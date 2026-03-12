@@ -90,6 +90,14 @@ Upload to [yaver-cli releases](https://github.com/kivanccakmak/yaver-cli/release
 
 No email/password — OAuth only.
 
+## Admin Scripts
+
+```bash
+# Remove user data from Convex (dry-run first, then --confirm)
+cd backend && node cleanup-user.mjs
+cd backend && node cleanup-user.mjs --confirm
+```
+
 ## Future (V2+)
 
 - Custom QUIC P2P networking (no Tailscale dependency)

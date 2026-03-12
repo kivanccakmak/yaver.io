@@ -79,6 +79,16 @@ Future versions will replace Tailscale with a custom QUIC P2P stack for zero-dep
 - Convex: mutations for writes, queries for reads, HTTP actions for OAuth callbacks
 - Mobile: always native builds (xcodebuild for iOS, Gradle for Android), never Expo CLI
 
+## Scripts
+
+### Cleanup user data from Convex
+Remove all data (user, sessions, devices) for specific emails:
+```bash
+cd backend && node cleanup-user.mjs                  # dry-run
+cd backend && node cleanup-user.mjs --confirm        # actually delete
+```
+Edit `backend/cleanup-user.mjs` to change the target emails. Uses `backend/convex/admin.ts` functions.
+
 ## Local Development
 - `cd backend && npx convex dev` — Start Convex dev server
 - `cd web && npm run dev` — Start web dev server
