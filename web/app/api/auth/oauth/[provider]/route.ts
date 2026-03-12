@@ -38,7 +38,7 @@ export async function GET(
   response.cookies.set("oauth_nonce", nonce, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    sameSite: "none",
     path: "/",
     maxAge: 600,
   });
