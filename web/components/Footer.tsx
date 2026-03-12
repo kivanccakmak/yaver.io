@@ -44,7 +44,7 @@ export default function Footer() {
 
         <div className="mt-12 border-t border-surface-800 pt-8">
           <p className="text-center text-xs text-surface-600">
-            {new Date().getFullYear()} Yaver. All rights reserved.
+            &copy; {new Date().getFullYear()} SIMKAB ELEKTRIK. All rights reserved.
           </p>
         </div>
       </div>

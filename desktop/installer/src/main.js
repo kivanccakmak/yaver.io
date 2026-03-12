@@ -251,53 +251,14 @@ ipcMain.handle('download-agent', async () => {
   }
 });
 
-ipcMain.handle('authenticate', async () => {
-  const authUrl = `${CONVEX_SITE_URL}/auth/google?client=desktop`;
+// Shared auth handler — opens yaver.io auth page, waits for local callback
+function startOAuthFlow(provider) {
+  // Open the web auth page with provider pre-selected, or generic page
+  const authUrl = provider
+    ? `https://yaver.io/api/auth/oauth/${provider}?client=desktop`
+    : 'https://yaver.io/auth?client=desktop';
   shell.openExternal(authUrl);
 
-  return new Promise((resolve) => {
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url, 'http://localhost');
-      const token = url.searchParams.get('token');
-      if (token) {
-        if (!fs.existsSync(CONFIG_DIR)) {
-          fs.mkdirSync(CONFIG_DIR, { recursive: true });
-        }
-        fs.writeFileSync(getTokenPath(), token, { mode: 0o600 });
-
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(`<html><body style="background:#0f1117;color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column">
-          <h2 style="margin-bottom:8px">Authenticated!</h2>
-          <p style="color:#9ca3af">You can close this tab and return to Yaver.</p>
-        </body></html>`);
-        server.close();
-
-        // Notify renderer
-        if (mainWindow) {
-          mainWindow.webContents.send('auth-state-changed', { signedIn: true });
-        }
-
-        resolve({ success: true });
-      } else {
-        res.writeHead(400);
-        res.end('Missing token');
-      }
-    });
-
-    server.listen(19836, '127.0.0.1');
-
-    setTimeout(() => {
-      server.close();
-      resolve({ success: false, error: 'Authentication timed out.' });
-    }, 5 * 60 * 1000);
-  });
-});
-
-ipcMain.handle('authenticate-microsoft', async () => {
-  const authUrl = `${CONVEX_SITE_URL}/auth/microsoft?client=desktop`;
-  shell.openExternal(authUrl);
-
-  // Reuse same callback server
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       const url = new URL(req.url, 'http://localhost');
@@ -333,7 +294,11 @@ ipcMain.handle('authenticate-microsoft', async () => {
       resolve({ success: false, error: 'Authentication timed out.' });
     }, 5 * 60 * 1000);
   });
-});
+}
+
+ipcMain.handle('authenticate', () => startOAuthFlow('google'));
+ipcMain.handle('authenticate-microsoft', () => startOAuthFlow('microsoft'));
+ipcMain.handle('authenticate-apple', () => startOAuthFlow('apple'));
 
 ipcMain.handle('install-service', async () => {
   try {

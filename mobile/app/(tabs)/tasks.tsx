@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useDevice } from "../../src/context/DeviceContext";
+import { useColors } from "../../src/context/ThemeContext";
 import {
   ConnectionState,
   quicClient,
@@ -77,6 +78,7 @@ function SwipeableTaskRow({
   onPress: () => void;
   onDelete: () => void;
 }) {
+  const c = useColors();
   const translateX = useRef(new Animated.Value(0)).current;
   const canSwipe = item.status === "completed" || item.status === "failed";
 
@@ -127,6 +129,7 @@ function SwipeableTaskRow({
         <Pressable
           style={({ pressed }) => [
             styles.taskCard,
+            { backgroundColor: c.bgCard, borderColor: c.border },
             pressed && styles.taskCardPressed,
           ]}
           onPress={onPress}
@@ -148,23 +151,23 @@ function SwipeableTaskRow({
               </Text>
             </View>
             {item.deviceName ? (
-              <View style={styles.deviceBadge}>
-                <Text style={styles.deviceBadgeText}>{item.deviceName}</Text>
+              <View style={[styles.deviceBadge, { backgroundColor: c.bgCardElevated }]}>
+                <Text style={[styles.deviceBadgeText, { color: c.textMuted }]}>{item.deviceName}</Text>
               </View>
             ) : null}
           </View>
-          <Text style={styles.taskTitle}>{item.title}</Text>
+          <Text style={[styles.taskTitle, { color: c.textPrimary }]}>{item.title}</Text>
           {item.description && !lastOutput ? (
-            <Text style={styles.taskDesc} numberOfLines={2}>
+            <Text style={[styles.taskDesc, { color: c.textMuted }]} numberOfLines={2}>
               {item.description}
             </Text>
           ) : null}
           {lastOutput ? (
-            <Text style={styles.taskOutputPreview} numberOfLines={1}>
+            <Text style={[styles.taskOutputPreview, { color: c.accent }]} numberOfLines={1}>
               {lastOutput}
             </Text>
           ) : null}
-          <Text style={styles.taskTimestamp}>
+          <Text style={[styles.taskTimestamp, { color: c.textMuted }]}>
             {formatRelativeTime(item.updatedAt)}
           </Text>
         </Pressable>
@@ -186,6 +189,7 @@ function formatRelativeTime(ts: number): string {
 // ── Main screen ──────────────────────────────────────────────────────
 
 export default function TasksScreen() {
+  const c = useColors();
   const { connectionStatus, activeDevice } = useDevice();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -297,7 +301,7 @@ export default function TasksScreen() {
   const banner = BANNER_CONFIG[effectiveState];
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={["bottom"]}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
       <View style={styles.container}>
         {/* Connection status banner */}
         <View
@@ -325,20 +329,20 @@ export default function TasksScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor="#6366f1"
-              colors={["#6366f1"]}
-              progressBackgroundColor="#111"
+              tintColor={c.accent}
+              colors={[c.accent]}
+              progressBackgroundColor={c.bgCard}
             />
           }
           ListEmptyComponent={
             <View style={styles.emptyList}>
-              <Text style={styles.emptyIcon}>{"[ ]"}</Text>
-              <Text style={styles.emptyTitle}>
+              <Text style={[styles.emptyIcon, { color: c.textMuted }]}>{"[ ]"}</Text>
+              <Text style={[styles.emptyTitle, { color: c.textPrimary }]}>
                 {connectionStatus !== "connected"
                   ? "No Device Connected"
                   : "All Clear"}
               </Text>
-              <Text style={styles.emptySubtitle}>
+              <Text style={[styles.emptySubtitle, { color: c.textSecondary }]}>
                 {connectionStatus !== "connected"
                   ? "Go to the Devices tab to connect to your desktop agent."
                   : "No tasks yet. Tap the + button to create your first task."}
@@ -370,19 +374,19 @@ export default function TasksScreen() {
         {/* New Task Modal */}
         <Modal visible={showNewTask} animationType="slide" transparent>
           <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>New Task</Text>
+            <View style={[styles.modalContent, { backgroundColor: c.bgCard }]}>
+              <Text style={[styles.modalTitle, { color: c.textPrimary }]}>New Task</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
                 placeholder="Task title"
-                placeholderTextColor="#52525b"
+                placeholderTextColor={c.textMuted}
                 value={newTitle}
                 onChangeText={setNewTitle}
               />
               <TextInput
-                style={[styles.input, styles.inputMultiline]}
+                style={[styles.input, styles.inputMultiline, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
                 placeholder="Description (optional)"
-                placeholderTextColor="#52525b"
+                placeholderTextColor={c.textMuted}
                 value={newDescription}
                 onChangeText={setNewDescription}
                 multiline
@@ -391,18 +395,19 @@ export default function TasksScreen() {
               />
               <View style={styles.modalButtons}>
                 <Pressable
-                  style={styles.cancelButton}
+                  style={[styles.cancelButton, { backgroundColor: c.bgCardElevated }]}
                   onPress={() => {
                     setShowNewTask(false);
                     setNewTitle("");
                     setNewDescription("");
                   }}
                 >
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                  <Text style={[styles.cancelButtonText, { color: c.textSecondary }]}>Cancel</Text>
                 </Pressable>
                 <Pressable
                   style={[
                     styles.submitButton,
+                    { backgroundColor: c.accent },
                     (!newTitle.trim() || isSubmitting) &&
                       styles.submitButtonDisabled,
                   ]}
@@ -421,15 +426,15 @@ export default function TasksScreen() {
         {/* Task Detail Modal */}
         <Modal visible={!!selectedTask} animationType="slide" transparent>
           <View style={styles.modalOverlay}>
-            <View style={[styles.modalContent, styles.detailModal]}>
+            <View style={[styles.modalContent, styles.detailModal, { backgroundColor: c.bgCard }]}>
               {selectedTask && (
                 <>
                   <View style={styles.detailHeader}>
-                    <Text style={styles.modalTitle} numberOfLines={2}>
+                    <Text style={[styles.modalTitle, { color: c.textPrimary }]} numberOfLines={2}>
                       {selectedTask.title}
                     </Text>
                     <Pressable onPress={() => setSelectedTask(null)}>
-                      <Text style={styles.closeButton}>X</Text>
+                      <Text style={[styles.closeButton, { color: c.textMuted }]}>X</Text>
                     </Pressable>
                   </View>
                   <View style={styles.detailMeta}>
@@ -460,23 +465,23 @@ export default function TasksScreen() {
                     ) : null}
                   </View>
                   {selectedTask.description ? (
-                    <Text style={styles.detailDesc}>
+                    <Text style={[styles.detailDesc, { color: c.textSecondary }]}>
                       {selectedTask.description}
                     </Text>
                   ) : null}
 
                   {/* Output */}
                   <View style={styles.outputContainer}>
-                    <Text style={styles.outputLabel}>Output</Text>
+                    <Text style={[styles.outputLabel, { color: c.textMuted }]}>Output</Text>
                     <FlatList
                       data={selectedTask.output}
                       keyExtractor={(_, i) => String(i)}
-                      style={styles.outputList}
+                      style={[styles.outputList, { backgroundColor: c.bg }]}
                       renderItem={({ item: line }) => (
-                        <Text style={styles.outputLine}>{line}</Text>
+                        <Text style={[styles.outputLine, { color: c.textPrimary }]}>{line}</Text>
                       )}
                       ListEmptyComponent={
-                        <Text style={styles.outputEmpty}>No output yet.</Text>
+                        <Text style={[styles.outputEmpty, { color: c.textMuted }]}>No output yet.</Text>
                       }
                     />
                   </View>
@@ -514,7 +519,7 @@ export default function TasksScreen() {
 // ── Styles ───────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: "#0a0a0a" },
+  safeArea: { flex: 1 },
   container: { flex: 1 },
 
   // Banner

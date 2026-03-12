@@ -1,3 +1,4 @@
+import Constants from "expo-constants";
 import { router } from "expo-router";
 import React, { useState } from "react";
 import {
@@ -6,20 +7,27 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
+import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { clearCache } from "../../src/lib/storage";
 
-const APP_VERSION = "1.0.0";
-const BUILD_INFO = "Expo SDK 52";
+const APP_VERSION = Constants.expoConfig?.version ?? "1.0.0";
+const BUILD_NUMBER =
+  Constants.expoConfig?.ios?.buildNumber ??
+  Constants.expoConfig?.android?.versionCode?.toString() ??
+  "1";
 
 export default function SettingsScreen() {
   const { user, logout } = useAuth();
   const { activeDevice, connectionStatus, disconnect } = useDevice();
+  const { isDark, toggleTheme } = useTheme();
+  const c = useColors();
   const [isClearing, setIsClearing] = useState(false);
 
   const handleSignOut = async () => {
@@ -53,49 +61,97 @@ export default function SettingsScreen() {
     );
   };
 
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      "Delete Account",
+      "This will permanently delete your account, all your devices, and sessions. This action cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete Account",
+          style: "destructive",
+          onPress: () => {
+            Alert.alert(
+              "Are you sure?",
+              "All your data will be permanently deleted. You will need to create a new account to use Yaver again.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Yes, Delete Everything",
+                  style: "destructive",
+                  onPress: async () => {
+                    // TODO: Call backend to delete account
+                    disconnect();
+                    await logout();
+                    router.replace("/login");
+                  },
+                },
+              ]
+            );
+          },
+        },
+      ]
+    );
+  };
+
   const openLink = (url: string) => {
-    Linking.openURL(url).catch(() => {
-      // Silently fail if link cannot be opened.
-    });
+    Linking.openURL(url).catch(() => {});
   };
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={["bottom"]}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
       <ScrollView
         style={styles.container}
         contentContainerStyle={styles.scrollContent}
       >
         {/* Profile section */}
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Account</Text>
-          <View style={styles.profileCard}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Account</Text>
+          <View style={[styles.profileCard, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            <View style={[styles.avatar, { backgroundColor: c.accent }]}>
+              <Text style={[styles.avatarText, { color: c.textInverse }]}>
                 {user?.name?.charAt(0).toUpperCase() ?? "?"}
               </Text>
             </View>
             <View style={styles.profileInfo}>
-              <Text style={styles.profileName}>
+              <Text style={[styles.profileName, { color: c.textPrimary }]}>
                 {user?.name ?? "Unknown User"}
               </Text>
-              <Text style={styles.profileEmail}>
+              <Text style={[styles.profileEmail, { color: c.textMuted }]}>
                 {user?.email ?? "No email"}
               </Text>
             </View>
           </View>
         </View>
 
+        {/* Subscription */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Subscription</Text>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            <View style={styles.subscriptionRow}>
+              <View>
+                <Text style={[styles.subscriptionPlan, { color: c.textPrimary }]}>Early Access</Text>
+                <Text style={[styles.subscriptionMeta, { color: c.textSecondary }]}>
+                  Free during early access period
+                </Text>
+              </View>
+              <View style={[styles.freeBadge, { backgroundColor: c.successBg, borderColor: c.successBorder }]}>
+                <Text style={[styles.freeBadgeText, { color: c.success }]}>FREE</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
         {/* Connected device */}
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Connected Device</Text>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Connected Device</Text>
           {activeDevice ? (
-            <View style={styles.card}>
+            <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
               <View style={styles.deviceRow}>
                 <View style={styles.deviceInfo}>
-                  <Text style={styles.deviceName}>{activeDevice.name}</Text>
-                  <Text style={styles.deviceMeta}>
-                    {activeDevice.os} &middot; {activeDevice.host}:
-                    {activeDevice.port}
+                  <Text style={[styles.deviceName, { color: c.textPrimary }]}>{activeDevice.name}</Text>
+                  <Text style={[styles.deviceMeta, { color: c.textMuted }]}>
+                    {activeDevice.os} &middot; {activeDevice.host}:{activeDevice.port}
                   </Text>
                 </View>
                 <View
@@ -104,24 +160,24 @@ export default function SettingsScreen() {
                     {
                       backgroundColor:
                         connectionStatus === "connected"
-                          ? "#22c55e"
+                          ? c.success
                           : connectionStatus === "connecting"
-                            ? "#eab308"
+                            ? c.warn
                             : connectionStatus === "error"
-                              ? "#ef4444"
-                              : "#666",
+                              ? c.error
+                              : c.textMuted,
                     },
                   ]}
                 />
               </View>
-              <View style={styles.deviceDetails}>
+              <View style={[styles.deviceDetails, { borderTopColor: c.borderSubtle }]}>
                 <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>Status</Text>
-                  <Text style={styles.detailValue}>{connectionStatus}</Text>
+                  <Text style={[styles.detailLabel, { color: c.textMuted }]}>Status</Text>
+                  <Text style={[styles.detailValue, { color: c.textPrimary }]}>{connectionStatus}</Text>
                 </View>
                 <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>Last seen</Text>
-                  <Text style={styles.detailValue}>
+                  <Text style={[styles.detailLabel, { color: c.textMuted }]}>Last seen</Text>
+                  <Text style={[styles.detailValue, { color: c.textPrimary }]}>
                     {activeDevice.online
                       ? "Online now"
                       : new Date(activeDevice.lastSeen).toLocaleString()}
@@ -130,93 +186,85 @@ export default function SettingsScreen() {
               </View>
             </View>
           ) : (
-            <View style={styles.card}>
-              <Text style={styles.noDeviceText}>
+            <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+              <Text style={[styles.noDeviceText, { color: c.textMuted }]}>
                 No device connected. Go to the Devices tab to connect.
               </Text>
             </View>
           )}
         </View>
 
+        {/* Appearance */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Appearance</Text>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            <View style={styles.themeRow}>
+              <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Dark Mode</Text>
+              <Switch
+                value={isDark}
+                onValueChange={toggleTheme}
+                trackColor={{ false: c.border, true: c.accent }}
+                thumbColor="#ffffff"
+              />
+            </View>
+          </View>
+        </View>
+
         {/* Data management */}
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Data</Text>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Data</Text>
           <Pressable
             style={({ pressed }) => [
               styles.actionRow,
+              { backgroundColor: c.bgCard, borderColor: c.border },
               pressed && styles.actionRowPressed,
             ]}
             onPress={handleClearCache}
             disabled={isClearing}
           >
-            <Text style={styles.actionRowLabel}>
+            <Text style={[styles.actionRowLabel, { color: c.textPrimary }]}>
               {isClearing ? "Clearing..." : "Clear Task Cache"}
             </Text>
-            <Text style={styles.actionRowChevron}>&rsaquo;</Text>
+            <Text style={[styles.actionRowChevron, { color: c.textMuted }]}>&rsaquo;</Text>
           </Pressable>
         </View>
 
         {/* About */}
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>About</Text>
-          <View style={styles.card}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>About</Text>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
             <View style={styles.aboutRow}>
-              <Text style={styles.aboutLabel}>Version</Text>
-              <Text style={styles.aboutValue}>{APP_VERSION}</Text>
+              <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Version</Text>
+              <Text style={[styles.aboutValue, { color: c.textMuted }]}>{APP_VERSION}</Text>
             </View>
-            <View style={styles.separator} />
+            <View style={[styles.separator, { backgroundColor: c.borderSubtle }]} />
             <View style={styles.aboutRow}>
-              <Text style={styles.aboutLabel}>Build</Text>
-              <Text style={styles.aboutValue}>{BUILD_INFO}</Text>
+              <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Build</Text>
+              <Text style={[styles.aboutValue, { color: c.textMuted }]}>{BUILD_NUMBER}</Text>
             </View>
           </View>
 
-          <View style={styles.linksCard}>
-            <Pressable
-              style={({ pressed }) => [
-                styles.linkRow,
-                pressed && styles.linkRowPressed,
-              ]}
-              onPress={() => openLink("https://yaver.io")}
-            >
-              <Text style={styles.linkText}>Website</Text>
-              <Text style={styles.linkChevron}>&rsaquo;</Text>
-            </Pressable>
-            <View style={styles.separator} />
-            <Pressable
-              style={({ pressed }) => [
-                styles.linkRow,
-                pressed && styles.linkRowPressed,
-              ]}
-              onPress={() => openLink("https://yaver.io/privacy")}
-            >
-              <Text style={styles.linkText}>Privacy Policy</Text>
-              <Text style={styles.linkChevron}>&rsaquo;</Text>
-            </Pressable>
-            <View style={styles.separator} />
-            <Pressable
-              style={({ pressed }) => [
-                styles.linkRow,
-                pressed && styles.linkRowPressed,
-              ]}
-              onPress={() => openLink("https://yaver.io/terms")}
-            >
-              <Text style={styles.linkText}>Terms of Service</Text>
-              <Text style={styles.linkChevron}>&rsaquo;</Text>
-            </Pressable>
-            <View style={styles.separator} />
-            <Pressable
-              style={({ pressed }) => [
-                styles.linkRow,
-                pressed && styles.linkRowPressed,
-              ]}
-              onPress={() =>
-                openLink("https://github.com/yaver-io/yaver")
-              }
-            >
-              <Text style={styles.linkText}>GitHub</Text>
-              <Text style={styles.linkChevron}>&rsaquo;</Text>
-            </Pressable>
+          <View style={[styles.linksCard, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            {[
+              { label: "Website", url: "https://yaver.io" },
+              { label: "Privacy Policy", url: "https://yaver.io/privacy" },
+              { label: "Terms of Service", url: "https://yaver.io/terms" },
+              { label: "Contact", url: "mailto:support@yaver.io" },
+            ].map((link, i) => (
+              <React.Fragment key={link.label}>
+                {i > 0 && <View style={[styles.separator, { backgroundColor: c.borderSubtle }]} />}
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.linkRow,
+                    pressed && { backgroundColor: c.bgCardElevated },
+                  ]}
+                  onPress={() => openLink(link.url)}
+                >
+                  <Text style={[styles.linkText, { color: c.accent }]}>{link.label}</Text>
+                  <Text style={[styles.linkChevron, { color: c.textMuted }]}>&rsaquo;</Text>
+                </Pressable>
+              </React.Fragment>
+            ))}
           </View>
         </View>
 
@@ -225,11 +273,25 @@ export default function SettingsScreen() {
           <Pressable
             style={({ pressed }) => [
               styles.signOutButton,
+              { backgroundColor: c.errorBg },
               pressed && styles.signOutPressed,
             ]}
             onPress={handleSignOut}
           >
-            <Text style={styles.signOutText}>Sign Out</Text>
+            <Text style={[styles.signOutText, { color: c.error }]}>Sign Out</Text>
+          </Pressable>
+        </View>
+
+        {/* Delete account */}
+        <View style={styles.section}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.deleteAccountButton,
+              pressed && styles.deleteAccountPressed,
+            ]}
+            onPress={handleDeleteAccount}
+          >
+            <Text style={styles.deleteAccountText}>Delete Account</Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -238,7 +300,7 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: "#0a0a0a" },
+  safeArea: { flex: 1 },
   container: { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 40 },
 
@@ -246,43 +308,51 @@ const styles = StyleSheet.create({
   sectionLabel: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#666",
     textTransform: "uppercase",
     letterSpacing: 0.5,
     marginBottom: 12,
   },
 
-  // Profile
   profileCard: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#111",
     borderRadius: 12,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#1e1e2e",
   },
   avatar: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: "#6366f1",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 14,
   },
-  avatarText: { fontSize: 20, fontWeight: "700", color: "#ffffff" },
+  avatarText: { fontSize: 20, fontWeight: "700" },
   profileInfo: { flex: 1 },
-  profileName: { fontSize: 16, fontWeight: "600", color: "#d0d0d0" },
-  profileEmail: { fontSize: 13, color: "#666", marginTop: 2 },
+  profileName: { fontSize: 16, fontWeight: "600" },
+  profileEmail: { fontSize: 13, marginTop: 2 },
 
-  // Card
+  // Subscription
+  subscriptionRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  subscriptionPlan: { fontSize: 16, fontWeight: "600" },
+  subscriptionMeta: { fontSize: 13, marginTop: 2 },
+  freeBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  freeBadgeText: { fontSize: 12, fontWeight: "700" },
+
   card: {
-    backgroundColor: "#111",
     borderRadius: 12,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#1e1e2e",
     marginBottom: 8,
   },
 
@@ -293,8 +363,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   deviceInfo: { flex: 1 },
-  deviceName: { fontSize: 16, fontWeight: "600", color: "#d0d0d0" },
-  deviceMeta: { fontSize: 12, color: "#666", marginTop: 2 },
+  deviceName: { fontSize: 16, fontWeight: "600" },
+  deviceMeta: { fontSize: 12, marginTop: 2 },
   connectionDot: {
     width: 10,
     height: 10,
@@ -306,28 +376,33 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingTop: 14,
     borderTopWidth: 1,
-    borderTopColor: "#1e1e2e",
     gap: 24,
   },
   detailItem: {},
-  detailLabel: { fontSize: 11, color: "#666", marginBottom: 2 },
-  detailValue: { fontSize: 13, color: "#d0d0d0" },
-  noDeviceText: { fontSize: 14, color: "#666" },
+  detailLabel: { fontSize: 11, marginBottom: 2 },
+  detailValue: { fontSize: 13 },
+  noDeviceText: { fontSize: 14 },
+
+  // Theme
+  themeRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  themeLabel: { fontSize: 15 },
 
   // Action row
   actionRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "#111",
     borderRadius: 12,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#1e1e2e",
   },
   actionRowPressed: { opacity: 0.7 },
-  actionRowLabel: { fontSize: 15, color: "#d0d0d0" },
-  actionRowChevron: { fontSize: 20, color: "#666" },
+  actionRowLabel: { fontSize: 15 },
+  actionRowChevron: { fontSize: 20 },
 
   // About
   aboutRow: {
@@ -336,15 +411,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: 4,
   },
-  aboutLabel: { fontSize: 15, color: "#d0d0d0" },
-  aboutValue: { fontSize: 15, color: "#666" },
+  aboutLabel: { fontSize: 15 },
+  aboutValue: { fontSize: 15 },
 
   // Links
   linksCard: {
-    backgroundColor: "#111",
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#1e1e2e",
     overflow: "hidden",
   },
   linkRow: {
@@ -353,23 +426,27 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     padding: 16,
   },
-  linkRowPressed: { backgroundColor: "#1a1a1a" },
-  linkText: { fontSize: 15, color: "#6366f1" },
-  linkChevron: { fontSize: 20, color: "#666" },
+  linkText: { fontSize: 15 },
+  linkChevron: { fontSize: 20 },
 
   separator: {
     height: 1,
-    backgroundColor: "#1e1e2e",
     marginHorizontal: 16,
   },
 
-  // Sign out
   signOutButton: {
-    backgroundColor: "#ef444422",
     borderRadius: 12,
     padding: 16,
     alignItems: "center",
   },
   signOutPressed: { opacity: 0.7 },
-  signOutText: { color: "#ef4444", fontSize: 16, fontWeight: "600" },
+  signOutText: { fontSize: 16, fontWeight: "600" },
+
+  deleteAccountButton: {
+    borderRadius: 12,
+    padding: 16,
+    alignItems: "center",
+  },
+  deleteAccountPressed: { opacity: 0.7 },
+  deleteAccountText: { color: "#888", fontSize: 14 },
 });

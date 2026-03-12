@@ -22,14 +22,18 @@ if (!convexUrl) {
 
 const DIST = path.join(ROOT, "desktop", "installer", "dist");
 
+// Read version from package.json
+const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "desktop", "installer", "package.json"), "utf8"));
+const VERSION = pkg.version;
+
 const FILES = [
-  { file: "Yaver-1.0.0-arm64.dmg", platform: "macos", arch: "arm64", format: "dmg", filename: "Yaver-arm64.dmg" },
-  { file: "Yaver-1.0.0-arm64-mac.zip", platform: "macos", arch: "arm64", format: "zip", filename: "Yaver-arm64.zip" },
-  { file: "Yaver-1.0.0-arm64.AppImage", platform: "linux", arch: "arm64", format: "appimage", filename: "Yaver-arm64.AppImage" },
-  { file: "yaver-installer_1.0.0_arm64.deb", platform: "linux", arch: "arm64", format: "deb", filename: "yaver-arm64.deb" },
-  { file: "Yaver-1.0.0.deb", platform: "linux", arch: "amd64", format: "deb", filename: "yaver-amd64.deb" },
-  { file: "Yaver-1.0.0.AppImage", platform: "linux", arch: "amd64", format: "appimage", filename: "Yaver-amd64.AppImage" },
-  { file: "Yaver Setup 1.0.0.exe", platform: "windows", arch: "amd64", format: "exe", filename: "Yaver-Setup.exe" },
+  { file: `Yaver-${VERSION}-arm64.dmg`, platform: "macos", arch: "arm64", format: "dmg", filename: "Yaver-arm64.dmg" },
+  { file: `Yaver-${VERSION}-arm64-mac.zip`, platform: "macos", arch: "arm64", format: "zip", filename: "Yaver-arm64.zip" },
+  { file: `Yaver-${VERSION}-arm64.AppImage`, platform: "linux", arch: "arm64", format: "appimage", filename: "Yaver-arm64.AppImage" },
+  { file: `yaver-installer_${VERSION}_arm64.deb`, platform: "linux", arch: "arm64", format: "deb", filename: "yaver-arm64.deb" },
+  { file: `Yaver-${VERSION}.deb`, platform: "linux", arch: "amd64", format: "deb", filename: "yaver-amd64.deb" },
+  { file: `Yaver-${VERSION}.AppImage`, platform: "linux", arch: "amd64", format: "appimage", filename: "Yaver-amd64.AppImage" },
+  { file: `Yaver Setup ${VERSION}.exe`, platform: "windows", arch: "amd64", format: "exe", filename: "Yaver-Setup.exe" },
 ];
 
 async function convexMutation(fnPath, args = {}) {
@@ -68,16 +72,14 @@ async function uploadFile(entry) {
   // Get upload URL
   const uploadUrl = await convexMutation("downloads:generateUploadUrl");
 
-  // Upload the file using a stream
-  const fileStream = fs.createReadStream(filePath);
+  // Upload the file as a Blob (avoids EPIPE with streams)
+  const fileBuffer = fs.readFileSync(filePath);
   const uploadRes = await fetch(uploadUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/octet-stream",
-      "Content-Length": String(size),
     },
-    body: fileStream,
-    duplex: "half",
+    body: new Blob([fileBuffer]),
   });
 
   if (!uploadRes.ok) {
@@ -92,7 +94,7 @@ async function uploadFile(entry) {
     platform: entry.platform,
     arch: entry.arch,
     format: entry.format,
-    version: "1.0.0",
+    version: VERSION,
     filename: entry.filename,
     storageId,
     size,

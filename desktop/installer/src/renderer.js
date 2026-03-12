@@ -126,12 +126,32 @@ async function signInMicrosoft() {
   }
 }
 
+async function signInApple() {
+  disableAuthButtons();
+  clearSigninError();
+
+  const result = await window.yaver.authenticateApple();
+
+  if (result.success) {
+    const state = await window.yaver.getAppState();
+    if (!state.agentInstalled) {
+      showView('view-setup-prereqs');
+      runPrerequisites();
+    } else {
+      showDashboard(state);
+    }
+  } else {
+    enableAuthButtons();
+    showSigninError(result.error || 'Authentication failed. Please try again.');
+  }
+}
+
 function disableAuthButtons() {
-  document.querySelectorAll('.btn-google, .btn-microsoft').forEach((b) => (b.disabled = true));
+  document.querySelectorAll('.btn-apple, .btn-google, .btn-microsoft').forEach((b) => (b.disabled = true));
 }
 
 function enableAuthButtons() {
-  document.querySelectorAll('.btn-google, .btn-microsoft').forEach((b) => (b.disabled = false));
+  document.querySelectorAll('.btn-apple, .btn-google, .btn-microsoft').forEach((b) => (b.disabled = false));
 }
 
 function showSigninError(msg) {

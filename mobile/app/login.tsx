@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../src/context/AuthContext";
+import { useColors, useTheme } from "../src/context/ThemeContext";
 import {
   type OAuthProvider,
   getConvexSiteUrl,
@@ -22,6 +23,8 @@ WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
   const { login } = useAuth();
+  const { isDark } = useTheme();
+  const c = useColors();
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
@@ -87,7 +90,7 @@ export default function LoginScreen() {
       router.replace("/(tabs)/tasks");
     } catch (e: unknown) {
       if ((e as { code?: string }).code === "ERR_REQUEST_CANCELED") {
-        // User cancelled — do nothing
+        // User cancelled
       }
     } finally {
       setIsLoading(false);
@@ -95,11 +98,11 @@ export default function LoginScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]}>
       <View style={styles.container}>
         <View style={styles.header}>
-          <Text style={styles.logo}>Yaver</Text>
-          <Text style={styles.subtitle}>
+          <Text style={[styles.logo, { color: c.textPrimary }]}>Yaver</Text>
+          <Text style={[styles.subtitle, { color: c.textSecondary }]}>
             Your AI coding assistant, everywhere.
           </Text>
         </View>
@@ -109,7 +112,11 @@ export default function LoginScreen() {
           {Platform.OS === "ios" && (
             <AppleAuthentication.AppleAuthenticationButton
               buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
-              buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+              buttonStyle={
+                isDark
+                  ? AppleAuthentication.AppleAuthenticationButtonStyle.WHITE
+                  : AppleAuthentication.AppleAuthenticationButtonStyle.BLACK
+              }
               cornerRadius={12}
               style={styles.appleButton}
               onPress={handleAppleNative}
@@ -121,49 +128,60 @@ export default function LoginScreen() {
             <Pressable
               style={({ pressed }) => [
                 styles.button,
-                styles.oauthButton,
+                { backgroundColor: c.bgCard, borderColor: c.border },
                 pressed && styles.buttonPressed,
               ]}
               onPress={() => handleOAuth("apple")}
             >
-              <View style={[styles.iconBox, { backgroundColor: "#fff" }]}>
-                <Text style={[styles.buttonIcon, { color: "#000" }]}>{"\uF8FF"}</Text>
-              </View>
-              <Text style={styles.buttonText}>Continue with Apple</Text>
+              <Text style={[styles.buttonText, { color: c.textPrimary }]}>Continue with Apple</Text>
             </Pressable>
           )}
 
           <Pressable
             style={({ pressed }) => [
               styles.button,
-              styles.oauthButton,
+              { backgroundColor: c.bgCard, borderColor: c.border },
               pressed && styles.buttonPressed,
             ]}
             onPress={() => handleOAuth("google")}
           >
-            <View style={[styles.iconBox, { backgroundColor: "#fff" }]}>
+            <View style={styles.iconBox}>
               <Text style={[styles.buttonIcon, { color: "#4285F4" }]}>G</Text>
             </View>
-            <Text style={styles.buttonText}>Continue with Google</Text>
+            <Text style={[styles.buttonText, { color: c.textPrimary }]}>Continue with Google</Text>
           </Pressable>
 
           <Pressable
             style={({ pressed }) => [
               styles.button,
-              styles.oauthButton,
+              { backgroundColor: c.bgCard, borderColor: c.border },
               pressed && styles.buttonPressed,
             ]}
             onPress={() => handleOAuth("microsoft")}
           >
-            <View style={[styles.iconBox, { backgroundColor: "#fff" }]}>
+            <View style={styles.iconBox}>
               <Text style={[styles.buttonIcon, { color: "#00A4EF" }]}>M</Text>
             </View>
-            <Text style={styles.buttonText}>Continue with Microsoft</Text>
+            <Text style={[styles.buttonText, { color: c.textPrimary }]}>Continue with Microsoft</Text>
           </Pressable>
         </View>
 
-        <Text style={styles.footer}>
-          By signing in you agree to the Terms of Service and Privacy Policy.
+        <Text style={[styles.footer, { color: c.textMuted }]}>
+          By signing in you agree to the{" "}
+          <Text
+            style={{ color: c.accent }}
+            onPress={() => Linking.openURL("https://yaver.io/terms")}
+          >
+            Terms of Service
+          </Text>{" "}
+          and{" "}
+          <Text
+            style={{ color: c.accent }}
+            onPress={() => Linking.openURL("https://yaver.io/privacy")}
+          >
+            Privacy Policy
+          </Text>
+          .
         </Text>
       </View>
     </SafeAreaView>
@@ -171,10 +189,7 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: "#0a0a0a",
-  },
+  safeArea: { flex: 1 },
   container: {
     flex: 1,
     paddingHorizontal: 24,
@@ -187,17 +202,13 @@ const styles = StyleSheet.create({
   logo: {
     fontSize: 48,
     fontWeight: "800",
-    color: "#ffffff",
     letterSpacing: -1,
   },
   subtitle: {
     fontSize: 16,
-    color: "#a1a1aa",
     marginTop: 8,
   },
-  buttons: {
-    gap: 12,
-  },
+  buttons: { gap: 12 },
   button: {
     flexDirection: "row",
     alignItems: "center",
@@ -206,20 +217,13 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
   },
-  oauthButton: {
-    backgroundColor: "#111111",
-    borderColor: "#2a2a2a",
-  },
-  buttonPressed: {
-    opacity: 0.7,
-  },
-  appleButton: {
-    height: 52,
-  },
+  buttonPressed: { opacity: 0.7 },
+  appleButton: { height: 52 },
   iconBox: {
     width: 32,
     height: 32,
     borderRadius: 8,
+    backgroundColor: "#fff",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 12,
@@ -231,11 +235,9 @@ const styles = StyleSheet.create({
   buttonText: {
     fontSize: 15,
     fontWeight: "600",
-    color: "#e4e4e7",
   },
   footer: {
     fontSize: 12,
-    color: "#52525b",
     textAlign: "center",
     marginTop: 48,
     lineHeight: 18,

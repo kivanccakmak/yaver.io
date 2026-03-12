@@ -1,22 +1,24 @@
 # Yaver.io — Claude Code Project Guide
 
 ## What is Yaver?
-Yaver is a P2P tool that lets developers use Claude SDK from their mobile device or any terminal, connecting directly to their development machines. No central relay — all task data flows peer-to-peer over QUIC.
+Yaver is a P2P tool that lets developers use Claude from their mobile device or any terminal, connecting directly to their development machines. No central relay — all task data flows peer-to-peer between your devices. V1 uses Tailscale for networking; future versions will use a custom QUIC P2P stack.
+
+**Company**: SIMKAB ELEKTRIK — Yunus Emre Mah. Adalar Sokak No:12 Sancaktepe/Istanbul, Turkey
 
 ## Architecture Overview
 ```
-┌─────────────┐         ┌──────────────┐
-│  Mobile App │◄──QUIC──►│ Desktop Agent │
-│ (React Native)        │  (Go CLI)     │
-└──────┬──────┘         └──────┬────────┘
-       │                       │
-       │  Auth only            │  Register device
-       ▼                       ▼
-┌──────────────────────────────────────┐
-│       Convex Backend                 │
-│  (Auth + Peer Discovery ONLY)        │
-│  Google Sign-In / Office 365         │
-└──────────────────────────────────────┘
+┌─────────────┐  Tailscale (V1)  ┌──────────────┐
+│  Mobile App │◄───── HTTP ──────►│ Desktop Agent │
+│ (React Native)                 │  (Go CLI)     │
+└──────┬──────┘                  └──────┬────────┘
+       │                                │
+       │  Auth only                     │  Register device
+       ▼                                ▼
+┌──────────────────────────────────────────┐
+│         Convex Backend                   │
+│  (Auth + Peer Discovery ONLY)            │
+│  Apple / Google / Microsoft Sign-In      │
+└──────────────────────────────────────────┘
        ▲
        │
 ┌──────┴──────┐
@@ -26,6 +28,8 @@ Yaver is a P2P tool that lets developers use Claude SDK from their mobile device
 │  Sign Up     │
 └─────────────┘
 ```
+> **V1**: Networking uses Tailscale. Both devices must be on the same Tailnet.
+> **V2+**: Custom QUIC P2P stack (no Tailscale dependency).
 
 ## Domain & URLs
 - **Domain**: `yaver.io`
@@ -39,35 +43,46 @@ Yaver is a P2P tool that lets developers use Claude SDK from their mobile device
 - `desktop/` — Electron installer (DMG/EXE/DEB) + Go CLI agent
   - `desktop/installer/` — Electron app for installation GUI
   - `desktop/agent/` — Go binary (QUIC server, Claude SDK runner, tmux manager)
-- `mobile/` — React Native (Expo) mobile app (iOS + Android)
+- `mobile/` — React Native mobile app (iOS + Android)
 - `backend/` — Convex backend (auth + peer discovery only)
 - `web/` — Next.js landing page, deployed on Vercel at yaver.io
 
 ## Tech Stack
-- **P2P Transport**: QUIC (quic-go on desktop, react-native-quic on mobile)
+- **Networking (V1)**: Tailscale (WireGuard) — HTTP over Tailscale mesh; custom QUIC P2P planned for V2
 - **Auth**: Convex + Google Sign-In + Apple Sign-In + Microsoft/Office 365
 - **Desktop Agent**: Go with quic-go, runs Claude CLI in tmux
 - **Desktop Installer**: Electron (electron-builder for DMG/EXE/DEB)
-- **Mobile**: React Native + Expo SDK 52
+- **Mobile**: React Native (native builds via xcodebuild/Gradle)
 - **Web**: Next.js 15, deployed on Vercel (yaver.io)
 - **Backend**: Convex (auth tables + device registry for peer discovery)
 
 ## Key Design Decisions
-1. **P2P only** — Convex is ONLY for auth and peer discovery. Task data, logs, and output flow directly over QUIC between mobile and desktop agent.
-2. **No SSH** — Unlike Talos, we use QUIC for all communication. No SSH tunnels.
-3. **QUIC for everything** — Connection establishment, task submission, log streaming, file transfer.
-4. **Desktop = installer + CLI** — The Electron app is only for installation. The actual agent is a Go CLI binary.
+1. **P2P only** — Convex is ONLY for auth and peer discovery. Task data, logs, and output flow directly between mobile and desktop agent.
+2. **Desktop = installer + CLI** — The Electron app is only for installation. The actual agent is a Go CLI binary.
+3. **Privacy-first** — No code, task data, or AI output ever touches our servers.
+
+## V1 Networking: Tailscale
+**Version 1 uses Tailscale as the networking layer.** This is a deliberate decision to ship a functional product quickly while postponing the custom QUIC P2P networking stack to a later version.
+
+V1 assumptions:
+- Both the mobile device and desktop machine have Tailscale installed and are on the same Tailnet
+- The mobile app connects to the desktop agent via Tailscale IP (HTTP over Tailscale's WireGuard tunnel)
+- No custom QUIC, no NAT traversal, no relay servers needed — Tailscale handles all of that
+- Device discovery can be manual (enter Tailscale IP) or via QR code pairing from the CLI
+- A Hetzner relay server may be used for initial testing
+
+Future versions will replace Tailscale with a custom QUIC P2P stack for zero-dependency networking.
 
 ## Conventions
 - Go code: standard Go project layout, `gofmt`
 - TypeScript/React: functional components, hooks, no class components
 - Convex: mutations for writes, queries for reads, HTTP actions for OAuth callbacks
-- Mobile: Expo managed workflow where possible
+- Mobile: always native builds (xcodebuild for iOS, Gradle for Android), never Expo CLI
 
 ## Local Development
 - `cd backend && npx convex dev` — Start Convex dev server
 - `cd web && npm run dev` — Start web dev server
-- `cd mobile && npx expo start` — Start mobile dev server
+- `cd mobile/ios && xcodebuild ...` or open in Xcode — Build and run on device/simulator
 - `cd desktop/agent && go run . serve` — Run desktop agent (QUIC server)
 - `cd desktop/installer && npm run dist` — Build desktop installers (Electron GUI)
 
@@ -103,7 +118,7 @@ Build a local binary: `cd desktop/agent && go build -o yaver .`
 - **API Key Issuer ID**: `7bd9329e-49b0-440a-97ed-873c74244c12`
 - **API Key Path**: `~/Workspace/talos/mobile/ios/AuthKey_77Z6B543D5.p8` (shared with Talos)
 
-Both Yaver and Talos are developed under the simkab Apple Developer team.
+Both Yaver and Talos are developed under the SIMKAB ELEKTRIK Apple Developer team.
 
 ---
 

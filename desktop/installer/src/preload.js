@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('yaver', {
   downloadAgent: () => ipcRenderer.invoke('download-agent'),
   authenticate: () => ipcRenderer.invoke('authenticate'),
   authenticateMicrosoft: () => ipcRenderer.invoke('authenticate-microsoft'),
+  authenticateApple: () => ipcRenderer.invoke('authenticate-apple'),
   installService: () => ipcRenderer.invoke('install-service'),
   restartService: () => ipcRenderer.invoke('restart-service'),
   getStatus: () => ipcRenderer.invoke('get-status'),
