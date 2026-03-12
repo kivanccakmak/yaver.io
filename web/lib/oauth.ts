@@ -61,7 +61,6 @@ export function isProviderConfigured(provider: OAuthProvider): boolean {
 }
 
 type OAuthState = {
-  nonce: string;
   client?: string;
 };
 
@@ -194,6 +193,3 @@ export async function getUserInfo(
   throw new Error(`Unknown provider: ${provider}`);
 }
 
-export function generateNonce(): string {
-  return crypto.randomBytes(16).toString("hex");
-}

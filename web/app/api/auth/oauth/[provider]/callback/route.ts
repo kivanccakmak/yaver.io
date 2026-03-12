@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import {
   type OAuthProvider,
   decodeOAuthState,
@@ -33,19 +32,7 @@ async function handleCallback(
   code: string,
   stateParam: string
 ) {
-  const cookieStore = await cookies();
-  const storedNonce = cookieStore.get("oauth_nonce")?.value;
-  cookieStore.delete("oauth_nonce");
-
-  if (!storedNonce) {
-    return errorRedirect("OAuth session expired. Please try again.");
-  }
-
   const state = decodeOAuthState(stateParam);
-
-  if (state.nonce !== storedNonce) {
-    return errorRedirect("Invalid OAuth state. Please try again.");
-  }
 
   const tokens = await exchangeCodeForTokens(provider, code);
   const userInfo = await getUserInfo(provider, tokens);

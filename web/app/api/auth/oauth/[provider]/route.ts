@@ -4,7 +4,6 @@ import {
   isProviderConfigured,
   encodeOAuthState,
   buildAuthorizationUrl,
-  generateNonce,
 } from "@/lib/oauth";
 
 const VALID_PROVIDERS = new Set<OAuthProvider>(["google", "microsoft", "apple"]);
@@ -29,19 +28,9 @@ export async function GET(
 
   const url = new URL(request.url);
   const client = url.searchParams.get("client") || "web";
-  const nonce = generateNonce();
 
-  const state = encodeOAuthState({ nonce, client });
+  const state = encodeOAuthState({ client });
   const authUrl = buildAuthorizationUrl(provider, state);
 
-  const response = NextResponse.redirect(authUrl);
-  response.cookies.set("oauth_nonce", nonce, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "none",
-    path: "/",
-    maxAge: 600,
-  });
-
-  return response;
+  return NextResponse.redirect(authUrl);
 }
