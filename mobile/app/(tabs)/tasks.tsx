@@ -2,8 +2,11 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
   FlatList,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
   PanResponder,
+  Platform,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -194,8 +197,7 @@ export default function TasksScreen() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [showNewTask, setShowNewTask] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
-  const [newDescription, setNewDescription] = useState("");
+  const [newTaskText, setNewTaskText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [quicState, setQuicState] = useState<ConnectionState>(
@@ -251,12 +253,12 @@ export default function TasksScreen() {
   }, [fetchTasks]);
 
   const handleCreateTask = async () => {
-    if (!newTitle.trim()) return;
+    if (!newTaskText.trim()) return;
+    Keyboard.dismiss();
     setIsSubmitting(true);
     try {
-      await quicClient.sendTask(newTitle.trim(), newDescription.trim());
-      setNewTitle("");
-      setNewDescription("");
+      await quicClient.sendTask(newTaskText.trim(), "");
+      setNewTaskText("");
       setShowNewTask(false);
       await fetchTasks();
     } catch {
@@ -373,33 +375,31 @@ export default function TasksScreen() {
 
         {/* New Task Modal */}
         <Modal visible={showNewTask} animationType="slide" transparent>
-          <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView
+            style={styles.modalOverlay}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+          >
+            <Pressable style={styles.modalDismiss} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); }} />
             <View style={[styles.modalContent, { backgroundColor: c.bgCard }]}>
               <Text style={[styles.modalTitle, { color: c.textPrimary }]}>New Task</Text>
               <TextInput
-                style={[styles.input, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
-                placeholder="Task title"
-                placeholderTextColor={c.textMuted}
-                value={newTitle}
-                onChangeText={setNewTitle}
-              />
-              <TextInput
                 style={[styles.input, styles.inputMultiline, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
-                placeholder="Description (optional)"
+                placeholder="What would you like Claude to do?"
                 placeholderTextColor={c.textMuted}
-                value={newDescription}
-                onChangeText={setNewDescription}
+                value={newTaskText}
+                onChangeText={setNewTaskText}
                 multiline
                 numberOfLines={4}
                 textAlignVertical="top"
+                autoFocus
               />
               <View style={styles.modalButtons}>
                 <Pressable
                   style={[styles.cancelButton, { backgroundColor: c.bgCardElevated }]}
                   onPress={() => {
+                    Keyboard.dismiss();
                     setShowNewTask(false);
-                    setNewTitle("");
-                    setNewDescription("");
+                    setNewTaskText("");
                   }}
                 >
                   <Text style={[styles.cancelButtonText, { color: c.textSecondary }]}>Cancel</Text>
@@ -408,19 +408,19 @@ export default function TasksScreen() {
                   style={[
                     styles.submitButton,
                     { backgroundColor: c.accent },
-                    (!newTitle.trim() || isSubmitting) &&
+                    (!newTaskText.trim() || isSubmitting) &&
                       styles.submitButtonDisabled,
                   ]}
                   onPress={handleCreateTask}
-                  disabled={!newTitle.trim() || isSubmitting}
+                  disabled={!newTaskText.trim() || isSubmitting}
                 >
                   <Text style={styles.submitButtonText}>
-                    {isSubmitting ? "Creating..." : "Create"}
+                    {isSubmitting ? "Sending..." : "Send"}
                   </Text>
                 </Pressable>
               </View>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* Task Detail Modal */}
@@ -654,6 +654,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.6)",
     justifyContent: "flex-end",
+  },
+  modalDismiss: {
+    flex: 1,
   },
   modalContent: {
     backgroundColor: "#111",

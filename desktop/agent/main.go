@@ -20,7 +20,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const version = "1.0.0"
+const version = "1.2.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -38,6 +38,10 @@ func main() {
 		runConnect(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
+	case "logs":
+		runLogs(os.Args[2:])
+	case "stop":
+		runStop()
 	case "status":
 		runStatus()
 	case "devices":
@@ -62,12 +66,20 @@ Usage:
   yaver auth        Sign in to Yaver (opens browser)
   yaver signout     Sign out and clear credentials
   yaver connect     Connect to your dev machine
-  yaver serve       Start the agent on this machine
+  yaver serve       Start the agent (runs in background)
+  yaver stop        Stop the running agent
+  yaver logs        Show agent logs
   yaver status      Show auth and connection status
   yaver devices     List your registered devices
   yaver uninstall   Remove config, certs, and stop the agent
   yaver help        Show this help message
   yaver version     Print version
+
+Flags for serve:
+  --debug           Run in foreground with verbose logging
+  --port            HTTP server port (default 8080)
+  --quic-port       QUIC server port (default 4433)
+  --work-dir        Working directory for tasks (default .)
 
 Run 'yaver <command> -h' for command-specific options.
 `)
@@ -269,10 +281,54 @@ func runConnect(args []string) {
 // serve — run the QUIC agent server
 // ---------------------------------------------------------------------------
 
+// pidFilePath returns the path to the PID file.
+func pidFilePath() string {
+	dir, err := ConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "agent.pid")
+}
+
+// logFilePath returns the path to the log file.
+func logFilePath() string {
+	dir, err := ConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "agent.log")
+}
+
+// isAgentRunning checks if the agent process is alive.
+func isAgentRunning() (int, bool) {
+	pidFile := pidFilePath()
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return 0, false
+	}
+	var pid int
+	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
+		return 0, false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return 0, false
+	}
+	// Signal 0 checks if process exists
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		os.Remove(pidFile)
+		return 0, false
+	}
+	return pid, true
+}
+
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	port := fs.Int("port", 4433, "QUIC server port")
+	httpPort := fs.Int("port", 8080, "HTTP server port")
+	quicPort := fs.Int("quic-port", 4433, "QUIC server port (legacy)")
 	workDir := fs.String("work-dir", ".", "Working directory for tasks")
+	noQUIC := fs.Bool("no-quic", false, "Disable QUIC server (HTTP only)")
+	debug := fs.Bool("debug", false, "Run in foreground with verbose logging")
 	fs.Parse(args)
 
 	if *workDir == "." {
@@ -283,11 +339,77 @@ func runServe(args []string) {
 		*workDir = wd
 	}
 
+	// Check if already running
+	if pid, running := isAgentRunning(); running {
+		fmt.Printf("Yaver agent is already running (PID %d).\n", pid)
+		fmt.Println("Use 'yaver stop' to stop it, or 'yaver logs' to view logs.")
+		return
+	}
+
 	cfg := mustLoadAuthConfig()
 
+	// Validate token before forking
+	if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
+		fmt.Fprintf(os.Stderr, "Token expired or invalid. Run 'yaver auth' to re-authenticate.\n")
+		os.Exit(1)
+	}
+
+	// If not debug mode, fork into background
+	if !*debug {
+		// Re-exec ourselves with an internal flag
+		execPath, err := os.Executable()
+		if err != nil {
+			log.Fatalf("cannot find executable: %v", err)
+		}
+
+		logFile := logFilePath()
+		lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			log.Fatalf("cannot open log file: %v", err)
+		}
+
+		// Build args for the child process
+		childArgs := []string{"serve", "--debug"}
+		childArgs = append(childArgs, fmt.Sprintf("--port=%d", *httpPort))
+		childArgs = append(childArgs, fmt.Sprintf("--quic-port=%d", *quicPort))
+		childArgs = append(childArgs, fmt.Sprintf("--work-dir=%s", *workDir))
+		if *noQUIC {
+			childArgs = append(childArgs, "--no-quic")
+		}
+
+		cmd := osexec.Command(execPath, childArgs...)
+		cmd.Stdout = lf
+		cmd.Stderr = lf
+		cmd.Dir = *workDir
+		// Detach from parent
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+		if err := cmd.Start(); err != nil {
+			log.Fatalf("failed to start agent: %v", err)
+		}
+
+		// Write PID file
+		if err := os.WriteFile(pidFilePath(), []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644); err != nil {
+			log.Printf("warning: could not write PID file: %v", err)
+		}
+
+		lf.Close()
+
+		fmt.Printf("Yaver agent started (PID %d).\n", cmd.Process.Pid)
+		fmt.Println()
+		fmt.Println("  yaver logs      View agent logs")
+		fmt.Println("  yaver stop      Stop the agent")
+		fmt.Println("  yaver status    Check agent status")
+		return
+	}
+
+	// Debug mode: run in foreground with full logging
 	log.Println("Yaver agent starting...")
 	log.Printf("  Work dir: %s", *workDir)
-	log.Printf("  QUIC port: %d", *port)
+	log.Printf("  HTTP port: %d", *httpPort)
+	if !*noQUIC {
+		log.Printf("  QUIC port: %d", *quicPort)
+	}
 
 	// Ensure stable device ID
 	if cfg.DeviceID == "" {
@@ -298,11 +420,6 @@ func runServe(args []string) {
 		log.Fatalf("save config: %v", err)
 	}
 
-	// Validate token
-	log.Println("Validating token...")
-	if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
-		log.Fatalf("Token expired or invalid. Run 'yaver auth' to re-authenticate.\n  Error: %v", err)
-	}
 	log.Println("Token validated.")
 
 	// Register device
@@ -318,11 +435,16 @@ func runServe(args []string) {
 		Name:     hostname,
 		Platform: platform,
 		QuicHost: "0.0.0.0",
-		QuicPort: *port,
+		QuicPort: *quicPort,
 	}); err != nil {
 		log.Fatalf("device registration failed: %v", err)
 	}
 	log.Println("Device registered.")
+
+	// Write PID file (for debug mode too, so stop/status work)
+	if err := os.WriteFile(pidFilePath(), []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
+		log.Printf("warning: could not write PID file: %v", err)
+	}
 
 	// Task store and manager
 	taskStore, err := NewTaskStore()
@@ -336,25 +458,111 @@ func runServe(args []string) {
 
 	go heartbeatLoop(ctx, cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID)
 
-	quicServer := NewQUICServer(*port, cfg.AuthToken, hostname, taskMgr)
+	// Start HTTP server (V1 — primary, also serves MCP)
+	httpServer := NewHTTPServer(*httpPort, cfg.AuthToken, hostname, taskMgr)
+	go func() {
+		if err := httpServer.Start(ctx); err != nil {
+			log.Fatalf("HTTP server error: %v", err)
+		}
+	}()
+
+	// Start QUIC server (legacy, can be disabled)
+	if !*noQUIC {
+		quicServer := NewQUICServer(*quicPort, cfg.AuthToken, hostname, taskMgr)
+		go func() {
+			if err := quicServer.Start(ctx); err != nil {
+				log.Printf("QUIC server error: %v", err)
+			}
+		}()
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		sig := <-sigCh
-		log.Printf("Received signal %s, shutting down...", sig)
-		if err := MarkOffline(cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID); err != nil {
-			log.Printf("failed to mark offline: %v", err)
-		}
-		cancel()
-	}()
+	sig := <-sigCh
+	log.Printf("Received signal %s, shutting down...", sig)
+	if err := MarkOffline(cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID); err != nil {
+		log.Printf("failed to mark offline: %v", err)
+	}
+	cancel()
+	os.Remove(pidFilePath())
 
-	if err := quicServer.Start(ctx); err != nil {
-		log.Fatalf("QUIC server error: %v", err)
+	time.Sleep(1 * time.Second)
+	log.Println("Agent stopped.")
+}
+
+// ---------------------------------------------------------------------------
+// logs — show agent log output
+// ---------------------------------------------------------------------------
+
+func runLogs(args []string) {
+	fs := flag.NewFlagSet("logs", flag.ExitOnError)
+	follow := fs.Bool("f", false, "Follow log output (like tail -f)")
+	lines := fs.Int("n", 50, "Number of lines to show")
+	fs.Parse(args)
+
+	logFile := logFilePath()
+	if _, err := os.Stat(logFile); os.IsNotExist(err) {
+		fmt.Println("No logs found. Start the agent with 'yaver serve'.")
+		return
 	}
 
-	log.Println("Agent stopped.")
+	if *follow {
+		// Use tail -f for following
+		cmd := osexec.Command("tail", "-f", "-n", fmt.Sprintf("%d", *lines), logFile)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			if cmd.Process != nil {
+				cmd.Process.Kill()
+			}
+		}()
+
+		cmd.Run()
+	} else {
+		cmd := osexec.Command("tail", "-n", fmt.Sprintf("%d", *lines), logFile)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Run()
+	}
+}
+
+// ---------------------------------------------------------------------------
+// stop — stop the running agent
+// ---------------------------------------------------------------------------
+
+func runStop() {
+	pid, running := isAgentRunning()
+	if !running {
+		fmt.Println("Yaver agent is not running.")
+		return
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error finding process %d: %v\n", pid, err)
+		os.Exit(1)
+	}
+
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		fmt.Fprintf(os.Stderr, "Error stopping agent: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Wait for process to exit
+	for i := 0; i < 30; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if err := proc.Signal(syscall.Signal(0)); err != nil {
+			break
+		}
+	}
+
+	os.Remove(pidFilePath())
+	fmt.Printf("Yaver agent stopped (was PID %d).\n", pid)
 }
 
 // ---------------------------------------------------------------------------
@@ -376,7 +584,14 @@ func runStatus() {
 		authStatus = "expired"
 	}
 
+	// Check agent
+	agentStatus := "stopped"
+	if pid, running := isAgentRunning(); running {
+		agentStatus = fmt.Sprintf("running (PID %d)", pid)
+	}
+
 	fmt.Printf("Auth:     %s\n", authStatus)
+	fmt.Printf("Agent:    %s\n", agentStatus)
 	if cfg.DeviceID != "" {
 		fmt.Printf("Device:   %s\n", cfg.DeviceID[:8]+"...")
 	}
