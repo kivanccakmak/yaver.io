@@ -10,6 +10,7 @@ interface User {
   name?: string;
   provider?: string;
   avatarUrl?: string;
+  surveyCompleted?: boolean;
 }
 
 interface AuthState {
@@ -17,6 +18,7 @@ interface AuthState {
   token: string | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  surveyCompleted: boolean;
   logout: () => void;
 }
 
@@ -103,6 +105,7 @@ export function useAuth(): AuthState {
     token,
     isLoading,
     isAuthenticated: token !== null,
+    surveyCompleted: user?.surveyCompleted ?? false,
     logout,
   };
 }

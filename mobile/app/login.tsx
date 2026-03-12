@@ -4,10 +4,15 @@ import * as WebBrowser from "expo-web-browser";
 import { router } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -17,15 +22,23 @@ import {
   type OAuthProvider,
   getConvexSiteUrl,
   getOAuthUrl,
+  signupWithEmail,
+  loginWithEmail,
 } from "../src/lib/auth";
 
 WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
-  const { login } = useAuth();
+  const { login, surveyCompleted } = useAuth();
   const { isDark } = useTheme();
   const c = useColors();
   const [isLoading, setIsLoading] = useState(false);
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [emailError, setEmailError] = useState("");
 
   useEffect(() => {
     const subscription = Linking.addEventListener("url", async (event) => {
@@ -37,7 +50,8 @@ export default function LoginScreen() {
       if (token) {
         try {
           await login(token);
-          router.replace("/(tabs)/tasks");
+          // Navigation handled by index.tsx based on survey status
+          router.replace("/");
         } catch {
           // Token validation failed
         }
@@ -87,7 +101,7 @@ export default function LoginScreen() {
 
       const { token } = await res.json();
       await login(token);
-      router.replace("/(tabs)/tasks");
+      router.replace("/");
     } catch (e: unknown) {
       if ((e as { code?: string }).code === "ERR_REQUEST_CANCELED") {
         // User cancelled
@@ -97,9 +111,55 @@ export default function LoginScreen() {
     }
   };
 
+  const handleEmailSubmit = async () => {
+    setEmailError("");
+    if (isSignUp) {
+      if (!fullName.trim()) {
+        setEmailError("Full name is required");
+        return;
+      }
+      if (password !== confirmPassword) {
+        setEmailError("Passwords do not match");
+        return;
+      }
+      if (password.length < 8) {
+        setEmailError("Password must be at least 8 characters");
+        return;
+      }
+    }
+    if (!email.trim() || !password) {
+      setEmailError("Email and password are required");
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      let result: { token: string };
+      if (isSignUp) {
+        result = await signupWithEmail(fullName.trim(), email.trim(), password);
+      } else {
+        result = await loginWithEmail(email.trim(), password);
+      }
+      await login(result.token);
+      router.replace("/");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Something went wrong";
+      setEmailError(message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]}>
-      <View style={styles.container}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+      <ScrollView
+        contentContainerStyle={styles.scrollContainer}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.header}>
           <Text style={[styles.logo, { color: c.textPrimary }]}>Yaver</Text>
           <Text style={[styles.subtitle, { color: c.textSecondary }]}>
@@ -166,6 +226,85 @@ export default function LoginScreen() {
           </Pressable>
         </View>
 
+        {/* Divider */}
+        <View style={styles.divider}>
+          <View style={[styles.dividerLine, { backgroundColor: c.border }]} />
+          <Text style={[styles.dividerText, { color: c.textMuted }]}>or</Text>
+          <View style={[styles.dividerLine, { backgroundColor: c.border }]} />
+        </View>
+
+        {/* Email/Password form */}
+        <View style={styles.emailForm}>
+          {isSignUp && (
+            <TextInput
+              style={[styles.input, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+              placeholder="Full Name"
+              placeholderTextColor={c.textMuted}
+              value={fullName}
+              onChangeText={setFullName}
+              autoCapitalize="words"
+              autoCorrect={false}
+            />
+          )}
+          <TextInput
+            style={[styles.input, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+            placeholder="Email"
+            placeholderTextColor={c.textMuted}
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <TextInput
+            style={[styles.input, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+            placeholder="Password"
+            placeholderTextColor={c.textMuted}
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+          />
+          {isSignUp && (
+            <TextInput
+              style={[styles.input, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+              placeholder="Confirm Password"
+              placeholderTextColor={c.textMuted}
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              secureTextEntry
+            />
+          )}
+
+          {emailError ? (
+            <Text style={[styles.errorText, { color: c.error }]}>{emailError}</Text>
+          ) : null}
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.submitButton,
+              { backgroundColor: c.accent },
+              pressed && styles.buttonPressed,
+              isLoading && { opacity: 0.6 },
+            ]}
+            onPress={handleEmailSubmit}
+            disabled={isLoading}
+          >
+            {isLoading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.submitButtonText}>
+                {isSignUp ? "Create Account" : "Sign In"}
+              </Text>
+            )}
+          </Pressable>
+
+          <Pressable onPress={() => { setIsSignUp(!isSignUp); setEmailError(""); }}>
+            <Text style={[styles.toggleText, { color: c.accent }]}>
+              {isSignUp ? "Already have an account? Sign In" : "Don't have an account? Sign Up"}
+            </Text>
+          </Pressable>
+        </View>
+
         <Text style={[styles.footer, { color: c.textMuted }]}>
           By signing in you agree to the{" "}
           <Text
@@ -183,15 +322,16 @@ export default function LoginScreen() {
           </Text>
           .
         </Text>
-      </View>
+      </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
-  container: {
-    flex: 1,
+  scrollContainer: {
+    flexGrow: 1,
     paddingHorizontal: 24,
     justifyContent: "center",
   },
@@ -241,5 +381,52 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 48,
     lineHeight: 18,
+    paddingBottom: 24,
+  },
+  divider: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 24,
+    marginBottom: 24,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+  },
+  dividerText: {
+    marginHorizontal: 16,
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  emailForm: {
+    gap: 12,
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    fontSize: 15,
+  },
+  errorText: {
+    fontSize: 13,
+    textAlign: "center",
+  },
+  submitButton: {
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 4,
+  },
+  submitButtonText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  toggleText: {
+    fontSize: 14,
+    textAlign: "center",
+    marginTop: 4,
   },
 });

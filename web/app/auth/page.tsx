@@ -2,16 +2,95 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
+
+const CONVEX_URL = "https://shocking-echidna-394.eu-west-1.convex.site";
 
 function AuthContent() {
   const params = useSearchParams();
   const error = params.get("error");
   const client = params.get("client") || "web";
 
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [rePassword, setRePassword] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
   const handleOAuth = (provider: "google" | "microsoft" | "apple") => {
     window.location.href = `/api/auth/oauth/${provider}?client=${client}`;
   };
+
+  const handleEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+
+    if (mode === "signup" && password !== rePassword) {
+      setFormError("Passwords do not match.");
+      return;
+    }
+
+    if (password.length < 8) {
+      setFormError("Password must be at least 8 characters.");
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const endpoint = mode === "signup" ? "/auth/signup" : "/auth/login";
+      const body: Record<string, string> = { email, password };
+      if (mode === "signup") {
+        body.fullName = fullName;
+      }
+
+      const res = await fetch(`${CONVEX_URL}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        setFormError(text || "Something went wrong. Please try again.");
+        setLoading(false);
+        return;
+      }
+
+      const data = await res.json();
+      const token = data.token;
+
+      if (!token) {
+        setFormError("No token received from server.");
+        setLoading(false);
+        return;
+      }
+
+      // Store token
+      localStorage.setItem("yaver_auth_token", token);
+      document.cookie = `yaver_auth_token=${token}; path=/; max-age=${60 * 60 * 24 * 30}; secure; samesite=lax`;
+
+      // Check if desktop client - redirect to localhost callback
+      if (client === "desktop") {
+        window.location.href = `http://127.0.0.1:19836/callback?token=${token}`;
+        return;
+      }
+
+      // Redirect based on survey status
+      if (data.surveyCompleted === false || !data.surveyCompleted) {
+        window.location.href = "/survey";
+      } else {
+        window.location.href = "/dashboard";
+      }
+    } catch {
+      setFormError("Network error. Please try again.");
+      setLoading(false);
+    }
+  };
+
+  const displayError = formError || error;
 
   return (
     <div className="flex min-h-[70vh] items-center justify-center px-6 py-20">
@@ -21,13 +100,13 @@ function AuthContent() {
             yaver<span className="font-normal text-surface-500">.io</span>
           </span>
           <p className="mt-3 text-sm text-surface-500">
-            Sign in to get started
+            {mode === "signin" ? "Sign in to get started" : "Create your account"}
           </p>
         </div>
 
-        {error && (
+        {displayError && (
           <div className="mb-6 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
-            {error}
+            {displayError}
           </div>
         )}
 
@@ -69,7 +148,86 @@ function AuthContent() {
           </button>
         </div>
 
-        <p className="mt-8 text-center text-xs text-surface-600">
+        {/* Divider */}
+        <div className="my-6 flex items-center gap-3">
+          <div className="h-px flex-1 bg-surface-700" />
+          <span className="text-xs text-surface-500">or</span>
+          <div className="h-px flex-1 bg-surface-700" />
+        </div>
+
+        {/* Email/Password Form */}
+        <form onSubmit={handleEmailSubmit} className="space-y-3">
+          {mode === "signup" && (
+            <input
+              type="text"
+              placeholder="Full name"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              required
+              className="w-full rounded-lg border border-surface-700 bg-surface-900 px-4 py-3 text-sm text-surface-200 placeholder-surface-500 outline-none transition-colors focus:border-surface-500"
+            />
+          )}
+          <input
+            type="email"
+            placeholder="Email address"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className="w-full rounded-lg border border-surface-700 bg-surface-900 px-4 py-3 text-sm text-surface-200 placeholder-surface-500 outline-none transition-colors focus:border-surface-500"
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            className="w-full rounded-lg border border-surface-700 bg-surface-900 px-4 py-3 text-sm text-surface-200 placeholder-surface-500 outline-none transition-colors focus:border-surface-500"
+          />
+          {mode === "signup" && (
+            <input
+              type="password"
+              placeholder="Confirm password"
+              value={rePassword}
+              onChange={(e) => setRePassword(e.target.value)}
+              required
+              className="w-full rounded-lg border border-surface-700 bg-surface-900 px-4 py-3 text-sm text-surface-200 placeholder-surface-500 outline-none transition-colors focus:border-surface-500"
+            />
+          )}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-lg bg-surface-50 px-4 py-3 text-sm font-medium text-surface-950 transition-colors hover:bg-surface-200 disabled:opacity-50"
+          >
+            {loading ? "Please wait..." : mode === "signin" ? "Sign In" : "Sign Up"}
+          </button>
+        </form>
+
+        {/* Toggle mode */}
+        <p className="mt-4 text-center text-sm text-surface-500">
+          {mode === "signin" ? (
+            <>
+              Don&apos;t have an account?{" "}
+              <button
+                onClick={() => { setMode("signup"); setFormError(null); }}
+                className="text-surface-300 hover:text-surface-50 transition-colors"
+              >
+                Sign Up
+              </button>
+            </>
+          ) : (
+            <>
+              Already have an account?{" "}
+              <button
+                onClick={() => { setMode("signin"); setFormError(null); }}
+                className="text-surface-300 hover:text-surface-50 transition-colors"
+              >
+                Sign In
+              </button>
+            </>
+          )}
+        </p>
+
+        <p className="mt-6 text-center text-xs text-surface-600">
           By continuing, you agree to our{" "}
           <Link href="/terms" className="text-surface-400 hover:text-surface-50">Terms</Link>{" "}
           and{" "}

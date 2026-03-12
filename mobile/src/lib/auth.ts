@@ -75,6 +75,79 @@ export function getOAuthUrl(provider: OAuthProvider): string {
   return `${base}/api/auth/oauth/${provider}?client=mobile`;
 }
 
+export async function signupWithEmail(
+  fullName: string,
+  email: string,
+  password: string
+): Promise<{ token: string; userId: string }> {
+  const response = await fetch(`${getConvexSiteUrl()}/auth/signup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fullName, email, password }),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error ?? "Signup failed");
+  }
+  return response.json();
+}
+
+export async function loginWithEmail(
+  email: string,
+  password: string
+): Promise<{ token: string; userId: string }> {
+  const response = await fetch(`${getConvexSiteUrl()}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error ?? "Login failed");
+  }
+  return response.json();
+}
+
+export async function submitSurvey(
+  token: string,
+  data: {
+    isDeveloper: boolean;
+    languages?: string[];
+    experienceLevel?: string;
+    role?: string;
+    companySize?: string;
+    useCase?: string;
+  }
+): Promise<void> {
+  const response = await fetch(`${getConvexSiteUrl()}/survey/submit`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error ?? "Failed to submit survey");
+  }
+}
+
+export async function getSurveyStatus(
+  token: string
+): Promise<{ completed: boolean }> {
+  const response = await fetch(`${getConvexSiteUrl()}/survey`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!response.ok) {
+    return { completed: false };
+  }
+  return response.json();
+}
+
 export async function deleteAccount(): Promise<boolean> {
   const token = await getToken();
   if (!token) return false;

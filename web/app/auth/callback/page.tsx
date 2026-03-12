@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense } from "react";
 
+const CONVEX_URL = "https://shocking-echidna-394.eu-west-1.convex.site";
+
 function CallbackHandler() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -30,8 +32,31 @@ function CallbackHandler() {
       // Also set as cookie for server-side access
       document.cookie = `yaver_auth_token=${token}; path=/; max-age=${60 * 60 * 24 * 30}; secure; samesite=lax`;
 
-      // Redirect to dashboard
-      router.push("/dashboard");
+      // Validate token and check survey status
+      fetch(`${CONVEX_URL}/auth/validate`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((res) => {
+          if (!res.ok) {
+            router.push("/dashboard");
+            return;
+          }
+          return res.json();
+        })
+        .then((data) => {
+          if (!data) return;
+          const userData = data.user ?? data;
+          if (userData.surveyCompleted === false || !userData.surveyCompleted) {
+            router.push("/survey");
+          } else {
+            router.push("/dashboard");
+          }
+        })
+        .catch(() => {
+          // On error, default to dashboard
+          router.push("/dashboard");
+        });
     } catch {
       setError("Failed to store authentication token.");
     }

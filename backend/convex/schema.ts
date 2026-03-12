@@ -6,7 +6,9 @@ export default defineSchema({
     userId: v.string(),
     email: v.string(),
     fullName: v.string(),
-    provider: v.union(v.literal("google"), v.literal("microsoft"), v.literal("apple")),
+    provider: v.union(v.literal("google"), v.literal("microsoft"), v.literal("apple"), v.literal("email")),
+    passwordHash: v.optional(v.string()),
+    surveyCompleted: v.optional(v.boolean()),
     providerId: v.string(),
     avatarUrl: v.optional(v.string()),
     plan: v.optional(v.union(v.literal("free"), v.literal("pro"), v.literal("enterprise"), v.literal("early_access"))),
@@ -83,6 +85,17 @@ export default defineSchema({
   })
     .index("by_userId", ["userId"])
     .index("by_lemonSqueezySubscriptionId", ["lemonSqueezySubscriptionId"]),
+
+  developerSurveys: defineTable({
+    userId: v.id("users"),
+    isDeveloper: v.boolean(),
+    languages: v.optional(v.array(v.string())),
+    experienceLevel: v.optional(v.string()),
+    role: v.optional(v.string()),
+    companySize: v.optional(v.string()),
+    useCase: v.optional(v.string()),
+    completedAt: v.number(),
+  }).index("by_userId", ["userId"]),
 
   authLogs: defineTable({
     level: v.union(v.literal("info"), v.literal("error"), v.literal("warn")),

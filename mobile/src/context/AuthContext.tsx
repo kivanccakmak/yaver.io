@@ -14,6 +14,7 @@ import {
   saveUser,
   clearToken,
   validateToken,
+  getSurveyStatus,
 } from "../lib/auth";
 
 interface AuthState {
@@ -21,8 +22,10 @@ interface AuthState {
   token: string | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  surveyCompleted: boolean;
   login: (token: string) => Promise<void>;
   logout: () => Promise<void>;
+  markSurveyCompleted: () => void;
 }
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -31,6 +34,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [surveyCompleted, setSurveyCompleted] = useState(false);
 
   // Restore session on mount
   useEffect(() => {
@@ -53,6 +57,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               await clearToken();
             }
           }
+          // Check survey status
+          try {
+            const survey = await getSurveyStatus(storedToken);
+            setSurveyCompleted(survey.completed);
+          } catch {
+            setSurveyCompleted(false);
+          }
         }
       } catch {
         // Silently fail; user stays unauthenticated.
@@ -71,12 +82,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await saveUser(validatedUser);
     setToken(newToken);
     setUser(validatedUser);
+    // Check survey status after login
+    try {
+      const survey = await getSurveyStatus(newToken);
+      setSurveyCompleted(survey.completed);
+    } catch {
+      setSurveyCompleted(false);
+    }
   }, []);
 
   const logout = useCallback(async () => {
     await clearToken();
     setToken(null);
     setUser(null);
+    setSurveyCompleted(false);
+  }, []);
+
+  const markSurveyCompleted = useCallback(() => {
+    setSurveyCompleted(true);
   }, []);
 
   const value = useMemo<AuthState>(
@@ -85,10 +108,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       token,
       isLoading,
       isAuthenticated: !!token && !!user,
+      surveyCompleted,
       login,
       logout,
+      markSurveyCompleted,
     }),
-    [user, token, isLoading, login, logout]
+    [user, token, isLoading, surveyCompleted, login, logout, markSurveyCompleted]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

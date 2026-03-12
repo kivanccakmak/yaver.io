@@ -59,6 +59,179 @@ async function authenticateRequest(
   return await ctx.runQuery(api.auth.validateSession, { tokenHash });
 }
 
+// ── Password Hashing Helpers (PBKDF2-SHA256) ────────────────────────
+
+async function hashPassword(password: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+  const hash = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+    keyMaterial,
+    256
+  );
+  const saltB64 = btoa(String.fromCharCode(...salt));
+  const hashB64 = btoa(String.fromCharCode(...new Uint8Array(hash)));
+  return `${saltB64}:${hashB64}`;
+}
+
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const [saltB64, hashB64] = stored.split(":");
+  if (!saltB64 || !hashB64) return false;
+  const encoder = new TextEncoder();
+  const salt = Uint8Array.from(atob(saltB64), (c) => c.charCodeAt(0));
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+  const hash = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+    keyMaterial,
+    256
+  );
+  const computedB64 = btoa(String.fromCharCode(...new Uint8Array(hash)));
+  return computedB64 === hashB64;
+}
+
+async function createSessionToken(ctx: { runMutation: (m: any, args: any) => Promise<any> }, userId: any) {
+  const tokenBytes = new Uint8Array(32);
+  crypto.getRandomValues(tokenBytes);
+  const token = Array.from(tokenBytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const tokenHash = await sha256Hex(token);
+  const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+  await ctx.runMutation(api.auth.createSession, { tokenHash, userId, expiresAt });
+  return token;
+}
+
+// ── Email/Password Auth Endpoints ───────────────────────────────────
+
+/** POST /auth/signup — Email/password signup. */
+http.route({
+  path: "/auth/signup",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const body = await request.json();
+    const { email, fullName, password } = body;
+
+    if (!email || !fullName || !password) {
+      return errorResponse("Missing required fields", 400);
+    }
+    if (password.length < 8) {
+      return errorResponse("Password must be at least 8 characters", 400);
+    }
+
+    const passwordHash = await hashPassword(password);
+
+    let userId;
+    try {
+      userId = await ctx.runMutation(api.auth.createEmailUser, {
+        email: email.toLowerCase().trim(),
+        fullName: fullName.trim(),
+        passwordHash,
+      });
+    } catch (e: any) {
+      if (e.message?.includes("EMAIL_EXISTS")) {
+        return errorResponse("An account with this email already exists", 409);
+      }
+      return errorResponse("Signup failed", 500);
+    }
+
+    const token = await createSessionToken(ctx, userId);
+    return jsonResponse({ token, userId: String(userId) });
+  }),
+});
+
+/** POST /auth/login — Email/password login. */
+http.route({
+  path: "/auth/login",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const body = await request.json();
+    const { email, password } = body;
+
+    if (!email || !password) {
+      return errorResponse("Missing email or password", 400);
+    }
+
+    const user = await ctx.runQuery(api.auth.lookupEmailUser, {
+      email: email.toLowerCase().trim(),
+    });
+
+    if (!user || !user.passwordHash) {
+      return errorResponse("Invalid email or password", 401);
+    }
+
+    const valid = await verifyPassword(password, user.passwordHash);
+    if (!valid) {
+      return errorResponse("Invalid email or password", 401);
+    }
+
+    const token = await createSessionToken(ctx, user._id);
+    return jsonResponse({ token, userId: user.userId });
+  }),
+});
+
+// ── Survey Endpoints ────────────────────────────────────────────────
+
+/** POST /survey/submit — Submit developer survey (authed). */
+http.route({
+  path: "/survey/submit",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const body = await request.json();
+    try {
+      await ctx.runMutation(api.survey.submitSurvey, {
+        tokenHash,
+        isDeveloper: body.isDeveloper ?? true,
+        languages: body.languages,
+        experienceLevel: body.experienceLevel,
+        role: body.role,
+        companySize: body.companySize,
+        useCase: body.useCase,
+      });
+      return jsonResponse({ ok: true });
+    } catch {
+      return errorResponse("Failed to submit survey", 500);
+    }
+  }),
+});
+
+/** GET /survey — Get survey status (authed). */
+http.route({
+  path: "/survey",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const survey = await ctx.runQuery(api.survey.getSurvey, { tokenHash });
+    if (!survey) return errorResponse("Unauthorized", 401);
+    return jsonResponse(survey);
+  }),
+});
+
 // ── Auth Endpoints (called by Next.js API routes) ────────────────────
 
 /** POST /auth/upsert-user — Create or update a user (called from web server). */

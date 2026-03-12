@@ -32,10 +32,12 @@ export async function validateSessionInternal(
     userId: string;
     email: string;
     fullName: string;
-    provider: "google" | "microsoft" | "apple";
+    provider: "google" | "microsoft" | "apple" | "email";
     providerId: string;
+    passwordHash?: string;
     avatarUrl?: string;
     plan?: "free" | "pro" | "enterprise" | "early_access";
+    surveyCompleted?: boolean;
     createdAt: number;
   };
   sessionId: Id<"sessions">;
@@ -64,7 +66,7 @@ export const createOrUpdateUser = mutation({
   args: {
     email: v.string(),
     fullName: v.string(),
-    provider: v.union(v.literal("google"), v.literal("microsoft"), v.literal("apple")),
+    provider: v.union(v.literal("google"), v.literal("microsoft"), v.literal("apple"), v.literal("email")),
     providerId: v.string(),
     avatarUrl: v.optional(v.string()),
   },
@@ -135,6 +137,7 @@ export const validateSession = query({
       fullName: result.user.fullName,
       provider: result.user.provider,
       avatarUrl: result.user.avatarUrl,
+      surveyCompleted: result.user.surveyCompleted ?? false,
     };
   },
 });
@@ -155,6 +158,63 @@ export const deleteSession = mutation({
     if (session) {
       await ctx.db.delete(session._id);
     }
+  },
+});
+
+/**
+ * Create a user with email/password.
+ */
+export const createEmailUser = mutation({
+  args: {
+    email: v.string(),
+    fullName: v.string(),
+    passwordHash: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Check for duplicate email
+    const existing = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.email))
+      .unique();
+
+    if (existing) {
+      throw new Error("EMAIL_EXISTS");
+    }
+
+    const userId = randomHex(16);
+    return await ctx.db.insert("users", {
+      userId,
+      email: args.email,
+      fullName: args.fullName,
+      provider: "email",
+      providerId: args.email,
+      passwordHash: args.passwordHash,
+      plan: "early_access",
+      createdAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Look up an email user for login. Returns user with passwordHash.
+ */
+export const lookupEmailUser = query({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.email))
+      .unique();
+
+    if (!user || user.provider !== "email") return null;
+
+    return {
+      _id: user._id,
+      userId: user.userId,
+      email: user.email,
+      fullName: user.fullName,
+      passwordHash: user.passwordHash,
+    };
   },
 });
 

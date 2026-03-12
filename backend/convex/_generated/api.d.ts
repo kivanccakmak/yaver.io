@@ -15,6 +15,7 @@ import type * as devices from "../devices.js";
 import type * as downloads from "../downloads.js";
 import type * as http from "../http.js";
 import type * as subscriptions from "../subscriptions.js";
+import type * as survey from "../survey.js";
 
 import type {
   ApiFromModules,
@@ -30,6 +31,7 @@ declare const fullApi: ApiFromModules<{
   downloads: typeof downloads;
   http: typeof http;
   subscriptions: typeof subscriptions;
+  survey: typeof survey;
 }>;
 
 /**

@@ -5,7 +5,7 @@ import { useAuth } from "../src/context/AuthContext";
 import { useColors } from "../src/context/ThemeContext";
 
 export default function IndexScreen() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, surveyCompleted } = useAuth();
   const c = useColors();
 
   if (isLoading) {
@@ -17,6 +17,9 @@ export default function IndexScreen() {
   }
 
   if (isAuthenticated) {
+    if (!surveyCompleted) {
+      return <Redirect href="/survey" />;
+    }
     return <Redirect href="/(tabs)/tasks" />;
   }
 
