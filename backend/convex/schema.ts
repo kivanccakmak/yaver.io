@@ -83,4 +83,13 @@ export default defineSchema({
   })
     .index("by_userId", ["userId"])
     .index("by_lemonSqueezySubscriptionId", ["lemonSqueezySubscriptionId"]),
+
+  authLogs: defineTable({
+    level: v.union(v.literal("info"), v.literal("error"), v.literal("warn")),
+    provider: v.string(),
+    step: v.string(),
+    message: v.string(),
+    details: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_createdAt", ["createdAt"]),
 });

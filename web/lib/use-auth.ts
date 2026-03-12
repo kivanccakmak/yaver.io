@@ -76,9 +76,10 @@ export function useAuth(): AuthState {
           return;
         }
 
-        const data = (await res.json()) as User;
+        const data = await res.json();
+        const userData = data.user ?? data;
         if (!cancelled) {
-          setUser(data);
+          setUser(userData as User);
           setToken(storedToken);
         }
       } catch {

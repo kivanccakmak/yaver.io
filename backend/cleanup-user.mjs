@@ -3,9 +3,12 @@
  * Remove specific user data from Convex (users, sessions, devices).
  *
  * Usage:
- *   cd backend && node cleanup-user.mjs                  # dry-run
- *   cd backend && node cleanup-user.mjs --confirm        # actually delete
- *   CONVEX_URL=<url> node cleanup-user.mjs --confirm     # target specific deployment
+ *   cd backend && node cleanup-user.mjs                           # dry-run, all providers
+ *   cd backend && node cleanup-user.mjs --confirm                 # delete all providers
+ *   cd backend && node cleanup-user.mjs --confirm --apple         # delete only Apple accounts
+ *   cd backend && node cleanup-user.mjs --confirm --google        # delete only Google accounts
+ *   cd backend && node cleanup-user.mjs --confirm --microsoft     # delete only Microsoft accounts
+ *   cd backend && node cleanup-user.mjs --confirm --apple --google  # delete Apple + Google
  *
  * Only deletes data for the emails listed in EMAILS below.
  */
@@ -23,13 +26,24 @@ const CONVEX_URL =
   process.env.CONVEX_URL ||
   "https://shocking-echidna-394.eu-west-1.convex.cloud";
 
-const dryRun = !process.argv.includes("--confirm");
+const args = process.argv.slice(2);
+const dryRun = !args.includes("--confirm");
+const filterApple = args.includes("--apple");
+const filterGoogle = args.includes("--google");
+const filterMicrosoft = args.includes("--microsoft");
+const hasProviderFilter = filterApple || filterGoogle || filterMicrosoft;
+
+const allowedProviders = new Set();
+if (filterApple) allowedProviders.add("apple");
+if (filterGoogle) allowedProviders.add("google");
+if (filterMicrosoft) allowedProviders.add("microsoft");
 
 async function run() {
   const client = new ConvexHttpClient(CONVEX_URL);
 
   console.log(`Target: ${CONVEX_URL}`);
   console.log(`Mode: ${dryRun ? "DRY RUN (pass --confirm to delete)" : "DELETING"}`);
+  console.log(`Providers: ${hasProviderFilter ? [...allowedProviders].join(", ") : "all"}`);
   console.log(`Emails: ${EMAILS.join(", ")}\n`);
 
   for (const email of EMAILS) {
@@ -43,6 +57,11 @@ async function run() {
     }
 
     for (const user of users) {
+      if (hasProviderFilter && !allowedProviders.has(user.provider)) {
+        console.log(`  Skipping: ${user._id} (${user.fullName}, provider: ${user.provider})`);
+        continue;
+      }
+
       console.log(`  User: ${user._id} (${user.fullName}, provider: ${user.provider})`);
       console.log(`  Created: ${new Date(user.createdAt).toISOString()}`);
 

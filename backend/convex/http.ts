@@ -580,6 +580,30 @@ http.route({
   }),
 });
 
+// ── Auth Logging (unauthenticated — for debugging OAuth) ───────────
+
+/** POST /auth/log — Log an auth event (unauthenticated, called from web OAuth flow). */
+http.route({
+  path: "/auth/log",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const body = await request.json();
+      await ctx.runMutation(api.authLogs.writeLog, {
+        level: body.level || "info",
+        provider: body.provider || "unknown",
+        step: body.step || "unknown",
+        message: body.message || "",
+        details: body.details ? String(body.details).slice(0, 2000) : undefined,
+      });
+      return jsonResponse({ ok: true });
+    } catch (e) {
+      console.error("Auth log error:", e);
+      return jsonResponse({ ok: false }, 500);
+    }
+  }),
+});
+
 // ── Download Endpoints ──────────────────────────────────────────────
 
 /** GET /downloads/list — List all available downloads (public, no auth). */

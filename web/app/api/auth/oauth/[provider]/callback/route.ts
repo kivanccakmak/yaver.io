@@ -9,8 +9,6 @@ import {
   createSessionToken,
   hashSessionToken,
   sessionExpiresAtMs,
-  SESSION_COOKIE_NAME,
-  sessionMaxAgeSeconds,
 } from "@/lib/session";
 
 const VALID_PROVIDERS = new Set<OAuthProvider>(["google", "microsoft", "apple"]);
@@ -21,10 +19,34 @@ function getBaseUrl(): string {
   return "http://localhost:3000";
 }
 
+function getConvexSiteUrl(): string {
+  return process.env.CONVEX_SITE_URL || "";
+}
+
+async function logToConvex(
+  provider: string,
+  step: string,
+  level: "info" | "error" | "warn",
+  message: string,
+  details?: string
+) {
+  const convexSiteUrl = getConvexSiteUrl();
+  if (!convexSiteUrl) return;
+  try {
+    await fetch(`${convexSiteUrl}/auth/log`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ level, provider, step, message, details }),
+    });
+  } catch {
+    // Best-effort logging, don't block the flow
+  }
+}
+
 function errorRedirect(message: string): NextResponse {
   const url = new URL("/auth", getBaseUrl());
   url.searchParams.set("error", message);
-  return NextResponse.redirect(url);
+  return NextResponse.redirect(url, 303);
 }
 
 async function handleCallback(
@@ -33,54 +55,95 @@ async function handleCallback(
   stateParam: string
 ) {
   const state = decodeOAuthState(stateParam);
+  await logToConvex(provider, "callback_start", "info", `OAuth callback started`, `client=${state.client || "web"}`);
 
-  const tokens = await exchangeCodeForTokens(provider, code);
-  const userInfo = await getUserInfo(provider, tokens);
+  let tokens;
+  try {
+    tokens = await exchangeCodeForTokens(provider, code);
+    await logToConvex(provider, "token_exchange", "info", "Token exchange succeeded");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await logToConvex(provider, "token_exchange", "error", "Token exchange failed", msg);
+    throw err;
+  }
+
+  let userInfo;
+  try {
+    userInfo = await getUserInfo(provider, tokens);
+    await logToConvex(provider, "get_user_info", "info", `Got user info: ${userInfo.email}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await logToConvex(provider, "get_user_info", "error", "getUserInfo failed", msg);
+    throw err;
+  }
 
   if (!userInfo.email) {
+    await logToConvex(provider, "get_user_info", "error", "No email from provider");
     return errorRedirect("Could not retrieve email from provider.");
   }
 
-  // Call Convex HTTP endpoints to create user and session
-  const convexSiteUrl = process.env.CONVEX_SITE_URL;
+  const convexSiteUrl = getConvexSiteUrl();
   if (!convexSiteUrl) {
     throw new Error("CONVEX_SITE_URL is not set");
   }
 
   // Upsert user via Convex HTTP action
-  const userRes = await fetch(`${convexSiteUrl}/auth/upsert-user`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email: userInfo.email.toLowerCase(),
-      fullName: userInfo.name || userInfo.email,
-      provider,
-      providerId: userInfo.providerId,
-      avatarUrl: userInfo.avatarUrl,
-    }),
-  });
+  let userId;
+  try {
+    const userRes = await fetch(`${convexSiteUrl}/auth/upsert-user`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: userInfo.email.toLowerCase(),
+        fullName: userInfo.name || userInfo.email,
+        provider,
+        providerId: userInfo.providerId,
+        avatarUrl: userInfo.avatarUrl,
+      }),
+    });
 
-  if (!userRes.ok) {
-    const text = await userRes.text();
-    throw new Error(`User upsert failed: ${text}`);
+    if (!userRes.ok) {
+      const text = await userRes.text();
+      await logToConvex(provider, "upsert_user", "error", "User upsert failed", text);
+      throw new Error(`User upsert failed: ${text}`);
+    }
+
+    const data = await userRes.json();
+    userId = data.userId;
+    await logToConvex(provider, "upsert_user", "info", `User upserted: ${userId}`);
+  } catch (err) {
+    if (!(err instanceof Error && err.message.startsWith("User upsert failed"))) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await logToConvex(provider, "upsert_user", "error", "User upsert exception", msg);
+    }
+    throw err;
   }
-
-  const { userId } = await userRes.json();
 
   // Create session via Convex HTTP action
   const token = createSessionToken();
   const tokenHash = hashSessionToken(token);
   const expiresAt = sessionExpiresAtMs();
 
-  const sessionRes = await fetch(`${convexSiteUrl}/auth/create-session`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tokenHash, userId, expiresAt }),
-  });
+  try {
+    const sessionRes = await fetch(`${convexSiteUrl}/auth/create-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tokenHash, userId, expiresAt }),
+    });
 
-  if (!sessionRes.ok) {
-    const text = await sessionRes.text();
-    throw new Error(`Session creation failed: ${text}`);
+    if (!sessionRes.ok) {
+      const text = await sessionRes.text();
+      await logToConvex(provider, "create_session", "error", "Session creation failed", text);
+      throw new Error(`Session creation failed: ${text}`);
+    }
+
+    await logToConvex(provider, "create_session", "info", "Session created successfully");
+  } catch (err) {
+    if (!(err instanceof Error && err.message.startsWith("Session creation failed"))) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await logToConvex(provider, "create_session", "error", "Session creation exception", msg);
+    }
+    throw err;
   }
 
   const baseUrl = getBaseUrl();
@@ -91,7 +154,8 @@ async function handleCallback(
     const mobileUrl = new URL(deepLink);
     mobileUrl.searchParams.set("token", token);
     mobileUrl.searchParams.set("provider", provider);
-    return NextResponse.redirect(mobileUrl.toString());
+    await logToConvex(provider, "redirect", "info", "Redirecting to mobile deep link");
+    return NextResponse.redirect(mobileUrl.toString(), 303);
   }
 
   // Desktop CLI client: redirect to local callback server
@@ -99,24 +163,15 @@ async function handleCallback(
     const localUrl = new URL("http://127.0.0.1:19836/callback");
     localUrl.searchParams.set("token", token);
     localUrl.searchParams.set("provider", provider);
-    return NextResponse.redirect(localUrl.toString());
+    await logToConvex(provider, "redirect", "info", "Redirecting to desktop callback");
+    return NextResponse.redirect(localUrl.toString(), 303);
   }
 
-  // Web client: set session cookie and redirect to dashboard
-  const dashboardUrl = new URL("/dashboard", baseUrl);
-  const response = NextResponse.redirect(dashboardUrl);
-
-  response.cookies.set({
-    name: SESSION_COOKIE_NAME,
-    value: token,
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: sessionMaxAgeSeconds(),
-  });
-
-  return response;
+  // Web client: redirect to /auth/callback which stores token in localStorage
+  const callbackUrl = new URL("/auth/callback", baseUrl);
+  callbackUrl.searchParams.set("token", token);
+  await logToConvex(provider, "redirect", "info", "Redirecting to web /auth/callback");
+  return NextResponse.redirect(callbackUrl.toString(), 303);
 }
 
 export async function GET(
@@ -136,10 +191,12 @@ export async function GET(
   const oauthError = url.searchParams.get("error");
 
   if (oauthError) {
+    await logToConvex(provider, "callback_error", "error", `OAuth error param: ${oauthError}`);
     return errorRedirect(`OAuth error: ${oauthError}`);
   }
 
   if (!code || !stateParam) {
+    await logToConvex(provider, "callback_error", "error", "Missing code or state param");
     return errorRedirect("Missing authorization code.");
   }
 
@@ -148,6 +205,7 @@ export async function GET(
   } catch (err) {
     const message = err instanceof Error ? err.message : "OAuth callback failed";
     console.error("OAuth callback error:", err);
+    await logToConvex(provider, "callback_exception", "error", message);
     return errorRedirect(message);
   }
 }
@@ -170,10 +228,12 @@ export async function POST(
   const oauthError = formData.get("error") as string | null;
 
   if (oauthError) {
+    await logToConvex(provider, "callback_error", "error", `OAuth error param (POST): ${oauthError}`);
     return errorRedirect(`OAuth error: ${oauthError}`);
   }
 
   if (!code || !stateParam) {
+    await logToConvex(provider, "callback_error", "error", "Missing code or state (POST)");
     return errorRedirect("Missing authorization code.");
   }
 
@@ -182,6 +242,7 @@ export async function POST(
   } catch (err) {
     const message = err instanceof Error ? err.message : "OAuth callback failed";
     console.error("OAuth callback error:", err);
+    await logToConvex(provider, "callback_exception", "error", message);
     return errorRedirect(message);
   }
 }
