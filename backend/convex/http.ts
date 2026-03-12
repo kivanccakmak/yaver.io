@@ -347,7 +347,7 @@ http.route({
     // Upsert user
     const userId = await ctx.runMutation(api.auth.createOrUpdateUser, {
       email: email.toLowerCase(),
-      fullName: fullName || email,
+      fullName: fullName || "",
       provider: "apple",
       providerId: sub,
     });

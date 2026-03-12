@@ -95,7 +95,7 @@ async function handleCallback(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         email: userInfo.email.toLowerCase(),
-        fullName: userInfo.name || userInfo.email,
+        fullName: userInfo.name || "",
         provider,
         providerId: userInfo.providerId,
         avatarUrl: userInfo.avatarUrl,

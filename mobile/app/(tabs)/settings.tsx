@@ -38,6 +38,8 @@ export default function SettingsScreen() {
   const { activeDevice, connectionStatus, disconnect } = useDevice();
   const { isDark, toggleTheme } = useTheme();
   const c = useColors();
+  // Name is "empty" if it equals the email or is blank
+  const displayName = user?.name && user.name !== user.email ? user.name : null;
   const [isEditingName, setIsEditingName] = useState(false);
   const [editName, setEditName] = useState(user?.name ?? "");
   const [isSavingName, setIsSavingName] = useState(false);
@@ -163,7 +165,7 @@ export default function SettingsScreen() {
           <View style={[styles.profileCard, { backgroundColor: c.bgCard, borderColor: c.border }]}>
             <View style={[styles.avatar, { backgroundColor: c.accent }]}>
               <Text style={[styles.avatarText, { color: c.textInverse }]}>
-                {user?.name?.charAt(0).toUpperCase() ?? "?"}
+                {displayName ? displayName.charAt(0).toUpperCase() : "?"}
               </Text>
             </View>
             <View style={styles.profileInfo}>
@@ -185,9 +187,9 @@ export default function SettingsScreen() {
                   </Pressable>
                 </View>
               ) : (
-                <Pressable onPress={() => { setEditName(user?.name ?? ""); setIsEditingName(true); }}>
-                  <Text style={[styles.profileName, { color: c.textPrimary }]}>
-                    {user?.name ?? "Set your name"}
+                <Pressable onPress={() => { setEditName(displayName ?? ""); setIsEditingName(true); }}>
+                  <Text style={[styles.profileName, { color: displayName ? c.textPrimary : c.textMuted }]}>
+                    {displayName || "Set your name"}
                   </Text>
                 </Pressable>
               )}
