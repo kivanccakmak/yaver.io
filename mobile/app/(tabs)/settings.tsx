@@ -15,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
+import { deleteAccount as deleteAccountApi } from "../../src/lib/auth";
 import { clearCache } from "../../src/lib/storage";
 
 const APP_VERSION = Constants.expoConfig?.version ?? "1.0.0";
@@ -80,10 +81,14 @@ export default function SettingsScreen() {
                   text: "Yes, Delete Everything",
                   style: "destructive",
                   onPress: async () => {
-                    // TODO: Call backend to delete account
-                    disconnect();
-                    await logout();
-                    router.replace("/login");
+                    const success = await deleteAccountApi();
+                    if (success) {
+                      disconnect();
+                      await logout();
+                      router.replace("/login");
+                    } else {
+                      Alert.alert("Error", "Failed to delete account. Please try again.");
+                    }
                   },
                 },
               ]
@@ -92,10 +97,6 @@ export default function SettingsScreen() {
         },
       ]
     );
-  };
-
-  const openLink = (url: string) => {
-    Linking.openURL(url).catch(() => {});
   };
 
   return (
@@ -246,10 +247,10 @@ export default function SettingsScreen() {
 
           <View style={[styles.linksCard, { backgroundColor: c.bgCard, borderColor: c.border }]}>
             {[
-              { label: "Website", url: "https://yaver.io" },
-              { label: "Privacy Policy", url: "https://yaver.io/privacy" },
-              { label: "Terms of Service", url: "https://yaver.io/terms" },
-              { label: "Contact", url: "mailto:support@yaver.io" },
+              { label: "Website", onPress: () => Linking.openURL("https://yaver.io").catch(() => {}) },
+              { label: "Privacy Policy", onPress: () => router.push("/legal/privacy") },
+              { label: "Terms of Service", onPress: () => router.push("/legal/terms") },
+              { label: "Contact", onPress: () => Linking.openURL("mailto:support@yaver.io").catch(() => {}) },
             ].map((link, i) => (
               <React.Fragment key={link.label}>
                 {i > 0 && <View style={[styles.separator, { backgroundColor: c.borderSubtle }]} />}
@@ -258,7 +259,7 @@ export default function SettingsScreen() {
                     styles.linkRow,
                     pressed && { backgroundColor: c.bgCardElevated },
                   ]}
-                  onPress={() => openLink(link.url)}
+                  onPress={link.onPress}
                 >
                   <Text style={[styles.linkText, { color: c.accent }]}>{link.label}</Text>
                   <Text style={[styles.linkChevron, { color: c.textMuted }]}>&rsaquo;</Text>

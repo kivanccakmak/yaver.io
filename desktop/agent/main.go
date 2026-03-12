@@ -307,12 +307,16 @@ func runServe(args []string) {
 
 	// Register device
 	hostname, _ := os.Hostname()
+	platform := runtime.GOOS
+	if platform == "darwin" {
+		platform = "macos"
+	}
 	log.Printf("Registering device %s (%s)...", hostname, cfg.DeviceID)
 	if err := RegisterDevice(cfg.ConvexSiteURL, RegisterDeviceRequest{
 		Token:    cfg.AuthToken,
 		DeviceID: cfg.DeviceID,
 		Name:     hostname,
-		Platform: runtime.GOOS,
+		Platform: platform,
 		QuicHost: "0.0.0.0",
 		QuicPort: *port,
 	}); err != nil {

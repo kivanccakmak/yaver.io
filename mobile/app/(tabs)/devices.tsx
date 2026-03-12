@@ -1,12 +1,15 @@
-import React from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Device, useDevice } from "../../src/context/DeviceContext";
 import { useColors } from "../../src/context/ThemeContext";
@@ -81,6 +84,136 @@ function DeviceCard({
   );
 }
 
+function CopyableCommand({ command }: { command: string }) {
+  const c = useColors();
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    await Clipboard.setStringAsync(command);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [command]);
+
+  return (
+    <Pressable
+      style={[styles.codeBlock, { backgroundColor: c.bg }]}
+      onPress={handleCopy}
+    >
+      <Text style={[styles.codeText, { color: c.textPrimary }]}>{command}</Text>
+      <Text style={[styles.copyHint, { color: copied ? c.success : c.textMuted }]}>
+        {copied ? "Copied!" : "Tap to copy"}
+      </Text>
+    </Pressable>
+  );
+}
+
+function PlatformIcon({ platform }: { platform: string }) {
+  const labels: Record<string, string> = { mac: "⌘", linux: "🐧", windows: "⊞" };
+  return <Text style={{ fontSize: 16, marginRight: 6 }}>{labels[platform] || ""}</Text>;
+}
+
+function PlatformTab({
+  platform,
+  label,
+  active,
+  onPress,
+}: {
+  platform: string;
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  const c = useColors();
+  return (
+    <Pressable
+      style={[
+        styles.platformTab,
+        {
+          backgroundColor: active ? c.textPrimary + "12" : "transparent",
+          borderColor: active ? c.textPrimary : c.border,
+        },
+      ]}
+      onPress={onPress}
+    >
+      <PlatformIcon platform={platform} color={active ? c.textPrimary : c.textMuted} />
+      <Text style={[styles.platformTabText, { color: active ? c.textPrimary : c.textMuted }]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function SetupInstructions() {
+  const c = useColors();
+  const [platform, setPlatform] = useState<"mac" | "linux" | "windows">("mac");
+
+  return (
+    <ScrollView contentContainerStyle={styles.setupContainer}>
+      <Text style={[styles.emptyTitle, { color: c.textPrimary }]}>Set Up Your Desktop</Text>
+      <Text style={[styles.emptySubtitle, { color: c.textSecondary }]}>
+        Install the Yaver agent on your dev machine, then pull to refresh.
+      </Text>
+
+      <View style={styles.platformTabs}>
+        <PlatformTab platform="mac" label="macOS" active={platform === "mac"} onPress={() => setPlatform("mac")} />
+        <PlatformTab platform="linux" label="Linux" active={platform === "linux"} onPress={() => setPlatform("linux")} />
+        <PlatformTab platform="windows" label="Windows" active={platform === "windows"} onPress={() => setPlatform("windows")} />
+      </View>
+
+      {platform === "mac" && (
+        <View style={styles.steps}>
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>1. Install via Homebrew</Text>
+          <CopyableCommand command="brew tap kivanccakmak/yaver && brew install yaver" />
+
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>2. Sign in</Text>
+          <CopyableCommand command="yaver auth" />
+
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>3. Start the agent</Text>
+          <CopyableCommand command="yaver serve" />
+        </View>
+      )}
+
+      {platform === "linux" && (
+        <View style={styles.steps}>
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>1. Install via Homebrew</Text>
+          <CopyableCommand command="brew tap kivanccakmak/yaver && brew install yaver" />
+
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>Or download directly</Text>
+          <CopyableCommand command={'curl -fsSL https://github.com/kivanccakmak/yaver-cli/releases/latest/download/yaver-linux-amd64 -o yaver && chmod +x yaver && sudo mv yaver /usr/local/bin/'} />
+
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>2. Sign in</Text>
+          <CopyableCommand command="yaver auth" />
+
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>3. Start the agent</Text>
+          <CopyableCommand command="yaver serve" />
+        </View>
+      )}
+
+      {platform === "windows" && (
+        <View style={styles.steps}>
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>1. Install via Scoop (PowerShell)</Text>
+          <CopyableCommand command="scoop bucket add yaver https://github.com/kivanccakmak/scoop-yaver && scoop install yaver" />
+
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>Or download manually</Text>
+          <Text style={[styles.stepHint, { color: c.textMuted }]}>
+            Download from yaver.io/download and add to your PATH.
+          </Text>
+
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>2. Sign in</Text>
+          <CopyableCommand command="yaver auth" />
+
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>3. Start the agent</Text>
+          <CopyableCommand command="yaver serve" />
+        </View>
+      )}
+
+      <Text style={[styles.refreshHint, { color: c.textMuted }]}>
+        Pull down to refresh after setup
+      </Text>
+    </ScrollView>
+  );
+}
+
 export default function DevicesScreen() {
   const c = useColors();
   const {
@@ -92,6 +225,12 @@ export default function DevicesScreen() {
     disconnect,
     refreshDevices,
   } = useDevice();
+
+  // Auto-refresh every 10 seconds
+  useEffect(() => {
+    const interval = setInterval(refreshDevices, 10000);
+    return () => clearInterval(interval);
+  }, [refreshDevices]);
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
@@ -118,14 +257,7 @@ export default function DevicesScreen() {
             contentContainerStyle={styles.listContent}
             refreshing={isLoadingDevices}
             onRefresh={refreshDevices}
-            ListEmptyComponent={
-              <View style={styles.center}>
-                <Text style={[styles.emptyTitle, { color: c.textPrimary }]}>No Devices Found</Text>
-                <Text style={[styles.emptySubtitle, { color: c.textSecondary }]}>
-                  Start the Yaver desktop agent on your computer to see it here.
-                </Text>
-              </View>
-            }
+            ListEmptyComponent={<SetupInstructions />}
             renderItem={({ item }) => (
               <DeviceCard
                 device={item}
@@ -173,11 +305,73 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 32,
   },
-  emptyTitle: { fontSize: 18, fontWeight: "700" },
+  emptyTitle: { fontSize: 20, fontWeight: "700", textAlign: "center" },
   emptySubtitle: {
     fontSize: 14,
     textAlign: "center",
     marginTop: 8,
+    lineHeight: 20,
+  },
+  setupContainer: {
+    padding: 8,
+    paddingTop: 24,
+    alignItems: "center",
+  },
+  platformTabs: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 20,
+    marginBottom: 20,
+  },
+  platformTab: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  platformTabText: {
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  steps: {
+    width: "100%",
+    gap: 6,
+  },
+  stepLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    marginTop: 10,
+    marginBottom: 2,
+  },
+  stepHint: {
+    fontSize: 12,
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  codeBlock: {
+    width: "100%",
+    borderRadius: 8,
+    padding: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  codeText: {
+    fontSize: 12,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    flex: 1,
+    marginRight: 8,
+  },
+  copyHint: {
+    fontSize: 10,
+    flexShrink: 0,
+  },
+  refreshHint: {
+    fontSize: 12,
+    marginTop: 24,
+    textAlign: "center",
   },
   card: {
     borderRadius: 12,

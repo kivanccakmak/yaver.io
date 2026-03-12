@@ -21,8 +21,9 @@ const tiers = [
   },
   {
     name: "Pro",
-    price: "$12",
-    period: "/month",
+    price: "$0",
+    originalPrice: "$12/mo",
+    period: "during early access",
     description: "For developers who use Claude daily.",
     features: [
       "Unlimited devices",
@@ -32,10 +33,10 @@ const tiers = [
       "Task history & search",
       "Team sharing (coming soon)",
     ],
-    cta: "Start free trial",
-    href: "/auth?signup=true&plan=pro",
+    cta: "Get started free",
+    href: "/auth?signup=true",
     highlighted: true,
-    badge: "POPULAR",
+    badge: "FREE IN EARLY ACCESS",
   },
   {
     name: "Enterprise",
@@ -70,6 +71,10 @@ const faqs = [
     a: "If a direct P2P connection cannot be established (e.g., restrictive NAT), we fall back to an encrypted relay. Your data is still end-to-end encrypted even through the relay.",
   },
   {
+    q: "Is it really free?",
+    a: "Yes. Yaver is in early access and all features across all tiers are completely free. We will give at least 60 days notice before any paid plans begin.",
+  },
+  {
     q: "Can I cancel my subscription anytime?",
     a: "Yes. Cancel anytime from your account settings. You'll keep access until the end of your billing period.",
   },
@@ -92,9 +97,12 @@ export default function PricingPage() {
         {/* Header */}
         <div className="mb-16 text-center">
           <h1 className="mb-4 text-3xl font-bold text-surface-50 md:text-4xl">Pricing</h1>
-          <p className="text-sm text-surface-500">
+          <p className="mb-6 text-sm text-surface-500">
             Start for free. Upgrade when you need more.
           </p>
+          <div className="inline-flex items-center rounded-full border border-green-800/60 bg-green-950/50 px-4 py-2 text-xs font-semibold text-green-400">
+            Early Access &mdash; All plans are free for a limited time
+          </div>
         </div>
 
         {/* Tiers */}
@@ -107,14 +115,17 @@ export default function PricingPage() {
               }`}
             >
               {tier.badge && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-surface-50 px-3 py-0.5 text-[10px] font-bold tracking-wider text-surface-950">
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-green-500 px-3 py-0.5 text-[10px] font-bold tracking-wider text-surface-950">
                   {tier.badge}
                 </div>
               )}
               <div className="mb-6">
                 <h3 className="mb-1 text-sm font-semibold text-surface-400">{tier.name}</h3>
-                <div className="flex items-baseline gap-1">
+                <div className="flex items-baseline gap-2">
                   <span className="text-3xl font-bold text-surface-50">{tier.price}</span>
+                  {(tier as typeof tier & { originalPrice?: string }).originalPrice && (
+                    <span className="text-sm text-surface-600 line-through">{(tier as typeof tier & { originalPrice?: string }).originalPrice}</span>
+                  )}
                   {tier.period && (
                     <span className="text-sm text-surface-500">{tier.period}</span>
                   )}

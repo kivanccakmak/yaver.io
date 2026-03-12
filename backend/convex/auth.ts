@@ -155,3 +155,42 @@ export const deleteSession = mutation({
     }
   },
 });
+
+/**
+ * Delete a user account and all associated data (sessions, devices).
+ * Requires a valid session token.
+ */
+export const deleteAccount = mutation({
+  args: {
+    tokenHash: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const result = await validateSessionInternal(ctx, args.tokenHash);
+    if (!result) {
+      throw new Error("Unauthorized");
+    }
+
+    const userId = result.user._id;
+
+    // Delete all sessions for this user
+    const sessions = await ctx.db
+      .query("sessions")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .collect();
+    for (const session of sessions) {
+      await ctx.db.delete(session._id);
+    }
+
+    // Delete all devices for this user
+    const devices = await ctx.db
+      .query("devices")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .collect();
+    for (const device of devices) {
+      await ctx.db.delete(device._id);
+    }
+
+    // Delete the user
+    await ctx.db.delete(userId);
+  },
+});

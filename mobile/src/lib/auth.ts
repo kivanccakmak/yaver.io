@@ -74,3 +74,23 @@ export function getOAuthUrl(provider: OAuthProvider): string {
   const base = getWebBaseUrl();
   return `${base}/api/auth/oauth/${provider}?client=mobile`;
 }
+
+export async function deleteAccount(): Promise<boolean> {
+  const token = await getToken();
+  if (!token) return false;
+
+  try {
+    const response = await fetch(`${getConvexSiteUrl()}/auth/delete-account`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) return false;
+    await clearToken();
+    return true;
+  } catch {
+    return false;
+  }
+}

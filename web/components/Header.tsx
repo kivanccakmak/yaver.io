@@ -11,11 +11,16 @@ export default function Header() {
   return (
     <header className="sticky top-0 z-50 border-b border-surface-800/60 bg-surface-950/80 backdrop-blur-xl">
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-        <Link href="/" className="flex items-center gap-2.5">
-          <span className="text-xl font-bold tracking-tight text-surface-50">
-            yaver<span className="font-normal text-surface-500">.io</span>
+        <div className="flex items-center gap-3">
+          <Link href="/" className="flex items-center gap-2.5">
+            <span className="text-xl font-bold tracking-tight text-surface-50">
+              yaver<span className="font-normal text-surface-500">.io</span>
+            </span>
+          </Link>
+          <span className="hidden rounded-full border border-green-800/60 bg-green-950/50 px-2.5 py-0.5 text-[10px] font-semibold tracking-wide text-green-400 sm:inline-flex">
+            Early Access
           </span>
-        </Link>
+        </div>
 
         <div className="hidden items-center gap-8 md:flex">
           <Link href="/#features" className="text-sm text-surface-400 transition-colors hover:text-surface-50">

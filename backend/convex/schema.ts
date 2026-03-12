@@ -32,7 +32,7 @@ export default defineSchema({
       v.literal("windows"),
       v.literal("linux")
     ),
-    publicKey: v.string(),
+    publicKey: v.optional(v.string()),
     quicHost: v.string(),
     quicPort: v.number(),
     isOnline: v.boolean(),

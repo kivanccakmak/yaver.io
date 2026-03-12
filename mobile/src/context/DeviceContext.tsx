@@ -50,7 +50,18 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       });
       if (res.ok) {
         const data = await res.json();
-        setDevices((data.devices || data) as Device[]);
+        const raw = data.devices || data || [];
+        // Map Convex device fields to our Device interface
+        const mapped: Device[] = raw.map((d: any) => ({
+          id: d.deviceId || d.id,
+          name: d.name,
+          host: d.quicHost || d.host,
+          port: d.quicPort || d.port,
+          online: d.isOnline ?? d.online ?? false,
+          lastSeen: d.lastHeartbeat || d.lastSeen || 0,
+          os: d.platform || d.os || "",
+        }));
+        setDevices(mapped);
       }
     } catch {
       // Silently fail — device list stays stale.

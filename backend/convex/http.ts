@@ -181,7 +181,7 @@ http.route({
       deviceId: body.deviceId,
       name: body.name,
       platform: body.platform,
-      publicKey: body.publicKey,
+      publicKey: body.publicKey || undefined,
       quicHost: body.quicHost,
       quicPort: body.quicPort,
     });
@@ -251,6 +251,29 @@ http.route({
     });
 
     return jsonResponse({ ok: true });
+  }),
+});
+
+// ── Account Deletion ────────────────────────────────────────────────
+
+/** POST /auth/delete-account — Delete user account and all data (authed). */
+http.route({
+  path: "/auth/delete-account",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    try {
+      await ctx.runMutation(api.auth.deleteAccount, { tokenHash });
+      return jsonResponse({ ok: true });
+    } catch {
+      return errorResponse("Failed to delete account", 500);
+    }
   }),
 });
 
