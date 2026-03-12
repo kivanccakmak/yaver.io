@@ -1,4 +1,5 @@
 import * as AppleAuthentication from "expo-apple-authentication";
+import Constants from "expo-constants";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { router } from "expo-router";
@@ -305,23 +306,28 @@ export default function LoginScreen() {
           </Pressable>
         </View>
 
-        <Text style={[styles.footer, { color: c.textMuted }]}>
-          By signing in you agree to the{" "}
-          <Text
-            style={{ color: c.accent }}
-            onPress={() => Linking.openURL("https://yaver.io/terms")}
-          >
-            Terms of Service
-          </Text>{" "}
-          and{" "}
-          <Text
-            style={{ color: c.accent }}
-            onPress={() => Linking.openURL("https://yaver.io/privacy")}
-          >
-            Privacy Policy
+        <View style={styles.footerContainer}>
+          <Text style={[styles.footer, { color: c.textMuted }]}>
+            By signing in you agree to the{" "}
+            <Text
+              style={{ color: c.accent }}
+              onPress={() => Linking.openURL("https://yaver.io/terms")}
+            >
+              Terms of Service
+            </Text>{" "}
+            and{" "}
+            <Text
+              style={{ color: c.accent }}
+              onPress={() => Linking.openURL("https://yaver.io/privacy")}
+            >
+              Privacy Policy
+            </Text>
+            .
           </Text>
-          .
-        </Text>
+          <Text style={[styles.versionText, { color: c.textMuted }]}>
+            v{Constants.expoConfig?.version ?? "1.0.0"}
+          </Text>
+        </View>
       </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -376,12 +382,20 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
   },
+  footerContainer: {
+    marginTop: 48,
+    paddingBottom: 24,
+    alignItems: "center",
+  },
   footer: {
     fontSize: 12,
     textAlign: "center",
-    marginTop: 48,
     lineHeight: 18,
-    paddingBottom: 24,
+  },
+  versionText: {
+    fontSize: 11,
+    marginTop: 12,
+    opacity: 0.6,
   },
   divider: {
     flexDirection: "row",
