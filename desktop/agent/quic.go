@@ -217,7 +217,7 @@ func (s *QUICServer) handleTaskList(stream quic.Stream) {
 }
 
 func (s *QUICServer) handleTaskContinue(stream quic.Stream, msg IncomingMessage) {
-	task, err := s.taskManager.ContinueTask(msg.TaskID, msg.Input)
+	task, err := s.taskManager.ResumeTask(msg.TaskID, msg.Input)
 	if err != nil {
 		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: err.Error()})
 		return

@@ -17,10 +17,12 @@ import (
 
 	osexec "os/exec"
 
+	"net"
+
 	"github.com/google/uuid"
 )
 
-const version = "1.2.1"
+const version = "1.4.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -42,10 +44,16 @@ func main() {
 		runLogs(os.Args[2:])
 	case "stop":
 		runStop()
+	case "clear-logs":
+		runClearLogs()
+	case "restart":
+		runRestart(os.Args[2:])
 	case "status":
 		runStatus()
 	case "devices":
 		runDevices()
+	case "config":
+		runConfig()
 	case "uninstall":
 		runUninstall()
 	case "help", "--help", "-h":
@@ -68,7 +76,10 @@ Usage:
   yaver connect     Connect to your dev machine
   yaver serve       Start the agent (runs in background)
   yaver stop        Stop the running agent
+  yaver restart     Restart the agent
   yaver logs        Show agent logs
+  yaver clear-logs  Clear agent log file
+  yaver config      Show current configuration
   yaver status      Show auth and connection status
   yaver devices     List your registered devices
   yaver uninstall   Remove config, certs, and stop the agent
@@ -77,7 +88,7 @@ Usage:
 
 Flags for serve:
   --debug           Run in foreground with verbose logging
-  --port            HTTP server port (default 8080)
+  --port            HTTP server port (default 18080)
   --quic-port       QUIC server port (default 4433)
   --work-dir        Working directory for tasks (default .)
 
@@ -135,10 +146,11 @@ func runAuth(args []string) {
 	authPageURL := "https://yaver.io/auth?client=desktop"
 	fmt.Printf("If your browser doesn't open, visit:\n  %s\n\n", authPageURL)
 
-	// Start local callback server
+	// Start local callback server — try multiple addresses for compatibility
 	callbackToken := make(chan string, 1)
-	srv := &http.Server{Addr: "127.0.0.1:19836"}
-	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+	callbackHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Printf("  Callback received: %s %s\n", r.Method, r.URL.String())
 		t := r.URL.Query().Get("token")
 		if t != "" {
 			w.Header().Set("Content-Type", "text/html")
@@ -152,18 +164,55 @@ func runAuth(args []string) {
 		}
 	})
 
-	go srv.ListenAndServe()
+	// Listen on both 127.0.0.1 and localhost for maximum compatibility
+	srv1 := &http.Server{Addr: "127.0.0.1:19836", Handler: callbackHandler}
+	srv2 := &http.Server{Addr: "localhost:19836", Handler: callbackHandler}
+
+	listenErr := make(chan error, 1)
+	go func() { listenErr <- srv1.ListenAndServe() }()
+
+	// Give first server a moment to start.
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case err := <-listenErr:
+		fmt.Fprintf(os.Stderr, "Error: could not start callback server on 127.0.0.1:19836: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Is another 'yaver auth' running?")
+		os.Exit(1)
+	default:
+	}
+
+	// Also try localhost (ignore errors — 127.0.0.1 may already cover it)
+	go func() { srv2.ListenAndServe() }()
+
 	openBrowser(authPageURL)
 
 	fmt.Println("Waiting for authentication...")
 
 	select {
 	case t := <-callbackToken:
-		srv.Close()
+		srv1.Close()
+		srv2.Close()
+		fmt.Printf("  Token received (%d chars)\n", len(t))
 		cfg.AuthToken = t
 		cfg.ConvexSiteURL = *convexURL
-		if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: token validation failed: %v\n", err)
+		// Retry validation — session may not be committed in Convex yet.
+		var validationErr error
+		for attempt := 0; attempt < 8; attempt++ {
+			if attempt > 0 {
+				delay := time.Duration(attempt) * time.Second
+				fmt.Printf("  Retrying validation (attempt %d/8, wait %s)...\n", attempt+1, delay)
+				time.Sleep(delay)
+			}
+			validationErr = ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken)
+			if validationErr == nil {
+				break
+			}
+			fmt.Printf("  Validation attempt %d failed: %v\n", attempt+1, validationErr)
+		}
+		if validationErr != nil {
+			fmt.Fprintf(os.Stderr, "Error: token validation failed after retries: %v\n", validationErr)
+			fmt.Fprintln(os.Stderr, "The token was received but could not be validated against Convex.")
+			fmt.Fprintln(os.Stderr, "Try again with: yaver auth")
 			os.Exit(1)
 		}
 		if cfg.DeviceID == "" {
@@ -181,7 +230,8 @@ func runAuth(args []string) {
 		fmt.Println("  yaver devices   List your devices")
 
 	case <-time.After(5 * time.Minute):
-		srv.Close()
+		srv1.Close()
+		srv2.Close()
 		fmt.Fprintln(os.Stderr, "Authentication timed out.")
 		os.Exit(1)
 	}
@@ -324,7 +374,7 @@ func isAgentRunning() (int, bool) {
 
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	httpPort := fs.Int("port", 8080, "HTTP server port")
+	httpPort := fs.Int("port", 18080, "HTTP server port")
 	quicPort := fs.Int("quic-port", 4433, "QUIC server port (legacy)")
 	workDir := fs.String("work-dir", ".", "Working directory for tasks")
 	noQUIC := fs.Bool("no-quic", false, "Disable QUIC server (HTTP only)")
@@ -339,17 +389,19 @@ func runServe(args []string) {
 		*workDir = wd
 	}
 
-	// Check if already running
-	if pid, running := isAgentRunning(); running {
-		fmt.Printf("Yaver agent is already running (PID %d).\n", pid)
-		fmt.Println("Use 'yaver stop' to stop it, or 'yaver logs' to view logs.")
-		return
+	// Check if already running (skip in debug mode — the forked child runs with --debug)
+	if !*debug {
+		if pid, running := isAgentRunning(); running {
+			fmt.Printf("Yaver agent is already running (PID %d).\n", pid)
+			fmt.Println("Use 'yaver stop' to stop it, or 'yaver logs' to view logs.")
+			return
+		}
 	}
 
 	cfg := mustLoadAuthConfig()
 
 	// Validate token before forking
-	if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
+	if _, err := ValidateTokenUser(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
 		fmt.Fprintf(os.Stderr, "Token expired or invalid. Run 'yaver auth' to re-authenticate.\n")
 		os.Exit(1)
 	}
@@ -420,7 +472,12 @@ func runServe(args []string) {
 		log.Fatalf("save config: %v", err)
 	}
 
-	log.Println("Token validated.")
+	// Get owner userId for multi-token auth
+	ownerUserID, err := ValidateTokenUser(cfg.ConvexSiteURL, cfg.AuthToken)
+	if err != nil {
+		log.Fatalf("failed to get owner userId: %v", err)
+	}
+	log.Printf("Token validated. Owner: %s", ownerUserID)
 
 	// Register device
 	hostname, _ := os.Hostname()
@@ -428,14 +485,15 @@ func runServe(args []string) {
 	if platform == "darwin" {
 		platform = "macos"
 	}
-	log.Printf("Registering device %s (%s)...", hostname, cfg.DeviceID)
+	localIP := getLocalIP()
+	log.Printf("Registering device %s (%s) at %s:%d...", hostname, cfg.DeviceID, localIP, *httpPort)
 	if err := RegisterDevice(cfg.ConvexSiteURL, RegisterDeviceRequest{
 		Token:    cfg.AuthToken,
 		DeviceID: cfg.DeviceID,
 		Name:     hostname,
 		Platform: platform,
-		QuicHost: "0.0.0.0",
-		QuicPort: *quicPort,
+		QuicHost: localIP,
+		QuicPort: *httpPort,
 	}); err != nil {
 		log.Fatalf("device registration failed: %v", err)
 	}
@@ -459,7 +517,7 @@ func runServe(args []string) {
 	go heartbeatLoop(ctx, cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID)
 
 	// Start HTTP server (V1 — primary, also serves MCP)
-	httpServer := NewHTTPServer(*httpPort, cfg.AuthToken, hostname, taskMgr)
+	httpServer := NewHTTPServer(*httpPort, cfg.AuthToken, ownerUserID, cfg.ConvexSiteURL, hostname, taskMgr)
 	go func() {
 		if err := httpServer.Start(ctx); err != nil {
 			log.Fatalf("HTTP server error: %v", err)
@@ -563,6 +621,84 @@ func runStop() {
 
 	os.Remove(pidFilePath())
 	fmt.Printf("Yaver agent stopped (was PID %d).\n", pid)
+}
+
+// ---------------------------------------------------------------------------
+// config — dump current CLI configuration
+// ---------------------------------------------------------------------------
+
+func runConfig() {
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfgPath, _ := ConfigPath()
+	fmt.Printf("Config file: %s\n\n", cfgPath)
+
+	token := cfg.AuthToken
+	if len(token) > 8 {
+		token = token[:4] + "..." + token[len(token)-4:]
+	} else if token != "" {
+		token = "***"
+	} else {
+		token = "(not set)"
+	}
+
+	fmt.Printf("auth_token:     %s\n", token)
+	fmt.Printf("device_id:      %s\n", valueOrEmpty(cfg.DeviceID))
+	fmt.Printf("convex_site_url: %s\n", valueOrEmpty(cfg.ConvexSiteURL))
+}
+
+func valueOrEmpty(s string) string {
+	if s == "" {
+		return "(not set)"
+	}
+	return s
+}
+
+// ---------------------------------------------------------------------------
+// clear-logs — truncate the agent log file
+// ---------------------------------------------------------------------------
+
+func runClearLogs() {
+	lp := logFilePath()
+	if lp == "" {
+		fmt.Fprintln(os.Stderr, "Could not determine log file path.")
+		os.Exit(1)
+	}
+	if err := os.Truncate(lp, 0); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No log file to clear.")
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Error clearing logs: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("Agent logs cleared.")
+}
+
+// ---------------------------------------------------------------------------
+// restart — stop and re-start the agent
+// ---------------------------------------------------------------------------
+
+func runRestart(args []string) {
+	if pid, running := isAgentRunning(); running {
+		proc, err := os.FindProcess(pid)
+		if err == nil {
+			proc.Signal(syscall.SIGTERM)
+			for i := 0; i < 30; i++ {
+				time.Sleep(100 * time.Millisecond)
+				if err := proc.Signal(syscall.Signal(0)); err != nil {
+					break
+				}
+			}
+		}
+		os.Remove(pidFilePath())
+		fmt.Printf("Stopped previous agent (PID %d).\n", pid)
+	}
+	runServe(args)
 }
 
 // ---------------------------------------------------------------------------
@@ -744,6 +880,48 @@ func listDevices(baseURL, token string) ([]DeviceInfo, error) {
 		return nil, fmt.Errorf("parse devices: %w", err)
 	}
 	return result.Devices, nil
+}
+
+// getLocalIP returns the preferred outbound local IP address.
+func getLocalIP() string {
+	// Try Tailscale IP first (100.x.x.x range)
+	ifaces, err := net.Interfaces()
+	if err == nil {
+		for _, iface := range ifaces {
+			if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+				continue
+			}
+			addrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
+			for _, addr := range addrs {
+				var ip net.IP
+				switch v := addr.(type) {
+				case *net.IPNet:
+					ip = v.IP
+				case *net.IPAddr:
+					ip = v.IP
+				}
+				if ip == nil || ip.IsLoopback() || ip.To4() == nil {
+					continue
+				}
+				// Tailscale uses 100.x.x.x CGNAT range
+				if ip[0] == 100 && ip[1] >= 64 && ip[1] <= 127 {
+					return ip.String()
+				}
+			}
+		}
+	}
+
+	// Fall back to default outbound IP
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "0.0.0.0"
+	}
+	defer conn.Close()
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String()
 }
 
 func openBrowser(url string) {

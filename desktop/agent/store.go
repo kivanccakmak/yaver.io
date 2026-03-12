@@ -11,15 +11,18 @@ import (
 
 // persistedTask is the JSON-serializable subset of Task that gets written to disk.
 type persistedTask struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Status      TaskStatus `json:"status"`
-	SessionID   string     `json:"session_id,omitempty"`
-	Output      string     `json:"output,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+	ID          string             `json:"id"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	Status      TaskStatus         `json:"status"`
+	SessionID   string             `json:"session_id,omitempty"`
+	Output      string             `json:"output,omitempty"`
+	ResultText  string             `json:"result_text,omitempty"`
+	CostUSD     float64            `json:"cost_usd,omitempty"`
+	Turns       []ConversationTurn `json:"turns,omitempty"`
+	CreatedAt   time.Time          `json:"created_at"`
+	StartedAt   *time.Time         `json:"started_at,omitempty"`
+	FinishedAt  *time.Time         `json:"finished_at,omitempty"`
 }
 
 // TaskStore persists task metadata to a JSON file under ~/.yaver/.
@@ -54,6 +57,9 @@ func (s *TaskStore) Save(tasks map[string]*Task) {
 			Status:      t.Status,
 			SessionID:   t.SessionID,
 			Output:      output,
+			ResultText:  t.ResultText,
+			CostUSD:     t.CostUSD,
+			Turns:       t.Turns,
 			CreatedAt:   t.CreatedAt,
 			StartedAt:   t.StartedAt,
 			FinishedAt:  t.FinishedAt,
@@ -109,6 +115,9 @@ func (s *TaskStore) Load() map[string]*Task {
 			Status:      status,
 			SessionID:   r.SessionID,
 			Output:      r.Output,
+			ResultText:  r.ResultText,
+			CostUSD:     r.CostUSD,
+			Turns:       r.Turns,
 			CreatedAt:   r.CreatedAt,
 			StartedAt:   r.StartedAt,
 			FinishedAt:  finishedAt,

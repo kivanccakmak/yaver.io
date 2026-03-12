@@ -81,6 +81,15 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [token, refreshDevices]);
 
+  // Auto-connect to the first online device if none is active
+  useEffect(() => {
+    if (!token || activeDevice || connectionStatus === "connecting") return;
+    const onlineDevice = devices.find((d) => d.online);
+    if (onlineDevice) {
+      selectDevice(onlineDevice);
+    }
+  }, [devices, token, activeDevice, connectionStatus, selectDevice]);
+
   const selectDevice = useCallback(
     async (device: Device) => {
       if (!token) return;

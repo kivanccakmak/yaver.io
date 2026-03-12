@@ -7,11 +7,13 @@
     "start": "next start"
   },
   "dependencies": {
+    "@tailwindcss/typography": "^0.5.19",
     "convex": "^1.17.0",
     "jose": "^6.2.1",
     "next": "^16.1.6",
     "react": "19.0.0",
-    "react-dom": "19.0.0"
+    "react-dom": "19.0.0",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -22,25 +22,78 @@ const (
 	TaskStatusQueued   TaskStatus = "queued"
 	TaskStatusRunning  TaskStatus = "running"
 	TaskStatusStopped  TaskStatus = "stopped"
-	TaskStatusFinished TaskStatus = "finished"
+	TaskStatusFinished TaskStatus = "completed"
 	TaskStatusFailed   TaskStatus = "failed"
 )
 
-// ClaudeEvent represents a line of stream-json output from Claude CLI.
+// ClaudeEvent represents a top-level line of stream-json output from Claude CLI.
+// With --include-partial-messages, events include:
+//   {"type":"system","subtype":"init",...}
+//   {"type":"stream_event","event":{...}} — incremental streaming (text_delta, tool_use, etc.)
+//   {"type":"assistant","message":{...}}  — complete assistant message (text or tool_use)
+//   {"type":"user","message":{...},"tool_use_result":{...}} — tool execution results (stdout/stderr)
+//   {"type":"result","result":"...", "total_cost_usd":0.01,...}
 type ClaudeEvent struct {
 	Type      string          `json:"type"`
+	Subtype   string          `json:"subtype,omitempty"`
 	SessionID string          `json:"session_id,omitempty"`
 	Message   json.RawMessage `json:"message,omitempty"`
-	Event     *struct {
-		Delta *struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"delta,omitempty"`
-	} `json:"event,omitempty"`
-	Result *struct {
-		Text      string `json:"text,omitempty"`
-		SessionID string `json:"session_id,omitempty"`
-	} `json:"result,omitempty"`
+	Event     json.RawMessage `json:"event,omitempty"` // For stream_event wrapper
+	RawResult json.RawMessage `json:"result,omitempty"`
+	TotalCost float64         `json:"total_cost_usd,omitempty"`
+	// Tool result (for "user" type events with tool output)
+	ToolUseResult *ToolUseResult `json:"tool_use_result,omitempty"`
+}
+
+// ToolUseResult contains stdout/stderr from a tool execution.
+type ToolUseResult struct {
+	Stdout      string `json:"stdout"`
+	Stderr      string `json:"stderr"`
+	Interrupted bool   `json:"interrupted"`
+}
+
+// streamEventInner is the inner event payload inside {"type":"stream_event","event":{...}}.
+type streamEventInner struct {
+	Type         string          `json:"type"` // message_start, content_block_start, content_block_delta, etc.
+	Index        int             `json:"index,omitempty"`
+	ContentBlock json.RawMessage `json:"content_block,omitempty"`
+	Delta        json.RawMessage `json:"delta,omitempty"`
+}
+
+// contentBlockInfo describes a content_block_start payload.
+type contentBlockInfo struct {
+	Type string `json:"type"` // "text" or "tool_use"
+	Name string `json:"name,omitempty"`
+}
+
+// deltaInfo describes a content_block_delta payload.
+type deltaInfo struct {
+	Type        string `json:"type"` // "text_delta" or "input_json_delta"
+	Text        string `json:"text,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
+}
+
+// claudeMessage is the parsed "message" field from assistant events.
+type claudeMessage struct {
+	Content []struct {
+		Type  string          `json:"type"`
+		Text  string          `json:"text,omitempty"`
+		Name  string          `json:"name,omitempty"`
+		Input json.RawMessage `json:"input,omitempty"`
+	} `json:"content"`
+}
+
+// bashInput is the parsed input from a Bash tool_use.
+type bashInput struct {
+	Command     string `json:"command"`
+	Description string `json:"description,omitempty"`
+}
+
+// ConversationTurn represents one user or assistant message in the task conversation.
+type ConversationTurn struct {
+	Role      string    `json:"role"` // "user" or "assistant"
+	Content   string    `json:"content"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // Task represents a single Claude CLI task running as a subprocess.
@@ -51,6 +104,9 @@ type Task struct {
 	Status      TaskStatus `json:"status"`
 	SessionID   string     `json:"session_id,omitempty"`
 	Output      string     `json:"output"`
+	ResultText   string  // Extracted clean result text from Claude
+	CostUSD      float64 // Total API cost
+	Turns       []ConversationTurn // Full conversation history
 	CreatedAt   time.Time  `json:"created_at"`
 	StartedAt   *time.Time `json:"started_at,omitempty"`
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`
@@ -64,15 +120,18 @@ type Task struct {
 
 // TaskInfo is the JSON-safe subset returned in listings.
 type TaskInfo struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Status      TaskStatus `json:"status"`
-	SessionID   string     `json:"session_id,omitempty"`
-	Output      string     `json:"output,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+	ID          string             `json:"id"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	Status      TaskStatus         `json:"status"`
+	SessionID   string             `json:"sessionId,omitempty"`
+	Output      string             `json:"output,omitempty"`
+	ResultText  string             `json:"resultText,omitempty"`
+	CostUSD     float64            `json:"costUsd,omitempty"`
+	Turns       []ConversationTurn `json:"turns,omitempty"`
+	CreatedAt   time.Time          `json:"createdAt"`
+	StartedAt   *time.Time         `json:"startedAt,omitempty"`
+	FinishedAt  *time.Time         `json:"finishedAt,omitempty"`
 }
 
 // TaskManager manages the lifecycle of tasks.
@@ -109,14 +168,18 @@ func (tm *TaskManager) persist() {
 func (tm *TaskManager) CreateTask(title, description string) (*Task, error) {
 	id := uuid.New().String()[:8]
 
+	now := time.Now()
 	task := &Task{
 		ID:          id,
 		Title:       title,
 		Description: description,
 		Status:      TaskStatusQueued,
-		CreatedAt:   time.Now(),
+		CreatedAt:   now,
 		outputCh:    make(chan string, 512),
 		doneCh:      make(chan struct{}),
+		Turns: []ConversationTurn{
+			{Role: "user", Content: title, Timestamp: now},
+		},
 	}
 
 	tm.mu.Lock()
@@ -124,13 +187,16 @@ func (tm *TaskManager) CreateTask(title, description string) (*Task, error) {
 	tm.persist()
 	tm.mu.Unlock()
 
+	log.Printf("[task %s] Starting Claude process for: %s", id, title)
 	if err := tm.startClaudeProcess(task); err != nil {
+		log.Printf("[task %s] Failed to start Claude: %v", id, err)
 		task.Status = TaskStatusFailed
 		tm.mu.Lock()
 		tm.persist()
 		tm.mu.Unlock()
 		return task, fmt.Errorf("start claude process: %w", err)
 	}
+	log.Printf("[task %s] Claude process started (PID %d)", id, task.cmd.Process.Pid)
 
 	return task, nil
 }
@@ -142,19 +208,23 @@ func (tm *TaskManager) startClaudeProcess(task *Task) error {
 		prompt = task.Title + "\n\n" + task.Description
 	}
 
+	// System prompt: behave as a remote terminal agent.
+	prompt += "\n\nYou are running tasks from a remote mobile device. Show what you are doing step by step. Use only terminal commands. Be concise. Format output in markdown."
+
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
 
-	// Use Claude CLI with stream-json output for structured streaming.
+	// Use Claude CLI with stream-json + partial messages for live streaming.
+	// --tools "Bash": restrict Claude to only the terminal/bash tool
+	// --include-partial-messages: get text_delta events for token-by-token streaming
 	// --dangerously-skip-permissions: auto-approve all tool use
-	// --output-format stream-json: get NDJSON events on stdout
-	// --include-partial-messages: stream tokens as they arrive
-	// --verbose: include full message metadata
 	cmd := exec.CommandContext(ctx,
 		"claude",
 		"-p", prompt,
 		"--output-format", "stream-json",
 		"--verbose",
+		"--include-partial-messages",
+		"--tools", "Bash",
 		"--dangerously-skip-permissions",
 	)
 	cmd.Dir = tm.workDir
@@ -200,11 +270,21 @@ func (tm *TaskManager) startClaudeProcess(task *Task) error {
 		if task.Status == TaskStatusRunning {
 			if err != nil {
 				task.Status = TaskStatusFailed
+				log.Printf("[task %s] Claude process failed: %v", task.ID, err)
 			} else {
 				task.Status = TaskStatusFinished
+				log.Printf("[task %s] Claude process finished successfully (output_len=%d)", task.ID, len(task.Output))
 			}
-			now := time.Now()
-			task.FinishedAt = &now
+			finishNow := time.Now()
+			task.FinishedAt = &finishNow
+			// Save assistant response as conversation turn
+			if task.ResultText != "" {
+				task.Turns = append(task.Turns, ConversationTurn{
+					Role:      "assistant",
+					Content:   task.ResultText,
+					Timestamp: finishNow,
+				})
+			}
 		}
 		tm.persist()
 		tm.mu.Unlock()
@@ -214,16 +294,39 @@ func (tm *TaskManager) startClaudeProcess(task *Task) error {
 	return nil
 }
 
-// readStreamJSON reads NDJSON from Claude CLI stdout, extracts text deltas,
-// and pushes them to the task's output channel for streaming to mobile.
+// emit pushes text to both the output buffer and the streaming channel.
+func (tm *TaskManager) emit(task *Task, output *strings.Builder, text string) {
+	output.WriteString(text)
+	tm.mu.Lock()
+	task.Output = output.String()
+	tm.mu.Unlock()
+	select {
+	case task.outputCh <- text:
+	default:
+	}
+}
+
+// readStreamJSON reads NDJSON from Claude CLI stdout with --include-partial-messages.
+// It produces a live markdown stream showing:
+//   - Commands Claude is running (from tool_use events)
+//   - Terminal output (from tool_result/user events)
+//   - Claude's text commentary (from text_delta streaming events)
 func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 	defer close(task.outputCh)
 
 	scanner := bufio.NewScanner(r)
-	// Increase buffer for large JSON lines.
 	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 
+	// Start from existing output (important for resumed tasks).
 	var output strings.Builder
+	tm.mu.RLock()
+	output.WriteString(task.Output)
+	tm.mu.RUnlock()
+
+	// Track state for accumulating tool input JSON across deltas.
+	var toolInputAccum strings.Builder
+	inToolUse := false
+	lastEmittedCmd := "" // Prevent duplicate command emissions
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -233,17 +336,8 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 
 		var event ClaudeEvent
 		if err := json.Unmarshal(line, &event); err != nil {
-			// Not JSON, treat as raw text.
 			text := string(line)
-			output.WriteString(text)
-			output.WriteString("\n")
-			tm.mu.Lock()
-			task.Output = output.String()
-			tm.mu.Unlock()
-			select {
-			case task.outputCh <- text:
-			default:
-			}
+			tm.emit(task, &output, text+"\n")
 			continue
 		}
 
@@ -254,31 +348,112 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 			tm.mu.Unlock()
 		}
 
-		// Handle text deltas (streaming tokens).
-		if event.Event != nil && event.Event.Delta != nil && event.Event.Delta.Type == "text_delta" {
-			text := event.Event.Delta.Text
-			output.WriteString(text)
-			tm.mu.Lock()
-			task.Output = output.String()
-			tm.mu.Unlock()
-			select {
-			case task.outputCh <- text:
-			default:
+		switch event.Type {
+		case "stream_event":
+			// Parse the inner streaming event.
+			if len(event.Event) == 0 {
+				continue
 			}
-		}
+			var inner streamEventInner
+			if err := json.Unmarshal(event.Event, &inner); err != nil {
+				continue
+			}
 
-		// Handle final result.
-		if event.Result != nil {
-			if event.Result.SessionID != "" {
-				tm.mu.Lock()
-				task.SessionID = event.Result.SessionID
-				tm.mu.Unlock()
+			switch inner.Type {
+			case "content_block_start":
+				// Check if this is a tool_use or text block.
+				if len(inner.ContentBlock) > 0 {
+					var cb contentBlockInfo
+					if json.Unmarshal(inner.ContentBlock, &cb) == nil {
+						if cb.Type == "tool_use" {
+							inToolUse = true
+							toolInputAccum.Reset()
+						}
+					}
+				}
+
+			case "content_block_delta":
+				if len(inner.Delta) == 0 {
+					continue
+				}
+				var d deltaInfo
+				if json.Unmarshal(inner.Delta, &d) != nil {
+					continue
+				}
+
+				if d.Type == "text_delta" && d.Text != "" {
+					// Stream Claude's text commentary token-by-token.
+					tm.emit(task, &output, d.Text)
+					log.Printf("[task %s delta] %s", task.ID, d.Text)
+				} else if d.Type == "input_json_delta" && d.PartialJSON != "" {
+					// Accumulate tool input JSON fragments.
+					toolInputAccum.WriteString(d.PartialJSON)
+				}
+
+			case "content_block_stop":
+				// If we were accumulating tool input, emit the command (if not already emitted).
+				if inToolUse && toolInputAccum.Len() > 0 {
+					var bi bashInput
+					if json.Unmarshal([]byte(toolInputAccum.String()), &bi) == nil && bi.Command != "" && bi.Command != lastEmittedCmd {
+						cmdText := fmt.Sprintf("\n**$ %s**\n", bi.Command)
+						tm.emit(task, &output, cmdText)
+						lastEmittedCmd = bi.Command
+						log.Printf("[task %s cmd] %s", task.ID, bi.Command)
+					}
+					inToolUse = false
+					toolInputAccum.Reset()
+				}
 			}
-			if event.Result.Text != "" {
-				output.WriteString(event.Result.Text)
-				tm.mu.Lock()
-				task.Output = output.String()
-				tm.mu.Unlock()
+
+		case "assistant":
+			// Complete assistant message. We already stream text via text_delta
+			// and commands via content_block_stop, so only emit tool_use as fallback
+			// if it wasn't already emitted.
+			if len(event.Message) > 0 {
+				var msg claudeMessage
+				if json.Unmarshal(event.Message, &msg) == nil {
+					for _, block := range msg.Content {
+						if block.Type == "tool_use" && len(block.Input) > 0 {
+							var bi bashInput
+							if json.Unmarshal(block.Input, &bi) == nil && bi.Command != "" && bi.Command != lastEmittedCmd {
+								cmdText := fmt.Sprintf("\n**$ %s**\n", bi.Command)
+								tm.emit(task, &output, cmdText)
+								lastEmittedCmd = bi.Command
+								log.Printf("[task %s cmd-fallback] %s", task.ID, bi.Command)
+							}
+						}
+					}
+				}
+			}
+
+		case "user":
+			// Tool result — contains stdout/stderr from bash execution.
+			if event.ToolUseResult != nil {
+				stdout := strings.TrimRight(event.ToolUseResult.Stdout, "\n")
+				stderr := strings.TrimRight(event.ToolUseResult.Stderr, "\n")
+				if stdout != "" {
+					resultText := fmt.Sprintf("```\n%s\n```\n", stdout)
+					tm.emit(task, &output, resultText)
+					log.Printf("[task %s stdout] %s", task.ID, truncate(stdout, 200))
+				}
+				if stderr != "" {
+					errText := fmt.Sprintf("```\n⚠ %s\n```\n", stderr)
+					tm.emit(task, &output, errText)
+					log.Printf("[task %s stderr-out] %s", task.ID, truncate(stderr, 200))
+				}
+			}
+
+		case "result":
+			// Final result — extract clean text and cost.
+			if len(event.RawResult) > 0 {
+				var resultStr string
+				if err := json.Unmarshal(event.RawResult, &resultStr); err == nil {
+					tm.mu.Lock()
+					task.ResultText = resultStr
+					task.CostUSD = event.TotalCost
+					tm.mu.Unlock()
+					log.Printf("[task %s result] cost=$%.4f len=%d", task.ID, event.TotalCost, len(resultStr))
+				}
 			}
 		}
 	}
@@ -286,6 +461,14 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 	if err := scanner.Err(); err != nil {
 		log.Printf("[task %s] scanner error: %v", task.ID, err)
 	}
+	log.Printf("[task %s] Stream reader finished (output_len=%d)", task.ID, output.Len())
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 // StopTask stops a running task by cancelling the context (kills the process).
@@ -322,45 +505,108 @@ func (tm *TaskManager) StopTask(id string) error {
 	return nil
 }
 
-// ContinueTask creates a new task that resumes a previous Claude session.
-func (tm *TaskManager) ContinueTask(parentID, input string) (*Task, error) {
-	tm.mu.RLock()
-	parent, ok := tm.tasks[parentID]
-	tm.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("task %s not found", parentID)
-	}
-
-	id := uuid.New().String()[:8]
-	task := &Task{
-		ID:          id,
-		Title:       fmt.Sprintf("Continue: %s", parent.Title),
-		Description: input,
-		Status:      TaskStatusQueued,
-		CreatedAt:   time.Now(),
-		outputCh:    make(chan string, 512),
-		doneCh:      make(chan struct{}),
-	}
-
+// DeleteTask removes a finished task from history.
+func (tm *TaskManager) DeleteTask(id string) error {
 	tm.mu.Lock()
-	tm.tasks[id] = task
+	defer tm.mu.Unlock()
+	task, ok := tm.tasks[id]
+	if !ok {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if task.Status == TaskStatusRunning || task.Status == TaskStatusQueued {
+		return fmt.Errorf("cannot delete %s task — stop it first", task.Status)
+	}
+	delete(tm.tasks, id)
+	tm.persist()
+	return nil
+}
+
+// StopAllTasks stops all running/queued tasks.
+func (tm *TaskManager) StopAllTasks() int {
+	tm.mu.RLock()
+	var ids []string
+	for id, t := range tm.tasks {
+		if t.Status == TaskStatusRunning || t.Status == TaskStatusQueued {
+			ids = append(ids, id)
+		}
+	}
+	tm.mu.RUnlock()
+
+	stopped := 0
+	for _, id := range ids {
+		if err := tm.StopTask(id); err == nil {
+			stopped++
+		}
+	}
+	return stopped
+}
+
+// DeleteAllTasks removes all finished tasks from history.
+func (tm *TaskManager) DeleteAllTasks() int {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	deleted := 0
+	for id, t := range tm.tasks {
+		if t.Status != TaskStatusRunning && t.Status != TaskStatusQueued {
+			delete(tm.tasks, id)
+			deleted++
+		}
+	}
+	tm.persist()
+	return deleted
+}
+
+// ResumeTask resumes an existing task in-place with a follow-up prompt.
+// Output is concatenated, same task ID is kept, and Claude session is resumed.
+func (tm *TaskManager) ResumeTask(id, input string) (*Task, error) {
+	tm.mu.Lock()
+	task, ok := tm.tasks[id]
+	if !ok {
+		tm.mu.Unlock()
+		return nil, fmt.Errorf("task %s not found", id)
+	}
+	if task.Status == TaskStatusRunning || task.Status == TaskStatusQueued {
+		tm.mu.Unlock()
+		return nil, fmt.Errorf("task %s is already running", id)
+	}
+
+	// Append follow-up to conversation history
+	turn := ConversationTurn{
+		Role:      "user",
+		Content:   input,
+		Timestamp: time.Now(),
+	}
+	task.Turns = append(task.Turns, turn)
+
+	// Add separator to output so streaming output concatenates visually
+	separator := fmt.Sprintf("\n\n---\n\n**Follow-up:** %s\n\n", input)
+	task.Output += separator
+	task.ResultText = "" // Clear previous result — new one will come
+	task.FinishedAt = nil
+	task.Status = TaskStatusQueued
+
+	// Re-create channels for the new run
+	task.outputCh = make(chan string, 512)
+	task.doneCh = make(chan struct{})
+
 	tm.persist()
 	tm.mu.Unlock()
 
-	// Use --resume with parent session ID if available.
-	if err := tm.startContinuation(task, parent.SessionID, input); err != nil {
-		task.Status = TaskStatusFailed
+	log.Printf("[task %s] Resuming with follow-up (session=%s): %s", id, task.SessionID, input)
+
+	if err := tm.startResume(task, input); err != nil {
 		tm.mu.Lock()
+		task.Status = TaskStatusFailed
 		tm.persist()
 		tm.mu.Unlock()
-		return task, fmt.Errorf("start continuation: %w", err)
+		return task, fmt.Errorf("resume task: %w", err)
 	}
 
 	return task, nil
 }
 
-// startContinuation spawns Claude CLI resuming a previous session.
-func (tm *TaskManager) startContinuation(task *Task, sessionID, prompt string) error {
+// startResume spawns Claude CLI resuming the task's existing session.
+func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
 
@@ -368,12 +614,14 @@ func (tm *TaskManager) startContinuation(task *Task, sessionID, prompt string) e
 		"-p", prompt,
 		"--output-format", "stream-json",
 		"--verbose",
+		"--include-partial-messages",
+		"--tools", "Bash",
 		"--dangerously-skip-permissions",
 	}
 
 	// Resume previous session if we have its ID.
-	if sessionID != "" {
-		args = append(args, "--resume", sessionID)
+	if task.SessionID != "" {
+		args = append(args, "--resume", task.SessionID)
 	}
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
@@ -422,6 +670,14 @@ func (tm *TaskManager) startContinuation(task *Task, sessionID, prompt string) e
 			}
 			now := time.Now()
 			task.FinishedAt = &now
+			// Save the latest result as a conversation turn
+			if task.ResultText != "" {
+				task.Turns = append(task.Turns, ConversationTurn{
+					Role:      "assistant",
+					Content:   task.ResultText,
+					Timestamp: now,
+				})
+			}
 		}
 		tm.persist()
 		tm.mu.Unlock()
@@ -450,6 +706,9 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			Status:      t.Status,
 			SessionID:   t.SessionID,
 			Output:      output,
+			ResultText:  t.ResultText,
+			CostUSD:     t.CostUSD,
+			Turns:       t.Turns,
 			CreatedAt:   t.CreatedAt,
 			StartedAt:   t.StartedAt,
 			FinishedAt:  t.FinishedAt,

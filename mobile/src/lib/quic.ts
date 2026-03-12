@@ -18,12 +18,21 @@ import { cacheTaskList, cacheTaskOutput, getCachedTaskList } from "./storage";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "stopped";
 
+export interface ConversationTurn {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
+}
+
 export interface Task {
   id: string;
   title: string;
   description: string;
   status: TaskStatus;
   output: string[];
+  resultText?: string;    // Extracted clean result from Claude
+  costUsd?: number;       // Total API cost in USD
+  turns?: ConversationTurn[];  // Full conversation history
   createdAt: number;
   updatedAt: number;
   /** Name of the device this task is executing on. */
@@ -109,8 +118,17 @@ export class QuicClient {
       body: JSON.stringify({ title, description }),
     });
     if (!res.ok) throw new Error(`Failed to create task: ${res.status}`);
-    const task = (await res.json()) as Task;
-    return task;
+    const data = await res.json();
+    // Agent returns { ok, taskId, status }
+    return {
+      id: data.taskId,
+      title,
+      description,
+      status: data.status,
+      output: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
   }
 
   /** List all tasks from the desktop agent, falling back to cache on failure. */
@@ -124,7 +142,28 @@ export class QuicClient {
         headers: this.authHeaders,
       });
       if (!res.ok) throw new Error(`Failed to list tasks: ${res.status}`);
-      const tasks = (await res.json()) as Task[];
+      const data = await res.json();
+      // Agent returns { ok, tasks: [...] } with output as a string
+      const rawTasks = data.tasks || [];
+      const tasks: Task[] = rawTasks.map((t: any) => ({
+        id: t.id,
+        title: t.title,
+        description: t.description,
+        status: t.status,
+        output: typeof t.output === "string" && t.output
+          ? t.output.split("\n").filter((l: string) => l)
+          : Array.isArray(t.output) ? t.output : [],
+        createdAt: t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
+        updatedAt: t.finishedAt
+          ? new Date(t.finishedAt).getTime()
+          : t.startedAt
+            ? new Date(t.startedAt).getTime()
+            : t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
+        deviceName: this.host,
+        resultText: t.resultText || undefined,
+        costUsd: t.costUsd || undefined,
+        turns: t.turns || undefined,
+      }));
       // Persist to local cache for offline access
       cacheTaskList(tasks);
       return tasks;
@@ -141,7 +180,27 @@ export class QuicClient {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to get task: ${res.status}`);
-    return (await res.json()) as Task;
+    const data = await res.json();
+    const t = data.task || data;
+    return {
+      id: t.id,
+      title: t.title,
+      description: t.description,
+      status: t.status,
+      output: typeof t.output === "string" && t.output
+        ? t.output.split("\n").filter((l: string) => l)
+        : Array.isArray(t.output) ? t.output : [],
+      createdAt: t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
+      updatedAt: t.finishedAt
+        ? new Date(t.finishedAt).getTime()
+        : t.startedAt
+          ? new Date(t.startedAt).getTime()
+          : t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
+      deviceName: this.host,
+      resultText: t.resultText || undefined,
+      costUsd: t.costUsd || undefined,
+      turns: t.turns || undefined,
+    };
   }
 
   /** Stop a running task. */
@@ -154,12 +213,13 @@ export class QuicClient {
     if (!res.ok) throw new Error(`Failed to stop task: ${res.status}`);
   }
 
-  /** Continue / resume a stopped or queued task. */
-  async continueTask(taskId: string): Promise<void> {
+  /** Resume a task with a follow-up prompt. */
+  async continueTask(taskId: string, input: string): Promise<void> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tasks/${taskId}/continue`, {
       method: "POST",
-      headers: this.authHeaders,
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ input }),
     });
     if (!res.ok) throw new Error(`Failed to continue task: ${res.status}`);
   }
@@ -172,6 +232,30 @@ export class QuicClient {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to delete task: ${res.status}`);
+  }
+
+  /** Stop all running tasks. */
+  async stopAllTasks(): Promise<number> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/tasks/stop-all`, {
+      method: "POST",
+      headers: this.authHeaders,
+    });
+    if (!res.ok) throw new Error(`Failed to stop all: ${res.status}`);
+    const data = await res.json();
+    return data.stopped || 0;
+  }
+
+  /** Delete all finished tasks. */
+  async deleteAllTasks(): Promise<number> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/tasks`, {
+      method: "DELETE",
+      headers: this.authHeaders,
+    });
+    if (!res.ok) throw new Error(`Failed to delete all: ${res.status}`);
+    const data = await res.json();
+    return data.deleted || 0;
   }
 
   // ── EventEmitter ───────────────────────────────────────────────────
@@ -287,34 +371,36 @@ export class QuicClient {
   }
 
   /**
-   * Poll the agent for new output lines.
+   * Poll the agent's task list for status updates.
    * This is a temporary mechanism; the real QUIC transport will push
    * output over a dedicated unidirectional stream.
    */
   private startPolling(): void {
     if (this.pollInterval) return;
+    // Track last known output lengths to detect new output
+    const lastOutputLen = new Map<string, number>();
+
     this.pollInterval = setInterval(async () => {
       try {
-        const res = await fetch(`${this.baseUrl}/tasks/output/stream`, {
+        const res = await fetch(`${this.baseUrl}/tasks`, {
           headers: this.authHeaders,
         });
         if (!res.ok) return;
-        const updates = (await res.json()) as Array<{
-          taskId: string;
-          line: string;
-        }>;
-        // Group output by task for caching
-        const outputByTask = new Map<string, string[]>();
-        for (const u of updates) {
-          this.emit("output", u.taskId, u.line);
-          if (!outputByTask.has(u.taskId)) {
-            outputByTask.set(u.taskId, []);
+        const data = await res.json();
+        const rawTasks = data.tasks || [];
+        for (const t of rawTasks) {
+          if (t.status !== "running" && t.status !== "completed") continue;
+          const output = typeof t.output === "string" ? t.output : "";
+          const prevLen = lastOutputLen.get(t.id) || 0;
+          if (output.length > prevLen) {
+            const newText = output.slice(prevLen);
+            const lines = newText.split("\n").filter((l: string) => l);
+            for (const line of lines) {
+              this.emit("output", t.id, line);
+            }
+            lastOutputLen.set(t.id, output.length);
+            cacheTaskOutput(t.id, lines);
           }
-          outputByTask.get(u.taskId)!.push(u.line);
-        }
-        // Persist output to local cache
-        for (const [taskId, lines] of outputByTask) {
-          cacheTaskOutput(taskId, lines);
         }
       } catch {
         // Polling failure — check if connection is lost
@@ -322,7 +408,7 @@ export class QuicClient {
         this.clearTimers();
         this.scheduleReconnect();
       }
-    }, 2000);
+    }, 3000);
   }
 }
 

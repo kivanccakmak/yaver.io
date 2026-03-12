@@ -50,7 +50,7 @@ const USE_CASES = [
 const COMPANY_SIZES = ["Solo", "2-10", "11-50", "51-200", "201-1000", "1000+"];
 
 export default function SurveyScreen() {
-  const { token, user, markSurveyCompleted } = useAuth();
+  const { token, user, markSurveyCompleted, refreshUser } = useAuth();
   const c = useColors();
 
   const [page, setPage] = useState(0);
@@ -85,6 +85,7 @@ export default function SurveyScreen() {
         useCase: useCase ?? undefined,
       });
       markSurveyCompleted();
+      await refreshUser();
       router.replace("/(tabs)/tasks");
     } catch {
       Alert.alert("Error", "Failed to submit survey. Please try again.");

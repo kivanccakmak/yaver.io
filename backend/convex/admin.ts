@@ -6,6 +6,30 @@ import { mutation, query } from "./_generated/server";
  * These are not exposed via HTTP — only callable via Convex client (scripts/dashboard).
  */
 
+/** List all users. */
+export const listAllUsers = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("users").collect();
+  },
+});
+
+/** List all sessions. */
+export const listAllSessions = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("sessions").collect();
+  },
+});
+
+/** List all devices. */
+export const listAllDevices = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("devices").collect();
+  },
+});
+
 /** Find all users by email. Returns array of user documents. */
 export const getUsersByEmail = query({
   args: { email: v.string() },

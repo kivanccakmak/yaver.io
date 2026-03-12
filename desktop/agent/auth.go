@@ -49,6 +49,34 @@ func ValidateToken(baseURL, token string) error {
 	return nil
 }
 
+// ValidateTokenUser checks the auth token against Convex and returns the userId.
+func ValidateTokenUser(baseURL, token string) (string, error) {
+	req, err := newBearerRequest("GET", baseURL+"/auth/validate", token, nil)
+	if err != nil {
+		return "", fmt.Errorf("create validate request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("validate token request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("validate token failed (status %d)", resp.StatusCode)
+	}
+
+	var result struct {
+		User struct {
+			UserID string `json:"userId"`
+		} `json:"user"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode validate response: %w", err)
+	}
+	return result.User.UserID, nil
+}
+
 // RegisterDeviceRequest contains the fields sent when registering a device.
 type RegisterDeviceRequest struct {
 	Token     string `json:"-"`

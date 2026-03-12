@@ -49,12 +49,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setToken(storedToken);
             setUser(validatedUser);
             await saveUser(validatedUser);
-            // Check survey status
-            try {
-              const survey = await getSurveyStatus(storedToken);
-              setSurveyCompleted(survey.completed);
-            } catch {
-              setSurveyCompleted(false);
+            // Use surveyCompleted from user record (set during validate)
+            if (validatedUser.surveyCompleted) {
+              setSurveyCompleted(true);
+            } else {
+              // Fallback: check survey table
+              try {
+                const survey = await getSurveyStatus(storedToken);
+                setSurveyCompleted(survey.completed);
+              } catch {
+                setSurveyCompleted(false);
+              }
             }
           } else {
             // Session expired or account deleted — clear local state
@@ -78,12 +83,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await saveUser(validatedUser);
     setToken(newToken);
     setUser(validatedUser);
-    // Check survey status after login
-    try {
-      const survey = await getSurveyStatus(newToken);
-      setSurveyCompleted(survey.completed);
-    } catch {
-      setSurveyCompleted(false);
+    // Use surveyCompleted from user record if available
+    if (validatedUser.surveyCompleted) {
+      setSurveyCompleted(true);
+    } else {
+      try {
+        const survey = await getSurveyStatus(newToken);
+        setSurveyCompleted(survey.completed);
+      } catch {
+        setSurveyCompleted(false);
+      }
     }
   }, []);
 

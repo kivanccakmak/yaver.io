@@ -10,6 +10,7 @@ export interface User {
   email: string;
   name: string;
   avatarUrl?: string;
+  surveyCompleted?: boolean;
 }
 
 export async function getToken(): Promise<string | null> {
@@ -62,6 +63,7 @@ export async function validateToken(token: string): Promise<User | null> {
       email: u.email,
       name: u.fullName ?? u.name,
       avatarUrl: u.avatarUrl,
+      surveyCompleted: u.surveyCompleted ?? false,
     } as User;
   } catch {
     return null;

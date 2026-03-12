@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
 import { agentClient, type Task, type ConnectionState } from "@/lib/agent-client";
 
 function formatRelativeTime(timestamp: number): string {
@@ -78,6 +79,7 @@ export default function TasksView({ connectionStatus, isDeviceConnected }: Tasks
   const [newTitle, setNewTitle] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
   const outputRef = useRef<HTMLDivElement>(null);
 
   // Fetch tasks
@@ -176,6 +178,21 @@ export default function TasksView({ connectionStatus, isDeviceConnected }: Tasks
     }
   }
 
+  async function handleStopAll() {
+    try {
+      await agentClient.stopAllTasks();
+      fetchTasks();
+    } catch {}
+  }
+
+  async function handleDeleteAll() {
+    try {
+      await agentClient.deleteAllTasks();
+      setTasks([]);
+      fetchTasks();
+    } catch {}
+  }
+
   // No device connected — show setup instructions
   if (!isDeviceConnected) {
     return (
@@ -243,12 +260,24 @@ export default function TasksView({ connectionStatus, isDeviceConnected }: Tasks
         <div className="flex w-full flex-col overflow-hidden lg:w-1/2 lg:border-r lg:border-surface-800">
           <div className="flex items-center justify-between border-b border-surface-800 px-4 py-3">
             <h2 className="text-lg font-semibold text-surface-50">Tasks</h2>
-            <button
-              onClick={() => setShowNewTask(!showNewTask)}
-              className="btn-primary px-3 py-1.5 text-xs"
-            >
-              {showNewTask ? "Cancel" : "New Task"}
-            </button>
+            <div className="flex items-center gap-2">
+              {tasks.some((t) => t.status === "running") && (
+                <button onClick={handleStopAll} className="rounded-lg border border-red-500/30 px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10">
+                  Stop All
+                </button>
+              )}
+              {tasks.some((t) => t.status !== "running" && t.status !== "queued") && (
+                <button onClick={handleDeleteAll} className="rounded-lg border border-surface-700 px-3 py-1.5 text-xs text-surface-400 hover:border-red-500/30 hover:text-red-400">
+                  Clear
+                </button>
+              )}
+              <button
+                onClick={() => setShowNewTask(!showNewTask)}
+                className="btn-primary px-3 py-1.5 text-xs"
+              >
+                {showNewTask ? "Cancel" : "New Task"}
+              </button>
+            </div>
           </div>
 
           {showNewTask && (
@@ -309,6 +338,11 @@ export default function TasksView({ connectionStatus, isDeviceConnected }: Tasks
                     {task.description && (
                       <p className="mt-1 truncate text-xs text-surface-400">
                         {task.description}
+                      </p>
+                    )}
+                    {task.resultText && (
+                      <p className="mt-1 truncate text-xs text-indigo-400">
+                        {task.resultText.substring(0, 80)}...
                       </p>
                     )}
                     <p className="mt-1 text-xs text-surface-500">
@@ -378,28 +412,55 @@ export default function TasksView({ connectionStatus, isDeviceConnected }: Tasks
               {/* Output stream */}
               <div className="flex-1 overflow-hidden p-4">
                 <div className="flex h-full flex-col rounded-xl border border-surface-700 bg-surface-950">
-                  <div className="flex items-center gap-2 border-b border-surface-800 px-4 py-2.5">
-                    <span className="h-3 w-3 rounded-full bg-red-500" />
-                    <span className="h-3 w-3 rounded-full bg-yellow-500" />
-                    <span className="h-3 w-3 rounded-full bg-green-500" />
-                    <span className="ml-2 text-xs text-surface-500">Output</span>
+                  <div className="flex items-center justify-between border-b border-surface-800 px-4 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full bg-red-500" />
+                      <span className="h-3 w-3 rounded-full bg-yellow-500" />
+                      <span className="h-3 w-3 rounded-full bg-green-500" />
+                      <span className="ml-2 text-xs text-surface-500">
+                        {selectedTask.resultText && !showRaw ? "Result" : "Output"}
+                      </span>
+                    </div>
+                    {(selectedTask.resultText || currentOutput.length > 0) && (
+                      <button
+                        onClick={() => setShowRaw(!showRaw)}
+                        className="text-xs text-indigo-400 hover:text-indigo-300"
+                      >
+                        {showRaw ? "Formatted" : "Raw"}
+                      </button>
+                    )}
                   </div>
                   <div
                     ref={outputRef}
-                    className="flex-1 overflow-y-auto p-4 font-mono text-xs leading-relaxed text-surface-300"
+                    className="flex-1 overflow-y-auto p-4"
                   >
-                    {currentOutput.length === 0 ? (
-                      <span className="text-surface-500">
+                    {!showRaw && selectedTask.resultText ? (
+                      <div className="prose prose-invert prose-sm max-w-none">
+                        <ReactMarkdown>{selectedTask.resultText}</ReactMarkdown>
+                        {selectedTask.costUsd !== undefined && selectedTask.costUsd > 0 && (
+                          <p className="mt-4 text-xs italic text-surface-500">
+                            Cost: ${selectedTask.costUsd.toFixed(4)}
+                          </p>
+                        )}
+                      </div>
+                    ) : !showRaw && selectedTask.status === "running" && currentOutput.length > 0 ? (
+                      <div className="prose prose-invert prose-sm max-w-none">
+                        <ReactMarkdown>{currentOutput.join("\n")}</ReactMarkdown>
+                      </div>
+                    ) : currentOutput.length === 0 ? (
+                      <span className="font-mono text-xs text-surface-500">
                         {selectedTask.status === "queued"
                           ? "Waiting for execution..."
                           : "No output yet."}
                       </span>
                     ) : (
-                      currentOutput.map((line, i) => (
-                        <div key={i} className="whitespace-pre-wrap break-all">
-                          {line}
-                        </div>
-                      ))
+                      <div className="font-mono text-xs leading-relaxed text-surface-300">
+                        {currentOutput.map((line, i) => (
+                          <div key={i} className="whitespace-pre-wrap break-all">
+                            {line}
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
                 </div>

@@ -9,12 +9,21 @@
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "stopped";
 
+export interface ConversationTurn {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
+}
+
 export interface Task {
   id: string;
   title: string;
   description: string;
   status: TaskStatus;
   output: string[];
+  resultText?: string;
+  costUsd?: number;
+  turns?: ConversationTurn[];
   createdAt: number;
   updatedAt: number;
   deviceName?: string;
@@ -92,7 +101,16 @@ class AgentClient {
       body: JSON.stringify({ title, description }),
     });
     if (!res.ok) throw new Error(`Failed to create task: ${res.status}`);
-    return (await res.json()) as Task;
+    const data = await res.json();
+    return {
+      id: data.taskId,
+      title,
+      description,
+      status: data.status,
+      output: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
   }
 
   async listTasks(): Promise<Task[]> {
@@ -104,7 +122,27 @@ class AgentClient {
         headers: this.authHeaders,
       });
       if (!res.ok) throw new Error(`Failed to list tasks: ${res.status}`);
-      const tasks = (await res.json()) as Task[];
+      const data = await res.json();
+      const rawTasks = data.tasks || [];
+      const tasks: Task[] = rawTasks.map((t: any) => ({
+        id: t.id,
+        title: t.title,
+        description: t.description,
+        status: t.status,
+        output: typeof t.output === "string" && t.output
+          ? t.output.split("\n").filter((l: string) => l)
+          : Array.isArray(t.output) ? t.output : [],
+        resultText: t.resultText || undefined,
+        costUsd: t.costUsd || undefined,
+        turns: t.turns || undefined,
+        createdAt: t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
+        updatedAt: t.finishedAt
+          ? new Date(t.finishedAt).getTime()
+          : t.startedAt
+            ? new Date(t.startedAt).getTime()
+            : t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
+        deviceName: this.host ?? undefined,
+      }));
       this.cacheTasks(tasks);
       return tasks;
     } catch {
@@ -118,7 +156,27 @@ class AgentClient {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to get task: ${res.status}`);
-    return (await res.json()) as Task;
+    const data = await res.json();
+    const t = data.task || data;
+    return {
+      id: t.id,
+      title: t.title,
+      description: t.description,
+      status: t.status,
+      output: typeof t.output === "string" && t.output
+        ? t.output.split("\n").filter((l: string) => l)
+        : Array.isArray(t.output) ? t.output : [],
+      resultText: t.resultText || undefined,
+      costUsd: t.costUsd || undefined,
+      turns: t.turns || undefined,
+      createdAt: t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
+      updatedAt: t.finishedAt
+        ? new Date(t.finishedAt).getTime()
+        : t.startedAt
+          ? new Date(t.startedAt).getTime()
+          : t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
+      deviceName: this.host ?? undefined,
+    };
   }
 
   async stopTask(taskId: string): Promise<void> {
@@ -130,11 +188,12 @@ class AgentClient {
     if (!res.ok) throw new Error(`Failed to stop task: ${res.status}`);
   }
 
-  async continueTask(taskId: string): Promise<void> {
+  async continueTask(taskId: string, input: string): Promise<void> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tasks/${taskId}/continue`, {
       method: "POST",
-      headers: this.authHeaders,
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ input }),
     });
     if (!res.ok) throw new Error(`Failed to continue task: ${res.status}`);
   }
@@ -146,6 +205,28 @@ class AgentClient {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to delete task: ${res.status}`);
+  }
+
+  async stopAllTasks(): Promise<number> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/tasks/stop-all`, {
+      method: "POST",
+      headers: this.authHeaders,
+    });
+    if (!res.ok) throw new Error(`Failed to stop all: ${res.status}`);
+    const data = await res.json();
+    return data.stopped || 0;
+  }
+
+  async deleteAllTasks(): Promise<number> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/tasks`, {
+      method: "DELETE",
+      headers: this.authHeaders,
+    });
+    if (!res.ok) throw new Error(`Failed to delete all: ${res.status}`);
+    const data = await res.json();
+    return data.deleted || 0;
   }
 
   // ── EventEmitter ───────────────────────────────────────────────────
@@ -256,25 +337,35 @@ class AgentClient {
 
   private startPolling(): void {
     if (this.pollInterval) return;
+    const lastOutputLen = new Map<string, number>();
+
     this.pollInterval = setInterval(async () => {
       try {
-        const res = await fetch(`${this.baseUrl}/tasks/output/stream`, {
+        const res = await fetch(`${this.baseUrl}/tasks`, {
           headers: this.authHeaders,
         });
         if (!res.ok) return;
-        const updates = (await res.json()) as Array<{
-          taskId: string;
-          line: string;
-        }>;
-        for (const u of updates) {
-          this.emit("output", u.taskId, u.line);
+        const data = await res.json();
+        const rawTasks = data.tasks || [];
+        for (const t of rawTasks) {
+          if (t.status !== "running" && t.status !== "completed") continue;
+          const output = typeof t.output === "string" ? t.output : "";
+          const prevLen = lastOutputLen.get(t.id) || 0;
+          if (output.length > prevLen) {
+            const newText = output.slice(prevLen);
+            const lines = newText.split("\n").filter((l: string) => l);
+            for (const line of lines) {
+              this.emit("output", t.id, line);
+            }
+            lastOutputLen.set(t.id, output.length);
+          }
         }
       } catch {
         this.setConnectionState("error");
         this.clearTimers();
         this.scheduleReconnect();
       }
-    }, 2000);
+    }, 3000);
   }
 
   // ── Local cache (localStorage) ─────────────────────────────────────

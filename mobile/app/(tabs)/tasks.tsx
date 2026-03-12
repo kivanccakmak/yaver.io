@@ -1,20 +1,24 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
+  Alert,
   Animated,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
-  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Markdown from "react-native-markdown-display";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useColors } from "../../src/context/ThemeContext";
 import {
@@ -68,11 +72,76 @@ const BANNER_CONFIG: Record<
   },
 };
 
-const SWIPE_THRESHOLD = -80;
+// ── Typing indicator ─────────────────────────────────────────────────
 
-// ── Swipeable task row ───────────────────────────────────────────────
+function TypingIndicator({ color }: { color: string }) {
+  const dot1 = useRef(new Animated.Value(0.3)).current;
+  const dot2 = useRef(new Animated.Value(0.3)).current;
+  const dot3 = useRef(new Animated.Value(0.3)).current;
 
-function SwipeableTaskRow({
+  useEffect(() => {
+    const animate = (dot: Animated.Value, delay: number) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(dot, { toValue: 1, duration: 400, useNativeDriver: true }),
+          Animated.timing(dot, { toValue: 0.3, duration: 400, useNativeDriver: true }),
+        ])
+      );
+    const a1 = animate(dot1, 0);
+    const a2 = animate(dot2, 200);
+    const a3 = animate(dot3, 400);
+    a1.start(); a2.start(); a3.start();
+    return () => { a1.stop(); a2.stop(); a3.stop(); };
+  }, [dot1, dot2, dot3]);
+
+  return (
+    <View style={s.typingRow}>
+      <View style={s.typingBubble}>
+        {[dot1, dot2, dot3].map((dot, i) => (
+          <Animated.View
+            key={i}
+            style={[s.typingDot, { backgroundColor: color, opacity: dot }]}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+// ── Chat bubble ──────────────────────────────────────────────────────
+
+function ChatBubble({
+  turn,
+  c,
+}: {
+  turn: { role: string; content: string };
+  c: ReturnType<typeof useColors>;
+}) {
+  const isUser = turn.role === "user";
+
+  if (isUser) {
+    return (
+      <View style={s.userRow}>
+        <View style={[s.userBubble, { backgroundColor: c.accent || "#6366f1" }]}>
+          <Text style={s.userBubbleText}>{turn.content}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={s.assistantRow}>
+      <View style={[s.assistantBubble, { backgroundColor: c.bgCardElevated || "#1a1a2e" }]}>
+        <Markdown style={markdownStyles(c)}>{turn.content || " "}</Markdown>
+      </View>
+    </View>
+  );
+}
+
+// ── Task card ────────────────────────────────────────────────────────
+
+function TaskCard({
   item,
   onPress,
   onDelete,
@@ -82,100 +151,41 @@ function SwipeableTaskRow({
   onDelete: () => void;
 }) {
   const c = useColors();
-  const translateX = useRef(new Animated.Value(0)).current;
-  const canSwipe = item.status === "completed" || item.status === "failed";
+  const canDelete = item.status !== "running" && item.status !== "queued";
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gesture) =>
-        canSwipe && Math.abs(gesture.dx) > 10 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
-      onPanResponderMove: (_, gesture) => {
-        if (gesture.dx < 0) {
-          translateX.setValue(gesture.dx);
-        }
-      },
-      onPanResponderRelease: (_, gesture) => {
-        if (gesture.dx < SWIPE_THRESHOLD) {
-          Animated.timing(translateX, {
-            toValue: -300,
-            duration: 200,
-            useNativeDriver: true,
-          }).start(() => onDelete());
-        } else {
-          Animated.spring(translateX, {
-            toValue: 0,
-            useNativeDriver: true,
-          }).start();
-        }
-      },
-    })
-  ).current;
+  const handleLongPress = () => {
+    if (!canDelete) return;
+    Alert.alert("Delete Task", "Are you sure?", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: onDelete },
+    ]);
+  };
 
-  const lastOutput =
-    item.status === "running" && item.output.length > 0
-      ? item.output[item.output.length - 1]
+  const previewText = item.resultText
+    ? item.resultText.substring(0, 120) + (item.resultText.length > 120 ? "..." : "")
+    : item.status === "running"
+      ? "Running..."
       : null;
 
   return (
-    <View style={styles.swipeContainer}>
-      {/* Delete background */}
-      {canSwipe && (
-        <View style={styles.deleteBackground}>
-          <Text style={styles.deleteBackgroundText}>Delete</Text>
+    <TouchableOpacity
+      style={[s.cardContainer, s.taskCard, { backgroundColor: c.bgCard, borderColor: c.border }]}
+      onPress={onPress}
+      onLongPress={handleLongPress}
+      activeOpacity={0.7}
+    >
+      <View style={s.taskHeader}>
+        <View style={[s.statusBadge, { backgroundColor: STATUS_COLORS[item.status] + "22" }]}>
+          <Text style={[s.statusText, { color: STATUS_COLORS[item.status] }]}>{item.status}</Text>
         </View>
-      )}
-
-      <Animated.View
-        style={{ transform: [{ translateX }] }}
-        {...(canSwipe ? panResponder.panHandlers : {})}
-      >
-        <Pressable
-          style={({ pressed }) => [
-            styles.taskCard,
-            { backgroundColor: c.bgCard, borderColor: c.border },
-            pressed && styles.taskCardPressed,
-          ]}
-          onPress={onPress}
-        >
-          <View style={styles.taskHeader}>
-            <View
-              style={[
-                styles.statusBadge,
-                { backgroundColor: STATUS_COLORS[item.status] + "22" },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.statusText,
-                  { color: STATUS_COLORS[item.status] },
-                ]}
-              >
-                {item.status}
-              </Text>
-            </View>
-            {item.deviceName ? (
-              <View style={[styles.deviceBadge, { backgroundColor: c.bgCardElevated }]}>
-                <Text style={[styles.deviceBadgeText, { color: c.textMuted }]}>{item.deviceName}</Text>
-              </View>
-            ) : null}
-          </View>
-          <Text style={[styles.taskTitle, { color: c.textPrimary }]}>{item.title}</Text>
-          {item.description && !lastOutput ? (
-            <Text style={[styles.taskDesc, { color: c.textMuted }]} numberOfLines={2}>
-              {item.description}
-            </Text>
-          ) : null}
-          {lastOutput ? (
-            <Text style={[styles.taskOutputPreview, { color: c.accent }]} numberOfLines={1}>
-              {lastOutput}
-            </Text>
-          ) : null}
-          <Text style={[styles.taskTimestamp, { color: c.textMuted }]}>
-            {formatRelativeTime(item.updatedAt)}
-          </Text>
-        </Pressable>
-      </Animated.View>
-    </View>
+        {item.status === "running" && <ActivityIndicator size="small" color="#6366f1" />}
+      </View>
+      <Text style={[s.taskTitle, { color: c.textPrimary }]} numberOfLines={2}>{item.title}</Text>
+      {previewText ? (
+        <Text style={[s.taskOutputPreview, { color: c.accent }]} numberOfLines={1}>{previewText}</Text>
+      ) : null}
+      <Text style={[s.taskTimestamp, { color: c.textMuted }]}>{formatRelativeTime(item.updatedAt)}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -189,6 +199,35 @@ function formatRelativeTime(ts: number): string {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
+/** Build chat messages from task turns + live streaming output. */
+function buildChatMessages(task: Task): { role: string; content: string }[] {
+  const messages: { role: string; content: string }[] = [];
+
+  if (task.turns && task.turns.length > 0) {
+    for (const turn of task.turns) {
+      messages.push({ role: turn.role, content: turn.content });
+    }
+  } else {
+    messages.push({ role: "user", content: task.title });
+    if (task.resultText) {
+      messages.push({ role: "assistant", content: task.resultText });
+    }
+  }
+
+  // If running and we have streaming output, show it as live assistant message
+  if (task.status === "running" && task.output.length > 0) {
+    const streamText = task.output.join("");
+    if (streamText.trim()) {
+      const lastAssistant = messages.filter(m => m.role === "assistant").pop();
+      if (!lastAssistant || lastAssistant.content !== streamText) {
+        messages.push({ role: "assistant", content: streamText });
+      }
+    }
+  }
+
+  return messages;
+}
+
 // ── Main screen ──────────────────────────────────────────────────────
 
 export default function TasksScreen() {
@@ -200,52 +239,88 @@ export default function TasksScreen() {
   const [newTaskText, setNewTaskText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [quicState, setQuicState] = useState<ConnectionState>(
-    quicClient.connectionState
-  );
+  const [followUpText, setFollowUpText] = useState("");
+  const [isSendingFollowUp, setIsSendingFollowUp] = useState(false);
+  const [quicState, setQuicState] = useState<ConnectionState>(quicClient.connectionState);
+  const chatScrollRef = useRef<ScrollView>(null);
 
-  // Track QUIC connection state independently for the banner
+  // Track QUIC connection state
   useEffect(() => {
-    const unsub = quicClient.on("connectionState", (state) => {
-      setQuicState(state);
-    });
-    return unsub;
+    return quicClient.on("connectionState", setQuicState);
   }, []);
 
-  // Fetch tasks (works offline via cache fallback)
+  // Fetch tasks
   const fetchTasks = useCallback(async () => {
     try {
       const list = await quicClient.listTasks();
       setTasks(list);
-    } catch {
-      // Silently fail — stale data stays visible
-    }
+      // Keep selected task in sync with latest data
+      setSelectedTask((prev) => {
+        if (!prev) return null;
+        return list.find((t) => t.id === prev.id) || prev;
+      });
+    } catch {}
   }, []);
 
+  const hasRunningTask = tasks.some(t => t.status === "running" || t.status === "queued");
   useEffect(() => {
     fetchTasks();
-    const interval = setInterval(fetchTasks, 5000);
+    // Poll less frequently when a task is running (streaming handles live output)
+    const interval = setInterval(fetchTasks, hasRunningTask ? 10000 : 3000);
     return () => clearInterval(interval);
-  }, [fetchTasks]);
+  }, [fetchTasks, hasRunningTask]);
 
-  // Listen for streaming output
+  // Listen for streaming output — buffer updates to avoid UI freezing
+  const outputBufferRef = useRef<Record<string, string[]>>({});
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
-    const unsub = quicClient.on("output", (taskId, line) => {
+    const flushOutputBuffer = () => {
+      const buffer = outputBufferRef.current;
+      outputBufferRef.current = {};
+      flushTimerRef.current = null;
+
+      const taskIds = Object.keys(buffer);
+      if (taskIds.length === 0) return;
+
       setTasks((prev) =>
-        prev.map((t) =>
-          t.id === taskId ? { ...t, output: [...t.output, line] } : t
-        )
+        prev.map((t) => {
+          const newLines = buffer[t.id];
+          if (!newLines) return t;
+          return { ...t, output: [...t.output, ...newLines] };
+        })
       );
-      setSelectedTask((prev) =>
-        prev && prev.id === taskId
-          ? { ...prev, output: [...prev.output, line] }
-          : prev
-      );
+      setSelectedTask((prev) => {
+        if (!prev || !buffer[prev.id]) return prev;
+        return { ...prev, output: [...prev.output, ...buffer[prev.id]] };
+      });
+    };
+
+    const unsub = quicClient.on("output", (taskId, line) => {
+      if (!outputBufferRef.current[taskId]) {
+        outputBufferRef.current[taskId] = [];
+      }
+      outputBufferRef.current[taskId].push(line);
+
+      // Flush every 250ms to keep UI responsive while still showing progress
+      if (!flushTimerRef.current) {
+        flushTimerRef.current = setTimeout(flushOutputBuffer, 250);
+      }
     });
-    return unsub;
+
+    return () => {
+      unsub();
+      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+    };
   }, []);
 
-  // Pull-to-refresh
+  // Auto-scroll chat when output changes
+  useEffect(() => {
+    if (selectedTask) {
+      setTimeout(() => chatScrollRef.current?.scrollToEnd({ animated: true }), 100);
+    }
+  }, [selectedTask?.output.length, selectedTask?.resultText, selectedTask?.status]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await fetchTasks();
@@ -257,94 +332,104 @@ export default function TasksScreen() {
     Keyboard.dismiss();
     setIsSubmitting(true);
     try {
-      await quicClient.sendTask(newTaskText.trim(), "");
+      const task = await quicClient.sendTask(newTaskText.trim(), "");
       setNewTaskText("");
       setShowNewTask(false);
-      await fetchTasks();
+      // Add task to list immediately
+      setTasks((prev) => [task, ...prev]);
+      // Wait for new-task modal to close, then open chat modal
+      setTimeout(() => {
+        setSelectedTask(task);
+      }, 400);
+      // Refresh from server in background
+      fetchTasks();
     } catch {
-      // Handle error
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleStopTask = async (taskId: string) => {
-    try {
-      await quicClient.stopTask(taskId);
-      await fetchTasks();
-    } catch {
-      // Handle error
-    }
+    try { await quicClient.stopTask(taskId); await fetchTasks(); } catch {}
   };
 
-  const handleContinueTask = async (taskId: string) => {
+  const handleFollowUp = async () => {
+    if (!selectedTask || !followUpText.trim()) return;
+    Keyboard.dismiss();
+    setIsSendingFollowUp(true);
     try {
-      await quicClient.continueTask(taskId);
+      await quicClient.continueTask(selectedTask.id, followUpText.trim());
+      setFollowUpText("");
       await fetchTasks();
     } catch {
-      // Handle error
+    } finally {
+      setIsSendingFollowUp(false);
     }
   };
 
   const handleDeleteTask = async (taskId: string) => {
-    // Optimistic removal
     setTasks((prev) => prev.filter((t) => t.id !== taskId));
-    try {
-      await quicClient.deleteTask(taskId);
-    } catch {
-      // Refetch on failure to restore
-      await fetchTasks();
-    }
+    try { await quicClient.deleteTask(taskId); } catch { await fetchTasks(); }
   };
 
-  // Determine which banner state to show
+  const handleStopAll = async () => {
+    try { await quicClient.stopAllTasks(); await fetchTasks(); } catch {}
+  };
+
+  const handleDeleteAll = async () => {
+    try { await quicClient.deleteAllTasks(); setTasks([]); await fetchTasks(); } catch {}
+  };
+
   const effectiveState: ConnectionState =
     connectionStatus === "connected" ? quicState : connectionStatus;
   const banner = BANNER_CONFIG[effectiveState];
 
+  const chatMessages = selectedTask ? buildChatMessages(selectedTask) : [];
+  const isRunning = selectedTask?.status === "running" || selectedTask?.status === "queued";
+
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
-      <View style={styles.container}>
-        {/* Connection status banner */}
-        <View
-          style={[
-            styles.banner,
-            { backgroundColor: banner.bg, borderBottomColor: banner.border },
-          ]}
-        >
-          <View style={[styles.dot, { backgroundColor: banner.dot }]} />
-          <Text style={[styles.bannerText, { color: banner.text }]}>
-            {banner.label}
-            {activeDevice ? ` \u00b7 ${activeDevice.name}` : ""}
+    <SafeAreaView style={[s.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
+      <View style={s.container}>
+        {/* Connection banner */}
+        <View style={[s.banner, { backgroundColor: banner.bg, borderBottomColor: banner.border }]}>
+          <View style={[s.dot, { backgroundColor: banner.dot }]} />
+          <Text style={[s.bannerText, { color: banner.text }]}>
+            {banner.label}{activeDevice ? ` \u00b7 ${activeDevice.name}` : ""}
           </Text>
         </View>
+
+        {/* Action bar */}
+        {tasks.length > 0 && connectionStatus === "connected" && (
+          <View style={[s.actionBar, { borderBottomColor: c.border }]}>
+            {tasks.some(t => t.status === "running") && (
+              <Pressable style={[s.actionButton, { backgroundColor: "#ef444418" }]} onPress={handleStopAll}>
+                <Text style={[s.actionButtonText, { color: "#ef4444" }]}>Stop All</Text>
+              </Pressable>
+            )}
+            {tasks.some(t => t.status !== "running" && t.status !== "queued") && (
+              <Pressable style={[s.actionButton, { backgroundColor: c.bgCardElevated }]} onPress={handleDeleteAll}>
+                <Text style={[s.actionButtonText, { color: c.textMuted }]}>Clear History</Text>
+              </Pressable>
+            )}
+          </View>
+        )}
 
         {/* Task list */}
         <FlatList
           data={tasks}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={[
-            styles.listContent,
-            tasks.length === 0 && styles.listContentEmpty,
-          ]}
+          alwaysBounceVertical
+          contentContainerStyle={[s.listContent, tasks.length === 0 && s.listContentEmpty]}
           refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={c.accent}
-              colors={[c.accent]}
-              progressBackgroundColor={c.bgCard}
-            />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.accent} colors={[c.accent]} progressBackgroundColor={c.bgCard} />
           }
           ListEmptyComponent={
-            <View style={styles.emptyList}>
-              <Text style={[styles.emptyIcon, { color: c.textMuted }]}>{"[ ]"}</Text>
-              <Text style={[styles.emptyTitle, { color: c.textPrimary }]}>
-                {connectionStatus !== "connected"
-                  ? "No Device Connected"
-                  : "All Clear"}
+            <View style={s.emptyList}>
+              <Text style={[s.emptyIcon, { color: c.textMuted }]}>{"[ ]"}</Text>
+              <Text style={[s.emptyTitle, { color: c.textPrimary }]}>
+                {connectionStatus !== "connected" ? "No Device Connected" : "All Clear"}
               </Text>
-              <Text style={[styles.emptySubtitle, { color: c.textSecondary }]}>
+              <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>
                 {connectionStatus !== "connected"
                   ? "Go to the Devices tab to connect to your desktop agent."
                   : "No tasks yet. Tap the + button to create your first task."}
@@ -352,7 +437,7 @@ export default function TasksScreen() {
             </View>
           }
           renderItem={({ item }) => (
-            <SwipeableTaskRow
+            <TaskCard
               item={item}
               onPress={() => setSelectedTask(item)}
               onDelete={() => handleDeleteTask(item.id)}
@@ -360,156 +445,138 @@ export default function TasksScreen() {
           )}
         />
 
-        {/* FAB — only show when connected */}
+        {/* FAB */}
         {connectionStatus === "connected" && (
-          <Pressable
-            style={({ pressed }) => [
-              styles.fab,
-              pressed && styles.fabPressed,
-            ]}
-            onPress={() => setShowNewTask(true)}
-          >
-            <Text style={styles.fabText}>+</Text>
+          <Pressable style={({ pressed }) => [s.fab, pressed && s.fabPressed]} onPress={() => setShowNewTask(true)}>
+            <Text style={s.fabText}>+</Text>
           </Pressable>
         )}
 
         {/* New Task Modal */}
         <Modal visible={showNewTask} animationType="slide" transparent>
-          <KeyboardAvoidingView
-            style={styles.modalOverlay}
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
-          >
-            <Pressable style={styles.modalDismiss} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); }} />
-            <View style={[styles.modalContent, { backgroundColor: c.bgCard }]}>
-              <Text style={[styles.modalTitle, { color: c.textPrimary }]}>New Task</Text>
+          <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+            <Pressable style={s.modalDismiss} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); }} />
+            <View style={[s.modalContent, { backgroundColor: c.bgCard }]}>
+              <Text style={[s.modalTitle, { color: c.textPrimary }]}>New Task</Text>
               <TextInput
-                style={[styles.input, styles.inputMultiline, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
+                style={[s.input, s.inputMultiline, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
                 placeholder="What would you like Claude to do?"
                 placeholderTextColor={c.textMuted}
                 value={newTaskText}
                 onChangeText={setNewTaskText}
-                multiline
-                numberOfLines={4}
-                textAlignVertical="top"
-                autoFocus
+                multiline numberOfLines={4} textAlignVertical="top" autoFocus
               />
-              <View style={styles.modalButtons}>
-                <Pressable
-                  style={[styles.cancelButton, { backgroundColor: c.bgCardElevated }]}
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    setShowNewTask(false);
-                    setNewTaskText("");
-                  }}
-                >
-                  <Text style={[styles.cancelButtonText, { color: c.textSecondary }]}>Cancel</Text>
+              <View style={s.modalButtons}>
+                <Pressable style={[s.cancelButton, { backgroundColor: c.bgCardElevated }]} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); }}>
+                  <Text style={[s.cancelButtonText, { color: c.textSecondary }]}>Cancel</Text>
                 </Pressable>
                 <Pressable
-                  style={[
-                    styles.submitButton,
-                    { backgroundColor: c.accent },
-                    (!newTaskText.trim() || isSubmitting) &&
-                      styles.submitButtonDisabled,
-                  ]}
+                  style={[s.submitButton, { backgroundColor: c.accent }, (!newTaskText.trim() || isSubmitting) && s.submitButtonDisabled]}
                   onPress={handleCreateTask}
                   disabled={!newTaskText.trim() || isSubmitting}
                 >
-                  <Text style={styles.submitButtonText}>
-                    {isSubmitting ? "Sending..." : "Send"}
-                  </Text>
+                  <Text style={s.submitButtonText}>{isSubmitting ? "Sending..." : "Send"}</Text>
                 </Pressable>
               </View>
             </View>
           </KeyboardAvoidingView>
         </Modal>
 
-        {/* Task Detail Modal */}
-        <Modal visible={!!selectedTask} animationType="slide" transparent>
-          <View style={styles.modalOverlay}>
-            <View style={[styles.modalContent, styles.detailModal, { backgroundColor: c.bgCard }]}>
-              {selectedTask && (
-                <>
-                  <View style={styles.detailHeader}>
-                    <Text style={[styles.modalTitle, { color: c.textPrimary }]} numberOfLines={2}>
+        {/* ── Chat Detail Modal ───────────────────────────────────── */}
+        <Modal visible={!!selectedTask} animationType="slide" transparent onRequestClose={() => setSelectedTask(null)}>
+          <KeyboardAvoidingView
+            style={s.chatModalOverlay}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={0}
+          >
+            {/* Tap outside to dismiss */}
+            <Pressable style={s.chatModalDismissArea} onPress={() => setSelectedTask(null)} />
+            {selectedTask && (
+              <View style={[s.chatModal, { backgroundColor: c.bg }]}>
+                {/* Header */}
+                <View style={[s.chatHeader, { borderBottomColor: c.border }]}>
+                  <Pressable onPress={() => { setSelectedTask(null); setFollowUpText(""); }} style={s.chatBackBtn}>
+                    <Text style={[s.chatBackText, { color: c.accent }]}>Close</Text>
+                  </Pressable>
+                  <View style={s.chatHeaderCenter}>
+                    <Text style={[s.chatHeaderTitle, { color: c.textPrimary }]} numberOfLines={1}>
                       {selectedTask.title}
                     </Text>
-                    <Pressable onPress={() => setSelectedTask(null)}>
-                      <Text style={[styles.closeButton, { color: c.textMuted }]}>X</Text>
-                    </Pressable>
-                  </View>
-                  <View style={styles.detailMeta}>
-                    <View
-                      style={[
-                        styles.statusBadge,
-                        {
-                          backgroundColor:
-                            STATUS_COLORS[selectedTask.status] + "22",
-                        },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.statusText,
-                          { color: STATUS_COLORS[selectedTask.status] },
-                        ]}
-                      >
+                    <View style={s.chatHeaderMeta}>
+                      <View style={[s.statusDotSmall, { backgroundColor: STATUS_COLORS[selectedTask.status] }]} />
+                      <Text style={[s.chatHeaderStatus, { color: STATUS_COLORS[selectedTask.status] }]}>
                         {selectedTask.status}
                       </Text>
-                    </View>
-                    {selectedTask.deviceName ? (
-                      <View style={styles.deviceBadge}>
-                        <Text style={styles.deviceBadgeText}>
-                          {selectedTask.deviceName}
+                      {selectedTask.costUsd ? (
+                        <Text style={[s.chatHeaderCost, { color: c.textMuted }]}>
+                          ${selectedTask.costUsd.toFixed(4)}
                         </Text>
-                      </View>
-                    ) : null}
+                      ) : null}
+                    </View>
                   </View>
-                  {selectedTask.description ? (
-                    <Text style={[styles.detailDesc, { color: c.textSecondary }]}>
-                      {selectedTask.description}
-                    </Text>
-                  ) : null}
+                  {isRunning ? (
+                    <Pressable onPress={() => handleStopTask(selectedTask.id)} style={s.chatStopBtn}>
+                      <Text style={s.chatStopText}>Stop</Text>
+                    </Pressable>
+                  ) : <View style={{ width: 50 }} />}
+                </View>
 
-                  {/* Output */}
-                  <View style={styles.outputContainer}>
-                    <Text style={[styles.outputLabel, { color: c.textMuted }]}>Output</Text>
-                    <FlatList
-                      data={selectedTask.output}
-                      keyExtractor={(_, i) => String(i)}
-                      style={[styles.outputList, { backgroundColor: c.bg }]}
-                      renderItem={({ item: line }) => (
-                        <Text style={[styles.outputLine, { color: c.textPrimary }]}>{line}</Text>
-                      )}
-                      ListEmptyComponent={
-                        <Text style={[styles.outputEmpty, { color: c.textMuted }]}>No output yet.</Text>
-                      }
-                    />
-                  </View>
+                {/* Chat messages */}
+                <ScrollView
+                  ref={chatScrollRef}
+                  style={s.chatScroll}
+                  contentContainerStyle={s.chatScrollContent}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {chatMessages.map((msg, i) => (
+                    <ChatBubble key={`${i}-${msg.role}`} turn={msg} c={c} />
+                  ))}
+                  {isRunning && chatMessages[chatMessages.length - 1]?.role !== "assistant" && (
+                    <TypingIndicator color={c.accent || "#6366f1"} />
+                  )}
+                  {isRunning && chatMessages[chatMessages.length - 1]?.role === "assistant" && (
+                    <View style={s.streamingIndicator}>
+                      <ActivityIndicator size="small" color={c.accent} />
+                      <Text style={[s.streamingText, { color: c.textMuted }]}>Claude is working...</Text>
+                    </View>
+                  )}
+                </ScrollView>
 
-                  {/* Actions */}
-                  <View style={styles.detailActions}>
-                    {selectedTask.status === "running" && (
+                {/* Input bar */}
+                <View style={[s.chatInputBar, { borderTopColor: c.border, backgroundColor: c.bgCard }]}>
+                  {isRunning ? (
+                    <View style={s.chatInputBarRunning}>
+                      <ActivityIndicator size="small" color={c.accent} />
+                      <Text style={[s.chatRunningText, { color: c.textMuted }]}>Task is running...</Text>
+                    </View>
+                  ) : (
+                    <>
+                      <TextInput
+                        style={[s.chatInput, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
+                        placeholder="Follow up..."
+                        placeholderTextColor={c.textMuted}
+                        value={followUpText}
+                        onChangeText={setFollowUpText}
+                        multiline
+                        maxLength={2000}
+                      />
                       <Pressable
-                        style={styles.stopButton}
-                        onPress={() => handleStopTask(selectedTask.id)}
+                        style={[
+                          s.chatSendBtn,
+                          { backgroundColor: c.accent },
+                          (!followUpText.trim() || isSendingFollowUp) && s.submitButtonDisabled,
+                        ]}
+                        onPress={handleFollowUp}
+                        disabled={!followUpText.trim() || isSendingFollowUp}
                       >
-                        <Text style={styles.stopButtonText}>Stop</Text>
+                        <Text style={s.chatSendText}>{isSendingFollowUp ? "..." : "\u2191"}</Text>
                       </Pressable>
-                    )}
-                    {(selectedTask.status === "stopped" ||
-                      selectedTask.status === "queued") && (
-                      <Pressable
-                        style={styles.continueButton}
-                        onPress={() => handleContinueTask(selectedTask.id)}
-                      >
-                        <Text style={styles.continueButtonText}>Continue</Text>
-                      </Pressable>
-                    )}
-                  </View>
-                </>
-              )}
-            </View>
-          </View>
+                    </>
+                  )}
+                </View>
+              </View>
+            )}
+          </KeyboardAvoidingView>
         </Modal>
       </View>
     </SafeAreaView>
@@ -518,248 +585,127 @@ export default function TasksScreen() {
 
 // ── Styles ───────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
+const s = StyleSheet.create({
   safeArea: { flex: 1 },
   container: { flex: 1 },
 
   // Banner
-  banner: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-  },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 8,
-  },
+  banner: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1 },
+  dot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
   bannerText: { fontSize: 13, fontWeight: "500" },
 
   // List
   listContent: { padding: 16, paddingBottom: 100 },
   listContentEmpty: { flex: 1 },
-
-  // Empty state
-  emptyList: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 32,
-  },
+  emptyList: { flex: 1, justifyContent: "center", alignItems: "center", paddingHorizontal: 32 },
   emptyIcon: { fontSize: 48, marginBottom: 16 },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#d0d0d0",
-    marginBottom: 8,
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    color: "#666",
-    textAlign: "center",
-    lineHeight: 20,
-  },
-
-  // Swipe
-  swipeContainer: { marginBottom: 12, position: "relative" },
-  deleteBackground: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "#ef4444",
-    borderRadius: 12,
-    justifyContent: "center",
-    alignItems: "flex-end",
-    paddingRight: 24,
-  },
-  deleteBackgroundText: {
-    color: "#fff",
-    fontWeight: "700",
-    fontSize: 14,
-  },
+  emptyTitle: { fontSize: 20, fontWeight: "700", marginBottom: 8 },
+  emptySubtitle: { fontSize: 14, textAlign: "center", lineHeight: 20 },
 
   // Task card
-  taskCard: {
-    backgroundColor: "#111",
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: "#1e1e2e",
-  },
+  cardContainer: { marginBottom: 12 },
+  taskCard: { borderRadius: 12, padding: 16, borderWidth: 1 },
   taskCardPressed: { opacity: 0.7 },
-  taskHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 8,
-    gap: 8,
-  },
-  statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: "600",
-    textTransform: "uppercase",
-  },
-  deviceBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-    backgroundColor: "#1e1e2e",
-  },
-  deviceBadgeText: {
-    fontSize: 11,
-    fontWeight: "500",
-    color: "#666",
-  },
-  taskTitle: { fontSize: 16, fontWeight: "600", color: "#d0d0d0" },
-  taskDesc: { fontSize: 13, color: "#666", marginTop: 4 },
-  taskOutputPreview: {
-    fontSize: 12,
-    color: "#6366f1",
-    marginTop: 6,
-    fontFamily: "monospace",
-  },
-  taskTimestamp: {
-    fontSize: 11,
-    color: "#444",
-    marginTop: 8,
-  },
+  taskHeader: { flexDirection: "row", alignItems: "center", marginBottom: 8, gap: 8 },
+  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
+  statusText: { fontSize: 12, fontWeight: "600", textTransform: "uppercase" },
+  taskTitle: { fontSize: 16, fontWeight: "600" },
+  taskOutputPreview: { fontSize: 12, marginTop: 6, fontFamily: "monospace" },
+  taskTimestamp: { fontSize: 11, marginTop: 8 },
 
   // FAB
-  fab: {
-    position: "absolute",
-    bottom: 24,
-    right: 24,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: "#6366f1",
-    alignItems: "center",
-    justifyContent: "center",
-    elevation: 4,
-    shadowColor: "#6366f1",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-  },
+  fab: { position: "absolute", bottom: 24, right: 24, width: 56, height: 56, borderRadius: 28, backgroundColor: "#6366f1", alignItems: "center", justifyContent: "center", elevation: 4, shadowColor: "#6366f1", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
   fabPressed: { opacity: 0.8, transform: [{ scale: 0.95 }] },
   fabText: { fontSize: 28, color: "#ffffff", fontWeight: "300" },
 
-  // Modals
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    justifyContent: "flex-end",
-  },
-  modalDismiss: {
-    flex: 1,
-  },
-  modalContent: {
-    backgroundColor: "#111",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 24,
-    paddingBottom: 40,
-  },
-  detailModal: { flex: 0.85 },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#d0d0d0",
-    marginBottom: 20,
-    flex: 1,
-  },
-
-  // Inputs
-  input: {
-    backgroundColor: "#0a0a0a",
-    borderWidth: 1,
-    borderColor: "#1e1e2e",
-    borderRadius: 10,
-    padding: 14,
-    fontSize: 15,
-    color: "#d0d0d0",
-    marginBottom: 12,
-  },
+  // New task modal
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "flex-end" },
+  modalDismiss: { flex: 1 },
+  modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
+  modalTitle: { fontSize: 20, fontWeight: "700", marginBottom: 20 },
+  input: { borderWidth: 1, borderRadius: 10, padding: 14, fontSize: 15, marginBottom: 12 },
   inputMultiline: { minHeight: 100 },
   modalButtons: { flexDirection: "row", gap: 12, marginTop: 8 },
-  cancelButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 10,
-    backgroundColor: "#1e1e2e",
-    alignItems: "center",
-  },
-  cancelButtonText: { color: "#a1a1aa", fontWeight: "600", fontSize: 15 },
-  submitButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 10,
-    backgroundColor: "#6366f1",
-    alignItems: "center",
-  },
+  cancelButton: { flex: 1, paddingVertical: 14, borderRadius: 10, alignItems: "center" },
+  cancelButtonText: { fontWeight: "600", fontSize: 15 },
+  submitButton: { flex: 1, paddingVertical: 14, borderRadius: 10, alignItems: "center" },
   submitButtonDisabled: { opacity: 0.4 },
   submitButtonText: { color: "#ffffff", fontWeight: "600", fontSize: 15 },
 
-  // Detail modal
-  detailHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-  },
-  detailMeta: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 12,
-  },
-  closeButton: {
-    color: "#666",
-    fontSize: 18,
-    fontWeight: "700",
-    padding: 4,
-  },
-  detailDesc: { color: "#a1a1aa", fontSize: 14, marginBottom: 16 },
-  outputContainer: { flex: 1, marginTop: 8 },
-  outputLabel: {
-    color: "#666",
-    fontSize: 12,
-    fontWeight: "600",
-    textTransform: "uppercase",
-    marginBottom: 8,
-  },
-  outputList: {
-    backgroundColor: "#050508",
-    borderRadius: 8,
-    padding: 12,
-    flex: 1,
-  },
-  outputLine: {
-    color: "#d0d0d0",
-    fontSize: 12,
-    fontFamily: "monospace",
-    lineHeight: 18,
-  },
-  outputEmpty: { color: "#3f3f46", fontSize: 12, fontStyle: "italic" },
-  detailActions: { flexDirection: "row", gap: 12, marginTop: 16 },
-  stopButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 10,
-    backgroundColor: "#ef444422",
-    alignItems: "center",
-  },
-  stopButtonText: { color: "#ef4444", fontWeight: "600" },
-  continueButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 10,
-    backgroundColor: "#6366f122",
-    alignItems: "center",
-  },
-  continueButtonText: { color: "#6366f1", fontWeight: "600" },
+  // Action bar
+  actionBar: { flexDirection: "row", paddingHorizontal: 16, paddingVertical: 8, gap: 8, borderBottomWidth: 1 },
+  actionButton: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8 },
+  actionButtonText: { fontSize: 12, fontWeight: "600" },
+
+  // ── Chat modal ─────────────────────────────────────────────────────
+  chatModalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.3)" },
+  chatModalDismissArea: { height: 50 },
+  chatModal: { flex: 1, borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: "hidden" },
+
+  // Chat header
+  chatHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 12, borderBottomWidth: 1 },
+  chatBackBtn: { width: 50 },
+  chatBackText: { fontSize: 15, fontWeight: "600" },
+  chatHeaderCenter: { flex: 1, alignItems: "center" },
+  chatHeaderTitle: { fontSize: 14, fontWeight: "600" },
+  chatHeaderMeta: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 },
+  statusDotSmall: { width: 6, height: 6, borderRadius: 3 },
+  chatHeaderStatus: { fontSize: 11, fontWeight: "500", textTransform: "uppercase" },
+  chatHeaderCost: { fontSize: 11, marginLeft: 6 },
+  chatStopBtn: { width: 50, alignItems: "flex-end" },
+  chatStopText: { color: "#ef4444", fontSize: 14, fontWeight: "600" },
+
+  // Chat messages
+  chatScroll: { flex: 1 },
+  chatScrollContent: { padding: 16, paddingBottom: 8 },
+
+  userRow: { flexDirection: "row", justifyContent: "flex-end", marginBottom: 12 },
+  userBubble: { maxWidth: "80%", borderRadius: 18, borderBottomRightRadius: 4, paddingHorizontal: 16, paddingVertical: 10 },
+  userBubbleText: { color: "#fff", fontSize: 15, lineHeight: 21 },
+
+  assistantRow: { flexDirection: "row", justifyContent: "flex-start", marginBottom: 12 },
+  assistantBubble: { maxWidth: "90%", borderRadius: 18, borderBottomLeftRadius: 4, paddingHorizontal: 14, paddingVertical: 10 },
+
+  // Typing indicator
+  typingRow: { flexDirection: "row", justifyContent: "flex-start", marginBottom: 12 },
+  typingBubble: { flexDirection: "row", gap: 5, backgroundColor: "#1a1a2e", borderRadius: 18, borderBottomLeftRadius: 4, paddingHorizontal: 16, paddingVertical: 14 },
+  typingDot: { width: 8, height: 8, borderRadius: 4 },
+
+  // Streaming indicator
+  streamingIndicator: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, paddingHorizontal: 4 },
+  streamingText: { fontSize: 12, fontStyle: "italic" },
+
+  // Chat input bar
+  chatInputBar: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 12, paddingVertical: 8, paddingBottom: Platform.OS === "ios" ? 24 : 8, borderTopWidth: 1, gap: 8 },
+  chatInputBarRunning: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 8 },
+  chatRunningText: { fontSize: 14 },
+  chatInput: { flex: 1, borderWidth: 1, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontSize: 15, maxHeight: 100, minHeight: 40 },
+  chatSendBtn: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
+  chatSendText: { color: "#fff", fontSize: 18, fontWeight: "700" },
 });
+
+// Markdown styles
+function markdownStyles(c: ReturnType<typeof useColors>) {
+  return {
+    body: { color: c.textPrimary, fontSize: 14, lineHeight: 22 },
+    heading1: { color: c.textPrimary, fontSize: 20, fontWeight: "700" as const, marginBottom: 6, marginTop: 12 },
+    heading2: { color: c.textPrimary, fontSize: 17, fontWeight: "700" as const, marginBottom: 4, marginTop: 10 },
+    heading3: { color: c.textPrimary, fontSize: 15, fontWeight: "600" as const, marginBottom: 4, marginTop: 8 },
+    paragraph: { color: c.textPrimary, marginBottom: 8 },
+    strong: { fontWeight: "700" as const, color: c.textPrimary },
+    em: { fontStyle: "italic" as const },
+    bullet_list: { marginBottom: 6 },
+    ordered_list: { marginBottom: 6 },
+    list_item: { flexDirection: "row" as const, marginBottom: 3 },
+    code_inline: { backgroundColor: c.bgCardElevated || "#1e1e2e", color: "#e879f9", fontFamily: "monospace", fontSize: 13, paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 },
+    fence: { backgroundColor: c.bgCardElevated || "#0a0a14", borderRadius: 8, padding: 12, marginVertical: 6 },
+    code_block: { color: "#a5f3fc", fontFamily: "monospace", fontSize: 12, lineHeight: 18 },
+    blockquote: { borderLeftWidth: 3, borderLeftColor: c.accent || "#6366f1", paddingLeft: 12, marginVertical: 6, opacity: 0.85 },
+    link: { color: c.accent || "#6366f1" },
+    hr: { backgroundColor: c.border || "#1e1e2e", height: 1, marginVertical: 10 },
+    table: { borderColor: c.border || "#1e1e2e" },
+    tr: { borderBottomColor: c.border || "#1e1e2e" },
+    th: { color: c.textPrimary, fontWeight: "700" as const, padding: 6 },
+    td: { color: c.textPrimary, padding: 6 },
+  };
+}

@@ -158,13 +158,12 @@ async function handleCallback(
     return NextResponse.redirect(mobileUrl.toString(), 303);
   }
 
-  // Desktop CLI client: redirect to local callback server
+  // Desktop CLI client: redirect via bridge page (Safari blocks HTTPS→HTTP server redirects)
   if (state.client === "desktop") {
-    const localUrl = new URL("http://127.0.0.1:19836/callback");
-    localUrl.searchParams.set("token", token);
-    localUrl.searchParams.set("provider", provider);
-    await logToConvex(provider, "redirect", "info", "Redirecting to desktop callback");
-    return NextResponse.redirect(localUrl.toString(), 303);
+    const bridgeUrl = new URL("/auth/desktop-callback", baseUrl);
+    bridgeUrl.searchParams.set("token", token);
+    await logToConvex(provider, "redirect", "info", "Redirecting to desktop bridge page");
+    return NextResponse.redirect(bridgeUrl.toString(), 303);
   }
 
   // Web client: redirect to /auth/callback which stores token in localStorage

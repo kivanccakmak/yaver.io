@@ -8,25 +8,33 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
 // HTTPServer serves the V1 HTTP API for mobile clients over Tailscale.
 type HTTPServer struct {
-	port     int
-	token    string
-	hostname string
-	taskMgr  *TaskManager
-	server   *http.Server
+	port        int
+	token       string
+	ownerUserID string
+	convexURL   string
+	hostname    string
+	taskMgr     *TaskManager
+	server      *http.Server
+
+	// Cache validated tokens (token -> userId) to avoid repeated Convex calls
+	tokenCache sync.Map
 }
 
 // NewHTTPServer creates a new HTTP server bound to the given port.
-func NewHTTPServer(port int, token, hostname string, taskMgr *TaskManager) *HTTPServer {
+func NewHTTPServer(port int, token, ownerUserID, convexURL, hostname string, taskMgr *TaskManager) *HTTPServer {
 	return &HTTPServer{
-		port:     port,
-		token:    token,
-		hostname: hostname,
-		taskMgr:  taskMgr,
+		port:        port,
+		token:       token,
+		ownerUserID: ownerUserID,
+		convexURL:   convexURL,
+		hostname:    hostname,
+		taskMgr:     taskMgr,
 	}
 }
 
@@ -73,12 +81,43 @@ func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
+			log.Printf("[AUTH] %s %s — missing Authorization header", r.Method, r.URL.Path)
 			jsonError(w, http.StatusUnauthorized, "missing or invalid Authorization header")
 			return
 		}
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if token != s.token {
+
+		// Fast path: exact match with the agent's own token
+		if token == s.token {
+			next(w, r)
+			return
+		}
+
+		// Check token cache
+		if cachedUID, ok := s.tokenCache.Load(token); ok {
+			if cachedUID.(string) == s.ownerUserID {
+				next(w, r)
+				return
+			}
+			log.Printf("[AUTH] %s %s — token belongs to different user (cached)", r.Method, r.URL.Path)
+			jsonError(w, http.StatusForbidden, "token belongs to a different user")
+			return
+		}
+
+		// Validate against Convex and cache the result
+		log.Printf("[AUTH] %s %s — validating token against Convex...", r.Method, r.URL.Path)
+		uid, err := ValidateTokenUser(s.convexURL, token)
+		if err != nil {
+			log.Printf("[AUTH] %s %s — token validation failed: %v", r.Method, r.URL.Path, err)
 			jsonError(w, http.StatusForbidden, "invalid token")
+			return
+		}
+		s.tokenCache.Store(token, uid)
+		log.Printf("[AUTH] %s %s — token validated, uid=%s (owner=%s)", r.Method, r.URL.Path, uid, s.ownerUserID)
+
+		if uid != s.ownerUserID {
+			log.Printf("[AUTH] %s %s — uid mismatch: got %s, want %s", r.Method, r.URL.Path, uid, s.ownerUserID)
+			jsonError(w, http.StatusForbidden, "token belongs to a different user")
 			return
 		}
 		next(w, r)
@@ -127,6 +166,9 @@ func (s *HTTPServer) handleTasks(w http.ResponseWriter, r *http.Request) {
 		s.listTasks(w, r)
 	case http.MethodPost:
 		s.createTask(w, r)
+	case http.MethodDelete:
+		count := s.taskMgr.DeleteAllTasks()
+		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "deleted": count})
 	default:
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -160,12 +202,15 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[HTTP] Task created: %s — %s", task.ID, task.Title)
-	jsonReply(w, http.StatusCreated, map[string]interface{}{
+	log.Printf("[HTTP] Task created: %s — %s (status: %s)", task.ID, task.Title, task.Status)
+	resp := map[string]interface{}{
 		"ok":     true,
 		"taskId": task.ID,
 		"status": task.Status,
-	})
+	}
+	log.Printf("[HTTP] Sending create response for task %s", task.ID)
+	jsonReply(w, http.StatusCreated, resp)
+	log.Printf("[HTTP] Response sent for task %s", task.ID)
 }
 
 // handleTaskByID routes /tasks/{id}, /tasks/{id}/output, /tasks/{id}/stop, /tasks/{id}/continue
@@ -184,9 +229,22 @@ func (s *HTTPServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if taskID == "stop-all" {
+		s.handleStopAll(w, r)
+		return
+	}
+	if taskID == "delete-all" {
+		s.handleDeleteAll(w, r)
+		return
+	}
+
 	switch action {
 	case "":
-		s.getTask(w, r, taskID)
+		if r.Method == http.MethodDelete {
+			s.deleteTask(w, r, taskID)
+		} else {
+			s.getTask(w, r, taskID)
+		}
 	case "output":
 		s.streamOutput(w, r, taskID)
 	case "stop":
@@ -199,8 +257,10 @@ func (s *HTTPServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) getTask(w http.ResponseWriter, r *http.Request, id string) {
+	log.Printf("[HTTP] GET task %s", id)
 	task, ok := s.taskMgr.GetTask(id)
 	if !ok {
+		log.Printf("[HTTP] Task %s not found", id)
 		jsonError(w, http.StatusNotFound, "task not found")
 		return
 	}
@@ -217,12 +277,16 @@ func (s *HTTPServer) getTask(w http.ResponseWriter, r *http.Request, id string) 
 		Status:      task.Status,
 		SessionID:   task.SessionID,
 		Output:      output,
+		ResultText:  task.ResultText,
+		CostUSD:     task.CostUSD,
+		Turns:       task.Turns,
 		CreatedAt:   task.CreatedAt,
 		StartedAt:   task.StartedAt,
 		FinishedAt:  task.FinishedAt,
 	}
 	s.taskMgr.mu.RUnlock()
 
+	log.Printf("[HTTP] Task %s status=%s output_len=%d", id, info.Status, len(info.Output))
 	jsonReply(w, http.StatusOK, map[string]interface{}{
 		"ok":   true,
 		"task": info,
@@ -231,8 +295,10 @@ func (s *HTTPServer) getTask(w http.ResponseWriter, r *http.Request, id string) 
 
 // streamOutput streams task output as Server-Sent Events (SSE).
 func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id string) {
+	log.Printf("[HTTP] SSE stream requested for task %s", id)
 	task, ok := s.taskMgr.GetTask(id)
 	if !ok {
+		log.Printf("[HTTP] SSE task %s not found", id)
 		jsonError(w, http.StatusNotFound, "task not found")
 		return
 	}
@@ -321,6 +387,41 @@ func (s *HTTPServer) stopTask(w http.ResponseWriter, r *http.Request, id string)
 	})
 }
 
+func (s *HTTPServer) deleteTask(w http.ResponseWriter, r *http.Request, id string) {
+	if err := s.taskMgr.DeleteTask(id); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	log.Printf("[HTTP] Task deleted: %s", id)
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true})
+}
+
+func (s *HTTPServer) handleStopAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	count := s.taskMgr.StopAllTasks()
+	log.Printf("[HTTP] Stopped all tasks: %d", count)
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":      true,
+		"stopped": count,
+	})
+}
+
+func (s *HTTPServer) handleDeleteAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		jsonError(w, http.StatusMethodNotAllowed, "use DELETE")
+		return
+	}
+	count := s.taskMgr.DeleteAllTasks()
+	log.Printf("[HTTP] Deleted all tasks: %d", count)
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":      true,
+		"deleted": count,
+	})
+}
+
 func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
@@ -339,14 +440,14 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 
-	task, err := s.taskMgr.ContinueTask(id, body.Input)
+	task, err := s.taskMgr.ResumeTask(id, body.Input)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("continue failed: %v", err))
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("resume failed: %v", err))
 		return
 	}
 
-	log.Printf("[HTTP] Task continued: %s → %s", id, task.ID)
-	jsonReply(w, http.StatusCreated, map[string]interface{}{
+	log.Printf("[HTTP] Task resumed: %s (session=%s)", id, task.SessionID)
+	jsonReply(w, http.StatusOK, map[string]interface{}{
 		"ok":     true,
 		"taskId": task.ID,
 		"status": task.Status,
@@ -610,12 +711,12 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 			Input  string `json:"input"`
 		}
 		json.Unmarshal(call.Arguments, &args)
-		task, err := s.taskMgr.ContinueTask(args.TaskID, args.Input)
+		task, err := s.taskMgr.ResumeTask(args.TaskID, args.Input)
 		if err != nil {
-			return mcpToolError(fmt.Sprintf("continue failed: %v", err))
+			return mcpToolError(fmt.Sprintf("resume failed: %v", err))
 		}
-		log.Printf("[MCP] Task continued: %s → %s", args.TaskID, task.ID)
-		return mcpToolResult(fmt.Sprintf("Task continued. New task ID: %s", task.ID))
+		log.Printf("[MCP] Task resumed: %s (session=%s)", args.TaskID, task.SessionID)
+		return mcpToolResult(fmt.Sprintf("Task resumed. Task ID: %s", task.ID))
 
 	case "get_info":
 		hostname, _ := os.Hostname()
