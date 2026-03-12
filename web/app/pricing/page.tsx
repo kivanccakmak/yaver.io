@@ -100,7 +100,7 @@ export default function PricingPage() {
           <p className="mb-6 text-sm text-surface-500">
             Start for free. Upgrade when you need more.
           </p>
-          <div className="inline-flex items-center rounded-full border border-green-800/60 bg-green-950/50 px-4 py-2 text-xs font-semibold text-green-400">
+          <div className="inline-flex items-center rounded-full border border-green-300 bg-green-50 px-4 py-2 text-xs font-semibold text-green-700 dark:border-green-800/60 dark:bg-green-950/50 dark:text-green-400">
             Early Access &mdash; All plans are free for a limited time
           </div>
         </div>
@@ -115,7 +115,7 @@ export default function PricingPage() {
               }`}
             >
               {tier.badge && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-green-500 px-3 py-0.5 text-[10px] font-bold tracking-wider text-surface-950">
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-green-600 px-3 py-0.5 text-[10px] font-bold tracking-wider text-white dark:bg-green-500 dark:text-surface-950">
                   {tier.badge}
                 </div>
               )}

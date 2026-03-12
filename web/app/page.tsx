@@ -75,7 +75,7 @@ export default function HomePage() {
       <section className="px-6 pb-24 pt-20 md:pt-32">
         <div className="mx-auto max-w-6xl">
           <div className="mb-16 text-center">
-            <div className="mb-6 inline-flex items-center rounded-full border border-green-800/60 bg-green-950/50 px-4 py-1.5 text-xs font-semibold text-green-400">
+            <div className="mb-6 inline-flex items-center rounded-full border border-green-300 bg-green-50 px-4 py-1.5 text-xs font-semibold text-green-700 dark:border-green-800/60 dark:bg-green-950/50 dark:text-green-400">
               <span className="mr-2 inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
               Early Access &mdash; Free to use
             </div>
@@ -263,7 +263,7 @@ export default function HomePage() {
             Free during early access. All features included.
           </p>
           <div className="mb-12 flex justify-center">
-            <div className="inline-flex items-center rounded-full border border-green-800/60 bg-green-950/50 px-4 py-2 text-xs font-semibold text-green-400">
+            <div className="inline-flex items-center rounded-full border border-green-300 bg-green-50 px-4 py-2 text-xs font-semibold text-green-700 dark:border-green-800/60 dark:bg-green-950/50 dark:text-green-400">
               Early Access &mdash; All plans are free for a limited time
             </div>
           </div>
@@ -293,7 +293,7 @@ export default function HomePage() {
 
             {/* Pro */}
             <div className="card relative flex flex-col border-surface-600">
-              <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-green-500 px-3 py-0.5 text-[10px] font-bold tracking-wider text-surface-950">
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-green-600 px-3 py-0.5 text-[10px] font-bold tracking-wider text-white dark:bg-green-500 dark:text-surface-950">
                 FREE IN EARLY ACCESS
               </div>
               <div className="mb-6">

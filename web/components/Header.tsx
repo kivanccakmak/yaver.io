@@ -17,7 +17,7 @@ export default function Header() {
               yaver<span className="font-normal text-surface-500">.io</span>
             </span>
           </Link>
-          <span className="hidden rounded-full border border-green-800/60 bg-green-950/50 px-2.5 py-0.5 text-[10px] font-semibold tracking-wide text-green-400 sm:inline-flex">
+          <span className="hidden rounded-full border border-green-300 bg-green-50 px-2.5 py-0.5 text-[10px] font-semibold tracking-wide text-green-700 dark:border-green-800/60 dark:bg-green-950/50 dark:text-green-400 sm:inline-flex">
             Early Access
           </span>
         </div>

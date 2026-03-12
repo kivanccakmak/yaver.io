@@ -60,7 +60,12 @@
 
 /* Terminal mockup */
 .terminal {
-  @apply rounded-xl border border-surface-700 bg-surface-900 font-mono text-sm;
+  @apply rounded-xl border border-surface-700 font-mono text-sm;
+  background-color: rgb(var(--surface-900));
+}
+
+.dark .terminal {
+  background-color: rgb(24, 24, 24);
 }
 
 .terminal-header {
