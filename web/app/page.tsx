@@ -10,13 +10,13 @@ function QuickStartTerminal() {
         <span className="ml-3 text-xs text-surface-500">terminal</span>
       </div>
       <div className="terminal-body space-y-3 text-[13px]">
-        <div className="text-surface-600"># Install in one command</div>
+        <div className="text-surface-500"># Install in one command</div>
         <div>
           <span className="text-surface-400">$</span>{" "}
           <span className="text-surface-200">brew install kivanccakmak/yaver/yaver</span>
         </div>
         <div className="h-px bg-surface-800/60" />
-        <div className="text-surface-600"># Sign in and start serving</div>
+        <div className="text-surface-500"># Sign in and start serving</div>
         <div>
           <span className="text-surface-400">$</span>{" "}
           <span className="text-surface-200">yaver auth</span>
@@ -31,7 +31,7 @@ function QuickStartTerminal() {
         <div className="text-surface-500">  Work dir: ~/projects/my-app</div>
         <div className="text-green-400/80">Agent ready. Waiting for tasks from your phone...</div>
         <div className="h-px bg-surface-800/60" />
-        <div className="text-surface-600"># Or send tasks from any terminal</div>
+        <div className="text-surface-500"># Or send tasks from any terminal</div>
         <div>
           <span className="text-surface-400">$</span>{" "}
           <span className="text-surface-200">
@@ -63,7 +63,7 @@ function FeatureCard({
   return (
     <div className="card">
       <h3 className="mb-2 text-sm font-semibold text-surface-50">{title}</h3>
-      <p className="text-sm leading-relaxed text-surface-500">{description}</p>
+      <p className="text-sm leading-relaxed text-surface-400">{description}</p>
     </div>
   );
 }
@@ -106,7 +106,7 @@ export default function HomePage() {
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
             Up and running in 30 seconds
           </h2>
-          <p className="mb-16 text-center text-sm text-surface-500">
+          <p className="mb-16 text-center text-sm text-surface-400">
             One install, one sign-in, done.
           </p>
           <div className="grid grid-cols-1 gap-10 md:grid-cols-3">
@@ -131,11 +131,11 @@ export default function HomePage() {
               },
             ].map((item) => (
               <div key={item.step} className="text-center">
-                <div className="mb-4 text-xs font-semibold tracking-widest text-surface-600">
+                <div className="mb-4 text-xs font-semibold tracking-widest text-surface-400">
                   {item.step}
                 </div>
                 <h3 className="mb-2 text-base font-semibold text-surface-50">{item.title}</h3>
-                <p className="mb-4 text-sm leading-relaxed text-surface-500">{item.desc}</p>
+                <p className="mb-4 text-sm leading-relaxed text-surface-400">{item.desc}</p>
                 <code className="inline-block rounded-lg bg-surface-900 px-3 py-1.5 text-xs text-surface-300">
                   {item.code}
                 </code>
@@ -151,7 +151,7 @@ export default function HomePage() {
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
             Privacy-first architecture
           </h2>
-          <p className="mb-16 text-center text-sm text-surface-500">
+          <p className="mb-16 text-center text-sm text-surface-400">
             Your data stays on your devices. We never see it.
           </p>
 
@@ -160,30 +160,30 @@ export default function HomePage() {
             <div className="card mb-6 p-8">
               <div className="flex items-center justify-center gap-4 sm:gap-6">
                 <div className="text-center">
-                  <div className="mb-2 flex h-14 w-14 items-center justify-center rounded-lg border border-surface-700 bg-surface-850 sm:h-16 sm:w-16">
-                    <span className="text-lg text-surface-300">M</span>
+                  <div className="mb-2 flex h-14 w-14 items-center justify-center rounded-lg border border-surface-600 bg-surface-800 sm:h-16 sm:w-16">
+                    <span className="text-lg font-medium text-surface-200">M</span>
                   </div>
-                  <span className="text-xs text-surface-500">Mobile</span>
+                  <span className="text-xs text-surface-400">Mobile</span>
                 </div>
 
-                <div className="flex flex-1 flex-col items-center gap-1">
-                  <div className="h-px w-full bg-surface-700" />
-                  <span className="whitespace-nowrap text-[11px] font-medium tracking-wide text-surface-400">
+                <div className="flex flex-1 flex-col items-center gap-1.5">
+                  <div className="h-px w-full bg-surface-600" />
+                  <span className="whitespace-nowrap text-[11px] font-semibold tracking-wide text-surface-300">
                     P2P Encrypted
                   </span>
-                  <div className="h-px w-full bg-surface-700" />
+                  <div className="h-px w-full bg-surface-600" />
                 </div>
 
                 <div className="text-center">
-                  <div className="mb-2 flex h-14 w-14 items-center justify-center rounded-lg border border-surface-700 bg-surface-850 sm:h-16 sm:w-16">
-                    <span className="text-lg text-surface-300">D</span>
+                  <div className="mb-2 flex h-14 w-14 items-center justify-center rounded-lg border border-surface-600 bg-surface-800 sm:h-16 sm:w-16">
+                    <span className="text-lg font-medium text-surface-200">D</span>
                   </div>
-                  <span className="text-xs text-surface-500">Desktop</span>
+                  <span className="text-xs text-surface-400">Desktop</span>
                 </div>
               </div>
 
               <div className="mt-6 text-center">
-                <span className="text-xs text-surface-600">
+                <span className="text-xs text-surface-400">
                   Direct peer-to-peer &mdash; no servers in the middle
                 </span>
               </div>
@@ -205,7 +205,7 @@ export default function HomePage() {
                     key={item}
                     className="flex items-start gap-3 text-sm text-surface-400"
                   >
-                    <span className="mt-0.5 text-surface-600">&#10003;</span>
+                    <span className="mt-0.5 text-surface-400">&#10003;</span>
                     {item}
                   </li>
                 ))}
@@ -221,7 +221,7 @@ export default function HomePage() {
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
             Built for developers
           </h2>
-          <p className="mb-16 text-center text-sm text-surface-500">
+          <p className="mb-16 text-center text-sm text-surface-400">
             Privacy, speed, and simplicity.
           </p>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -259,7 +259,7 @@ export default function HomePage() {
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
             Pricing
           </h2>
-          <p className="mb-4 text-center text-sm text-surface-500">
+          <p className="mb-4 text-center text-sm text-surface-400">
             Free during early access. All features included.
           </p>
           <div className="mb-12 flex justify-center">
@@ -275,14 +275,14 @@ export default function HomePage() {
                 <h3 className="mb-1 text-sm font-semibold text-surface-400">Free</h3>
                 <div className="flex items-baseline gap-1">
                   <span className="text-3xl font-bold text-surface-50">$0</span>
-                  <span className="text-sm text-surface-500">forever</span>
+                  <span className="text-sm text-surface-400">forever</span>
                 </div>
-                <p className="mt-2 text-xs text-surface-500">For individual developers trying it out.</p>
+                <p className="mt-2 text-xs text-surface-400">For individual developers trying it out.</p>
               </div>
               <ul className="mb-8 flex-1 space-y-3">
                 {["1 device connection", "5 tasks per day", "P2P encrypted", "Community support"].map((f) => (
                   <li key={f} className="flex items-start gap-2 text-sm text-surface-300">
-                    <span className="mt-0.5 text-surface-500">&#10003;</span>{f}
+                    <span className="mt-0.5 text-surface-400">&#10003;</span>{f}
                   </li>
                 ))}
               </ul>
@@ -300,14 +300,14 @@ export default function HomePage() {
                 <h3 className="mb-1 text-sm font-semibold text-surface-400">Pro</h3>
                 <div className="flex items-baseline gap-1">
                   <span className="text-3xl font-bold text-surface-50">$0</span>
-                  <span className="text-sm text-surface-500 line-through">$12/mo</span>
+                  <span className="text-sm text-surface-400 line-through">$12/mo</span>
                 </div>
-                <p className="mt-2 text-xs text-surface-500">For developers who use Claude daily.</p>
+                <p className="mt-2 text-xs text-surface-400">For developers who use Claude daily.</p>
               </div>
               <ul className="mb-8 flex-1 space-y-3">
                 {["Unlimited devices", "Unlimited tasks", "P2P encrypted", "Priority support", "Task history & search", "Team sharing (coming soon)"].map((f) => (
                   <li key={f} className="flex items-start gap-2 text-sm text-surface-300">
-                    <span className="mt-0.5 text-surface-500">&#10003;</span>{f}
+                    <span className="mt-0.5 text-surface-400">&#10003;</span>{f}
                   </li>
                 ))}
               </ul>
@@ -323,12 +323,12 @@ export default function HomePage() {
                 <div className="flex items-baseline gap-1">
                   <span className="text-3xl font-bold text-surface-50">Custom</span>
                 </div>
-                <p className="mt-2 text-xs text-surface-500">For teams with security and compliance needs.</p>
+                <p className="mt-2 text-xs text-surface-400">For teams with security and compliance needs.</p>
               </div>
               <ul className="mb-8 flex-1 space-y-3">
                 {["Everything in Pro", "SSO / SAML", "Audit logs", "Dedicated support", "Custom deployment", "SLA guarantee"].map((f) => (
                   <li key={f} className="flex items-start gap-2 text-sm text-surface-300">
-                    <span className="mt-0.5 text-surface-500">&#10003;</span>{f}
+                    <span className="mt-0.5 text-surface-400">&#10003;</span>{f}
                   </li>
                 ))}
               </ul>
@@ -346,7 +346,7 @@ export default function HomePage() {
           <h2 className="mb-4 text-2xl font-bold text-surface-50 md:text-3xl">
             Ready to get started?
           </h2>
-          <p className="mb-4 text-sm text-surface-500">
+          <p className="mb-4 text-sm text-surface-400">
             Install in one command and start using Claude from your phone.
           </p>
           <code className="mb-8 inline-block rounded-lg bg-surface-900 px-5 py-2.5 text-sm text-surface-300">

@@ -43,7 +43,7 @@ def main():
             "track": TRACK,
             "releases": [{
                 "versionCodes": [str(version_code)],
-                "status": "completed",
+                "status": "draft",
             }],
         }
     ).execute()

@@ -40,7 +40,7 @@ function getProviderConfig(provider: OAuthProvider): ProviderConfig {
         userInfoUrl: "https://graph.microsoft.com/v1.0/me",
         clientId: process.env.OAUTH_MICROSOFT_CLIENT_ID || "",
         clientSecret: process.env.OAUTH_MICROSOFT_CLIENT_SECRET || "",
-        scope: "openid email profile User.Read",
+        scope: "openid email profile",
       };
     case "apple":
       return {
