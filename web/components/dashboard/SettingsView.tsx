@@ -18,6 +18,7 @@ interface SettingsViewProps {
     name?: string;
     provider?: string;
     avatarUrl?: string;
+    surveyCompleted?: boolean;
   } | null;
   activeDevice: Device | null;
   onLogout: () => void;
@@ -27,9 +28,11 @@ export default function SettingsView({ user, activeDevice, onLogout }: SettingsV
   const [subscription, setSubscription] = useState<SubscriptionData | null>(null);
   const [subLoading, setSubLoading] = useState(true);
   const [subActionLoading, setSubActionLoading] = useState(false);
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState("");
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [surveyStatus, setSurveyStatus] = useState<boolean | null>(null);
+  const [surveyLoading, setSurveyLoading] = useState(true);
 
   const fetchSubscription = useCallback(async () => {
     try {
@@ -45,9 +48,43 @@ export default function SettingsView({ user, activeDevice, onLogout }: SettingsV
     }
   }, []);
 
+  const fetchSurveyStatus = useCallback(async () => {
+    try {
+      const token =
+        localStorage.getItem("yaver_auth_token") ||
+        document.cookie
+          .split(";")
+          .find((c) => c.trim().startsWith("yaver_auth_token="))
+          ?.split("=")[1];
+
+      if (!token) {
+        setSurveyLoading(false);
+        return;
+      }
+
+      const res = await fetch(
+        "https://shocking-echidna-394.eu-west-1.convex.site/survey",
+        {
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      if (res.ok) {
+        const data = await res.json();
+        setSurveyStatus(data.surveyCompleted ?? false);
+      }
+    } catch {
+      // Not critical
+    } finally {
+      setSurveyLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchSubscription();
-  }, [fetchSubscription]);
+    fetchSurveyStatus();
+  }, [fetchSubscription, fetchSurveyStatus]);
 
   const handleUpgrade = async () => {
     setSubActionLoading(true);
@@ -169,6 +206,33 @@ export default function SettingsView({ user, activeDevice, onLogout }: SettingsV
           </div>
         </div>
 
+        {/* Developer Profile */}
+        <div className="card mb-4">
+          <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-surface-400">
+            Developer Profile
+          </h3>
+          {surveyLoading ? (
+            <div className="flex items-center gap-2">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-surface-600 border-t-surface-300" />
+              <span className="text-sm text-surface-500">Loading...</span>
+            </div>
+          ) : (
+            <div>
+              <p className="mb-3 text-sm text-surface-400">
+                {surveyStatus
+                  ? "Your developer survey has been completed."
+                  : "Help us understand your background by completing a short survey."}
+              </p>
+              <a
+                href="/survey"
+                className="block w-full rounded-lg border border-surface-700 px-4 py-3 text-center text-sm text-surface-200 transition-colors hover:border-surface-500 hover:text-surface-50"
+              >
+                {surveyStatus ? "Edit Developer Survey" : "Complete Developer Survey"}
+              </a>
+            </div>
+          )}
+        </div>
+
         {/* Subscription / Plan */}
         <div className="card mb-4">
           <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-surface-400">
@@ -225,9 +289,9 @@ export default function SettingsView({ user, activeDevice, onLogout }: SettingsV
                 </div>
               )}
 
-              {/* Action buttons */}
-              <div className="pt-1">
-                {isPro ? (
+              {/* Action buttons — only show for Pro subscribers */}
+              {isPro && (
+                <div className="pt-1">
                   <button
                     onClick={handleManageSubscription}
                     disabled={subActionLoading}
@@ -235,16 +299,8 @@ export default function SettingsView({ user, activeDevice, onLogout }: SettingsV
                   >
                     {subActionLoading ? "Loading..." : "Manage Subscription"}
                   </button>
-                ) : (
-                  <button
-                    onClick={handleUpgrade}
-                    disabled={subActionLoading}
-                    className="w-full rounded-lg bg-surface-50 px-4 py-3 text-sm font-medium text-surface-950 transition-colors hover:bg-surface-100 disabled:opacity-50"
-                  >
-                    {subActionLoading ? "Loading..." : "Upgrade to Pro"}
-                  </button>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -319,46 +375,27 @@ export default function SettingsView({ user, activeDevice, onLogout }: SettingsV
           <p className="mb-4 text-xs text-surface-500">
             Permanently delete your account and all associated data. This action cannot be undone.
           </p>
-
-          {!deleteConfirmOpen ? (
-            <button
-              onClick={() => setDeleteConfirmOpen(true)}
-              className="w-full rounded-lg border border-red-500/30 px-4 py-3 text-sm text-red-400 transition-colors hover:bg-red-500/10"
-            >
-              Delete Account
-            </button>
-          ) : (
-            <div className="space-y-3">
-              <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-4">
-                <p className="mb-3 text-sm text-red-300">
-                  Are you sure? This will permanently delete your account, all devices, and all
-                  data. This cannot be undone.
-                </p>
-                {deleteError && (
-                  <p className="mb-3 text-sm text-red-400">{deleteError}</p>
-                )}
-                <div className="flex gap-3">
-                  <button
-                    onClick={handleDeleteAccount}
-                    disabled={deleteLoading}
-                    className="flex-1 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-50"
-                  >
-                    {deleteLoading ? "Deleting..." : "Yes, delete my account"}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setDeleteConfirmOpen(false);
-                      setDeleteError(null);
-                    }}
-                    disabled={deleteLoading}
-                    className="flex-1 rounded-lg border border-surface-700 px-4 py-2.5 text-sm text-surface-300 transition-colors hover:border-surface-500 disabled:opacity-50"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </div>
+          <p className="mb-3 text-xs text-surface-500">
+            Type <span className="font-mono text-surface-300">delete my account</span> to confirm:
+          </p>
+          <input
+            type="text"
+            value={deleteConfirm}
+            onChange={(e) => setDeleteConfirm(e.target.value)}
+            placeholder="delete my account"
+            disabled={deleteLoading}
+            className="mb-3 w-full rounded-lg border border-surface-700 bg-surface-850 px-4 py-2.5 text-sm text-surface-200 placeholder-surface-600 outline-none transition-colors focus:border-red-500/50 disabled:opacity-50"
+          />
+          {deleteError && (
+            <p className="mb-3 text-sm text-red-400">{deleteError}</p>
           )}
+          <button
+            onClick={handleDeleteAccount}
+            disabled={deleteConfirm !== "delete my account" || deleteLoading}
+            className="w-full rounded-lg border border-red-500/30 px-4 py-3 text-sm font-medium text-red-400 transition-colors hover:bg-red-500/10 disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            {deleteLoading ? "Deleting..." : "Delete My Account"}
+          </button>
         </div>
       </div>
     </div>

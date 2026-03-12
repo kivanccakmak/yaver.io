@@ -10,6 +10,7 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -31,11 +32,13 @@ const BUILD_NUMBER =
   "1";
 
 export default function SettingsScreen() {
-  const { user, token, logout } = useAuth();
+  const { user, token, logout, surveyCompleted } = useAuth();
   const { activeDevice, connectionStatus, disconnect } = useDevice();
   const { isDark, toggleTheme } = useTheme();
   const c = useColors();
   const [isClearing, setIsClearing] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState("");
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
   const [isLoadingSubscription, setIsLoadingSubscription] = useState(true);
   const [isOpeningPortal, setIsOpeningPortal] = useState(false);
@@ -109,41 +112,18 @@ export default function SettingsScreen() {
     );
   };
 
-  const handleDeleteAccount = () => {
-    Alert.alert(
-      "Delete Account",
-      "This will permanently delete your account, all your devices, and sessions. This action cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete Account",
-          style: "destructive",
-          onPress: () => {
-            Alert.alert(
-              "Are you sure?",
-              "All your data will be permanently deleted. You will need to create a new account to use Yaver again.",
-              [
-                { text: "Cancel", style: "cancel" },
-                {
-                  text: "Yes, Delete Everything",
-                  style: "destructive",
-                  onPress: async () => {
-                    const success = await deleteAccountApi();
-                    if (success) {
-                      disconnect();
-                      await logout();
-                      router.replace("/login");
-                    } else {
-                      Alert.alert("Error", "Failed to delete account. Please try again.");
-                    }
-                  },
-                },
-              ]
-            );
-          },
-        },
-      ]
-    );
+  const handleDeleteAccount = async () => {
+    if (deleteConfirm !== "delete my account") return;
+    setDeletingAccount(true);
+    const success = await deleteAccountApi();
+    if (success) {
+      disconnect();
+      await logout();
+      router.replace("/login");
+    } else {
+      Alert.alert("Error", "Failed to delete account. Please try again.");
+      setDeletingAccount(false);
+    }
   };
 
   return (
@@ -170,6 +150,24 @@ export default function SettingsScreen() {
               </Text>
             </View>
           </View>
+        </View>
+
+        {/* Developer Profile */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Developer Profile</Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.actionRow,
+              { backgroundColor: c.bgCard, borderColor: c.border },
+              pressed && styles.actionRowPressed,
+            ]}
+            onPress={() => router.push("/survey")}
+          >
+            <Text style={[styles.actionRowLabel, { color: c.textPrimary }]}>
+              {surveyCompleted ? "Edit Developer Survey" : "Complete Developer Survey"}
+            </Text>
+            <Text style={[styles.actionRowChevron, { color: c.textMuted }]}>&rsaquo;</Text>
+          </Pressable>
         </View>
 
         {/* Subscription */}
@@ -377,15 +375,40 @@ export default function SettingsScreen() {
 
         {/* Delete account */}
         <View style={styles.section}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.deleteAccountButton,
-              pressed && styles.deleteAccountPressed,
-            ]}
-            onPress={handleDeleteAccount}
-          >
-            <Text style={styles.deleteAccountText}>Delete Account</Text>
-          </Pressable>
+          <Text style={[styles.sectionLabel, { color: c.error }]}>Danger Zone</Text>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.error + "30" }]}>
+            <Text style={[styles.dangerDescription, { color: c.textMuted }]}>
+              Permanently delete your account and all associated data. This action cannot be undone.
+            </Text>
+            <Text style={[styles.dangerHint, { color: c.textMuted }]}>
+              Type <Text style={{ color: c.textSecondary, fontFamily: "monospace" }}>delete my account</Text> to confirm:
+            </Text>
+            <TextInput
+              style={[styles.deleteInput, { backgroundColor: c.bgCardElevated, borderColor: deleteConfirm === "delete my account" ? c.error : c.border, color: c.textPrimary }]}
+              value={deleteConfirm}
+              onChangeText={setDeleteConfirm}
+              placeholder="delete my account"
+              placeholderTextColor={c.textMuted}
+              autoCapitalize="none"
+              editable={!deletingAccount}
+            />
+            <Pressable
+              style={({ pressed }) => [
+                styles.deleteAccountButton,
+                { borderColor: c.error + "30" },
+                deleteConfirm === "delete my account"
+                  ? { backgroundColor: c.error + "15" }
+                  : { opacity: 0.3 },
+                pressed && deleteConfirm === "delete my account" && { opacity: 0.7 },
+              ]}
+              onPress={handleDeleteAccount}
+              disabled={deleteConfirm !== "delete my account" || deletingAccount}
+            >
+              <Text style={[styles.deleteAccountText, { color: c.error }]}>
+                {deletingAccount ? "Deleting..." : "Delete My Account"}
+              </Text>
+            </Pressable>
+          </View>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -553,11 +576,20 @@ const styles = StyleSheet.create({
   signOutPressed: { opacity: 0.7 },
   signOutText: { fontSize: 16, fontWeight: "600" },
 
+  dangerDescription: { fontSize: 13, lineHeight: 19, marginBottom: 12 },
+  dangerHint: { fontSize: 12, marginBottom: 8 },
+  deleteInput: {
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 12,
+    fontSize: 14,
+    marginBottom: 12,
+  },
   deleteAccountButton: {
     borderRadius: 12,
-    padding: 16,
+    borderWidth: 1,
+    padding: 14,
     alignItems: "center",
   },
-  deleteAccountPressed: { opacity: 0.7 },
-  deleteAccountText: { color: "#888", fontSize: 14 },
+  deleteAccountText: { fontSize: 14, fontWeight: "600" },
 });
