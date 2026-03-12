@@ -83,8 +83,8 @@ export default function HomePage() {
               Use Claude from anywhere
             </h1>
             <p className="mx-auto max-w-xl text-base leading-relaxed text-surface-400 md:text-lg">
-              Your code never leaves your devices. Encrypted peer-to-peer
-              connections between your phone and dev machine.
+              Your code never leaves your devices. MCP-standard agent with
+              encrypted peer-to-peer connections between your phone and dev machine.
             </p>
             <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link href="/download" className="btn-primary px-8 py-3.5 text-sm">
@@ -226,16 +226,16 @@ export default function HomePage() {
           </p>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <FeatureCard
+              title="MCP standard"
+              description="Built on the Model Context Protocol. Connect any MCP-compatible client to your agent — IDE plugins, CLI tools, or custom integrations."
+            />
+            <FeatureCard
               title="Zero-knowledge"
               description="We never see your code. All task data flows P2P between your devices."
             />
             <FeatureCard
               title="P2P encrypted"
               description="End-to-end encrypted connections between your mobile app and agent machine. Your data never touches our servers."
-            />
-            <FeatureCard
-              title="No cloud relay"
-              description="Your prompts and outputs travel directly between devices, never through our servers."
             />
             <FeatureCard
               title="Real-time streaming"
@@ -246,8 +246,8 @@ export default function HomePage() {
               description="Connect from your phone, tablet, or any device. Manage multiple dev machines from one app."
             />
             <FeatureCard
-              title="tmux integration"
-              description="Each task runs in its own tmux session. Attach from your terminal to inspect or continue any task."
+              title="Agent-to-agent"
+              description="Expose your dev machine as an MCP server. Other agents and tools can discover and interact with it using the open standard."
             />
           </div>
         </div>

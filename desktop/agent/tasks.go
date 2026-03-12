@@ -154,7 +154,7 @@ func (tm *TaskManager) startClaudeProcess(task *Task) error {
 		"claude",
 		"-p", prompt,
 		"--output-format", "stream-json",
-		"--include-partial-messages",
+		"--verbose",
 		"--dangerously-skip-permissions",
 	)
 	cmd.Dir = tm.workDir
@@ -367,7 +367,7 @@ func (tm *TaskManager) startContinuation(task *Task, sessionID, prompt string) e
 	args := []string{
 		"-p", prompt,
 		"--output-format", "stream-json",
-		"--include-partial-messages",
+		"--verbose",
 		"--dangerously-skip-permissions",
 	}
 
