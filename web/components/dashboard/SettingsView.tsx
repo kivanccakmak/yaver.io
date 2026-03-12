@@ -206,32 +206,25 @@ export default function SettingsView({ user, activeDevice, onLogout }: SettingsV
           </div>
         </div>
 
-        {/* Developer Profile */}
-        <div className="card mb-4">
-          <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-surface-400">
-            Developer Profile
-          </h3>
-          {surveyLoading ? (
-            <div className="flex items-center gap-2">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-surface-600 border-t-surface-300" />
-              <span className="text-sm text-surface-500">Loading...</span>
-            </div>
-          ) : (
+        {/* Developer Profile — only show if survey not completed */}
+        {!surveyLoading && !surveyStatus && (
+          <div className="card mb-4">
+            <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-surface-400">
+              Developer Profile
+            </h3>
             <div>
               <p className="mb-3 text-sm text-surface-400">
-                {surveyStatus
-                  ? "Your developer survey has been completed."
-                  : "Help us understand your background by completing a short survey."}
+                Help us understand your background by completing a short survey.
               </p>
               <a
                 href="/survey"
                 className="block w-full rounded-lg border border-surface-700 px-4 py-3 text-center text-sm text-surface-200 transition-colors hover:border-surface-500 hover:text-surface-50"
               >
-                {surveyStatus ? "Edit Developer Survey" : "Complete Developer Survey"}
+                Complete Developer Survey
               </a>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Subscription / Plan */}
         <div className="card mb-4">

@@ -152,23 +152,25 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* Developer Profile */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Developer Profile</Text>
-          <Pressable
-            style={({ pressed }) => [
-              styles.actionRow,
-              { backgroundColor: c.bgCard, borderColor: c.border },
-              pressed && styles.actionRowPressed,
-            ]}
-            onPress={() => router.push("/survey")}
-          >
-            <Text style={[styles.actionRowLabel, { color: c.textPrimary }]}>
-              {surveyCompleted ? "Edit Developer Survey" : "Complete Developer Survey"}
-            </Text>
-            <Text style={[styles.actionRowChevron, { color: c.textMuted }]}>&rsaquo;</Text>
-          </Pressable>
-        </View>
+        {/* Developer Profile — only show if survey not completed */}
+        {!surveyCompleted && (
+          <View style={styles.section}>
+            <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Developer Profile</Text>
+            <Pressable
+              style={({ pressed }) => [
+                styles.actionRow,
+                { backgroundColor: c.bgCard, borderColor: c.border },
+                pressed && styles.actionRowPressed,
+              ]}
+              onPress={() => router.push("/survey")}
+            >
+              <Text style={[styles.actionRowLabel, { color: c.textPrimary }]}>
+                Complete Developer Survey
+              </Text>
+              <Text style={[styles.actionRowChevron, { color: c.textMuted }]}>&rsaquo;</Text>
+            </Pressable>
+          </View>
+        )}
 
         {/* Subscription */}
         <View style={styles.section}>
