@@ -195,6 +195,16 @@ export async function getUserInfo(
     };
   }
 
+  if (provider === "microsoft") {
+    if (!tokens.id_token) throw new Error("Microsoft did not return id_token");
+    const payload = decodeJwtPayload(tokens.id_token);
+    return {
+      email: (payload.email || payload.preferred_username) as string,
+      name: payload.name as string | undefined,
+      providerId: payload.sub as string,
+    };
+  }
+
   const config = getProviderConfig(provider);
 
   const res = await fetch(config.userInfoUrl, {
@@ -213,14 +223,6 @@ export async function getUserInfo(
       name: data.name,
       providerId: data.id,
       avatarUrl: data.picture,
-    };
-  }
-
-  if (provider === "microsoft") {
-    return {
-      email: data.mail || data.userPrincipalName,
-      name: data.displayName,
-      providerId: data.id,
     };
   }
 
