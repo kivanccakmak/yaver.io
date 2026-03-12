@@ -45,12 +45,12 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     setIsLoadingDevices(true);
     try {
       // Discover devices via Convex / backend
-      const res = await fetch("https://api.yaver.io/api/devices", {
+      const res = await fetch("https://shocking-echidna-394.eu-west-1.convex.site/devices/list", {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
-        const data = (await res.json()) as Device[];
-        setDevices(data);
+        const data = await res.json();
+        setDevices((data.devices || data) as Device[]);
       }
     } catch {
       // Silently fail — device list stays stale.

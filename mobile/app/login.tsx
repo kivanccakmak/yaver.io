@@ -1,8 +1,10 @@
+import * as AppleAuthentication from "expo-apple-authentication";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { router } from "expo-router";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -10,14 +12,18 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../src/context/AuthContext";
-import { getOAuthUrl } from "../src/lib/auth";
+import {
+  type OAuthProvider,
+  getConvexSiteUrl,
+  getOAuthUrl,
+} from "../src/lib/auth";
 
 WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
   const { login } = useAuth();
+  const [isLoading, setIsLoading] = useState(false);
 
-  // Listen for deep link callback
   useEffect(() => {
     const subscription = Linking.addEventListener("url", async (event) => {
       const url = event.url;
@@ -30,7 +36,7 @@ export default function LoginScreen() {
           await login(token);
           router.replace("/(tabs)/tasks");
         } catch {
-          // Token validation failed — stay on login screen.
+          // Token validation failed
         }
       }
     });
@@ -38,17 +44,59 @@ export default function LoginScreen() {
     return () => subscription.remove();
   }, [login]);
 
-  const handleOAuth = async (provider: "google" | "microsoft") => {
+  const handleOAuth = async (provider: OAuthProvider) => {
     const url = getOAuthUrl(provider);
     await WebBrowser.openBrowserAsync(url, {
       showInRecents: true,
     });
   };
 
+  const handleAppleNative = async () => {
+    setIsLoading(true);
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+
+      if (!credential.identityToken) {
+        throw new Error("No identity token");
+      }
+
+      const fullName = [credential.fullName?.givenName, credential.fullName?.familyName]
+        .filter(Boolean)
+        .join(" ") || undefined;
+
+      const res = await fetch(`${getConvexSiteUrl()}/auth/apple-native`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          identityToken: credential.identityToken,
+          fullName,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Auth failed");
+      }
+
+      const { token } = await res.json();
+      await login(token);
+      router.replace("/(tabs)/tasks");
+    } catch (e: unknown) {
+      if ((e as { code?: string }).code === "ERR_REQUEST_CANCELED") {
+        // User cancelled — do nothing
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        {/* Header */}
         <View style={styles.header}>
           <Text style={styles.logo}>Yaver</Text>
           <Text style={styles.subtitle}>
@@ -56,34 +104,64 @@ export default function LoginScreen() {
           </Text>
         </View>
 
-        {/* Sign-in buttons */}
         <View style={styles.buttons}>
+          {/* Native Apple Sign-In on iOS */}
+          {Platform.OS === "ios" && (
+            <AppleAuthentication.AppleAuthenticationButton
+              buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+              buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+              cornerRadius={12}
+              style={styles.appleButton}
+              onPress={handleAppleNative}
+            />
+          )}
+
+          {/* Fallback Apple OAuth on Android */}
+          {Platform.OS !== "ios" && (
+            <Pressable
+              style={({ pressed }) => [
+                styles.button,
+                styles.oauthButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => handleOAuth("apple")}
+            >
+              <View style={[styles.iconBox, { backgroundColor: "#fff" }]}>
+                <Text style={[styles.buttonIcon, { color: "#000" }]}>{"\uF8FF"}</Text>
+              </View>
+              <Text style={styles.buttonText}>Continue with Apple</Text>
+            </Pressable>
+          )}
+
           <Pressable
             style={({ pressed }) => [
               styles.button,
-              styles.googleButton,
+              styles.oauthButton,
               pressed && styles.buttonPressed,
             ]}
             onPress={() => handleOAuth("google")}
           >
-            <Text style={styles.buttonIcon}>G</Text>
-            <Text style={styles.buttonText}>Sign in with Google</Text>
+            <View style={[styles.iconBox, { backgroundColor: "#fff" }]}>
+              <Text style={[styles.buttonIcon, { color: "#4285F4" }]}>G</Text>
+            </View>
+            <Text style={styles.buttonText}>Continue with Google</Text>
           </Pressable>
 
           <Pressable
             style={({ pressed }) => [
               styles.button,
-              styles.microsoftButton,
+              styles.oauthButton,
               pressed && styles.buttonPressed,
             ]}
             onPress={() => handleOAuth("microsoft")}
           >
-            <Text style={styles.buttonIcon}>M</Text>
-            <Text style={styles.buttonText}>Sign in with Microsoft</Text>
+            <View style={[styles.iconBox, { backgroundColor: "#fff" }]}>
+              <Text style={[styles.buttonIcon, { color: "#00A4EF" }]}>M</Text>
+            </View>
+            <Text style={styles.buttonText}>Continue with Microsoft</Text>
           </Pressable>
         </View>
 
-        {/* Footer */}
         <Text style={styles.footer}>
           By signing in you agree to the Terms of Service and Privacy Policy.
         </Text>
@@ -118,36 +196,40 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   buttons: {
-    gap: 16,
+    gap: 12,
   },
   button: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 16,
-    paddingHorizontal: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
     borderRadius: 12,
     borderWidth: 1,
   },
-  googleButton: {
-    backgroundColor: "#1a1a2e",
-    borderColor: "#2a2a4a",
-  },
-  microsoftButton: {
-    backgroundColor: "#1a1a2e",
-    borderColor: "#2a2a4a",
+  oauthButton: {
+    backgroundColor: "#111111",
+    borderColor: "#2a2a2a",
   },
   buttonPressed: {
     opacity: 0.7,
   },
-  buttonIcon: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#6366f1",
+  appleButton: {
+    height: 52,
+  },
+  iconBox: {
     width: 32,
-    textAlign: "center",
+    height: 32,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  buttonIcon: {
+    fontSize: 18,
+    fontWeight: "700",
   },
   buttonText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "600",
     color: "#e4e4e7",
   },

@@ -9,11 +9,20 @@ import (
 	"time"
 )
 
-const (
-	// convexBaseURL is the base URL for the Convex backend.
-	// In production this would come from configuration.
-	convexBaseURL = "https://api.yaver.io"
+// newBearerRequest creates an HTTP request with Authorization: Bearer header.
+func newBearerRequest(method, url, token string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req, nil
+}
 
+const (
 	httpTimeout = 10 * time.Second
 )
 
@@ -21,18 +30,13 @@ var httpClient = &http.Client{Timeout: httpTimeout}
 
 // ValidateToken checks the auth token against the Convex backend.
 // Returns nil on success, an error otherwise.
-func ValidateToken(token string) error {
-	payload := map[string]string{"token": token}
-	body, err := json.Marshal(payload)
+func ValidateToken(baseURL, token string) error {
+	req, err := newBearerRequest("GET", baseURL+"/auth/validate", token, nil)
 	if err != nil {
-		return fmt.Errorf("marshal validate request: %w", err)
+		return fmt.Errorf("create validate request: %w", err)
 	}
 
-	resp, err := httpClient.Post(
-		convexBaseURL+"/auth/validate",
-		"application/json",
-		bytes.NewReader(body),
-	)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("validate token request: %w", err)
 	}
@@ -47,27 +51,28 @@ func ValidateToken(token string) error {
 
 // RegisterDeviceRequest contains the fields sent when registering a device.
 type RegisterDeviceRequest struct {
-	Token     string `json:"token"`
-	DeviceID  string `json:"device_id"`
+	Token     string `json:"-"`
+	DeviceID  string `json:"deviceId"`
 	Name      string `json:"name"`
 	Platform  string `json:"platform"`
-	PublicKey string `json:"public_key"`
-	Host      string `json:"host"`
-	Port      int    `json:"port"`
+	PublicKey string `json:"publicKey"`
+	QuicHost  string `json:"quicHost"`
+	QuicPort  int    `json:"quicPort"`
 }
 
 // RegisterDevice registers this desktop agent with the Convex backend.
-func RegisterDevice(req RegisterDeviceRequest) error {
-	body, err := json.Marshal(req)
+func RegisterDevice(baseURL string, r RegisterDeviceRequest) error {
+	body, err := json.Marshal(r)
 	if err != nil {
 		return fmt.Errorf("marshal register request: %w", err)
 	}
 
-	resp, err := httpClient.Post(
-		convexBaseURL+"/devices/register",
-		"application/json",
-		bytes.NewReader(body),
-	)
+	req, err := newBearerRequest("POST", baseURL+"/devices/register", r.Token, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create register request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("register device request: %w", err)
 	}
@@ -82,21 +87,19 @@ func RegisterDevice(req RegisterDeviceRequest) error {
 
 // SendHeartbeat sends a heartbeat to the Convex backend so the device stays
 // marked as online.
-func SendHeartbeat(token, deviceID string) error {
-	payload := map[string]string{
-		"token":     token,
-		"device_id": deviceID,
-	}
+func SendHeartbeat(baseURL, token, deviceID string) error {
+	payload := map[string]string{"deviceId": deviceID}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal heartbeat: %w", err)
 	}
 
-	resp, err := httpClient.Post(
-		convexBaseURL+"/devices/heartbeat",
-		"application/json",
-		bytes.NewReader(body),
-	)
+	req, err := newBearerRequest("POST", baseURL+"/devices/heartbeat", token, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create heartbeat request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("heartbeat request: %w", err)
 	}
@@ -110,21 +113,19 @@ func SendHeartbeat(token, deviceID string) error {
 }
 
 // MarkOffline tells the backend this device is going offline.
-func MarkOffline(token, deviceID string) error {
-	payload := map[string]string{
-		"token":     token,
-		"device_id": deviceID,
-	}
+func MarkOffline(baseURL, token, deviceID string) error {
+	payload := map[string]string{"deviceId": deviceID}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal offline: %w", err)
 	}
 
-	resp, err := httpClient.Post(
-		convexBaseURL+"/devices/offline",
-		"application/json",
-		bytes.NewReader(body),
-	)
+	req, err := newBearerRequest("POST", baseURL+"/devices/offline", token, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create offline request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("offline request: %w", err)
 	}

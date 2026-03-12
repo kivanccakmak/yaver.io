@@ -3,6 +3,8 @@ import * as SecureStore from "expo-secure-store";
 const TOKEN_KEY = "yaver_auth_token";
 const USER_KEY = "yaver_user";
 
+export type OAuthProvider = "google" | "microsoft" | "apple";
+
 export interface User {
   id: string;
   email: string;
@@ -43,13 +45,11 @@ export async function saveUser(user: User): Promise<void> {
 
 export async function validateToken(token: string): Promise<User | null> {
   try {
-    // Validate token against the backend
     const response = await fetch(
-      `${getApiBaseUrl()}/api/auth/validate`,
+      `${getConvexSiteUrl()}/auth/validate`,
       {
-        method: "POST",
+        method: "GET",
         headers: {
-          "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
       }
@@ -62,13 +62,15 @@ export async function validateToken(token: string): Promise<User | null> {
   }
 }
 
-export function getApiBaseUrl(): string {
-  // TODO: make configurable
-  return "https://api.yaver.io";
+export function getWebBaseUrl(): string {
+  return "https://yaver.io";
 }
 
-export function getOAuthUrl(provider: "google" | "microsoft"): string {
-  const base = getApiBaseUrl();
-  const redirectUri = "yaver://oauth-callback";
-  return `${base}/api/auth/${provider}?redirect_uri=${encodeURIComponent(redirectUri)}`;
+export function getConvexSiteUrl(): string {
+  return "https://shocking-echidna-394.eu-west-1.convex.site";
+}
+
+export function getOAuthUrl(provider: OAuthProvider): string {
+  const base = getWebBaseUrl();
+  return `${base}/api/auth/oauth/${provider}?client=mobile`;
 }

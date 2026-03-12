@@ -77,6 +77,10 @@ const faqs = [
     q: "Do you support team accounts?",
     a: "Team features are coming soon. Enterprise customers can contact us for early access to team management, shared devices, and audit logging.",
   },
+  {
+    q: "What is your privacy model?",
+    a: "Yaver uses a zero-knowledge architecture. All code, prompts, and outputs flow directly between your devices over P2P connections. Our servers only handle authentication and peer discovery -- we never see, store, or process your data. Even if our servers were compromised, your code and task data would not be exposed because it never passes through them.",
+  },
 ];
 
 export default function PricingPage() {
@@ -87,7 +91,7 @@ export default function PricingPage() {
       <div className="mx-auto max-w-5xl">
         {/* Header */}
         <div className="mb-16 text-center">
-          <h1 className="mb-4 text-3xl font-bold text-white md:text-4xl">Pricing</h1>
+          <h1 className="mb-4 text-3xl font-bold text-surface-50 md:text-4xl">Pricing</h1>
           <p className="text-sm text-surface-500">
             Start for free. Upgrade when you need more.
           </p>
@@ -103,14 +107,14 @@ export default function PricingPage() {
               }`}
             >
               {tier.badge && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-white px-3 py-0.5 text-[10px] font-bold tracking-wider text-black">
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-surface-50 px-3 py-0.5 text-[10px] font-bold tracking-wider text-surface-950">
                   {tier.badge}
                 </div>
               )}
               <div className="mb-6">
                 <h3 className="mb-1 text-sm font-semibold text-surface-400">{tier.name}</h3>
                 <div className="flex items-baseline gap-1">
-                  <span className="text-3xl font-bold text-white">{tier.price}</span>
+                  <span className="text-3xl font-bold text-surface-50">{tier.price}</span>
                   {tier.period && (
                     <span className="text-sm text-surface-500">{tier.period}</span>
                   )}
@@ -143,14 +147,14 @@ export default function PricingPage() {
 
         {/* FAQ */}
         <div className="mx-auto max-w-2xl">
-          <h2 className="mb-8 text-center text-xl font-bold text-white">
+          <h2 className="mb-8 text-center text-xl font-bold text-surface-50">
             Frequently asked questions
           </h2>
           <div className="space-y-2">
             {faqs.map((faq, i) => (
               <div key={i} className="border-b border-surface-800">
                 <button
-                  className="flex w-full items-center justify-between py-4 text-left text-sm font-medium text-surface-200 hover:text-white"
+                  className="flex w-full items-center justify-between py-4 text-left text-sm font-medium text-surface-200 hover:text-surface-50"
                   onClick={() => setOpenFaq(openFaq === i ? null : i)}
                 >
                   {faq.q}
@@ -169,7 +173,7 @@ export default function PricingPage() {
         </div>
 
         <div className="mt-16 text-center">
-          <Link href="/" className="text-xs text-surface-500 hover:text-white">
+          <Link href="/" className="text-xs text-surface-500 hover:text-surface-50">
             Back to home
           </Link>
         </div>

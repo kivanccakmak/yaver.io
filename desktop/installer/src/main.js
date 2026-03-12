@@ -1,9 +1,9 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const http = require('http');
-const { execSync, exec } = require('child_process');
+const { execSync, spawn } = require('child_process');
 const os = require('os');
 
 const AGENT_REPO = 'yaver-io/agent';
@@ -14,16 +14,23 @@ const INSTALL_DIR = process.platform === 'win32'
 const CONFIG_DIR = process.platform === 'win32'
   ? path.join(process.env.APPDATA || '', 'Yaver')
   : path.join(os.homedir(), '.yaver');
+const CONVEX_SITE_URL = 'https://shocking-echidna-394.eu-west-1.convex.site';
 
 let mainWindow;
+let tray = null;
+
+// ---------------------------------------------------------------------------
+// Window management
+// ---------------------------------------------------------------------------
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
+    width: 480,
+    height: 560,
     resizable: false,
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0f1117',
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -32,54 +39,201 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+  });
+
+  mainWindow.on('close', (e) => {
+    // Hide to tray instead of quitting (macOS / Linux)
+    if (tray && process.platform !== 'win32') {
+      e.preventDefault();
+      mainWindow.hide();
+    }
+  });
 }
 
-app.whenReady().then(createWindow);
+function createTray() {
+  // Tiny 16x16 template icon for menu bar
+  const icon = nativeImage.createFromDataURL(
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAmklEQVQ4T2NkoBAwUqifYdAY8J+B4T8jECMDEJuRgQGOQWxkNciADEBDQGyQGqgaFAPABjAw/GdgZPzPwMjw/z8jwBUMDEBnMjD8h7sEZCLIJSA+IwPY1XAXgA0gygCQSxgZ/v9nBLkY7A0GBrigYjYjigEkNSgqQJqQvAFjI/lBZABMPwi5AJlrIGYSFQYY4CUJDJgBAACqEFBE0GFnQAAAABJRU5ErkJggg=='
+  );
+  tray = new Tray(icon);
+  tray.setToolTip('Yaver');
+
+  const updateTrayMenu = () => {
+    const isSignedIn = hasToken();
+    const agentRunning = isAgentRunning();
+
+    const menu = Menu.buildFromTemplate([
+      {
+        label: agentRunning ? '● Agent Running' : '○ Agent Stopped',
+        enabled: false,
+      },
+      { type: 'separator' },
+      {
+        label: 'Open Yaver',
+        click: () => {
+          if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+          } else {
+            createWindow();
+          }
+        },
+      },
+      { type: 'separator' },
+      ...(isSignedIn
+        ? [{ label: 'Sign Out', click: () => signOut() }]
+        : [{ label: 'Sign In...', click: () => { mainWindow?.show(); mainWindow?.focus(); } }]),
+      { type: 'separator' },
+      { label: 'Quit Yaver', click: () => { app.quit(); } },
+    ]);
+
+    tray.setContextMenu(menu);
+  };
+
+  updateTrayMenu();
+  // Refresh tray menu every 30 seconds
+  setInterval(updateTrayMenu, 30000);
+}
+
+app.whenReady().then(() => {
+  createTray();
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
-  app.quit();
+  if (process.platform !== 'darwin') app.quit();
 });
+
+app.on('activate', () => {
+  if (mainWindow) {
+    mainWindow.show();
+  } else {
+    createWindow();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Auth helpers
+// ---------------------------------------------------------------------------
+
+function getTokenPath() {
+  return path.join(CONFIG_DIR, 'token');
+}
+
+function hasToken() {
+  return fs.existsSync(getTokenPath());
+}
+
+function getToken() {
+  try {
+    return fs.readFileSync(getTokenPath(), 'utf8').trim();
+  } catch {
+    return null;
+  }
+}
+
+function clearToken() {
+  try {
+    fs.unlinkSync(getTokenPath());
+  } catch { /* ignore */ }
+}
+
+function signOut() {
+  clearToken();
+  // Stop agent service
+  try {
+    if (process.platform === 'darwin') {
+      execSync('launchctl unload ~/Library/LaunchAgents/io.yaver.agent.plist 2>/dev/null', { stdio: 'ignore' });
+    } else if (process.platform === 'linux') {
+      execSync('systemctl --user stop yaver-agent 2>/dev/null', { stdio: 'ignore' });
+    } else if (process.platform === 'win32') {
+      execSync('sc stop YaverAgent 2>nul', { stdio: 'ignore' });
+    }
+  } catch { /* ignore */ }
+
+  if (mainWindow) {
+    mainWindow.webContents.send('auth-state-changed', { signedIn: false });
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
+
+function isAgentRunning() {
+  try {
+    if (process.platform === 'darwin') {
+      const out = execSync('launchctl list io.yaver.agent 2>&1', { encoding: 'utf8' });
+      return !out.includes('Could not find');
+    } else if (process.platform === 'linux') {
+      const out = execSync('systemctl --user is-active yaver-agent 2>&1', { encoding: 'utf8' });
+      return out.trim() === 'active';
+    } else if (process.platform === 'win32') {
+      const out = execSync('sc query YaverAgent 2>&1', { encoding: 'utf8' });
+      return out.includes('RUNNING');
+    }
+  } catch { /* */ }
+  return false;
+}
+
+function isAgentInstalled() {
+  return fs.existsSync(path.join(INSTALL_DIR, AGENT_BINARY_NAME));
+}
 
 // ---------------------------------------------------------------------------
 // IPC Handlers
 // ---------------------------------------------------------------------------
 
+ipcMain.handle('get-app-state', async () => {
+  const token = getToken();
+  let tokenValid = false;
+
+  if (token) {
+    try {
+      tokenValid = await validateToken(token);
+    } catch {
+      tokenValid = false;
+    }
+  }
+
+  return {
+    hasToken: !!token,
+    tokenValid,
+    agentInstalled: isAgentInstalled(),
+    agentRunning: isAgentRunning(),
+    platform: process.platform,
+    arch: process.arch,
+  };
+});
+
 ipcMain.handle('check-prerequisites', async () => {
-  const results = { claude: false, go: false, platform: process.platform, arch: process.arch };
+  const results = { claude: false, platform: process.platform, arch: process.arch };
 
   try {
     execSync('claude --version', { stdio: 'ignore' });
     results.claude = true;
   } catch { /* not found */ }
 
-  try {
-    execSync('go version', { stdio: 'ignore' });
-    results.go = true;
-  } catch { /* not found */ }
-
   return results;
 });
 
-ipcMain.handle('download-agent', async (_event) => {
+ipcMain.handle('download-agent', async () => {
   try {
-    // Determine the right asset name for this platform
     const platformMap = { darwin: 'darwin', linux: 'linux', win32: 'windows' };
     const archMap = { x64: 'amd64', arm64: 'arm64' };
     const plat = platformMap[process.platform] || process.platform;
     const arch = archMap[process.arch] || process.arch;
     const assetName = `yaver-agent-${plat}-${arch}${process.platform === 'win32' ? '.exe' : ''}`;
 
-    // Fetch latest release metadata from GitHub
     const releaseUrl = `https://api.github.com/repos/${AGENT_REPO}/releases/latest`;
     const releaseMeta = await httpGetJson(releaseUrl);
 
     const asset = releaseMeta.assets && releaseMeta.assets.find((a) => a.name === assetName);
     if (!asset) {
-      // Fallback: just report what we looked for
       return { success: false, error: `No release asset found for ${assetName}. You may need to build from source.` };
     }
 
-    // Download the binary
     const destDir = INSTALL_DIR;
     if (!fs.existsSync(destDir)) {
       fs.mkdirSync(destDir, { recursive: true });
@@ -87,7 +241,6 @@ ipcMain.handle('download-agent', async (_event) => {
     const destPath = path.join(destDir, AGENT_BINARY_NAME);
     await downloadFile(asset.browser_download_url, destPath);
 
-    // Make executable on Unix
     if (process.platform !== 'win32') {
       fs.chmodSync(destPath, 0o755);
     }
@@ -99,25 +252,31 @@ ipcMain.handle('download-agent', async (_event) => {
 });
 
 ipcMain.handle('authenticate', async () => {
-  // Open OAuth URL in the default browser
-  const authUrl = 'https://yaver.io/auth/desktop';
+  const authUrl = `${CONVEX_SITE_URL}/auth/google?client=desktop`;
   shell.openExternal(authUrl);
 
-  // Start a tiny local HTTP server to catch the callback
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       const url = new URL(req.url, 'http://localhost');
       const token = url.searchParams.get('token');
       if (token) {
-        // Persist token
         if (!fs.existsSync(CONFIG_DIR)) {
           fs.mkdirSync(CONFIG_DIR, { recursive: true });
         }
-        fs.writeFileSync(path.join(CONFIG_DIR, 'token'), token, { mode: 0o600 });
+        fs.writeFileSync(getTokenPath(), token, { mode: 0o600 });
 
         res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<html><body style="background:#0f1117;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh"><h2>Authenticated! You can close this tab.</h2></body></html>');
+        res.end(`<html><body style="background:#0f1117;color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column">
+          <h2 style="margin-bottom:8px">Authenticated!</h2>
+          <p style="color:#9ca3af">You can close this tab and return to Yaver.</p>
+        </body></html>`);
         server.close();
+
+        // Notify renderer
+        if (mainWindow) {
+          mainWindow.webContents.send('auth-state-changed', { signedIn: true });
+        }
+
         resolve({ success: true });
       } else {
         res.writeHead(400);
@@ -125,11 +284,50 @@ ipcMain.handle('authenticate', async () => {
       }
     });
 
-    server.listen(19836, '127.0.0.1', () => {
-      // The OAuth flow will redirect back to http://localhost:19836?token=...
+    server.listen(19836, '127.0.0.1');
+
+    setTimeout(() => {
+      server.close();
+      resolve({ success: false, error: 'Authentication timed out.' });
+    }, 5 * 60 * 1000);
+  });
+});
+
+ipcMain.handle('authenticate-microsoft', async () => {
+  const authUrl = `${CONVEX_SITE_URL}/auth/microsoft?client=desktop`;
+  shell.openExternal(authUrl);
+
+  // Reuse same callback server
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      const url = new URL(req.url, 'http://localhost');
+      const token = url.searchParams.get('token');
+      if (token) {
+        if (!fs.existsSync(CONFIG_DIR)) {
+          fs.mkdirSync(CONFIG_DIR, { recursive: true });
+        }
+        fs.writeFileSync(getTokenPath(), token, { mode: 0o600 });
+
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(`<html><body style="background:#0f1117;color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column">
+          <h2 style="margin-bottom:8px">Authenticated!</h2>
+          <p style="color:#9ca3af">You can close this tab and return to Yaver.</p>
+        </body></html>`);
+        server.close();
+
+        if (mainWindow) {
+          mainWindow.webContents.send('auth-state-changed', { signedIn: true });
+        }
+
+        resolve({ success: true });
+      } else {
+        res.writeHead(400);
+        res.end('Missing token');
+      }
     });
 
-    // Timeout after 5 minutes
+    server.listen(19836, '127.0.0.1');
+
     setTimeout(() => {
       server.close();
       resolve({ success: false, error: 'Authentication timed out.' });
@@ -159,22 +357,63 @@ ipcMain.handle('install-service', async () => {
   }
 });
 
-ipcMain.handle('get-status', async () => {
+ipcMain.handle('restart-service', async () => {
   try {
     if (process.platform === 'darwin') {
-      const out = execSync('launchctl list io.yaver.agent 2>&1', { encoding: 'utf8' });
-      return { running: !out.includes('Could not find'), detail: out.trim() };
+      execSync('launchctl unload ~/Library/LaunchAgents/io.yaver.agent.plist 2>/dev/null || true', { stdio: 'ignore' });
+      execSync('launchctl load -w ~/Library/LaunchAgents/io.yaver.agent.plist', { stdio: 'ignore' });
     } else if (process.platform === 'linux') {
-      const out = execSync('systemctl --user is-active yaver-agent 2>&1', { encoding: 'utf8' });
-      return { running: out.trim() === 'active', detail: out.trim() };
+      execSync('systemctl --user restart yaver-agent');
     } else if (process.platform === 'win32') {
-      const out = execSync('sc query YaverAgent 2>&1', { encoding: 'utf8' });
-      return { running: out.includes('RUNNING'), detail: out.trim() };
+      execSync('sc stop YaverAgent 2>nul & sc start YaverAgent');
     }
-  } catch {
-    return { running: false, detail: 'Service not installed' };
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
   }
 });
+
+ipcMain.handle('get-status', async () => {
+  return {
+    running: isAgentRunning(),
+    installed: isAgentInstalled(),
+    hasToken: hasToken(),
+  };
+});
+
+ipcMain.handle('sign-out', async () => {
+  signOut();
+  return { success: true };
+});
+
+ipcMain.handle('validate-token', async () => {
+  const token = getToken();
+  if (!token) return { valid: false };
+  try {
+    const valid = await validateToken(token);
+    return { valid };
+  } catch {
+    return { valid: false };
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Token validation
+// ---------------------------------------------------------------------------
+
+async function validateToken(token) {
+  return new Promise((resolve) => {
+    const url = new URL('/auth/validate', CONVEX_SITE_URL);
+    https.get(url.toString(), {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'User-Agent': 'YaverDesktop/1.0',
+      },
+    }, (res) => {
+      resolve(res.statusCode === 200);
+    }).on('error', () => resolve(false));
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Platform service installers
@@ -208,6 +447,11 @@ function installLaunchd(agentPath) {
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
   }
+  // Unload first if already loaded
+  try {
+    execSync(`launchctl unload "${plistPath}" 2>/dev/null`, { stdio: 'ignore' });
+  } catch { /* ignore */ }
+
   fs.writeFileSync(plistPath, plist);
   execSync(`launchctl load -w "${plistPath}"`);
   return { success: true };
@@ -239,7 +483,6 @@ WantedBy=default.target
 }
 
 function installWindowsService(agentPath) {
-  // Use sc.exe to create a simple Windows service
   try {
     execSync(`sc create YaverAgent binPath= "\\"${agentPath}\\" serve" start= auto DisplayName= "Yaver Agent"`);
     execSync('sc start YaverAgent');
@@ -256,7 +499,7 @@ function installWindowsService(agentPath) {
 function httpGetJson(url) {
   return new Promise((resolve, reject) => {
     const get = (u) => {
-      https.get(u, { headers: { 'User-Agent': 'YaverInstaller/1.0' } }, (res) => {
+      https.get(u, { headers: { 'User-Agent': 'YaverDesktop/1.0' } }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           get(res.headers.location);
           return;
@@ -277,7 +520,7 @@ function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
     const download = (u) => {
       const mod = u.startsWith('https') ? https : http;
-      mod.get(u, { headers: { 'User-Agent': 'YaverInstaller/1.0' } }, (res) => {
+      mod.get(u, { headers: { 'User-Agent': 'YaverDesktop/1.0' } }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           download(res.headers.location);
           return;

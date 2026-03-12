@@ -6,29 +6,45 @@ import { Suspense } from "react";
 
 function AuthContent() {
   const params = useSearchParams();
-  const isSignup = params.get("signup") === "true";
+  const error = params.get("error");
+  const client = params.get("client") || "web";
 
-  const handleOAuth = (provider: "google" | "microsoft") => {
-    const base = process.env.NEXT_PUBLIC_CONVEX_SITE_URL || "";
-    window.location.href = `${base}/auth/${provider}?client=web`;
+  const handleOAuth = (provider: "google" | "microsoft" | "apple") => {
+    window.location.href = `/api/auth/oauth/${provider}?client=${client}`;
   };
 
   return (
     <div className="flex min-h-[70vh] items-center justify-center px-6 py-20">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <span className="text-2xl font-bold tracking-tight text-white">
+          <span className="text-2xl font-bold tracking-tight text-surface-50">
             yaver<span className="font-normal text-surface-500">.io</span>
           </span>
           <p className="mt-3 text-sm text-surface-500">
-            {isSignup ? "Create your account" : "Sign in to your account"}
+            Sign in to get started
           </p>
         </div>
 
+        {error && (
+          <div className="mb-6 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+            {error}
+          </div>
+        )}
+
         <div className="space-y-3">
           <button
+            onClick={() => handleOAuth("apple")}
+            className="flex w-full items-center justify-center gap-3 rounded-lg bg-white px-4 py-3 text-sm font-medium text-black transition-colors hover:bg-gray-100"
+          >
+            <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z" />
+            </svg>
+            Continue with Apple
+          </button>
+
+          <button
             onClick={() => handleOAuth("google")}
-            className="flex w-full items-center justify-center gap-3 rounded-lg border border-surface-700 bg-surface-900 px-4 py-3 text-sm font-medium text-surface-200 transition-colors hover:border-surface-600 hover:text-white"
+            className="flex w-full items-center justify-center gap-3 rounded-lg border border-surface-700 bg-surface-900 px-4 py-3 text-sm font-medium text-surface-200 transition-colors hover:border-surface-600 hover:text-surface-50"
           >
             <svg className="h-5 w-5" viewBox="0 0 24 24">
               <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
@@ -41,7 +57,7 @@ function AuthContent() {
 
           <button
             onClick={() => handleOAuth("microsoft")}
-            className="flex w-full items-center justify-center gap-3 rounded-lg border border-surface-700 bg-surface-900 px-4 py-3 text-sm font-medium text-surface-200 transition-colors hover:border-surface-600 hover:text-white"
+            className="flex w-full items-center justify-center gap-3 rounded-lg border border-surface-700 bg-surface-900 px-4 py-3 text-sm font-medium text-surface-200 transition-colors hover:border-surface-600 hover:text-surface-50"
           >
             <svg className="h-5 w-5" viewBox="0 0 24 24">
               <path fill="#F25022" d="M1 1h10v10H1z" />
@@ -55,24 +71,10 @@ function AuthContent() {
 
         <p className="mt-8 text-center text-xs text-surface-600">
           By continuing, you agree to our{" "}
-          <Link href="/terms" className="text-surface-400 hover:text-white">Terms</Link>{" "}
+          <Link href="/terms" className="text-surface-400 hover:text-surface-50">Terms</Link>{" "}
           and{" "}
-          <Link href="/privacy" className="text-surface-400 hover:text-white">Privacy Policy</Link>.
+          <Link href="/privacy" className="text-surface-400 hover:text-surface-50">Privacy Policy</Link>.
         </p>
-
-        <div className="mt-6 text-center">
-          {isSignup ? (
-            <p className="text-xs text-surface-500">
-              Already have an account?{" "}
-              <Link href="/auth" className="text-white hover:underline">Sign in</Link>
-            </p>
-          ) : (
-            <p className="text-xs text-surface-500">
-              Don&apos;t have an account?{" "}
-              <Link href="/auth?signup=true" className="text-white hover:underline">Sign up</Link>
-            </p>
-          )}
-        </div>
       </div>
     </div>
   );

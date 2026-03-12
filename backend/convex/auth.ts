@@ -32,7 +32,7 @@ export async function validateSessionInternal(
     userId: string;
     email: string;
     fullName: string;
-    provider: "google" | "microsoft";
+    provider: "google" | "microsoft" | "apple";
     providerId: string;
     avatarUrl?: string;
     createdAt: number;
@@ -63,7 +63,7 @@ export const createOrUpdateUser = mutation({
   args: {
     email: v.string(),
     fullName: v.string(),
-    provider: v.union(v.literal("google"), v.literal("microsoft")),
+    provider: v.union(v.literal("google"), v.literal("microsoft"), v.literal("apple")),
     providerId: v.string(),
     avatarUrl: v.optional(v.string()),
   },

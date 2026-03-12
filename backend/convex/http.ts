@@ -1,7 +1,7 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { api } from "./_generated/api";
-import { sha256Hex, randomHex } from "./auth";
+import { sha256Hex } from "./auth";
 
 const http = httpRouter();
 
@@ -38,225 +38,37 @@ async function authenticateRequest(
   return await ctx.runQuery(api.auth.validateSession, { tokenHash });
 }
 
-// ── Google OAuth ─────────────────────────────────────────────────────
+// ── Auth Endpoints (called by Next.js API routes) ────────────────────
 
-/** POST /auth/google — Redirect to Google OAuth consent screen. */
+/** POST /auth/upsert-user — Create or update a user (called from web server). */
 http.route({
-  path: "/auth/google",
+  path: "/auth/upsert-user",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    const redirectBase = process.env.AUTH_REDIRECT_URL;
-    if (!clientId || !redirectBase) {
-      return errorResponse("Google OAuth not configured", 500);
-    }
-
-    const body = await request.json().catch(() => ({}));
-    const state = randomHex(16);
-
-    const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: `${redirectBase}/auth/google/callback`,
-      response_type: "code",
-      scope: "openid email profile",
-      state,
-      access_type: "offline",
-      prompt: "consent",
-    });
-
-    const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-    return jsonResponse({ url, state });
-  }),
-});
-
-/** GET /auth/google/callback — Handle Google OAuth callback. */
-http.route({
-  path: "/auth/google/callback",
-  method: "GET",
-  handler: httpAction(async (ctx, request) => {
-    const url = new URL(request.url);
-    const code = url.searchParams.get("code");
-    const error = url.searchParams.get("error");
-
-    if (error || !code) {
-      return errorResponse(`OAuth failed: ${error || "no code"}`, 400);
-    }
-
-    const clientId = process.env.GOOGLE_CLIENT_ID!;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
-    const redirectBase = process.env.AUTH_REDIRECT_URL!;
-    const deepLink = process.env.MOBILE_DEEP_LINK || "yaver://oauth-callback";
-
-    // Exchange code for tokens
-    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code,
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: `${redirectBase}/auth/google/callback`,
-        grant_type: "authorization_code",
-      }),
-    });
-
-    if (!tokenRes.ok) {
-      const text = await tokenRes.text();
-      return errorResponse(`Token exchange failed: ${text}`, 502);
-    }
-
-    const tokens = await tokenRes.json();
-
-    // Fetch user info
-    const userInfoRes = await fetch(
-      "https://www.googleapis.com/oauth2/v2/userinfo",
-      { headers: { Authorization: `Bearer ${tokens.access_token}` } }
-    );
-
-    if (!userInfoRes.ok) {
-      return errorResponse("Failed to fetch user info", 502);
-    }
-
-    const userInfo = await userInfoRes.json();
-
-    // Upsert user
+    const body = await request.json();
     const userId = await ctx.runMutation(api.auth.createOrUpdateUser, {
-      email: userInfo.email,
-      fullName: userInfo.name || userInfo.email,
-      provider: "google",
-      providerId: userInfo.id,
-      avatarUrl: userInfo.picture,
+      email: body.email,
+      fullName: body.fullName,
+      provider: body.provider,
+      providerId: body.providerId,
+      avatarUrl: body.avatarUrl,
     });
-
-    // Create session
-    const rawToken = randomHex(32);
-    const tokenHash = await sha256Hex(rawToken);
-    const thirtyDays = 30 * 24 * 60 * 60 * 1000;
-
-    await ctx.runMutation(api.auth.createSession, {
-      tokenHash,
-      userId,
-      expiresAt: Date.now() + thirtyDays,
-    });
-
-    // Redirect to mobile deep link with token
-    const redirectUrl = `${deepLink}?token=${rawToken}&provider=google`;
-    return new Response(null, {
-      status: 302,
-      headers: { Location: redirectUrl },
-    });
+    return jsonResponse({ userId });
   }),
 });
 
-// ── Microsoft OAuth ──────────────────────────────────────────────────
-
-/** POST /auth/microsoft — Redirect to Microsoft OAuth consent screen. */
+/** POST /auth/create-session — Create a session (called from web server). */
 http.route({
-  path: "/auth/microsoft",
+  path: "/auth/create-session",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const clientId = process.env.MICROSOFT_CLIENT_ID;
-    const redirectBase = process.env.AUTH_REDIRECT_URL;
-    if (!clientId || !redirectBase) {
-      return errorResponse("Microsoft OAuth not configured", 500);
-    }
-
-    const state = randomHex(16);
-
-    const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: `${redirectBase}/auth/microsoft/callback`,
-      response_type: "code",
-      scope: "openid email profile User.Read",
-      state,
-      response_mode: "query",
+    const body = await request.json();
+    const sessionId = await ctx.runMutation(api.auth.createSession, {
+      tokenHash: body.tokenHash,
+      userId: body.userId,
+      expiresAt: body.expiresAt,
     });
-
-    const url = `https://login.microsoftonline.com/common/oauth2/v2/authorize?${params.toString()}`;
-    return jsonResponse({ url, state });
-  }),
-});
-
-/** GET /auth/microsoft/callback — Handle Microsoft OAuth callback. */
-http.route({
-  path: "/auth/microsoft/callback",
-  method: "GET",
-  handler: httpAction(async (ctx, request) => {
-    const url = new URL(request.url);
-    const code = url.searchParams.get("code");
-    const error = url.searchParams.get("error");
-
-    if (error || !code) {
-      return errorResponse(
-        `OAuth failed: ${error || "no code"}`,
-        400
-      );
-    }
-
-    const clientId = process.env.MICROSOFT_CLIENT_ID!;
-    const clientSecret = process.env.MICROSOFT_CLIENT_SECRET!;
-    const redirectBase = process.env.AUTH_REDIRECT_URL!;
-    const deepLink = process.env.MOBILE_DEEP_LINK || "yaver://oauth-callback";
-
-    // Exchange code for tokens
-    const tokenRes = await fetch(
-      "https://login.microsoftonline.com/common/oauth2/v2/token",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          code,
-          client_id: clientId,
-          client_secret: clientSecret,
-          redirect_uri: `${redirectBase}/auth/microsoft/callback`,
-          grant_type: "authorization_code",
-        }),
-      }
-    );
-
-    if (!tokenRes.ok) {
-      const text = await tokenRes.text();
-      return errorResponse(`Token exchange failed: ${text}`, 502);
-    }
-
-    const tokens = await tokenRes.json();
-
-    // Fetch user info from Microsoft Graph
-    const userInfoRes = await fetch("https://graph.microsoft.com/v1.0/me", {
-      headers: { Authorization: `Bearer ${tokens.access_token}` },
-    });
-
-    if (!userInfoRes.ok) {
-      return errorResponse("Failed to fetch user info", 502);
-    }
-
-    const userInfo = await userInfoRes.json();
-
-    // Upsert user
-    const userId = await ctx.runMutation(api.auth.createOrUpdateUser, {
-      email: userInfo.mail || userInfo.userPrincipalName,
-      fullName: userInfo.displayName || userInfo.mail || "Unknown",
-      provider: "microsoft",
-      providerId: userInfo.id,
-    });
-
-    // Create session
-    const rawToken = randomHex(32);
-    const tokenHash = await sha256Hex(rawToken);
-    const thirtyDays = 30 * 24 * 60 * 60 * 1000;
-
-    await ctx.runMutation(api.auth.createSession, {
-      tokenHash,
-      userId,
-      expiresAt: Date.now() + thirtyDays,
-    });
-
-    // Redirect to mobile deep link with token
-    const redirectUrl = `${deepLink}?token=${rawToken}&provider=microsoft`;
-    return new Response(null, {
-      status: 302,
-      headers: { Location: redirectUrl },
-    });
+    return jsonResponse({ sessionId });
   }),
 });
 
@@ -272,6 +84,80 @@ http.route({
       return errorResponse("Unauthorized", 401);
     }
     return jsonResponse({ user });
+  }),
+});
+
+// ── Apple Sign-In ────────────────────────────────────────────────────
+
+/** POST /auth/apple-native — Native iOS Apple Sign-In (receives identityToken). */
+http.route({
+  path: "/auth/apple-native",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const body = await request.json();
+    const { identityToken, fullName } = body;
+
+    if (!identityToken) {
+      return errorResponse("Missing identityToken", 400);
+    }
+
+    // Decode Apple's identity token (JWT) to extract email and sub
+    const parts = identityToken.split(".");
+    if (parts.length !== 3) {
+      return errorResponse("Invalid identityToken format", 400);
+    }
+
+    let payload: Record<string, unknown>;
+    try {
+      const decoded = atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"));
+      payload = JSON.parse(decoded);
+    } catch {
+      return errorResponse("Failed to decode identityToken", 400);
+    }
+
+    const email = payload.email as string;
+    const sub = payload.sub as string;
+
+    if (!email || !sub) {
+      return errorResponse("Token missing email or sub", 400);
+    }
+
+    // Upsert user
+    const userId = await ctx.runMutation(api.auth.createOrUpdateUser, {
+      email: email.toLowerCase(),
+      fullName: fullName || email,
+      provider: "apple",
+      providerId: sub,
+    });
+
+    // Create session
+    const tokenBytes = new Uint8Array(32);
+    crypto.getRandomValues(tokenBytes);
+    const token = Array.from(tokenBytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    const tokenHash = await sha256Hex(token);
+    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000; // 30 days
+
+    await ctx.runMutation(api.auth.createSession, {
+      tokenHash,
+      userId,
+      expiresAt,
+    });
+
+    return jsonResponse({ token, userId });
+  }),
+});
+
+/** POST /auth/apple-notifications — Apple sends account events here. */
+http.route({
+  path: "/auth/apple-notifications",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const body = await request.json();
+    console.log("Apple notification received:", JSON.stringify(body));
+    return new Response(null, { status: 200 });
   }),
 });
 
@@ -365,6 +251,24 @@ http.route({
     });
 
     return jsonResponse({ ok: true });
+  }),
+});
+
+// ── Download Endpoints ──────────────────────────────────────────────
+
+/** GET /downloads/list — List all available downloads (public, no auth). */
+http.route({
+  path: "/downloads/list",
+  method: "GET",
+  handler: httpAction(async (ctx) => {
+    const downloads = await ctx.runQuery(api.downloads.listDownloads, {});
+    return new Response(JSON.stringify({ downloads }), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
   }),
 });
 

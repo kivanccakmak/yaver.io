@@ -2,31 +2,275 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
 	"syscall"
 	"time"
 
+	osexec "os/exec"
+
 	"github.com/google/uuid"
 )
 
-func main() {
-	token := flag.String("token", "", "Authentication token for Convex")
-	port := flag.Int("port", 4433, "QUIC server port")
-	workDir := flag.String("work-dir", ".", "Working directory for tasks")
-	flag.Parse()
+const version = "1.0.0"
 
-	if *token == "" {
-		fmt.Fprintln(os.Stderr, "error: --token is required")
-		flag.Usage()
-		os.Exit(1)
+func main() {
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(0)
 	}
 
-	// Resolve working directory.
+	cmd := os.Args[1]
+	switch cmd {
+	case "auth":
+		runAuth(os.Args[2:])
+	case "signout", "logout":
+		runSignout()
+	case "connect":
+		runConnect(os.Args[2:])
+	case "serve":
+		runServe(os.Args[2:])
+	case "status":
+		runStatus()
+	case "devices":
+		runDevices()
+	case "help", "--help", "-h":
+		printUsage()
+	case "version", "--version", "-v":
+		fmt.Printf("yaver %s\n", version)
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmd)
+		printUsage()
+		os.Exit(1)
+	}
+}
+
+func printUsage() {
+	fmt.Print(`Yaver — use Claude from anywhere
+
+Usage:
+  yaver auth        Sign in to Yaver (opens browser)
+  yaver signout     Sign out and clear credentials
+  yaver connect     Connect to your dev machine
+  yaver serve       Start the agent on this machine
+  yaver status      Show auth and connection status
+  yaver devices     List your registered devices
+  yaver help        Show this help message
+  yaver version     Print version
+
+Run 'yaver <command> -h' for command-specific options.
+`)
+}
+
+// ---------------------------------------------------------------------------
+// auth — sign in via browser OAuth (like claude auth)
+// ---------------------------------------------------------------------------
+
+func runAuth(args []string) {
+	fs := flag.NewFlagSet("auth", flag.ExitOnError)
+	convexURL := fs.String("convex-url", "https://shocking-echidna-394.eu-west-1.convex.site", "Convex site URL")
+	token := fs.String("token", "", "Provide token directly (skip browser)")
+	fs.Parse(args)
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+
+	// Check if already logged in
+	if cfg.AuthToken != "" && cfg.ConvexSiteURL != "" {
+		if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err == nil {
+			fmt.Println("Already signed in. Use 'yaver signout' to sign out first.")
+			return
+		}
+		// Token expired, continue to re-auth
+		fmt.Println("Session expired. Re-authenticating...")
+	}
+
+	if *token != "" {
+		// Direct token
+		cfg.AuthToken = *token
+		cfg.ConvexSiteURL = *convexURL
+		if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: token validation failed: %v\n", err)
+			os.Exit(1)
+		}
+		if cfg.DeviceID == "" {
+			cfg.DeviceID = uuid.New().String()
+		}
+		if err := SaveConfig(cfg); err != nil {
+			log.Fatalf("save config: %v", err)
+		}
+		fmt.Println("Signed in successfully.")
+		return
+	}
+
+	// Browser-based OAuth — opens yaver.io auth page with provider choice
+	fmt.Println("Opening browser to sign in...")
+	fmt.Println()
+
+	authPageURL := "https://yaver.io/auth?client=desktop"
+	fmt.Printf("If your browser doesn't open, visit:\n  %s\n\n", authPageURL)
+
+	// Start local callback server
+	callbackToken := make(chan string, 1)
+	srv := &http.Server{Addr: "127.0.0.1:19836"}
+	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t := r.URL.Query().Get("token")
+		if t != "" {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<html><body style="background:#0f1117;color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column">
+				<h2 style="margin-bottom:8px">Signed in!</h2>
+				<p style="color:#9ca3af">You can close this tab and return to your terminal.</p>
+			</body></html>`)
+			callbackToken <- t
+		} else {
+			http.Error(w, "Missing token", 400)
+		}
+	})
+
+	go srv.ListenAndServe()
+	openBrowser(authPageURL)
+
+	fmt.Println("Waiting for authentication...")
+
+	select {
+	case t := <-callbackToken:
+		srv.Close()
+		cfg.AuthToken = t
+		cfg.ConvexSiteURL = *convexURL
+		if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: token validation failed: %v\n", err)
+			os.Exit(1)
+		}
+		if cfg.DeviceID == "" {
+			cfg.DeviceID = uuid.New().String()
+		}
+		if err := SaveConfig(cfg); err != nil {
+			log.Fatalf("save config: %v", err)
+		}
+		fmt.Println()
+		fmt.Println("Signed in successfully.")
+		fmt.Println()
+		fmt.Println("Next steps:")
+		fmt.Println("  yaver serve     Start the agent on this machine")
+		fmt.Println("  yaver connect   Connect to a remote machine")
+		fmt.Println("  yaver devices   List your devices")
+
+	case <-time.After(5 * time.Minute):
+		srv.Close()
+		fmt.Fprintln(os.Stderr, "Authentication timed out.")
+		os.Exit(1)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// signout — clear credentials
+// ---------------------------------------------------------------------------
+
+func runSignout() {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.AuthToken == "" {
+		fmt.Println("Not signed in.")
+		return
+	}
+
+	cfg.AuthToken = ""
+	if err := SaveConfig(cfg); err != nil {
+		log.Fatalf("save config: %v", err)
+	}
+	fmt.Println("Signed out.")
+}
+
+// ---------------------------------------------------------------------------
+// connect — connect to a remote agent interactively
+// ---------------------------------------------------------------------------
+
+func runConnect(args []string) {
+	fs := flag.NewFlagSet("connect", flag.ExitOnError)
+	host := fs.String("host", "", "Agent host (auto-discovers if not set)")
+	port := fs.Int("port", 4433, "Agent QUIC port")
+	deviceID := fs.String("device", "", "Device ID to connect to")
+	fs.Parse(args)
+
+	cfg := mustLoadAuthConfig()
+
+	// Auto-discover device if host not specified
+	if *host == "" {
+		devices, err := listDevices(cfg.ConvexSiteURL, cfg.AuthToken)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error listing devices: %v\n", err)
+			os.Exit(1)
+		}
+
+		if len(devices) == 0 {
+			fmt.Fprintln(os.Stderr, "No devices found. Make sure your agent is running on your dev machine.")
+			os.Exit(1)
+		}
+
+		var target *DeviceInfo
+		for i := range devices {
+			if *deviceID != "" && devices[i].DeviceID == *deviceID {
+				target = &devices[i]
+				break
+			}
+			if *deviceID == "" && devices[i].IsOnline {
+				target = &devices[i]
+				break
+			}
+		}
+
+		if target == nil {
+			fmt.Fprintln(os.Stderr, "No matching online device. Your devices:")
+			for _, d := range devices {
+				status := "offline"
+				if d.IsOnline {
+					status = "online"
+				}
+				fmt.Fprintf(os.Stderr, "  %s  %-20s  %-8s  %s:%d\n", d.DeviceID[:8], d.Name, status, d.QuicHost, d.QuicPort)
+			}
+			os.Exit(1)
+		}
+
+		*host = target.QuicHost
+		*port = target.QuicPort
+		fmt.Printf("Connecting to %s (%s)...\n", target.Name, target.DeviceID[:8])
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		fmt.Println()
+		cancel()
+	}()
+
+	if err := RunClient(ctx, *host, *port, cfg.AuthToken); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// serve — run the QUIC agent server
+// ---------------------------------------------------------------------------
+
+func runServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	port := fs.Int("port", 4433, "QUIC server port")
+	workDir := fs.String("work-dir", ".", "Working directory for tasks")
+	fs.Parse(args)
+
 	if *workDir == "." {
 		wd, err := os.Getwd()
 		if err != nil {
@@ -35,20 +279,13 @@ func main() {
 		*workDir = wd
 	}
 
-	log.Println("Yaver Desktop Agent starting...")
+	cfg := mustLoadAuthConfig()
+
+	log.Println("Yaver agent starting...")
 	log.Printf("  Work dir: %s", *workDir)
 	log.Printf("  QUIC port: %d", *port)
 
-	// Load or create config.
-	cfg, err := LoadConfig()
-	if err != nil {
-		log.Fatalf("load config: %v", err)
-	}
-
-	// Persist token.
-	cfg.AuthToken = *token
-
-	// Ensure a stable device ID.
+	// Ensure stable device ID
 	if cfg.DeviceID == "" {
 		cfg.DeviceID = uuid.New().String()
 		log.Printf("Generated device ID: %s", cfg.DeviceID)
@@ -57,57 +294,54 @@ func main() {
 		log.Fatalf("save config: %v", err)
 	}
 
-	// Validate token with Convex.
+	// Validate token
 	log.Println("Validating token...")
-	if err := ValidateToken(*token); err != nil {
-		log.Fatalf("token validation failed: %v", err)
+	if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
+		log.Fatalf("Token expired or invalid. Run 'yaver auth' to re-authenticate.\n  Error: %v", err)
 	}
 	log.Println("Token validated.")
 
-	// Register device.
+	// Register device
 	hostname, _ := os.Hostname()
 	log.Printf("Registering device %s (%s)...", hostname, cfg.DeviceID)
-	if err := RegisterDevice(RegisterDeviceRequest{
-		Token:    *token,
+	if err := RegisterDevice(cfg.ConvexSiteURL, RegisterDeviceRequest{
+		Token:    cfg.AuthToken,
 		DeviceID: cfg.DeviceID,
 		Name:     hostname,
 		Platform: runtime.GOOS,
-		Host:     "0.0.0.0",
-		Port:     *port,
+		QuicHost: "0.0.0.0",
+		QuicPort: *port,
 	}); err != nil {
 		log.Fatalf("device registration failed: %v", err)
 	}
 	log.Println("Device registered.")
 
-	// Create task manager.
-	taskMgr := NewTaskManager(*workDir)
+	// Task store and manager
+	taskStore, err := NewTaskStore()
+	if err != nil {
+		log.Fatalf("failed to create task store: %v", err)
+	}
+	taskMgr := NewTaskManager(*workDir, taskStore)
 
-	// Create cancellable context for graceful shutdown.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start heartbeat goroutine.
-	go heartbeatLoop(ctx, *token, cfg.DeviceID)
+	go heartbeatLoop(ctx, cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID)
 
-	// Start QUIC server.
-	quicServer := NewQUICServer(*port, *token, hostname, taskMgr)
+	quicServer := NewQUICServer(*port, cfg.AuthToken, hostname, taskMgr)
 
-	// Listen for shutdown signals.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
 		sig := <-sigCh
 		log.Printf("Received signal %s, shutting down...", sig)
-
-		// Mark device offline.
-		if err := MarkOffline(*token, cfg.DeviceID); err != nil {
+		if err := MarkOffline(cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID); err != nil {
 			log.Printf("failed to mark offline: %v", err)
 		}
 		cancel()
 	}()
 
-	// This blocks until the context is cancelled.
 	if err := quicServer.Start(ctx); err != nil {
 		log.Fatalf("QUIC server error: %v", err)
 	}
@@ -115,8 +349,143 @@ func main() {
 	log.Println("Agent stopped.")
 }
 
-// heartbeatLoop sends heartbeats to Convex every 2 minutes.
-func heartbeatLoop(ctx context.Context, token, deviceID string) {
+// ---------------------------------------------------------------------------
+// status — show auth and agent status
+// ---------------------------------------------------------------------------
+
+func runStatus() {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.AuthToken == "" {
+		fmt.Println("Status: not signed in")
+		fmt.Println()
+		fmt.Println("Run 'yaver auth' to sign in.")
+		return
+	}
+
+	// Check token
+	authStatus := "valid"
+	if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
+		authStatus = "expired"
+	}
+
+	fmt.Printf("Auth:     %s\n", authStatus)
+	if cfg.DeviceID != "" {
+		fmt.Printf("Device:   %s\n", cfg.DeviceID[:8]+"...")
+	}
+	fmt.Printf("Backend:  %s\n", cfg.ConvexSiteURL)
+
+	if authStatus == "expired" {
+		fmt.Println()
+		fmt.Println("Session expired. Run 'yaver auth' to re-authenticate.")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// devices — list registered devices
+// ---------------------------------------------------------------------------
+
+func runDevices() {
+	cfg := mustLoadAuthConfig()
+
+	devices, err := listDevices(cfg.ConvexSiteURL, cfg.AuthToken)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(devices) == 0 {
+		fmt.Println("No devices registered.")
+		fmt.Println("Run 'yaver serve' on your dev machine to register it.")
+		return
+	}
+
+	fmt.Printf("%-10s  %-20s  %-8s  %-8s  %s\n", "ID", "NAME", "PLATFORM", "STATUS", "ADDRESS")
+	for _, d := range devices {
+		status := "offline"
+		if d.IsOnline {
+			status = "online"
+		}
+		id := d.DeviceID
+		if len(id) > 8 {
+			id = id[:8] + "..."
+		}
+		fmt.Printf("%-10s  %-20s  %-8s  %-8s  %s:%d\n",
+			id, d.Name, d.Platform, status, d.QuicHost, d.QuicPort)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+func mustLoadAuthConfig() *Config {
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Not signed in. Run 'yaver auth' first.")
+		os.Exit(1)
+	}
+	if cfg.AuthToken == "" {
+		fmt.Fprintln(os.Stderr, "Not signed in. Run 'yaver auth' first.")
+		os.Exit(1)
+	}
+	if cfg.ConvexSiteURL == "" {
+		fmt.Fprintln(os.Stderr, "No backend configured. Run 'yaver auth' first.")
+		os.Exit(1)
+	}
+	return cfg
+}
+
+type DeviceInfo struct {
+	DeviceID string `json:"deviceId"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+	QuicHost string `json:"quicHost"`
+	QuicPort int    `json:"quicPort"`
+	IsOnline bool   `json:"isOnline"`
+}
+
+func listDevices(baseURL, token string) ([]DeviceInfo, error) {
+	req, err := newBearerRequest("GET", baseURL+"/devices/list", token, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list devices failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Devices []DeviceInfo `json:"devices"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parse devices: %w", err)
+	}
+	return result.Devices, nil
+}
+
+func openBrowser(url string) {
+	switch runtime.GOOS {
+	case "darwin":
+		execOpen("open", url)
+	case "linux":
+		execOpen("xdg-open", url)
+	case "windows":
+		execOpen("cmd", "/c", "start", url)
+	}
+}
+
+func execOpen(name string, args ...string) {
+	cmd := osexec.Command(name, args...)
+	cmd.Start()
+}
+
+func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string) {
 	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 
@@ -125,7 +494,7 @@ func heartbeatLoop(ctx context.Context, token, deviceID string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := SendHeartbeat(token, deviceID); err != nil {
+			if err := SendHeartbeat(baseURL, token, deviceID); err != nil {
 				log.Printf("heartbeat failed: %v", err)
 			} else {
 				log.Println("Heartbeat sent.")

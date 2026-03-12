@@ -1,34 +1,37 @@
 import { Tabs } from "expo-router";
 import React from "react";
 import { StyleSheet, Text } from "react-native";
+import { useColors } from "../../src/context/ThemeContext";
 
 function TabIcon({ label, focused }: { label: string; focused: boolean }) {
+  const c = useColors();
   const icons: Record<string, string> = {
     Tasks: "T",
     Devices: "D",
     Settings: "S",
   };
   return (
-    <Text style={[styles.icon, focused && styles.iconFocused]}>
+    <Text style={[styles.icon, { color: focused ? c.tabActive : c.tabInactive }]}>
       {icons[label] ?? "?"}
     </Text>
   );
 }
 
 export default function TabLayout() {
+  const c = useColors();
   return (
     <Tabs
       screenOptions={{
-        headerStyle: { backgroundColor: "#0a0a0a" },
-        headerTintColor: "#ffffff",
+        headerStyle: { backgroundColor: c.bg },
+        headerTintColor: c.textPrimary,
         headerTitleStyle: { fontWeight: "700" },
         tabBarStyle: {
-          backgroundColor: "#0a0a0a",
-          borderTopColor: "#1a1a2e",
+          backgroundColor: c.bgTabBar,
+          borderTopColor: c.border,
           borderTopWidth: 1,
         },
-        tabBarActiveTintColor: "#6366f1",
-        tabBarInactiveTintColor: "#52525b",
+        tabBarActiveTintColor: c.tabActive,
+        tabBarInactiveTintColor: c.tabInactive,
       }}
     >
       <Tabs.Screen
@@ -60,9 +63,5 @@ const styles = StyleSheet.create({
   icon: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#52525b",
-  },
-  iconFocused: {
-    color: "#6366f1",
   },
 });

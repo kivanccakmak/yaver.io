@@ -11,10 +11,11 @@ const configDirName = ".yaver"
 
 // Config holds persisted agent configuration.
 type Config struct {
-	AuthToken string `json:"auth_token,omitempty"`
-	DeviceID  string `json:"device_id,omitempty"`
-	TLSCert   string `json:"tls_cert,omitempty"`
-	TLSKey    string `json:"tls_key,omitempty"`
+	AuthToken    string `json:"auth_token,omitempty"`
+	DeviceID     string `json:"device_id,omitempty"`
+	ConvexSiteURL string `json:"convex_site_url,omitempty"`
+	TLSCert      string `json:"tls_cert,omitempty"`
+	TLSKey       string `json:"tls_key,omitempty"`
 }
 
 // ConfigDir returns the path to ~/.yaver/, creating it if needed.

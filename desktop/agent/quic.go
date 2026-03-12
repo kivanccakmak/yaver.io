@@ -217,15 +217,17 @@ func (s *QUICServer) handleTaskList(stream quic.Stream) {
 }
 
 func (s *QUICServer) handleTaskContinue(stream quic.Stream, msg IncomingMessage) {
-	if err := s.taskManager.ContinueTask(msg.TaskID, msg.Input); err != nil {
+	task, err := s.taskManager.ContinueTask(msg.TaskID, msg.Input)
+	if err != nil {
 		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: err.Error()})
 		return
 	}
 	s.sendMessage(stream, OutgoingMessage{
-		Type:   "task_output",
-		TaskID: msg.TaskID,
-		Text:   "Input sent.",
+		Type:   "task_created",
+		TaskID: task.ID,
+		Status: string(task.Status),
 	})
+	go s.streamTaskOutput(stream, task)
 }
 
 // streamTaskOutput reads from the task's output channel and sends each line

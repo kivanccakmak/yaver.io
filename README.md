@@ -35,8 +35,62 @@ cd mobile && npm install && npx expo start
 cd desktop/agent && go run .
 ```
 
+## CLI (`yaver`)
+
+The `yaver` CLI lets you use Claude from any terminal — connect to your dev machine remotely.
+
+### Install via Homebrew
+
+```bash
+brew tap kivanccakmak/yaver
+brew install yaver
+```
+
+### Commands
+
+```
+yaver auth        Sign in (opens browser — Apple, Google, or Microsoft)
+yaver signout     Sign out and clear credentials
+yaver connect     Connect to your dev machine
+yaver serve       Start the agent on this machine
+yaver status      Show auth and connection status
+yaver devices     List your registered devices
+yaver help        Show help
+yaver version     Print version
+```
+
+### Local Development
+
+```bash
+cd desktop/agent
+
+# Run any command from source:
+go run . auth
+go run . serve
+go run . connect
+go run . status
+go run . help
+
+# Build a local binary:
+go build -o yaver .
+./yaver auth
+```
+
+### Cross-compile & Release
+
+```bash
+cd desktop/agent
+GOOS=darwin GOARCH=arm64 go build -o yaver-darwin-arm64 .
+GOOS=darwin GOARCH=amd64 go build -o yaver-darwin-amd64 .
+GOOS=linux  GOARCH=arm64 go build -o yaver-linux-arm64 .
+GOOS=linux  GOARCH=amd64 go build -o yaver-linux-amd64 .
+```
+
+Upload to [yaver-cli releases](https://github.com/kivanccakmak/yaver-cli/releases), then update SHA256 hashes in the [homebrew-yaver tap](https://github.com/kivanccakmak/homebrew-yaver).
+
 ## Auth
 
+- Apple Sign-In
 - Google Sign-In
 - Microsoft / Office 365
 

@@ -2,6 +2,11 @@
   "name": "yaver-installer",
   "version": "1.0.0",
   "description": "Yaver Desktop Agent Installer",
+  "author": {
+    "name": "Yaver",
+    "email": "hello@yaver.io"
+  },
+  "homepage": "https://yaver.io",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
