@@ -1,3 +1,4 @@
+import { Ionicons, FontAwesome } from "@expo/vector-icons";
 import * as AppleAuthentication from "expo-apple-authentication";
 import Constants from "expo-constants";
 import * as Linking from "expo-linking";
@@ -178,7 +179,10 @@ export default function LoginScreen() {
             ]}
             onPress={Platform.OS === "ios" ? handleAppleNative : () => handleOAuth("apple")}
           >
-            <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Apple</Text>
+            <View style={styles.buttonContent}>
+              <Ionicons name="logo-apple" size={18} color={c.textPrimary} style={styles.buttonIcon} />
+              <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Apple</Text>
+            </View>
           </Pressable>
 
           <Pressable
@@ -189,7 +193,10 @@ export default function LoginScreen() {
             ]}
             onPress={() => handleOAuth("google")}
           >
-            <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Google</Text>
+            <View style={styles.buttonContent}>
+              <Ionicons name="logo-google" size={16} color={c.textPrimary} style={styles.buttonIcon} />
+              <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Google</Text>
+            </View>
           </Pressable>
 
           <Pressable
@@ -200,7 +207,10 @@ export default function LoginScreen() {
             ]}
             onPress={() => handleOAuth("microsoft")}
           >
-            <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Microsoft</Text>
+            <View style={styles.buttonContent}>
+              <FontAwesome name="windows" size={16} color={c.textPrimary} style={styles.buttonIcon} />
+              <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Microsoft</Text>
+            </View>
           </Pressable>
 
           {/* Continue with Email — collapsed button or expanded form */}
@@ -213,7 +223,10 @@ export default function LoginScreen() {
               ]}
               onPress={() => setShowEmailForm(true)}
             >
-              <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Email</Text>
+              <View style={styles.buttonContent}>
+                <Ionicons name="mail-outline" size={17} color={c.textPrimary} style={styles.buttonIcon} />
+                <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Email</Text>
+              </View>
             </Pressable>
           ) : (
             <>
@@ -354,7 +367,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   buttonPressed: { opacity: 0.7 },
-  appleButton: { height: 52 },
+  buttonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  buttonIcon: {
+    marginRight: 10,
+  },
   buttonTextCentered: {
     fontSize: 15,
     fontWeight: "600",
