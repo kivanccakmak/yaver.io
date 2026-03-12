@@ -34,6 +34,7 @@ export default function LoginScreen() {
   const { isDark } = useTheme();
   const c = useColors();
   const [isLoading, setIsLoading] = useState(false);
+  const [showEmailForm, setShowEmailForm] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -194,7 +195,7 @@ export default function LoginScreen() {
               ]}
               onPress={() => handleOAuth("apple")}
             >
-              <Text style={[styles.buttonText, { color: c.textPrimary }]}>Continue with Apple</Text>
+              <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Apple</Text>
             </Pressable>
           )}
 
@@ -206,10 +207,7 @@ export default function LoginScreen() {
             ]}
             onPress={() => handleOAuth("google")}
           >
-            <View style={styles.iconBox}>
-              <Text style={[styles.buttonIcon, { color: "#4285F4" }]}>G</Text>
-            </View>
-            <Text style={[styles.buttonText, { color: c.textPrimary }]}>Continue with Google</Text>
+            <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Google</Text>
           </Pressable>
 
           <Pressable
@@ -220,90 +218,100 @@ export default function LoginScreen() {
             ]}
             onPress={() => handleOAuth("microsoft")}
           >
-            <View style={styles.iconBox}>
-              <Text style={[styles.buttonIcon, { color: "#00A4EF" }]}>M</Text>
-            </View>
-            <Text style={[styles.buttonText, { color: c.textPrimary }]}>Continue with Microsoft</Text>
+            <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Microsoft</Text>
           </Pressable>
-        </View>
 
-        {/* Divider */}
-        <View style={styles.divider}>
-          <View style={[styles.dividerLine, { backgroundColor: c.border }]} />
-          <Text style={[styles.dividerText, { color: c.textMuted }]}>or</Text>
-          <View style={[styles.dividerLine, { backgroundColor: c.border }]} />
-        </View>
+          {/* Continue with Email — collapsed button or expanded form */}
+          {!showEmailForm ? (
+            <Pressable
+              style={({ pressed }) => [
+                styles.button,
+                { backgroundColor: c.bgCard, borderColor: c.border },
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => setShowEmailForm(true)}
+            >
+              <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Email</Text>
+            </Pressable>
+          ) : (
+            <>
+              <View style={styles.divider}>
+                <View style={[styles.dividerLine, { backgroundColor: c.border }]} />
+                <Text style={[styles.dividerText, { color: c.textMuted }]}>email</Text>
+                <View style={[styles.dividerLine, { backgroundColor: c.border }]} />
+              </View>
+              <View style={styles.emailForm}>
+                {isSignUp && (
+                  <TextInput
+                    style={[styles.input, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+                    placeholder="Full Name"
+                    placeholderTextColor={c.textMuted}
+                    value={fullName}
+                    onChangeText={setFullName}
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                  />
+                )}
+                <TextInput
+                  style={[styles.input, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+                  placeholder="Email"
+                  placeholderTextColor={c.textMuted}
+                  value={email}
+                  onChangeText={setEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <TextInput
+                  style={[styles.input, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+                  placeholder="Password"
+                  placeholderTextColor={c.textMuted}
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry
+                />
+                {isSignUp && (
+                  <TextInput
+                    style={[styles.input, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+                    placeholder="Confirm Password"
+                    placeholderTextColor={c.textMuted}
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    secureTextEntry
+                  />
+                )}
 
-        {/* Email/Password form */}
-        <View style={styles.emailForm}>
-          {isSignUp && (
-            <TextInput
-              style={[styles.input, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
-              placeholder="Full Name"
-              placeholderTextColor={c.textMuted}
-              value={fullName}
-              onChangeText={setFullName}
-              autoCapitalize="words"
-              autoCorrect={false}
-            />
+                {emailError ? (
+                  <Text style={[styles.errorText, { color: c.error }]}>{emailError}</Text>
+                ) : null}
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.submitButton,
+                    { backgroundColor: c.accent },
+                    pressed && styles.buttonPressed,
+                    isLoading && { opacity: 0.6 },
+                  ]}
+                  onPress={handleEmailSubmit}
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.submitButtonText}>
+                      {isSignUp ? "Create Account" : "Sign In"}
+                    </Text>
+                  )}
+                </Pressable>
+
+                <Pressable onPress={() => { setIsSignUp(!isSignUp); setEmailError(""); }}>
+                  <Text style={[styles.toggleText, { color: c.accent }]}>
+                    {isSignUp ? "Already have an account? Sign In" : "Don't have an account? Sign Up"}
+                  </Text>
+                </Pressable>
+              </View>
+            </>
           )}
-          <TextInput
-            style={[styles.input, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
-            placeholder="Email"
-            placeholderTextColor={c.textMuted}
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <TextInput
-            style={[styles.input, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
-            placeholder="Password"
-            placeholderTextColor={c.textMuted}
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-          />
-          {isSignUp && (
-            <TextInput
-              style={[styles.input, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
-              placeholder="Confirm Password"
-              placeholderTextColor={c.textMuted}
-              value={confirmPassword}
-              onChangeText={setConfirmPassword}
-              secureTextEntry
-            />
-          )}
-
-          {emailError ? (
-            <Text style={[styles.errorText, { color: c.error }]}>{emailError}</Text>
-          ) : null}
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.submitButton,
-              { backgroundColor: c.accent },
-              pressed && styles.buttonPressed,
-              isLoading && { opacity: 0.6 },
-            ]}
-            onPress={handleEmailSubmit}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text style={styles.submitButtonText}>
-                {isSignUp ? "Create Account" : "Sign In"}
-              </Text>
-            )}
-          </Pressable>
-
-          <Pressable onPress={() => { setIsSignUp(!isSignUp); setEmailError(""); }}>
-            <Text style={[styles.toggleText, { color: c.accent }]}>
-              {isSignUp ? "Already have an account? Sign In" : "Don't have an account? Sign Up"}
-            </Text>
-          </Pressable>
         </View>
 
         <View style={styles.footerContainer}>
@@ -356,8 +364,8 @@ const styles = StyleSheet.create({
   },
   buttons: { gap: 12 },
   button: {
-    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     paddingVertical: 14,
     paddingHorizontal: 16,
     borderRadius: 12,
@@ -365,22 +373,10 @@ const styles = StyleSheet.create({
   },
   buttonPressed: { opacity: 0.7 },
   appleButton: { height: 52 },
-  iconBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: "#fff",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  buttonIcon: {
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  buttonText: {
+  buttonTextCentered: {
     fontSize: 15,
     fontWeight: "600",
+    textAlign: "center",
   },
   footerContainer: {
     marginTop: 48,
