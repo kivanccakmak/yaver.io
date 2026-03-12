@@ -47,3 +47,5 @@ npm-debug.log*
 *.tsbuildinfo
 .vercel
 .env*.local
+keys/*.p8
+*.p8

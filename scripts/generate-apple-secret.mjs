@@ -17,11 +17,11 @@ import { createPrivateKey, createSign } from "crypto";
 
 // --- Configuration ---
 const TEAM_ID = "5SJZ4KA39A";
-const KEY_ID = "77Z6B543D5";
-const CLIENT_ID = "io.yaver.web"; // Your Services ID — update if different
+const KEY_ID = "2563MLJ593";
+const CLIENT_ID = "io.yaver.web"; // Your Services ID
 const KEY_PATH =
   process.env.APPLE_KEY_PATH ||
-  `${process.env.HOME}/Workspace/talos/mobile/ios/AuthKey_${KEY_ID}.p8`;
+  `${process.env.HOME}/Workspace/yaver.io/web/AuthKey_${KEY_ID}.p8`;
 
 // --- Generate JWT ---
 const now = Math.floor(Date.now() / 1000);

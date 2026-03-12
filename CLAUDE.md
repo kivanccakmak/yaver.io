@@ -128,7 +128,7 @@ Build a local binary: `cd desktop/agent && go build -o yaver .`
 - **App Store Connect API Key Issuer ID**: `7bd9329e-49b0-440a-97ed-873c74244c12`
 - **App Store Connect API Key Path**: `~/Workspace/talos/mobile/ios/AuthKey_77Z6B543D5.p8` (shared with Talos)
 - **Sign in with Apple Key ID**: `2563MLJ593`
-- **Sign in with Apple Key Path**: `web/AuthKey_2563MLJ593.p8`
+- **Sign in with Apple Key Path**: `keys/AuthKey_2563MLJ593.p8`
 - **Apple Services ID (web OAuth)**: `io.yaver.web`
 
 Both Yaver and Talos are developed under the SIMKAB ELEKTRIK Apple Developer team.
