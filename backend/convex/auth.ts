@@ -71,20 +71,41 @@ export const createOrUpdateUser = mutation({
     avatarUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const existing = await ctx.db
+    // First: exact provider+providerId match (returning user via same provider)
+    const byProvider = await ctx.db
       .query("users")
       .withIndex("by_provider", (q) =>
         q.eq("provider", args.provider).eq("providerId", args.providerId)
       )
       .unique();
 
-    if (existing) {
-      await ctx.db.patch(existing._id, {
+    if (byProvider) {
+      await ctx.db.patch(byProvider._id, {
         email: args.email,
         fullName: args.fullName,
         avatarUrl: args.avatarUrl,
       });
-      return existing._id;
+      return byProvider._id;
+    }
+
+    // Second: email match (account linking — same user, different provider)
+    const byEmail = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.email))
+      .unique();
+
+    if (byEmail) {
+      // Link to existing account — update avatar if provided
+      const patch: Record<string, string | undefined> = {};
+      if (args.avatarUrl) patch.avatarUrl = args.avatarUrl;
+      if (args.fullName && byEmail.fullName === byEmail.email) {
+        // Only update name if current name is just the email (placeholder)
+        patch.fullName = args.fullName;
+      }
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(byEmail._id, patch);
+      }
+      return byEmail._id;
     }
 
     const userId = randomHex(16);
@@ -215,6 +236,27 @@ export const lookupEmailUser = query({
       fullName: user.fullName,
       passwordHash: user.passwordHash,
     };
+  },
+});
+
+/**
+ * Update user profile fields (e.g. fullName).
+ */
+export const updateProfile = mutation({
+  args: {
+    tokenHash: v.string(),
+    fullName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const result = await validateSessionInternal(ctx, args.tokenHash);
+    if (!result) throw new Error("Unauthorized");
+
+    const patch: Record<string, string> = {};
+    if (args.fullName !== undefined) patch.fullName = args.fullName;
+
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(result.user._id, patch);
+    }
   },
 });
 

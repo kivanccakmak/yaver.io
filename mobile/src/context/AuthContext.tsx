@@ -26,6 +26,7 @@ interface AuthState {
   login: (token: string) => Promise<void>;
   logout: () => Promise<void>;
   markSurveyCompleted: () => void;
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -102,6 +103,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSurveyCompleted(true);
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    if (!token) return;
+    const validatedUser = await validateToken(token);
+    if (validatedUser) {
+      setUser(validatedUser);
+      await saveUser(validatedUser);
+    }
+  }, [token]);
+
   const value = useMemo<AuthState>(
     () => ({
       user,
@@ -112,8 +122,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       login,
       logout,
       markSurveyCompleted,
+      refreshUser,
     }),
-    [user, token, isLoading, surveyCompleted, login, logout, markSurveyCompleted]
+    [user, token, isLoading, surveyCompleted, login, logout, markSurveyCompleted, refreshUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

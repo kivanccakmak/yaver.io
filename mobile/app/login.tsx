@@ -170,34 +170,16 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.buttons}>
-          {/* Native Apple Sign-In on iOS */}
-          {Platform.OS === "ios" && (
-            <AppleAuthentication.AppleAuthenticationButton
-              buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
-              buttonStyle={
-                isDark
-                  ? AppleAuthentication.AppleAuthenticationButtonStyle.WHITE
-                  : AppleAuthentication.AppleAuthenticationButtonStyle.BLACK
-              }
-              cornerRadius={12}
-              style={styles.appleButton}
-              onPress={handleAppleNative}
-            />
-          )}
-
-          {/* Fallback Apple OAuth on Android */}
-          {Platform.OS !== "ios" && (
-            <Pressable
-              style={({ pressed }) => [
-                styles.button,
-                { backgroundColor: c.bgCard, borderColor: c.border },
-                pressed && styles.buttonPressed,
-              ]}
-              onPress={() => handleOAuth("apple")}
-            >
-              <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Apple</Text>
-            </Pressable>
-          )}
+          <Pressable
+            style={({ pressed }) => [
+              styles.button,
+              { backgroundColor: c.bgCard, borderColor: c.border },
+              pressed && styles.buttonPressed,
+            ]}
+            onPress={Platform.OS === "ios" ? handleAppleNative : () => handleOAuth("apple")}
+          >
+            <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Apple</Text>
+          </Pressable>
 
           <Pressable
             style={({ pressed }) => [

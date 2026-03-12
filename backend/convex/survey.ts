@@ -6,6 +6,7 @@ export const submitSurvey = mutation({
   args: {
     tokenHash: v.string(),
     isDeveloper: v.boolean(),
+    fullName: v.optional(v.string()),
     languages: v.optional(v.array(v.string())),
     experienceLevel: v.optional(v.string()),
     role: v.optional(v.string()),
@@ -38,7 +39,11 @@ export const submitSurvey = mutation({
       await ctx.db.insert("developerSurveys", data);
     }
 
-    await ctx.db.patch(result.user._id, { surveyCompleted: true });
+    const userPatch: Record<string, unknown> = { surveyCompleted: true };
+    if (args.fullName) {
+      userPatch.fullName = args.fullName;
+    }
+    await ctx.db.patch(result.user._id, userPatch);
   },
 });
 

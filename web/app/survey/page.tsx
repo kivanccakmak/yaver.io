@@ -50,6 +50,7 @@ function Chip({ label, selected, onClick }: { label: string; selected: boolean; 
 export default function SurveyPage() {
   const router = useRouter();
   const [page, setPage] = useState(0);
+  const [fullName, setFullName] = useState("");
   const [identity, setIdentity] = useState<string | null>(null);
   const [languages, setLanguages] = useState<string[]>([]);
   const [experience, setExperience] = useState<string | null>(null);
@@ -80,6 +81,7 @@ export default function SurveyPage() {
         },
         body: JSON.stringify({
           isDeveloper: isDev,
+          fullName: fullName.trim() || undefined,
           languages: isDev && languages.length > 0 ? languages : undefined,
           experienceLevel: isDev ? experience : undefined,
           role: identity ?? undefined,
@@ -128,9 +130,16 @@ export default function SurveyPage() {
             <h2 className="mb-2 text-center text-xl font-semibold tracking-tight text-surface-50">
               What best describes you?
             </h2>
-            <p className="mb-8 text-center text-sm text-surface-500">
+            <p className="mb-6 text-center text-sm text-surface-500">
               Help us personalize your experience
             </p>
+            <input
+              type="text"
+              placeholder="Full Name"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              className="mb-6 w-full rounded-lg border border-surface-800 bg-transparent px-4 py-3 text-sm text-surface-100 placeholder-surface-600 outline-none transition-colors focus:border-surface-500"
+            />
             <div className="grid grid-cols-2 gap-3">
               {IDENTITIES.map((item) => (
                 <button

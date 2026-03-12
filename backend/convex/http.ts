@@ -201,6 +201,7 @@ http.route({
       await ctx.runMutation(api.survey.submitSurvey, {
         tokenHash,
         isDeveloper: body.isDeveloper ?? true,
+        fullName: body.fullName,
         languages: body.languages,
         experienceLevel: body.experienceLevel,
         role: body.role,
@@ -263,6 +264,33 @@ http.route({
       expiresAt: body.expiresAt,
     });
     return jsonResponse({ sessionId });
+  }),
+});
+
+// ── Profile Update Endpoint ──────────────────────────────────────────
+
+/** POST /auth/update-profile — Update user profile (authed). */
+http.route({
+  path: "/auth/update-profile",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const body = await request.json();
+    try {
+      await ctx.runMutation(api.auth.updateProfile, {
+        tokenHash,
+        fullName: body.fullName,
+      });
+      return jsonResponse({ ok: true });
+    } catch {
+      return errorResponse("Failed to update profile", 500);
+    }
   }),
 });
 

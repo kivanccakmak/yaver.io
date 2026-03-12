@@ -19,7 +19,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
-import { deleteAccount as deleteAccountApi } from "../../src/lib/auth";
+import { deleteAccount as deleteAccountApi, updateProfile } from "../../src/lib/auth";
 import { clearCache } from "../../src/lib/storage";
 import {
   type SubscriptionStatus,
@@ -34,10 +34,13 @@ const BUILD_NUMBER =
   "1";
 
 export default function SettingsScreen() {
-  const { user, token, logout, surveyCompleted } = useAuth();
+  const { user, token, logout, surveyCompleted, refreshUser } = useAuth();
   const { activeDevice, connectionStatus, disconnect } = useDevice();
   const { isDark, toggleTheme } = useTheme();
   const c = useColors();
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editName, setEditName] = useState(user?.name ?? "");
+  const [isSavingName, setIsSavingName] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
   const [deletingAccount, setDeletingAccount] = useState(false);
@@ -81,7 +84,21 @@ export default function SettingsScreen() {
     }
   };
 
-  const isEarlyAccess = !subscription || subscription.plan === "Early Access";
+  const isEarlyAccess = !subscription || subscription.plan === "Early Access" || subscription.plan === "early_access";
+
+  const handleSaveName = async () => {
+    if (!token || !editName.trim()) return;
+    setIsSavingName(true);
+    try {
+      await updateProfile(token, { fullName: editName.trim() });
+      await refreshUser();
+      setIsEditingName(false);
+    } catch {
+      Alert.alert("Error", "Failed to update name.");
+    } finally {
+      setIsSavingName(false);
+    }
+  };
 
   const handleSignOut = async () => {
     disconnect();
@@ -133,7 +150,7 @@ export default function SettingsScreen() {
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 120 : 0}
       >
       <ScrollView
         style={styles.container}
@@ -150,9 +167,30 @@ export default function SettingsScreen() {
               </Text>
             </View>
             <View style={styles.profileInfo}>
-              <Text style={[styles.profileName, { color: c.textPrimary }]}>
-                {user?.name ?? "Unknown User"}
-              </Text>
+              {isEditingName ? (
+                <View style={styles.editNameRow}>
+                  <TextInput
+                    style={[styles.editNameInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
+                    value={editName}
+                    onChangeText={setEditName}
+                    autoCapitalize="words"
+                    autoFocus
+                  />
+                  <Pressable
+                    style={[styles.editNameButton, { backgroundColor: c.accent }]}
+                    onPress={handleSaveName}
+                    disabled={isSavingName}
+                  >
+                    <Text style={styles.editNameButtonText}>{isSavingName ? "..." : "Save"}</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <Pressable onPress={() => { setEditName(user?.name ?? ""); setIsEditingName(true); }}>
+                  <Text style={[styles.profileName, { color: c.textPrimary }]}>
+                    {user?.name ?? "Set your name"}
+                  </Text>
+                </Pressable>
+              )}
               <Text style={[styles.profileEmail, { color: c.textMuted }]}>
                 {user?.email ?? "No email"}
               </Text>
@@ -193,7 +231,7 @@ export default function SettingsScreen() {
                 <View style={styles.subscriptionRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.subscriptionPlan, { color: c.textPrimary }]}>
-                      {subscription?.plan ?? "Early Access"}
+                      {isEarlyAccess ? "Early Access" : subscription?.plan ?? "Early Access"}
                     </Text>
                     <Text style={[styles.subscriptionMeta, { color: c.textSecondary }]}>
                       {isEarlyAccess
@@ -459,6 +497,21 @@ const styles = StyleSheet.create({
   profileInfo: { flex: 1 },
   profileName: { fontSize: 16, fontWeight: "600" },
   profileEmail: { fontSize: 13, marginTop: 2 },
+  editNameRow: { flexDirection: "row", alignItems: "center", gap: 8, flex: 1 },
+  editNameInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    fontSize: 15,
+  },
+  editNameButton: {
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  editNameButtonText: { color: "#fff", fontSize: 13, fontWeight: "600" },
 
   // Subscription
   subscriptionRow: {

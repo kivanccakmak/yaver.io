@@ -56,7 +56,13 @@ export async function validateToken(token: string): Promise<User | null> {
     );
     if (!response.ok) return null;
     const data = await response.json();
-    return data.user as User;
+    const u = data.user;
+    return {
+      id: u.userId ?? u.id,
+      email: u.email,
+      name: u.fullName ?? u.name,
+      avatarUrl: u.avatarUrl,
+    } as User;
   } catch {
     return null;
   }
@@ -108,10 +114,29 @@ export async function loginWithEmail(
   return response.json();
 }
 
+export async function updateProfile(
+  token: string,
+  data: { fullName?: string }
+): Promise<void> {
+  const response = await fetch(`${getConvexSiteUrl()}/auth/update-profile`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error ?? "Failed to update profile");
+  }
+}
+
 export async function submitSurvey(
   token: string,
   data: {
     isDeveloper: boolean;
+    fullName?: string;
     languages?: string[];
     experienceLevel?: string;
     role?: string;

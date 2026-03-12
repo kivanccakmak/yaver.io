@@ -5,6 +5,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
   Alert,
 } from "react-native";
@@ -49,10 +50,11 @@ const USE_CASES = [
 const COMPANY_SIZES = ["Solo", "2-10", "11-50", "51-200", "201-1000", "1000+"];
 
 export default function SurveyScreen() {
-  const { token, markSurveyCompleted } = useAuth();
+  const { token, user, markSurveyCompleted } = useAuth();
   const c = useColors();
 
   const [page, setPage] = useState(0);
+  const [fullName, setFullName] = useState(user?.name ?? "");
   const [identity, setIdentity] = useState<string | null>(null);
   const [languages, setLanguages] = useState<string[]>([]);
   const [experience, setExperience] = useState<string | null>(null);
@@ -75,6 +77,7 @@ export default function SurveyScreen() {
     try {
       await submitSurvey(token, {
         isDeveloper: isDev,
+        fullName: fullName.trim() || undefined,
         languages: isDev && languages.length > 0 ? languages : undefined,
         experienceLevel: isDev ? experience ?? undefined : undefined,
         role: identity ?? undefined,
@@ -116,6 +119,17 @@ export default function SurveyScreen() {
       <Text style={[styles.pageSubtitle, { color: c.textSecondary }]}>
         Help us personalize your experience
       </Text>
+
+      <TextInput
+        style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+        placeholder="Full Name"
+        placeholderTextColor={c.textMuted}
+        value={fullName}
+        onChangeText={setFullName}
+        autoCapitalize="words"
+        autoCorrect={false}
+      />
+
       <View style={styles.identityGrid}>
         {IDENTITIES.map((item) => {
           const selected = identity === item.id;
@@ -428,6 +442,14 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     letterSpacing: 1,
     marginBottom: 12,
+  },
+  nameInput: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    fontSize: 15,
+    marginBottom: 20,
   },
   identityGrid: {
     flexDirection: "row",
