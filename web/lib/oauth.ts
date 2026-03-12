@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { SignJWT, importPKCS8 } from "jose";
 
 export type OAuthProvider = "google" | "microsoft" | "apple";
 
@@ -47,7 +48,7 @@ function getProviderConfig(provider: OAuthProvider): ProviderConfig {
         tokenUrl: "https://appleid.apple.com/auth/token",
         userInfoUrl: "",
         clientId: process.env.OAUTH_APPLE_CLIENT_ID || "",
-        clientSecret: process.env.OAUTH_APPLE_CLIENT_SECRET || "",
+        clientSecret: "", // generated dynamically via generateAppleClientSecret()
         scope: "name email",
       };
     default:
@@ -56,8 +57,37 @@ function getProviderConfig(provider: OAuthProvider): ProviderConfig {
 }
 
 export function isProviderConfigured(provider: OAuthProvider): boolean {
+  if (provider === "apple") {
+    return !!(
+      process.env.OAUTH_APPLE_CLIENT_ID &&
+      process.env.OAUTH_APPLE_TEAM_ID &&
+      process.env.OAUTH_APPLE_KEY_ID &&
+      process.env.OAUTH_APPLE_PRIVATE_KEY
+    );
+  }
   const config = getProviderConfig(provider);
   return !!(config.clientId && config.clientSecret);
+}
+
+async function generateAppleClientSecret(): Promise<string> {
+  const teamId = process.env.OAUTH_APPLE_TEAM_ID!;
+  const keyId = process.env.OAUTH_APPLE_KEY_ID!;
+  const clientId = process.env.OAUTH_APPLE_CLIENT_ID!;
+  const privateKeyPem = process.env.OAUTH_APPLE_PRIVATE_KEY!.replace(/\\n/g, "\n");
+
+  const privateKey = await importPKCS8(privateKeyPem, "ES256");
+
+  const now = Math.floor(Date.now() / 1000);
+  const jwt = await new SignJWT({})
+    .setProtectedHeader({ alg: "ES256", kid: keyId })
+    .setIssuer(teamId)
+    .setIssuedAt(now)
+    .setExpirationTime(now + 15777000) // ~6 months
+    .setAudience("https://appleid.apple.com")
+    .setSubject(clientId)
+    .sign(privateKey);
+
+  return jwt;
 }
 
 type OAuthState = {
@@ -111,9 +141,14 @@ export async function exchangeCodeForTokens(
   code: string
 ): Promise<OAuthTokens> {
   const config = getProviderConfig(provider);
+  const clientSecret =
+    provider === "apple"
+      ? await generateAppleClientSecret()
+      : config.clientSecret;
+
   const body = new URLSearchParams({
     client_id: config.clientId,
-    client_secret: config.clientSecret,
+    client_secret: clientSecret,
     code,
     grant_type: "authorization_code",
     redirect_uri: getCallbackUrl(provider),

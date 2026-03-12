@@ -114,9 +114,12 @@ Build a local binary: `cd desktop/agent && go build -o yaver .`
 ## Apple Developer (simkab team)
 - **Team ID**: `5SJZ4KA39A`
 - **Bundle ID**: `io.yaver.mobile`
-- **API Key ID**: `77Z6B543D5`
-- **API Key Issuer ID**: `7bd9329e-49b0-440a-97ed-873c74244c12`
-- **API Key Path**: `~/Workspace/talos/mobile/ios/AuthKey_77Z6B543D5.p8` (shared with Talos)
+- **App Store Connect API Key ID**: `77Z6B543D5`
+- **App Store Connect API Key Issuer ID**: `7bd9329e-49b0-440a-97ed-873c74244c12`
+- **App Store Connect API Key Path**: `~/Workspace/talos/mobile/ios/AuthKey_77Z6B543D5.p8` (shared with Talos)
+- **Sign in with Apple Key ID**: `2563MLJ593`
+- **Sign in with Apple Key Path**: `web/AuthKey_2563MLJ593.p8`
+- **Apple Services ID (web OAuth)**: `io.yaver.web`
 
 Both Yaver and Talos are developed under the SIMKAB ELEKTRIK Apple Developer team.
 
@@ -145,7 +148,10 @@ Required Vercel env vars:
 - `NEXT_PUBLIC_BASE_URL` — `https://yaver.io`
 - `OAUTH_GOOGLE_CLIENT_ID` / `OAUTH_GOOGLE_CLIENT_SECRET`
 - `OAUTH_MICROSOFT_CLIENT_ID` / `OAUTH_MICROSOFT_CLIENT_SECRET` / `OAUTH_MICROSOFT_TENANT_ID`
-- `OAUTH_APPLE_CLIENT_ID` / `OAUTH_APPLE_CLIENT_SECRET`
+- `OAUTH_APPLE_CLIENT_ID` — `io.yaver.web` (Apple Services ID)
+- `OAUTH_APPLE_TEAM_ID` — `5SJZ4KA39A`
+- `OAUTH_APPLE_KEY_ID` — `2563MLJ593`
+- `OAUTH_APPLE_PRIVATE_KEY` — contents of `web/AuthKey_2563MLJ593.p8` (with `\n` for newlines)
 
 ### iOS — TestFlight (Local, No EAS, No Fastlane)
 
