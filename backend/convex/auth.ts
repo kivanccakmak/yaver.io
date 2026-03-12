@@ -80,11 +80,15 @@ export const createOrUpdateUser = mutation({
       .unique();
 
     if (byProvider) {
-      await ctx.db.patch(byProvider._id, {
+      const patch: Record<string, string | undefined> = {
         email: args.email,
-        fullName: args.fullName,
         avatarUrl: args.avatarUrl,
-      });
+      };
+      // Only overwrite fullName if the new value is non-empty
+      if (args.fullName) {
+        patch.fullName = args.fullName;
+      }
+      await ctx.db.patch(byProvider._id, patch);
       return byProvider._id;
     }
 
@@ -95,11 +99,11 @@ export const createOrUpdateUser = mutation({
       .unique();
 
     if (byEmail) {
-      // Link to existing account — update avatar if provided
+      // Link to existing account — update avatar/name if better data available
       const patch: Record<string, string | undefined> = {};
       if (args.avatarUrl) patch.avatarUrl = args.avatarUrl;
-      if (args.fullName && byEmail.fullName === byEmail.email) {
-        // Only update name if current name is just the email (placeholder)
+      if (args.fullName && (!byEmail.fullName || byEmail.fullName === byEmail.email)) {
+        // Update name if current name is empty or just the email (placeholder)
         patch.fullName = args.fullName;
       }
       if (Object.keys(patch).length > 0) {
