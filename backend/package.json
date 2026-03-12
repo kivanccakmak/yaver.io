@@ -12,5 +12,9 @@
   "license": "ISC",
   "dependencies": {
     "convex": "^1.32.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.4.0",
+    "typescript": "^5.9.3"
   }
 }

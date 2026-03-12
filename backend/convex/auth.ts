@@ -35,6 +35,7 @@ export async function validateSessionInternal(
     provider: "google" | "microsoft" | "apple";
     providerId: string;
     avatarUrl?: string;
+    plan?: "free" | "pro" | "enterprise" | "early_access";
     createdAt: number;
   };
   sessionId: Id<"sessions">;
@@ -92,6 +93,7 @@ export const createOrUpdateUser = mutation({
       provider: args.provider,
       providerId: args.providerId,
       avatarUrl: args.avatarUrl,
+      plan: "early_access",
       createdAt: Date.now(),
     });
   },

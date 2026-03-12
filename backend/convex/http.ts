@@ -18,6 +18,27 @@ function errorResponse(message: string, status = 400): Response {
   return jsonResponse({ error: message }, status);
 }
 
+/** Verify LemonSqueezy webhook HMAC-SHA256 signature using Web Crypto API. */
+async function verifyWebhookSignature(
+  payload: string,
+  signature: string,
+  secret: string
+): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
+  const hex = Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return hex === signature;
+}
+
 /** Extract Bearer token from Authorization header, hash it, and validate. */
 async function authenticateRequest(
   ctx: { runQuery: (query: any, args: any) => Promise<any> },
@@ -274,6 +295,288 @@ http.route({
     } catch {
       return errorResponse("Failed to delete account", 500);
     }
+  }),
+});
+
+// ── LemonSqueezy Webhook ────────────────────────────────────────────
+
+/** POST /webhooks/lemonsqueezy — Handle LemonSqueezy subscription webhooks. */
+http.route({
+  path: "/webhooks/lemonsqueezy",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const rawBody = await request.text();
+
+    // Validate signature
+    const signature = request.headers.get("X-Signature");
+    if (!signature) {
+      return errorResponse("Missing signature", 401);
+    }
+
+    const webhookSecret = process.env.LEMON_SQUEEZY_WEBHOOK_SECRET;
+    if (!webhookSecret) {
+      console.error("LEMON_SQUEEZY_WEBHOOK_SECRET not configured");
+      return errorResponse("Server configuration error", 500);
+    }
+
+    const isValid = await verifyWebhookSignature(rawBody, signature, webhookSecret);
+    if (!isValid) {
+      return errorResponse("Invalid signature", 401);
+    }
+
+    let body: Record<string, any>;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return errorResponse("Invalid JSON", 400);
+    }
+
+    const eventName = body.meta?.event_name as string | undefined;
+    if (!eventName) {
+      return errorResponse("Missing event_name", 400);
+    }
+
+    const handledEvents = [
+      "subscription_created",
+      "subscription_updated",
+      "subscription_cancelled",
+      "subscription_expired",
+      "subscription_payment_success",
+      "order_created",
+    ];
+
+    if (!handledEvents.includes(eventName)) {
+      // Acknowledge but don't process unknown events
+      return jsonResponse({ ok: true });
+    }
+
+    const attrs = body.data?.attributes ?? {};
+    const customData = body.meta?.custom_data ?? {};
+    const userId = customData.user_id as string | undefined;
+
+    if (!userId) {
+      console.error("LemonSqueezy webhook missing user_id in custom_data");
+      return errorResponse("Missing user_id in custom_data", 400);
+    }
+
+    // Map LemonSqueezy status to our status
+    let status: "active" | "cancelled" | "expired" | "past_due" | "early_access" = "active";
+    const lsStatus = attrs.status as string | undefined;
+    if (eventName === "subscription_cancelled" || lsStatus === "cancelled") {
+      status = "cancelled";
+    } else if (eventName === "subscription_expired" || lsStatus === "expired") {
+      status = "expired";
+    } else if (lsStatus === "past_due") {
+      status = "past_due";
+    } else if (lsStatus === "active") {
+      status = "active";
+    }
+
+    // Determine plan from variant/product (default to "pro")
+    const plan: "free" | "pro" | "enterprise" = "pro";
+
+    const subscriptionId = String(body.data?.id ?? "");
+    const currentPeriodEnd = attrs.renews_at
+      ? new Date(attrs.renews_at).getTime()
+      : undefined;
+    const cancelledAt = attrs.cancelled_at
+      ? new Date(attrs.cancelled_at).getTime()
+      : undefined;
+
+    await ctx.runMutation(api.subscriptions.upsertSubscription, {
+      userId,
+      platform: "web",
+      plan,
+      status,
+      lemonSqueezySubscriptionId: subscriptionId || undefined,
+      lemonSqueezyCustomerId: attrs.customer_id
+        ? String(attrs.customer_id)
+        : undefined,
+      lemonSqueezyOrderId: attrs.order_id
+        ? String(attrs.order_id)
+        : undefined,
+      variantId: attrs.variant_id ? String(attrs.variant_id) : undefined,
+      productId: attrs.product_id ? String(attrs.product_id) : undefined,
+      currentPeriodEnd,
+      cancelledAt,
+    });
+
+    return jsonResponse({ ok: true });
+  }),
+});
+
+// ── Subscription Endpoints ──────────────────────────────────────────
+
+/** POST /subscriptions/checkout — Create a LemonSqueezy checkout URL (authed). */
+http.route({
+  path: "/subscriptions/checkout",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const user = await authenticateRequest(ctx, request);
+    if (!user) {
+      return errorResponse("Unauthorized", 401);
+    }
+
+    const body = await request.json();
+    const variantId = body.variantId as string | undefined;
+    if (!variantId) {
+      return errorResponse("Missing variantId", 400);
+    }
+
+    const apiKey = process.env.LEMON_SQUEEZY_API_KEY;
+    const storeId = process.env.LEMON_SQUEEZY_STORE_ID;
+    if (!apiKey || !storeId) {
+      console.error("LemonSqueezy env vars not configured");
+      return errorResponse("Server configuration error", 500);
+    }
+
+    const checkoutResponse = await fetch(
+      "https://api.lemonsqueezy.com/v1/checkouts",
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/vnd.api+json",
+          "Content-Type": "application/vnd.api+json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          data: {
+            type: "checkouts",
+            attributes: {
+              custom_price: null,
+              product_options: {
+                redirect_url: "https://yaver.io",
+              },
+              checkout_data: {
+                custom: {
+                  user_id: user.userId,
+                  email: user.email,
+                },
+                email: user.email,
+                name: user.fullName,
+              },
+            },
+            relationships: {
+              store: {
+                data: {
+                  type: "stores",
+                  id: storeId,
+                },
+              },
+              variant: {
+                data: {
+                  type: "variants",
+                  id: variantId,
+                },
+              },
+            },
+          },
+        }),
+      }
+    );
+
+    if (!checkoutResponse.ok) {
+      const errorText = await checkoutResponse.text();
+      console.error("LemonSqueezy checkout error:", errorText);
+      return errorResponse("Failed to create checkout", 502);
+    }
+
+    const checkoutData = await checkoutResponse.json();
+    const checkoutUrl = checkoutData.data?.attributes?.url;
+
+    if (!checkoutUrl) {
+      return errorResponse("No checkout URL in response", 502);
+    }
+
+    return jsonResponse({ checkoutUrl });
+  }),
+});
+
+/** GET /subscriptions/status — Get user's subscription status (authed). */
+http.route({
+  path: "/subscriptions/status",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const status = await ctx.runQuery(api.subscriptions.getSubscriptionStatus, {
+      tokenHash,
+    });
+
+    if (!status) {
+      return errorResponse("Unauthorized", 401);
+    }
+
+    return jsonResponse(status);
+  }),
+});
+
+/** POST /subscriptions/customer-portal — Get LemonSqueezy customer portal URL (authed). */
+http.route({
+  path: "/subscriptions/customer-portal",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const subscriptionStatus = await ctx.runQuery(
+      api.subscriptions.getSubscriptionStatus,
+      { tokenHash }
+    );
+
+    if (!subscriptionStatus) {
+      return errorResponse("Unauthorized", 401);
+    }
+
+    const lsSubId =
+      subscriptionStatus.subscription?.lemonSqueezySubscriptionId;
+    if (!lsSubId) {
+      return errorResponse("No active LemonSqueezy subscription found", 404);
+    }
+
+    const apiKey = process.env.LEMON_SQUEEZY_API_KEY;
+    if (!apiKey) {
+      return errorResponse("Server configuration error", 500);
+    }
+
+    // Fetch subscription from LemonSqueezy to get customer portal URL
+    const lsResponse = await fetch(
+      `https://api.lemonsqueezy.com/v1/subscriptions/${lsSubId}`,
+      {
+        headers: {
+          Accept: "application/vnd.api+json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+      }
+    );
+
+    if (!lsResponse.ok) {
+      console.error(
+        "LemonSqueezy subscription fetch error:",
+        await lsResponse.text()
+      );
+      return errorResponse("Failed to fetch subscription", 502);
+    }
+
+    const lsData = await lsResponse.json();
+    const portalUrl =
+      lsData.data?.attributes?.urls?.customer_portal ??
+      lsData.data?.attributes?.urls?.update_payment_method;
+
+    if (!portalUrl) {
+      return errorResponse("Customer portal URL not available", 404);
+    }
+
+    return jsonResponse({ portalUrl });
   }),
 });
 

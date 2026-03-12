@@ -1,7 +1,8 @@
 import Constants from "expo-constants";
 import { router } from "expo-router";
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Linking,
   Pressable,
@@ -17,6 +18,11 @@ import { useDevice } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { deleteAccount as deleteAccountApi } from "../../src/lib/auth";
 import { clearCache } from "../../src/lib/storage";
+import {
+  type SubscriptionStatus,
+  getSubscriptionStatus,
+  getCustomerPortal,
+} from "../../src/lib/subscription";
 
 const APP_VERSION = Constants.expoConfig?.version ?? "1.0.0";
 const BUILD_NUMBER =
@@ -25,11 +31,52 @@ const BUILD_NUMBER =
   "1";
 
 export default function SettingsScreen() {
-  const { user, logout } = useAuth();
+  const { user, token, logout } = useAuth();
   const { activeDevice, connectionStatus, disconnect } = useDevice();
   const { isDark, toggleTheme } = useTheme();
   const c = useColors();
   const [isClearing, setIsClearing] = useState(false);
+  const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
+  const [isLoadingSubscription, setIsLoadingSubscription] = useState(true);
+  const [isOpeningPortal, setIsOpeningPortal] = useState(false);
+
+  const fetchSubscription = useCallback(async () => {
+    if (!token) {
+      setIsLoadingSubscription(false);
+      return;
+    }
+    try {
+      const status = await getSubscriptionStatus(token);
+      setSubscription(status);
+    } catch {
+      setSubscription({ plan: "Early Access", status: "active" });
+    } finally {
+      setIsLoadingSubscription(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    fetchSubscription();
+  }, [fetchSubscription]);
+
+  const handleManageSubscription = async () => {
+    if (!token) return;
+    setIsOpeningPortal(true);
+    try {
+      const portalUrl = await getCustomerPortal(token);
+      if (portalUrl) {
+        await Linking.openURL(portalUrl);
+      } else {
+        Alert.alert("Unavailable", "Subscription management is not available yet.");
+      }
+    } catch {
+      Alert.alert("Error", "Could not open subscription management.");
+    } finally {
+      setIsOpeningPortal(false);
+    }
+  };
+
+  const isEarlyAccess = !subscription || subscription.plan === "Early Access";
 
   const handleSignOut = async () => {
     disconnect();
@@ -129,17 +176,62 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Subscription</Text>
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-            <View style={styles.subscriptionRow}>
-              <View>
-                <Text style={[styles.subscriptionPlan, { color: c.textPrimary }]}>Early Access</Text>
-                <Text style={[styles.subscriptionMeta, { color: c.textSecondary }]}>
-                  Free during early access period
-                </Text>
+            {isLoadingSubscription ? (
+              <View style={styles.subscriptionLoading}>
+                <ActivityIndicator size="small" color={c.accent} />
               </View>
-              <View style={[styles.freeBadge, { backgroundColor: c.successBg, borderColor: c.successBorder }]}>
-                <Text style={[styles.freeBadgeText, { color: c.success }]}>FREE</Text>
-              </View>
-            </View>
+            ) : (
+              <>
+                <View style={styles.subscriptionRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.subscriptionPlan, { color: c.textPrimary }]}>
+                      {subscription?.plan ?? "Early Access"}
+                    </Text>
+                    <Text style={[styles.subscriptionMeta, { color: c.textSecondary }]}>
+                      {isEarlyAccess
+                        ? "Free during early access period"
+                        : `Status: ${subscription?.status ?? "active"}`}
+                    </Text>
+                    {!isEarlyAccess && subscription?.renewalDate && (
+                      <Text style={[styles.subscriptionMeta, { color: c.textMuted, marginTop: 2 }]}>
+                        Renews {new Date(subscription.renewalDate).toLocaleDateString()}
+                      </Text>
+                    )}
+                  </View>
+                  {isEarlyAccess ? (
+                    <View style={[styles.freeBadge, { backgroundColor: c.successBg, borderColor: c.successBorder }]}>
+                      <Text style={[styles.freeBadgeText, { color: c.success }]}>FREE</Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.statusBadge, {
+                      backgroundColor: subscription?.status === "active" ? c.successBg : c.errorBg,
+                      borderColor: subscription?.status === "active" ? c.successBorder : c.error,
+                    }]}>
+                      <Text style={[styles.freeBadgeText, {
+                        color: subscription?.status === "active" ? c.success : c.error,
+                      }]}>
+                        {(subscription?.status ?? "active").toUpperCase()}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                {!isEarlyAccess && (
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.manageButton,
+                      { borderColor: c.border },
+                      pressed && { opacity: 0.7 },
+                    ]}
+                    onPress={handleManageSubscription}
+                    disabled={isOpeningPortal}
+                  >
+                    <Text style={[styles.manageButtonText, { color: c.accent }]}>
+                      {isOpeningPortal ? "Opening..." : "Manage Subscription"}
+                    </Text>
+                  </Pressable>
+                )}
+              </>
+            )}
           </View>
         </View>
 
@@ -349,6 +441,24 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   freeBadgeText: { fontSize: 12, fontWeight: "700" },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  subscriptionLoading: {
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  manageButton: {
+    marginTop: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: "center",
+  },
+  manageButtonText: { fontSize: 14, fontWeight: "600" },
 
   card: {
     borderRadius: 12,
