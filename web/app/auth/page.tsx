@@ -100,7 +100,7 @@ function AuthContent() {
             yaver<span className="font-normal text-surface-500">.io</span>
           </span>
           <p className="mt-3 text-sm text-surface-500">
-            {mode === "signin" ? "Sign in to get started" : "Create your account"}
+            {mode === "signin" ? "Sign in to get started" : "Create an account with email"}
           </p>
         </div>
 

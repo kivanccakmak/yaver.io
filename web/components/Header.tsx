@@ -146,11 +146,8 @@ export default function Header() {
                   </svg>
                 )}
               </button>
-              <Link href="/auth" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
+              <Link href="/auth" className="btn-primary px-5 py-2 text-sm">
                 Log in
-              </Link>
-              <Link href="/auth?signup=true" className="btn-primary px-5 py-2 text-sm">
-                Sign up
               </Link>
             </>
           )}
@@ -198,8 +195,7 @@ export default function Header() {
             <Link href="/#features" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Features</Link>
             <Link href="/pricing" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Pricing</Link>
             <Link href="/download" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Download</Link>
-            <Link href="/auth" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Log in</Link>
-            <Link href="/auth?signup=true" className="btn-primary text-center text-sm" onClick={() => setMobileOpen(false)}>Sign up</Link>
+            <Link href="/auth" className="btn-primary text-center text-sm" onClick={() => setMobileOpen(false)}>Log in</Link>
           </div>
         </div>
       )}

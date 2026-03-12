@@ -79,9 +79,17 @@ export function useAuth(): AuthState {
         }
 
         const data = await res.json();
-        const userData = data.user ?? data;
+        const raw = data.user ?? data;
+        const mapped: User = {
+          id: raw.userId ?? raw.id ?? "",
+          email: raw.email ?? "",
+          name: raw.fullName ?? raw.name ?? "",
+          provider: raw.provider,
+          avatarUrl: raw.avatarUrl,
+          surveyCompleted: raw.surveyCompleted,
+        };
         if (!cancelled) {
-          setUser(userData as User);
+          setUser(mapped);
           setToken(storedToken);
         }
       } catch {
