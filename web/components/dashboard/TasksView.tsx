@@ -176,19 +176,56 @@ export default function TasksView({ connectionStatus, isDeviceConnected }: Tasks
     }
   }
 
-  // No device connected
+  // No device connected — show setup instructions
   if (!isDeviceConnected) {
     return (
-      <div className="flex flex-1 items-center justify-center">
-        <div className="text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-surface-900 text-surface-500">
-            <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25A2.25 2.25 0 015.25 3h13.5A2.25 2.25 0 0121 5.25z" />
-            </svg>
+      <div className="flex flex-1 items-center justify-center p-8">
+        <div className="w-full max-w-xl">
+          <h3 className="mb-1 text-lg font-semibold text-surface-50">Get Started</h3>
+          <p className="mb-6 text-sm text-surface-400">
+            Install the Yaver agent on your development machine to connect.
+          </p>
+
+          {/* macOS */}
+          <div className="mb-4">
+            <div className="mb-2 flex items-center gap-2">
+              <svg className="h-4 w-4 text-surface-400" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+              <span className="text-sm font-medium text-surface-300">macOS</span>
+            </div>
+            <div className="rounded-lg border border-surface-800 bg-surface-950 p-3 font-mono text-[13px]">
+              <div className="text-surface-500"># Install via Homebrew</div>
+              <div className="mt-1 select-all text-surface-200">brew tap kivanccakmak/yaver && brew install yaver</div>
+            </div>
           </div>
-          <h3 className="mb-2 text-lg font-semibold text-surface-50">No device connected</h3>
-          <p className="text-sm text-surface-400">
-            Connect to a device from the Devices tab to manage tasks.
+
+          {/* Linux */}
+          <div className="mb-4">
+            <div className="mb-2 flex items-center gap-2">
+              <svg className="h-4 w-4 text-surface-400" viewBox="0 0 24 24" fill="currentColor"><path d="M12.504 0c-.155 0-.315.008-.48.021-4.226.333-3.105 4.807-3.17 6.298-.076 1.092-.3 1.953-1.05 3.02-.885 1.051-2.127 2.75-2.716 4.521-.278.832-.41 1.684-.287 2.489a.424.424 0 00-.11.135c-.26.268-.45.6-.663.839-.199.199-.485.267-.797.4-.313.136-.658.269-.864.68-.09.189-.136.394-.132.602 0 .199.027.4.055.536.058.399.116.728.04.97-.249.68-.28 1.145-.106 1.484.174.334.535.47.94.601.81.2 1.91.135 2.774.6.926.466 1.866.67 2.616.47.526-.116.97-.464 1.208-.946.587-.003 1.23-.269 2.26-.334.699-.058 1.574.267 2.577.2.025.134.063.198.114.333l.003.003c.391.778 1.113 1.368 1.884 1.43.585.047 1.18-.13 1.683-.529.355.21.757.315 1.152.315.694 0 1.37-.395 1.725-.967.312-.5.437-1.009.662-1.457.147-.292.309-.568.465-.824a1.4 1.4 0 00.107-.163c.152-.243.313-.506.407-.825.13-.433.155-.883.101-1.299-.054-.414-.166-.844-.37-1.228a1.67 1.67 0 00-.32-.384c-.06-.054-.12-.1-.181-.14.01-.036.013-.075.023-.11.2-.58.287-1.205.087-1.845-.201-.645-.66-1.215-1.24-1.655-.592-.442-1.29-.755-1.838-1.195-.382-.308-.664-.616-.87-1.02-.107-.209-.188-.43-.25-.665a3.05 3.05 0 01-.098-.78c.002-.397.078-.784.184-1.167.206-.74.478-1.456.637-2.28.17-.892.163-1.87-.134-2.812-.297-.937-.871-1.782-1.745-2.344C14.554.207 13.573 0 12.504 0z"/></svg>
+              <span className="text-sm font-medium text-surface-300">Linux</span>
+            </div>
+            <div className="rounded-lg border border-surface-800 bg-surface-950 p-3 font-mono text-[13px]">
+              <div className="text-surface-500"># Download latest binary</div>
+              <div className="mt-1 select-all text-surface-200">curl -fsSL https://yaver.io/install.sh | bash</div>
+            </div>
+          </div>
+
+          {/* Then authenticate */}
+          <div className="mt-6">
+            <div className="mb-2 flex items-center gap-2">
+              <svg className="h-4 w-4 text-surface-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
+              </svg>
+              <span className="text-sm font-medium text-surface-300">Then authenticate & start</span>
+            </div>
+            <div className="rounded-lg border border-surface-800 bg-surface-950 p-3 font-mono text-[13px]">
+              <div className="select-all text-surface-200">yaver auth</div>
+              <div className="mt-1 select-all text-surface-200">yaver serve</div>
+            </div>
+          </div>
+
+          <p className="mt-6 text-xs text-surface-500">
+            Once the agent is running, your device will appear in the Devices tab.
           </p>
         </div>
       </div>
