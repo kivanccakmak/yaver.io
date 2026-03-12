@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+
+# Go
+desktop/agent/yaver-agent
+
+# Expo / React Native
+mobile/.expo/
+mobile/ios/
+mobile/android/
+
+# Electron
+desktop/installer/dist/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Convex
+backend/.convex/
+
+# Vercel
+web/.vercel/
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript
+*.tsbuildinfo

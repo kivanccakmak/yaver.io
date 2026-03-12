@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "Yaver",
+    "slug": "yaver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "yaver",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": { "backgroundColor": "#0a0a0a" },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "io.yaver.mobile",
+      "infoPlist": {
+        "CFBundleURLTypes": [{ "CFBundleURLSchemes": ["yaver"] }]
+      }
+    },
+    "android": {
+      "adaptiveIcon": { "backgroundColor": "#0a0a0a" },
+      "package": "io.yaver.mobile",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "data": [{ "scheme": "yaver" }],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
+    },
+    "plugins": ["expo-router", "expo-secure-store"]
+  }
+}

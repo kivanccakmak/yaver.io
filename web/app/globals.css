@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-surface-950 text-surface-200 antialiased;
+  }
+
+  ::selection {
+    background: rgba(255, 255, 255, 0.12);
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-lg bg-white px-6 py-3 text-sm font-medium text-black transition-all duration-150 hover:bg-surface-100 focus:outline-none focus:ring-2 focus:ring-white/20;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center rounded-lg border border-surface-700 bg-transparent px-6 py-3 text-sm font-medium text-surface-200 transition-all duration-150 hover:border-surface-500 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/10;
+  }
+
+  .card {
+    @apply rounded-xl border border-surface-800 bg-surface-900 p-6 transition-colors duration-150 hover:border-surface-700;
+  }
+}
+
+/* Terminal mockup */
+.terminal {
+  @apply rounded-xl border border-surface-700 bg-surface-900 font-mono text-sm;
+}
+
+.terminal-header {
+  @apply flex items-center gap-2 border-b border-surface-800 px-4 py-3;
+}
+
+.terminal-dot {
+  @apply h-3 w-3 rounded-full;
+}
+
+.terminal-body {
+  @apply p-5 leading-relaxed;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-surface-700;
+}

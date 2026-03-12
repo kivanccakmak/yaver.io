@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>Yaver Installer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #0f1117;
+      color: #e1e4e8;
+      height: 100vh;
+      overflow: hidden;
+      user-select: none;
+      -webkit-app-region: drag;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* Sidebar progress indicator */
+    .sidebar {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      padding: 24px 32px 0;
+      -webkit-app-region: drag;
+    }
+
+    .step-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #2a2d35;
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+
+    .step-dot.active {
+      background: #6366f1;
+      box-shadow: 0 0 8px rgba(99, 102, 241, 0.5);
+    }
+
+    .step-dot.done {
+      background: #22c55e;
+    }
+
+    /* Main content area */
+    .content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 48px;
+      -webkit-app-region: no-drag;
+    }
+
+    .step { display: none; flex-direction: column; align-items: center; text-align: center; width: 100%; max-width: 480px; }
+    .step.visible { display: flex; }
+
+    .logo {
+      font-size: 48px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #6366f1, #a855f7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+      letter-spacing: -1px;
+    }
+
+    h2 {
+      font-size: 22px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #f0f0f0;
+    }
+
+    p {
+      color: #9ca3af;
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 32px;
+      border: none;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
+      min-width: 200px;
+    }
+
+    .btn:hover { transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+    }
+
+    .btn-primary:hover { box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45); }
+
+    .btn-outline {
+      background: transparent;
+      color: #e1e4e8;
+      border: 1px solid #333;
+    }
+
+    .btn-outline:hover { border-color: #6366f1; color: #fff; }
+
+    .btn-google {
+      background: #fff;
+      color: #333;
+    }
+
+    .btn-microsoft {
+      background: #2f2f2f;
+      color: #fff;
+      border: 1px solid #444;
+    }
+
+    .auth-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      width: 100%;
+      max-width: 320px;
+    }
+
+    /* Check list */
+    .checklist {
+      text-align: left;
+      width: 100%;
+      margin-bottom: 24px;
+    }
+
+    .check-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: #1a1d27;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .check-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+
+    .check-icon.pass { background: #16382a; color: #22c55e; }
+    .check-icon.fail { background: #3b1a1a; color: #ef4444; }
+    .check-icon.wait { background: #2a2d35; color: #9ca3af; }
+
+    /* Progress bar */
+    .progress-wrapper {
+      width: 100%;
+      margin-bottom: 16px;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 6px;
+      background: #2a2d35;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #6366f1, #a855f7);
+      border-radius: 3px;
+      transition: width 0.5s ease;
+    }
+
+    .progress-label {
+      font-size: 13px;
+      color: #9ca3af;
+      margin-top: 8px;
+    }
+
+    /* Completion */
+    .success-icon {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #16382a, #0f2920);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+      margin-bottom: 20px;
+      border: 2px solid #22c55e;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 24px;
+    }
+
+    .status-badge.running {
+      background: #16382a;
+      color: #22c55e;
+      border: 1px solid #22c55e33;
+    }
+
+    .pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .footer {
+      padding: 16px 32px;
+      text-align: center;
+      font-size: 12px;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <div class="step-dot active" data-step="0"></div>
+      <div class="step-dot" data-step="1"></div>
+      <div class="step-dot" data-step="2"></div>
+      <div class="step-dot" data-step="3"></div>
+      <div class="step-dot" data-step="4"></div>
+    </div>
+
+    <div class="content">
+      <!-- Step 0: Welcome -->
+      <div class="step visible" id="step-0">
+        <div class="logo">Yaver</div>
+        <h2>Install Yaver Agent</h2>
+        <p>
+          Yaver connects your phone to your desktop development environment.
+          This installer will set up the agent that runs in the background
+          on your machine.
+        </p>
+        <button class="btn btn-primary" onclick="nextStep()">Get Started</button>
+      </div>
+
+      <!-- Step 1: Prerequisites -->
+      <div class="step" id="step-1">
+        <h2>Checking Prerequisites</h2>
+        <p>Verifying your system has everything needed.</p>
+        <div class="checklist" id="checklist">
+          <div class="check-item" id="check-claude">
+            <div class="check-icon wait" id="icon-claude">...</div>
+            <span>Claude CLI</span>
+          </div>
+          <div class="check-item" id="check-go">
+            <div class="check-icon wait" id="icon-go">...</div>
+            <span>Go runtime (optional, for building from source)</span>
+          </div>
+          <div class="check-item" id="check-platform">
+            <div class="check-icon wait" id="icon-platform">...</div>
+            <span id="label-platform">Platform detection</span>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="btn-prereq" disabled onclick="nextStep()">Continue</button>
+      </div>
+
+      <!-- Step 2: Authenticate -->
+      <div class="step" id="step-2">
+        <h2>Sign In</h2>
+        <p>Sign in to link this machine with your Yaver account. A browser window will open for authentication.</p>
+        <div class="auth-buttons">
+          <button class="btn btn-google" onclick="authenticate()">
+            <svg width="18" height="18" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+            Sign in with Google
+          </button>
+          <button class="btn btn-microsoft" onclick="authenticate()">
+            <svg width="18" height="18" viewBox="0 0 24 24"><rect x="1" y="1" width="10" height="10" fill="#F25022"/><rect x="13" y="1" width="10" height="10" fill="#7FBA00"/><rect x="1" y="13" width="10" height="10" fill="#00A4EF"/><rect x="13" y="13" width="10" height="10" fill="#FFB900"/></svg>
+            Sign in with Microsoft
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 3: Install -->
+      <div class="step" id="step-3">
+        <h2>Installing Agent</h2>
+        <p>Downloading and configuring the Yaver agent on your system.</p>
+        <div class="progress-wrapper">
+          <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+          <div class="progress-label" id="progress-label">Preparing...</div>
+        </div>
+        <button class="btn btn-primary" id="btn-install" style="display:none" onclick="nextStep()">Continue</button>
+      </div>
+
+      <!-- Step 4: Done -->
+      <div class="step" id="step-4">
+        <div class="success-icon">&#10003;</div>
+        <h2>You're All Set</h2>
+        <div class="status-badge running" id="status-badge">
+          <div class="pulse"></div>
+          <span>Agent running</span>
+        </div>
+        <p>
+          The Yaver agent is running in the background. Open the Yaver app on
+          your phone to start working with your codebase.
+        </p>
+        <button class="btn btn-outline" onclick="window.close()">Close Installer</button>
+      </div>
+    </div>
+
+    <div class="footer">Yaver &mdash; Your AI-powered development companion</div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
