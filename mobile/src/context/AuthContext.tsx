@@ -43,27 +43,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const storedToken = await getToken();
         if (storedToken) {
-          const storedUser = await getUser();
-          if (storedUser) {
+          // Always validate token remotely to ensure session is still valid
+          const validatedUser = await validateToken(storedToken);
+          if (validatedUser) {
             setToken(storedToken);
-            setUser(storedUser);
-          } else {
-            // Token exists but no cached user — validate remotely
-            const validatedUser = await validateToken(storedToken);
-            if (validatedUser) {
-              setToken(storedToken);
-              setUser(validatedUser);
-              await saveUser(validatedUser);
-            } else {
-              await clearToken();
+            setUser(validatedUser);
+            await saveUser(validatedUser);
+            // Check survey status
+            try {
+              const survey = await getSurveyStatus(storedToken);
+              setSurveyCompleted(survey.completed);
+            } catch {
+              setSurveyCompleted(false);
             }
-          }
-          // Check survey status
-          try {
-            const survey = await getSurveyStatus(storedToken);
-            setSurveyCompleted(survey.completed);
-          } catch {
-            setSurveyCompleted(false);
+          } else {
+            // Session expired or account deleted — clear local state
+            await clearToken();
           }
         }
       } catch {
