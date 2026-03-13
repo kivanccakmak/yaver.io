@@ -1,24 +1,25 @@
 # Yaver.io — Claude Code Project Guide
 
 ## What is Yaver?
-Yaver is a P2P tool that lets developers use Claude from their mobile device or any terminal, connecting directly to their development machines. No central relay — all task data flows peer-to-peer between your devices. V1 uses Tailscale for networking; future versions will use a custom QUIC P2P stack.
+Yaver is a P2P tool that lets developers use Claude from their mobile device or any terminal, connecting directly to their development machines. Task data flows peer-to-peer between your devices — our servers only handle auth and peer discovery.
 
 **Company**: SIMKAB ELEKTRIK — Yunus Emre Mah. Adalar Sokak No:12 Sancaktepe/Istanbul, Turkey
 
 ## Architecture Overview
 ```
-┌─────────────┐  Tailscale (V1)  ┌──────────────┐
-│  Mobile App │◄───── HTTP ──────►│ Desktop Agent │
-│ (React Native)                 │  (Go CLI)     │
-└──────┬──────┘                  └──────┬────────┘
-       │                                │
-       │  Auth only                     │  Register device
-       ▼                                ▼
-┌──────────────────────────────────────────┐
-│         Convex Backend                   │
-│  (Auth + Peer Discovery ONLY)            │
-│  Apple / Google / Microsoft Sign-In      │
-└──────────────────────────────────────────┘
+┌─────────────┐     HTTP         ┌──────────────┐    QUIC tunnel    ┌──────────────┐
+│  Mobile App │─────────────────►│ Relay Server │◄──────────────────│ Desktop Agent│
+│ (React Native)  short-lived    │  (Hetzner)   │  persistent       │  (Go CLI)    │
+│  Wi-Fi/5G   │  HTTP requests   │  public IP   │  outbound conn    │  behind NAT  │
+└──────┬──────┘                  └──────┬───────┘                   └──────┬───────┘
+       │                                │                                  │
+       │  Auth only                     │  Platform config                 │  Register device
+       ▼                                ▼                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Convex Backend                                       │
+│  Auth + Peer Discovery + Platform Config (relay server list)                │
+│  Apple / Google / Microsoft Sign-In                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
        ▲
        │
 ┌──────┴──────┐
@@ -28,8 +29,12 @@ Yaver is a P2P tool that lets developers use Claude from their mobile device or 
 │  Sign Up     │
 └─────────────┘
 ```
-> **V1**: Networking uses Tailscale. Both devices must be on the same Tailnet.
-> **V2+**: Custom QUIC P2P stack (no Tailscale dependency).
+
+### Connection strategy (direct-first, relay-fallback)
+1. Mobile tries **direct connection** to desktop agent (3s timeout) — lowest latency
+2. If direct fails, tries **each relay server** in priority order (5s timeout each)
+3. Desktop agent connects outbound to **all** relay servers via QUIC tunnels on startup
+4. If a relay goes down, traffic automatically routes through remaining relays
 
 ## Domain & URLs
 - **Domain**: `yaver.io`
@@ -44,34 +49,56 @@ Yaver is a P2P tool that lets developers use Claude from their mobile device or 
   - `desktop/installer/` — Electron app for installation GUI
   - `desktop/agent/` — Go binary (QUIC server, Claude SDK runner, tmux manager)
 - `mobile/` — React Native mobile app (iOS + Android)
-- `backend/` — Convex backend (auth + peer discovery only)
+- `backend/` — Convex backend (auth + peer discovery + platform config)
+- `relay/` — QUIC relay server for NAT traversal (Go, deployed to Hetzner)
+  - `relay/deploy/` — Deployment scripts (up.sh, down.sh, systemd unit)
 - `web/` — Next.js landing page, deployed on Vercel at yaver.io
 
 ## Tech Stack
-- **Networking (V1)**: Tailscale (WireGuard) — HTTP over Tailscale mesh; custom QUIC P2P planned for V2
+- **Networking**: Application-layer QUIC relay (direct-first, relay-fallback). No TUN/TAP, no VPN rights — won't conflict with user's VPN.
+- **Relay Server**: Go with `quic-go`, deployed to Hetzner VPS via Docker. Agents connect outbound via QUIC tunnels; mobile makes short-lived HTTP requests.
 - **Auth**: Convex + Google Sign-In + Apple Sign-In + Microsoft/Office 365
 - **Desktop Agent**: Go with quic-go, runs Claude CLI in tmux
 - **Desktop Installer**: Electron (electron-builder for DMG/EXE/DEB)
 - **Mobile**: React Native (native builds via xcodebuild/Gradle)
 - **Web**: Next.js 15, deployed on Vercel (yaver.io)
-- **Backend**: Convex (auth tables + device registry for peer discovery)
+- **Backend**: Convex (auth tables + device registry + platform config for relay servers)
 
 ## Key Design Decisions
-1. **P2P only** — Convex is ONLY for auth and peer discovery. Task data, logs, and output flow directly between mobile and desktop agent.
+1. **P2P only** — Convex is ONLY for auth, peer discovery, and platform config. Task data, logs, and output flow directly between mobile and desktop agent (via relay if needed, but relay doesn't store anything).
 2. **Desktop = installer + CLI** — The Electron app is only for installation. The actual agent is a Go CLI binary.
-3. **Privacy-first** — No code, task data, or AI output ever touches our servers.
+3. **Privacy-first** — No code, task data, or AI output ever touches our servers. The relay is a pass-through proxy.
+4. **Relay is Yaver infrastructure** — Relay servers are managed by us, not by customers. Config is stored centrally in Convex `platformConfig` and auto-fetched by CLI/mobile.
+5. **Multi-relay redundancy** — Multiple relay servers can be configured. If one goes down, traffic routes through others. Clients try all relays in priority order.
+6. **Application-layer only** — No TUN/TAP, no VPN rights. Won't conflict with user's existing VPN (SurfShark, NordVPN, etc.).
 
-## V1 Networking: Tailscale
-**Version 1 uses Tailscale as the networking layer.** This is a deliberate decision to ship a functional product quickly while postponing the custom QUIC P2P networking stack to a later version.
+## Networking: QUIC Relay
 
-V1 assumptions:
-- Both the mobile device and desktop machine have Tailscale installed and are on the same Tailnet
-- The mobile app connects to the desktop agent via Tailscale IP (HTTP over Tailscale's WireGuard tunnel)
-- No custom QUIC, no NAT traversal, no relay servers needed — Tailscale handles all of that
-- Device discovery can be manual (enter Tailscale IP) or via QR code pairing from the CLI
-- A Hetzner relay server may be used for initial testing
+Yaver uses application-layer QUIC relay servers for NAT traversal and roaming. No Tailscale, no TUN/TAP, no VPN rights required.
 
-Future versions will replace Tailscale with a custom QUIC P2P stack for zero-dependency networking.
+### How it works
+- **Desktop agent** connects outbound to all relay servers via QUIC tunnels on startup (solves NAT — no inbound ports needed)
+- **Mobile app** makes short-lived HTTP requests to relay (IP changes from Wi-Fi/5G roaming don't matter)
+- **Direct connection** is tried first (3s timeout) for lowest latency when on the same network
+- **Relay fallback** kicks in automatically if direct fails, trying each relay in priority order
+- **Reconnection** uses exponential backoff (1s → 2s → 4s → 8s → max 30s)
+
+### Relay server config
+Relay servers are stored in Convex `platformConfig` under the key `relay_servers` (JSON array). Clients auto-fetch from `GET /config` endpoint.
+
+```bash
+# View current relay servers
+cd backend && npx convex run platformConfig:get '{"key":"relay_servers"}'
+
+# Update relay servers
+cd backend && npx convex run platformConfig:set '{"key":"relay_servers","value":"[{\"id\":\"hel1\",\"quicAddr\":\"37.27.184.85:4433\",\"httpUrl\":\"http://37.27.184.85:8443\",\"region\":\"eu-hel\",\"priority\":1}]"}'
+```
+
+### Current relay servers
+
+| ID | IP | Ports | Region | Provider |
+|---|---|---|---|---|
+| `hel1` | `37.27.184.85` | QUIC 4433/udp, HTTP 8443/tcp | Helsinki (eu-hel) | Hetzner CAX11 (ARM64) |
 
 ## Conventions
 - Go code: standard Go project layout, `gofmt`
@@ -93,8 +120,9 @@ Edit `backend/cleanup-user.mjs` to change the target emails. Uses `backend/conve
 - `cd backend && npx convex dev` — Start Convex dev server
 - `cd web && npm run dev` — Start web dev server
 - `cd mobile/ios && xcodebuild ...` or open in Xcode — Build and run on device/simulator
-- `cd desktop/agent && go run . serve` — Run desktop agent (QUIC server)
+- `cd desktop/agent && go run . serve` — Run desktop agent (auto-connects to relays from Convex)
 - `cd desktop/installer && npm run dist` — Build desktop installers (Electron GUI)
+- `cd relay && go run . serve` — Run relay server locally
 
 ### CLI Development (`desktop/agent/`)
 The `yaver` CLI is a Go binary in `desktop/agent/`. Run from source during development:
@@ -162,6 +190,45 @@ Required Vercel env vars:
 - `OAUTH_APPLE_TEAM_ID` — `5SJZ4KA39A`
 - `OAUTH_APPLE_KEY_ID` — `2563MLJ593`
 - `OAUTH_APPLE_PRIVATE_KEY` — contents of `web/AuthKey_2563MLJ593.p8` (with `\n` for newlines)
+
+### Relay Server (Hetzner)
+
+Current server: `37.27.184.85` (Hetzner CAX11, ARM64, Ubuntu 24.04, 4GB RAM, 40GB SSD)
+
+```bash
+# Deploy via Docker (recommended)
+cd relay && ./deploy/up.sh 37.27.184.85 --docker
+
+# Deploy via binary + systemd
+cd relay && ./deploy/up.sh 37.27.184.85
+
+# Stop relay
+cd relay && ./deploy/down.sh 37.27.184.85
+
+# Stop + purge everything
+cd relay && ./deploy/down.sh 37.27.184.85 --purge
+
+# Logs (Docker)
+ssh root@37.27.184.85 docker logs -f yaver-relay
+
+# Logs (systemd)
+ssh root@37.27.184.85 journalctl -u yaver-relay -f
+
+# Health check
+curl http://37.27.184.85:8443/health
+
+# Active tunnels
+curl http://37.27.184.85:8443/tunnels
+
+# Server resources
+ssh root@37.27.184.85 'df -h / && free -h && docker ps'
+```
+
+Adding a new relay server:
+1. Deploy relay to new VPS: `./deploy/up.sh <new-ip> --docker`
+2. Verify: `curl http://<new-ip>:8443/health`
+3. Add to Convex: `npx convex run platformConfig:set '{"key":"relay_servers","value":"[...existing...,{\"id\":\"new1\",\"quicAddr\":\"<ip>:4433\",\"httpUrl\":\"http://<ip>:8443\",\"region\":\"<region>\",\"priority\":2}]"}'`
+4. Clients pick it up automatically on next startup
 
 ### iOS — TestFlight (Local, No EAS, No Fastlane)
 

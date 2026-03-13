@@ -40,23 +40,37 @@ export interface Task {
 }
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
+export type ConnectionMode = "direct" | "relay" | null;
 
 export type OutputCallback = (taskId: string, line: string) => void;
 export type ConnectionStateCallback = (state: ConnectionState) => void;
+export type ConnectionModeCallback = (mode: ConnectionMode) => void;
 
 type EventMap = {
   output: OutputCallback;
   connectionState: ConnectionStateCallback;
+  connectionMode: ConnectionModeCallback;
 };
 
 type EventName = keyof EventMap;
 
 // ── Client ───────────────────────────────────────────────────────────
 
+export interface RelayServer {
+  id: string;
+  quicAddr: string;
+  httpUrl: string;  // e.g. "http://37.27.184.85:8443"
+  region: string;
+  priority: number;
+}
+
 export class QuicClient {
   private host: string | null = null;
   private port: number | null = null;
   private token: string | null = null;
+  private deviceId: string | null = null;
+  private relayServers: RelayServer[] = [];  // all available relay servers
+  private activeRelayUrl: string | null = null; // currently working relay base URL
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -66,11 +80,19 @@ export class QuicClient {
   private readonly maxReconnectAttempt = 8;
   private readonly baseBackoffMs = 1000;
 
+  private _connectionMode: ConnectionMode = null;
+
   // Event listeners
   private listeners: { [K in EventName]: Array<EventMap[K]> } = {
     output: [],
     connectionState: [],
+    connectionMode: [],
   };
+
+  /** Set relay servers fetched from platform config. */
+  setRelayServers(servers: RelayServer[]): void {
+    this.relayServers = servers.sort((a, b) => a.priority - b.priority);
+  }
 
   // ── Public getters ─────────────────────────────────────────────────
 
@@ -82,16 +104,22 @@ export class QuicClient {
     return this._connectionState;
   }
 
+  get connectionMode(): ConnectionMode {
+    return this._connectionMode;
+  }
+
   // ── Connection lifecycle ───────────────────────────────────────────
 
   /**
    * Establish a connection to the desktop agent.
-   * Currently uses HTTP; will be replaced with QUIC when native module is ready.
+   * Tries direct connection first, then relay servers in priority order.
    */
-  async connect(host: string, port: number, token: string): Promise<void> {
+  async connect(host: string, port: number, token: string, deviceId: string): Promise<void> {
     this.host = host;
     this.port = port;
     this.token = token;
+    this.deviceId = deviceId;
+    this.activeRelayUrl = null;
     this.reconnectAttempt = 0;
 
     await this.attemptConnect();
@@ -104,7 +132,10 @@ export class QuicClient {
     this.host = null;
     this.port = null;
     this.token = null;
-    this.listeners = { output: [], connectionState: [] };
+    this.deviceId = null;
+    this.activeRelayUrl = null;
+    this._connectionMode = null;
+    this.listeners = { output: [], connectionState: [], connectionMode: [] };
   }
 
   // ── Task API ───────────────────────────────────────────────────────
@@ -264,6 +295,8 @@ export class QuicClient {
   on(event: "output", callback: OutputCallback): () => void;
   /** Register a listener for connection state changes. */
   on(event: "connectionState", callback: ConnectionStateCallback): () => void;
+  /** Register a listener for connection mode changes (direct vs relay). */
+  on(event: "connectionMode", callback: ConnectionModeCallback): () => void;
   on<E extends EventName>(event: E, callback: EventMap[E]): () => void {
     (this.listeners[event] as Array<EventMap[E]>).push(callback);
     return () => {
@@ -283,6 +316,11 @@ export class QuicClient {
   // ── Private helpers ────────────────────────────────────────────────
 
   private get baseUrl(): string {
+    // Use active relay if we're going through a relay server
+    if (this.activeRelayUrl) {
+      return `${this.activeRelayUrl}/d/${this.deviceId}`;
+    }
+    // Direct connection (same network / Tailscale)
     return `http://${this.host}:${this.port}`;
   }
 
@@ -302,6 +340,18 @@ export class QuicClient {
     for (const cb of this.listeners.connectionState) {
       try {
         cb(state);
+      } catch {
+        // Listener errors should not break the client.
+      }
+    }
+  }
+
+  private setConnectionMode(mode: ConnectionMode): void {
+    if (this._connectionMode === mode) return;
+    this._connectionMode = mode;
+    for (const cb of this.listeners.connectionMode) {
+      try {
+        cb(mode);
       } catch {
         // Listener errors should not break the client.
       }
@@ -334,10 +384,49 @@ export class QuicClient {
   private async attemptConnect(): Promise<void> {
     this.setConnectionState("connecting");
     try {
-      const res = await fetch(`${this.baseUrl}/health`, {
-        headers: this.authHeaders,
-      });
-      if (!res.ok) throw new Error(`Agent responded with ${res.status}`);
+      let connected = false;
+
+      // 1. Try direct connection first (lowest latency)
+      try {
+        const directUrl = `http://${this.host}:${this.port}`;
+        const res = await fetch(`${directUrl}/health`, {
+          headers: this.authHeaders,
+          signal: AbortSignal.timeout(3000),
+        });
+        if (res.ok) {
+          this.activeRelayUrl = null;
+          this.setConnectionMode("direct");
+          connected = true;
+        }
+      } catch {
+        // Direct failed — try relay servers
+      }
+
+      // 2. Try relay servers in priority order
+      if (!connected && this.deviceId) {
+        for (const relay of this.relayServers) {
+          try {
+            const relayDeviceUrl = `${relay.httpUrl}/d/${this.deviceId}`;
+            const res = await fetch(`${relayDeviceUrl}/health`, {
+              headers: this.authHeaders,
+              signal: AbortSignal.timeout(5000),
+            });
+            if (res.ok) {
+              this.activeRelayUrl = relay.httpUrl;
+              this.setConnectionMode("relay");
+              connected = true;
+              break;
+            }
+          } catch {
+            // This relay failed, try next
+          }
+        }
+      }
+
+      if (!connected) {
+        throw new Error("Could not reach agent (direct or via relay)");
+      }
+
       this.reconnectAttempt = 0;
       this.setConnectionState("connected");
       this.startPolling();

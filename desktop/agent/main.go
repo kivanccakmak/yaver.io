@@ -1,28 +1,31 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
 	osexec "os/exec"
 
-	"net"
-
 	"github.com/google/uuid"
+	"github.com/quic-go/quic-go"
 )
 
-const version = "1.4.0"
+const version = "1.5.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -90,6 +93,7 @@ Flags for serve:
   --debug           Run in foreground with verbose logging
   --port            HTTP server port (default 18080)
   --quic-port       QUIC server port (default 4433)
+  --no-relay        Disable relay tunnels (direct connections only)
   --work-dir        Working directory for tasks (default .)
 
 Run 'yaver <command> -h' for command-specific options.
@@ -378,6 +382,7 @@ func runServe(args []string) {
 	quicPort := fs.Int("quic-port", 4433, "QUIC server port (legacy)")
 	workDir := fs.String("work-dir", ".", "Working directory for tasks")
 	noQUIC := fs.Bool("no-quic", false, "Disable QUIC server (HTTP only)")
+	noRelay := fs.Bool("no-relay", false, "Disable relay tunnel (direct only)")
 	debug := fs.Bool("debug", false, "Run in foreground with verbose logging")
 	fs.Parse(args)
 
@@ -427,6 +432,9 @@ func runServe(args []string) {
 		childArgs = append(childArgs, fmt.Sprintf("--work-dir=%s", *workDir))
 		if *noQUIC {
 			childArgs = append(childArgs, "--no-quic")
+		}
+		if *noRelay {
+			childArgs = append(childArgs, "--no-relay")
 		}
 
 		cmd := osexec.Command(execPath, childArgs...)
@@ -486,6 +494,7 @@ func runServe(args []string) {
 		platform = "macos"
 	}
 	localIP := getLocalIP()
+
 	log.Printf("Registering device %s (%s) at %s:%d...", hostname, cfg.DeviceID, localIP, *httpPort)
 	if err := RegisterDevice(cfg.ConvexSiteURL, RegisterDeviceRequest{
 		Token:    cfg.AuthToken,
@@ -498,6 +507,23 @@ func runServe(args []string) {
 		log.Fatalf("device registration failed: %v", err)
 	}
 	log.Println("Device registered.")
+
+	// Fetch relay servers from platform config
+	var relayServers []RelayServerInfo
+	if !*noRelay {
+		var err error
+		relayServers, err = FetchRelayServers(cfg.ConvexSiteURL)
+		if err != nil {
+			log.Printf("Warning: could not fetch relay servers: %v", err)
+		} else if len(relayServers) > 0 {
+			log.Printf("Found %d relay server(s):", len(relayServers))
+			for _, rs := range relayServers {
+				log.Printf("  [%s] %s (%s)", rs.ID, rs.QuicAddr, rs.Region)
+			}
+		} else {
+			log.Println("No relay servers configured.")
+		}
+	}
 
 	// Write PID file (for debug mode too, so stop/status work)
 	if err := os.WriteFile(pidFilePath(), []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
@@ -532,6 +558,13 @@ func runServe(args []string) {
 				log.Printf("QUIC server error: %v", err)
 			}
 		}()
+	}
+
+	// Start relay tunnels (connect to all relay servers for redundancy)
+	for _, rs := range relayServers {
+		rs := rs // capture loop variable
+		log.Printf("Starting relay tunnel to %s (%s)...", rs.QuicAddr, rs.ID)
+		go runRelayTunnel(ctx, rs.QuicAddr, fmt.Sprintf("127.0.0.1:%d", *httpPort), cfg.DeviceID, cfg.AuthToken)
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -884,37 +917,7 @@ func listDevices(baseURL, token string) ([]DeviceInfo, error) {
 
 // getLocalIP returns the preferred outbound local IP address.
 func getLocalIP() string {
-	// Try Tailscale IP first (100.x.x.x range)
-	ifaces, err := net.Interfaces()
-	if err == nil {
-		for _, iface := range ifaces {
-			if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
-				continue
-			}
-			addrs, err := iface.Addrs()
-			if err != nil {
-				continue
-			}
-			for _, addr := range addrs {
-				var ip net.IP
-				switch v := addr.(type) {
-				case *net.IPNet:
-					ip = v.IP
-				case *net.IPAddr:
-					ip = v.IP
-				}
-				if ip == nil || ip.IsLoopback() || ip.To4() == nil {
-					continue
-				}
-				// Tailscale uses 100.x.x.x CGNAT range
-				if ip[0] == 100 && ip[1] >= 64 && ip[1] <= 127 {
-					return ip.String()
-				}
-			}
-		}
-	}
-
-	// Fall back to default outbound IP
+	// Use default outbound IP (LAN address when on local network)
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
 		return "0.0.0.0"
@@ -956,4 +959,225 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string) {
 			}
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Relay tunnel — connects agent to public relay server for P2P connectivity
+// ---------------------------------------------------------------------------
+
+// relayRegisterMsg is sent by the agent on the first QUIC stream.
+type relayRegisterMsg struct {
+	Type     string `json:"type"`
+	DeviceID string `json:"deviceId"`
+	Token    string `json:"token"`
+}
+
+type relayRegisterResp struct {
+	Type    string `json:"type"`
+	OK      bool   `json:"ok"`
+	Message string `json:"message,omitempty"`
+}
+
+type relayTunnelRequest struct {
+	ID      string            `json:"id"`
+	Method  string            `json:"method"`
+	Path    string            `json:"path"`
+	Query   string            `json:"query"`
+	Headers map[string]string `json:"headers"`
+	Body    []byte            `json:"body"`
+}
+
+type relayTunnelResponse struct {
+	ID         string            `json:"id"`
+	StatusCode int               `json:"statusCode"`
+	Headers    map[string]string `json:"headers"`
+	Body       []byte            `json:"body"`
+}
+
+// runRelayTunnel connects to the relay and handles incoming proxied requests.
+// It reconnects automatically with exponential backoff.
+func runRelayTunnel(ctx context.Context, relayAddr, agentAddr, deviceID, token string) {
+	backoff := time.Second
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		log.Printf("[RELAY] Connecting to relay %s...", relayAddr)
+		err := relayConnectAndServe(ctx, relayAddr, agentAddr, deviceID, token)
+		if err != nil {
+			log.Printf("[RELAY] Connection lost: %v", err)
+		}
+
+		if ctx.Err() != nil {
+			return
+		}
+
+		log.Printf("[RELAY] Reconnecting in %s...", backoff)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+
+		backoff *= 2
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+	}
+}
+
+func relayConnectAndServe(ctx context.Context, relayAddr, agentAddr, deviceID, token string) error {
+	tlsCfg := &tls.Config{
+		InsecureSkipVerify: true,
+		NextProtos:         []string{"yaver-relay"},
+	}
+
+	conn, err := quic.DialAddr(ctx, relayAddr, tlsCfg, &quic.Config{
+		MaxIdleTimeout:  120 * time.Second,
+		KeepAlivePeriod: 20 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("dial relay: %w", err)
+	}
+	defer conn.CloseWithError(0, "shutdown")
+
+	// Register
+	stream, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		return fmt.Errorf("open registration stream: %w", err)
+	}
+
+	regMsg := relayRegisterMsg{Type: "register", DeviceID: deviceID, Token: token}
+	data, _ := json.Marshal(regMsg)
+	stream.Write(data)
+	stream.Close()
+
+	respData, err := io.ReadAll(io.LimitReader(stream, 1<<16))
+	if err != nil {
+		return fmt.Errorf("read registration response: %w", err)
+	}
+
+	var regResp relayRegisterResp
+	if err := json.Unmarshal(respData, &regResp); err != nil {
+		return fmt.Errorf("parse registration response: %w", err)
+	}
+	if !regResp.OK {
+		return fmt.Errorf("registration rejected: %s", regResp.Message)
+	}
+
+	log.Printf("[RELAY] Registered with relay as device %s", deviceID[:8])
+
+	// Handle incoming proxied requests
+	localClient := &http.Client{Timeout: 60 * time.Second}
+
+	for {
+		stream, err := conn.AcceptStream(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("accept stream: %w", err)
+		}
+		go relayHandleProxiedRequest(stream, agentAddr, localClient)
+	}
+}
+
+func relayHandleProxiedRequest(stream quic.Stream, agentAddr string, client *http.Client) {
+	defer stream.Close()
+
+	data, err := io.ReadAll(io.LimitReader(stream, 10<<20))
+	if err != nil {
+		log.Printf("[RELAY] read request: %v", err)
+		return
+	}
+
+	var req relayTunnelRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		log.Printf("[RELAY] parse request: %v", err)
+		return
+	}
+
+	// Build local HTTP request
+	url := fmt.Sprintf("http://%s%s", agentAddr, req.Path)
+	if req.Query != "" {
+		url += "?" + req.Query
+	}
+
+	httpReq, err := http.NewRequest(req.Method, url, bytes.NewReader(req.Body))
+	if err != nil {
+		log.Printf("[RELAY] build request: %v", err)
+		relaySendError(stream, req.ID, 500, "failed to build request")
+		return
+	}
+
+	for k, v := range req.Headers {
+		httpReq.Header.Set(k, v)
+	}
+
+	// Check if SSE request
+	isSSE := strings.HasSuffix(req.Path, "/output") && req.Method == "GET"
+
+	if isSSE {
+		sseClient := &http.Client{Timeout: 10 * time.Minute}
+		resp, err := sseClient.Do(httpReq)
+		if err != nil {
+			relaySendError(stream, req.ID, 502, fmt.Sprintf("agent error: %v", err))
+			return
+		}
+		defer resp.Body.Close()
+		buf := make([]byte, 4096)
+		for {
+			n, err := resp.Body.Read(buf)
+			if n > 0 {
+				if _, werr := stream.Write(buf[:n]); werr != nil {
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
+
+	// Regular request
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		relaySendError(stream, req.ID, 502, fmt.Sprintf("agent error: %v", err))
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+
+	headers := make(map[string]string)
+	for k, v := range resp.Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
+
+	tunnelResp := relayTunnelResponse{
+		ID:         req.ID,
+		StatusCode: resp.StatusCode,
+		Headers:    headers,
+		Body:       respBody,
+	}
+
+	respJSON, _ := json.Marshal(tunnelResp)
+	stream.Write(respJSON)
+}
+
+func relaySendError(stream quic.Stream, id string, code int, msg string) {
+	resp := relayTunnelResponse{
+		ID:         id,
+		StatusCode: code,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       []byte(fmt.Sprintf(`{"ok":false,"error":"%s"}`, msg)),
+	}
+	data, _ := json.Marshal(resp)
+	stream.Write(data)
 }

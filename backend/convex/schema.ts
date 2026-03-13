@@ -97,6 +97,12 @@ export default defineSchema({
     completedAt: v.number(),
   }).index("by_userId", ["userId"]),
 
+  platformConfig: defineTable({
+    key: v.string(),
+    value: v.string(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+
   authLogs: defineTable({
     level: v.union(v.literal("info"), v.literal("error"), v.literal("warn")),
     provider: v.string(),

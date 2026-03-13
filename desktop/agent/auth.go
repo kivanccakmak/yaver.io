@@ -88,6 +88,41 @@ type RegisterDeviceRequest struct {
 	QuicPort  int    `json:"quicPort"`
 }
 
+// RelayServerInfo describes a relay server from platform config.
+type RelayServerInfo struct {
+	ID       string `json:"id"`
+	QuicAddr string `json:"quicAddr"` // e.g. "37.27.184.85:4433"
+	HttpURL  string `json:"httpUrl"`  // e.g. "http://37.27.184.85:8443"
+	Region   string `json:"region"`
+	Priority int    `json:"priority"`
+}
+
+// FetchRelayServers fetches the relay server list from Convex platform config.
+func FetchRelayServers(baseURL string) ([]RelayServerInfo, error) {
+	req, err := http.NewRequest("GET", baseURL+"/config", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create config request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch config: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("config request failed (status %d)", resp.StatusCode)
+	}
+
+	var result struct {
+		RelayServers []RelayServerInfo `json:"relayServers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	return result.RelayServers, nil
+}
+
 // RegisterDevice registers this desktop agent with the Convex backend.
 func RegisterDevice(baseURL string, r RegisterDeviceRequest) error {
 	body, err := json.Marshal(r)

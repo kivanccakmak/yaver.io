@@ -22,6 +22,7 @@ import Markdown from "react-native-markdown-display";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useColors } from "../../src/context/ThemeContext";
 import {
+  ConnectionMode,
   ConnectionState,
   quicClient,
   Task,
@@ -54,14 +55,14 @@ const BANNER_CONFIG: Record<
     border: "#2e2e1a",
     dot: "#eab308",
     text: "#facc15",
-    label: "Connecting",
+    label: "Reconnecting",
   },
   error: {
     bg: "#1a0d0d",
     border: "#2e1a1a",
     dot: "#ef4444",
     text: "#f87171",
-    label: "Connection lost",
+    label: "Reconnecting",
   },
   disconnected: {
     bg: "#111",
@@ -242,11 +243,15 @@ export default function TasksScreen() {
   const [followUpText, setFollowUpText] = useState("");
   const [isSendingFollowUp, setIsSendingFollowUp] = useState(false);
   const [quicState, setQuicState] = useState<ConnectionState>(quicClient.connectionState);
+  const [connMode, setConnMode] = useState<ConnectionMode>(quicClient.connectionMode);
   const chatScrollRef = useRef<ScrollView>(null);
+  const pendingOpenTaskRef = useRef<Task | null>(null);
 
-  // Track QUIC connection state
+  // Track QUIC connection state and mode
   useEffect(() => {
-    return quicClient.on("connectionState", setQuicState);
+    const unsub1 = quicClient.on("connectionState", setQuicState);
+    const unsub2 = quicClient.on("connectionMode", setConnMode);
+    return () => { unsub1(); unsub2(); };
   }, []);
 
   // Fetch tasks
@@ -334,13 +339,11 @@ export default function TasksScreen() {
     try {
       const task = await quicClient.sendTask(newTaskText.trim(), "");
       setNewTaskText("");
-      setShowNewTask(false);
       // Add task to list immediately
       setTasks((prev) => [task, ...prev]);
-      // Wait for new-task modal to close, then open chat modal
-      setTimeout(() => {
-        setSelectedTask(task);
-      }, 400);
+      // Store task to open after modal closes (onDismiss will pick it up)
+      pendingOpenTaskRef.current = task;
+      setShowNewTask(false);
       // Refresh from server in background
       fetchTasks();
     } catch {
@@ -348,6 +351,22 @@ export default function TasksScreen() {
       setIsSubmitting(false);
     }
   };
+
+  const handleNewTaskModalDismiss = () => {
+    if (pendingOpenTaskRef.current) {
+      const task = pendingOpenTaskRef.current;
+      pendingOpenTaskRef.current = null;
+      setSelectedTask(task);
+    }
+  };
+
+  // Android fallback: onDismiss is iOS-only, so use effect to detect modal close
+  useEffect(() => {
+    if (!showNewTask && pendingOpenTaskRef.current && Platform.OS === "android") {
+      const timer = setTimeout(handleNewTaskModalDismiss, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [showNewTask]);
 
   const handleStopTask = async (taskId: string) => {
     try { await quicClient.stopTask(taskId); await fetchTasks(); } catch {}
@@ -383,6 +402,8 @@ export default function TasksScreen() {
   const effectiveState: ConnectionState =
     connectionStatus === "connected" ? quicState : connectionStatus;
   const banner = BANNER_CONFIG[effectiveState];
+  const isEffectivelyConnected = effectiveState === "connected";
+  const modeLabel = connMode === "relay" ? " via Relay" : connMode === "direct" ? " Direct" : "";
 
   const chatMessages = selectedTask ? buildChatMessages(selectedTask) : [];
   const isRunning = selectedTask?.status === "running" || selectedTask?.status === "queued";
@@ -394,12 +415,12 @@ export default function TasksScreen() {
         <View style={[s.banner, { backgroundColor: banner.bg, borderBottomColor: banner.border }]}>
           <View style={[s.dot, { backgroundColor: banner.dot }]} />
           <Text style={[s.bannerText, { color: banner.text }]}>
-            {banner.label}{activeDevice ? ` \u00b7 ${activeDevice.name}` : ""}
+            {banner.label}{modeLabel}{activeDevice ? ` \u00b7 ${activeDevice.name}` : ""}
           </Text>
         </View>
 
         {/* Action bar */}
-        {tasks.length > 0 && connectionStatus === "connected" && (
+        {tasks.length > 0 && isEffectivelyConnected && (
           <View style={[s.actionBar, { borderBottomColor: c.border }]}>
             {tasks.some(t => t.status === "running") && (
               <Pressable style={[s.actionButton, { backgroundColor: "#ef444418" }]} onPress={handleStopAll}>
@@ -427,10 +448,10 @@ export default function TasksScreen() {
             <View style={s.emptyList}>
               <Text style={[s.emptyIcon, { color: c.textMuted }]}>{"[ ]"}</Text>
               <Text style={[s.emptyTitle, { color: c.textPrimary }]}>
-                {connectionStatus !== "connected" ? "No Device Connected" : "All Clear"}
+                {!isEffectivelyConnected ? "No Device Connected" : "All Clear"}
               </Text>
               <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>
-                {connectionStatus !== "connected"
+                {!isEffectivelyConnected
                   ? "Go to the Devices tab to connect to your desktop agent."
                   : "No tasks yet. Tap the + button to create your first task."}
               </Text>
@@ -446,14 +467,14 @@ export default function TasksScreen() {
         />
 
         {/* FAB */}
-        {connectionStatus === "connected" && (
+        {isEffectivelyConnected && (
           <Pressable style={({ pressed }) => [s.fab, pressed && s.fabPressed]} onPress={() => setShowNewTask(true)}>
             <Text style={s.fabText}>+</Text>
           </Pressable>
         )}
 
         {/* New Task Modal */}
-        <Modal visible={showNewTask} animationType="slide" transparent>
+        <Modal visible={showNewTask} animationType="slide" transparent onDismiss={handleNewTaskModalDismiss}>
           <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
             <Pressable style={s.modalDismiss} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); }} />
             <View style={[s.modalContent, { backgroundColor: c.bgCard }]}>

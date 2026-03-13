@@ -823,4 +823,38 @@ http.route({
   }),
 });
 
+// ── Platform Config ──────────────────────────────────────────────────
+
+/** GET /config — Public platform config (relay servers, etc.). No auth required. */
+http.route({
+  path: "/config",
+  method: "GET",
+  handler: httpAction(async (ctx) => {
+    const config = await ctx.runQuery(api.platformConfig.getClientConfig, {});
+    // Parse relay_servers from JSON string to array for client convenience
+    let relayServers: unknown[] = [];
+    if (config.relay_servers) {
+      try {
+        relayServers = JSON.parse(config.relay_servers);
+      } catch {
+        // ignore parse errors
+      }
+    }
+    return new Response(
+      JSON.stringify({
+        relayServers,
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+          // Cache for 5 minutes — relay list doesn't change often
+          "Cache-Control": "public, max-age=300",
+        },
+      }
+    );
+  }),
+});
+
 export default http;

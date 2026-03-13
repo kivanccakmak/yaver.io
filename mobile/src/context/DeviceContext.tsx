@@ -4,10 +4,13 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
-import { quicClient } from "../lib/quic";
+import { quicClient, RelayServer } from "../lib/quic";
 import { useAuth } from "./AuthContext";
+
+const CONVEX_SITE_URL = "https://shocking-echidna-394.eu-west-1.convex.site";
 
 export interface Device {
   id: string;
@@ -70,6 +73,25 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [token]);
 
+  // Fetch relay servers from platform config (once)
+  const relaysFetched = useRef(false);
+  useEffect(() => {
+    if (relaysFetched.current) return;
+    relaysFetched.current = true;
+    (async () => {
+      try {
+        const res = await fetch(`${CONVEX_SITE_URL}/config`);
+        if (res.ok) {
+          const data = await res.json();
+          const servers: RelayServer[] = data.relayServers || [];
+          quicClient.setRelayServers(servers);
+        }
+      } catch {
+        // Relay config fetch failed — direct connections still work.
+      }
+    })();
+  }, []);
+
   // Fetch devices when token becomes available
   useEffect(() => {
     if (token) {
@@ -103,7 +125,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       setActiveDevice(device);
 
       try {
-        await quicClient.connect(device.host, device.port, token);
+        await quicClient.connect(device.host, device.port, token, device.id);
         setConnectionStatus("connected");
       } catch {
         setConnectionStatus("error");
