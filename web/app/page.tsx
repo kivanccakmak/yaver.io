@@ -85,7 +85,7 @@ export default function HomePage() {
       <section id="how-it-works" className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-5xl">
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
-            Set up in 5 minutes
+            Set up in 2 minutes
           </h2>
           <p className="mb-16 text-center text-sm text-surface-400">
             Two things to set up: the agent on your dev machine, and the app on your phone.
