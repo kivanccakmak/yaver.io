@@ -539,6 +539,8 @@ func runServe(args []string) {
 	runner := resolveRunner(cfg.ConvexSiteURL, cfg.AuthToken)
 	log.Printf("Runner: %s (command=%s, mode=%s)", runner.Name, runner.Command, runner.OutputMode)
 
+	go ensureProjectDiscovery()
+
 	// Task store and manager
 	taskStore, err := NewTaskStore()
 	if err != nil {
@@ -998,6 +1000,22 @@ func runStatus() {
 	if result.User.FullName != "" && result.User.FullName != result.User.Email {
 		fmt.Printf("Name:     %s\n", result.User.FullName)
 	}
+
+	// Show current runner
+	runnerID := getCurrentRunner(statusClient, cfg.ConvexSiteURL, cfg.AuthToken)
+	if runnerID == "" {
+		runnerID = "claude"
+	}
+	runnerName := runnerID
+	if runners, err := fetchRunnersFromBackend(statusClient, cfg.ConvexSiteURL); err == nil {
+		for _, r := range runners {
+			if r.RunnerID == runnerID {
+				runnerName = r.Name
+				break
+			}
+		}
+	}
+	fmt.Printf("Runner:   %s (%s)\n", runnerName, runnerID)
 }
 
 // ---------------------------------------------------------------------------

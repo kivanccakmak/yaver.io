@@ -247,6 +247,11 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		prompt = task.Title + "\n\n" + task.Description
 	}
 
+	// Prepend local project context if available
+	if projectCtx := getProjectContext(); projectCtx != "" {
+		prompt = "Here is context about the user's machine and projects:\n\n" + projectCtx + "\n\n---\n\nUser's task:\n" + prompt
+	}
+
 	// System prompt: behave as a remote terminal agent.
 	prompt += "\n\nYou are running tasks from a remote mobile device. Show what you are doing step by step. Use only terminal commands. Be concise. Format output in markdown."
 

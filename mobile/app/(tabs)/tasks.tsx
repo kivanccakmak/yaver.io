@@ -335,6 +335,16 @@ export default function TasksScreen() {
     }
   }, [selectedTask?.output.length, selectedTask?.resultText, selectedTask?.status]);
 
+  // Auto-scroll to bottom when keyboard appears (prevents last message from being hidden)
+  useEffect(() => {
+    const sub = Keyboard.addListener("keyboardDidShow", () => {
+      if (selectedTask) {
+        setTimeout(() => chatScrollRef.current?.scrollToEnd({ animated: true }), 150);
+      }
+    });
+    return () => sub.remove();
+  }, [selectedTask]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await fetchTasks();
@@ -654,7 +664,7 @@ export default function TasksScreen() {
                   {isRunning && chatMessages[chatMessages.length - 1]?.role === "assistant" && (
                     <View style={s.streamingIndicator}>
                       <ActivityIndicator size="small" color={c.accent} />
-                      <Text style={[s.streamingText, { color: c.textMuted }]}>Claude is working...</Text>
+                      <Text style={[s.streamingText, { color: c.textMuted }]}>Working...</Text>
                     </View>
                   )}
                 </ScrollView>
@@ -836,7 +846,7 @@ const s = StyleSheet.create({
 
   // Chat messages
   chatScroll: { flex: 1 },
-  chatScrollContent: { padding: 16, paddingBottom: 8 },
+  chatScrollContent: { padding: 16, paddingBottom: 80 },
 
   userRow: { flexDirection: "row", justifyContent: "flex-end", marginBottom: 12 },
   userBubble: { maxWidth: "80%", borderRadius: 18, borderBottomRightRadius: 4, paddingHorizontal: 16, paddingVertical: 10 },
