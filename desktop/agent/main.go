@@ -25,7 +25,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.6.0"
+const version = "1.7.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -57,6 +57,8 @@ func main() {
 		runDevices()
 	case "config":
 		runConfig()
+	case "set-runner":
+		runSetRunner(os.Args[2:])
 	case "uninstall":
 		runUninstall()
 	case "help", "--help", "-h":
@@ -71,7 +73,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Print(`Yaver — use Claude from anywhere
+	fmt.Print(`Yaver — your AI coding agent, on your phone
 
 Usage:
   yaver auth        Sign in to Yaver (opens browser)
@@ -83,6 +85,7 @@ Usage:
   yaver logs        Show agent logs
   yaver clear-logs  Clear agent log file
   yaver config      Show current configuration
+  yaver set-runner  Set which AI agent to use (claude, codex, aider, custom)
   yaver status      Show auth and connection status
   yaver devices     List your registered devices
   yaver uninstall   Remove config, certs, and stop the agent
@@ -95,6 +98,13 @@ Flags for serve:
   --quic-port       QUIC server port (default 4433)
   --no-relay        Disable relay tunnels (direct connections only)
   --work-dir        Working directory for tasks (default .)
+
+Examples:
+  yaver set-runner claude           Use Claude Code (default)
+  yaver set-runner codex            Use OpenAI Codex
+  yaver set-runner aider            Use Aider
+  yaver set-runner custom "my-ai --auto {prompt}"   Use a custom command
+  yaver set-runner                  List available runners
 
 Run 'yaver <command> -h' for command-specific options.
 `)
@@ -688,6 +698,16 @@ func runConfig() {
 		}
 	}
 
+	// Show current runner
+	if cfg.AuthToken != "" && cfg.ConvexSiteURL != "" {
+		client := &http.Client{Timeout: 5 * time.Second}
+		runnerID := getCurrentRunner(client, cfg.ConvexSiteURL, cfg.AuthToken)
+		if runnerID == "" {
+			runnerID = "claude"
+		}
+		fmt.Printf("runner:          %s\n", runnerID)
+	}
+
 	fmt.Printf("auth_token:      %s\n", token)
 	fmt.Printf("device_id:       %s\n", valueOrEmpty(cfg.DeviceID))
 	fmt.Printf("convex_site_url: %s\n", valueOrEmpty(cfg.ConvexSiteURL))
@@ -698,6 +718,181 @@ func valueOrEmpty(s string) string {
 		return "(not set)"
 	}
 	return s
+}
+
+// ---------------------------------------------------------------------------
+// set-runner — set which AI agent to use
+// ---------------------------------------------------------------------------
+
+func runSetRunner(args []string) {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.AuthToken == "" {
+		fmt.Fprintln(os.Stderr, "Not signed in. Run 'yaver auth' first.")
+		os.Exit(1)
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// Fetch available runners from Convex
+	runners, err := fetchRunnersFromBackend(client, cfg.ConvexSiteURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not fetch runners: %v\n", err)
+		os.Exit(1)
+	}
+
+	// No args: list available runners and show current selection
+	if len(args) == 0 {
+		// Fetch current settings
+		currentRunner := getCurrentRunner(client, cfg.ConvexSiteURL, cfg.AuthToken)
+		fmt.Println("Available AI runners:")
+		fmt.Println()
+		for _, r := range runners {
+			marker := "  "
+			if r.RunnerID == currentRunner {
+				marker = "* "
+			}
+			fmt.Printf("  %s%-12s %s\n", marker, r.RunnerID, r.Name)
+			if r.Description != "" {
+				fmt.Printf("    %s%s\n", strings.Repeat(" ", 12), r.Description)
+			}
+		}
+		fmt.Println()
+		fmt.Println("Usage:")
+		fmt.Println("  yaver set-runner claude           Use Claude Code (default)")
+		fmt.Println("  yaver set-runner codex            Use OpenAI Codex")
+		fmt.Println("  yaver set-runner aider            Use Aider")
+		fmt.Printf("  yaver set-runner custom \"cmd\"      Use a custom command\n")
+		fmt.Println()
+		if currentRunner != "" {
+			fmt.Printf("Current runner: %s\n", currentRunner)
+		}
+		return
+	}
+
+	runnerID := args[0]
+
+	// Validate runner ID
+	if runnerID != "custom" {
+		found := false
+		for _, r := range runners {
+			if r.RunnerID == runnerID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Fprintf(os.Stderr, "Unknown runner: %s\n", runnerID)
+			fmt.Fprintln(os.Stderr, "Run 'yaver set-runner' to see available runners.")
+			os.Exit(1)
+		}
+	}
+
+	// Build settings payload
+	payload := map[string]string{"runnerId": runnerID}
+	if runnerID == "custom" {
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "Custom runner requires a command.")
+			fmt.Fprintln(os.Stderr, "Example: yaver set-runner custom \"my-ai --auto {prompt}\"")
+			os.Exit(1)
+		}
+		payload["customRunnerCommand"] = args[1]
+	}
+
+	payloadBytes, _ := json.Marshal(payload)
+	req, err := newBearerRequest("POST", cfg.ConvexSiteURL+"/settings", cfg.AuthToken, bytes.NewReader(payloadBytes))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not save settings: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Server returned %d\n", resp.StatusCode)
+		os.Exit(1)
+	}
+
+	if runnerID == "custom" {
+		fmt.Printf("Runner set to: custom (%s)\n", args[1])
+	} else {
+		// Find name
+		name := runnerID
+		for _, r := range runners {
+			if r.RunnerID == runnerID {
+				name = r.Name
+				break
+			}
+		}
+		fmt.Printf("Runner set to: %s\n", name)
+	}
+	fmt.Println("Restart the agent for changes to take effect: yaver restart")
+}
+
+type backendRunner struct {
+	RunnerID    string `json:"runnerId"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+func fetchRunnersFromBackend(client *http.Client, convexSiteURL string) ([]backendRunner, error) {
+	req, err := http.NewRequest("GET", convexSiteURL+"/runners", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("runners endpoint returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var runners []backendRunner
+	if err := json.Unmarshal(body, &runners); err != nil {
+		return nil, err
+	}
+	return runners, nil
+}
+
+func getCurrentRunner(client *http.Client, convexSiteURL, token string) string {
+	req, err := newBearerRequest("GET", convexSiteURL+"/settings", token, nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ""
+	}
+
+	var settings struct {
+		RunnerID string `json:"runnerId"`
+	}
+	if err := json.Unmarshal(body, &settings); err != nil {
+		return ""
+	}
+	return settings.RunnerID
 }
 
 // ---------------------------------------------------------------------------

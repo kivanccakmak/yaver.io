@@ -140,6 +140,37 @@ export default function HomePage() {
                 </div>
               </div>
 
+              {/* Runner selection examples */}
+              <div className="terminal mt-4">
+                <div className="terminal-header">
+                  <div className="terminal-dot bg-[#ff5f57]" />
+                  <div className="terminal-dot bg-[#febc2e]" />
+                  <div className="terminal-dot bg-[#28c840]" />
+                  <span className="ml-3 text-xs text-surface-500">choose your agent</span>
+                </div>
+                <div className="terminal-body space-y-2 text-[13px]">
+                  <div className="text-surface-500"># Switch AI agents anytime</div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200">yaver set-runner claude</span>
+                    <span className="ml-2 text-surface-500"># default</span>
+                  </div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200">yaver set-runner codex</span>
+                  </div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200">yaver set-runner aider</span>
+                  </div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200">{`yaver set-runner custom "my-tool {prompt}"`}</span>
+                  </div>
+                  <div className="text-green-400/80 pl-2">Runner set to: Claude Code</div>
+                </div>
+              </div>
+
               <div className="mt-4 space-y-2">
                 <p className="text-xs text-surface-500">
                   Also available via <code className="rounded bg-surface-900 px-1.5 py-0.5 text-surface-400">curl -fsSL https://get.yaver.io | sh</code> or{" "}
