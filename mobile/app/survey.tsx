@@ -146,6 +146,19 @@ export default function SurveyScreen() {
         autoCorrect={false}
         autoFocus
       />
+
+      <Pressable
+        style={({ pressed }) => [
+          styles.inlineContinue,
+          { backgroundColor: c.textPrimary },
+          pressed && { opacity: 0.7 },
+          !fullName.trim() && { opacity: 0.4 },
+        ]}
+        onPress={handleNext}
+        disabled={!fullName.trim()}
+      >
+        <Text style={[styles.nextButtonText, { color: c.bg }]}>Continue</Text>
+      </Pressable>
     </View>
   );
 
@@ -445,8 +458,8 @@ export default function SurveyScreen() {
           renderUseCasePage()}
       </View>
 
-      {/* Bottom buttons */}
-      <View style={styles.bottomButtons}>
+      {/* Bottom buttons — hidden on name page (page 0) since it has inline Continue */}
+      {page > 0 && <View style={styles.bottomButtons}>
         {page > 0 ? (
           <Pressable
             style={({ pressed }) => [
@@ -480,7 +493,7 @@ export default function SurveyScreen() {
             {isSubmitting ? "..." : isLastPage ? "Finish" : "Continue"}
           </Text>
         </Pressable>
-      </View>
+      </View>}
 
       {/* Only show skip after runner page (page 2) has been passed */}
       {page >= 3 && (
@@ -550,6 +563,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     fontSize: 15,
     marginBottom: 20,
+  },
+  inlineContinue: {
+    alignSelf: "flex-end",
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    borderRadius: 10,
   },
   identityGrid: {
     flexDirection: "row",
