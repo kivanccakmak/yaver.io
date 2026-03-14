@@ -27,10 +27,10 @@ export default function HomePage() {
               Early Access &mdash; Free to use
             </div>
             <h1 className="mb-6 text-4xl font-bold tracking-tight text-surface-50 sm:text-5xl md:text-6xl">
-              Claude Code on your phone
+              Your AI coding agent, on your phone
             </h1>
             <p className="mx-auto max-w-2xl text-base leading-relaxed text-surface-400 md:text-lg">
-              You pay $200/mo for Claude Code. It runs on your PC.
+              Claude Code, Codex, Aider &mdash; whichever terminal AI you use, it runs on your PC.
               But when you leave your desk, it just sits there.
               Yaver lets you send tasks to your dev machine from your phone &mdash; from
               anywhere, over any network. Your code never leaves your devices.
@@ -70,7 +70,7 @@ export default function HomePage() {
                     <span className="text-2xl">&#128187;</span>
                   </div>
                   <span className="text-sm font-medium text-surface-200">Your dev machine</span>
-                  <p className="mt-1 text-xs text-surface-500">Claude Code runs here</p>
+                  <p className="mt-1 text-xs text-surface-500">Your AI agent runs here</p>
                 </div>
               </div>
               <p className="mt-6 text-center text-xs text-surface-500">
@@ -149,7 +149,7 @@ export default function HomePage() {
                   for macOS, Windows, and Linux.
                 </p>
                 <p className="text-xs text-surface-500">
-                  The agent runs in the background. Your Claude Code subscription runs locally on this machine &mdash; Yaver just makes it reachable.
+                  The agent runs in the background. Your AI tool (Claude Code, Codex, Aider, or any CLI) runs locally &mdash; Yaver just makes it reachable from your phone.
                 </p>
               </div>
             </div>
@@ -200,9 +200,9 @@ export default function HomePage() {
                       3
                     </span>
                     <div>
-                      <h4 className="text-sm font-medium text-surface-200">Start sending tasks</h4>
+                      <h4 className="text-sm font-medium text-surface-200">Choose your agent &amp; start sending tasks</h4>
                       <p className="mt-1 text-xs text-surface-500">
-                        Your dev machine appears automatically. Tap it, type a task, and Claude starts working. Output streams back live to your phone.
+                        Pick your AI tool &mdash; Claude Code, Codex, Aider, or bring your own. Your dev machine appears automatically. Type a task and output streams back live.
                       </p>
                     </div>
                   </div>
@@ -346,8 +346,12 @@ export default function HomePage() {
               description="End-to-end encrypted connections between your mobile app and agent machine. Your data never touches our servers."
             />
             <FeatureCard
+              title="Any terminal AI"
+              description="Claude Code, OpenAI Codex, Aider, or your own CLI tool. Pick your agent in the app — switch anytime."
+            />
+            <FeatureCard
               title="Real-time streaming"
-              description="Claude responses stream token-by-token across devices. No buffering, no delays."
+              description="Responses stream token-by-token across devices. No buffering, no delays."
             />
             <FeatureCard
               title="Multi-device"
@@ -410,7 +414,7 @@ export default function HomePage() {
                   <span className="text-3xl font-bold text-surface-50">$0</span>
                   <span className="text-sm text-surface-400 line-through">$12/mo</span>
                 </div>
-                <p className="mt-2 text-xs text-surface-400">For developers who use Claude daily.</p>
+                <p className="mt-2 text-xs text-surface-400">For developers who use AI coding tools daily.</p>
               </div>
               <ul className="mb-8 flex-1 space-y-3">
                 {["Unlimited devices", "Unlimited tasks", "P2P encrypted", "Priority support", "Task history & search", "Team sharing (coming soon)"].map((f) => (
@@ -452,12 +456,12 @@ export default function HomePage() {
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="mb-4 text-2xl font-bold text-surface-50 md:text-3xl">
-            Stop wasting your Claude subscription
+            Your AI agent doesn&apos;t stop when you leave
           </h2>
           <p className="mb-8 text-sm leading-relaxed text-surface-400">
             Install the agent on your dev machine, get the app on your phone.
             <br />
-            Claude keeps working while you&apos;re away from your desk.
+            Send tasks from anywhere &mdash; your AI keeps working while you&apos;re away from your desk.
           </p>
           <code className="mb-8 inline-block rounded-lg bg-surface-900 px-5 py-2.5 text-sm text-surface-300">
             brew install kivanccakmak/yaver/yaver

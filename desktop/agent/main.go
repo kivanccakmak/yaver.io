@@ -525,12 +525,16 @@ func runServe(args []string) {
 		log.Printf("warning: could not write PID file: %v", err)
 	}
 
+	// Resolve runner config (fetch user settings, fall back to default)
+	runner := resolveRunner(cfg.ConvexSiteURL, cfg.AuthToken)
+	log.Printf("Runner: %s (command=%s, mode=%s)", runner.Name, runner.Command, runner.OutputMode)
+
 	// Task store and manager
 	taskStore, err := NewTaskStore()
 	if err != nil {
 		log.Fatalf("failed to create task store: %v", err)
 	}
-	taskMgr := NewTaskManager(*workDir, taskStore)
+	taskMgr := NewTaskManager(*workDir, taskStore, runner)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -890,6 +894,114 @@ func runUninstall() {
 	fmt.Println("To remove the binary:")
 	fmt.Println("  brew uninstall yaver          # if installed via Homebrew")
 	fmt.Printf("  rm %s   # if installed manually\n", os.Args[0])
+}
+
+// ---------------------------------------------------------------------------
+// runner resolution — fetch user settings to determine which AI runner to use
+// ---------------------------------------------------------------------------
+
+// resolveRunner fetches user settings from the backend and returns the
+// appropriate RunnerConfig. Falls back to defaultRunner on any error.
+func resolveRunner(convexSiteURL, token string) RunnerConfig {
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// Step 1: Fetch user settings
+	req, err := newBearerRequest("GET", convexSiteURL+"/settings", token, nil)
+	if err != nil {
+		log.Printf("Runner: could not build settings request: %v — using default", err)
+		return defaultRunner
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Runner: could not fetch settings: %v — using default", err)
+		return defaultRunner
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Runner: settings endpoint returned %d — using default", resp.StatusCode)
+		return defaultRunner
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Runner: could not read settings response: %v — using default", err)
+		return defaultRunner
+	}
+
+	var settings struct {
+		RunnerID            string `json:"runnerId"`
+		CustomRunnerCommand string `json:"customRunnerCommand"`
+	}
+	if err := json.Unmarshal(body, &settings); err != nil {
+		log.Printf("Runner: could not parse settings: %v — using default", err)
+		return defaultRunner
+	}
+
+	// No runner configured — use default
+	if settings.RunnerID == "" {
+		return defaultRunner
+	}
+
+	// Custom runner: wrap in sh -c with {prompt} placeholder
+	if settings.RunnerID == "custom" && settings.CustomRunnerCommand != "" {
+		log.Printf("Runner: using custom command: %s", settings.CustomRunnerCommand)
+		return RunnerConfig{
+			RunnerID:        "custom",
+			Name:            "Custom Runner",
+			Command:         "sh",
+			Args:            []string{"-c", settings.CustomRunnerCommand},
+			OutputMode:      "raw",
+			ResumeSupported: false,
+		}
+	}
+
+	// Known runner ID — try to fetch runner definitions from backend
+	if settings.RunnerID == "claude" {
+		return defaultRunner
+	}
+
+	runner, err := fetchRunner(client, convexSiteURL, settings.RunnerID)
+	if err != nil {
+		log.Printf("Runner: could not fetch runner %q: %v — using default", settings.RunnerID, err)
+		return defaultRunner
+	}
+	return runner
+}
+
+// fetchRunner fetches the runner list from the backend and finds the one
+// matching the given ID.
+func fetchRunner(client *http.Client, convexSiteURL, runnerID string) (RunnerConfig, error) {
+	req, err := http.NewRequest("GET", convexSiteURL+"/runners", nil)
+	if err != nil {
+		return RunnerConfig{}, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return RunnerConfig{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return RunnerConfig{}, fmt.Errorf("runners endpoint returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return RunnerConfig{}, err
+	}
+
+	var runners []RunnerConfig
+	if err := json.Unmarshal(body, &runners); err != nil {
+		return RunnerConfig{}, fmt.Errorf("parse runners: %w", err)
+	}
+
+	for _, r := range runners {
+		if r.RunnerID == runnerID {
+			return r, nil
+		}
+	}
+	return RunnerConfig{}, fmt.Errorf("runner %q not found", runnerID)
 }
 
 // ---------------------------------------------------------------------------

@@ -115,7 +115,22 @@ export default defineSchema({
   userSettings: defineTable({
     userId: v.id("users"),
     forceRelay: v.optional(v.boolean()),
+    runnerId: v.optional(v.string()),
+    customRunnerCommand: v.optional(v.string()),
   }).index("by_userId", ["userId"]),
+
+  aiRunners: defineTable({
+    runnerId: v.string(),
+    name: v.string(),
+    command: v.string(),
+    args: v.string(), // JSON array as string
+    outputMode: v.union(v.literal("stream-json"), v.literal("raw")),
+    resumeSupported: v.boolean(),
+    resumeArgs: v.optional(v.string()), // JSON array as string
+    description: v.string(),
+    isDefault: v.optional(v.boolean()),
+    sortOrder: v.number(),
+  }).index("by_runnerId", ["runnerId"]),
 
   mobileStreamLogs: defineTable({
     userId: v.optional(v.string()),

@@ -19,7 +19,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
-import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings } from "../../src/lib/auth";
+import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner } from "../../src/lib/auth";
 import { clearCache } from "../../src/lib/storage";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, clearLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
@@ -55,8 +55,11 @@ export default function SettingsScreen() {
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>(getLogEntries());
   const [forceRelay, setForceRelay] = useState(quicClient.forceRelay);
+  const [runners, setRunners] = useState<AiRunner[]>([]);
+  const [selectedRunner, setSelectedRunner] = useState<string>("claude");
+  const [customRunnerCommand, setCustomRunnerCommand] = useState("");
 
-  // Load user settings from Convex
+  // Load user settings and runners from Convex
   useEffect(() => {
     if (!token) return;
     getUserSettings(token).then((s) => {
@@ -64,7 +67,10 @@ export default function SettingsScreen() {
         setForceRelay(s.forceRelay);
         quicClient.setForceRelay(s.forceRelay);
       }
+      if (s.runnerId) setSelectedRunner(s.runnerId);
+      if (s.customRunnerCommand) setCustomRunnerCommand(s.customRunnerCommand);
     });
+    getAiRunners().then(setRunners);
   }, [token]);
 
   // Subscribe to live log updates
@@ -355,6 +361,60 @@ export default function SettingsScreen() {
               </Text>
             </View>
           )}
+        </View>
+
+        {/* AI Runner */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>AI Runner</Text>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            {runners.map((runner) => {
+              const selected = selectedRunner === runner.runnerId;
+              return (
+                <Pressable
+                  key={runner.runnerId}
+                  style={[styles.runnerOption, { borderBottomColor: c.borderSubtle }]}
+                  onPress={() => {
+                    setSelectedRunner(runner.runnerId);
+                    if (token) saveUserSettings(token, { runnerId: runner.runnerId });
+                  }}
+                >
+                  <View style={[styles.radioOuter, { borderColor: selected ? c.accent : c.border }]}>
+                    {selected && <View style={[styles.radioInner, { backgroundColor: c.accent }]} />}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.runnerName, { color: c.textPrimary }]}>{runner.name}</Text>
+                    <Text style={[styles.runnerDesc, { color: c.textMuted }]}>{runner.description}</Text>
+                  </View>
+                </Pressable>
+              );
+            })}
+            <Pressable
+              style={styles.runnerOption}
+              onPress={() => {
+                setSelectedRunner("custom");
+                if (token) saveUserSettings(token, { runnerId: "custom", customRunnerCommand });
+              }}
+            >
+              <View style={[styles.radioOuter, { borderColor: selectedRunner === "custom" ? c.accent : c.border }]}>
+                {selectedRunner === "custom" && <View style={[styles.radioInner, { backgroundColor: c.accent }]} />}
+              </View>
+              <Text style={[styles.runnerName, { color: c.textPrimary }]}>Custom</Text>
+            </Pressable>
+            {selectedRunner === "custom" && (
+              <TextInput
+                style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
+                placeholder='my-tool --auto "{prompt}"'
+                placeholderTextColor={c.textMuted}
+                value={customRunnerCommand}
+                onChangeText={(text) => {
+                  setCustomRunnerCommand(text);
+                  if (token) saveUserSettings(token, { runnerId: "custom", customRunnerCommand: text });
+                }}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            )}
+          </View>
         </View>
 
         {/* Appearance */}
@@ -766,6 +826,46 @@ const styles = StyleSheet.create({
   logsScroll: { maxHeight: 300, paddingHorizontal: 12, paddingBottom: 12 },
   logLine: { fontSize: 11, fontFamily: "monospace", lineHeight: 16, marginBottom: 1 },
   logEmpty: { fontSize: 13, textAlign: "center", paddingVertical: 20 },
+
+  // AI Runner
+  runnerOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    gap: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  radioOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  radioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  runnerName: {
+    fontSize: 15,
+    fontWeight: "500",
+  },
+  runnerDesc: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  customRunnerInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    fontFamily: "monospace",
+    marginTop: 8,
+    marginLeft: 32,
+  },
 
   deleteAccountButton: {
     borderRadius: 12,

@@ -26,6 +26,34 @@ const (
 	TaskStatusFailed   TaskStatus = "failed"
 )
 
+// RunnerConfig describes how to invoke an AI runner (Claude or a custom tool).
+type RunnerConfig struct {
+	RunnerID        string   `json:"runnerId"`
+	Name            string   `json:"name"`
+	Command         string   `json:"command"`
+	Args            []string `json:"args"`
+	OutputMode      string   `json:"outputMode"` // "stream-json" or "raw"
+	ResumeSupported bool     `json:"resumeSupported"`
+	ResumeArgs      []string `json:"resumeArgs,omitempty"`
+}
+
+var defaultRunner = RunnerConfig{
+	RunnerID: "claude",
+	Name:     "Claude Code",
+	Command:  "claude",
+	Args: []string{
+		"-p", "{prompt}",
+		"--output-format", "stream-json",
+		"--verbose",
+		"--include-partial-messages",
+		"--tools", "Bash",
+		"--dangerously-skip-permissions",
+	},
+	OutputMode:      "stream-json",
+	ResumeSupported: true,
+	ResumeArgs:      []string{"--resume", "{sessionId}"},
+}
+
 // ClaudeEvent represents a top-level line of stream-json output from Claude CLI.
 // With --include-partial-messages, events include:
 //   {"type":"system","subtype":"init",...}
@@ -140,11 +168,12 @@ type TaskManager struct {
 	tasks   map[string]*Task
 	workDir string
 	store   *TaskStore
+	runner  RunnerConfig
 }
 
 // NewTaskManager creates a new TaskManager. If store is non-nil, previously
 // persisted tasks are loaded from disk (running/queued ones become stopped).
-func NewTaskManager(workDir string, store *TaskStore) *TaskManager {
+func NewTaskManager(workDir string, store *TaskStore, runner RunnerConfig) *TaskManager {
 	tasks := make(map[string]*Task)
 	if store != nil {
 		tasks = store.Load()
@@ -153,6 +182,7 @@ func NewTaskManager(workDir string, store *TaskStore) *TaskManager {
 		tasks:   tasks,
 		workDir: workDir,
 		store:   store,
+		runner:  runner,
 	}
 }
 
@@ -187,22 +217,31 @@ func (tm *TaskManager) CreateTask(title, description string) (*Task, error) {
 	tm.persist()
 	tm.mu.Unlock()
 
-	log.Printf("[task %s] Starting Claude process for: %s", id, title)
-	if err := tm.startClaudeProcess(task); err != nil {
-		log.Printf("[task %s] Failed to start Claude: %v", id, err)
+	log.Printf("[task %s] Starting %s process for: %s", id, tm.runner.Name, title)
+	if err := tm.startProcess(task); err != nil {
+		log.Printf("[task %s] Failed to start %s: %v", id, tm.runner.Name, err)
 		task.Status = TaskStatusFailed
 		tm.mu.Lock()
 		tm.persist()
 		tm.mu.Unlock()
-		return task, fmt.Errorf("start claude process: %w", err)
+		return task, fmt.Errorf("start process: %w", err)
 	}
-	log.Printf("[task %s] Claude process started (PID %d)", id, task.cmd.Process.Pid)
+	log.Printf("[task %s] %s process started (PID %d)", id, tm.runner.Name, task.cmd.Process.Pid)
 
 	return task, nil
 }
 
-// startClaudeProcess spawns Claude CLI with stream-json output for RPC-like control.
-func (tm *TaskManager) startClaudeProcess(task *Task) error {
+// buildArgs replaces placeholders in the runner's arg template with actual values.
+func (tm *TaskManager) buildArgs(prompt string) []string {
+	args := make([]string, len(tm.runner.Args))
+	for i, a := range tm.runner.Args {
+		args[i] = strings.ReplaceAll(a, "{prompt}", prompt)
+	}
+	return args
+}
+
+// startProcess spawns the configured runner with the task's prompt.
+func (tm *TaskManager) startProcess(task *Task) error {
 	prompt := task.Title
 	if task.Description != "" && task.Description != task.Title {
 		prompt = task.Title + "\n\n" + task.Description
@@ -214,19 +253,8 @@ func (tm *TaskManager) startClaudeProcess(task *Task) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
 
-	// Use Claude CLI with stream-json + partial messages for live streaming.
-	// --tools "Bash": restrict Claude to only the terminal/bash tool
-	// --include-partial-messages: get text_delta events for token-by-token streaming
-	// --dangerously-skip-permissions: auto-approve all tool use
-	cmd := exec.CommandContext(ctx,
-		"claude",
-		"-p", prompt,
-		"--output-format", "stream-json",
-		"--verbose",
-		"--include-partial-messages",
-		"--tools", "Bash",
-		"--dangerously-skip-permissions",
-	)
+	args := tm.buildArgs(prompt)
+	cmd := exec.CommandContext(ctx, tm.runner.Command, args...)
 	cmd.Dir = tm.workDir
 
 	stdout, err := cmd.StdoutPipe()
@@ -245,15 +273,19 @@ func (tm *TaskManager) startClaudeProcess(task *Task) error {
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		return fmt.Errorf("start claude: %w", err)
+		return fmt.Errorf("start process: %w", err)
 	}
 
 	now := time.Now()
 	task.StartedAt = &now
 	task.Status = TaskStatusRunning
 
-	// Monitor stdout (stream-json events).
-	go tm.readStreamJSON(task, stdout)
+	// Monitor stdout based on output mode.
+	if tm.runner.OutputMode == "raw" {
+		go tm.readRawOutput(task, stdout)
+	} else {
+		go tm.readStreamJSON(task, stdout)
+	}
 
 	// Drain stderr.
 	go func() {
@@ -270,10 +302,10 @@ func (tm *TaskManager) startClaudeProcess(task *Task) error {
 		if task.Status == TaskStatusRunning {
 			if err != nil {
 				task.Status = TaskStatusFailed
-				log.Printf("[task %s] Claude process failed: %v", task.ID, err)
+				log.Printf("[task %s] %s process failed: %v", task.ID, tm.runner.Name, err)
 			} else {
 				task.Status = TaskStatusFinished
-				log.Printf("[task %s] Claude process finished successfully (output_len=%d)", task.ID, len(task.Output))
+				log.Printf("[task %s] %s process finished successfully (output_len=%d)", task.ID, tm.runner.Name, len(task.Output))
 			}
 			finishNow := time.Now()
 			task.FinishedAt = &finishNow
@@ -292,6 +324,35 @@ func (tm *TaskManager) startClaudeProcess(task *Task) error {
 	}()
 
 	return nil
+}
+
+// readRawOutput reads plain text lines from stdout (for non-JSON runners).
+func (tm *TaskManager) readRawOutput(task *Task, r io.Reader) {
+	defer close(task.outputCh)
+
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+
+	var output strings.Builder
+	tm.mu.RLock()
+	output.WriteString(task.Output)
+	tm.mu.RUnlock()
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		tm.emit(task, &output, line+"\n")
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("[task %s] scanner error: %v", task.ID, err)
+	}
+
+	// Store final output as result text for raw runners.
+	tm.mu.Lock()
+	task.ResultText = task.Output
+	tm.mu.Unlock()
+
+	log.Printf("[task %s] Raw output reader finished (output_len=%d)", task.ID, output.Len())
 }
 
 // emit pushes text to both the output buffer and the streaming channel.
@@ -605,26 +666,21 @@ func (tm *TaskManager) ResumeTask(id, input string) (*Task, error) {
 	return task, nil
 }
 
-// startResume spawns Claude CLI resuming the task's existing session.
+// startResume spawns the runner resuming the task's existing session (if supported).
 func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
 
-	args := []string{
-		"-p", prompt,
-		"--output-format", "stream-json",
-		"--verbose",
-		"--include-partial-messages",
-		"--tools", "Bash",
-		"--dangerously-skip-permissions",
+	args := tm.buildArgs(prompt)
+
+	// Append resume args if the runner supports it and we have a session ID.
+	if tm.runner.ResumeSupported && task.SessionID != "" && len(tm.runner.ResumeArgs) > 0 {
+		for _, ra := range tm.runner.ResumeArgs {
+			args = append(args, strings.ReplaceAll(ra, "{sessionId}", task.SessionID))
+		}
 	}
 
-	// Resume previous session if we have its ID.
-	if task.SessionID != "" {
-		args = append(args, "--resume", task.SessionID)
-	}
-
-	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd := exec.CommandContext(ctx, tm.runner.Command, args...)
 	cmd.Dir = tm.workDir
 
 	stdout, err := cmd.StdoutPipe()
@@ -643,14 +699,18 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		return fmt.Errorf("start claude: %w", err)
+		return fmt.Errorf("start process: %w", err)
 	}
 
 	now := time.Now()
 	task.StartedAt = &now
 	task.Status = TaskStatusRunning
 
-	go tm.readStreamJSON(task, stdout)
+	if tm.runner.OutputMode == "raw" {
+		go tm.readRawOutput(task, stdout)
+	} else {
+		go tm.readStreamJSON(task, stdout)
+	}
 
 	go func() {
 		scanner := bufio.NewScanner(stderr)

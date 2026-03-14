@@ -814,7 +814,10 @@ http.route({
     const user = await authenticateRequest(ctx, request);
     if (!user) return errorResponse("Unauthorized", 401);
     const settings = await ctx.runQuery(api.userSettings.get, { userId: user.userId as any });
-    return jsonResponse({ ok: true, settings: settings || { forceRelay: false } });
+    return jsonResponse({
+      ok: true,
+      settings: settings || { forceRelay: false, runnerId: undefined, customRunnerCommand: undefined },
+    });
   }),
 });
 
@@ -828,6 +831,8 @@ http.route({
     await ctx.runMutation(api.userSettings.set, {
       userId: user.userId as any,
       forceRelay: body.forceRelay ?? false,
+      runnerId: body.runnerId,
+      customRunnerCommand: body.customRunnerCommand,
     });
     return jsonResponse({ ok: true });
   }),
@@ -913,6 +918,28 @@ http.route({
         },
       }
     );
+  }),
+});
+
+// ── AI Runners ──────────────────────────────────────────────────────
+
+/** GET /runners — List all AI runners (public, no auth). */
+http.route({
+  path: "/runners",
+  method: "GET",
+  handler: httpAction(async (ctx) => {
+    const runners = await ctx.runQuery(api.aiRunners.list, {});
+    return jsonResponse({ runners });
+  }),
+});
+
+/** POST /runners/seed — Seed predefined AI runners (idempotent, no auth). */
+http.route({
+  path: "/runners/seed",
+  method: "POST",
+  handler: httpAction(async (ctx) => {
+    await ctx.runMutation(api.aiRunners.seed, {});
+    return jsonResponse({ ok: true });
   }),
 });
 

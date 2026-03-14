@@ -9,6 +9,7 @@
  */
 
 import type * as admin from "../admin.js";
+import type * as aiRunners from "../aiRunners.js";
 import type * as auth from "../auth.js";
 import type * as authLogs from "../authLogs.js";
 import type * as devices from "../devices.js";
@@ -28,6 +29,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   admin: typeof admin;
+  aiRunners: typeof aiRunners;
   auth: typeof auth;
   authLogs: typeof authLogs;
   devices: typeof devices;

@@ -198,6 +198,29 @@ export async function getSurveyStatus(
 
 export interface UserSettings {
   forceRelay?: boolean;
+  runnerId?: string;
+  customRunnerCommand?: string;
+}
+
+export interface AiRunner {
+  runnerId: string;
+  name: string;
+  command: string;
+  description: string;
+  outputMode: string;
+  isDefault?: boolean;
+  sortOrder: number;
+}
+
+export async function getAiRunners(): Promise<AiRunner[]> {
+  try {
+    const res = await fetch(`${getConvexSiteUrl()}/runners`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.runners ?? data ?? [];
+  } catch {
+    return [];
+  }
 }
 
 export async function getUserSettings(token: string): Promise<UserSettings> {

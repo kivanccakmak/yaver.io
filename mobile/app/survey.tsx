@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Pressable,
   ScrollView,
@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../src/context/AuthContext";
 import { useColors } from "../src/context/ThemeContext";
-import { submitSurvey } from "../src/lib/auth";
+import { submitSurvey, getAiRunners, saveUserSettings, type AiRunner } from "../src/lib/auth";
 
 const IDENTITIES = [
   { id: "developer", label: "Developer" },
@@ -61,9 +61,19 @@ export default function SurveyScreen() {
   const [useCase, setUseCase] = useState<string | null>(null);
   const [companySize, setCompanySize] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [runners, setRunners] = useState<AiRunner[]>([]);
+  const [selectedRunner, setSelectedRunner] = useState<string>("claude");
+
+  useEffect(() => {
+    getAiRunners().then((r) => {
+      setRunners(r);
+      const defaultRunner = r.find((runner) => runner.isDefault);
+      if (defaultRunner) setSelectedRunner(defaultRunner.runnerId);
+    });
+  }, []);
 
   const isDev = identity === "developer";
-  const totalPages = isDev ? 3 : 2;
+  const totalPages = isDev ? 4 : 3;
 
   const toggleLanguage = (lang: string) => {
     setLanguages((prev) =>
@@ -84,6 +94,8 @@ export default function SurveyScreen() {
         companySize: companySize ?? undefined,
         useCase: useCase ?? undefined,
       });
+      // Save runner preference to user settings
+      await saveUserSettings(token, { runnerId: selectedRunner });
       markSurveyCompleted();
       await refreshUser();
       router.replace("/(tabs)/tasks");
@@ -95,10 +107,8 @@ export default function SurveyScreen() {
   };
 
   const handleNext = () => {
-    if (page === 0) {
-      setPage(1);
-    } else if (page === 1 && isDev) {
-      setPage(2);
+    if (page < totalPages - 1) {
+      setPage(page + 1);
     } else {
       finishSurvey();
     }
@@ -106,7 +116,7 @@ export default function SurveyScreen() {
 
   const handleBack = () => setPage((p) => Math.max(0, p - 1));
 
-  const isLastPage = isDev ? page === 2 : page === 1;
+  const isLastPage = page === totalPages - 1;
 
   // Map visual dot index
   const currentDot = page;
@@ -154,6 +164,54 @@ export default function SurveyScreen() {
                 ]}
               >
                 {item.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+
+  const renderRunnerPage = () => (
+    <View style={styles.pageContent}>
+      <Text style={[styles.pageTitle, { color: c.textPrimary }]}>
+        Which AI tool do you use?
+      </Text>
+      <Text style={[styles.pageSubtitle, { color: c.textSecondary }]}>
+        Select your preferred AI runner
+      </Text>
+
+      <View style={styles.identityGrid}>
+        {runners.map((runner) => {
+          const selected = selectedRunner === runner.runnerId;
+          return (
+            <Pressable
+              key={runner.runnerId}
+              style={({ pressed }) => [
+                styles.identityButton,
+                {
+                  backgroundColor: selected ? c.accent : c.bgCard,
+                  borderColor: selected ? c.accent : c.border,
+                },
+                pressed && { opacity: 0.7 },
+              ]}
+              onPress={() => setSelectedRunner(runner.runnerId)}
+            >
+              <Text
+                style={[
+                  styles.identityButtonText,
+                  { color: selected ? "#fff" : c.textPrimary },
+                ]}
+              >
+                {runner.name}
+              </Text>
+              <Text
+                style={[
+                  styles.runnerDescText,
+                  { color: selected ? "rgba(255,255,255,0.7)" : c.textMuted },
+                ]}
+              >
+                {runner.description}
               </Text>
             </Pressable>
           );
@@ -344,8 +402,9 @@ export default function SurveyScreen() {
       {/* Page content */}
       <View style={styles.contentArea}>
         {page === 0 && renderPage0()}
-        {page === 1 && isDev && renderPage1Dev()}
-        {((page === 1 && !isDev) || (page === 2 && isDev)) &&
+        {page === 1 && renderRunnerPage()}
+        {page === 2 && isDev && renderPage1Dev()}
+        {((page === 2 && !isDev) || (page === 3 && isDev)) &&
           renderUseCasePage()}
       </View>
 
@@ -468,6 +527,11 @@ const styles = StyleSheet.create({
   identityButtonText: {
     fontSize: 15,
     fontWeight: "600",
+  },
+  runnerDescText: {
+    fontSize: 11,
+    marginTop: 4,
+    textAlign: "center",
   },
   chipContainer: {
     flexDirection: "row",
