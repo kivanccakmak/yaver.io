@@ -7,8 +7,11 @@ build/
 out/
 .next/
 
-# Go
+# Go binaries
+desktop/agent/yaver
 desktop/agent/yaver-agent
+desktop/agent/agent
+desktop/agent/yaver-*
 
 # Expo / React Native
 mobile/.expo/
