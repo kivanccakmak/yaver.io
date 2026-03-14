@@ -119,20 +119,14 @@ export default function HomePage() {
                     </span>
                   </div>
                   <div className="h-px bg-surface-800/60" />
-                  <div className="text-surface-500"># 2. Sign in (opens browser)</div>
+                  <div className="text-surface-500"># 2. Sign in & start (opens browser)</div>
                   <div>
                     <span className="text-surface-400">$</span>{" "}
                     <span className="text-surface-200">yaver auth</span>
                   </div>
                   <div className="text-surface-500 pl-2">Opening browser...</div>
                   <div className="text-green-400/80 pl-2">Signed in as you@gmail.com</div>
-                  <div className="h-px bg-surface-800/60" />
-                  <div className="text-surface-500"># 3. Start the agent</div>
-                  <div>
-                    <span className="text-surface-400">$</span>{" "}
-                    <span className="text-surface-200">yaver serve</span>
-                  </div>
-                  <div className="text-surface-500 pl-2">Agent listening on :19835</div>
+                  <div className="text-surface-500 pl-2">Starting agent...</div>
                   <div className="text-surface-500 pl-2">Connected to relay (eu-hel)</div>
                   <div className="text-green-400/80 pl-2">
                     Ready. Waiting for tasks...

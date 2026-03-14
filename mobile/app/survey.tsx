@@ -74,7 +74,7 @@ export default function SurveyScreen() {
   }, []);
 
   const isDev = identity === "developer";
-  const totalPages = isDev ? 4 : 3;
+  const totalPages = isDev ? 5 : 4;
 
   const toggleLanguage = (lang: string) => {
     setLanguages((prev) =>
@@ -127,7 +127,29 @@ export default function SurveyScreen() {
   const currentDot = page;
   const dotCount = totalPages;
 
-  const renderPage0 = () => (
+  const renderNamePage = () => (
+    <View style={styles.pageContent}>
+      <Text style={[styles.pageTitle, { color: c.textPrimary }]}>
+        How can we call you?
+      </Text>
+      <Text style={[styles.pageSubtitle, { color: c.textSecondary }]}>
+        Let's get to know each other
+      </Text>
+
+      <TextInput
+        style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+        placeholder="Your name"
+        placeholderTextColor={c.textMuted}
+        value={fullName}
+        onChangeText={setFullName}
+        autoCapitalize="words"
+        autoCorrect={false}
+        autoFocus
+      />
+    </View>
+  );
+
+  const renderRolePage = () => (
     <View style={styles.pageContent}>
       <Text style={[styles.pageTitle, { color: c.textPrimary }]}>
         What best describes you?
@@ -135,16 +157,6 @@ export default function SurveyScreen() {
       <Text style={[styles.pageSubtitle, { color: c.textSecondary }]}>
         Help us personalize your experience
       </Text>
-
-      <TextInput
-        style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
-        placeholder="Full Name"
-        placeholderTextColor={c.textMuted}
-        value={fullName}
-        onChangeText={setFullName}
-        autoCapitalize="words"
-        autoCorrect={false}
-      />
 
       <View style={styles.identityGrid}>
         {IDENTITIES.map((item) => {
@@ -425,10 +437,11 @@ export default function SurveyScreen() {
 
       {/* Page content */}
       <View style={styles.contentArea}>
-        {page === 0 && renderPage0()}
-        {page === 1 && renderRunnerPage()}
-        {page === 2 && isDev && renderPage1Dev()}
-        {((page === 2 && !isDev) || (page === 3 && isDev)) &&
+        {page === 0 && renderNamePage()}
+        {page === 1 && renderRolePage()}
+        {page === 2 && renderRunnerPage()}
+        {page === 3 && isDev && renderPage1Dev()}
+        {((page === 3 && !isDev) || (page === 4 && isDev)) &&
           renderUseCasePage()}
       </View>
 
@@ -456,12 +469,12 @@ export default function SurveyScreen() {
             styles.nextButton,
             { backgroundColor: c.textPrimary },
             pressed && { opacity: 0.7 },
-            (isSubmitting || (page === 0 && identity === null) || (page === 1 && selectedRunner === "custom" && !customCommand.trim())) && {
+            (isSubmitting || (page === 0 && !fullName.trim()) || (page === 1 && identity === null) || (page === 2 && selectedRunner === "custom" && !customCommand.trim())) && {
               opacity: 0.4,
             },
           ]}
           onPress={handleNext}
-          disabled={isSubmitting || (page === 0 && identity === null) || (page === 1 && selectedRunner === "custom" && !customCommand.trim())}
+          disabled={isSubmitting || (page === 0 && !fullName.trim()) || (page === 1 && identity === null) || (page === 2 && selectedRunner === "custom" && !customCommand.trim())}
         >
           <Text style={[styles.nextButtonText, { color: c.bg }]}>
             {isSubmitting ? "..." : isLastPage ? "Finish" : "Continue"}
@@ -469,8 +482,8 @@ export default function SurveyScreen() {
         </Pressable>
       </View>
 
-      {/* Only show skip after runner page (page 1) has been passed */}
-      {page >= 2 && (
+      {/* Only show skip after runner page (page 2) has been passed */}
+      {page >= 3 && (
         <Pressable
           style={({ pressed }) => [pressed && { opacity: 0.7 }]}
           onPress={finishSurvey}

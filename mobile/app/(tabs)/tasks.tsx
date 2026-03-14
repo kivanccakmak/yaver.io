@@ -437,7 +437,7 @@ export default function TasksScreen() {
       // Give it a moment to establish connection
       await new Promise(resolve => setTimeout(resolve, 3000));
       if (quicClient.connectionState !== "connected") {
-        setReconnectError(`Could not reach ${device.name}. Make sure yaver serve is running.`);
+        setReconnectError(`Could not reach ${device.name}. Make sure yaver is running.`);
       }
     } catch (e: any) {
       setReconnectError(e?.message || `Could not reach ${device.name}`);
@@ -530,17 +530,8 @@ export default function TasksScreen() {
                         <Text style={s.discoverStepNum}>2</Text>
                       </View>
                       <View style={s.discoverStepContent}>
-                        <Text style={[s.discoverStepTitle, { color: c.textPrimary }]}>Sign in</Text>
+                        <Text style={[s.discoverStepTitle, { color: c.textPrimary }]}>Sign in & start</Text>
                         <Text style={[s.discoverStepDesc, { color: c.textMuted }]}>yaver auth</Text>
-                      </View>
-                    </View>
-                    <View style={s.discoverStep}>
-                      <View style={[s.discoverStepDot, { backgroundColor: c.accent }]}>
-                        <Text style={s.discoverStepNum}>3</Text>
-                      </View>
-                      <View style={s.discoverStepContent}>
-                        <Text style={[s.discoverStepTitle, { color: c.textPrimary }]}>Start</Text>
-                        <Text style={[s.discoverStepDesc, { color: c.textMuted }]}>yaver serve</Text>
                       </View>
                     </View>
                   </View>

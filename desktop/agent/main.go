@@ -82,12 +82,12 @@ func printUsage() {
 	fmt.Print(`Yaver — your AI coding agent, on your phone
 
 Usage:
-  yaver auth        Sign in to Yaver (opens browser)
+  yaver auth        Sign in and start agent (opens browser)
   yaver signout     Sign out and clear credentials
   yaver connect     Connect to your dev machine
-  yaver serve       Start the agent (runs in background)
   yaver stop        Stop the running agent
   yaver restart     Restart the agent
+  yaver serve       Start the agent manually (advanced)
   yaver logs        Show agent logs
   yaver clear-logs  Clear agent log file
   yaver config      Show current configuration
@@ -135,7 +135,9 @@ func runAuth(args []string) {
 	// Check if already logged in
 	if cfg.AuthToken != "" && cfg.ConvexSiteURL != "" {
 		if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err == nil {
-			fmt.Println("Already signed in. Use 'yaver signout' to sign out first.")
+			fmt.Println("Already signed in. Starting agent...")
+			fmt.Println()
+			runServe([]string{})
 			return
 		}
 		// Token expired, continue to re-auth
@@ -156,7 +158,9 @@ func runAuth(args []string) {
 		if err := SaveConfig(cfg); err != nil {
 			log.Fatalf("save config: %v", err)
 		}
-		fmt.Println("Signed in successfully.")
+		fmt.Println("Signed in successfully. Starting agent...")
+		fmt.Println()
+		runServe([]string{})
 		return
 	}
 
@@ -243,12 +247,9 @@ func runAuth(args []string) {
 			log.Fatalf("save config: %v", err)
 		}
 		fmt.Println()
-		fmt.Println("Signed in successfully.")
+		fmt.Println("Signed in successfully. Starting agent...")
 		fmt.Println()
-		fmt.Println("Next steps:")
-		fmt.Println("  yaver serve     Start the agent on this machine")
-		fmt.Println("  yaver connect   Connect to a remote machine")
-		fmt.Println("  yaver devices   List your devices")
+		runServe([]string{})
 
 	case <-time.After(5 * time.Minute):
 		srv1.Close()

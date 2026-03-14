@@ -165,11 +165,8 @@ function SetupInstructions() {
           <Text style={[styles.stepLabel, { color: c.textSecondary }]}>1. Install via Homebrew</Text>
           <CopyableCommand command="brew tap kivanccakmak/yaver && brew install yaver" />
 
-          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>2. Sign in</Text>
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>2. Sign in & start</Text>
           <CopyableCommand command="yaver auth" />
-
-          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>3. Start the agent</Text>
-          <CopyableCommand command="yaver serve" />
         </View>
       )}
 
@@ -181,11 +178,8 @@ function SetupInstructions() {
           <Text style={[styles.stepLabel, { color: c.textSecondary }]}>Or download directly</Text>
           <CopyableCommand command={'curl -fsSL https://github.com/kivanccakmak/yaver-cli/releases/latest/download/yaver-linux-amd64 -o yaver && chmod +x yaver && sudo mv yaver /usr/local/bin/'} />
 
-          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>2. Sign in</Text>
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>2. Sign in & start</Text>
           <CopyableCommand command="yaver auth" />
-
-          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>3. Start the agent</Text>
-          <CopyableCommand command="yaver serve" />
         </View>
       )}
 
@@ -199,11 +193,8 @@ function SetupInstructions() {
             Download from yaver.io/download and add to your PATH.
           </Text>
 
-          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>2. Sign in</Text>
+          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>2. Sign in & start</Text>
           <CopyableCommand command="yaver auth" />
-
-          <Text style={[styles.stepLabel, { color: c.textSecondary }]}>3. Start the agent</Text>
-          <CopyableCommand command="yaver serve" />
         </View>
       )}
 

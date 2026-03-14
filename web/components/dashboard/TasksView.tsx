@@ -237,7 +237,6 @@ export default function TasksView({ connectionStatus, isDeviceConnected }: Tasks
             </div>
             <div className="rounded-lg border border-surface-800 bg-surface-950 p-3 font-mono text-[13px]">
               <div className="select-all text-surface-200">yaver auth</div>
-              <div className="mt-1 select-all text-surface-200">yaver serve</div>
             </div>
           </div>
 
