@@ -1,58 +1,5 @@
 import Link from "next/link";
 
-function QuickStartTerminal() {
-  return (
-    <div className="terminal mx-auto max-w-2xl">
-      <div className="terminal-header">
-        <div className="terminal-dot bg-[#ff5f57]" />
-        <div className="terminal-dot bg-[#febc2e]" />
-        <div className="terminal-dot bg-[#28c840]" />
-        <span className="ml-3 text-xs text-surface-500">terminal</span>
-      </div>
-      <div className="terminal-body space-y-3 text-[13px]">
-        <div className="text-surface-500"># Install in one command</div>
-        <div>
-          <span className="text-surface-400">$</span>{" "}
-          <span className="text-surface-200">brew install kivanccakmak/yaver/yaver</span>
-        </div>
-        <div className="h-px bg-surface-800/60" />
-        <div className="text-surface-500"># Sign in and start serving</div>
-        <div>
-          <span className="text-surface-400">$</span>{" "}
-          <span className="text-surface-200">yaver auth</span>
-        </div>
-        <div className="text-surface-500">Opening browser to sign in...</div>
-        <div className="text-green-400/80">Signed in successfully.</div>
-        <div className="mt-1">
-          <span className="text-surface-400">$</span>{" "}
-          <span className="text-surface-200">yaver serve</span>
-        </div>
-        <div className="text-surface-500">Yaver agent starting...</div>
-        <div className="text-surface-500">  Work dir: ~/projects/my-app</div>
-        <div className="text-green-400/80">Agent ready. Waiting for tasks from your phone...</div>
-        <div className="h-px bg-surface-800/60" />
-        <div className="text-surface-500"># Or send tasks from any terminal</div>
-        <div>
-          <span className="text-surface-400">$</span>{" "}
-          <span className="text-surface-200">
-            yaver connect
-          </span>
-        </div>
-        <div className="text-surface-300">
-          Connected to MacBook Pro (encrypted)
-        </div>
-        <div className="mt-1">
-          <span className="text-surface-400">{">"}</span>{" "}
-          <span className="text-surface-200">
-            refactor the auth module to use JWT
-          </span>
-          <span className="ml-0.5 inline-block h-4 w-[2px] animate-blink bg-surface-300" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function FeatureCard({
   title,
   description,
@@ -80,67 +27,228 @@ export default function HomePage() {
               Early Access &mdash; Free to use
             </div>
             <h1 className="mb-6 text-4xl font-bold tracking-tight text-surface-50 sm:text-5xl md:text-6xl">
-              Use Claude from anywhere
+              Claude Code on your phone
             </h1>
-            <p className="mx-auto max-w-xl text-base leading-relaxed text-surface-400 md:text-lg">
-              Your code never leaves your devices. MCP-standard agent with
-              encrypted peer-to-peer connections between your phone and dev machine.
+            <p className="mx-auto max-w-2xl text-base leading-relaxed text-surface-400 md:text-lg">
+              You pay $200/mo for Claude Code. It runs on your PC.
+              But when you leave your desk, it just sits there.
+              Yaver lets you send tasks to your dev machine from your phone &mdash; from
+              anywhere, over any network. Your code never leaves your devices.
             </p>
             <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link href="/download" className="btn-primary px-8 py-3.5 text-sm">
                 Get started free
               </Link>
-              <Link href="/#features" className="btn-secondary px-8 py-3.5 text-sm">
-                Learn more
+              <Link href="/#how-it-works" className="btn-secondary px-8 py-3.5 text-sm">
+                See how it works
               </Link>
             </div>
           </div>
 
-          <QuickStartTerminal />
+          {/* Use case visual */}
+          <div className="mx-auto max-w-3xl">
+            <div className="card p-8">
+              <div className="flex flex-col items-center gap-6 sm:flex-row sm:justify-center">
+                <div className="text-center">
+                  <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-2xl border border-surface-600 bg-surface-800">
+                    <span className="text-2xl">&#128241;</span>
+                  </div>
+                  <span className="text-sm font-medium text-surface-200">Your phone</span>
+                  <p className="mt-1 text-xs text-surface-500">WiFi, 4G, 5G</p>
+                </div>
+
+                <div className="flex flex-col items-center gap-1.5 sm:flex-1">
+                  <div className="h-px w-full bg-gradient-to-r from-transparent via-surface-500 to-transparent" />
+                  <span className="whitespace-nowrap text-[11px] font-semibold tracking-wide text-surface-300">
+                    Encrypted P2P
+                  </span>
+                  <div className="h-px w-full bg-gradient-to-r from-transparent via-surface-500 to-transparent" />
+                </div>
+
+                <div className="text-center">
+                  <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-2xl border border-surface-600 bg-surface-800">
+                    <span className="text-2xl">&#128187;</span>
+                  </div>
+                  <span className="text-sm font-medium text-surface-200">Your dev machine</span>
+                  <p className="mt-1 text-xs text-surface-500">Claude Code runs here</p>
+                </div>
+              </div>
+              <p className="mt-6 text-center text-xs text-surface-500">
+                Tasks flow directly between your devices. We never see your code.
+              </p>
+            </div>
+          </div>
         </div>
       </section>
 
-      {/* Quick start steps */}
-      <section className="border-t border-surface-800/60 px-6 py-24">
-        <div className="mx-auto max-w-6xl">
+      {/* How it works — detailed setup */}
+      <section id="how-it-works" className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-5xl">
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
-            Up and running in 30 seconds
+            Set up in 5 minutes
           </h2>
           <p className="mb-16 text-center text-sm text-surface-400">
-            One install, one sign-in, done.
+            Two things to set up: the agent on your dev machine, and the app on your phone.
           </p>
-          <div className="grid grid-cols-1 gap-10 md:grid-cols-3">
-            {[
-              {
-                step: "01",
-                title: "Install",
-                desc: "One command: brew install yaver. Or download for macOS, Windows, or Linux.",
-                code: "brew install kivanccakmak/yaver/yaver",
-              },
-              {
-                step: "02",
-                title: "Sign in & serve",
-                desc: "Authenticate with Apple, Google, or Microsoft. Start the agent on your dev machine.",
-                code: "yaver auth && yaver serve",
-              },
-              {
-                step: "03",
-                title: "Send tasks",
-                desc: "Open the mobile app or connect from another terminal. Claude runs on your machine, output streams back live.",
-                code: "yaver connect",
-              },
-            ].map((item) => (
-              <div key={item.step} className="text-center">
-                <div className="mb-4 text-xs font-semibold tracking-widest text-surface-400">
-                  {item.step}
-                </div>
-                <h3 className="mb-2 text-base font-semibold text-surface-50">{item.title}</h3>
-                <p className="mb-4 text-sm leading-relaxed text-surface-400">{item.desc}</p>
-                <code className="inline-block rounded-lg bg-surface-900 px-3 py-1.5 text-xs text-surface-300">
-                  {item.code}
-                </code>
+
+          <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
+            {/* Left: Dev machine setup */}
+            <div>
+              <div className="mb-6 flex items-center gap-3">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-800 text-xs font-bold text-surface-300">
+                  A
+                </span>
+                <h3 className="text-base font-semibold text-surface-50">
+                  On your dev machine
+                </h3>
               </div>
-            ))}
+
+              <div className="terminal">
+                <div className="terminal-header">
+                  <div className="terminal-dot bg-[#ff5f57]" />
+                  <div className="terminal-dot bg-[#febc2e]" />
+                  <div className="terminal-dot bg-[#28c840]" />
+                  <span className="ml-3 text-xs text-surface-500">terminal</span>
+                </div>
+                <div className="terminal-body space-y-3 text-[13px]">
+                  <div className="text-surface-500"># 1. Install the agent</div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200 select-all">
+                      brew install kivanccakmak/yaver/yaver
+                    </span>
+                  </div>
+                  <div className="h-px bg-surface-800/60" />
+                  <div className="text-surface-500"># 2. Sign in (opens browser)</div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200">yaver auth</span>
+                  </div>
+                  <div className="text-surface-500 pl-2">Opening browser...</div>
+                  <div className="text-green-400/80 pl-2">Signed in as you@gmail.com</div>
+                  <div className="h-px bg-surface-800/60" />
+                  <div className="text-surface-500"># 3. Start the agent</div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200">yaver serve</span>
+                  </div>
+                  <div className="text-surface-500 pl-2">Agent listening on :19835</div>
+                  <div className="text-surface-500 pl-2">Connected to relay (eu-hel)</div>
+                  <div className="text-green-400/80 pl-2">
+                    Ready. Waiting for tasks...
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-2">
+                <p className="text-xs text-surface-500">
+                  Also available via <code className="rounded bg-surface-900 px-1.5 py-0.5 text-surface-400">curl -fsSL https://get.yaver.io | sh</code> or{" "}
+                  <Link href="/download" className="text-surface-300 underline underline-offset-2 hover:text-surface-100">
+                    direct download
+                  </Link>{" "}
+                  for macOS, Windows, and Linux.
+                </p>
+                <p className="text-xs text-surface-500">
+                  The agent runs in the background. Your Claude Code subscription runs locally on this machine &mdash; Yaver just makes it reachable.
+                </p>
+              </div>
+            </div>
+
+            {/* Right: Mobile app setup */}
+            <div>
+              <div className="mb-6 flex items-center gap-3">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-800 text-xs font-bold text-surface-300">
+                  B
+                </span>
+                <h3 className="text-base font-semibold text-surface-50">
+                  On your phone
+                </h3>
+              </div>
+
+              <div className="space-y-4">
+                <div className="card">
+                  <div className="flex items-start gap-4">
+                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-800 text-[11px] font-bold text-surface-400">
+                      1
+                    </span>
+                    <div>
+                      <h4 className="text-sm font-medium text-surface-200">Download the app</h4>
+                      <p className="mt-1 text-xs text-surface-500">
+                        Get Yaver from the App Store or Google Play. It&apos;s free.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="flex items-start gap-4">
+                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-800 text-[11px] font-bold text-surface-400">
+                      2
+                    </span>
+                    <div>
+                      <h4 className="text-sm font-medium text-surface-200">Sign in</h4>
+                      <p className="mt-1 text-xs text-surface-500">
+                        Use the same Apple, Google, or Microsoft account you used on your dev machine. One-tap sign in.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="flex items-start gap-4">
+                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-800 text-[11px] font-bold text-surface-400">
+                      3
+                    </span>
+                    <div>
+                      <h4 className="text-sm font-medium text-surface-200">Start sending tasks</h4>
+                      <p className="mt-1 text-xs text-surface-500">
+                        Your dev machine appears automatically. Tap it, type a task, and Claude starts working. Output streams back live to your phone.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card border-surface-700 bg-surface-850">
+                  <div className="flex items-start gap-4">
+                    <span className="mt-0.5 text-lg">&#9889;</span>
+                    <div>
+                      <h4 className="text-sm font-medium text-surface-200">Works everywhere</h4>
+                      <p className="mt-1 text-xs text-surface-500">
+                        Switch between WiFi and cellular seamlessly &mdash; like WhatsApp.
+                        On the same network? Direct connection. Out and about? Automatic relay.
+                        You don&apos;t have to think about it.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <p className="text-xs text-surface-500">
+                  You can also connect from another terminal with <code className="rounded bg-surface-900 px-1.5 py-0.5 text-surface-400">yaver connect</code> for a remote CLI experience.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* What you can do */}
+          <div className="mt-16">
+            <h3 className="mb-6 text-center text-sm font-semibold uppercase tracking-wider text-surface-500">
+              What you can do from your phone
+            </h3>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                { task: "\"Refactor the auth module to use JWT\"", context: "Large codebase change" },
+                { task: "\"Fix the failing CI tests on main\"", context: "Debug & fix remotely" },
+                { task: "\"Add dark mode to the settings page\"", context: "Feature development" },
+                { task: "\"Review the last 3 PRs and summarize\"", context: "Code review on the go" },
+              ].map((item) => (
+                <div key={item.task} className="rounded-lg border border-surface-800 bg-surface-900/50 px-4 py-3">
+                  <p className="text-xs font-medium text-surface-200">{item.task}</p>
+                  <p className="mt-1 text-[11px] text-surface-500">{item.context}</p>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </section>
@@ -344,17 +452,19 @@ export default function HomePage() {
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="mb-4 text-2xl font-bold text-surface-50 md:text-3xl">
-            Ready to get started?
+            Stop wasting your Claude subscription
           </h2>
-          <p className="mb-4 text-sm text-surface-400">
-            Install in one command and start using Claude from your phone.
+          <p className="mb-8 text-sm leading-relaxed text-surface-400">
+            Install the agent on your dev machine, get the app on your phone.
+            <br />
+            Claude keeps working while you&apos;re away from your desk.
           </p>
           <code className="mb-8 inline-block rounded-lg bg-surface-900 px-5 py-2.5 text-sm text-surface-300">
             brew install kivanccakmak/yaver/yaver
           </code>
           <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Link href="/download" className="btn-primary px-8 py-3.5 text-sm">
-              Download for free
+              Get started free
             </Link>
             <Link href="/pricing" className="btn-secondary px-8 py-3.5 text-sm">
               View pricing
