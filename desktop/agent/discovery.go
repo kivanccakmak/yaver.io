@@ -305,12 +305,17 @@ func writeProjects(sb *strings.Builder) {
 		return projects[i].Path < projects[j].Path
 	})
 
+	sb.WriteString("Only directories with `.git` are listed — these are the user's software projects.\n\n")
+
 	for _, p := range projects {
 		sb.WriteString(fmt.Sprintf("### %s\n", p.Path))
 		sb.WriteString(fmt.Sprintf("- Branch: %s\n", p.Branch))
 		sb.WriteString(fmt.Sprintf("- Last commit: \"%s\"\n", p.LastCommit))
 		if len(p.Languages) > 0 {
 			sb.WriteString(fmt.Sprintf("- Languages: %s\n", strings.Join(p.Languages, ", ")))
+		}
+		if p.ReadmePath != "" {
+			sb.WriteString(fmt.Sprintf("- README: [%s](%s)\n", filepath.Base(p.ReadmePath), p.ReadmePath))
 		}
 		if p.Tree != "" {
 			sb.WriteString("- Structure:\n```\n")
@@ -327,6 +332,7 @@ type projectInfo struct {
 	LastCommit string
 	Languages  []string
 	Tree       string // limited directory tree
+	ReadmePath string // path to copied README in ~/.yaver/projects/
 }
 
 func gatherProjectInfo(repoDir string) projectInfo {
@@ -357,7 +363,69 @@ func gatherProjectInfo(repoDir string) projectInfo {
 	// Directory tree (depth 2, exclude noise dirs, limit to 50 lines)
 	info.Tree = getProjectTree(repoDir)
 
+	// Copy README if exists
+	info.ReadmePath = copyReadme(repoDir)
+
 	return info
+}
+
+// copyReadme copies a project's README to ~/.yaver/projects/<safe-name>.md
+// Returns the destination path, or empty string if no README found.
+func copyReadme(repoDir string) string {
+	// Look for common README filenames
+	candidates := []string{"README.md", "Readme.md", "readme.md", "README.txt", "README", "README.rst"}
+	var readmeSrc string
+	for _, name := range candidates {
+		p := filepath.Join(repoDir, name)
+		if _, err := os.Stat(p); err == nil {
+			readmeSrc = p
+			break
+		}
+	}
+	if readmeSrc == "" {
+		return ""
+	}
+
+	// Also check for CLAUDE.md — copy that too if it exists
+	claudeMdSrc := filepath.Join(repoDir, "CLAUDE.md")
+
+	dir, err := yaverDir()
+	if err != nil {
+		return ""
+	}
+	projectsDir := filepath.Join(dir, "projects")
+	if err := os.MkdirAll(projectsDir, 0700); err != nil {
+		return ""
+	}
+
+	// Create a safe filename from the repo path
+	safeName := strings.ReplaceAll(repoDir, "/", "_")
+	safeName = strings.TrimPrefix(safeName, "_")
+
+	// Copy README
+	readmeDst := filepath.Join(projectsDir, safeName+"_README.md")
+	data, err := os.ReadFile(readmeSrc)
+	if err != nil {
+		return ""
+	}
+	// Limit README to 10KB to avoid bloating context
+	if len(data) > 10*1024 {
+		data = append(data[:10*1024], []byte("\n\n... (truncated at 10KB)")...)
+	}
+	if err := os.WriteFile(readmeDst, data, 0600); err != nil {
+		return ""
+	}
+
+	// Copy CLAUDE.md if exists
+	if claudeData, err := os.ReadFile(claudeMdSrc); err == nil {
+		claudeDst := filepath.Join(projectsDir, safeName+"_CLAUDE.md")
+		if len(claudeData) > 10*1024 {
+			claudeData = append(claudeData[:10*1024], []byte("\n\n... (truncated at 10KB)")...)
+		}
+		os.WriteFile(claudeDst, claudeData, 0600)
+	}
+
+	return readmeDst
 }
 
 // getProjectTree returns a limited directory tree for a project.
