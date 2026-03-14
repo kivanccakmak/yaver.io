@@ -1,7 +1,28 @@
 import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const TOKEN_KEY = "yaver_auth_token";
 const USER_KEY = "yaver_user";
+const INSTALLED_FLAG = "yaver_installed";
+
+/**
+ * On iOS, Keychain data survives app uninstall/reinstall.
+ * AsyncStorage (backed by NSUserDefaults/files) does NOT survive uninstall.
+ * So we use an AsyncStorage flag to detect fresh installs and wipe stale Keychain tokens.
+ */
+export async function clearKeychainIfFreshInstall(): Promise<void> {
+  try {
+    const installed = await AsyncStorage.getItem(INSTALLED_FLAG);
+    if (!installed) {
+      // Fresh install — wipe any leftover Keychain data
+      await SecureStore.deleteItemAsync(TOKEN_KEY);
+      await SecureStore.deleteItemAsync(USER_KEY);
+      await AsyncStorage.setItem(INSTALLED_FLAG, "1");
+    }
+  } catch {
+    // Best-effort
+  }
+}
 
 export type OAuthProvider = "google" | "microsoft" | "apple";
 
@@ -173,6 +194,31 @@ export async function getSurveyStatus(
     return { completed: false };
   }
   return response.json();
+}
+
+export interface UserSettings {
+  forceRelay?: boolean;
+}
+
+export async function getUserSettings(token: string): Promise<UserSettings> {
+  try {
+    const res = await fetch(`${getConvexSiteUrl()}/settings`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return {};
+    const data = await res.json();
+    return data.settings || {};
+  } catch {
+    return {};
+  }
+}
+
+export async function saveUserSettings(token: string, settings: Partial<UserSettings>): Promise<void> {
+  await fetch(`${getConvexSiteUrl()}/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(settings),
+  }).catch(() => {});
 }
 
 export async function deleteAccount(): Promise<boolean> {

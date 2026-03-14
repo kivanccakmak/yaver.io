@@ -15,6 +15,7 @@ import {
   clearToken,
   validateToken,
   getSurveyStatus,
+  clearKeychainIfFreshInstall,
 } from "../lib/auth";
 
 interface AuthState {
@@ -41,6 +42,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
+        // Wipe stale Keychain tokens on fresh install (iOS Keychain survives uninstall)
+        await clearKeychainIfFreshInstall();
         const storedToken = await getToken();
         if (storedToken) {
           // Always validate token remotely to ensure session is still valid

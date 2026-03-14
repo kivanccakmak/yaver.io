@@ -19,8 +19,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
-import { deleteAccount as deleteAccountApi, updateProfile } from "../../src/lib/auth";
+import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings } from "../../src/lib/auth";
 import { clearCache } from "../../src/lib/storage";
+import * as ExpoClipboard from "expo-clipboard";
+import { getLogEntries, clearLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
+import { quicClient } from "../../src/lib/quic";
 import {
   type SubscriptionStatus,
   getSubscriptionStatus,
@@ -49,6 +52,25 @@ export default function SettingsScreen() {
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
   const [isLoadingSubscription, setIsLoadingSubscription] = useState(true);
   const [isOpeningPortal, setIsOpeningPortal] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>(getLogEntries());
+  const [forceRelay, setForceRelay] = useState(quicClient.forceRelay);
+
+  // Load user settings from Convex
+  useEffect(() => {
+    if (!token) return;
+    getUserSettings(token).then((s) => {
+      if (s.forceRelay !== undefined) {
+        setForceRelay(s.forceRelay);
+        quicClient.setForceRelay(s.forceRelay);
+      }
+    });
+  }, [token]);
+
+  // Subscribe to live log updates
+  useEffect(() => {
+    return onLogsChanged(() => setLogs(getLogEntries()));
+  }, []);
 
   const fetchSubscription = useCallback(async () => {
     if (!token) {
@@ -370,6 +392,80 @@ export default function SettingsScreen() {
           </Pressable>
         </View>
 
+        {/* Logs */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Diagnostics</Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.actionRow,
+              { backgroundColor: c.bgCard, borderColor: c.border },
+              pressed && styles.actionRowPressed,
+            ]}
+            onPress={() => setShowLogs(!showLogs)}
+          >
+            <Text style={[styles.actionRowLabel, { color: c.textPrimary }]}>
+              Connection Logs ({logs.length})
+            </Text>
+            <Text style={[styles.actionRowChevron, { color: c.textMuted }]}>{showLogs ? "\u2303" : "\u2304"}</Text>
+          </Pressable>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 8 }]}>
+            <View style={styles.themeRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Force Relay</Text>
+                <Text style={[{ fontSize: 12, color: c.textMuted, marginTop: 2 }]}>
+                  Skip direct connection, always use relay server
+                </Text>
+              </View>
+              <Switch
+                value={forceRelay}
+                onValueChange={(v) => {
+                  setForceRelay(v);
+                  quicClient.setForceRelay(v);
+                  if (token) saveUserSettings(token, { forceRelay: v });
+                  if (activeDevice) {
+                    disconnect();
+                    Alert.alert("Relay Mode Changed", "Disconnect and reconnect to apply.");
+                  }
+                }}
+                trackColor={{ false: c.border, true: c.accent }}
+                thumbColor="#ffffff"
+              />
+            </View>
+          </View>
+
+          {showLogs && (
+            <View style={[styles.logsContainer, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+              <View style={styles.logsActions}>
+                <Pressable onPress={() => {
+                  const text = logs.map(l =>
+                    `${new Date(l.timestamp).toLocaleTimeString()} [${l.level}] ${l.message}`
+                  ).join("\n");
+                  ExpoClipboard.setStringAsync(text);
+                  Alert.alert("Copied", "Logs copied to clipboard.");
+                }}>
+                  <Text style={[styles.logsActionBtn, { color: c.accent }]}>Copy All</Text>
+                </Pressable>
+                <Pressable onPress={() => { clearLogEntries(); }}>
+                  <Text style={[styles.logsActionBtn, { color: c.error }]}>Clear</Text>
+                </Pressable>
+              </View>
+              <ScrollView style={styles.logsScroll} nestedScrollEnabled>
+                {logs.length === 0 ? (
+                  <Text style={[styles.logEmpty, { color: c.textMuted }]}>No logs yet.</Text>
+                ) : (
+                  logs.slice().reverse().map((entry, i) => (
+                    <Text key={i} style={[styles.logLine, {
+                      color: entry.level === "error" ? c.error : entry.level === "warn" ? "#eab308" : c.textSecondary,
+                    }]}>
+                      {new Date(entry.timestamp).toLocaleTimeString()} {entry.message}
+                    </Text>
+                  ))
+                )}
+              </ScrollView>
+            </View>
+          )}
+        </View>
+
         {/* About */}
         <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: c.textMuted }]}>About</Text>
@@ -651,6 +747,26 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginBottom: 12,
   },
+  // Logs
+  logsContainer: {
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 8,
+    overflow: "hidden",
+  },
+  logsActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 16,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 6,
+  },
+  logsActionBtn: { fontSize: 13, fontWeight: "600" },
+  logsScroll: { maxHeight: 300, paddingHorizontal: 12, paddingBottom: 12 },
+  logLine: { fontSize: 11, fontFamily: "monospace", lineHeight: 16, marginBottom: 1 },
+  logEmpty: { fontSize: 13, textAlign: "center", paddingVertical: 20 },
+
   deleteAccountButton: {
     borderRadius: 12,
     borderWidth: 1,

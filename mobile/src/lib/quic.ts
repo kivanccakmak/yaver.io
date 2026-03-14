@@ -71,6 +71,7 @@ export class QuicClient {
   private deviceId: string | null = null;
   private relayServers: RelayServer[] = [];  // all available relay servers
   private activeRelayUrl: string | null = null; // currently working relay base URL
+  private _forceRelay = false; // skip direct connection attempts
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -107,6 +108,18 @@ export class QuicClient {
     return this._connectionMode;
   }
 
+  get relayServerCount(): number {
+    return this.relayServers.length;
+  }
+
+  get forceRelay(): boolean {
+    return this._forceRelay;
+  }
+
+  setForceRelay(value: boolean): void {
+    this._forceRelay = value;
+  }
+
   // ── Connection lifecycle ───────────────────────────────────────────
 
   /**
@@ -128,13 +141,12 @@ export class QuicClient {
   disconnect(): void {
     this.clearTimers();
     this.setConnectionState("disconnected");
+    this.setConnectionMode(null);
     this.host = null;
     this.port = null;
     this.token = null;
     this.deviceId = null;
     this.activeRelayUrl = null;
-    this._connectionMode = null;
-    this.listeners = { output: [], connectionState: [], connectionMode: [] };
   }
 
   // ── Task API ───────────────────────────────────────────────────────
@@ -327,8 +339,13 @@ export class QuicClient {
     return { Authorization: `Bearer ${this.token}` };
   }
 
+  /** True when we have enough info to attempt API calls (even during reconnection). */
+  private get hasConnectionInfo(): boolean {
+    return !!(this.host && this.port && this.token);
+  }
+
   private assertConnected(): void {
-    if (!this.isConnected) {
+    if (!this.isConnected && !this.hasConnectionInfo) {
       throw new Error("QuicClient is not connected. Call connect() first.");
     }
   }
@@ -380,50 +397,71 @@ export class QuicClient {
 
   // ── Connection + reconnection ──────────────────────────────────────
 
+  /** Create a fetch with a manual timeout (AbortSignal.timeout may not exist in Hermes). */
+  private fetchWithTimeout(url: string, opts: RequestInit, timeoutMs: number): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+  }
+
   private async attemptConnect(): Promise<void> {
     this.setConnectionState("connecting");
+    this._connectionMode = null; // Reset so it's properly set by the winning path
     try {
       let connected = false;
 
-      // 1. Try direct connection first (lowest latency)
-      try {
-        const directUrl = `http://${this.host}:${this.port}`;
-        const res = await fetch(`${directUrl}/health`, {
-          headers: this.authHeaders,
-          signal: AbortSignal.timeout(3000),
-        });
-        if (res.ok) {
-          this.activeRelayUrl = null;
-          this.setConnectionMode("direct");
-          connected = true;
+      // 1. Try direct connection first (lowest latency) — skip if forceRelay
+      if (!this._forceRelay) {
+        try {
+          const directUrl = `http://${this.host}:${this.port}`;
+          console.log("[QUIC] Trying direct:", directUrl);
+          const res = await this.fetchWithTimeout(`${directUrl}/health`, {
+            headers: this.authHeaders,
+          }, 3000);
+          if (res.ok) {
+            this.activeRelayUrl = null;
+            this.setConnectionMode("direct");
+            connected = true;
+            console.log("[QUIC] Direct connection succeeded");
+          }
+        } catch (e) {
+          console.log("[QUIC] Direct failed:", e);
         }
-      } catch {
-        // Direct failed — try relay servers
+      } else {
+        console.log("[QUIC] Skipping direct (force relay enabled)");
       }
 
       // 2. Try relay servers in priority order
       if (!connected && this.deviceId) {
+        console.log("[QUIC] Trying", this.relayServers.length, "relay server(s)");
         for (const relay of this.relayServers) {
           try {
             const relayDeviceUrl = `${relay.httpUrl}/d/${this.deviceId}`;
-            const res = await fetch(`${relayDeviceUrl}/health`, {
+            console.log("[QUIC] Trying relay:", relay.id, relayDeviceUrl);
+            const res = await this.fetchWithTimeout(`${relayDeviceUrl}/health`, {
               headers: this.authHeaders,
-              signal: AbortSignal.timeout(5000),
-            });
+            }, 5000);
             if (res.ok) {
               this.activeRelayUrl = relay.httpUrl;
               this.setConnectionMode("relay");
               connected = true;
+              console.log("[QUIC] Relay connection succeeded via", relay.id);
               break;
             }
-          } catch {
-            // This relay failed, try next
+          } catch (e) {
+            console.log("[QUIC] Relay", relay.id, "failed:", e);
           }
         }
       }
 
       if (!connected) {
         throw new Error("Could not reach agent (direct or via relay)");
+      }
+
+      // Defensive: ensure connectionMode is set based on activeRelayUrl
+      if (this._connectionMode === null) {
+        this._connectionMode = this.activeRelayUrl ? "relay" : "direct";
+        console.log("[QUIC] Mode was null after connect, inferred:", this._connectionMode);
       }
 
       this.reconnectAttempt = 0;
@@ -513,8 +551,8 @@ export class QuicClient {
             cacheTaskOutput(t.id, lines);
           }
         }
-      } catch {
-        // Polling failure — check if connection is lost
+      } catch (e) {
+        console.warn("[QUIC] Polling failed, triggering reconnect:", e);
         this.setConnectionState("error");
         this.clearTimers();
         this.scheduleReconnect();

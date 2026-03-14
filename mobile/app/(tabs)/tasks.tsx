@@ -21,6 +21,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Markdown from "react-native-markdown-display";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useColors } from "../../src/context/ThemeContext";
+import * as ExpoClipboard from "expo-clipboard";
+import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
 import {
   ConnectionMode,
   ConnectionState,
@@ -233,7 +235,14 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
 
 export default function TasksScreen() {
   const c = useColors();
-  const { connectionStatus, activeDevice } = useDevice();
+  const { connectionStatus, activeDevice, devices, userDisconnected, lastError, selectDevice, isLoadingDevices, refreshDevices } = useDevice();
+  const [showLogs, setShowLogs] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>(getLogEntries());
+
+  // Subscribe to log changes
+  useEffect(() => {
+    return onLogsChanged(() => setLogs(getLogEntries()));
+  }, []);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [showNewTask, setShowNewTask] = useState(false);
@@ -388,7 +397,12 @@ export default function TasksScreen() {
 
   const handleDeleteTask = async (taskId: string) => {
     setTasks((prev) => prev.filter((t) => t.id !== taskId));
-    try { await quicClient.deleteTask(taskId); } catch { await fetchTasks(); }
+    try {
+      await quicClient.deleteTask(taskId);
+    } catch (e) {
+      console.warn("[Tasks] Delete failed:", e);
+      await fetchTasks();
+    }
   };
 
   const handleStopAll = async () => {
@@ -445,17 +459,99 @@ export default function TasksScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.accent} colors={[c.accent]} progressBackgroundColor={c.bgCard} />
           }
           ListEmptyComponent={
-            <View style={s.emptyList}>
-              <Text style={[s.emptyIcon, { color: c.textMuted }]}>{"[ ]"}</Text>
-              <Text style={[s.emptyTitle, { color: c.textPrimary }]}>
-                {!isEffectivelyConnected ? "No Device Connected" : "All Clear"}
-              </Text>
-              <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>
-                {!isEffectivelyConnected
-                  ? "Go to the Devices tab to connect to your desktop agent."
-                  : "No tasks yet. Tap the + button to create your first task."}
-              </Text>
-            </View>
+            isEffectivelyConnected ? (
+              <View style={s.emptyList}>
+                <Text style={[s.emptyIcon, { color: c.textMuted }]}>{"[ ]"}</Text>
+                <Text style={[s.emptyTitle, { color: c.textPrimary }]}>All Clear</Text>
+                <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>
+                  No tasks yet. Tap the + button to create your first task.
+                </Text>
+              </View>
+            ) : isLoadingDevices ? (
+              <View style={s.emptyList}>
+                <ActivityIndicator size="large" color={c.accent} />
+                <Text style={[s.emptySubtitle, { color: c.textSecondary, marginTop: 16 }]}>
+                  Looking for devices...
+                </Text>
+              </View>
+            ) : devices.length === 0 ? (
+              <View style={s.emptyList}>
+                <Text style={[s.emptyIcon, { color: c.textMuted }]}>{"{ }"}</Text>
+                <Text style={[s.emptyTitle, { color: c.textPrimary }]}>No Devices Found</Text>
+                <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>
+                  Install and run the Yaver agent on your dev machine. Go to the Devices tab for setup instructions.
+                </Text>
+              </View>
+            ) : userDisconnected && devices.length === 1 ? (
+              <View style={s.emptyList}>
+                <Text style={[s.emptyIcon, { color: c.textMuted }]}>{"\u23FB"}</Text>
+                <Text style={[s.emptyTitle, { color: c.textPrimary }]}>Disconnected</Text>
+                <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>
+                  You disconnected from {devices[0].name}.
+                </Text>
+                <Pressable
+                  style={[s.inlineConnectBtn, { backgroundColor: c.accent }]}
+                  onPress={() => selectDevice(devices[0])}
+                >
+                  <Text style={s.inlineConnectText}>Reconnect</Text>
+                </Pressable>
+              </View>
+            ) : connectionStatus === "error" && lastError ? (
+              <View style={s.emptyList}>
+                <Text style={[s.emptyIcon, { color: "#ef4444" }]}>!</Text>
+                <Text style={[s.emptyTitle, { color: c.textPrimary }]}>Connection Failed</Text>
+                <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>
+                  {lastError}
+                </Text>
+                <View style={s.errorActions}>
+                  <Pressable
+                    style={[s.inlineConnectBtn, { backgroundColor: c.accent }]}
+                    onPress={() => { if (devices.length === 1) selectDevice(devices[0]); }}
+                  >
+                    <Text style={s.inlineConnectText}>Retry</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[s.inlineConnectBtn, { backgroundColor: c.bgCardElevated || "#222", marginLeft: 10 }]}
+                    onPress={() => setShowLogs(true)}
+                  >
+                    <Text style={[s.inlineConnectText, { color: c.textSecondary }]}>View Logs</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : devices.length === 1 && connectionStatus === "connecting" ? (
+              <View style={s.emptyList}>
+                <ActivityIndicator size="large" color={c.accent} />
+                <Text style={[s.emptyTitle, { color: c.textPrimary, marginTop: 16 }]}>Connecting...</Text>
+                <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>
+                  {devices[0].name}
+                </Text>
+              </View>
+            ) : devices.length >= 1 && !activeDevice ? (
+              <View style={s.emptyList}>
+                <Text style={[s.emptyIcon, { color: c.textMuted }]}>{"\u2630"}</Text>
+                <Text style={[s.emptyTitle, { color: c.textPrimary }]}>
+                  {devices.length} Devices Available
+                </Text>
+                <Text style={[s.emptySubtitle, { color: c.textSecondary, marginBottom: 16 }]}>
+                  Which device do you want to connect to?
+                </Text>
+                {devices.map((d) => (
+                  <Pressable
+                    key={d.id}
+                    style={[s.devicePickerCard, { backgroundColor: c.bgCard, borderColor: c.border }]}
+                    onPress={() => selectDevice(d)}
+                  >
+                    <View style={s.devicePickerRow}>
+                      <View>
+                        <Text style={[s.devicePickerName, { color: c.textPrimary }]}>{d.name}</Text>
+                        <Text style={[s.devicePickerMeta, { color: c.textMuted }]}>{d.os} · {d.host}</Text>
+                      </View>
+                      <View style={[s.devicePickerDot, { backgroundColor: d.online ? c.success || "#22c55e" : c.textMuted }]} />
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null
           }
           renderItem={({ item }) => (
             <TaskCard
@@ -599,6 +695,42 @@ export default function TasksScreen() {
             )}
           </KeyboardAvoidingView>
         </Modal>
+        {/* ── Logs Modal ─────────────────────────────────────────── */}
+        <Modal visible={showLogs} animationType="slide" transparent onRequestClose={() => setShowLogs(false)}>
+          <View style={s.logsModalOverlay}>
+            <Pressable style={{ height: 80 }} onPress={() => setShowLogs(false)} />
+            <View style={[s.logsModal, { backgroundColor: c.bg }]}>
+              <View style={[s.logsHeader, { borderBottomColor: c.border }]}>
+                <Text style={[s.logsTitle, { color: c.textPrimary }]}>Connection Logs</Text>
+                <View style={s.logsHeaderActions}>
+                  <Pressable onPress={() => {
+                    const text = logs.map(l => `${new Date(l.timestamp).toLocaleTimeString()} [${l.level}] ${l.message}`).join("\n");
+                    ExpoClipboard.setStringAsync(text);
+                    Alert.alert("Copied", "Logs copied to clipboard.");
+                  }}>
+                    <Text style={[s.logsActionText, { color: c.accent }]}>Copy</Text>
+                  </Pressable>
+                  <Pressable onPress={() => setShowLogs(false)} style={{ marginLeft: 16 }}>
+                    <Text style={[s.logsActionText, { color: c.textMuted }]}>Close</Text>
+                  </Pressable>
+                </View>
+              </View>
+              <ScrollView style={s.logsScroll} contentContainerStyle={s.logsScrollContent}>
+                {logs.length === 0 ? (
+                  <Text style={[s.logsEmpty, { color: c.textMuted }]}>No logs yet.</Text>
+                ) : (
+                  logs.slice().reverse().map((entry, i) => (
+                    <Text key={i} style={[s.logLine, {
+                      color: entry.level === "error" ? "#ef4444" : entry.level === "warn" ? "#eab308" : c.textSecondary,
+                    }]}>
+                      {new Date(entry.timestamp).toLocaleTimeString()} {entry.message}
+                    </Text>
+                  ))
+                )}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
       </View>
     </SafeAreaView>
   );
@@ -622,6 +754,32 @@ const s = StyleSheet.create({
   emptyIcon: { fontSize: 48, marginBottom: 16 },
   emptyTitle: { fontSize: 20, fontWeight: "700", marginBottom: 8 },
   emptySubtitle: { fontSize: 14, textAlign: "center", lineHeight: 20 },
+
+  // Inline connect button (reconnect after user disconnect)
+  inlineConnectBtn: { marginTop: 20, paddingHorizontal: 28, paddingVertical: 12, borderRadius: 10 },
+  inlineConnectText: { color: "#ffffff", fontWeight: "600", fontSize: 15 },
+
+  // Device picker cards (multi-device selection)
+  devicePickerCard: { width: "100%", borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 10 },
+  devicePickerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  devicePickerName: { fontSize: 16, fontWeight: "600" },
+  devicePickerMeta: { fontSize: 12, marginTop: 2 },
+  devicePickerDot: { width: 10, height: 10, borderRadius: 5 },
+
+  // Error actions row
+  errorActions: { flexDirection: "row", marginTop: 20 },
+
+  // Logs modal
+  logsModalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)" },
+  logsModal: { flex: 1, borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: "hidden" },
+  logsHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
+  logsTitle: { fontSize: 16, fontWeight: "700" },
+  logsHeaderActions: { flexDirection: "row", alignItems: "center" },
+  logsActionText: { fontSize: 15, fontWeight: "600" },
+  logsScroll: { flex: 1 },
+  logsScrollContent: { padding: 12 },
+  logsEmpty: { fontSize: 14, textAlign: "center", marginTop: 40 },
+  logLine: { fontSize: 11, fontFamily: "monospace", lineHeight: 16, marginBottom: 2 },
 
   // Task card
   cardContainer: { marginBottom: 12 },

@@ -111,4 +111,22 @@ export default defineSchema({
     details: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_createdAt", ["createdAt"]),
+
+  userSettings: defineTable({
+    userId: v.id("users"),
+    forceRelay: v.optional(v.boolean()),
+  }).index("by_userId", ["userId"]),
+
+  mobileStreamLogs: defineTable({
+    userId: v.optional(v.string()),
+    platform: v.string(),
+    appVersion: v.string(),
+    buildNumber: v.string(),
+    level: v.union(v.literal("info"), v.literal("error"), v.literal("warn")),
+    step: v.string(),
+    message: v.string(),
+    details: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_createdAt", ["createdAt"])
+    .index("by_userId", ["userId", "createdAt"]),
 });

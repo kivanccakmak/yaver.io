@@ -805,6 +805,65 @@ http.route({
   }),
 });
 
+// ── User Settings ───────────────────────────────────────────────────
+
+http.route({
+  path: "/settings",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const user = await authenticateRequest(ctx, request);
+    if (!user) return errorResponse("Unauthorized", 401);
+    const settings = await ctx.runQuery(api.userSettings.get, { userId: user.userId as any });
+    return jsonResponse({ ok: true, settings: settings || { forceRelay: false } });
+  }),
+});
+
+http.route({
+  path: "/settings",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const user = await authenticateRequest(ctx, request);
+    if (!user) return errorResponse("Unauthorized", 401);
+    const body = await request.json();
+    await ctx.runMutation(api.userSettings.set, {
+      userId: user.userId as any,
+      forceRelay: body.forceRelay ?? false,
+    });
+    return jsonResponse({ ok: true });
+  }),
+});
+
+// ── Mobile Stream Logs ──────────────────────────────────────────────
+
+http.route({
+  path: "/mobile/log",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const body = await request.json();
+      // Best-effort user identification
+      let userId: string | undefined;
+      const user = await authenticateRequest(ctx, request);
+      if (user) userId = user.userId;
+
+      await ctx.runMutation(api.mobileStreamLogs.writeLog, {
+        userId,
+        platform: body.platform || "unknown",
+        appVersion: body.appVersion || "unknown",
+        buildNumber: body.buildNumber || "unknown",
+        level: body.level || "info",
+        step: body.step || "unknown",
+        message: body.message || "",
+        details: body.details ? String(body.details).slice(0, 2000) : undefined,
+      });
+      return jsonResponse({ ok: true });
+    } catch (e) {
+      console.error("Mobile log error:", e);
+      return jsonResponse({ ok: false }, 500);
+    }
+  }),
+});
+
 // ── Download Endpoints ──────────────────────────────────────────────
 
 /** GET /downloads/list — List all available downloads (public, no auth). */
