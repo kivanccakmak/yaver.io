@@ -59,6 +59,10 @@ func main() {
 		runConfig()
 	case "set-runner":
 		runSetRunner(os.Args[2:])
+	case "discover":
+		discoverProjects()
+		fp, _ := projectsFilePath()
+		fmt.Printf("Project discovery complete: %s\n", fp)
 	case "uninstall":
 		runUninstall()
 	case "help", "--help", "-h":
@@ -535,10 +539,38 @@ func runServe(args []string) {
 		log.Printf("warning: could not write PID file: %v", err)
 	}
 
-	// Resolve runner config (fetch user settings, fall back to default)
+	// Resolve runner config (fetch user settings, fall back to auto-detect)
 	runner := resolveRunner(cfg.ConvexSiteURL, cfg.AuthToken)
+
+	// If no runner was explicitly set by user, auto-detect available agents
+	if runner.AutoDetected {
+		// Check if the resolved runner's binary actually exists
+		if _, err := osexec.LookPath(runner.Command); err != nil {
+			// Claude not found — try codex, then aider
+			if codexPath, err := osexec.LookPath("codex"); err == nil {
+				log.Printf("Runner: claude not found, detected codex at %s", codexPath)
+				if r, err := fetchRunner(&http.Client{Timeout: 5 * time.Second}, cfg.ConvexSiteURL, "codex"); err == nil {
+					runner = r
+				}
+			} else if aiderPath, err := osexec.LookPath("aider"); err == nil {
+				log.Printf("Runner: claude not found, detected aider at %s", aiderPath)
+				if r, err := fetchRunner(&http.Client{Timeout: 5 * time.Second}, cfg.ConvexSiteURL, "aider"); err == nil {
+					runner = r
+				}
+			} else {
+				log.Printf("WARNING: No AI agent found (claude, codex, aider). Install one to run tasks.")
+				log.Printf("  Claude Code: https://docs.anthropic.com/en/docs/claude-code")
+				log.Printf("  OpenAI Codex: https://github.com/openai/codex")
+				log.Printf("  Aider: https://aider.chat")
+				log.Printf("  Or set a custom command: yaver set-runner custom \"your-command {prompt}\"")
+				log.Printf("Agent will start but tasks will fail until an AI agent is available.")
+			}
+		}
+	}
 	log.Printf("Runner: %s (command=%s, mode=%s)", runner.Name, runner.Command, runner.OutputMode)
 
+	// Discover local projects in background (scans home dir for git repos, system info, tools)
+	log.Printf("Scanning for local projects (stored in ~/.yaver/PROJECTS.md, never uploaded)...")
 	go ensureProjectDiscovery()
 
 	// Task store and manager
@@ -1151,9 +1183,11 @@ func resolveRunner(convexSiteURL, token string) RunnerConfig {
 		return defaultRunner
 	}
 
-	// No runner configured — use default
+	// No runner configured — use default but mark as auto-detected
 	if settings.RunnerID == "" {
-		return defaultRunner
+		r := defaultRunner
+		r.AutoDetected = true
+		return r
 	}
 
 	// Custom runner: wrap in sh -c with {prompt} placeholder

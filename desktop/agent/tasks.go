@@ -35,6 +35,7 @@ type RunnerConfig struct {
 	OutputMode      string   `json:"outputMode"` // "stream-json" or "raw"
 	ResumeSupported bool     `json:"resumeSupported"`
 	ResumeArgs      []string `json:"resumeArgs,omitempty"`
+	AutoDetected    bool     `json:"-"` // true if user never explicitly chose a runner
 }
 
 var defaultRunner = RunnerConfig{

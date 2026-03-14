@@ -93,8 +93,16 @@ func discoverProjects() {
 
 	// --- Available Tools ---
 	sb.WriteString("## Available Tools\n")
-	writeAvailableTools(&sb)
+	hasAgent := writeAvailableTools(&sb)
 	sb.WriteString("\n")
+
+	if !hasAgent {
+		sb.WriteString("## Warning\n")
+		sb.WriteString("No supported AI agent found (claude, codex, aider). Install one to run tasks.\n")
+		sb.WriteString("- Claude Code: https://docs.anthropic.com/en/docs/claude-code\n")
+		sb.WriteString("- OpenAI Codex: https://github.com/openai/codex\n")
+		sb.WriteString("- Aider: https://aider.chat\n\n")
+	}
 
 	// --- Projects ---
 	sb.WriteString("## Projects\n")
@@ -183,7 +191,9 @@ func getRAM() string {
 }
 
 // writeAvailableTools checks for known binaries and writes their paths/versions.
-func writeAvailableTools(sb *strings.Builder) {
+// Returns true if at least one AI agent (claude, codex, aider) was found.
+func writeAvailableTools(sb *strings.Builder) bool {
+	aiAgents := map[string]bool{"claude": false, "codex": false, "aider": false}
 	tools := []struct {
 		name       string
 		versionCmd []string // command to get version, empty = no version check
@@ -219,6 +229,11 @@ func writeAvailableTools(sb *strings.Builder) {
 			continue
 		}
 
+		// Track AI agents
+		if _, isAgent := aiAgents[binName]; isAgent {
+			aiAgents[binName] = true
+		}
+
 		version := ""
 		if t.versionCmd != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -240,6 +255,13 @@ func writeAvailableTools(sb *strings.Builder) {
 			sb.WriteString(fmt.Sprintf("- %s: %s\n", binName, path))
 		}
 	}
+
+	for _, found := range aiAgents {
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 // writeProjects discovers git repos and writes project info.
@@ -290,6 +312,11 @@ func writeProjects(sb *strings.Builder) {
 		if len(p.Languages) > 0 {
 			sb.WriteString(fmt.Sprintf("- Languages: %s\n", strings.Join(p.Languages, ", ")))
 		}
+		if p.Tree != "" {
+			sb.WriteString("- Structure:\n```\n")
+			sb.WriteString(p.Tree)
+			sb.WriteString("\n```\n")
+		}
 		sb.WriteString("\n")
 	}
 }
@@ -299,6 +326,7 @@ type projectInfo struct {
 	Branch     string
 	LastCommit string
 	Languages  []string
+	Tree       string // limited directory tree
 }
 
 func gatherProjectInfo(repoDir string) projectInfo {
@@ -326,7 +354,62 @@ func gatherProjectInfo(repoDir string) projectInfo {
 		info.Languages = detectLanguages(string(out))
 	}
 
+	// Directory tree (depth 2, exclude noise dirs, limit to 50 lines)
+	info.Tree = getProjectTree(repoDir)
+
 	return info
+}
+
+// getProjectTree returns a limited directory tree for a project.
+// Uses find with depth 2, excludes common noise directories, caps at 50 lines.
+func getProjectTree(repoDir string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Use find instead of tree (tree may not be installed)
+	// Exclude common noise directories
+	// Use -prune to skip noisy directories entirely (faster than -not -path)
+	cmd := exec.CommandContext(ctx, "find", repoDir,
+		"-maxdepth", "2",
+		"(", "-name", ".git", "-o", "-name", "node_modules", "-o", "-name", "vendor",
+		"-o", "-name", "__pycache__", "-o", "-name", ".next", "-o", "-name", ".expo",
+		"-o", "-name", ".cache", "-o", "-name", ".gradle", "-o", "-name", "Pods",
+		"-o", "-name", ".dart_tool", "-o", "-name", ".DS_Store",
+		")", "-prune", "-o",
+		"(", "-type", "f", "-o", "-type", "d", ")", "-print",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+
+	// Make paths relative to repoDir
+	var relative []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || line == repoDir {
+			continue
+		}
+		rel, err := filepath.Rel(repoDir, line)
+		if err != nil {
+			continue
+		}
+		relative = append(relative, rel)
+	}
+
+	sort.Strings(relative)
+
+	// Limit to 50 entries
+	if len(relative) > 50 {
+		relative = append(relative[:50], fmt.Sprintf("... and %d more", len(relative)-50))
+	}
+
+	if len(relative) == 0 {
+		return ""
+	}
+	return strings.Join(relative, "\n")
 }
 
 // detectLanguages examines file extensions and returns a deduplicated list of languages.
