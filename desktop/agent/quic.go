@@ -31,6 +31,7 @@ type IncomingMessage struct {
 	Description string `json:"description,omitempty"`
 	TaskID      string `json:"taskId,omitempty"`
 	Input       string `json:"input,omitempty"`
+	Source      string `json:"source,omitempty"` // "mobile" or "cli"
 }
 
 // OutgoingMessage is a JSON message sent back to the mobile client.
@@ -179,7 +180,11 @@ func (s *QUICServer) handleStream(ctx context.Context, stream quic.Stream, authe
 }
 
 func (s *QUICServer) handleTaskCreate(stream quic.Stream, msg IncomingMessage) {
-	task, err := s.taskManager.CreateTask(msg.Title, msg.Description)
+	source := msg.Source
+	if source == "" {
+		source = "mobile"
+	}
+	task, err := s.taskManager.CreateTask(msg.Title, msg.Description, "", source)
 	if err != nil {
 		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: err.Error()})
 		return

@@ -186,6 +186,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Title       string `json:"title"`
 		Description string `json:"description"`
+		Model       string `json:"model"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -196,13 +197,13 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.taskMgr.CreateTask(body.Title, body.Description)
+	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "mobile")
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create task: %v", err))
 		return
 	}
 
-	log.Printf("[HTTP] Task created: %s — %s (status: %s)", task.ID, task.Title, task.Status)
+	log.Printf("[HTTP] Task created: %s — %s (status: %s, model: %s)", task.ID, task.Title, task.Status, body.Model)
 	resp := map[string]interface{}{
 		"ok":     true,
 		"taskId": task.ID,
@@ -677,7 +678,7 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		if args.Prompt == "" {
 			return mcpToolError("prompt is required")
 		}
-		task, err := s.taskMgr.CreateTask(args.Prompt, "")
+		task, err := s.taskMgr.CreateTask(args.Prompt, "", "", "mcp")
 		if err != nil {
 			return mcpToolError(fmt.Sprintf("failed to create task: %v", err))
 		}

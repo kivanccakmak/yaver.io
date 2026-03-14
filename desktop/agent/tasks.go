@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +50,7 @@ var defaultRunner = RunnerConfig{
 		"--output-format", "stream-json",
 		"--verbose",
 		"--include-partial-messages",
+		"--model", "sonnet",
 		"--tools", "Bash",
 		"--dangerously-skip-permissions",
 	},
@@ -140,6 +143,8 @@ type Task struct {
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
 	Status      TaskStatus `json:"status"`
+	Source      string     `json:"source,omitempty"` // "mobile", "mcp", "cli"
+	Model       string     `json:"model,omitempty"`
 	SessionID   string     `json:"session_id,omitempty"`
 	Output      string     `json:"output"`
 	ResultText   string  // Extracted clean result text from Claude
@@ -188,12 +193,23 @@ func NewTaskManager(workDir string, store *TaskStore, runner RunnerConfig) *Task
 	if store != nil {
 		tasks = store.Load()
 	}
-	return &TaskManager{
+	// Mark orphaned "running" tasks as failed — they have no live process after restart.
+	now := time.Now()
+	for _, t := range tasks {
+		if t.Status == TaskStatusRunning {
+			log.Printf("[task %s] Marking orphaned task as failed (was running before restart)", t.ID)
+			t.Status = TaskStatusFailed
+			t.FinishedAt = &now
+		}
+	}
+	tm := &TaskManager{
 		tasks:   tasks,
 		workDir: workDir,
 		store:   store,
 		runner:  runner,
 	}
+	tm.persist()
+	return tm
 }
 
 // persist saves the current task map to disk if a store is configured.
@@ -204,8 +220,13 @@ func (tm *TaskManager) persist() {
 	}
 }
 
-// CreateTask creates a new task and runs Claude CLI with stream-json RPC mode.
-func (tm *TaskManager) CreateTask(title, description string) (*Task, error) {
+// CreateTask creates a new task and runs the configured runner.
+// model overrides the default model (e.g. "opus", "sonnet", "haiku") — empty uses runner default.
+// source indicates where the task originated: "mobile", "mcp", or "cli" — defaults to "mobile".
+func (tm *TaskManager) CreateTask(title, description, model, source string) (*Task, error) {
+	if source == "" {
+		source = "mobile"
+	}
 	id := uuid.New().String()[:8]
 
 	now := time.Now()
@@ -214,6 +235,8 @@ func (tm *TaskManager) CreateTask(title, description string) (*Task, error) {
 		Title:       title,
 		Description: description,
 		Status:      TaskStatusQueued,
+		Source:      source,
+		Model:       model,
 		CreatedAt:   now,
 		outputCh:    make(chan string, 512),
 		doneCh:      make(chan struct{}),
@@ -257,8 +280,12 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		prompt = task.Title + "\n\n" + task.Description
 	}
 
-	// Prepend local project context if available
+	// Prepend local project context if available (capped at 4KB to keep prompt fast)
 	if projectCtx := getProjectContext(); projectCtx != "" {
+		const maxCtx = 4096
+		if len(projectCtx) > maxCtx {
+			projectCtx = projectCtx[:maxCtx] + "\n...(truncated)"
+		}
 		prompt = "Here is context about the user's machine and projects:\n\n" + projectCtx + "\n\n---\n\nUser's task:\n" + prompt
 	}
 
@@ -267,15 +294,50 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		prompt = sessionCtx + "\n\n---\n\n" + prompt
 	}
 
-	// System prompt: behave as a remote terminal agent.
-	prompt += "\n\nYou are running tasks from a remote mobile device. Show what you are doing step by step. Use only terminal commands. Be concise. Format output in markdown."
+	// System prompt: behave as a remote terminal agent, tailored to the task source.
+	switch task.Source {
+	case "mcp":
+		prompt += "\n\nYou are running tasks via MCP from an AI agent. Show what you are doing step by step. Use only terminal commands. Be concise. Format output in markdown."
+	case "cli":
+		prompt += "\n\nYou are running tasks from a remote CLI terminal. Show what you are doing step by step. Use only terminal commands. Be concise. Format output in markdown."
+	default:
+		prompt += "\n\nYou are running tasks from a remote mobile device. Show what you are doing step by step. Use only terminal commands. Be concise. Format output in markdown."
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
 
 	args := tm.buildArgs(prompt)
+
+	// Override model if specified on the task (e.g. "opus", "sonnet", "haiku").
+	if task.Model != "" {
+		modelOverride := false
+		for i, a := range args {
+			if a == "--model" && i+1 < len(args) {
+				args[i+1] = task.Model
+				modelOverride = true
+				break
+			}
+		}
+		if !modelOverride {
+			args = append(args, "--model", task.Model)
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, tm.runner.Command, args...)
 	cmd.Dir = tm.workDir
+
+	// Ensure common tool paths are in PATH for background processes.
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		existingPath := os.Getenv("PATH")
+		extraPaths := filepath.Join(home, ".local", "bin") + ":" +
+			"/opt/homebrew/bin" + ":" +
+			"/usr/local/bin"
+		cmd.Env = append(os.Environ(), "PATH="+extraPaths+":"+existingPath)
+	}
+
+	log.Printf("[task %s] Launching: %s %v (dir=%s)", task.ID, tm.runner.Command, args[:2], tm.workDir)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

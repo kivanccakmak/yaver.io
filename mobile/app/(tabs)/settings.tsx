@@ -58,6 +58,8 @@ export default function SettingsScreen() {
   const [runners, setRunners] = useState<AiRunner[]>([]);
   const [selectedRunner, setSelectedRunner] = useState<string>("claude");
   const [customRunnerCommand, setCustomRunnerCommand] = useState("");
+  const [agentVersion, setAgentVersion] = useState<string | null>(null);
+  const [agentLastPing, setAgentLastPing] = useState<Date | null>(null);
 
   // Load user settings and runners from Convex
   useEffect(() => {
@@ -77,6 +79,26 @@ export default function SettingsScreen() {
   useEffect(() => {
     return onLogsChanged(() => setLogs(getLogEntries()));
   }, []);
+
+  // Ping the agent for version when connected
+  useEffect(() => {
+    if (connectionStatus !== "connected" || !activeDevice) {
+      setAgentVersion(null);
+      setAgentLastPing(null);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await quicClient.getInfo();
+        if (res) {
+          setAgentVersion(res.version || null);
+          setAgentLastPing(new Date());
+        }
+      } catch {
+        // Agent unreachable — leave as null
+      }
+    })();
+  }, [connectionStatus, activeDevice]);
 
   const fetchSubscription = useCallback(async () => {
     if (!token) {
@@ -345,11 +367,25 @@ export default function SettingsScreen() {
                   <Text style={[styles.detailValue, { color: c.textPrimary }]}>{connectionStatus}</Text>
                 </View>
                 <View style={styles.detailItem}>
+                  <Text style={[styles.detailLabel, { color: c.textMuted }]}>Mode</Text>
+                  <Text style={[styles.detailValue, { color: c.textPrimary }]}>
+                    {quicClient.connectionMode || "—"}
+                  </Text>
+                </View>
+                {agentVersion && (
+                  <View style={styles.detailItem}>
+                    <Text style={[styles.detailLabel, { color: c.textMuted }]}>Agent</Text>
+                    <Text style={[styles.detailValue, { color: c.textPrimary }]}>v{agentVersion}</Text>
+                  </View>
+                )}
+                <View style={styles.detailItem}>
                   <Text style={[styles.detailLabel, { color: c.textMuted }]}>Last seen</Text>
                   <Text style={[styles.detailValue, { color: c.textPrimary }]}>
-                    {activeDevice.online
-                      ? "Online now"
-                      : new Date(activeDevice.lastSeen).toLocaleString()}
+                    {agentLastPing
+                      ? agentLastPing.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+                      : activeDevice.lastSeen
+                        ? new Date(activeDevice.lastSeen).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+                        : "Unknown"}
                   </Text>
                 </View>
               </View>

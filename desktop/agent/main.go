@@ -215,6 +215,8 @@ func runAuth(args []string) {
 
 	select {
 	case t := <-callbackToken:
+		// Give the browser time to receive the HTML response before shutting down servers.
+		time.Sleep(500 * time.Millisecond)
 		srv1.Close()
 		srv2.Close()
 		fmt.Printf("  Token received (%d chars)\n", len(t))

@@ -39,12 +39,18 @@ function DeviceCard({
   onSelect: () => void;
 }) {
   const c = useColors();
+  const HEARTBEAT_STALE_MS = 5 * 60 * 1000; // 5 minutes
+  const isRecentlyActive = device.lastSeen > 0 && (Date.now() - device.lastSeen) < HEARTBEAT_STALE_MS;
+  const isOnline = device.online && isRecentlyActive;
+
   const timeSince = (ts: number) => {
+    if (!ts) return "never";
     const seconds = Math.floor((Date.now() - ts) / 1000);
     if (seconds < 60) return "just now";
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
     if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-    return `${Math.floor(seconds / 86400)}d ago`;
+    const d = new Date(ts);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   };
 
   return (
@@ -67,12 +73,17 @@ function DeviceCard({
           <View
             style={[
               styles.onlineDot,
-              { backgroundColor: device.online ? c.success : c.textMuted },
+              { backgroundColor: isOnline ? c.success : c.textMuted },
             ]}
           />
           <Text style={[styles.lastSeen, { color: c.textMuted }]}>
-            {device.online ? "online" : timeSince(device.lastSeen)}
+            {isOnline ? "online" : "offline"}
           </Text>
+          {device.lastSeen > 0 && (
+            <Text style={[styles.lastSeen, { color: c.textMuted, marginTop: 2 }]}>
+              {timeSince(device.lastSeen)}
+            </Text>
+          )}
         </View>
       </View>
       {isActive && (

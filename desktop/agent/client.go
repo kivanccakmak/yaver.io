@@ -132,6 +132,7 @@ func clientCreateTask(ctx context.Context, conn quic.Connection, prompt string) 
 		Type:        "task_create",
 		Title:       prompt,
 		Description: prompt,
+		Source:      "cli",
 	}
 
 	data, _ := json.Marshal(msg)

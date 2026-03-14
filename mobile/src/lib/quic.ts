@@ -117,7 +117,58 @@ export class QuicClient {
   }
 
   setForceRelay(value: boolean): void {
+    if (this._forceRelay === value) return;
     this._forceRelay = value;
+    // Seamlessly switch connection mode without dropping existing connection
+    if (this._connectionState === "connected" && this.host) {
+      console.log("[QUIC] Force relay changed to", value, "— switching mode...");
+      this.switchConnectionMode(value);
+    }
+  }
+
+  /** Switch between direct and relay without dropping the connection. */
+  private async switchConnectionMode(useRelay: boolean): Promise<void> {
+    try {
+      if (useRelay) {
+        // Try relay servers
+        for (const relay of this.relayServers) {
+          try {
+            const relayDeviceUrl = `${relay.httpUrl}/d/${this.deviceId}`;
+            const res = await this.fetchWithTimeout(`${relayDeviceUrl}/health`, {
+              headers: this.authHeaders,
+            }, 5000);
+            if (res.ok) {
+              this.activeRelayUrl = relay.httpUrl;
+              this.setConnectionMode("relay");
+              console.log("[QUIC] Switched to relay:", relay.id);
+              return;
+            }
+          } catch (e) {
+            console.log("[QUIC] Relay", relay.id, "unreachable:", e);
+          }
+        }
+        console.warn("[QUIC] No relay available — staying on direct");
+      } else {
+        // Switch back to direct
+        try {
+          const directUrl = `http://${this.host}:${this.port}`;
+          const res = await this.fetchWithTimeout(`${directUrl}/health`, {
+            headers: this.authHeaders,
+          }, 3000);
+          if (res.ok) {
+            this.activeRelayUrl = null;
+            this.setConnectionMode("direct");
+            console.log("[QUIC] Switched to direct");
+            return;
+          }
+        } catch (e) {
+          console.log("[QUIC] Direct unreachable:", e);
+        }
+        console.warn("[QUIC] Direct unavailable — staying on relay");
+      }
+    } catch (e) {
+      console.warn("[QUIC] Mode switch failed:", e);
+    }
   }
 
   // ── Connection lifecycle ───────────────────────────────────────────
@@ -152,12 +203,12 @@ export class QuicClient {
   // ── Task API ───────────────────────────────────────────────────────
 
   /** Send a new task to the desktop agent. */
-  async sendTask(title: string, description: string): Promise<Task> {
+  async sendTask(title: string, description: string, model?: string): Promise<Task> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tasks`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ title, description }),
+      body: JSON.stringify({ title, description, ...(model ? { model } : {}) }),
     });
     if (!res.ok) throw new Error(`Failed to create task: ${res.status}`);
     const data = await res.json();
@@ -296,6 +347,25 @@ export class QuicClient {
     if (!res.ok) throw new Error(`Failed to stop all: ${res.status}`);
     const data = await res.json();
     return data.stopped || 0;
+  }
+
+  /** Get agent info (hostname, version, workDir). */
+  async getInfo(): Promise<{ hostname: string; version: string; workDir: string } | null> {
+    if (!this.isConnected && !this.hasConnectionInfo) return null;
+    try {
+      const res = await fetch(`${this.baseUrl}/info`, {
+        headers: this.authHeaders,
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return {
+        hostname: data.hostname || "",
+        version: data.version || "",
+        workDir: data.workDir || "",
+      };
+    } catch {
+      return null;
+    }
   }
 
   /** Delete all finished tasks. */
@@ -544,7 +614,10 @@ export class QuicClient {
         const res = await fetch(`${this.baseUrl}/tasks`, {
           headers: this.authHeaders,
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          console.log("[QUIC] Poll /tasks failed:", res.status);
+          return;
+        }
         const data = await res.json();
         const rawTasks = data.tasks || [];
         for (const t of rawTasks) {
@@ -554,6 +627,7 @@ export class QuicClient {
           if (output.length > prevLen) {
             const newText = output.slice(prevLen);
             const lines = newText.split("\n").filter((l: string) => l);
+            console.log(`[QUIC] Poll: task ${t.id} has ${lines.length} new line(s), total=${output.length}`);
             for (const line of lines) {
               this.emit("output", t.id, line);
             }

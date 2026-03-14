@@ -142,6 +142,50 @@ function ChatBubble({
   );
 }
 
+// ── Debug section (foldable) ─────────────────────────────────────────
+
+function DebugSection({
+  task,
+  connMode,
+  c,
+}: {
+  task: Task;
+  connMode: ConnectionMode;
+  c: ReturnType<typeof useColors>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <View style={s.debugContainer}>
+      <Pressable
+        style={[s.debugToggle, { backgroundColor: c.bgCard, borderColor: c.border }]}
+        onPress={() => setExpanded(!expanded)}
+      >
+        <Text style={[s.debugToggleText, { color: c.textMuted }]}>
+          {expanded ? "\u25BC" : "\u25B6"} Debug
+        </Text>
+      </Pressable>
+      {expanded && (
+        <View style={[s.debugContent, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+          <Text style={[s.debugLine, { color: c.textMuted }]}>Task ID: {task.id}</Text>
+          <Text style={[s.debugLine, { color: c.textMuted }]}>Status: {task.status}</Text>
+          <Text style={[s.debugLine, { color: c.textMuted }]}>Output lines: {task.output.length}</Text>
+          <Text style={[s.debugLine, { color: c.textMuted }]}>Output chars: {task.output.join("").length}</Text>
+          <Text style={[s.debugLine, { color: c.textMuted }]}>Mode: {connMode || "null"}</Text>
+          <Text style={[s.debugLine, { color: c.textMuted }]}>Base URL: {quicClient.connectionMode === "relay" ? "relay" : "direct"}</Text>
+          {task.resultText ? (
+            <Text style={[s.debugLine, { color: c.textMuted }]}>Result: {task.resultText.length} chars</Text>
+          ) : null}
+          {task.costUsd ? (
+            <Text style={[s.debugLine, { color: c.textMuted }]}>Cost: ${task.costUsd.toFixed(4)}</Text>
+          ) : null}
+          <Text style={[s.debugLine, { color: c.textMuted }]}>Created: {new Date(task.createdAt).toLocaleTimeString()}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
 // ── Task card ────────────────────────────────────────────────────────
 
 function TaskCard({
@@ -248,6 +292,7 @@ export default function TasksScreen() {
   const [showNewTask, setShowNewTask] = useState(false);
   const [newTaskText, setNewTaskText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<string>("sonnet");
   const [refreshing, setRefreshing] = useState(false);
   const [followUpText, setFollowUpText] = useState("");
   const [isSendingFollowUp, setIsSendingFollowUp] = useState(false);
@@ -358,7 +403,7 @@ export default function TasksScreen() {
     Keyboard.dismiss();
     setIsSubmitting(true);
     try {
-      const task = await quicClient.sendTask(newTaskText.trim(), "");
+      const task = await quicClient.sendTask(newTaskText.trim(), "", selectedModel || undefined);
       setNewTaskText("");
       // Add task to list immediately
       setTasks((prev) => [task, ...prev]);
@@ -680,6 +725,27 @@ export default function TasksScreen() {
                 onChangeText={setNewTaskText}
                 multiline numberOfLines={4} textAlignVertical="top" autoFocus
               />
+              <View style={s.modelChips}>
+                {[
+                  { id: "sonnet", label: "Sonnet" },
+                  { id: "opus", label: "Opus" },
+                  { id: "haiku", label: "Haiku" },
+                ].map((m) => (
+                  <Pressable
+                    key={m.id}
+                    style={[
+                      s.modelChip,
+                      { borderColor: selectedModel === m.id ? c.accent : c.border },
+                      selectedModel === m.id && { backgroundColor: c.accent + "20" },
+                    ]}
+                    onPress={() => setSelectedModel(m.id)}
+                  >
+                    <Text style={[s.modelChipText, { color: selectedModel === m.id ? c.accent : c.textMuted }]}>
+                      {m.label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
               <View style={s.modalButtons}>
                 <Pressable style={[s.cancelButton, { backgroundColor: c.bgCardElevated }]} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); }}>
                   <Text style={[s.cancelButtonText, { color: c.textSecondary }]}>Cancel</Text>
@@ -755,7 +821,12 @@ export default function TasksScreen() {
                     <ChatBubble key={`${i}-${msg.role}`} turn={msg} c={c} />
                   ))}
                   {isRunning && chatMessages[chatMessages.length - 1]?.role !== "assistant" && (
-                    <TypingIndicator color={c.accent || "#6366f1"} />
+                    <View>
+                      <TypingIndicator color={c.accent || "#6366f1"} />
+                      <Text style={[s.startingHint, { color: c.textMuted }]}>
+                        Starting agent... this may take a moment
+                      </Text>
+                    </View>
                   )}
                   {isRunning && chatMessages[chatMessages.length - 1]?.role === "assistant" && (
                     <View style={s.streamingIndicator}>
@@ -763,6 +834,9 @@ export default function TasksScreen() {
                       <Text style={[s.streamingText, { color: c.textMuted }]}>Working...</Text>
                     </View>
                   )}
+
+                  {/* Debug info (foldable) */}
+                  <DebugSection task={selectedTask} connMode={connMode} c={c} />
                 </ScrollView>
 
                 {/* Input bar */}
@@ -987,6 +1061,10 @@ const s = StyleSheet.create({
 
   // Streaming indicator
   streamingIndicator: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, paddingHorizontal: 4 },
+  startingHint: { fontSize: 12, marginTop: 8, marginLeft: 4, marginBottom: 12 },
+  modelChips: { flexDirection: "row", gap: 8, marginTop: 12, marginBottom: 4 },
+  modelChip: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 16, borderWidth: 1 },
+  modelChipText: { fontSize: 13, fontWeight: "500" },
   streamingText: { fontSize: 12, fontStyle: "italic" },
 
   // Chat input bar
@@ -996,6 +1074,13 @@ const s = StyleSheet.create({
   chatInput: { flex: 1, borderWidth: 1, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontSize: 15, maxHeight: 100, minHeight: 40 },
   chatSendBtn: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   chatSendText: { color: "#fff", fontSize: 18, fontWeight: "700" },
+
+  // Debug section
+  debugContainer: { marginTop: 16, marginBottom: 8 },
+  debugToggle: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, alignSelf: "flex-start" },
+  debugToggleText: { fontSize: 12, fontWeight: "600" },
+  debugContent: { marginTop: 6, padding: 12, borderRadius: 8, borderWidth: 1 },
+  debugLine: { fontSize: 11, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", lineHeight: 18 },
 });
 
 // Markdown styles

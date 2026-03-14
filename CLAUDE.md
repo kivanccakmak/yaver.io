@@ -1,5 +1,8 @@
 # Yaver.io — Claude Code Project Guide
 
+## Important Rules
+- **Never push or commit without explicit user permission.** Vercel auto-deploys on push to main, which costs money.
+
 ## What is Yaver?
 Yaver is a P2P tool that lets developers use Claude from their mobile device or any terminal, connecting directly to their development machines. Task data flows peer-to-peer between your devices — our servers only handle auth and peer discovery.
 
