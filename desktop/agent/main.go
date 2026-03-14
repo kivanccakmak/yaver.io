@@ -25,7 +25,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.5.0"
+const version = "1.6.0"
 
 func main() {
 	if len(os.Args) < 2 {
