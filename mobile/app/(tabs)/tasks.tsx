@@ -486,11 +486,48 @@ export default function TasksScreen() {
               </View>
             ) : devices.length === 0 ? (
               <View style={s.emptyList}>
-                <Text style={[s.emptyIcon, { color: c.textMuted }]}>{"{ }"}</Text>
-                <Text style={[s.emptyTitle, { color: c.textPrimary }]}>No Devices Found</Text>
-                <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>
-                  Install and run the Yaver agent on your dev machine. Go to the Devices tab for setup instructions.
-                </Text>
+                <View style={[s.discoverCard, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+                  <Text style={[s.discoverIcon, { color: c.textMuted }]}>{"\u2318"}</Text>
+                  <Text style={[s.emptyTitle, { color: c.textPrimary }]}>Set Up Your Dev Machine</Text>
+                  <Text style={[s.emptySubtitle, { color: c.textSecondary, marginTop: 8 }]}>
+                    Install the Yaver agent on your computer to start sending tasks from your phone.
+                  </Text>
+                  <View style={s.discoverSteps}>
+                    <View style={s.discoverStep}>
+                      <View style={[s.discoverStepDot, { backgroundColor: c.accent }]}>
+                        <Text style={s.discoverStepNum}>1</Text>
+                      </View>
+                      <View style={s.discoverStepContent}>
+                        <Text style={[s.discoverStepTitle, { color: c.textPrimary }]}>Install</Text>
+                        <Text style={[s.discoverStepDesc, { color: c.textMuted }]}>brew install kivanccakmak/yaver/yaver</Text>
+                      </View>
+                    </View>
+                    <View style={s.discoverStep}>
+                      <View style={[s.discoverStepDot, { backgroundColor: c.accent }]}>
+                        <Text style={s.discoverStepNum}>2</Text>
+                      </View>
+                      <View style={s.discoverStepContent}>
+                        <Text style={[s.discoverStepTitle, { color: c.textPrimary }]}>Sign in</Text>
+                        <Text style={[s.discoverStepDesc, { color: c.textMuted }]}>yaver auth</Text>
+                      </View>
+                    </View>
+                    <View style={s.discoverStep}>
+                      <View style={[s.discoverStepDot, { backgroundColor: c.accent }]}>
+                        <Text style={s.discoverStepNum}>3</Text>
+                      </View>
+                      <View style={s.discoverStepContent}>
+                        <Text style={[s.discoverStepTitle, { color: c.textPrimary }]}>Start</Text>
+                        <Text style={[s.discoverStepDesc, { color: c.textMuted }]}>yaver serve</Text>
+                      </View>
+                    </View>
+                  </View>
+                  <Pressable
+                    style={[s.discoverBtn, { backgroundColor: c.accent }]}
+                    onPress={() => refreshDevices()}
+                  >
+                    <Text style={s.discoverBtnText}>Refresh Devices</Text>
+                  </Pressable>
+                </View>
               </View>
             ) : userDisconnected && devices.length === 1 ? (
               <View style={s.emptyList}>
@@ -778,6 +815,19 @@ const s = StyleSheet.create({
 
   // Error actions row
   errorActions: { flexDirection: "row", marginTop: 20 },
+
+  // Discover card (no devices)
+  discoverCard: { width: "100%", borderRadius: 16, borderWidth: 1, padding: 24, alignItems: "center" },
+  discoverIcon: { fontSize: 40, marginBottom: 12 },
+  discoverSteps: { width: "100%", marginTop: 20, gap: 14 },
+  discoverStep: { flexDirection: "row", alignItems: "center", gap: 12 },
+  discoverStepDot: { width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  discoverStepNum: { color: "#fff", fontSize: 13, fontWeight: "700" },
+  discoverStepContent: { flex: 1 },
+  discoverStepTitle: { fontSize: 14, fontWeight: "600" },
+  discoverStepDesc: { fontSize: 12, fontFamily: "monospace", marginTop: 2 },
+  discoverBtn: { marginTop: 24, paddingHorizontal: 28, paddingVertical: 12, borderRadius: 10 },
+  discoverBtnText: { color: "#ffffff", fontWeight: "600", fontSize: 15 },
 
   // Logs modal
   logsModalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)" },
