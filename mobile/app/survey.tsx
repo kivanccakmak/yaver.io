@@ -63,6 +63,7 @@ export default function SurveyScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [runners, setRunners] = useState<AiRunner[]>([]);
   const [selectedRunner, setSelectedRunner] = useState<string>("claude");
+  const [customCommand, setCustomCommand] = useState("");
 
   useEffect(() => {
     getAiRunners().then((r) => {
@@ -95,7 +96,11 @@ export default function SurveyScreen() {
         useCase: useCase ?? undefined,
       });
       // Save runner preference to user settings
-      await saveUserSettings(token, { runnerId: selectedRunner });
+      const runnerSettings: { runnerId: string; customRunnerCommand?: string } = { runnerId: selectedRunner };
+      if (selectedRunner === "custom" && customCommand.trim()) {
+        runnerSettings.customRunnerCommand = customCommand.trim();
+      }
+      await saveUserSettings(token, runnerSettings);
       markSurveyCompleted();
       await refreshUser();
       router.replace("/(tabs)/tasks");
@@ -173,12 +178,15 @@ export default function SurveyScreen() {
   );
 
   const renderRunnerPage = () => (
-    <View style={styles.pageContent}>
+    <ScrollView
+      contentContainerStyle={styles.pageContent}
+      showsVerticalScrollIndicator={false}
+    >
       <Text style={[styles.pageTitle, { color: c.textPrimary }]}>
-        Which AI tool do you use?
+        Choose your AI agent
       </Text>
       <Text style={[styles.pageSubtitle, { color: c.textSecondary }]}>
-        Select your preferred AI runner
+        Yaver runs any terminal AI tool on your machine
       </Text>
 
       <View style={styles.identityGrid}>
@@ -217,7 +225,23 @@ export default function SurveyScreen() {
           );
         })}
       </View>
-    </View>
+
+      {selectedRunner === "custom" && (
+        <TextInput
+          style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary, marginTop: 16 }]}
+          placeholder="e.g. my-ai-tool --auto {prompt}"
+          placeholderTextColor={c.textMuted}
+          value={customCommand}
+          onChangeText={setCustomCommand}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+      )}
+
+      <Text style={[styles.runnerHint, { color: c.textMuted }]}>
+        You can change this anytime in Settings
+      </Text>
+    </ScrollView>
   );
 
   const renderPage1Dev = () => (
@@ -432,12 +456,12 @@ export default function SurveyScreen() {
             styles.nextButton,
             { backgroundColor: c.textPrimary },
             pressed && { opacity: 0.7 },
-            (isSubmitting || (page === 0 && identity === null)) && {
+            (isSubmitting || (page === 0 && identity === null) || (page === 1 && selectedRunner === "custom" && !customCommand.trim())) && {
               opacity: 0.4,
             },
           ]}
           onPress={handleNext}
-          disabled={isSubmitting || (page === 0 && identity === null)}
+          disabled={isSubmitting || (page === 0 && identity === null) || (page === 1 && selectedRunner === "custom" && !customCommand.trim())}
         >
           <Text style={[styles.nextButtonText, { color: c.bg }]}>
             {isSubmitting ? "..." : isLastPage ? "Finish" : "Continue"}
@@ -445,21 +469,24 @@ export default function SurveyScreen() {
         </Pressable>
       </View>
 
-      <Pressable
-        style={({ pressed }) => [pressed && { opacity: 0.7 }]}
-        onPress={finishSurvey}
-        disabled={isSubmitting}
-      >
-        <Text
-          style={[
-            styles.skipText,
-            { color: c.textMuted },
-            isSubmitting && { opacity: 0.4 },
-          ]}
+      {/* Only show skip after runner page (page 1) has been passed */}
+      {page >= 2 && (
+        <Pressable
+          style={({ pressed }) => [pressed && { opacity: 0.7 }]}
+          onPress={finishSurvey}
+          disabled={isSubmitting}
         >
-          Skip for now
-        </Text>
-      </Pressable>
+          <Text
+            style={[
+              styles.skipText,
+              { color: c.textMuted },
+              isSubmitting && { opacity: 0.4 },
+            ]}
+          >
+            Skip for now
+          </Text>
+        </Pressable>
+      )}
     </SafeAreaView>
   );
 }
@@ -532,6 +559,11 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 4,
     textAlign: "center",
+  },
+  runnerHint: {
+    fontSize: 12,
+    textAlign: "center",
+    marginTop: 20,
   },
   chipContainer: {
     flexDirection: "row",
