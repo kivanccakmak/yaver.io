@@ -142,10 +142,36 @@ go run . help       # Show all commands
 Build a local binary: `cd desktop/agent && go build -o yaver .`
 
 ### CLI Release Process
-1. Cross-compile: `GOOS=darwin GOARCH=arm64 go build -o yaver-darwin-arm64 .` (repeat for darwin/amd64, linux/arm64, linux/amd64)
-2. Create GitHub release on `kivanccakmak/yaver-cli` with all binaries
-3. Update SHA256 hashes in `kivanccakmak/homebrew-yaver` Formula/yaver.rb
-4. Users install via: `brew tap kivanccakmak/yaver && brew install yaver`
+1. Cross-compile: `GOOS=darwin GOARCH=arm64 go build -o yaver-darwin-arm64 .` (repeat for darwin/amd64, linux/arm64, linux/amd64, windows/amd64)
+2. Sign Windows .exe: `./scripts/sign-windows.sh yaver-windows-amd64.exe` (requires SimplySign Desktop logged in)
+3. Create GitHub release on `kivanccakmak/yaver-cli` with all binaries
+4. Update SHA256 hashes in `kivanccakmak/homebrew-yaver` Formula/yaver.rb
+5. Update Scoop manifest in `kivanccakmak/scoop-yaver` bucket/yaver.json
+6. Upload binaries to Convex storage for download page (see `scripts/upload-downloads.mjs`)
+7. Users install via:
+   - macOS/Linux: `brew tap kivanccakmak/yaver && brew install yaver`
+   - Windows: `scoop bucket add yaver https://github.com/kivanccakmak/scoop-yaver && scoop install yaver`
+
+### Windows Code Signing (Certum / SimplySign)
+We use **Certum** (Polish CA) with **SimplySign** cloud-based PKCS#11 signing. NOT Azure Sign Tool.
+
+**Prerequisites:**
+1. SimplySign Desktop installed: `brew install --cask simplysign`
+2. proCertumSmartSign installed (provides bundled JDK)
+3. jsign at `/tmp/jsign.jar` (auto-downloaded by script)
+
+**Signing flow:**
+1. Generate OTP: `./scripts/certum-otp.sh`
+2. Open SimplySign Desktop and log in (email: kivanccakmak@gmail.com + password + OTP from script above)
+3. Run: `./scripts/sign-windows.sh <file.exe>`
+4. Script uses jsign + PKCS#11 to sign with Certum certificate (serial: `33F009BCF17FA6764B6A9BCD1664E63E`)
+5. Timestamp server: `http://time.certum.pl`
+
+**Key paths:**
+- PKCS#11 library: `/usr/local/lib/libSimplySignPKCS.dylib`
+- Signing script: `scripts/sign-windows.sh`
+- OTP generator: `scripts/certum-otp.sh`
+- TOTP secret: `~/Downloads/otpauthuri.txt`
 
 ### CLI Auth Flow
 `yaver auth` opens `https://yaver.io/auth?client=desktop` in the browser. The web app handles OAuth (Apple/Google/Microsoft) and redirects back to `http://127.0.0.1:19836/callback?token=<token>`. The CLI's local HTTP server receives the token and saves it to `~/.config/yaver/config.json`.

@@ -121,8 +121,8 @@ export default function DownloadPage() {
                 desc: "macOS 13+",
                 highlighted: platform === "macos",
                 buttons: [
-                  { label: "Apple Silicon", plat: "macos", arch: "arm64", format: "dmg", primary: true },
-                  { label: "Intel", plat: "macos", arch: "x64", format: "bin" },
+                  { label: "Apple Silicon", plat: "macos", arch: "arm64", format: "bin", primary: true },
+                  { label: "Intel", plat: "macos", arch: "amd64", format: "bin" },
                 ],
               },
               {
@@ -138,8 +138,8 @@ export default function DownloadPage() {
                 desc: "Ubuntu, Fedora, Arch",
                 highlighted: platform === "linux",
                 buttons: [
-                  { label: ".deb", plat: "linux", arch: "arm64", format: "deb", primary: true },
-                  { label: "AppImage", plat: "linux", arch: "arm64", format: "appimage" },
+                  { label: "x86_64", plat: "linux", arch: "amd64", format: "bin", primary: true },
+                  { label: "ARM64", plat: "linux", arch: "arm64", format: "bin" },
                 ],
               },
             ].map((p) => (
