@@ -245,7 +245,7 @@ export class QuicClient {
     };
   }
 
-  /** Stop a running task. */
+  /** Stop a running task (kills the process). */
   async stopTask(taskId: string): Promise<void> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tasks/${taskId}/stop`, {
@@ -253,6 +253,16 @@ export class QuicClient {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to stop task: ${res.status}`);
+  }
+
+  /** Gracefully exit a running task by sending the runner's exit command (e.g. /exit for Claude). */
+  async exitTask(taskId: string): Promise<void> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/tasks/${taskId}/exit`, {
+      method: "POST",
+      headers: this.authHeaders,
+    });
+    if (!res.ok) throw new Error(`Failed to exit task: ${res.status}`);
   }
 
   /** Resume a task with a follow-up prompt. */

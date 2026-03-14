@@ -71,7 +71,15 @@ export default function LoginScreen() {
     });
   };
 
-  const handleAppleNative = async () => {
+  const handleAppleSignIn = async () => {
+    // Check if native Apple auth is available (requires Apple ID on simulator)
+    const isAvailable = await AppleAuthentication.isAvailableAsync();
+    if (!isAvailable) {
+      // Fall back to web OAuth for Apple (works on simulator without Apple ID)
+      await handleOAuth("apple");
+      return;
+    }
+
     setIsLoading(true);
     try {
       const credential = await AppleAuthentication.signInAsync({
@@ -99,7 +107,8 @@ export default function LoginScreen() {
       });
 
       if (!res.ok) {
-        throw new Error("Auth failed");
+        const body = await res.text().catch(() => "");
+        throw new Error(body || "Auth failed");
       }
 
       const { token } = await res.json();
@@ -107,7 +116,10 @@ export default function LoginScreen() {
       router.replace("/");
     } catch (e: unknown) {
       if ((e as { code?: string }).code === "ERR_REQUEST_CANCELED") {
-        // User cancelled
+        // User cancelled — do nothing
+      } else {
+        const msg = e instanceof Error ? e.message : "Apple Sign In failed";
+        Alert.alert("Sign In Failed", msg);
       }
     } finally {
       setIsLoading(false);
@@ -177,7 +189,7 @@ export default function LoginScreen() {
               { backgroundColor: c.bgCard, borderColor: c.border },
               pressed && styles.buttonPressed,
             ]}
-            onPress={Platform.OS === "ios" ? handleAppleNative : () => handleOAuth("apple")}
+            onPress={Platform.OS === "ios" ? handleAppleSignIn : () => handleOAuth("apple")}
           >
             <View style={styles.buttonContent}>
               <Ionicons name="logo-apple" size={18} color={c.textPrimary} style={styles.buttonIcon} />

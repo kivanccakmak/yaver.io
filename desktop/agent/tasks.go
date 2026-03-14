@@ -35,7 +35,8 @@ type RunnerConfig struct {
 	OutputMode      string   `json:"outputMode"` // "stream-json" or "raw"
 	ResumeSupported bool     `json:"resumeSupported"`
 	ResumeArgs      []string `json:"resumeArgs,omitempty"`
-	AutoDetected    bool     `json:"-"` // true if user never explicitly chose a runner
+	ExitCommand     string   `json:"exitCommand,omitempty"` // e.g. "/exit" for Claude, "/quit" for Aider
+	AutoDetected    bool     `json:"-"`                     // true if user never explicitly chose a runner
 }
 
 var defaultRunner = RunnerConfig{
@@ -53,6 +54,14 @@ var defaultRunner = RunnerConfig{
 	OutputMode:      "stream-json",
 	ResumeSupported: true,
 	ResumeArgs:      []string{"--resume", "{sessionId}"},
+	ExitCommand:     "/exit",
+}
+
+// exitCommands maps runner IDs to their graceful exit commands.
+var exitCommands = map[string]string{
+	"claude": "/exit",
+	"codex":  "exit",
+	"aider":  "/quit",
 }
 
 // ClaudeEvent represents a top-level line of stream-json output from Claude CLI.
@@ -253,6 +262,11 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		prompt = "Here is context about the user's machine and projects:\n\n" + projectCtx + "\n\n---\n\nUser's task:\n" + prompt
 	}
 
+	// Prepend recent session history so the agent knows what user has been working on
+	if sessionCtx := getRecentSessionsContext(); sessionCtx != "" {
+		prompt = sessionCtx + "\n\n---\n\n" + prompt
+	}
+
 	// System prompt: behave as a remote terminal agent.
 	prompt += "\n\nYou are running tasks from a remote mobile device. Show what you are doing step by step. Use only terminal commands. Be concise. Format output in markdown."
 
@@ -274,6 +288,14 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		cancel()
 		return fmt.Errorf("stderr pipe: %w", err)
 	}
+
+	// Set up stdin pipe for graceful exit support.
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		return fmt.Errorf("stdin pipe: %w", err)
+	}
+	task.stdin = stdinPipe
 
 	task.cmd = cmd
 
@@ -325,6 +347,8 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			}
 		}
 		tm.persist()
+		// Save session file for recent history (non-blocking)
+		go saveSessionFile(task, tm.runner.Name, tm.workDir)
 		tm.mu.Unlock()
 		close(task.doneCh)
 	}()
@@ -572,6 +596,59 @@ func (tm *TaskManager) StopTask(id string) error {
 	return nil
 }
 
+// GracefulStopTask sends the runner's exit command via stdin, waits for graceful exit,
+// then falls back to kill if the process doesn't exit in time.
+func (tm *TaskManager) GracefulStopTask(id string) error {
+	tm.mu.RLock()
+	task, ok := tm.tasks[id]
+	if !ok {
+		tm.mu.RUnlock()
+		return fmt.Errorf("task %s not found", id)
+	}
+	tm.mu.RUnlock()
+
+	if task.Status != TaskStatusRunning && task.Status != TaskStatusQueued {
+		return fmt.Errorf("task %s is not running", id)
+	}
+
+	// Determine exit command: runner config > known defaults > fallback to kill
+	exitCmd := tm.runner.ExitCommand
+	if exitCmd == "" {
+		if cmd, ok := exitCommands[tm.runner.RunnerID]; ok {
+			exitCmd = cmd
+		}
+	}
+
+	// Try graceful exit via stdin
+	if exitCmd != "" && task.stdin != nil {
+		log.Printf("[task %s] Sending exit command: %s", id, exitCmd)
+		_, err := fmt.Fprintf(task.stdin, "%s\n", exitCmd)
+		if err != nil {
+			log.Printf("[task %s] Failed to write exit command: %v, falling back to kill", id, err)
+		} else {
+			// Wait up to 10s for graceful exit
+			select {
+			case <-task.doneCh:
+				log.Printf("[task %s] Gracefully exited", id)
+				tm.mu.Lock()
+				if task.Status == TaskStatusRunning {
+					task.Status = TaskStatusStopped
+					now := time.Now()
+					task.FinishedAt = &now
+				}
+				tm.persist()
+				tm.mu.Unlock()
+				return nil
+			case <-time.After(10 * time.Second):
+				log.Printf("[task %s] Graceful exit timed out, killing process", id)
+			}
+		}
+	}
+
+	// Fall back to regular stop (kill)
+	return tm.StopTask(id)
+}
+
 // DeleteTask removes a finished task from history.
 func (tm *TaskManager) DeleteTask(id string) error {
 	tm.mu.Lock()
@@ -701,6 +778,13 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 		return fmt.Errorf("stderr pipe: %w", err)
 	}
 
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		return fmt.Errorf("stdin pipe: %w", err)
+	}
+	task.stdin = stdinPipe
+
 	task.cmd = cmd
 
 	if err := cmd.Start(); err != nil {
@@ -746,6 +830,7 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 			}
 		}
 		tm.persist()
+		go saveSessionFile(task, tm.runner.Name, tm.workDir)
 		tm.mu.Unlock()
 		close(task.doneCh)
 	}()

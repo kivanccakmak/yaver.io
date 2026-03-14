@@ -25,7 +25,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.7.0"
+const version = "1.8.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -573,6 +573,9 @@ func runServe(args []string) {
 	log.Printf("Scanning for local projects (stored in ~/.yaver/PROJECTS.md, never uploaded)...")
 	go ensureProjectDiscovery()
 
+	// Clean old session files (>7 days)
+	go cleanOldSessions()
+
 	// Task store and manager
 	taskStore, err := NewTaskStore()
 	if err != nil {
@@ -893,11 +896,14 @@ func fetchRunnersFromBackend(client *http.Client, convexSiteURL string) ([]backe
 		return nil, err
 	}
 
-	var runners []backendRunner
-	if err := json.Unmarshal(body, &runners); err != nil {
+	// Response is {"runners": [...]}
+	var parsed struct {
+		Runners []backendRunner `json:"runners"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, err
 	}
-	return runners, nil
+	return parsed.Runners, nil
 }
 
 func getCurrentRunner(client *http.Client, convexSiteURL, token string) string {
@@ -1216,6 +1222,19 @@ func resolveRunner(convexSiteURL, token string) RunnerConfig {
 	return runner
 }
 
+// backendRunnerFull mirrors the Convex aiRunners table (args/resumeArgs are JSON strings).
+type backendRunnerFull struct {
+	RunnerID        string `json:"runnerId"`
+	Name            string `json:"name"`
+	Command         string `json:"command"`
+	Args            string `json:"args"`            // JSON-encoded []string
+	OutputMode      string `json:"outputMode"`
+	ResumeSupported bool   `json:"resumeSupported"`
+	ResumeArgs      string `json:"resumeArgs,omitempty"` // JSON-encoded []string
+	ExitCommand     string `json:"exitCommand,omitempty"`
+	Description     string `json:"description"`
+}
+
 // fetchRunner fetches the runner list from the backend and finds the one
 // matching the given ID.
 func fetchRunner(client *http.Client, convexSiteURL, runnerID string) (RunnerConfig, error) {
@@ -1238,14 +1257,32 @@ func fetchRunner(client *http.Client, convexSiteURL, runnerID string) (RunnerCon
 		return RunnerConfig{}, err
 	}
 
-	var runners []RunnerConfig
-	if err := json.Unmarshal(body, &runners); err != nil {
+	// Response is {"runners": [...]}
+	var wrapped struct {
+		Runners []backendRunnerFull `json:"runners"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err != nil {
 		return RunnerConfig{}, fmt.Errorf("parse runners: %w", err)
 	}
 
-	for _, r := range runners {
+	for _, r := range wrapped.Runners {
 		if r.RunnerID == runnerID {
-			return r, nil
+			rc := RunnerConfig{
+				RunnerID:        r.RunnerID,
+				Name:            r.Name,
+				Command:         r.Command,
+				OutputMode:      r.OutputMode,
+				ResumeSupported: r.ResumeSupported,
+				ExitCommand:     r.ExitCommand,
+			}
+			// Parse JSON-encoded args
+			if r.Args != "" {
+				_ = json.Unmarshal([]byte(r.Args), &rc.Args)
+			}
+			if r.ResumeArgs != "" {
+				_ = json.Unmarshal([]byte(r.ResumeArgs), &rc.ResumeArgs)
+			}
+			return rc, nil
 		}
 	}
 	return RunnerConfig{}, fmt.Errorf("runner %q not found", runnerID)

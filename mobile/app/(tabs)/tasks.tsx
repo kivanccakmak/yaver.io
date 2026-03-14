@@ -251,6 +251,8 @@ export default function TasksScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [followUpText, setFollowUpText] = useState("");
   const [isSendingFollowUp, setIsSendingFollowUp] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const [reconnectError, setReconnectError] = useState<string | null>(null);
   const [quicState, setQuicState] = useState<ConnectionState>(quicClient.connectionState);
   const [connMode, setConnMode] = useState<ConnectionMode>(quicClient.connectionMode);
   const chatScrollRef = useRef<ScrollView>(null);
@@ -391,6 +393,10 @@ export default function TasksScreen() {
     try { await quicClient.stopTask(taskId); await fetchTasks(); } catch {}
   };
 
+  const handleExitTask = async (taskId: string) => {
+    try { await quicClient.exitTask(taskId); await fetchTasks(); } catch {}
+  };
+
   const handleFollowUp = async () => {
     if (!selectedTask || !followUpText.trim()) return;
     Keyboard.dismiss();
@@ -421,6 +427,23 @@ export default function TasksScreen() {
 
   const handleDeleteAll = async () => {
     try { await quicClient.deleteAllTasks(); setTasks([]); await fetchTasks(); } catch {}
+  };
+
+  const handleReconnect = async (device: typeof devices[0]) => {
+    setIsReconnecting(true);
+    setReconnectError(null);
+    try {
+      await selectDevice(device);
+      // Give it a moment to establish connection
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      if (quicClient.connectionState !== "connected") {
+        setReconnectError(`Could not reach ${device.name}. Make sure yaver serve is running.`);
+      }
+    } catch (e: any) {
+      setReconnectError(e?.message || `Could not reach ${device.name}`);
+    } finally {
+      setIsReconnecting(false);
+    }
   };
 
   const effectiveState: ConnectionState =
@@ -529,19 +552,55 @@ export default function TasksScreen() {
                   </Pressable>
                 </View>
               </View>
-            ) : userDisconnected && devices.length === 1 ? (
+            ) : userDisconnected && devices.length >= 1 ? (
               <View style={s.emptyList}>
-                <Text style={[s.emptyIcon, { color: c.textMuted }]}>{"\u23FB"}</Text>
-                <Text style={[s.emptyTitle, { color: c.textPrimary }]}>Disconnected</Text>
-                <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>
-                  You disconnected from {devices[0].name}.
-                </Text>
-                <Pressable
-                  style={[s.inlineConnectBtn, { backgroundColor: c.accent }]}
-                  onPress={() => selectDevice(devices[0])}
-                >
-                  <Text style={s.inlineConnectText}>Reconnect</Text>
-                </Pressable>
+                <View style={[s.reconnectCard, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+                  <Text style={[s.reconnectIcon, { color: c.textMuted }]}>{"\u23FB"}</Text>
+                  <Text style={[s.emptyTitle, { color: c.textPrimary }]}>Disconnected</Text>
+                  <Text style={[s.emptySubtitle, { color: c.textSecondary, marginTop: 8 }]}>
+                    Your last session
+                  </Text>
+
+                  <Pressable
+                    style={[s.reconnectDeviceCard, { backgroundColor: c.bg, borderColor: c.border }]}
+                    onPress={() => !isReconnecting && handleReconnect(devices[0])}
+                    disabled={isReconnecting}
+                  >
+                    <View style={s.reconnectDeviceRow}>
+                      <View style={s.reconnectDeviceInfo}>
+                        <Text style={[s.reconnectDeviceName, { color: c.textPrimary }]}>{devices[0].name}</Text>
+                        <Text style={[s.reconnectDeviceMeta, { color: c.textMuted }]}>
+                          {devices[0].os} · {devices[0].host}
+                        </Text>
+                      </View>
+                      <View style={[s.reconnectDeviceStatus, { backgroundColor: devices[0].online ? "#22c55e22" : "#a1a1aa22" }]}>
+                        <View style={[s.reconnectStatusDot, { backgroundColor: devices[0].online ? "#22c55e" : "#a1a1aa" }]} />
+                        <Text style={[s.reconnectStatusText, { color: devices[0].online ? "#22c55e" : "#a1a1aa" }]}>
+                          {devices[0].online ? "Online" : "Offline"}
+                        </Text>
+                      </View>
+                    </View>
+                  </Pressable>
+
+                  {reconnectError && (
+                    <Text style={[s.reconnectError, { color: "#ef4444" }]}>{reconnectError}</Text>
+                  )}
+
+                  <Pressable
+                    style={[s.reconnectBtn, { backgroundColor: c.accent }, isReconnecting && s.submitButtonDisabled]}
+                    onPress={() => handleReconnect(devices[0])}
+                    disabled={isReconnecting}
+                  >
+                    {isReconnecting ? (
+                      <View style={s.reconnectBtnRow}>
+                        <ActivityIndicator size="small" color="#fff" />
+                        <Text style={s.reconnectBtnText}>Reconnecting...</Text>
+                      </View>
+                    ) : (
+                      <Text style={s.reconnectBtnText}>Reconnect</Text>
+                    )}
+                  </Pressable>
+                </View>
               </View>
             ) : connectionStatus === "error" && lastError ? (
               <View style={s.emptyList}>
@@ -679,8 +738,17 @@ export default function TasksScreen() {
                     </View>
                   </View>
                   {isRunning ? (
-                    <Pressable onPress={() => handleStopTask(selectedTask.id)} style={s.chatStopBtn}>
-                      <Text style={s.chatStopText}>Stop</Text>
+                    <Pressable
+                      onPress={() => handleExitTask(selectedTask.id)}
+                      onLongPress={() => {
+                        Alert.alert("Force Stop", "Kill the process immediately?", [
+                          { text: "Cancel", style: "cancel" },
+                          { text: "Kill", style: "destructive", onPress: () => handleStopTask(selectedTask.id) },
+                        ]);
+                      }}
+                      style={s.chatStopBtn}
+                    >
+                      <Text style={s.chatStopText}>Exit</Text>
                     </Pressable>
                   ) : <View style={{ width: 50 }} />}
                 </View>
@@ -828,6 +896,22 @@ const s = StyleSheet.create({
   discoverStepDesc: { fontSize: 12, fontFamily: "monospace", marginTop: 2 },
   discoverBtn: { marginTop: 24, paddingHorizontal: 28, paddingVertical: 12, borderRadius: 10 },
   discoverBtnText: { color: "#ffffff", fontWeight: "600", fontSize: 15 },
+
+  // Reconnect card (disconnected with prior session)
+  reconnectCard: { width: "100%", borderRadius: 16, borderWidth: 1, padding: 24, alignItems: "center" },
+  reconnectIcon: { fontSize: 40, marginBottom: 12 },
+  reconnectDeviceCard: { width: "100%", borderWidth: 1, borderRadius: 12, padding: 14, marginTop: 16 },
+  reconnectDeviceRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  reconnectDeviceInfo: { flex: 1 },
+  reconnectDeviceName: { fontSize: 16, fontWeight: "600" },
+  reconnectDeviceMeta: { fontSize: 12, marginTop: 2, fontFamily: "monospace" },
+  reconnectDeviceStatus: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  reconnectStatusDot: { width: 8, height: 8, borderRadius: 4 },
+  reconnectStatusText: { fontSize: 11, fontWeight: "600", textTransform: "uppercase" },
+  reconnectError: { fontSize: 13, textAlign: "center", marginTop: 12, lineHeight: 18 },
+  reconnectBtn: { marginTop: 16, paddingHorizontal: 28, paddingVertical: 12, borderRadius: 10 },
+  reconnectBtnRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  reconnectBtnText: { color: "#ffffff", fontWeight: "600", fontSize: 15 },
 
   // Logs modal
   logsModalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)" },

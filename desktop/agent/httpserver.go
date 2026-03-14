@@ -249,6 +249,8 @@ func (s *HTTPServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 		s.streamOutput(w, r, taskID)
 	case "stop":
 		s.stopTask(w, r, taskID)
+	case "exit":
+		s.exitTask(w, r, taskID)
 	case "continue":
 		s.continueTask(w, r, taskID)
 	default:
@@ -380,6 +382,25 @@ func (s *HTTPServer) stopTask(w http.ResponseWriter, r *http.Request, id string)
 	}
 
 	log.Printf("[HTTP] Task stopped: %s", id)
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":     true,
+		"taskId": id,
+		"status": TaskStatusStopped,
+	})
+}
+
+func (s *HTTPServer) exitTask(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+
+	if err := s.taskMgr.GracefulStopTask(id); err != nil {
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	log.Printf("[HTTP] Task gracefully exited: %s", id)
 	jsonReply(w, http.StatusOK, map[string]interface{}{
 		"ok":     true,
 		"taskId": id,

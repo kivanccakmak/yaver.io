@@ -127,6 +127,7 @@ export default defineSchema({
     outputMode: v.union(v.literal("stream-json"), v.literal("raw")),
     resumeSupported: v.boolean(),
     resumeArgs: v.optional(v.string()), // JSON array as string
+    exitCommand: v.optional(v.string()), // e.g. "/exit", "/quit"
     description: v.string(),
     isDefault: v.optional(v.boolean()),
     sortOrder: v.number(),
