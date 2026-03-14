@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import NetInfo from "@react-native-community/netinfo";
 import { quicClient, RelayServer } from "../lib/quic";
 import { useAuth } from "./AuthContext";
 
@@ -111,6 +112,17 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       selectDevice(onlineDevice);
     }
   }, [devices, token, activeDevice, connectionStatus, selectDevice]);
+
+  // Trigger immediate reconnection on network change (WiFi↔cellular roaming)
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      if (state.isConnected && activeDevice) {
+        // Network came back or switched type — re-probe immediately
+        quicClient.triggerReconnect();
+      }
+    });
+    return () => unsubscribe();
+  }, [activeDevice]);
 
   const selectDevice = useCallback(
     async (device: Device) => {

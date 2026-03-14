@@ -161,7 +161,7 @@ export default function TasksView({ connectionStatus, isDeviceConnected }: Tasks
 
   async function handleContinue(taskId: string) {
     try {
-      await agentClient.continueTask(taskId);
+      await agentClient.continueTask(taskId, "");
       fetchTasks();
     } catch {
       // Ignore.

@@ -364,12 +364,7 @@ func isAgentRunning() (int, bool) {
 	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
 		return 0, false
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return 0, false
-	}
-	// Signal 0 checks if process exists
-	if err := proc.Signal(syscall.Signal(0)); err != nil {
+	if !isProcessAlive(pid) {
 		os.Remove(pidFile)
 		return 0, false
 	}
@@ -441,8 +436,8 @@ func runServe(args []string) {
 		cmd.Stdout = lf
 		cmd.Stderr = lf
 		cmd.Dir = *workDir
-		// Detach from parent
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		// Detach from parent (platform-specific)
+		detachProcess(cmd)
 
 		if err := cmd.Start(); err != nil {
 			log.Fatalf("failed to start agent: %v", err)
@@ -639,7 +634,7 @@ func runStop() {
 		os.Exit(1)
 	}
 
-	if err := proc.Signal(syscall.SIGTERM); err != nil {
+	if err := terminateProcess(proc); err != nil {
 		fmt.Fprintf(os.Stderr, "Error stopping agent: %v\n", err)
 		os.Exit(1)
 	}
@@ -647,7 +642,7 @@ func runStop() {
 	// Wait for process to exit
 	for i := 0; i < 30; i++ {
 		time.Sleep(100 * time.Millisecond)
-		if err := proc.Signal(syscall.Signal(0)); err != nil {
+		if !isProcessAlive(pid) {
 			break
 		}
 	}
@@ -720,10 +715,10 @@ func runRestart(args []string) {
 	if pid, running := isAgentRunning(); running {
 		proc, err := os.FindProcess(pid)
 		if err == nil {
-			proc.Signal(syscall.SIGTERM)
+			terminateProcess(proc)
 			for i := 0; i < 30; i++ {
 				time.Sleep(100 * time.Millisecond)
-				if err := proc.Signal(syscall.Signal(0)); err != nil {
+				if !isProcessAlive(pid) {
 					break
 				}
 			}
@@ -840,6 +835,9 @@ func runUninstall() {
 		os.Remove(unitPath)
 		osexec.Command("systemctl", "--user", "daemon-reload").Run()
 		fmt.Println("  Removed systemd service.")
+	case "windows":
+		removeAutoStart()
+		fmt.Println("  Removed scheduled task.")
 	}
 
 	// Remove config directory (~/.yaver)

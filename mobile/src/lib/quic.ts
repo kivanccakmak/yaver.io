@@ -74,10 +74,9 @@ export class QuicClient {
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
 
-  // Reconnection
+  // Reconnection — unlimited retries for seamless WiFi↔cellular roaming
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
-  private readonly maxReconnectAttempt = 8;
   private readonly baseBackoffMs = 1000;
 
   private _connectionMode: ConnectionMode = null;
@@ -441,9 +440,32 @@ export class QuicClient {
     }
   }
 
+  /**
+   * Force an immediate reconnection attempt (e.g. on network change).
+   * Resets backoff so the first retry is instant.
+   */
+  triggerReconnect(): void {
+    if (!this.host || !this.port || !this.token) return;
+    // Already connected — nothing to do
+    if (this._connectionState === "connected") {
+      // Still worth re-probing: the current path may be dead after a network switch.
+      // Clear polling so attemptConnect can restart it on the new path.
+      this.clearTimers();
+      this.reconnectAttempt = 0;
+      this.attemptConnect().catch(() => {});
+      return;
+    }
+    // Cancel any pending backoff timer and reconnect immediately
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempt = 0;
+    this.attemptConnect().catch(() => {});
+  }
+
   private scheduleReconnect(): void {
     if (!this.host || !this.port || !this.token) return;
-    if (this.reconnectAttempt >= this.maxReconnectAttempt) return;
 
     const delay = Math.min(
       this.baseBackoffMs * Math.pow(2, this.reconnectAttempt),

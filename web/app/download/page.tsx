@@ -122,15 +122,15 @@ export default function DownloadPage() {
                 highlighted: platform === "macos",
                 buttons: [
                   { label: "Apple Silicon", plat: "macos", arch: "arm64", format: "dmg", primary: true },
-                  { label: "Intel", plat: "macos", arch: "x64", format: "dmg" },
+                  { label: "Intel", plat: "macos", arch: "x64", format: "bin" },
                 ],
               },
               {
                 name: "Windows",
-                desc: "Windows 10+",
+                desc: "Windows 10+ (64-bit)",
                 highlighted: platform === "windows",
                 buttons: [
-                  { label: "Download .exe", plat: "windows", arch: "amd64", format: "exe", primary: true },
+                  { label: "Download CLI", plat: "windows", arch: "amd64", format: "exe", primary: true },
                 ],
               },
               {
