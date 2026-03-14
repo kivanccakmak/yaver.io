@@ -63,6 +63,8 @@ func main() {
 		discoverProjects()
 		fp, _ := projectsFilePath()
 		fmt.Printf("Project discovery complete: %s\n", fp)
+	case "purge":
+		runPurge()
 	case "uninstall":
 		runUninstall()
 	case "help", "--help", "-h":
@@ -92,6 +94,7 @@ Usage:
   yaver set-runner  Set which AI agent to use (claude, codex, aider, custom)
   yaver status      Show auth and connection status
   yaver devices     List your registered devices
+  yaver purge       Remove all local data (auth, sessions, tasks, logs)
   yaver uninstall   Remove config, certs, and stop the agent
   yaver help        Show this help message
   yaver version     Print version
@@ -271,6 +274,54 @@ func runSignout() {
 		log.Fatalf("save config: %v", err)
 	}
 	fmt.Println("Signed out.")
+}
+
+// ---------------------------------------------------------------------------
+// purge — wipe all local data (auth, sessions, tasks, projects, certs, logs)
+// ---------------------------------------------------------------------------
+
+func runPurge() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("cannot find home dir: %v", err)
+	}
+	yaverDir := filepath.Join(home, ".yaver")
+
+	// Check if directory exists
+	if _, err := os.Stat(yaverDir); os.IsNotExist(err) {
+		fmt.Println("Nothing to purge — ~/.yaver does not exist.")
+		return
+	}
+
+	// List what will be removed
+	fmt.Println("This will remove ALL local Yaver data:")
+	fmt.Println()
+	entries, _ := os.ReadDir(yaverDir)
+	for _, e := range entries {
+		info, _ := e.Info()
+		if info != nil && info.IsDir() {
+			fmt.Printf("  %s/\n", e.Name())
+		} else {
+			fmt.Printf("  %s\n", e.Name())
+		}
+	}
+	fmt.Println()
+	fmt.Print("Are you sure? (y/N): ")
+
+	var confirm string
+	fmt.Scanln(&confirm)
+	if confirm != "y" && confirm != "Y" {
+		fmt.Println("Aborted.")
+		return
+	}
+
+	if err := os.RemoveAll(yaverDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Purged. All local data removed from ~/.yaver/")
+	fmt.Println("Run 'yaver auth' to sign in again.")
 }
 
 // ---------------------------------------------------------------------------

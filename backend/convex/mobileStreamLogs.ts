@@ -30,3 +30,14 @@ export const recent = query({
       .take(args.limit ?? 100);
   },
 });
+
+export const clearAll = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const logs = await ctx.db.query("mobileStreamLogs").collect();
+    for (const log of logs) {
+      await ctx.db.delete(log._id);
+    }
+    return logs.length;
+  },
+});

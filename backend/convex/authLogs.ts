@@ -28,3 +28,14 @@ export const recentLogs = query({
       .take(limit);
   },
 });
+
+export const clearAll = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const logs = await ctx.db.query("authLogs").collect();
+    for (const log of logs) {
+      await ctx.db.delete(log._id);
+    }
+    return logs.length;
+  },
+});
