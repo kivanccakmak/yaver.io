@@ -2,5 +2,6 @@
   "buildCommand": "cd web && npm install && npm run build",
   "installCommand": "echo 'skip'",
   "outputDirectory": "web/.next",
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- web/"
 }
