@@ -49,32 +49,47 @@ func ValidateToken(baseURL, token string) error {
 	return nil
 }
 
-// ValidateTokenUser checks the auth token against Convex and returns the userId.
-func ValidateTokenUser(baseURL, token string) (string, error) {
+// UserInfo contains user profile information from Convex.
+type UserInfo struct {
+	UserID   string `json:"userId"`
+	Email    string `json:"email"`
+	FullName string `json:"fullName"`
+	Provider string `json:"provider"`
+}
+
+// ValidateTokenInfo checks the auth token against Convex and returns full user info.
+func ValidateTokenInfo(baseURL, token string) (*UserInfo, error) {
 	req, err := newBearerRequest("GET", baseURL+"/auth/validate", token, nil)
 	if err != nil {
-		return "", fmt.Errorf("create validate request: %w", err)
+		return nil, fmt.Errorf("create validate request: %w", err)
 	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("validate token request: %w", err)
+		return nil, fmt.Errorf("validate token request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("validate token failed (status %d)", resp.StatusCode)
+		return nil, fmt.Errorf("validate token failed (status %d)", resp.StatusCode)
 	}
 
 	var result struct {
-		User struct {
-			UserID string `json:"userId"`
-		} `json:"user"`
+		User UserInfo `json:"user"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decode validate response: %w", err)
+		return nil, fmt.Errorf("decode validate response: %w", err)
 	}
-	return result.User.UserID, nil
+	return &result.User, nil
+}
+
+// ValidateTokenUser checks the auth token against Convex and returns the userId.
+func ValidateTokenUser(baseURL, token string) (string, error) {
+	info, err := ValidateTokenInfo(baseURL, token)
+	if err != nil {
+		return "", err
+	}
+	return info.UserID, nil
 }
 
 // RegisterDeviceRequest contains the fields sent when registering a device.

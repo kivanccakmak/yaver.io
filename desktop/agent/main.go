@@ -674,8 +674,18 @@ func runConfig() {
 		token = "(not set)"
 	}
 
-	fmt.Printf("auth_token:     %s\n", token)
-	fmt.Printf("device_id:      %s\n", valueOrEmpty(cfg.DeviceID))
+	// Show user info if token is valid
+	if cfg.AuthToken != "" && cfg.ConvexSiteURL != "" {
+		if info, err := ValidateTokenInfo(cfg.ConvexSiteURL, cfg.AuthToken); err == nil {
+			fmt.Printf("user:            %s (%s)\n", info.Email, info.Provider)
+			if info.FullName != "" && info.FullName != info.Email {
+				fmt.Printf("name:            %s\n", info.FullName)
+			}
+		}
+	}
+
+	fmt.Printf("auth_token:      %s\n", token)
+	fmt.Printf("device_id:       %s\n", valueOrEmpty(cfg.DeviceID))
 	fmt.Printf("convex_site_url: %s\n", valueOrEmpty(cfg.ConvexSiteURL))
 }
 
@@ -742,28 +752,52 @@ func runStatus() {
 		return
 	}
 
-	// Check token
-	authStatus := "valid"
-	if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
-		authStatus = "expired"
-	}
-
-	// Check agent
+	// Check agent first (local, instant)
 	agentStatus := "stopped"
 	if pid, running := isAgentRunning(); running {
 		agentStatus = fmt.Sprintf("running (PID %d)", pid)
 	}
 
-	fmt.Printf("Auth:     %s\n", authStatus)
+	// Print local info immediately
 	fmt.Printf("Agent:    %s\n", agentStatus)
 	if cfg.DeviceID != "" {
 		fmt.Printf("Device:   %s\n", cfg.DeviceID[:8]+"...")
 	}
 	fmt.Printf("Backend:  %s\n", cfg.ConvexSiteURL)
 
-	if authStatus == "expired" {
+	// Validate token with a short timeout (3s) — don't block the user
+	statusClient := &http.Client{Timeout: 3 * time.Second}
+	req, reqErr := newBearerRequest("GET", cfg.ConvexSiteURL+"/auth/validate", cfg.AuthToken, nil)
+	if reqErr != nil {
+		fmt.Printf("Auth:     token present (validation skipped)\n")
+		return
+	}
+	resp, respErr := statusClient.Do(req)
+	if respErr != nil {
+		fmt.Printf("Auth:     token present (could not reach server)\n")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("Auth:     expired\n")
 		fmt.Println()
 		fmt.Println("Session expired. Run 'yaver auth' to re-authenticate.")
+		return
+	}
+
+	var result struct {
+		User UserInfo `json:"user"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		fmt.Printf("Auth:     valid\n")
+		return
+	}
+
+	fmt.Printf("Auth:     valid\n")
+	fmt.Printf("User:     %s (%s)\n", result.User.Email, result.User.Provider)
+	if result.User.FullName != "" && result.User.FullName != result.User.Email {
+		fmt.Printf("Name:     %s\n", result.User.FullName)
 	}
 }
 
