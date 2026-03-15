@@ -134,6 +134,18 @@ export default defineSchema({
     sortOrder: v.number(),
   }).index("by_runnerId", ["runnerId"]),
 
+  // Available AI models per runner (managed by us, not by users)
+  aiModels: defineTable({
+    modelId: v.string(),        // e.g. "sonnet", "opus", "haiku", "o3-mini"
+    runnerId: v.string(),       // which runner this model belongs to
+    name: v.string(),           // display name, e.g. "Claude Sonnet"
+    description: v.optional(v.string()),
+    isDefault: v.optional(v.boolean()), // default model for this runner
+    sortOrder: v.number(),
+  })
+    .index("by_runnerId", ["runnerId"])
+    .index("by_modelId", ["modelId", "runnerId"]),
+
   // Per-minute CPU/RAM metrics from desktop agents (last 1 hour kept)
   deviceMetrics: defineTable({
     deviceId: v.string(),       // matches devices.deviceId
@@ -181,6 +193,19 @@ export default defineSchema({
     taskCount: v.number(),
   })
     .index("by_userId_date", ["userId", "date"]),
+
+  developerLogs: defineTable({
+    userId: v.optional(v.string()),
+    email: v.optional(v.string()),
+    source: v.union(v.literal("agent"), v.literal("mobile"), v.literal("web"), v.literal("relay")),
+    level: v.union(v.literal("info"), v.literal("error"), v.literal("warn"), v.literal("debug")),
+    tag: v.string(),
+    message: v.string(),
+    data: v.optional(v.string()), // JSON blob
+    createdAt: v.number(),
+  })
+    .index("by_createdAt", ["createdAt"])
+    .index("by_email", ["email", "createdAt"]),
 
   mobileStreamLogs: defineTable({
     userId: v.optional(v.string()),

@@ -14,6 +14,7 @@ import type { Task } from "./quic";
 const KEYS = {
   TASK_LIST: "@yaver/task_list",
   TASK_OUTPUT_PREFIX: "@yaver/task_output/",
+  DELETED_TASKS: "@yaver/deleted_tasks",
 } as const;
 
 /** Persist the current task list to local storage. */
@@ -61,6 +62,26 @@ export async function getCachedTaskOutput(
     return JSON.parse(raw) as string[];
   } catch {
     return [];
+  }
+}
+
+/** Mark a task as deleted so it won't reappear after refresh/re-login. */
+export async function markTaskDeleted(taskId: string): Promise<void> {
+  try {
+    const ids = await getDeletedTaskIds();
+    ids.add(taskId);
+    await AsyncStorage.setItem(KEYS.DELETED_TASKS, JSON.stringify([...ids]));
+  } catch {}
+}
+
+/** Get the set of deleted task IDs. */
+export async function getDeletedTaskIds(): Promise<Set<string>> {
+  try {
+    const raw = await AsyncStorage.getItem(KEYS.DELETED_TASKS);
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw) as string[]);
+  } catch {
+    return new Set();
   }
 }
 

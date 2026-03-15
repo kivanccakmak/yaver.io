@@ -1057,6 +1057,54 @@ http.route({
   }),
 });
 
+// ── Developer Logs (developer-only debugging) ──────────────────────
+
+/** POST /dev/log — Write a developer log (only accepted from developer emails). */
+http.route({
+  path: "/dev/log",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const body = await request.json();
+      // Best-effort user identification
+      let email: string | undefined = body.email;
+      let userId: string | undefined;
+      const user = await authenticateRequest(ctx, request);
+      if (user) {
+        email = user.email;
+        userId = user.userId;
+      }
+
+      await ctx.runMutation(api.developerLogs.writeLog, {
+        email,
+        userId,
+        source: body.source || "agent",
+        level: body.level || "info",
+        tag: body.tag || "general",
+        message: body.message || "",
+        data: body.data ? String(body.data).slice(0, 8000) : undefined,
+      });
+      return jsonResponse({ ok: true });
+    } catch (e) {
+      console.error("Dev log error:", e);
+      return jsonResponse({ ok: false }, 500);
+    }
+  }),
+});
+
+/** GET /dev/logs — Read developer logs (no auth — dev-only data). */
+http.route({
+  path: "/dev/logs",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const limit = parseInt(url.searchParams.get("limit") || "50");
+    const email = url.searchParams.get("email") || undefined;
+    const logs = await ctx.runQuery(api.developerLogs.getLogs, { limit, email });
+    return jsonResponse({ logs });
+  }),
+});
+
 // ── Download Endpoints ──────────────────────────────────────────────
 
 /** GET /downloads/list — List all available downloads (public, no auth). */
@@ -1077,12 +1125,16 @@ http.route({
 
 // ── Platform Config ──────────────────────────────────────────────────
 
-/** GET /config — Public platform config (relay servers, etc.). No auth required. */
+/** GET /config — Public platform config (relay servers, runners, models). No auth required. */
 http.route({
   path: "/config",
   method: "GET",
   handler: httpAction(async (ctx) => {
-    const config = await ctx.runQuery(api.platformConfig.getClientConfig, {});
+    const [config, runners, models] = await Promise.all([
+      ctx.runQuery(api.platformConfig.getClientConfig, {}),
+      ctx.runQuery(api.aiRunners.list, {}),
+      ctx.runQuery(api.aiModels.list, {}),
+    ]);
     // Parse relay_servers from JSON string to array for client convenience
     let relayServers: unknown[] = [];
     if (config.relay_servers) {
@@ -1095,13 +1147,15 @@ http.route({
     return new Response(
       JSON.stringify({
         relayServers,
+        runners,
+        models,
       }),
       {
         status: 200,
         headers: {
           "Content-Type": "application/json",
           "Access-Control-Allow-Origin": "*",
-          // Cache for 5 minutes — relay list doesn't change often
+          // Cache for 5 minutes — config doesn't change often
           "Cache-Control": "public, max-age=300",
         },
       }
@@ -1127,6 +1181,28 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx) => {
     await ctx.runMutation(api.aiRunners.seed, {});
+    return jsonResponse({ ok: true });
+  }),
+});
+
+// ── AI Models ────────────────────────────────────────────────────────
+
+/** GET /models — List all AI models (public, no auth). */
+http.route({
+  path: "/models",
+  method: "GET",
+  handler: httpAction(async (ctx) => {
+    const models = await ctx.runQuery(api.aiModels.list, {});
+    return jsonResponse({ models });
+  }),
+});
+
+/** POST /models/seed — Seed predefined AI models (idempotent, no auth). */
+http.route({
+  path: "/models/seed",
+  method: "POST",
+  handler: httpAction(async (ctx) => {
+    await ctx.runMutation(api.aiModels.seed, {});
     return jsonResponse({ ok: true });
   }),
 });

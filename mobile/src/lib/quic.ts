@@ -12,7 +12,7 @@
  * - Local task + output cache via AsyncStorage for offline / P2P sync
  */
 
-import { cacheTaskList, cacheTaskOutput, getCachedTaskList } from "./storage";
+import { cacheTaskList, cacheTaskOutput, getCachedTaskList, getDeletedTaskIds } from "./storage";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -32,11 +32,28 @@ export interface Task {
   output: string[];
   resultText?: string;    // Extracted clean result from Claude
   costUsd?: number;       // Total API cost in USD
+  runnerId?: string;      // Which runner executed this task (claude, codex, aider)
   turns?: ConversationTurn[];  // Full conversation history
   createdAt: number;
   updatedAt: number;
   /** Name of the device this task is executing on. */
   deviceName?: string;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  description?: string;
+  isDefault?: boolean;
+}
+
+export interface RunnerInfo {
+  id: string;
+  name: string;
+  command: string;
+  installed: boolean;
+  isDefault: boolean;
+  models: ModelInfo[];
 }
 
 export interface AgentStatus {
@@ -222,12 +239,17 @@ export class QuicClient {
   // ── Task API ───────────────────────────────────────────────────────
 
   /** Send a new task to the desktop agent. */
-  async sendTask(title: string, description: string, model?: string): Promise<Task> {
+  async sendTask(title: string, description: string, model?: string, runner?: string): Promise<Task> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tasks`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ title, description, ...(model ? { model } : {}) }),
+      body: JSON.stringify({
+        title,
+        description,
+        ...(model ? { model } : {}),
+        ...(runner ? { runner } : {}),
+      }),
     });
     if (!res.ok) {
       let msg = `Failed to create task: ${res.status}`;
@@ -238,12 +260,13 @@ export class QuicClient {
       throw new Error(msg);
     }
     const data = await res.json();
-    // Agent returns { ok, taskId, status }
+    // Agent returns { ok, taskId, status, runnerId }
     return {
       id: data.taskId,
       title,
       description,
       status: data.status,
+      runnerId: data.runnerId,
       output: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -269,6 +292,7 @@ export class QuicClient {
         title: t.title,
         description: t.description,
         status: t.status,
+        runnerId: t.runnerId || undefined,
         output: typeof t.output === "string" && t.output
           ? t.output.split("\n").filter((l: string) => l)
           : Array.isArray(t.output) ? t.output : [],
@@ -283,9 +307,12 @@ export class QuicClient {
         costUsd: t.costUsd || undefined,
         turns: t.turns || undefined,
       }));
+      // Filter out tasks the user previously deleted
+      const deletedIds = await getDeletedTaskIds();
+      const filtered = deletedIds.size > 0 ? tasks.filter(t => !deletedIds.has(t.id)) : tasks;
       // Persist to local cache for offline access
-      cacheTaskList(tasks);
-      return tasks;
+      cacheTaskList(filtered);
+      return filtered;
     } catch {
       // Network error — serve from cache
       return getCachedTaskList();
@@ -406,6 +433,21 @@ export class QuicClient {
       return data.status || null;
     } catch {
       return null;
+    }
+  }
+
+  /** Get available runners from the agent with install status. */
+  async getRunners(): Promise<RunnerInfo[]> {
+    if (!this.isConnected && !this.hasConnectionInfo) return [];
+    try {
+      const res = await fetch(`${this.baseUrl}/agent/runners`, {
+        headers: this.authHeaders,
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.runners || [];
+    } catch {
+      return [];
     }
   }
 

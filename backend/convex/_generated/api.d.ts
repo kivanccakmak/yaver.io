@@ -9,9 +9,11 @@
  */
 
 import type * as admin from "../admin.js";
+import type * as aiModels from "../aiModels.js";
 import type * as aiRunners from "../aiRunners.js";
 import type * as auth from "../auth.js";
 import type * as authLogs from "../authLogs.js";
+import type * as developerLogs from "../developerLogs.js";
 import type * as deviceEvents from "../deviceEvents.js";
 import type * as deviceMetrics from "../deviceMetrics.js";
 import type * as devices from "../devices.js";
@@ -32,9 +34,11 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   admin: typeof admin;
+  aiModels: typeof aiModels;
   aiRunners: typeof aiRunners;
   auth: typeof auth;
   authLogs: typeof authLogs;
+  developerLogs: typeof developerLogs;
   deviceEvents: typeof deviceEvents;
   deviceMetrics: typeof deviceMetrics;
   devices: typeof devices;

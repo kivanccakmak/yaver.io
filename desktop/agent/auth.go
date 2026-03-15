@@ -112,8 +112,25 @@ type RelayServerInfo struct {
 	Priority int    `json:"priority"`
 }
 
-// FetchRelayServers fetches the relay server list from Convex platform config.
-func FetchRelayServers(baseURL string) ([]RelayServerInfo, error) {
+// PlatformConfig holds all platform-level config fetched from Convex /config.
+type PlatformConfig struct {
+	RelayServers []RelayServerInfo   `json:"relayServers"`
+	Runners      []backendRunnerFull `json:"runners"`
+	Models       []BackendModel      `json:"models"`
+}
+
+// BackendModel mirrors the Convex aiModels table.
+type BackendModel struct {
+	ModelID     string `json:"modelId"`
+	RunnerID    string `json:"runnerId"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	IsDefault   bool   `json:"isDefault,omitempty"`
+	SortOrder   int    `json:"sortOrder"`
+}
+
+// FetchPlatformConfig fetches all platform config from Convex (relays, runners, models).
+func FetchPlatformConfig(baseURL string) (*PlatformConfig, error) {
 	req, err := http.NewRequest("GET", baseURL+"/config", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create config request: %w", err)
@@ -129,13 +146,20 @@ func FetchRelayServers(baseURL string) ([]RelayServerInfo, error) {
 		return nil, fmt.Errorf("config request failed (status %d)", resp.StatusCode)
 	}
 
-	var result struct {
-		RelayServers []RelayServerInfo `json:"relayServers"`
-	}
+	var result PlatformConfig
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
-	return result.RelayServers, nil
+	return &result, nil
+}
+
+// FetchRelayServers fetches just relay servers (convenience wrapper).
+func FetchRelayServers(baseURL string) ([]RelayServerInfo, error) {
+	cfg, err := FetchPlatformConfig(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	return cfg.RelayServers, nil
 }
 
 // RegisterDevice registers this desktop agent with the Convex backend.
@@ -219,6 +243,34 @@ func ReportMetrics(baseURL, token, deviceID string, cpuPercent, memUsedMB, memTo
 		return fmt.Errorf("metrics failed (status %d): %s", resp.StatusCode, string(respBody))
 	}
 	return nil
+}
+
+// SendDevLog sends a developer log to Convex (only stored for developer emails).
+func SendDevLog(baseURL, token, email, tag, message string, data map[string]interface{}) {
+	payload := map[string]interface{}{
+		"email":   email,
+		"source":  "agent",
+		"level":   "debug",
+		"tag":     tag,
+		"message": message,
+	}
+	if data != nil {
+		d, _ := json.Marshal(data)
+		payload["data"] = string(d)
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	req, err := newBearerRequest("POST", baseURL+"/dev/log", token, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return
+	}
+	resp.Body.Close()
 }
 
 // ReportDeviceEvent sends a lifecycle event (crash, restart, etc.) to Convex.

@@ -53,6 +53,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/tasks/", s.auth(s.handleTaskByID))
 	mux.HandleFunc("/info", s.auth(s.handleInfo))
 	mux.HandleFunc("/agent/status", s.auth(s.handleAgentStatus))
+	mux.HandleFunc("/agent/runners", s.auth(s.handleRunners))
 	mux.HandleFunc("/agent/runner/restart", s.auth(s.handleRunnerRestart))
 	mux.HandleFunc("/agent/runner/switch", s.auth(s.handleRunnerSwitch))
 	mux.HandleFunc("/agent/shutdown", s.auth(s.handleShutdown))
@@ -181,6 +182,60 @@ func (s *HTTPServer) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleRunnerRestart checks if the runner is healthy and clears the runnerDown flag.
 // Mobile can call this to "restart" the runner after all retries were exhausted.
+// handleRunners returns all available runners with their install status and models.
+func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "use GET")
+		return
+	}
+
+	type modelInfo struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+		IsDefault   bool   `json:"isDefault,omitempty"`
+	}
+
+	type runnerInfo struct {
+		ID        string      `json:"id"`
+		Name      string      `json:"name"`
+		Command   string      `json:"command"`
+		Installed bool        `json:"installed"`
+		IsDefault bool        `json:"isDefault"`
+		Models    []modelInfo `json:"models"`
+	}
+
+	// Build models index by runner
+	modelsByRunner := make(map[string][]modelInfo)
+	for _, m := range GetCachedModels() {
+		modelsByRunner[m.RunnerID] = append(modelsByRunner[m.RunnerID], modelInfo{
+			ID:          m.ModelID,
+			Name:        m.Name,
+			Description: m.Description,
+			IsDefault:   m.IsDefault,
+		})
+	}
+
+	var runners []runnerInfo
+	for _, r := range builtinRunners {
+		_, err := osexec.LookPath(r.Command)
+		runners = append(runners, runnerInfo{
+			ID:        r.RunnerID,
+			Name:      r.Name,
+			Command:   r.Command,
+			Installed: err == nil,
+			IsDefault: r.RunnerID == s.taskMgr.runner.RunnerID,
+			Models:    modelsByRunner[r.RunnerID],
+		})
+	}
+
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":      true,
+		"runners": runners,
+		"default": s.taskMgr.runner.RunnerID,
+	})
+}
+
 func (s *HTTPServer) handleRunnerRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
@@ -365,6 +420,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		Title       string `json:"title"`
 		Description string `json:"description"`
 		Model       string `json:"model"`
+		Runner      string `json:"runner"` // runner ID: "claude", "codex", "aider" — empty uses default
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -375,17 +431,18 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "mobile")
+	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "mobile", body.Runner)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create task: %v", err))
 		return
 	}
 
-	log.Printf("[HTTP] Task created: %s — %s (status: %s, model: %s)", task.ID, task.Title, task.Status, body.Model)
+	log.Printf("[HTTP] Task created: %s — %s (status: %s, model: %s, runner: %s)", task.ID, task.Title, task.Status, body.Model, task.RunnerID)
 	resp := map[string]interface{}{
-		"ok":     true,
-		"taskId": task.ID,
-		"status": task.Status,
+		"ok":       true,
+		"taskId":   task.ID,
+		"status":   task.Status,
+		"runnerId": task.RunnerID,
 	}
 	log.Printf("[HTTP] Sending create response for task %s", task.ID)
 	jsonReply(w, http.StatusCreated, resp)
@@ -456,6 +513,7 @@ func (s *HTTPServer) getTask(w http.ResponseWriter, r *http.Request, id string) 
 		Title:       task.Title,
 		Description: task.Description,
 		Status:      task.Status,
+		RunnerID:    task.RunnerID,
 		SessionID:   task.SessionID,
 		Output:      output,
 		ResultText:  task.ResultText,
@@ -856,7 +914,7 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		if args.Prompt == "" {
 			return mcpToolError("prompt is required")
 		}
-		task, err := s.taskMgr.CreateTask(args.Prompt, "", "", "mcp")
+		task, err := s.taskMgr.CreateTask(args.Prompt, "", "", "mcp", "")
 		if err != nil {
 			return mcpToolError(fmt.Sprintf("failed to create task: %v", err))
 		}

@@ -27,10 +27,13 @@ import {
   AgentStatus,
   ConnectionMode,
   ConnectionState,
+  ModelInfo,
   quicClient,
+  RunnerInfo,
   Task,
   TaskStatus,
 } from "../../src/lib/quic";
+import { markTaskDeleted } from "../../src/lib/storage";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -199,14 +202,20 @@ function TaskCard({
   onDelete: () => void;
 }) {
   const c = useColors();
-  const canDelete = item.status !== "running" && item.status !== "queued";
+  const isRunning = item.status === "running" || item.status === "queued";
 
   const handleLongPress = () => {
-    if (!canDelete) return;
-    Alert.alert("Delete Task", "Are you sure?", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: onDelete },
-    ]);
+    if (isRunning) {
+      Alert.alert("Stop & Delete Task", "This will kill the running process and remove the task.", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Stop & Delete", style: "destructive", onPress: onDelete },
+      ]);
+    } else {
+      Alert.alert("Delete Task", "Are you sure?", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: onDelete },
+      ]);
+    }
   };
 
   const previewText = item.resultText
@@ -226,6 +235,11 @@ function TaskCard({
         <View style={[s.statusBadge, { backgroundColor: STATUS_COLORS[item.status] + "22" }]}>
           <Text style={[s.statusText, { color: STATUS_COLORS[item.status] }]}>{item.status}</Text>
         </View>
+        {item.runnerId && item.runnerId !== "claude" && (
+          <View style={[s.statusBadge, { backgroundColor: "#f59e0b22" }]}>
+            <Text style={[s.statusText, { color: "#f59e0b" }]}>{item.runnerId}</Text>
+          </View>
+        )}
         {item.status === "running" && <ActivityIndicator size="small" color="#6366f1" />}
       </View>
       <Text style={[s.taskTitle, { color: c.textPrimary }]} numberOfLines={2}>{item.title}</Text>
@@ -307,6 +321,9 @@ export default function TasksScreen() {
   const [pingResult, setPingResult] = useState<{ ok: boolean; rttMs: number; hostname?: string; mode?: string } | null>(null);
   const [showPingResult, setShowPingResult] = useState(false);
   const [isRestartingRunner, setIsRestartingRunner] = useState(false);
+  const [availableRunners, setAvailableRunners] = useState<RunnerInfo[]>([]);
+  const [selectedRunner, setSelectedRunner] = useState<string>(""); // "" = default
+  const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const chatScrollRef = useRef<ScrollView>(null);
   const pendingOpenTaskRef = useRef<Task | null>(null);
 
@@ -330,6 +347,43 @@ export default function TasksScreen() {
     const interval = setInterval(fetchStatus, 30000);
     return () => clearInterval(interval);
   }, [connectionStatus]);
+
+  // Fetch available runners + models when connected
+  useEffect(() => {
+    if (connectionStatus !== "connected") {
+      setAvailableRunners([]);
+      setAvailableModels([]);
+      return;
+    }
+    quicClient.getRunners().then(r => {
+      if (r.length > 0) {
+        setAvailableRunners(r);
+        // Set default runner selection and its models
+        const def = r.find(x => x.isDefault);
+        if (def) {
+          setSelectedRunner(def.id);
+          if (def.models?.length > 0) {
+            setAvailableModels(def.models);
+            const defModel = def.models.find(m => m.isDefault);
+            if (defModel) setSelectedModel(defModel.id);
+          }
+        }
+      }
+    });
+  }, [connectionStatus]);
+
+  // Update models when runner selection changes
+  useEffect(() => {
+    const runner = availableRunners.find(r => r.id === selectedRunner);
+    if (runner?.models?.length) {
+      setAvailableModels(runner.models);
+      const defModel = runner.models.find(m => m.isDefault);
+      if (defModel) setSelectedModel(defModel.id);
+      else setSelectedModel(runner.models[0].id);
+    } else {
+      setAvailableModels([]);
+    }
+  }, [selectedRunner, availableRunners]);
 
   // Ping agent every 10s when connected
   useEffect(() => {
@@ -474,7 +528,7 @@ export default function TasksScreen() {
     Keyboard.dismiss();
     setIsSubmitting(true);
     try {
-      const task = await quicClient.sendTask(newTaskText.trim(), "", selectedModel || undefined);
+      const task = await quicClient.sendTask(newTaskText.trim(), "", selectedModel || undefined, selectedRunner || undefined);
       setNewTaskText("");
       // Add task to list immediately
       setTasks((prev) => [task, ...prev]);
@@ -530,7 +584,11 @@ export default function TasksScreen() {
   };
 
   const handleDeleteTask = async (taskId: string) => {
+    // Close detail modal if this task is open
+    if (selectedTask?.id === taskId) setSelectedTask(null);
     setTasks((prev) => prev.filter((t) => t.id !== taskId));
+    // Remember deletion so it won't reappear after refresh/re-login
+    markTaskDeleted(taskId);
     try {
       await quicClient.deleteTask(taskId);
     } catch (e) {
@@ -857,33 +915,50 @@ export default function TasksScreen() {
               <Text style={[s.modalTitle, { color: c.textPrimary }]}>New Task</Text>
               <TextInput
                 style={[s.input, s.inputMultiline, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
-                placeholder="What would you like Claude to do?"
+                placeholder={`What would you like ${selectedRunner === "codex" ? "Codex" : selectedRunner === "aider" ? "Aider" : "Claude"} to do?`}
                 placeholderTextColor={c.textMuted}
                 value={newTaskText}
                 onChangeText={setNewTaskText}
                 multiline numberOfLines={4} textAlignVertical="top" autoFocus
               />
-              <View style={s.modelChips}>
-                {[
-                  { id: "sonnet", label: "Sonnet" },
-                  { id: "opus", label: "Opus" },
-                  { id: "haiku", label: "Haiku" },
-                ].map((m) => (
-                  <Pressable
-                    key={m.id}
-                    style={[
-                      s.modelChip,
-                      { borderColor: selectedModel === m.id ? c.accent : c.border },
-                      selectedModel === m.id && { backgroundColor: c.accent + "20" },
-                    ]}
-                    onPress={() => setSelectedModel(m.id)}
-                  >
-                    <Text style={[s.modelChipText, { color: selectedModel === m.id ? c.accent : c.textMuted }]}>
-                      {m.label}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
+              {availableModels.length > 0 && (
+                <View style={s.modelChips}>
+                  {availableModels.map((m) => (
+                    <Pressable
+                      key={m.id}
+                      style={[
+                        s.modelChip,
+                        { borderColor: selectedModel === m.id ? c.accent : c.border },
+                        selectedModel === m.id && { backgroundColor: c.accent + "20" },
+                      ]}
+                      onPress={() => setSelectedModel(m.id)}
+                    >
+                      <Text style={[s.modelChipText, { color: selectedModel === m.id ? c.accent : c.textMuted }]}>
+                        {m.name}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+              {availableRunners.filter(r => r.installed).length > 1 && (
+                <View style={s.modelChips}>
+                  {availableRunners.filter(r => r.installed).map((r) => (
+                    <Pressable
+                      key={r.id}
+                      style={[
+                        s.modelChip,
+                        { borderColor: selectedRunner === r.id ? "#f59e0b" : c.border },
+                        selectedRunner === r.id && { backgroundColor: "#f59e0b" + "20" },
+                      ]}
+                      onPress={() => setSelectedRunner(r.id)}
+                    >
+                      <Text style={[s.modelChipText, { color: selectedRunner === r.id ? "#f59e0b" : c.textMuted }]}>
+                        {r.name}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
               <View style={s.modalButtons}>
                 <Pressable style={[s.cancelButton, { backgroundColor: c.bgCardElevated }]} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); }}>
                   <Text style={[s.cancelButtonText, { color: c.textSecondary }]}>Cancel</Text>

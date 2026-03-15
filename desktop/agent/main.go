@@ -25,7 +25,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.11.0"
+const version = "1.15.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -113,6 +113,7 @@ Flags for serve:
   --quic-port       QUIC server port (default 4433)
   --no-relay        Disable relay tunnels (direct connections only)
   --wait-for-session Wait for other Claude Code sessions to finish before starting tasks
+  --dummy           Use dummy runner (fake responses for network testing)
   --work-dir        Working directory for tasks (default .)
 
 Flags for connect:
@@ -152,9 +153,9 @@ func runAuth(args []string) {
 	// Check if already logged in
 	if cfg.AuthToken != "" && cfg.ConvexSiteURL != "" {
 		if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err == nil {
-			fmt.Println("Already signed in. Starting agent...")
+			fmt.Println("Already signed in.")
 			fmt.Println()
-			runServe([]string{})
+			fmt.Println("Run 'yaver serve' to start the agent.")
 			return
 		}
 		// Token expired, continue to re-auth
@@ -175,9 +176,9 @@ func runAuth(args []string) {
 		if err := SaveConfig(cfg); err != nil {
 			log.Fatalf("save config: %v", err)
 		}
-		fmt.Println("Signed in successfully. Starting agent...")
+		fmt.Println("Signed in successfully.")
 		fmt.Println()
-		runServe([]string{})
+		fmt.Println("Run 'yaver serve' to start the agent.")
 		return
 	}
 
@@ -266,9 +267,9 @@ func runAuth(args []string) {
 			log.Fatalf("save config: %v", err)
 		}
 		fmt.Println()
-		fmt.Println("Signed in successfully. Starting agent...")
+		fmt.Println("Signed in successfully.")
 		fmt.Println()
-		runServe([]string{})
+		fmt.Println("Run 'yaver serve' to start the agent.")
 
 	case <-time.After(5 * time.Minute):
 		srv1.Close()
@@ -611,6 +612,7 @@ func runServe(args []string) {
 	noRelay := fs.Bool("no-relay", false, "Disable relay tunnel (direct only)")
 	waitForSession := fs.Bool("wait-for-session", false, "Wait for other Claude Code sessions to finish before starting tasks")
 	debug := fs.Bool("debug", false, "Run in foreground with verbose logging")
+	dummy := fs.Bool("dummy", false, "Use dummy runner (fake responses for network testing)")
 	fs.Parse(args)
 
 	if *workDir == "." {
@@ -666,6 +668,9 @@ func runServe(args []string) {
 		if *waitForSession {
 			childArgs = append(childArgs, "--wait-for-session")
 		}
+		if *dummy {
+			childArgs = append(childArgs, "--dummy")
+		}
 
 		cmd := osexec.Command(execPath, childArgs...)
 		cmd.Stdout = lf
@@ -695,6 +700,10 @@ func runServe(args []string) {
 
 	// Debug mode: run in foreground with full logging
 	log.Println("Yaver agent starting...")
+
+	// Note: we no longer kill other Claude processes on startup.
+	// Users may have active Claude Code sessions we shouldn't disrupt.
+
 	log.Printf("  Work dir: %s", *workDir)
 	log.Printf("  HTTP port: %d", *httpPort)
 	if !*noQUIC {
@@ -710,12 +719,14 @@ func runServe(args []string) {
 		log.Fatalf("save config: %v", err)
 	}
 
-	// Get owner userId for multi-token auth
-	ownerUserID, err := ValidateTokenUser(cfg.ConvexSiteURL, cfg.AuthToken)
+	// Get owner userId and email for multi-token auth and dev logging
+	ownerInfo, err := ValidateTokenInfo(cfg.ConvexSiteURL, cfg.AuthToken)
 	if err != nil {
-		log.Fatalf("failed to get owner userId: %v", err)
+		log.Fatalf("failed to get owner info: %v", err)
 	}
-	log.Printf("Token validated. Owner: %s", ownerUserID)
+	ownerUserID := ownerInfo.UserID
+	ownerEmail := ownerInfo.Email
+	log.Printf("Token validated. Owner: %s (%s)", ownerUserID, ownerEmail)
 
 	// Register device
 	hostname, _ := os.Hostname()
@@ -756,20 +767,33 @@ func runServe(args []string) {
 	}
 	log.Println("Device registered.")
 
-	// Fetch relay servers from platform config
+	// Fetch platform config (relay servers, runners, models) from Convex
 	var relayServers []RelayServerInfo
-	if !*noRelay {
-		var err error
-		relayServers, err = FetchRelayServers(cfg.ConvexSiteURL)
-		if err != nil {
-			log.Printf("Warning: could not fetch relay servers: %v", err)
-		} else if len(relayServers) > 0 {
-			log.Printf("Found %d relay server(s):", len(relayServers))
-			for _, rs := range relayServers {
-				log.Printf("  [%s] %s (%s)", rs.ID, rs.QuicAddr, rs.Region)
+	platformCfg, platformErr := FetchPlatformConfig(cfg.ConvexSiteURL)
+	if platformErr != nil {
+		log.Printf("Warning: could not fetch platform config: %v", platformErr)
+	} else {
+		// Populate relay servers
+		if !*noRelay {
+			relayServers = platformCfg.RelayServers
+			if len(relayServers) > 0 {
+				log.Printf("Found %d relay server(s):", len(relayServers))
+				for _, rs := range relayServers {
+					log.Printf("  [%s] %s (%s)", rs.ID, rs.QuicAddr, rs.Region)
+				}
+			} else {
+				log.Println("No relay servers configured.")
 			}
-		} else {
-			log.Println("No relay servers configured.")
+		}
+		// Populate runners from Convex (overrides hardcoded builtinRunners)
+		if len(platformCfg.Runners) > 0 {
+			log.Printf("Loaded %d runner(s) from Convex", len(platformCfg.Runners))
+			LoadRunnersFromBackend(platformCfg.Runners)
+		}
+		// Cache models for the /agent/runners endpoint
+		if len(platformCfg.Models) > 0 {
+			log.Printf("Loaded %d model(s) from Convex", len(platformCfg.Models))
+			LoadModelsFromBackend(platformCfg.Models)
 		}
 	}
 
@@ -822,9 +846,14 @@ func runServe(args []string) {
 	}
 	taskMgr := NewTaskManager(*workDir, taskStore, runner)
 	taskMgr.WaitForSlot = *waitForSession
+	taskMgr.DummyMode = *dummy
+	if *dummy {
+		log.Println("DUMMY MODE enabled — tasks will return fake responses (no real runner)")
+	}
 	taskMgr.ConvexURL = cfg.ConvexSiteURL
 	taskMgr.AuthToken = cfg.AuthToken
 	taskMgr.DeviceID = cfg.DeviceID
+	taskMgr.OwnerEmail = ownerEmail
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

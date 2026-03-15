@@ -184,7 +184,7 @@ func (s *QUICServer) handleTaskCreate(stream quic.Stream, msg IncomingMessage) {
 	if source == "" {
 		source = "mobile"
 	}
-	task, err := s.taskManager.CreateTask(msg.Title, msg.Description, "", source)
+	task, err := s.taskManager.CreateTask(msg.Title, msg.Description, "", source, "")
 	if err != nil {
 		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: err.Error()})
 		return

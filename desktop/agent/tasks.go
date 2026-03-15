@@ -54,10 +54,11 @@ var defaultRunner = RunnerConfig{
 		"--model", "sonnet",
 		"--tools", "Bash",
 		"--dangerously-skip-permissions",
+		"--no-session-persistence",
 	},
 	OutputMode:      "stream-json",
-	ResumeSupported: true,
-	ResumeArgs:      []string{"--resume", "{sessionId}"},
+	ResumeSupported: false,
+	ResumeArgs:      nil,
 	ExitCommand:     "/exit",
 }
 
@@ -66,6 +67,80 @@ var exitCommands = map[string]string{
 	"claude": "/exit",
 	"codex":  "exit",
 	"aider":  "/quit",
+}
+
+// builtinRunners defines all known runner configurations.
+var builtinRunners = map[string]RunnerConfig{
+	"claude": {
+		RunnerID:    "claude",
+		Name:        "Claude Code",
+		Command:     "claude",
+		Args:        []string{"-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "sonnet", "--tools", "Bash", "--dangerously-skip-permissions", "--no-session-persistence"},
+		OutputMode:  "stream-json",
+		ExitCommand: "/exit",
+	},
+	"codex": {
+		RunnerID:   "codex",
+		Name:       "OpenAI Codex",
+		Command:    "codex",
+		Args:       []string{"--quiet", "--full-auto", "{prompt}"},
+		OutputMode: "raw",
+	},
+	"aider": {
+		RunnerID:    "aider",
+		Name:        "Aider",
+		Command:     "aider",
+		Args:        []string{"--yes-always", "--no-git", "--message", "{prompt}"},
+		OutputMode:  "raw",
+		ExitCommand: "/quit",
+	},
+}
+
+// GetRunnerConfig returns the RunnerConfig for a given runner ID.
+// Falls back to defaultRunner if not found.
+func GetRunnerConfig(runnerID string) RunnerConfig {
+	if r, ok := builtinRunners[runnerID]; ok {
+		return r
+	}
+	return defaultRunner
+}
+
+// cachedModels stores models fetched from Convex for the /agent/runners endpoint.
+var cachedModels []BackendModel
+
+// LoadRunnersFromBackend populates builtinRunners from Convex backend data.
+func LoadRunnersFromBackend(runners []backendRunnerFull) {
+	for _, r := range runners {
+		if r.Command == "" || r.RunnerID == "custom" {
+			continue // skip custom runner template
+		}
+		rc := RunnerConfig{
+			RunnerID:        r.RunnerID,
+			Name:            r.Name,
+			Command:         r.Command,
+			OutputMode:      r.OutputMode,
+			ResumeSupported: r.ResumeSupported,
+			ExitCommand:     r.ExitCommand,
+		}
+		if r.Args != "" {
+			_ = json.Unmarshal([]byte(r.Args), &rc.Args)
+		}
+		if r.ResumeArgs != "" {
+			_ = json.Unmarshal([]byte(r.ResumeArgs), &rc.ResumeArgs)
+		}
+		builtinRunners[r.RunnerID] = rc
+		log.Printf("  Runner loaded: %s (%s)", rc.Name, rc.RunnerID)
+	}
+}
+
+// LoadModelsFromBackend caches models fetched from Convex.
+func LoadModelsFromBackend(models []BackendModel) {
+	cachedModels = models
+}
+
+// GetCachedModels returns models loaded from Convex.
+func GetCachedModels() []BackendModel {
+	return cachedModels
 }
 
 // ClaudeEvent represents a top-level line of stream-json output from Claude CLI.
@@ -256,6 +331,7 @@ type Task struct {
 	Status      TaskStatus `json:"status"`
 	Source      string     `json:"source,omitempty"` // "mobile", "mcp", "cli"
 	Model       string     `json:"model,omitempty"`
+	RunnerID    string     `json:"runnerId,omitempty"` // which runner is executing this task
 	SessionID   string     `json:"session_id,omitempty"`
 	Output      string     `json:"output"`
 	ResultText   string  // Extracted clean result text from Claude
@@ -265,6 +341,7 @@ type Task struct {
 	StartedAt   *time.Time `json:"started_at,omitempty"`
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 
+	runner       RunnerConfig // the runner config used for this task (not persisted)
 	cmd          *exec.Cmd
 	cancel       context.CancelFunc
 	stdin        io.WriteCloser
@@ -279,6 +356,7 @@ type TaskInfo struct {
 	Title       string             `json:"title"`
 	Description string             `json:"description"`
 	Status      TaskStatus         `json:"status"`
+	RunnerID    string             `json:"runnerId,omitempty"`
 	SessionID   string             `json:"sessionId,omitempty"`
 	Output      string             `json:"output,omitempty"`
 	ResultText  string             `json:"resultText,omitempty"`
@@ -297,11 +375,13 @@ type TaskManager struct {
 	store        *TaskStore
 	runner       RunnerConfig
 	WaitForSlot  bool // If true, wait for other Claude Code sessions to finish before starting
+	DummyMode    bool // If true, use fake responses instead of launching a real runner
 
 	// Convex reporting (set after construction)
-	ConvexURL string
-	AuthToken string
-	DeviceID  string
+	ConvexURL  string
+	AuthToken  string
+	DeviceID   string
+	OwnerEmail string // for dev logging
 
 	// Warm session: forked at startup, reused for all tasks
 	warmSessionID  string     // Claude session ID from warmup
@@ -338,6 +418,10 @@ func NewTaskManager(workDir string, store *TaskStore, runner RunnerConfig) *Task
 // WarmUp forks the runner at startup to establish a session.
 // This avoids cold-start delays and keeps us in one session for rate limiting.
 func (tm *TaskManager) WarmUp() {
+	if !tm.runner.ResumeSupported {
+		log.Printf("[warmup] Skipping — resume not supported for %s", tm.runner.Name)
+		return
+	}
 	if err := tm.CheckRunner(); err != nil {
 		log.Printf("[warmup] Runner not available: %v — skipping warmup", err)
 		return
@@ -479,23 +563,26 @@ func (tm *TaskManager) CheckRunner() error {
 	return nil
 }
 
-// CreateTask creates a new task and runs the configured runner.
+// CreateTask creates a new task and runs the specified (or default) runner.
+// runnerID selects which runner to use — empty uses the agent's default.
 // model overrides the default model (e.g. "opus", "sonnet", "haiku") — empty uses runner default.
 // source indicates where the task originated: "mobile", "mcp", or "cli" — defaults to "mobile".
-func (tm *TaskManager) CreateTask(title, description, model, source string) (*Task, error) {
-	// Enforce single-fork limit: only one running task at a time
-	tm.mu.RLock()
-	for _, t := range tm.tasks {
-		if t.Status == TaskStatusRunning || t.Status == TaskStatusQueued {
-			tm.mu.RUnlock()
-			return nil, fmt.Errorf("another task is already running (id=%s) — stop it first or wait", t.ID)
+func (tm *TaskManager) CreateTask(title, description, model, source, runnerID string) (*Task, error) {
+	// Resolve which runner to use for this task
+	taskRunner := tm.runner // default
+	if runnerID != "" && runnerID != tm.runner.RunnerID {
+		if r, ok := builtinRunners[runnerID]; ok {
+			taskRunner = r
+		} else {
+			return nil, fmt.Errorf("unknown runner: %s", runnerID)
 		}
 	}
-	tm.mu.RUnlock()
 
-	// Pre-flight: verify the runner is available before creating the task.
-	if err := tm.CheckRunner(); err != nil {
-		return nil, fmt.Errorf("runner not ready: %w", err)
+	// Pre-flight: verify the runner binary is available (skip in dummy mode).
+	if !tm.DummyMode {
+		if err := CheckRunnerBinary(taskRunner.Command); err != nil {
+			return nil, fmt.Errorf("runner not ready: %w", err)
+		}
 	}
 
 	if source == "" {
@@ -511,6 +598,8 @@ func (tm *TaskManager) CreateTask(title, description, model, source string) (*Ta
 		Status:      TaskStatusQueued,
 		Source:      source,
 		Model:       model,
+		RunnerID:    taskRunner.RunnerID,
+		runner:      taskRunner,
 		CreatedAt:   now,
 		outputCh:    make(chan string, 512),
 		doneCh:      make(chan struct{}),
@@ -524,27 +613,106 @@ func (tm *TaskManager) CreateTask(title, description, model, source string) (*Ta
 	tm.persist()
 	tm.mu.Unlock()
 
-	log.Printf("[task %s] Starting %s process for: %s", id, tm.runner.Name, title)
+	// Dummy mode: stream fake response without launching a real process.
+	if tm.DummyMode {
+		log.Printf("[task %s] DUMMY MODE — streaming fake response for: %s", id, title)
+		go tm.runDummyTask(task)
+		return task, nil
+	}
+
+	log.Printf("[task %s] Starting %s process for: %s", id, taskRunner.Name, title)
 	if err := tm.startProcess(task); err != nil {
-		log.Printf("[task %s] Failed to start %s: %v", id, tm.runner.Name, err)
+		log.Printf("[task %s] Failed to start %s: %v", id, taskRunner.Name, err)
 		task.Status = TaskStatusFailed
 		tm.mu.Lock()
 		tm.persist()
 		tm.mu.Unlock()
 		return task, fmt.Errorf("start process: %w", err)
 	}
-	log.Printf("[task %s] %s process started (PID %d)", id, tm.runner.Name, task.cmd.Process.Pid)
+	log.Printf("[task %s] %s process started (PID %d)", id, taskRunner.Name, task.cmd.Process.Pid)
 
 	return task, nil
 }
 
+// CheckRunnerBinary checks if a runner binary is available in PATH.
+func CheckRunnerBinary(command string) error {
+	path, err := exec.LookPath(command)
+	if err != nil {
+		return fmt.Errorf("%s not found in PATH", command)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command, "--version")
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		existingPath := os.Getenv("PATH")
+		extraPaths := filepath.Join(home, ".local", "bin") + ":" +
+			"/opt/homebrew/bin" + ":" +
+			"/usr/local/bin"
+		cmd.Env = append(os.Environ(), "PATH="+extraPaths+":"+existingPath)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s found but not working: %v (output: %s)", command, err, strings.TrimSpace(string(out)))
+	}
+	log.Printf("[runner-check] %s at %s — %s", command, path, strings.TrimSpace(string(out)))
+	return nil
+}
+
+// runDummyTask streams a fake response for network testing (no real runner).
+func (tm *TaskManager) runDummyTask(task *Task) {
+	now := time.Now()
+	task.StartedAt = &now
+	task.Status = TaskStatusRunning
+
+	var output strings.Builder
+
+	chunks := []string{
+		"## Dummy Response\n\n",
+		"This is a **dummy response** from the Yaver agent.\n\n",
+		fmt.Sprintf("Your prompt was: *%s*\n\n", task.Title),
+		"Network connection is working correctly.\n\n",
+		fmt.Sprintf("- Device: `%s`\n", tm.DeviceID),
+		fmt.Sprintf("- Work dir: `%s`\n", tm.workDir),
+		fmt.Sprintf("- Time: `%s`\n", now.Format(time.RFC3339)),
+		"\nDummy mode active — no real AI runner was invoked.\n",
+	}
+
+	for _, chunk := range chunks {
+		time.Sleep(300 * time.Millisecond)
+		tm.emit(task, &output, chunk)
+	}
+
+	finishNow := time.Now()
+	tm.mu.Lock()
+	task.Status = TaskStatusFinished
+	task.FinishedAt = &finishNow
+	task.ResultText = output.String()
+	task.Turns = append(task.Turns, ConversationTurn{
+		Role:      "assistant",
+		Content:   task.ResultText,
+		Timestamp: finishNow,
+	})
+	tm.persist()
+	tm.mu.Unlock()
+	close(task.outputCh)
+	close(task.doneCh)
+	log.Printf("[task %s] DUMMY task completed", task.ID)
+}
+
 // buildArgs replaces placeholders in the runner's arg template with actual values.
-func (tm *TaskManager) buildArgs(prompt string) []string {
-	args := make([]string, len(tm.runner.Args))
-	for i, a := range tm.runner.Args {
+func buildRunnerArgs(runner RunnerConfig, prompt string) []string {
+	args := make([]string, len(runner.Args))
+	for i, a := range runner.Args {
 		args[i] = strings.ReplaceAll(a, "{prompt}", prompt)
 	}
 	return args
+}
+
+// buildArgs is a convenience wrapper using the task manager's default runner.
+func (tm *TaskManager) buildArgs(prompt string) []string {
+	return buildRunnerArgs(tm.runner, prompt)
 }
 
 // countOtherClaudeProcesses counts how many `claude` processes are running
@@ -625,21 +793,9 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		prompt = task.Title + "\n\n" + task.Description
 	}
 
-	// Prepend local project context if available (capped at 4KB to keep prompt fast)
-	if projectCtx := getProjectContext(); projectCtx != "" {
-		const maxCtx = 4096
-		if len(projectCtx) > maxCtx {
-			projectCtx = projectCtx[:maxCtx] + "\n...(truncated)"
-		}
-		prompt = "Here is context about the user's machine and projects:\n\n" + projectCtx + "\n\n---\n\nUser's task:\n" + prompt
-	}
-
-	// Prepend recent session history so the agent knows what user has been working on
-	if sessionCtx := getRecentSessionsContext(); sessionCtx != "" {
-		prompt = sessionCtx + "\n\n---\n\n" + prompt
-	}
-
 	// System prompt: behave as a remote terminal agent, tailored to the task source.
+	// NOTE: project context and session history are NOT prepended to keep the prompt
+	// short and avoid CLI arg length issues. Claude reads CLAUDE.md automatically.
 	switch task.Source {
 	case "mcp":
 		prompt += "\n\nYou are running tasks via MCP from an AI agent. Show what you are doing step by step. Use only terminal commands. Be concise. Format output in markdown."
@@ -652,17 +808,23 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
 
-	args := tm.buildArgs(prompt)
+	runner := task.runner
+	args := buildRunnerArgs(runner, prompt)
 
 	// Use warm session if available (resume = same rate-limit bucket)
 	tm.mu.RLock()
 	warmSID := tm.warmSessionID
 	tm.mu.RUnlock()
-	if warmSID != "" && tm.runner.ResumeSupported && len(tm.runner.ResumeArgs) > 0 {
-		for _, ra := range tm.runner.ResumeArgs {
+	if warmSID != "" && runner.ResumeSupported && len(runner.ResumeArgs) > 0 {
+		for _, ra := range runner.ResumeArgs {
 			args = append(args, strings.ReplaceAll(ra, "{sessionId}", warmSID))
 		}
 		log.Printf("[task %s] Resuming warm session %s", task.ID, warmSID)
+	}
+
+	// Give each Claude task its own session ID to avoid blocking other sessions
+	if runner.RunnerID == "claude" {
+		args = append(args, "--session-id", uuid.New().String())
 	}
 
 	// Override model if specified on the task (e.g. "opus", "sonnet", "haiku").
@@ -680,7 +842,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, tm.runner.Command, args...)
+	cmd := exec.CommandContext(ctx, runner.Command, args...)
 	cmd.Dir = tm.workDir
 
 	// Ensure common tool paths are in PATH for background processes.
@@ -693,7 +855,12 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		cmd.Env = append(os.Environ(), "PATH="+extraPaths+":"+existingPath)
 	}
 
-	log.Printf("[task %s] Launching: %s %v (dir=%s)", task.ID, tm.runner.Command, args[:2], tm.workDir)
+	log.Printf("[task %s] Launching: %s %v (dir=%s)", task.ID, runner.Command, args[:2], tm.workDir)
+
+	// Dev log: task launch
+	go SendDevLog(tm.ConvexURL, tm.AuthToken, tm.OwnerEmail, "task-launch",
+		fmt.Sprintf("Launching task %s: %s", task.ID, task.Title),
+		map[string]interface{}{"runner": runner.RunnerID, "model": task.Model, "argCount": len(args)})
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -707,18 +874,20 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		return fmt.Errorf("stderr pipe: %w", err)
 	}
 
-	// Set up stdin pipe for graceful exit support.
-	stdinPipe, err := cmd.StdinPipe()
-	if err != nil {
-		cancel()
-		return fmt.Errorf("stdin pipe: %w", err)
+	// Point stdin to /dev/null — Claude CLI blocks when stdin is a pipe.
+	// Graceful exit is handled via process signals instead.
+	devNull, err := os.Open(os.DevNull)
+	if err == nil {
+		cmd.Stdin = devNull
+		defer devNull.Close()
 	}
-	task.stdin = stdinPipe
 
 	task.cmd = cmd
 
 	if err := cmd.Start(); err != nil {
 		cancel()
+		go SendDevLog(tm.ConvexURL, tm.AuthToken, tm.OwnerEmail, "task-start-fail",
+			fmt.Sprintf("Failed to start process for task %s: %v", task.ID, err), nil)
 		return fmt.Errorf("start process: %w", err)
 	}
 
@@ -726,8 +895,11 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	task.StartedAt = &now
 	task.Status = TaskStatusRunning
 
+	go SendDevLog(tm.ConvexURL, tm.AuthToken, tm.OwnerEmail, "task-started",
+		fmt.Sprintf("Claude PID %d started for task %s", cmd.Process.Pid, task.ID), nil)
+
 	// Monitor stdout based on output mode.
-	if tm.runner.OutputMode == "raw" {
+	if runner.OutputMode == "raw" {
 		go tm.readRawOutput(task, stdout)
 	} else {
 		go tm.readStreamJSON(task, stdout)
@@ -774,7 +946,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 					task.retryCount++
 					backoff := time.Duration(2<<uint(retries)) * time.Second // 2s, 4s, 8s, 16s
 					log.Printf("[task %s] %s crashed (exit: %v, output_len=%d) — auto-restarting in %v (attempt %d/%d)",
-						task.ID, tm.runner.Name, err, outputLen, backoff, retries+1, maxProcessRetries)
+						task.ID, task.runner.Name, err, outputLen, backoff, retries+1, maxProcessRetries)
 
 					// Report crash event to Convex
 					go func() {
@@ -832,10 +1004,10 @@ func (tm *TaskManager) startProcess(task *Task) error {
 				}()
 
 				task.Status = TaskStatusFailed
-				log.Printf("[task %s] %s process failed: %v", task.ID, tm.runner.Name, err)
+				log.Printf("[task %s] %s process failed: %v", task.ID, task.runner.Name, err)
 			} else {
 				task.Status = TaskStatusFinished
-				log.Printf("[task %s] %s process finished successfully (output_len=%d)", task.ID, tm.runner.Name, len(task.Output))
+				log.Printf("[task %s] %s process finished successfully (output_len=%d)", task.ID, task.runner.Name, len(task.Output))
 			}
 			finishNow := time.Now()
 			task.FinishedAt = &finishNow
@@ -853,7 +1025,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			duration := task.FinishedAt.Sub(*task.StartedAt).Seconds()
 			startMs := task.StartedAt.UnixMilli()
 			finishMs := task.FinishedAt.UnixMilli()
-			runner := tm.runner.Name
+			runner := task.runner.Name
 			model := task.Model
 			source := task.Source
 			taskID := task.ID
@@ -867,7 +1039,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		}
 		tm.persist()
 		// Save session file for recent history (non-blocking)
-		go saveSessionFile(task, tm.runner.Name, tm.workDir)
+		go saveSessionFile(task, task.runner.Name, tm.workDir)
 		tm.mu.Unlock()
 		close(task.doneCh)
 	}()
@@ -940,12 +1112,20 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 	inToolUse := false
 	lastEmittedCmd := "" // Prevent duplicate command emissions
 	lineCount := 0
+	firstOutputLogged := false
 
 	for scanner.Scan() {
 		lineCount++
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
+		}
+
+		// Dev log: first output from Claude
+		if !firstOutputLogged {
+			firstOutputLogged = true
+			go SendDevLog(tm.ConvexURL, tm.AuthToken, tm.OwnerEmail, "task-first-output",
+				fmt.Sprintf("First stdout line for task %s (len=%d)", task.ID, len(line)), nil)
 		}
 
 		// Log raw stdout for debugging (truncate long lines)
@@ -1146,11 +1326,16 @@ func (tm *TaskManager) GracefulStopTask(id string) error {
 	}
 
 	// Determine exit command: runner config > known defaults > fallback to kill
-	exitCmd := tm.runner.ExitCommand
+	// Use the task's runner for exit commands, fall back to global
+	exitCmd := task.runner.ExitCommand
 	if exitCmd == "" {
-		if cmd, ok := exitCommands[tm.runner.RunnerID]; ok {
+		if cmd, ok := exitCommands[task.runner.RunnerID]; ok {
 			exitCmd = cmd
 		}
+	}
+	// Final fallback to global runner
+	if exitCmd == "" {
+		exitCmd = tm.runner.ExitCommand
 	}
 
 	// Try graceful exit via stdin
@@ -1183,17 +1368,33 @@ func (tm *TaskManager) GracefulStopTask(id string) error {
 	return tm.StopTask(id)
 }
 
-// DeleteTask removes a finished task from history.
+// DeleteTask removes a task from history. If running/queued, stops it first.
 func (tm *TaskManager) DeleteTask(id string) error {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
+	tm.mu.RLock()
 	task, ok := tm.tasks[id]
 	if !ok {
+		tm.mu.RUnlock()
 		return fmt.Errorf("task %s not found", id)
 	}
-	if task.Status == TaskStatusRunning || task.Status == TaskStatusQueued {
-		return fmt.Errorf("cannot delete %s task — stop it first", task.Status)
+	isRunning := task.Status == TaskStatusRunning || task.Status == TaskStatusQueued
+	tm.mu.RUnlock()
+
+	// Auto-stop running tasks before deleting
+	if isRunning {
+		log.Printf("[task %s] Stopping running task before delete", id)
+		if err := tm.StopTask(id); err != nil {
+			log.Printf("[task %s] Stop failed during delete: %v", id, err)
+		}
+		// Wait briefly for process cleanup
+		select {
+		case <-task.doneCh:
+		case <-time.After(3 * time.Second):
+			log.Printf("[task %s] Timed out waiting for process exit during delete", id)
+		}
 	}
+
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
 	delete(tm.tasks, id)
 	tm.persist()
 	return nil
@@ -1364,7 +1565,7 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 			}
 		}
 		tm.persist()
-		go saveSessionFile(task, tm.runner.Name, tm.workDir)
+		go saveSessionFile(task, task.runner.Name, tm.workDir)
 		tm.mu.Unlock()
 		close(task.doneCh)
 	}()
@@ -1389,6 +1590,7 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			Title:       t.Title,
 			Description: t.Description,
 			Status:      t.Status,
+			RunnerID:    t.RunnerID,
 			SessionID:   t.SessionID,
 			Output:      output,
 			ResultText:  t.ResultText,

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -78,6 +79,12 @@ func installAutoStart(exePath, workDir string) error {
 		return fmt.Errorf("create scheduled task: %w — %s", err, string(output))
 	}
 	return nil
+}
+
+// killAllClaude kills all running claude processes on Windows.
+func killAllClaude() {
+	osexec.Command("taskkill", "/F", "/IM", "claude.exe").Run()
+	time.Sleep(500 * time.Millisecond)
 }
 
 // findRunnerProcesses returns PIDs and command lines of running processes

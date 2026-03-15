@@ -4,10 +4,12 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	osexec "os/exec"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // detachProcess sets the child process to run in a new session (Unix: setsid).
@@ -27,6 +29,29 @@ func isProcessAlive(pid int) bool {
 // terminateProcess sends SIGTERM to gracefully stop a process.
 func terminateProcess(proc *os.Process) error {
 	return proc.Signal(syscall.SIGTERM)
+}
+
+// killAllClaude kills all running `claude` processes to avoid session conflicts.
+func killAllClaude() {
+	out, err := osexec.Command("pgrep", "-x", "claude").CombinedOutput()
+	if err != nil {
+		return // no claude processes
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		var pid int
+		if _, err := fmt.Sscanf(line, "%d", &pid); err == nil {
+			proc, err := os.FindProcess(pid)
+			if err == nil {
+				log.Printf("[startup] Killing leftover claude process PID %d", pid)
+				proc.Signal(syscall.SIGTERM)
+			}
+		}
+	}
+	// Give processes time to exit
+	time.Sleep(500 * time.Millisecond)
 }
 
 // findRunnerProcesses returns PIDs and command lines of running processes
