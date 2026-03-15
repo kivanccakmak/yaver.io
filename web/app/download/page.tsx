@@ -30,14 +30,18 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
 }
 
+const GITHUB_RELEASE = "https://github.com/kivanccakmak/yaver-cli/releases/latest";
+
 export default function DownloadPage() {
   const [platform, setPlatform] = useState<Platform>("unknown");
   const [downloads, setDownloads] = useState<Download[]>([]);
+  const [cliVersion, setCliVersion] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setPlatform(detectPlatform());
 
+    // Fetch downloads list
     fetch(
       `${process.env.NEXT_PUBLIC_CONVEX_SITE_URL || "https://shocking-echidna-394.eu-west-1.convex.site"}/downloads/list`
     )
@@ -45,12 +49,25 @@ export default function DownloadPage() {
       .then((data) => setDownloads(data.downloads || []))
       .catch(() => {})
       .finally(() => setLoading(false));
+
+    // Fetch CLI version from config
+    fetch(
+      `${process.env.NEXT_PUBLIC_CONVEX_SITE_URL || "https://shocking-echidna-394.eu-west-1.convex.site"}/config`
+    )
+      .then((res) => res.json())
+      .then((data) => {
+        // cli_version may be in the config response or platformConfig
+        if (data.cliVersion) setCliVersion(data.cliVersion);
+      })
+      .catch(() => {});
   }, []);
 
   function findDownload(plat: string, arch: string, format: string) {
-    return downloads.find(
-      (d) => d.platform === plat && d.arch === arch && d.format === format
-    );
+    // Prefer latest version
+    const matches = downloads
+      .filter((d) => d.platform === plat && d.arch === arch && d.format === format)
+      .sort((a, b) => b.version.localeCompare(a.version));
+    return matches[0];
   }
 
   function downloadButton(
@@ -81,15 +98,27 @@ export default function DownloadPage() {
       );
     }
 
+    // Fallback to GitHub release
     return (
-      <span
+      <a
         key={label}
-        className="inline-flex items-center justify-center rounded-lg border border-surface-800 bg-surface-900 px-4 py-2 text-xs text-surface-600 cursor-not-allowed"
+        href={GITHUB_RELEASE}
+        className={
+          primary
+            ? "btn-primary py-2 px-4 text-xs"
+            : "btn-secondary py-2 px-4 text-xs"
+        }
       >
-        {label} (coming soon)
-      </span>
+        {label}
+      </a>
     );
   }
+
+  const versionBadge = cliVersion ? (
+    <span className="ml-2 rounded-full bg-surface-800 px-2 py-0.5 text-[10px] font-medium text-surface-400">
+      v{cliVersion}
+    </span>
+  ) : null;
 
   return (
     <div className="px-6 py-20">
@@ -99,7 +128,8 @@ export default function DownloadPage() {
             Download
           </h1>
           <p className="text-sm text-surface-500">
-            Install the agent on your dev machine. Get the app on your phone.
+            Install the CLI on your dev machine. Get the app on your phone.
+            {versionBadge}
           </p>
         </div>
 
@@ -109,33 +139,34 @@ export default function DownloadPage() {
           </div>
         )}
 
-        {/* Desktop */}
+        {/* Desktop CLI */}
         <div className="mb-12">
           <h2 className="mb-6 text-xs font-semibold uppercase tracking-wider text-surface-500">
-            Desktop agent
+            Desktop CLI {cliVersion && <span className="normal-case tracking-normal text-surface-600">v{cliVersion}</span>}
           </h2>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             {[
               {
                 name: "macOS",
-                desc: "macOS 13+",
+                desc: "macOS 13+ (Apple Silicon & Intel)",
                 highlighted: platform === "macos",
                 buttons: [
                   { label: "Apple Silicon", plat: "macos", arch: "arm64", format: "bin", primary: true },
                   { label: "Intel", plat: "macos", arch: "amd64", format: "bin" },
+                  { label: ".pkg (ARM)", plat: "macos", arch: "arm64", format: "pkg" },
                 ],
               },
               {
                 name: "Windows",
-                desc: "Windows 10+ (64-bit)",
+                desc: "Windows 10+ (64-bit, signed)",
                 highlighted: platform === "windows",
                 buttons: [
-                  { label: "Download CLI", plat: "windows", arch: "amd64", format: "exe", primary: true },
+                  { label: "Download .exe", plat: "windows", arch: "amd64", format: "exe", primary: true },
                 ],
               },
               {
                 name: "Linux",
-                desc: "Ubuntu, Fedora, Arch",
+                desc: "Ubuntu, Debian, Fedora, Arch",
                 highlighted: platform === "linux",
                 buttons: [
                   { label: "x86_64", plat: "linux", arch: "amd64", format: "bin", primary: true },
@@ -166,6 +197,73 @@ export default function DownloadPage() {
           </div>
         </div>
 
+        {/* Package managers */}
+        <div className="mb-12">
+          <h2 className="mb-6 text-xs font-semibold uppercase tracking-wider text-surface-500">
+            Package managers
+          </h2>
+          <div className="card space-y-4">
+            <div>
+              <p className="mb-2 text-xs text-surface-500">Homebrew (macOS / Linux)</p>
+              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
+                <span className="text-surface-500">$</span>{" "}
+                <span className="text-surface-300 select-all">
+                  brew install kivanccakmak/yaver/yaver
+                </span>
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-xs text-surface-500">APT (Debian / Ubuntu)</p>
+              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px] space-y-1">
+                <div>
+                  <span className="text-surface-500">$</span>{" "}
+                  <span className="text-surface-300 select-all">
+                    curl -fsSL https://kivanccakmak.github.io/apt-yaver/KEY.gpg | sudo gpg --dearmor -o /usr/share/keyrings/yaver.gpg
+                  </span>
+                </div>
+                <div>
+                  <span className="text-surface-500">$</span>{" "}
+                  <span className="text-surface-300 select-all">
+                    {`echo "deb [signed-by=/usr/share/keyrings/yaver.gpg] https://kivanccakmak.github.io/apt-yaver stable main" | sudo tee /etc/apt/sources.list.d/yaver.list`}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-surface-500">$</span>{" "}
+                  <span className="text-surface-300 select-all">
+                    sudo apt update && sudo apt install yaver
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-xs text-surface-500">Scoop (Windows)</p>
+              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px] space-y-1">
+                <div>
+                  <span className="text-surface-500">&gt;</span>{" "}
+                  <span className="text-surface-300 select-all">
+                    scoop bucket add yaver https://github.com/kivanccakmak/scoop-yaver
+                  </span>
+                </div>
+                <div>
+                  <span className="text-surface-500">&gt;</span>{" "}
+                  <span className="text-surface-300 select-all">
+                    scoop install yaver
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-xs text-surface-500">Quick install (macOS / Linux)</p>
+              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
+                <span className="text-surface-500">$</span>{" "}
+                <span className="text-surface-300 select-all">
+                  curl -fsSL https://yaver.io/install.sh | sh
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Mobile */}
         <div className="mb-12">
           <h2 className="mb-6 text-xs font-semibold uppercase tracking-wider text-surface-500">
@@ -181,9 +279,12 @@ export default function DownloadPage() {
               <p className="mb-5 text-xs text-surface-500">
                 iOS 16+. iPhone and iPad.
               </p>
-              <span className="inline-flex items-center justify-center rounded-lg border border-surface-800 bg-surface-900 px-4 py-2 text-xs text-surface-600 cursor-not-allowed">
-                App Store (coming soon)
-              </span>
+              <a
+                href="https://testflight.apple.com/join/yaver"
+                className="btn-primary py-2 px-4 text-xs"
+              >
+                TestFlight (Early Access)
+              </a>
             </div>
             <div
               className={`card ${platform === "android" ? "border-surface-600" : ""}`}
@@ -199,45 +300,15 @@ export default function DownloadPage() {
           </div>
         </div>
 
-        {/* CLI */}
-        <div className="mb-12">
-          <h2 className="mb-6 text-xs font-semibold uppercase tracking-wider text-surface-500">
-            CLI install
-          </h2>
-          <div className="card space-y-4">
-            <div>
-              <p className="mb-2 text-xs text-surface-500">macOS / Linux</p>
-              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
-                <span className="text-surface-500">$</span>{" "}
-                <span className="text-surface-300 select-all">
-                  curl -fsSL https://get.yaver.io | sh
-                </span>
-              </div>
-            </div>
-            <div>
-              <p className="mb-2 text-xs text-surface-500">Homebrew</p>
-              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
-                <span className="text-surface-500">$</span>{" "}
-                <span className="text-surface-300 select-all">
-                  brew install kivanccakmak/yaver/yaver
-                </span>
-              </div>
-            </div>
-            <div>
-              <p className="mb-2 text-xs text-surface-500">
-                Windows (PowerShell)
-              </p>
-              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
-                <span className="text-surface-500">&gt;</span>{" "}
-                <span className="text-surface-300 select-all">
-                  irm https://get.yaver.io/windows | iex
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="text-center">
+        {/* GitHub link */}
+        <div className="text-center space-y-3">
+          <a
+            href={GITHUB_RELEASE}
+            className="text-xs text-surface-400 hover:text-surface-50 underline underline-offset-2"
+          >
+            All releases on GitHub
+          </a>
+          <br />
           <Link
             href="/"
             className="text-xs text-surface-500 hover:text-surface-50"

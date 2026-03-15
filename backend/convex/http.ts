@@ -1149,6 +1149,8 @@ http.route({
         relayServers,
         runners,
         models,
+        cliVersion: config.cli_version || null,
+        mobileVersion: config.mobile_version || null,
       }),
       {
         status: 200,
