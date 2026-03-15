@@ -167,7 +167,7 @@ export default function HomePage() {
 
               <div className="mt-4 space-y-2">
                 <p className="text-xs text-surface-500">
-                  Also available via <code className="rounded bg-surface-900 px-1.5 py-0.5 text-surface-400">curl -fsSL https://get.yaver.io | sh</code> or{" "}
+                  Also available via <code className="rounded bg-surface-900 px-1.5 py-0.5 text-surface-400">curl -fsSL https://yaver.io/install.sh | sh</code> or{" "}
                   <Link href="/download" className="text-surface-300 underline underline-offset-2 hover:text-surface-100">
                     direct download
                   </Link>{" "}
@@ -496,9 +496,10 @@ export default function HomePage() {
             <br />
             Send tasks from anywhere &mdash; your AI keeps working while you&apos;re away from your desk.
           </p>
-          <code className="mb-8 inline-block rounded-lg bg-surface-900 px-5 py-2.5 text-sm text-surface-300">
+          <code className="mb-4 inline-block rounded-lg bg-surface-900 px-5 py-2.5 text-sm text-surface-300">
             brew install kivanccakmak/yaver/yaver
           </code>
+          <p className="mb-8 text-xs text-surface-500">CLI v1.25.0 &mdash; macOS, Linux, Windows</p>
           <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Link href="/download" className="btn-primary px-8 py-3.5 text-sm">
               Get started free
