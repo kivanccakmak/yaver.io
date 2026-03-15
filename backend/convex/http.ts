@@ -454,6 +454,28 @@ http.route({
   }),
 });
 
+/** POST /devices/offline — Mark device offline (authed). */
+http.route({
+  path: "/devices/offline",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const body = await request.json();
+    await ctx.runMutation(api.devices.markOffline, {
+      tokenHash,
+      deviceId: body.deviceId,
+    });
+
+    return jsonResponse({ ok: true });
+  }),
+});
+
 /** POST /devices/remove — Remove a device (authed). */
 http.route({
   path: "/devices/remove",

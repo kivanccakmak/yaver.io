@@ -12,7 +12,9 @@ import {
 import * as Clipboard from "expo-clipboard";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Device, useDevice } from "../../src/context/DeviceContext";
+import { useAuth } from "../../src/context/AuthContext";
 import { useColors } from "../../src/context/ThemeContext";
+import { quicClient } from "../../src/lib/quic";
 
 function ConnectionBadge({ status }: { status: string }) {
   const c = useColors();
@@ -33,12 +35,15 @@ function DeviceCard({
   device,
   isActive,
   onSelect,
+  token,
 }: {
   device: Device;
   isActive: boolean;
   onSelect: () => void;
+  token: string | null;
 }) {
   const c = useColors();
+  const [pingState, setPingState] = useState<{ pinging: boolean; rttMs?: number; ok?: boolean }>({ pinging: false });
   const HEARTBEAT_STALE_MS = 5 * 60 * 1000; // 5 minutes
   const isRecentlyActive = device.lastSeen > 0 && (Date.now() - device.lastSeen) < HEARTBEAT_STALE_MS;
   const isOnline = device.online && isRecentlyActive;
@@ -51,6 +56,34 @@ function DeviceCard({
     if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
     const d = new Date(ts);
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  };
+
+  const handlePing = async () => {
+    setPingState({ pinging: true });
+    const relays = quicClient.getRelayServers();
+    const urls = [
+      ...relays.map((r) => `${r.httpUrl}/d/${device.id}`),
+      `http://${device.host}:${device.port}`,
+    ];
+    for (const url of urls) {
+      const start = Date.now();
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const res = await fetch(`${url}/health`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (res.ok) {
+          setPingState({ pinging: false, ok: true, rttMs: Date.now() - start });
+          return;
+        }
+      } catch {
+        continue;
+      }
+    }
+    setPingState({ pinging: false, ok: false });
   };
 
   return (
@@ -86,11 +119,29 @@ function DeviceCard({
           )}
         </View>
       </View>
-      {isActive && (
-        <View style={[styles.activeLabel, { backgroundColor: c.accent + "22" }]}>
-          <Text style={[styles.activeLabelText, { color: c.accent }]}>Active</Text>
-        </View>
-      )}
+      <View style={styles.cardBottom}>
+        {isActive && (
+          <View style={[styles.activeLabel, { backgroundColor: c.accent + "22" }]}>
+            <Text style={[styles.activeLabelText, { color: c.accent }]}>Active</Text>
+          </View>
+        )}
+        <Pressable
+          style={[styles.pingBtn, { backgroundColor: c.bgCardElevated || c.bg }]}
+          onPress={(e) => { e.stopPropagation; handlePing(); }}
+          disabled={pingState.pinging}
+        >
+          <Text style={[styles.pingBtnText, {
+            color: pingState.pinging ? c.textMuted
+              : pingState.ok === true ? c.success
+              : pingState.ok === false ? c.error
+              : c.textSecondary,
+          }]}>
+            {pingState.pinging ? "..." :
+              pingState.ok === true ? `${pingState.rttMs}ms` :
+              pingState.ok === false ? "unreachable" : "ping"}
+          </Text>
+        </Pressable>
+      </View>
     </Pressable>
   );
 }
@@ -218,6 +269,7 @@ function SetupInstructions() {
 
 export default function DevicesScreen() {
   const c = useColors();
+  const { token } = useAuth();
   const {
     devices,
     activeDevice,
@@ -248,35 +300,34 @@ export default function DevicesScreen() {
           </View>
         )}
 
-        {isLoadingDevices ? (
-          <View style={styles.center}>
-            <ActivityIndicator size="large" color={c.accent} />
-          </View>
-        ) : (
-          <FlatList
-            data={(() => {
-              // Deduplicate by name — keep the entry with the latest lastSeen
-              const seen = new Map<string, typeof devices[0]>();
-              for (const d of devices) {
-                const existing = seen.get(d.name);
-                if (!existing || d.lastSeen > existing.lastSeen) seen.set(d.name, d);
-              }
-              return [...seen.values()];
-            })()}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.listContent}
-            refreshing={isLoadingDevices}
-            onRefresh={refreshDevices}
-            ListEmptyComponent={<SetupInstructions />}
-            renderItem={({ item }) => (
-              <DeviceCard
-                device={item}
-                isActive={activeDevice?.id === item.id}
-                onSelect={() => selectDevice(item)}
-              />
-            )}
-          />
-        )}
+        <FlatList
+          data={(() => {
+            // Deduplicate by name — keep the entry with the latest lastSeen
+            const seen = new Map<string, typeof devices[0]>();
+            for (const d of devices) {
+              const existing = seen.get(d.name);
+              if (!existing || d.lastSeen > existing.lastSeen) seen.set(d.name, d);
+            }
+            return [...seen.values()];
+          })()}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          refreshing={isLoadingDevices}
+          onRefresh={refreshDevices}
+          ListEmptyComponent={isLoadingDevices ? (
+            <View style={styles.center}>
+              <ActivityIndicator size="large" color={c.accent} />
+            </View>
+          ) : <SetupInstructions />}
+          renderItem={({ item }) => (
+            <DeviceCard
+              device={item}
+              isActive={activeDevice?.id === item.id}
+              onSelect={() => selectDevice(item)}
+              token={token}
+            />
+          )}
+        />
       </View>
     </SafeAreaView>
   );
@@ -397,12 +448,24 @@ const styles = StyleSheet.create({
   cardRight: { alignItems: "flex-end" },
   onlineDot: { width: 8, height: 8, borderRadius: 4, marginBottom: 4 },
   lastSeen: { fontSize: 11 },
-  activeLabel: {
+  cardBottom: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     marginTop: 10,
+  },
+  activeLabel: {
     alignSelf: "flex-start",
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 6,
   },
   activeLabelText: { fontSize: 12, fontWeight: "600" },
+  pingBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginLeft: "auto",
+  },
+  pingBtnText: { fontSize: 12, fontWeight: "600" },
 });

@@ -583,6 +583,13 @@ export default function TasksScreen() {
     Keyboard.dismiss();
     setIsSendingFollowUp(true);
     try {
+      // If task is running, stop it first then resume with new input
+      const isTaskRunning = selectedTask.status === "running" || selectedTask.status === "queued";
+      if (isTaskRunning) {
+        await quicClient.stopTask(selectedTask.id);
+        // Wait briefly for task to fully stop
+        await new Promise((r) => setTimeout(r, 500));
+      }
       await quicClient.continueTask(selectedTask.id, followUpText.trim());
       setFollowUpText("");
       await fetchTasks();
@@ -1307,8 +1314,8 @@ const s = StyleSheet.create({
   agentPickerTitle: { fontSize: 17, fontWeight: "700" },
   agentPickerSection: { fontSize: 11, fontWeight: "600", letterSpacing: 0.5, marginTop: 16, marginBottom: 8, marginLeft: 20 },
   agentPickerChips: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, marginBottom: 4 },
-  input: { borderWidth: 1, borderRadius: 10, padding: 14, fontSize: 15, marginBottom: 12 },
-  inputMultiline: { minHeight: 100 },
+  input: { borderWidth: 1, borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 12 },
+  inputMultiline: { minHeight: 150 },
   modalButtons: { flexDirection: "row", gap: 12, marginTop: 8 },
   cancelButton: { flex: 1, paddingVertical: 14, borderRadius: 10, alignItems: "center" },
   cancelButtonText: { fontWeight: "600", fontSize: 15 },

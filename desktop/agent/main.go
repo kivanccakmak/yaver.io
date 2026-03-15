@@ -290,6 +290,21 @@ func runSignout() {
 		return
 	}
 
+	// Mark device offline and report event before clearing credentials
+	if cfg.DeviceID != "" && cfg.ConvexSiteURL != "" {
+		_ = ReportDeviceEvent(cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID, "stopped", "signout")
+		if err := MarkOffline(cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID); err != nil {
+			fmt.Printf("Warning: could not mark device offline: %v\n", err)
+		}
+	}
+
+	// Stop running agent if any (it will lose auth after signout)
+	if pid, running := isAgentRunning(); running {
+		if proc, err := os.FindProcess(pid); err == nil {
+			terminateProcess(proc)
+		}
+	}
+
 	cfg.AuthToken = ""
 	cfg.DeviceID = ""
 	if err := SaveConfig(cfg); err != nil {

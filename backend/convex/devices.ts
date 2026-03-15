@@ -146,6 +146,34 @@ export const setRunnerDown = mutation({
 });
 
 /**
+ * Mark a device as offline.
+ * Called by the desktop agent on stop/signout.
+ */
+export const markOffline = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+
+    if (!device) throw new Error("Device not found");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    await ctx.db.patch(device._id, {
+      isOnline: false,
+      lastHeartbeat: Date.now(),
+    });
+  },
+});
+
+/**
  * Remove (unregister) a device.
  */
 export const removeDevice = mutation({

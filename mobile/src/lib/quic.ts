@@ -148,6 +148,10 @@ export class QuicClient {
     return this.relayServers.length;
   }
 
+  getRelayServers(): RelayServer[] {
+    return [...this.relayServers];
+  }
+
   get forceRelay(): boolean {
     return this._forceRelay;
   }

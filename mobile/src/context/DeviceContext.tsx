@@ -80,6 +80,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const [userDisconnected, setUserDisconnected] = useState(false);
   const [relaysReady, setRelaysReady] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+  const hasLoadedOnce = useRef(false);
 
   const refreshDevices = useCallback(async () => {
     if (!token) {
@@ -87,7 +88,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     appLog("info", "refreshDevices: fetching...");
-    setIsLoadingDevices(true);
+    // Only show loading spinner on initial load, not background refreshes
+    if (!hasLoadedOnce.current) {
+      setIsLoadingDevices(true);
+    }
     try {
       // Fetch devices and settings in parallel
       const [devicesRes, settings] = await Promise.all([
@@ -123,6 +127,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       appLog("error", `refreshDevices error: ${e}`);
     } finally {
+      hasLoadedOnce.current = true;
       setIsLoadingDevices(false);
     }
   }, [token]);
