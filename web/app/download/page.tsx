@@ -236,6 +236,26 @@ export default function DownloadPage() {
               </div>
             </div>
             <div>
+              <p className="mb-2 text-xs text-surface-500">Arch Linux (AUR)</p>
+              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px] space-y-1">
+                <div>
+                  <span className="text-surface-500">$</span>{" "}
+                  <span className="text-surface-300 select-all">
+                    git clone https://github.com/kivanccakmak/aur-yaver.git && cd aur-yaver && makepkg -si
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-xs text-surface-500">RPM (Fedora / RHEL) — ARM64</p>
+              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
+                <span className="text-surface-500">$</span>{" "}
+                <span className="text-surface-300 select-all">
+                  sudo rpm -i https://github.com/kivanccakmak/yaver-cli/releases/latest/download/yaver_1.25.0_aarch64.rpm
+                </span>
+              </div>
+            </div>
+            <div>
               <p className="mb-2 text-xs text-surface-500">Scoop (Windows)</p>
               <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px] space-y-1">
                 <div>
