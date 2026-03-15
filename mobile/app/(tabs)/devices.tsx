@@ -254,7 +254,15 @@ export default function DevicesScreen() {
           </View>
         ) : (
           <FlatList
-            data={devices}
+            data={(() => {
+              // Deduplicate by name — keep the entry with the latest lastSeen
+              const seen = new Map<string, typeof devices[0]>();
+              for (const d of devices) {
+                const existing = seen.get(d.name);
+                if (!existing || d.lastSeen > existing.lastSeen) seen.set(d.name, d);
+              }
+              return [...seen.values()];
+            })()}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listContent}
             refreshing={isLoadingDevices}

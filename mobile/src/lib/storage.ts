@@ -97,3 +97,47 @@ export async function clearCache(): Promise<void> {
     // Non-fatal.
   }
 }
+
+// ── Todo storage ─────────────────────────────────────────────────────
+
+export interface TodoProject {
+  id: string;
+  name: string;
+  createdAt: number;
+}
+
+export interface Todo {
+  id: string;
+  projectId: string;
+  title: string;
+  notes?: string;
+  done: boolean;
+  createdAt: number;
+}
+
+const TODO_KEYS = {
+  PROJECTS: "@yaver/todo_projects",
+  TODOS: "@yaver/todos",
+} as const;
+
+export async function getTodoProjects(): Promise<TodoProject[]> {
+  try {
+    const raw = await AsyncStorage.getItem(TODO_KEYS.PROJECTS);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+export async function saveTodoProjects(projects: TodoProject[]): Promise<void> {
+  try { await AsyncStorage.setItem(TODO_KEYS.PROJECTS, JSON.stringify(projects)); } catch {}
+}
+
+export async function getTodos(): Promise<Todo[]> {
+  try {
+    const raw = await AsyncStorage.getItem(TODO_KEYS.TODOS);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+export async function saveTodos(todos: Todo[]): Promise<void> {
+  try { await AsyncStorage.setItem(TODO_KEYS.TODOS, JSON.stringify(todos)); } catch {}
+}

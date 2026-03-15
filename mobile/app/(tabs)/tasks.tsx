@@ -326,6 +326,7 @@ export default function TasksScreen() {
   const [selectedRunner, setSelectedRunner] = useState<string>(""); // "" = default
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [customCommand, setCustomCommand] = useState("");
+  const [showAgentPicker, setShowAgentPicker] = useState(false);
   const chatScrollRef = useRef<ScrollView>(null);
   const pendingOpenTaskRef = useRef<Task | null>(null);
 
@@ -928,7 +929,26 @@ export default function TasksScreen() {
           <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
             <Pressable style={s.modalDismiss} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); }} />
             <View style={[s.modalContent, { backgroundColor: c.bgCard }]}>
-              <Text style={[s.modalTitle, { color: c.textPrimary }]}>New Task</Text>
+              <View style={s.modalHeader}>
+                <Text style={[s.modalTitle, { color: c.textPrimary }]}>New Task</Text>
+                {(availableRunners.length > 0 || availableModels.length > 0) && (
+                  <Pressable
+                    style={[s.agentBadge, { backgroundColor: c.bgCardElevated, borderColor: c.border }]}
+                    onPress={() => setShowAgentPicker(true)}
+                  >
+                    <Text style={[s.agentBadgeText, { color: c.textSecondary }]}>
+                      {(() => {
+                        const runner = availableRunners.find(r => r.id === selectedRunner);
+                        const model = availableModels.find(m => m.id === selectedModel);
+                        const runnerLabel = selectedRunner === "custom" ? "Custom" : (runner?.name || "Claude");
+                        const modelLabel = model?.name || selectedModel || "";
+                        return modelLabel ? `${runnerLabel} · ${modelLabel}` : runnerLabel;
+                      })()}
+                    </Text>
+                    <Text style={{ color: c.textMuted, fontSize: 10, marginLeft: 4 }}>▾</Text>
+                  </Pressable>
+                )}
+              </View>
               <TextInput
                 style={[s.input, s.inputMultiline, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
                 placeholder={`What would you like ${selectedRunner === "codex" ? "Codex" : selectedRunner === "aider" ? "Aider" : "Claude"} to do?`}
@@ -937,67 +957,6 @@ export default function TasksScreen() {
                 onChangeText={setNewTaskText}
                 multiline numberOfLines={4} textAlignVertical="top" autoFocus
               />
-              {availableRunners.length > 0 && (
-                <View style={s.modelChips}>
-                  {availableRunners.map((r) => (
-                    <Pressable
-                      key={r.id}
-                      style={[
-                        s.modelChip,
-                        { borderColor: selectedRunner === r.id ? "#f59e0b" : c.border },
-                        selectedRunner === r.id && { backgroundColor: "#f59e0b" + "20" },
-                      ]}
-                      onPress={() => setSelectedRunner(r.id)}
-                    >
-                      <Text style={[s.modelChipText, { color: selectedRunner === r.id ? "#f59e0b" : c.textMuted }]}>
-                        {r.name}
-                      </Text>
-                    </Pressable>
-                  ))}
-                  <Pressable
-                    style={[
-                      s.modelChip,
-                      { borderColor: selectedRunner === "custom" ? "#f59e0b" : c.border },
-                      selectedRunner === "custom" && { backgroundColor: "#f59e0b" + "20" },
-                    ]}
-                    onPress={() => setSelectedRunner("custom")}
-                  >
-                    <Text style={[s.modelChipText, { color: selectedRunner === "custom" ? "#f59e0b" : c.textMuted }]}>
-                      Custom
-                    </Text>
-                  </Pressable>
-                </View>
-              )}
-              {selectedRunner === "custom" && (
-                <TextInput
-                  style={[s.input, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary, marginTop: 8, fontSize: 13, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }]}
-                  placeholder="Command, e.g. my-tool --auto {prompt}"
-                  placeholderTextColor={c.textMuted}
-                  value={customCommand}
-                  onChangeText={setCustomCommand}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              )}
-              {availableModels.length > 0 && (
-                <View style={s.modelChips}>
-                  {availableModels.map((m) => (
-                    <Pressable
-                      key={m.id}
-                      style={[
-                        s.modelChip,
-                        { borderColor: selectedModel === m.id ? c.accent : c.border },
-                        selectedModel === m.id && { backgroundColor: c.accent + "20" },
-                      ]}
-                      onPress={() => setSelectedModel(m.id)}
-                    >
-                      <Text style={[s.modelChipText, { color: selectedModel === m.id ? c.accent : c.textMuted }]}>
-                        {m.name}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              )}
               <View style={s.modalButtons}>
                 <Pressable style={[s.cancelButton, { backgroundColor: c.bgCardElevated }]} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); }}>
                   <Text style={[s.cancelButtonText, { color: c.textSecondary }]}>Cancel</Text>
@@ -1014,6 +973,86 @@ export default function TasksScreen() {
           </KeyboardAvoidingView>
         </Modal>
 
+
+        {/* ── Agent / Model Picker Modal ─────────────────────────────── */}
+        <Modal visible={showAgentPicker} animationType="slide" transparent onRequestClose={() => setShowAgentPicker(false)}>
+          <Pressable style={{ flex: 1 }} onPress={() => setShowAgentPicker(false)} />
+          <View style={[s.agentPickerSheet, { backgroundColor: c.bgCard }]}>
+            <View style={[s.agentPickerHeader, { borderBottomColor: c.border }]}>
+              <Text style={[s.agentPickerTitle, { color: c.textPrimary }]}>Agent & Model</Text>
+              <Pressable onPress={() => setShowAgentPicker(false)}>
+                <Text style={{ color: c.accent, fontSize: 15, fontWeight: "600" }}>Done</Text>
+              </Pressable>
+            </View>
+            {availableRunners.length > 0 && (
+              <>
+                <Text style={[s.agentPickerSection, { color: c.textMuted }]}>AGENT</Text>
+                <View style={s.agentPickerChips}>
+                  {availableRunners.map((r) => (
+                    <Pressable
+                      key={r.id}
+                      style={[
+                        s.modelChip,
+                        { borderColor: selectedRunner === r.id ? "#f59e0b" : c.border },
+                        selectedRunner === r.id && { backgroundColor: "#f59e0b20" },
+                      ]}
+                      onPress={() => setSelectedRunner(r.id)}
+                    >
+                      <Text style={[s.modelChipText, { color: selectedRunner === r.id ? "#f59e0b" : c.textMuted }]}>
+                        {r.name}
+                      </Text>
+                    </Pressable>
+                  ))}
+                  <Pressable
+                    style={[
+                      s.modelChip,
+                      { borderColor: selectedRunner === "custom" ? "#f59e0b" : c.border },
+                      selectedRunner === "custom" && { backgroundColor: "#f59e0b20" },
+                    ]}
+                    onPress={() => setSelectedRunner("custom")}
+                  >
+                    <Text style={[s.modelChipText, { color: selectedRunner === "custom" ? "#f59e0b" : c.textMuted }]}>
+                      Custom
+                    </Text>
+                  </Pressable>
+                </View>
+                {selectedRunner === "custom" && (
+                  <TextInput
+                    style={[s.input, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary, marginHorizontal: 16, marginBottom: 8, fontSize: 13, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }]}
+                    placeholder="Command, e.g. my-tool --auto {prompt}"
+                    placeholderTextColor={c.textMuted}
+                    value={customCommand}
+                    onChangeText={setCustomCommand}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                )}
+              </>
+            )}
+            {availableModels.length > 0 && (
+              <>
+                <Text style={[s.agentPickerSection, { color: c.textMuted }]}>MODEL</Text>
+                <View style={s.agentPickerChips}>
+                  {availableModels.map((m) => (
+                    <Pressable
+                      key={m.id}
+                      style={[
+                        s.modelChip,
+                        { borderColor: selectedModel === m.id ? c.accent : c.border },
+                        selectedModel === m.id && { backgroundColor: c.accent + "20" },
+                      ]}
+                      onPress={() => setSelectedModel(m.id)}
+                    >
+                      <Text style={[s.modelChipText, { color: selectedModel === m.id ? c.accent : c.textMuted }]}>
+                        {m.name}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </>
+            )}
+          </View>
+        </Modal>
         {/* ── Chat Detail Modal ───────────────────────────────────── */}
         <Modal visible={!!selectedTask} animationType="slide" transparent onRequestClose={() => setSelectedTask(null)}>
           <KeyboardAvoidingView
@@ -1088,35 +1127,29 @@ export default function TasksScreen() {
 
                 {/* Input bar */}
                 <View style={[s.chatInputBar, { borderTopColor: c.border, backgroundColor: c.bgCard }]}>
-                  {isRunning ? (
-                    <View style={s.chatInputBarRunning}>
-                      <ActivityIndicator size="small" color={c.accent} />
-                      <Text style={[s.chatRunningText, { color: c.textMuted }]}>Task is running...</Text>
-                    </View>
-                  ) : (
-                    <>
-                      <TextInput
-                        style={[s.chatInput, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
-                        placeholder="Follow up..."
-                        placeholderTextColor={c.textMuted}
-                        value={followUpText}
-                        onChangeText={setFollowUpText}
-                        multiline
-                        maxLength={2000}
-                      />
-                      <Pressable
-                        style={[
-                          s.chatSendBtn,
-                          { backgroundColor: c.accent },
-                          (!followUpText.trim() || isSendingFollowUp) && s.submitButtonDisabled,
-                        ]}
-                        onPress={handleFollowUp}
-                        disabled={!followUpText.trim() || isSendingFollowUp}
-                      >
-                        <Text style={s.chatSendText}>{isSendingFollowUp ? "..." : "\u2191"}</Text>
-                      </Pressable>
-                    </>
+                  <TextInput
+                    style={[s.chatInput, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
+                    placeholder={isRunning ? "Send a command..." : "Follow up..."}
+                    placeholderTextColor={c.textMuted}
+                    value={followUpText}
+                    onChangeText={setFollowUpText}
+                    multiline
+                    maxLength={2000}
+                  />
+                  {isRunning && (
+                    <ActivityIndicator size="small" color={c.accent} style={{ marginRight: 4 }} />
                   )}
+                  <Pressable
+                    style={[
+                      s.chatSendBtn,
+                      { backgroundColor: c.accent },
+                      (!followUpText.trim() || isSendingFollowUp) && s.submitButtonDisabled,
+                    ]}
+                    onPress={handleFollowUp}
+                    disabled={!followUpText.trim() || isSendingFollowUp}
+                  >
+                    <Text style={s.chatSendText}>{isSendingFollowUp ? "..." : "\u2191"}</Text>
+                  </Pressable>
                 </View>
               </View>
             )}
@@ -1265,7 +1298,15 @@ const s = StyleSheet.create({
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "flex-end" },
   modalDismiss: { flex: 1 },
   modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
-  modalTitle: { fontSize: 20, fontWeight: "700", marginBottom: 20 },
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 20 },
+  modalTitle: { fontSize: 20, fontWeight: "700" },
+  agentBadge: { flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, borderWidth: 1 },
+  agentBadgeText: { fontSize: 12, fontWeight: "500" },
+  agentPickerSheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 40 },
+  agentPickerHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1 },
+  agentPickerTitle: { fontSize: 17, fontWeight: "700" },
+  agentPickerSection: { fontSize: 11, fontWeight: "600", letterSpacing: 0.5, marginTop: 16, marginBottom: 8, marginLeft: 20 },
+  agentPickerChips: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, marginBottom: 4 },
   input: { borderWidth: 1, borderRadius: 10, padding: 14, fontSize: 15, marginBottom: 12 },
   inputMultiline: { minHeight: 100 },
   modalButtons: { flexDirection: "row", gap: 12, marginTop: 8 },

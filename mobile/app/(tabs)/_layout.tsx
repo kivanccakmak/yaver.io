@@ -7,6 +7,7 @@ function TabIcon({ label, focused }: { label: string; focused: boolean }) {
   const c = useColors();
   const icons: Record<string, string> = {
     Tasks: "T",
+    Todos: "☐",
     Devices: "D",
     Settings: "S",
   };
@@ -39,6 +40,13 @@ export default function TabLayout() {
         options={{
           title: "Tasks",
           tabBarIcon: ({ focused }) => <TabIcon label="Tasks" focused={focused} />,
+        }}
+      />
+      <Tabs.Screen
+        name="todos"
+        options={{
+          title: "Todos",
+          tabBarIcon: ({ focused }) => <TabIcon label="Todos" focused={focused} />,
         }}
       />
       <Tabs.Screen
