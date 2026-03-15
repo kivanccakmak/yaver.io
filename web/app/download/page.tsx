@@ -307,6 +307,15 @@ export default function DownloadPage() {
                 </span>
               </div>
             </div>
+            <div>
+              <p className="mb-2 text-xs text-surface-500">Quick install (Windows PowerShell)</p>
+              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
+                <span className="text-surface-500">&gt;</span>{" "}
+                <span className="text-surface-300 select-all">
+                  irm https://yaver.io/install.ps1 | iex
+                </span>
+              </div>
+            </div>
           </div>
         </div>
 
