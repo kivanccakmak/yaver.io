@@ -1489,16 +1489,27 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
 
-	args := tm.buildArgs(prompt)
+	// Use task's runner if set, otherwise fall back to global
+	runner := task.runner
+	if runner.Command == "" {
+		runner = tm.runner
+	}
+
+	args := buildRunnerArgs(runner, prompt)
 
 	// Append resume args if the runner supports it and we have a session ID.
-	if tm.runner.ResumeSupported && task.SessionID != "" && len(tm.runner.ResumeArgs) > 0 {
-		for _, ra := range tm.runner.ResumeArgs {
+	if runner.ResumeSupported && task.SessionID != "" && len(runner.ResumeArgs) > 0 {
+		for _, ra := range runner.ResumeArgs {
 			args = append(args, strings.ReplaceAll(ra, "{sessionId}", task.SessionID))
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, tm.runner.Command, args...)
+	// Give each Claude task its own session ID to avoid blocking other sessions
+	if runner.RunnerID == "claude" && task.SessionID == "" {
+		args = append(args, "--session-id", uuid.New().String())
+	}
+
+	cmd := exec.CommandContext(ctx, runner.Command, args...)
 	cmd.Dir = tm.workDir
 
 	stdout, err := cmd.StdoutPipe()
@@ -1513,12 +1524,12 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 		return fmt.Errorf("stderr pipe: %w", err)
 	}
 
-	stdinPipe, err := cmd.StdinPipe()
-	if err != nil {
-		cancel()
-		return fmt.Errorf("stdin pipe: %w", err)
+	// Point stdin to /dev/null — Claude CLI blocks when stdin is a pipe.
+	devNull, err := os.Open(os.DevNull)
+	if err == nil {
+		cmd.Stdin = devNull
+		defer devNull.Close()
 	}
-	task.stdin = stdinPipe
 
 	task.cmd = cmd
 
