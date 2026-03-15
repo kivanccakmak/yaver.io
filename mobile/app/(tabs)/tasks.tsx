@@ -180,9 +180,6 @@ function DebugSection({
           {task.resultText ? (
             <Text style={[s.debugLine, { color: c.textMuted }]}>Result: {task.resultText.length} chars</Text>
           ) : null}
-          {task.costUsd ? (
-            <Text style={[s.debugLine, { color: c.textMuted }]}>Cost: ${task.costUsd.toFixed(4)}</Text>
-          ) : null}
           <Text style={[s.debugLine, { color: c.textMuted }]}>Created: {new Date(task.createdAt).toLocaleTimeString()}</Text>
         </View>
       )}
@@ -276,12 +273,16 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
     }
   }
 
-  // If running and we have streaming output, show it as live assistant message
+  // If running and we have streaming output, replace the last assistant message
+  // with the live stream (which is more up-to-date than the polled turn data)
   if (task.status === "running" && task.output.length > 0) {
-    const streamText = task.output.join("");
+    const streamText = task.output.join("\n");
     if (streamText.trim()) {
-      const lastAssistant = messages.filter(m => m.role === "assistant").pop();
-      if (!lastAssistant || lastAssistant.content !== streamText) {
+      // Remove the last assistant message if present — streaming output supersedes it
+      const lastIdx = messages.length - 1;
+      if (lastIdx >= 0 && messages[lastIdx].role === "assistant") {
+        messages[lastIdx].content = streamText;
+      } else {
         messages.push({ role: "assistant", content: streamText });
       }
     }
@@ -324,6 +325,7 @@ export default function TasksScreen() {
   const [availableRunners, setAvailableRunners] = useState<RunnerInfo[]>([]);
   const [selectedRunner, setSelectedRunner] = useState<string>(""); // "" = default
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
+  const [customCommand, setCustomCommand] = useState("");
   const chatScrollRef = useRef<ScrollView>(null);
   const pendingOpenTaskRef = useRef<Task | null>(null);
 
@@ -382,6 +384,7 @@ export default function TasksScreen() {
       else setSelectedModel(runner.models[0].id);
     } else {
       setAvailableModels([]);
+      setSelectedModel("");
     }
   }, [selectedRunner, availableRunners]);
 
@@ -394,7 +397,7 @@ export default function TasksScreen() {
     const doPing = async () => {
       const result = await quicClient.ping();
       if (result.ok) setPingRtt(result.rttMs);
-      else setPingRtt(null);
+      else setPingRtt(result.timedOut ? -1 : null);
     };
     doPing();
     const interval = setInterval(doPing, 10000);
@@ -528,7 +531,12 @@ export default function TasksScreen() {
     Keyboard.dismiss();
     setIsSubmitting(true);
     try {
-      const task = await quicClient.sendTask(newTaskText.trim(), "", selectedModel || undefined, selectedRunner || undefined);
+      const task = await quicClient.sendTask(
+        newTaskText.trim(), "",
+        selectedRunner === "custom" ? undefined : (selectedModel || undefined),
+        selectedRunner === "custom" ? "custom" : (selectedRunner || undefined),
+        selectedRunner === "custom" ? customCommand.trim() || undefined : undefined,
+      );
       setNewTaskText("");
       // Add task to list immediately
       setTasks((prev) => [task, ...prev]);
@@ -635,32 +643,40 @@ export default function TasksScreen() {
     <SafeAreaView style={[s.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
       <View style={s.container}>
         {/* Connection banner */}
-        <View style={[s.banner, { backgroundColor: banner.bg, borderBottomColor: banner.border, flexDirection: "column", alignItems: "flex-start" }]}>
-          <View style={{ flexDirection: "row", alignItems: "center" }}>
+        <View style={[s.banner, { backgroundColor: banner.bg, borderBottomColor: banner.border, flexDirection: "column", alignItems: "flex-start", paddingVertical: 12 }]}>
+          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap" }}>
             <View style={[s.dot, { backgroundColor: banner.dot }]} />
-            <Text style={[s.bannerText, { color: banner.text }]}>
+            <Text style={[s.bannerText, { color: banner.text, flexShrink: 1 }]} numberOfLines={1}>
               {banner.label}{modeLabel}{activeDevice ? ` \u00b7 ${activeDevice.name}` : ""}
             </Text>
-            {pingRtt !== null && isEffectivelyConnected && (
-              <Pressable onPress={handlePing} style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: (pingRtt < 100 ? "#22c55e" : pingRtt < 300 ? "#eab308" : "#ef4444") + "18" }}>
-                <Text style={{ color: pingRtt < 100 ? "#4ade80" : pingRtt < 300 ? "#facc15" : "#f87171", fontSize: 11, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }}>
-                  {isPinging ? "..." : `${pingRtt}ms`}
-                </Text>
-              </Pressable>
-            )}
-            {pingRtt === null && isEffectivelyConnected && (
-              <Pressable onPress={handlePing} style={{ marginLeft: 8 }}>
-                <Text style={{ color: banner.text, fontSize: 11 }}>{isPinging ? "pinging..." : "ping"}</Text>
-              </Pressable>
-            )}
           </View>
-          {agentStatus && isEffectivelyConnected && (
+          {isEffectivelyConnected && (
+            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 4, marginLeft: 18 }}>
+              {agentStatus && (
+                <>
+                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: agentStatus.runner.installed ? "#22c55e" : "#ef4444" }} />
+                  <Text style={{ color: agentStatus.runner.installed ? "#4ade80" : "#f87171", fontSize: 11, marginLeft: 6 }}>
+                    {agentStatus.runner.name} {agentStatus.runner.installed ? "ready" : "not found"}
+                    {agentStatus.runningTasks > 0 ? ` \u00b7 ${agentStatus.runningTasks} running` : ""}
+                  </Text>
+                </>
+              )}
+              {pingRtt !== null && (
+                <Pressable onPress={handlePing} style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4, backgroundColor: (pingRtt === -1 ? "#ef4444" : pingRtt < 100 ? "#22c55e" : pingRtt < 300 ? "#eab308" : "#ef4444") + "18" }}>
+                  <Text style={{ color: pingRtt === -1 ? "#f87171" : pingRtt < 100 ? "#4ade80" : pingRtt < 300 ? "#facc15" : "#f87171", fontSize: 11, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }}>
+                    {isPinging ? "..." : pingRtt === -1 ? "no response" : `${pingRtt}ms`}
+                  </Text>
+                </Pressable>
+              )}
+              {pingRtt === null && (
+                <Pressable onPress={handlePing} style={{ marginLeft: 8 }}>
+                  <Text style={{ color: banner.text, fontSize: 11 }}>{isPinging ? "pinging..." : "ping"}</Text>
+                </Pressable>
+              )}
+            </View>
+          )}
+          {agentStatus && isEffectivelyConnected && !agentStatus.runner.installed && (
             <View style={{ flexDirection: "row", alignItems: "center", marginTop: 2, marginLeft: 18 }}>
-              <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: agentStatus.runner.installed ? "#22c55e" : "#ef4444" }} />
-              <Text style={{ color: agentStatus.runner.installed ? "#4ade80" : "#f87171", fontSize: 11, marginLeft: 6 }}>
-                {agentStatus.runner.name} {agentStatus.runner.installed ? "ready" : "not found"}
-                {agentStatus.runningTasks > 0 ? ` \u00b7 ${agentStatus.runningTasks} running` : ""}
-              </Text>
               {agentStatus.runner.installed === false && (
                 <Pressable
                   onPress={handleRestartRunner}
@@ -921,6 +937,48 @@ export default function TasksScreen() {
                 onChangeText={setNewTaskText}
                 multiline numberOfLines={4} textAlignVertical="top" autoFocus
               />
+              {availableRunners.length > 0 && (
+                <View style={s.modelChips}>
+                  {availableRunners.map((r) => (
+                    <Pressable
+                      key={r.id}
+                      style={[
+                        s.modelChip,
+                        { borderColor: selectedRunner === r.id ? "#f59e0b" : c.border },
+                        selectedRunner === r.id && { backgroundColor: "#f59e0b" + "20" },
+                      ]}
+                      onPress={() => setSelectedRunner(r.id)}
+                    >
+                      <Text style={[s.modelChipText, { color: selectedRunner === r.id ? "#f59e0b" : c.textMuted }]}>
+                        {r.name}
+                      </Text>
+                    </Pressable>
+                  ))}
+                  <Pressable
+                    style={[
+                      s.modelChip,
+                      { borderColor: selectedRunner === "custom" ? "#f59e0b" : c.border },
+                      selectedRunner === "custom" && { backgroundColor: "#f59e0b" + "20" },
+                    ]}
+                    onPress={() => setSelectedRunner("custom")}
+                  >
+                    <Text style={[s.modelChipText, { color: selectedRunner === "custom" ? "#f59e0b" : c.textMuted }]}>
+                      Custom
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
+              {selectedRunner === "custom" && (
+                <TextInput
+                  style={[s.input, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary, marginTop: 8, fontSize: 13, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }]}
+                  placeholder="Command, e.g. my-tool --auto {prompt}"
+                  placeholderTextColor={c.textMuted}
+                  value={customCommand}
+                  onChangeText={setCustomCommand}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              )}
               {availableModels.length > 0 && (
                 <View style={s.modelChips}>
                   {availableModels.map((m) => (
@@ -935,25 +993,6 @@ export default function TasksScreen() {
                     >
                       <Text style={[s.modelChipText, { color: selectedModel === m.id ? c.accent : c.textMuted }]}>
                         {m.name}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              )}
-              {availableRunners.filter(r => r.installed).length > 1 && (
-                <View style={s.modelChips}>
-                  {availableRunners.filter(r => r.installed).map((r) => (
-                    <Pressable
-                      key={r.id}
-                      style={[
-                        s.modelChip,
-                        { borderColor: selectedRunner === r.id ? "#f59e0b" : c.border },
-                        selectedRunner === r.id && { backgroundColor: "#f59e0b" + "20" },
-                      ]}
-                      onPress={() => setSelectedRunner(r.id)}
-                    >
-                      <Text style={[s.modelChipText, { color: selectedRunner === r.id ? "#f59e0b" : c.textMuted }]}>
-                        {r.name}
                       </Text>
                     </Pressable>
                   ))}
@@ -1000,11 +1039,6 @@ export default function TasksScreen() {
                       <Text style={[s.chatHeaderStatus, { color: STATUS_COLORS[selectedTask.status] }]}>
                         {selectedTask.status}
                       </Text>
-                      {selectedTask.costUsd ? (
-                        <Text style={[s.chatHeaderCost, { color: c.textMuted }]}>
-                          ${selectedTask.costUsd.toFixed(4)}
-                        </Text>
-                      ) : null}
                     </View>
                   </View>
                   {isRunning ? (
@@ -1037,7 +1071,7 @@ export default function TasksScreen() {
                     <View>
                       <TypingIndicator color={c.accent || "#6366f1"} />
                       <Text style={[s.startingHint, { color: c.textMuted }]}>
-                        Starting agent... this may take a moment
+                        {(selectedTask?.turns?.length ?? 0) > 2 ? "Thinking..." : "Starting..."}
                       </Text>
                     </View>
                   )}

@@ -5,7 +5,7 @@ export const PREDEFINED_RUNNERS = [
     runnerId: "claude",
     name: "Claude Code",
     command: "claude",
-    args: JSON.stringify(["-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "sonnet", "--tools", "Bash", "--dangerously-skip-permissions", "--no-session-persistence"]),
+    args: JSON.stringify(["-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "sonnet", "--tools", "Bash", "--dangerously-skip-permissions"]),
     outputMode: "stream-json" as const,
     resumeSupported: true,
     resumeArgs: JSON.stringify(["--resume", "{sessionId}"]),

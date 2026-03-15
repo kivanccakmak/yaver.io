@@ -217,15 +217,50 @@ func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var runners []runnerInfo
-	for _, r := range builtinRunners {
+	seenIDs := make(map[string]bool)
+
+	// Add default runner first, then others sorted by ID
+	defaultID := s.taskMgr.runner.RunnerID
+	addRunner := func(r RunnerConfig) {
+		if seenIDs[r.RunnerID] {
+			return
+		}
 		_, err := osexec.LookPath(r.Command)
 		runners = append(runners, runnerInfo{
 			ID:        r.RunnerID,
 			Name:      r.Name,
 			Command:   r.Command,
 			Installed: err == nil,
-			IsDefault: r.RunnerID == s.taskMgr.runner.RunnerID,
+			IsDefault: r.RunnerID == defaultID,
 			Models:    modelsByRunner[r.RunnerID],
+		})
+		seenIDs[r.RunnerID] = true
+	}
+
+	// Default runner first
+	if r, ok := builtinRunners[defaultID]; ok {
+		addRunner(r)
+	}
+	// Then rest in stable order
+	for _, id := range []string{"claude", "codex", "aider"} {
+		if r, ok := builtinRunners[id]; ok {
+			addRunner(r)
+		}
+	}
+	// Any remaining runners from Convex
+	for _, r := range builtinRunners {
+		addRunner(r)
+	}
+
+	// Include the active runner if it's custom (not in builtinRunners)
+	if !seenIDs[s.taskMgr.runner.RunnerID] {
+		runners = append(runners, runnerInfo{
+			ID:        s.taskMgr.runner.RunnerID,
+			Name:      s.taskMgr.runner.Name,
+			Command:   s.taskMgr.runner.Command,
+			Installed: true,
+			IsDefault: true,
+			Models:    nil, // custom runners have no predefined models
 		})
 	}
 
@@ -417,10 +452,11 @@ func (s *HTTPServer) listTasks(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title       string `json:"title"`
-		Description string `json:"description"`
-		Model       string `json:"model"`
-		Runner      string `json:"runner"` // runner ID: "claude", "codex", "aider" — empty uses default
+		Title         string `json:"title"`
+		Description   string `json:"description"`
+		Model         string `json:"model"`
+		Runner        string `json:"runner"`        // runner ID: "claude", "codex", "aider" — empty uses default
+		CustomCommand string `json:"customCommand"` // arbitrary command — runs via sh -c
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -431,7 +467,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "mobile", body.Runner)
+	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "mobile", body.Runner, body.CustomCommand)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create task: %v", err))
 		return
@@ -914,7 +950,7 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		if args.Prompt == "" {
 			return mcpToolError("prompt is required")
 		}
-		task, err := s.taskMgr.CreateTask(args.Prompt, "", "", "mcp", "")
+		task, err := s.taskMgr.CreateTask(args.Prompt, "", "", "mcp", "", "")
 		if err != nil {
 			return mcpToolError(fmt.Sprintf("failed to create task: %v", err))
 		}

@@ -54,11 +54,10 @@ var defaultRunner = RunnerConfig{
 		"--model", "sonnet",
 		"--tools", "Bash",
 		"--dangerously-skip-permissions",
-		"--no-session-persistence",
 	},
 	OutputMode:      "stream-json",
 	ResumeSupported: false,
-	ResumeArgs:      nil,
+	ResumeArgs:      []string{"--resume", "{sessionId}"},
 	ExitCommand:     "/exit",
 }
 
@@ -75,7 +74,7 @@ var builtinRunners = map[string]RunnerConfig{
 		RunnerID:    "claude",
 		Name:        "Claude Code",
 		Command:     "claude",
-		Args:        []string{"-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "sonnet", "--tools", "Bash", "--dangerously-skip-permissions", "--no-session-persistence"},
+		Args:        []string{"-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "sonnet", "--tools", "Bash", "--dangerously-skip-permissions"},
 		OutputMode:  "stream-json",
 		ExitCommand: "/exit",
 	},
@@ -567,14 +566,30 @@ func (tm *TaskManager) CheckRunner() error {
 // runnerID selects which runner to use — empty uses the agent's default.
 // model overrides the default model (e.g. "opus", "sonnet", "haiku") — empty uses runner default.
 // source indicates where the task originated: "mobile", "mcp", or "cli" — defaults to "mobile".
-func (tm *TaskManager) CreateTask(title, description, model, source, runnerID string) (*Task, error) {
-	// Resolve which runner to use for this task
-	taskRunner := tm.runner // default
-	if runnerID != "" && runnerID != tm.runner.RunnerID {
-		if r, ok := builtinRunners[runnerID]; ok {
-			taskRunner = r
-		} else {
-			return nil, fmt.Errorf("unknown runner: %s", runnerID)
+// customCommand, if non-empty, runs an arbitrary command via sh -c (ignores runnerID).
+func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, customCommand string) (*Task, error) {
+	var taskRunner RunnerConfig
+
+	if customCommand != "" {
+		// Ad-hoc custom command from mobile — run via sh -c
+		taskRunner = RunnerConfig{
+			RunnerID:   "custom",
+			Name:       "Custom",
+			Command:    "sh",
+			Args:       []string{"-c", customCommand},
+			OutputMode: "raw",
+		}
+	} else {
+		// Resolve which runner to use for this task
+		taskRunner = tm.runner // default (could be custom)
+		if runnerID != "" && runnerID != tm.runner.RunnerID {
+			if r, ok := builtinRunners[runnerID]; ok {
+				taskRunner = r
+			} else if runnerID == "custom" || runnerID == tm.runner.RunnerID {
+				taskRunner = tm.runner
+			} else {
+				return nil, fmt.Errorf("unknown runner: %s", runnerID)
+			}
 		}
 	}
 
@@ -1230,18 +1245,14 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 
 		case "user":
 			// Tool result — contains stdout/stderr from bash execution.
+			// We only log these (don't emit to output) because Claude's text_delta
+			// already streams a formatted version of the same content.
 			if event.ToolUseResult != nil {
-				stdout := strings.TrimRight(event.ToolUseResult.Stdout, "\n")
-				stderr := strings.TrimRight(event.ToolUseResult.Stderr, "\n")
-				if stdout != "" {
-					resultText := fmt.Sprintf("```\n%s\n```\n", stdout)
-					tm.emit(task, &output, resultText)
-					log.Printf("[task %s stdout] %s", task.ID, truncate(stdout, 200))
+				if event.ToolUseResult.Stdout != "" {
+					log.Printf("[task %s stdout] %s", task.ID, truncate(strings.TrimRight(event.ToolUseResult.Stdout, "\n"), 200))
 				}
-				if stderr != "" {
-					errText := fmt.Sprintf("```\n⚠ %s\n```\n", stderr)
-					tm.emit(task, &output, errText)
-					log.Printf("[task %s stderr-out] %s", task.ID, truncate(stderr, 200))
+				if event.ToolUseResult.Stderr != "" {
+					log.Printf("[task %s stderr-out] %s", task.ID, truncate(strings.TrimRight(event.ToolUseResult.Stderr, "\n"), 200))
 				}
 			}
 
@@ -1457,9 +1468,8 @@ func (tm *TaskManager) ResumeTask(id, input string) (*Task, error) {
 	}
 	task.Turns = append(task.Turns, turn)
 
-	// Add separator to output so streaming output concatenates visually
-	separator := fmt.Sprintf("\n\n---\n\n**Follow-up:** %s\n\n", input)
-	task.Output += separator
+	// Clear output for the new run — turns track conversation history
+	task.Output = ""
 	task.ResultText = "" // Clear previous result — new one will come
 	task.FinishedAt = nil
 	task.Status = TaskStatusQueued
@@ -1497,15 +1507,25 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 
 	args := buildRunnerArgs(runner, prompt)
 
-	// Append resume args if the runner supports it and we have a session ID.
-	if runner.ResumeSupported && task.SessionID != "" && len(runner.ResumeArgs) > 0 {
+	// Resume with session ID if available (follow-up conversation)
+	if task.SessionID != "" && runner.RunnerID == "claude" {
+		args = append(args, "--resume", task.SessionID)
+		// Remove --no-session-persistence — can't resume a non-persisted session
+		filtered := args[:0]
+		for _, a := range args {
+			if a != "--no-session-persistence" {
+				filtered = append(filtered, a)
+			}
+		}
+		args = filtered
+		log.Printf("[task %s] Resuming session %s", task.ID, task.SessionID)
+	} else if task.SessionID != "" && len(runner.ResumeArgs) > 0 {
+		// Non-Claude runner with resume support
 		for _, ra := range runner.ResumeArgs {
 			args = append(args, strings.ReplaceAll(ra, "{sessionId}", task.SessionID))
 		}
-	}
-
-	// Give each Claude task its own session ID to avoid blocking other sessions
-	if runner.RunnerID == "claude" && task.SessionID == "" {
+	} else if runner.RunnerID == "claude" {
+		// New task — give it a unique session ID
 		args = append(args, "--session-id", uuid.New().String())
 	}
 

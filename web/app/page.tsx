@@ -263,10 +263,10 @@ export default function HomePage() {
             </h3>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {[
-                { task: "\"Refactor the auth module to use JWT\"", context: "Large codebase change" },
-                { task: "\"Fix the failing CI tests on main\"", context: "Debug & fix remotely" },
-                { task: "\"Add dark mode to the settings page\"", context: "Feature development" },
-                { task: "\"Review the last 3 PRs and summarize\"", context: "Code review on the go" },
+                { task: "\"Refactor the auth module to use JWT\"", context: "Claude Code \u00b7 Large codebase change" },
+                { task: "\"Fix the failing CI tests on main\"", context: "Codex \u00b7 Debug & fix remotely" },
+                { task: "\"Add dark mode to the settings page\"", context: "Claude Code \u00b7 Feature development" },
+                { task: "\"Run my deploy script for staging\"", context: "Custom command \u00b7 Any CLI tool" },
               ].map((item) => (
                 <div key={item.task} className="rounded-lg border border-surface-800 bg-surface-900/50 px-4 py-3">
                   <p className="text-xs font-medium text-surface-200">{item.task}</p>
@@ -375,16 +375,24 @@ export default function HomePage() {
               description="Claude Code, OpenAI Codex, Aider, or your own CLI tool. Pick your agent in the app — switch anytime."
             />
             <FeatureCard
+              title="Multi-agent per task"
+              description="Run Claude on one task and Codex on another — simultaneously. Pick the right agent for each job, or bring your own custom command."
+            />
+            <FeatureCard
               title="Real-time streaming"
-              description="Responses stream token-by-token across devices. No buffering, no delays."
+              description="Responses stream token-by-token across devices. No buffering, no delays. Follow up with additional instructions mid-session."
             />
             <FeatureCard
               title="Multi-device"
-              description="Connect from your phone, tablet, or any device. Manage multiple dev machines from one app."
+              description="Connect from your phone, tablet, or any terminal. Manage multiple dev machines from one app."
             />
             <FeatureCard
               title="Agent-to-agent"
               description="Expose your dev machine as an MCP server. Other agents and tools can discover and interact with it using the open standard."
+            />
+            <FeatureCard
+              title="Works behind NAT"
+              description="No port forwarding, no VPN, no TUN/TAP. Application-layer QUIC relay handles NAT traversal automatically."
             />
           </div>
         </div>

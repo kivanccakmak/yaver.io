@@ -239,7 +239,7 @@ export class QuicClient {
   // ── Task API ───────────────────────────────────────────────────────
 
   /** Send a new task to the desktop agent. */
-  async sendTask(title: string, description: string, model?: string, runner?: string): Promise<Task> {
+  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string): Promise<Task> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tasks`, {
       method: "POST",
@@ -249,6 +249,7 @@ export class QuicClient {
         description,
         ...(model ? { model } : {}),
         ...(runner ? { runner } : {}),
+        ...(customCommand ? { customCommand } : {}),
       }),
     });
     if (!res.ok) {
@@ -294,7 +295,7 @@ export class QuicClient {
         status: t.status,
         runnerId: t.runnerId || undefined,
         output: typeof t.output === "string" && t.output
-          ? t.output.split("\n").filter((l: string) => l)
+          ? t.output.split("\n")
           : Array.isArray(t.output) ? t.output : [],
         createdAt: t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
         updatedAt: t.finishedAt
@@ -452,15 +453,19 @@ export class QuicClient {
   }
 
   /** Ping the agent and return round-trip time in milliseconds. */
-  async ping(): Promise<{ ok: boolean; rttMs: number; hostname?: string; version?: string }> {
+  async ping(): Promise<{ ok: boolean; rttMs: number; hostname?: string; version?: string; timedOut?: boolean }> {
     if (!this.isConnected && !this.hasConnectionInfo) {
       return { ok: false, rttMs: -1 };
     }
     const start = Date.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     try {
       const res = await fetch(`${this.baseUrl}/health`, {
         headers: this.authHeaders,
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       const rttMs = Date.now() - start;
       if (!res.ok) return { ok: false, rttMs };
       const data = await res.json();
@@ -471,7 +476,9 @@ export class QuicClient {
         version: data.version,
       };
     } catch {
-      return { ok: false, rttMs: Date.now() - start };
+      clearTimeout(timeout);
+      const elapsed = Date.now() - start;
+      return { ok: false, rttMs: elapsed, timedOut: elapsed >= 5000 };
     }
   }
 

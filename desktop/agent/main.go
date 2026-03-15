@@ -25,7 +25,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.15.0"
+const version = "1.25.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -1592,9 +1592,9 @@ func resolveRunner(convexSiteURL, token string) RunnerConfig {
 		}
 	}
 
-	// Known runner ID — try to fetch runner definitions from backend
-	if settings.RunnerID == "claude" {
-		return defaultRunner
+	// Known runner ID — use builtinRunners (populated from Convex) or default
+	if r, ok := builtinRunners[settings.RunnerID]; ok {
+		return r
 	}
 
 	runner, err := fetchRunner(client, convexSiteURL, settings.RunnerID)
