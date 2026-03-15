@@ -138,6 +138,32 @@ export async function getDeviceEvents(token: string, deviceId: string): Promise<
   }
 }
 
+export interface UsageDaySummary {
+  date: string;
+  totalSec: number;
+  taskCount: number;
+  runners: Record<string, number>;
+}
+
+export interface UsageSummary {
+  entries: any[];
+  daily: UsageDaySummary[];
+  totalSeconds: number;
+}
+
+export async function getUsageSummary(token: string, since?: number): Promise<UsageSummary> {
+  try {
+    const params = since ? `?since=${since}` : "";
+    const res = await fetch(`${getConvexSiteUrl()}/usage${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return { entries: [], daily: [], totalSeconds: 0 };
+    return await res.json();
+  } catch {
+    return { entries: [], daily: [], totalSeconds: 0 };
+  }
+}
+
 export function getOAuthUrl(provider: OAuthProvider): string {
   const base = getWebBaseUrl();
   return `${base}/api/auth/oauth/${provider}?client=mobile`;

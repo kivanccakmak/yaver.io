@@ -159,6 +159,21 @@ export default defineSchema({
   })
     .index("by_deviceId", ["deviceId", "timestamp"]),
 
+  // Runner usage tracking — how long each AI agent ran per task
+  runnerUsage: defineTable({
+    userId: v.string(),           // owner of the device
+    deviceId: v.string(),         // which device ran it
+    taskId: v.string(),           // task identifier
+    runner: v.string(),           // "claude", "codex", "aider", etc.
+    model: v.optional(v.string()), // "sonnet", "opus", etc.
+    durationSec: v.number(),      // how many seconds the runner ran
+    startedAt: v.number(),        // epoch ms when task started
+    finishedAt: v.number(),       // epoch ms when task finished
+    source: v.optional(v.string()), // "mobile", "cli", "mcp"
+  })
+    .index("by_userId", ["userId", "startedAt"])
+    .index("by_deviceId", ["deviceId", "startedAt"]),
+
   mobileStreamLogs: defineTable({
     userId: v.optional(v.string()),
     platform: v.string(),

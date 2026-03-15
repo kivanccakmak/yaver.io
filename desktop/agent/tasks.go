@@ -829,6 +829,23 @@ func (tm *TaskManager) startProcess(task *Task) error {
 				})
 			}
 		}
+		// Report runner usage to Convex (non-blocking)
+		if tm.ConvexURL != "" && task.StartedAt != nil && task.FinishedAt != nil {
+			duration := task.FinishedAt.Sub(*task.StartedAt).Seconds()
+			startMs := task.StartedAt.UnixMilli()
+			finishMs := task.FinishedAt.UnixMilli()
+			runner := tm.runner.Name
+			model := task.Model
+			source := task.Source
+			taskID := task.ID
+			go func() {
+				if err := ReportRunnerUsage(tm.ConvexURL, tm.AuthToken, tm.DeviceID, taskID, runner, model, source, duration, startMs, finishMs); err != nil {
+					log.Printf("[usage] failed to report: %v", err)
+				} else {
+					log.Printf("[usage] recorded %.0fs of %s for task %s", duration, runner, taskID[:8])
+				}
+			}()
+		}
 		tm.persist()
 		// Save session file for recent history (non-blocking)
 		go saveSessionFile(task, tm.runner.Name, tm.workDir)

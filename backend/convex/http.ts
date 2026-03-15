@@ -581,6 +581,61 @@ http.route({
   }),
 });
 
+/** POST /usage/record — Record runner usage when a task finishes (authed). */
+http.route({
+  path: "/usage/record",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const body = await request.json();
+    try {
+      await ctx.runMutation(api.runnerUsage.record, {
+        tokenHash,
+        deviceId: body.deviceId,
+        taskId: body.taskId,
+        runner: body.runner,
+        model: body.model,
+        durationSec: body.durationSec,
+        startedAt: body.startedAt,
+        finishedAt: body.finishedAt,
+        source: body.source,
+      });
+      return jsonResponse({ ok: true });
+    } catch (e: any) {
+      return errorResponse(e.message || "Failed to record usage", 500);
+    }
+  }),
+});
+
+/** GET /usage — Get usage summary with daily aggregation (authed). */
+http.route({
+  path: "/usage",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const url = new URL(request.url);
+    const since = url.searchParams.get("since");
+
+    const usage = await ctx.runQuery(api.runnerUsage.getUsage, {
+      tokenHash,
+      since: since ? parseInt(since) : undefined,
+    });
+    return jsonResponse(usage);
+  }),
+});
+
 /** POST /devices/runner-down — Set runner down/up flag (authed). */
 http.route({
   path: "/devices/runner-down",

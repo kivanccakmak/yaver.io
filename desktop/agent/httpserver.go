@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	osexec "os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +54,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/info", s.auth(s.handleInfo))
 	mux.HandleFunc("/agent/status", s.auth(s.handleAgentStatus))
 	mux.HandleFunc("/agent/runner/restart", s.auth(s.handleRunnerRestart))
+	mux.HandleFunc("/agent/runner/switch", s.auth(s.handleRunnerSwitch))
 	mux.HandleFunc("/agent/shutdown", s.auth(s.handleShutdown))
 
 	// MCP (Model Context Protocol) endpoint — JSON-RPC 2.0 over HTTP
@@ -202,6 +205,99 @@ func (s *HTTPServer) handleRunnerRestart(w http.ResponseWriter, r *http.Request)
 	jsonReply(w, http.StatusOK, map[string]interface{}{
 		"ok":      true,
 		"message": "Runner is healthy, runnerDown flag cleared",
+	})
+}
+
+// handleRunnerSwitch switches the active runner. Validates the binary exists first.
+func (s *HTTPServer) handleRunnerSwitch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+
+	var body struct {
+		RunnerID string `json:"runnerId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if body.RunnerID == "" {
+		jsonError(w, http.StatusBadRequest, "runnerId is required")
+		return
+	}
+
+	// Map runner IDs to commands
+	runnerCommands := map[string]string{
+		"claude": "claude",
+		"codex":  "codex",
+		"aider":  "aider",
+	}
+
+	cmd, known := runnerCommands[body.RunnerID]
+	if !known {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("unknown runner: %s (available: claude, codex, aider)", body.RunnerID))
+		return
+	}
+
+	// Check if binary exists on this machine
+	path, err := osexec.LookPath(cmd)
+	if err != nil {
+		log.Printf("[HTTP] Runner switch failed: %s not found on machine", cmd)
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("%s is not installed on this machine", cmd))
+		return
+	}
+
+	// Build new runner config
+	var newRunner RunnerConfig
+	switch body.RunnerID {
+	case "claude":
+		newRunner = defaultRunner
+	case "codex":
+		newRunner = RunnerConfig{
+			RunnerID: "codex",
+			Name:     "OpenAI Codex",
+			Command:  "codex",
+			Args:     []string{"--quiet", "--full-auto", "{prompt}"},
+			OutputMode: "raw",
+		}
+	case "aider":
+		newRunner = RunnerConfig{
+			RunnerID: "aider",
+			Name:     "Aider",
+			Command:  "aider",
+			Args:     []string{"--yes-always", "--no-git", "--message", "{prompt}"},
+			OutputMode:  "raw",
+			ExitCommand: "/quit",
+		}
+	}
+
+	// Update the task manager's runner
+	s.taskMgr.mu.Lock()
+	s.taskMgr.runner = newRunner
+	s.taskMgr.mu.Unlock()
+
+	log.Printf("[HTTP] Runner switched to %s (%s) at %s", newRunner.Name, body.RunnerID, path)
+
+	// Also save to Convex user settings (non-blocking)
+	if s.taskMgr.ConvexURL != "" {
+		go func() {
+			payload, _ := json.Marshal(map[string]string{"runnerId": body.RunnerID})
+			req, err := newBearerRequest("POST", s.taskMgr.ConvexURL+"/settings", s.taskMgr.AuthToken, bytes.NewReader(payload))
+			if err == nil {
+				resp, err := http.DefaultClient.Do(req)
+				if err == nil {
+					resp.Body.Close()
+				}
+			}
+		}()
+	}
+
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":       true,
+		"runner":   newRunner.Name,
+		"runnerId": body.RunnerID,
+		"path":     path,
 	})
 }
 

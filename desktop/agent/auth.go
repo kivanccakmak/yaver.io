@@ -276,6 +276,41 @@ func SetRunnerDown(baseURL, token, deviceID string, down bool) error {
 	return nil
 }
 
+// ReportRunnerUsage records how long a runner ran for a task.
+func ReportRunnerUsage(baseURL, token, deviceID, taskID, runner, model, source string, durationSec float64, startedAt, finishedAt int64) error {
+	payload := map[string]interface{}{
+		"deviceId":    deviceID,
+		"taskId":      taskID,
+		"runner":      runner,
+		"model":       model,
+		"durationSec": durationSec,
+		"startedAt":   startedAt,
+		"finishedAt":  finishedAt,
+		"source":      source,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal usage: %w", err)
+	}
+
+	req, err := newBearerRequest("POST", baseURL+"/usage/record", token, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create usage request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("usage request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("usage report failed (status %d): %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
 // MarkOffline tells the backend this device is going offline.
 func MarkOffline(baseURL, token, deviceID string) error {
 	payload := map[string]string{"deviceId": deviceID}

@@ -461,6 +461,23 @@ export class QuicClient {
     }
   }
 
+  /** Switch the runner on the desktop agent. Returns error message if runner not found. */
+  async switchRunner(runnerId: string): Promise<{ ok: boolean; runner?: string; error?: string }> {
+    if (!this.isConnected && !this.hasConnectionInfo) return { ok: false, error: "Not connected" };
+    try {
+      const res = await fetch(`${this.baseUrl}/agent/runner/switch`, {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ runnerId }),
+      });
+      const data = await res.json();
+      if (!res.ok) return { ok: false, error: data.error || `HTTP ${res.status}` };
+      return { ok: true, runner: data.runner };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "Unknown error" };
+    }
+  }
+
   /** Delete all finished tasks. */
   async deleteAllTasks(): Promise<number> {
     this.assertConnected();
