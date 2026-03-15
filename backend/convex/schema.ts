@@ -174,6 +174,14 @@ export default defineSchema({
     .index("by_userId", ["userId", "startedAt"])
     .index("by_deviceId", ["deviceId", "startedAt"]),
 
+  // Daily task counts per user — simple counter for analytics dashboard
+  dailyTaskCounts: defineTable({
+    userId: v.string(),         // matches users.userId
+    date: v.string(),           // "YYYY-MM-DD"
+    taskCount: v.number(),
+  })
+    .index("by_userId_date", ["userId", "date"]),
+
   mobileStreamLogs: defineTable({
     userId: v.optional(v.string()),
     platform: v.string(),

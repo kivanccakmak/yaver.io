@@ -997,9 +997,10 @@ http.route({
   path: "/settings",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
-    const user = await authenticateRequest(ctx, request);
-    if (!user) return errorResponse("Unauthorized", 401);
-    const settings = await ctx.runQuery(api.userSettings.get, { userId: user.userId as any });
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+    const settings = await ctx.runQuery(api.userSettings.getByToken, { tokenHash });
     return jsonResponse({
       ok: true,
       settings: settings || { forceRelay: true, runnerId: undefined, customRunnerCommand: undefined },
@@ -1011,12 +1012,13 @@ http.route({
   path: "/settings",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const user = await authenticateRequest(ctx, request);
-    if (!user) return errorResponse("Unauthorized", 401);
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
     const body = await request.json();
-    await ctx.runMutation(api.userSettings.set, {
-      userId: user.userId as any,
-      forceRelay: body.forceRelay ?? false,
+    await ctx.runMutation(api.userSettings.setByToken, {
+      tokenHash,
+      forceRelay: body.forceRelay,
       runnerId: body.runnerId,
       customRunnerCommand: body.customRunnerCommand,
     });

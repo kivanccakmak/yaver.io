@@ -113,7 +113,7 @@ export const createOrUpdateUser = mutation({
     }
 
     const userId = randomHex(16);
-    return await ctx.db.insert("users", {
+    const userDocId = await ctx.db.insert("users", {
       userId,
       email: args.email,
       fullName: args.fullName,
@@ -123,6 +123,12 @@ export const createOrUpdateUser = mutation({
       plan: "early_access",
       createdAt: Date.now(),
     });
+    // Create default settings for new user
+    await ctx.db.insert("userSettings", {
+      userId: userDocId,
+      forceRelay: true,
+    });
+    return userDocId;
   },
 });
 
@@ -207,7 +213,7 @@ export const createEmailUser = mutation({
     }
 
     const userId = randomHex(16);
-    return await ctx.db.insert("users", {
+    const userDocId = await ctx.db.insert("users", {
       userId,
       email: args.email,
       fullName: args.fullName,
@@ -217,6 +223,12 @@ export const createEmailUser = mutation({
       plan: "early_access",
       createdAt: Date.now(),
     });
+    // Create default settings for new user
+    await ctx.db.insert("userSettings", {
+      userId: userDocId,
+      forceRelay: true,
+    });
+    return userDocId;
   },
 });
 

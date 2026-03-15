@@ -412,6 +412,25 @@ func (tm *TaskManager) WarmUp() {
 	}()
 }
 
+// Shutdown stops all running tasks and kills the warm session process.
+func (tm *TaskManager) Shutdown() {
+	stopped := tm.StopAllTasks()
+	if stopped > 0 {
+		log.Printf("[shutdown] Stopped %d running task(s)", stopped)
+	}
+
+	tm.mu.Lock()
+	pid := tm.warmPID
+	tm.mu.Unlock()
+
+	if pid > 0 {
+		if proc, err := os.FindProcess(pid); err == nil {
+			log.Printf("[shutdown] Killing warm session (PID %d)", pid)
+			_ = proc.Kill()
+		}
+	}
+}
+
 // GetWarmSessionID returns the warm session ID if available.
 func (tm *TaskManager) GetWarmSessionID() string {
 	tm.mu.RLock()

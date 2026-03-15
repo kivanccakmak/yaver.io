@@ -94,14 +94,16 @@ Relay servers are stored in Convex `platformConfig` under the key `relay_servers
 cd backend && npx convex run platformConfig:get '{"key":"relay_servers"}'
 
 # Update relay servers
-cd backend && npx convex run platformConfig:set '{"key":"relay_servers","value":"[{\"id\":\"hel1\",\"quicAddr\":\"37.27.184.85:4433\",\"httpUrl\":\"http://37.27.184.85:8443\",\"region\":\"eu-hel\",\"priority\":1}]"}'
+cd backend && npx convex run platformConfig:set '{"key":"relay_servers","value":"[{\"id\":\"hel1\",\"quicAddr\":\"37.27.184.85:4433\",\"httpUrl\":\"https://connect.yaver.io\",\"region\":\"eu-hel\",\"priority\":1}]"}'
 ```
 
 ### Current relay servers
 
-| ID | IP | Ports | Region | Provider |
-|---|---|---|---|---|
-| `hel1` | `37.27.184.85` | QUIC 4433/udp, HTTP 8443/tcp | Helsinki (eu-hel) | Hetzner CAX11 (ARM64) |
+| ID | Domain | IP | Ports | Region | Provider |
+|---|---|---|---|---|---|
+| `hel1` | `connect.yaver.io` | `37.27.184.85` | QUIC 4433/udp, HTTPS 443/tcp | Helsinki (eu-hel) | Hetzner CAX11 (ARM64) |
+
+HTTPS is handled by nginx + Let's Encrypt (certbot auto-renews). Cert expires 2026-06-13.
 
 ## Conventions
 - Go code: standard Go project layout, `gofmt`
@@ -250,7 +252,8 @@ Required Vercel env vars:
 
 ### Relay Server (Hetzner)
 
-Current server: `37.27.184.85` (Hetzner CAX11, ARM64, Ubuntu 24.04, 4GB RAM, 40GB SSD)
+Current server: `connect.yaver.io` / `37.27.184.85` (Hetzner CAX11, ARM64, Ubuntu 24.04, 4GB RAM, 40GB SSD)
+HTTPS via nginx + Let's Encrypt (certbot auto-renews).
 
 ```bash
 # Deploy via Docker (recommended)
@@ -272,10 +275,10 @@ ssh root@37.27.184.85 docker logs -f yaver-relay
 ssh root@37.27.184.85 journalctl -u yaver-relay -f
 
 # Health check
-curl http://37.27.184.85:8443/health
+curl https://connect.yaver.io/health
 
 # Active tunnels
-curl http://37.27.184.85:8443/tunnels
+curl https://connect.yaver.io/tunnels
 
 # Server resources
 ssh root@37.27.184.85 'df -h / && free -h && docker ps'
@@ -283,9 +286,10 @@ ssh root@37.27.184.85 'df -h / && free -h && docker ps'
 
 Adding a new relay server:
 1. Deploy relay to new VPS: `./deploy/up.sh <new-ip> --docker`
-2. Verify: `curl http://<new-ip>:8443/health`
-3. Add to Convex: `npx convex run platformConfig:set '{"key":"relay_servers","value":"[...existing...,{\"id\":\"new1\",\"quicAddr\":\"<ip>:4433\",\"httpUrl\":\"http://<ip>:8443\",\"region\":\"<region>\",\"priority\":2}]"}'`
-4. Clients pick it up automatically on next startup
+2. Set up DNS A record + nginx + certbot for HTTPS
+3. Verify: `curl https://<domain>/health`
+4. Add to Convex: `npx convex run platformConfig:set '{"key":"relay_servers","value":"[...existing...,{\"id\":\"new1\",\"quicAddr\":\"<ip>:4433\",\"httpUrl\":\"https://<domain>\",\"region\":\"<region>\",\"priority\":2}]"}'`
+5. Clients pick it up automatically on next startup
 
 ### iOS — TestFlight (Local, No EAS, No Fastlane)
 

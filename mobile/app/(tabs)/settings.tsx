@@ -19,7 +19,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
-import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent } from "../../src/lib/auth";
+import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent, getUsageSummary, type UsageSummary } from "../../src/lib/auth";
 import { clearCache } from "../../src/lib/storage";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, clearLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
@@ -67,8 +67,9 @@ export default function SettingsScreen() {
   const [metrics, setMetrics] = useState<DeviceMetric[]>([]);
   const [events, setEvents] = useState<DeviceEvent[]>([]);
   const [showMetrics, setShowMetrics] = useState(false);
+  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
 
-  // Load user settings and runners from Convex
+  // Load user settings, runners, and usage from Convex
   useEffect(() => {
     if (!token) return;
     getUserSettings(token).then((s) => {
@@ -80,6 +81,7 @@ export default function SettingsScreen() {
       if (s.customRunnerCommand) setCustomRunnerCommand(s.customRunnerCommand);
     });
     getAiRunners().then(setRunners);
+    getUsageSummary(token).then(setUsageSummary);
   }, [token]);
 
   // Subscribe to live log updates
@@ -620,6 +622,53 @@ export default function SettingsScreen() {
                 )}
               </View>
             )}
+          </View>
+        )}
+
+        {/* Yaver Usage */}
+        {usageSummary && usageSummary.daily.length > 0 && (
+          <View style={styles.section}>
+            <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Yaver Usage (30 days)</Text>
+            <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+              <View style={styles.aboutRow}>
+                <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Total Tasks</Text>
+                <Text style={[styles.aboutValue, { color: c.accent, fontWeight: "600" }]}>
+                  {usageSummary.daily.reduce((sum, d) => sum + d.taskCount, 0)}
+                </Text>
+              </View>
+              <View style={[styles.separator, { backgroundColor: c.borderSubtle }]} />
+              <View style={styles.aboutRow}>
+                <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Total Time</Text>
+                <Text style={[styles.aboutValue, { color: c.accent, fontWeight: "600" }]}>
+                  {usageSummary.totalSeconds >= 3600
+                    ? `${(usageSummary.totalSeconds / 3600).toFixed(1)}h`
+                    : `${Math.round(usageSummary.totalSeconds / 60)}m`}
+                </Text>
+              </View>
+              {(() => {
+                const runners: Record<string, number> = {};
+                for (const d of usageSummary.daily) {
+                  for (const [r, secs] of Object.entries(d.runners)) {
+                    runners[r] = (runners[r] || 0) + secs;
+                  }
+                }
+                const sorted = Object.entries(runners).sort((a, b) => b[1] - a[1]);
+                if (sorted.length === 0) return null;
+                return sorted.map(([runner, secs]) => (
+                  <React.Fragment key={runner}>
+                    <View style={[styles.separator, { backgroundColor: c.borderSubtle }]} />
+                    <View style={styles.aboutRow}>
+                      <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>{runner}</Text>
+                      <Text style={[styles.aboutValue, { color: c.textMuted }]}>
+                        {secs >= 3600
+                          ? `${(secs / 3600).toFixed(1)}h`
+                          : `${Math.round(secs / 60)}m`}
+                      </Text>
+                    </View>
+                  </React.Fragment>
+                ));
+              })()}
+            </View>
           </View>
         )}
 

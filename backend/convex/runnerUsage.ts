@@ -33,6 +33,24 @@ export const record = mutation({
       finishedAt: args.finishedAt,
       source: args.source,
     });
+
+    // Increment daily task count
+    const date = new Date(args.startedAt).toISOString().slice(0, 10);
+    const existing = await ctx.db
+      .query("dailyTaskCounts")
+      .withIndex("by_userId_date", (q) =>
+        q.eq("userId", session.user.userId).eq("date", date)
+      )
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, { taskCount: existing.taskCount + 1 });
+    } else {
+      await ctx.db.insert("dailyTaskCounts", {
+        userId: session.user.userId,
+        date,
+        taskCount: 1,
+      });
+    }
   },
 });
 
@@ -75,5 +93,34 @@ export const getUsage = query({
     const daily = Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 
     return { entries, daily, totalSeconds };
+  },
+});
+
+/**
+ * Get daily task counts for analytics charts.
+ * Returns last N days of task counts.
+ */
+export const getDailyTaskCounts = query({
+  args: {
+    tokenHash: v.string(),
+    days: v.optional(v.number()), // defaults to 30
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) return { counts: [] };
+
+    const days = args.days ?? 30;
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const sinceDate = since.toISOString().slice(0, 10);
+
+    const counts = await ctx.db
+      .query("dailyTaskCounts")
+      .withIndex("by_userId_date", (q) =>
+        q.eq("userId", session.user.userId).gte("date", sinceDate)
+      )
+      .collect();
+
+    return { counts };
   },
 });

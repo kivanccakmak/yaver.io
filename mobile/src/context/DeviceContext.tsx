@@ -12,6 +12,7 @@ import Constants from "expo-constants";
 import NetInfo from "@react-native-community/netinfo";
 import { quicClient, RelayServer } from "../lib/quic";
 import { useAuth } from "./AuthContext";
+import { getUserSettings } from "../lib/auth";
 import { appLog } from "../lib/logger";
 
 const APP_VERSION = Constants.expoConfig?.version ?? "unknown";
@@ -88,12 +89,22 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     appLog("info", "refreshDevices: fetching...");
     setIsLoadingDevices(true);
     try {
-      const res = await fetch(`${CONVEX_SITE_URL}/devices/list`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      appLog("info", `/devices/list status: ${res.status}`);
-      if (res.ok) {
-        const data = await res.json();
+      // Fetch devices and settings in parallel
+      const [devicesRes, settings] = await Promise.all([
+        fetch(`${CONVEX_SITE_URL}/devices/list`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        getUserSettings(token),
+      ]);
+      appLog("info", `/devices/list status: ${devicesRes.status}`);
+
+      // Apply forceRelay setting
+      if (settings.forceRelay !== undefined) {
+        quicClient.setForceRelay(settings.forceRelay);
+      }
+
+      if (devicesRes.ok) {
+        const data = await devicesRes.json();
         const raw = data.devices || data || [];
         appLog("info", `Found ${raw.length} device(s)`);
         const mapped: Device[] = raw.map((d: any) => ({
@@ -107,7 +118,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         }));
         setDevices(mapped);
       } else {
-        appLog("warn", `/devices/list failed: ${res.status}`);
+        appLog("warn", `/devices/list failed: ${devicesRes.status}`);
       }
     } catch (e) {
       appLog("error", `refreshDevices error: ${e}`);
@@ -188,7 +199,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     return () => unsub();
   }, [activeDevice]);
 
-  // Fetch relay servers from platform config (once)
+  // Fetch relay servers and user settings from platform config (once)
   const relaysFetched = useRef(false);
   useEffect(() => {
     if (relaysFetched.current) return;
@@ -210,6 +221,19 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       }
     })();
   }, []);
+
+  // Load user settings (forceRelay) on startup
+  const settingsLoaded = useRef(false);
+  useEffect(() => {
+    if (!token || settingsLoaded.current) return;
+    settingsLoaded.current = true;
+    getUserSettings(token).then((s) => {
+      if (s.forceRelay !== undefined) {
+        quicClient.setForceRelay(s.forceRelay);
+        appLog("info", `[settings] forceRelay=${s.forceRelay}`);
+      }
+    });
+  }, [token]);
 
   // Fetch devices when token becomes available
   useEffect(() => {

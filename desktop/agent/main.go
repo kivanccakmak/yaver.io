@@ -25,7 +25,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.10.0"
+const version = "1.11.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -290,6 +290,7 @@ func runSignout() {
 	}
 
 	cfg.AuthToken = ""
+	cfg.DeviceID = ""
 	if err := SaveConfig(cfg); err != nil {
 		log.Fatalf("save config: %v", err)
 	}
@@ -463,7 +464,7 @@ func runConnect(args []string) {
 	deviceID := fs.String("device", "", "Device ID to connect to")
 	useRelay := fs.Bool("relay", true, "Connect through relay server (default: true)")
 	direct := fs.Bool("direct", false, "Connect directly via QUIC (skip relay)")
-	relayURL := fs.String("relay-server", "", "Relay server URL (e.g. http://37.27.184.85:8443). Auto-fetched if not set")
+	relayURL := fs.String("relay-server", "", "Relay server URL (e.g. https://connect.yaver.io). Auto-fetched if not set")
 	fs.Parse(args)
 
 	// --direct overrides --relay
@@ -733,7 +734,25 @@ func runServe(args []string) {
 		QuicHost: localIP,
 		QuicPort: *httpPort,
 	}); err != nil {
-		log.Fatalf("device registration failed: %v", err)
+		if strings.Contains(err.Error(), "belongs to another user") {
+			log.Printf("Device ID conflict — generating new device ID")
+			cfg.DeviceID = uuid.New().String()
+			if saveErr := SaveConfig(cfg); saveErr != nil {
+				log.Fatalf("save config after device ID reset: %v", saveErr)
+			}
+			if err2 := RegisterDevice(cfg.ConvexSiteURL, RegisterDeviceRequest{
+				Token:    cfg.AuthToken,
+				DeviceID: cfg.DeviceID,
+				Name:     hostname,
+				Platform: platform,
+				QuicHost: localIP,
+				QuicPort: *httpPort,
+			}); err2 != nil {
+				log.Fatalf("device registration failed after reset: %v", err2)
+			}
+		} else {
+			log.Fatalf("device registration failed: %v", err)
+		}
 	}
 	log.Println("Device registered.")
 
@@ -857,6 +876,7 @@ func runServe(args []string) {
 
 	sig := <-sigCh
 	log.Printf("Received signal %s, shutting down...", sig)
+	taskMgr.Shutdown()
 	if err := MarkOffline(cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID); err != nil {
 		log.Printf("failed to mark offline: %v", err)
 	}
@@ -1367,24 +1387,21 @@ func runStatus() {
 				if json.NewDecoder(statusResp.Body).Decode(&statusBody) == nil {
 					procs := statusBody.Status.RunnerProcesses
 					if len(procs) > 0 {
-						fmt.Printf("  Forked: %d process(es)\n", len(procs))
 						for _, p := range procs {
 							cmdPreview := p.Command
 							if len(cmdPreview) > 60 {
 								cmdPreview = cmdPreview[:60] + "..."
 							}
-							fmt.Printf("    PID %d: %s\n", p.PID, cmdPreview)
+							fmt.Printf("  Forked: PID %d (%s)\n", p.PID, cmdPreview)
 						}
 					} else {
-						fmt.Printf("  Forked: none\n")
+						fmt.Printf("  Forked: idle\n")
 					}
 
-					// Show task summary
-					total := int(statusBody.Status.TotalTasks)
-					running := int(statusBody.Status.RunningTasks)
-					// TODO: warm session shown via Forked line above
-					if total > 0 {
-						fmt.Printf("  Tasks:  %d total, %d running\n", total, running)
+					// Show running tasks only
+					runningCount := int(statusBody.Status.RunningTasks)
+					if runningCount > 0 {
+						fmt.Printf("  Tasks:  %d running\n", runningCount)
 					}
 				}
 			}

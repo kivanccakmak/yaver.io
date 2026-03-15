@@ -56,7 +56,7 @@ Relay servers are stored as a JSON array in Convex `platformConfig` under the ke
 
 ```json
 [
-  {"id": "hel1", "quicAddr": "37.27.184.85:4433", "httpUrl": "http://37.27.184.85:8443", "region": "eu-hel", "priority": 1},
+  {"id": "hel1", "quicAddr": "37.27.184.85:4433", "httpUrl": "https://connect.yaver.io", "region": "eu-hel", "priority": 1},
   {"id": "fsn1", "quicAddr": "xx.xx.xx.xx:4433", "httpUrl": "http://xx.xx.xx.xx:8443", "region": "eu-fsn", "priority": 2}
 ]
 ```
@@ -73,17 +73,17 @@ Relay servers are stored as a JSON array in Convex `platformConfig` under the ke
 npx convex run platformConfig:get '{"key":"relay_servers"}'
 
 # Set relay servers (replaces entire list)
-npx convex run platformConfig:set '{"key":"relay_servers","value":"[{\"id\":\"hel1\",\"quicAddr\":\"37.27.184.85:4433\",\"httpUrl\":\"http://37.27.184.85:8443\",\"region\":\"eu-hel\",\"priority\":1}]"}'
+npx convex run platformConfig:set '{"key":"relay_servers","value":"[{\"id\":\"hel1\",\"quicAddr\":\"37.27.184.85:4433\",\"httpUrl\":\"https://connect.yaver.io\",\"region\":\"eu-hel\",\"priority\":1}]"}'
 
 # Add a second relay (copy existing, append new entry)
-npx convex run platformConfig:set '{"key":"relay_servers","value":"[{\"id\":\"hel1\",\"quicAddr\":\"37.27.184.85:4433\",\"httpUrl\":\"http://37.27.184.85:8443\",\"region\":\"eu-hel\",\"priority\":1},{\"id\":\"fsn1\",\"quicAddr\":\"xx.xx.xx.xx:4433\",\"httpUrl\":\"http://xx.xx.xx.xx:8443\",\"region\":\"eu-fsn\",\"priority\":2}]"}'
+npx convex run platformConfig:set '{"key":"relay_servers","value":"[{\"id\":\"hel1\",\"quicAddr\":\"37.27.184.85:4433\",\"httpUrl\":\"https://connect.yaver.io\",\"region\":\"eu-hel\",\"priority\":1},{\"id\":\"fsn1\",\"quicAddr\":\"xx.xx.xx.xx:4433\",\"httpUrl\":\"http://xx.xx.xx.xx:8443\",\"region\":\"eu-fsn\",\"priority\":2}]"}'
 ```
 
 The public endpoint `GET /config` returns:
 ```json
 {
   "relayServers": [
-    {"id": "hel1", "quicAddr": "37.27.184.85:4433", "httpUrl": "http://37.27.184.85:8443", "region": "eu-hel", "priority": 1}
+    {"id": "hel1", "quicAddr": "37.27.184.85:4433", "httpUrl": "https://connect.yaver.io", "region": "eu-hel", "priority": 1}
   ]
 }
 ```
@@ -121,9 +121,9 @@ curl http://127.0.0.1:8443/tunnels
 
 ### Current deployment
 
-| Server | IP | Arch | Relay ID | Region |
-|---|---|---|---|---|
-| Hetzner CAX11 | `37.27.184.85` | ARM64 (aarch64) | `hel1` | `eu-hel` (Helsinki) |
+| Server | Domain | IP | Arch | Relay ID | Region |
+|---|---|---|---|---|---|
+| Hetzner CAX11 | `connect.yaver.io` | `37.27.184.85` | ARM64 (aarch64) | `hel1` | `eu-hel` (Helsinki) |
 
 ### Docker deploy (current method)
 
@@ -196,10 +196,10 @@ ssh root@37.27.184.85 journalctl -u yaver-relay --since today
 ssh root@37.27.184.85 journalctl -u yaver-relay -n 100
 
 # Health check
-curl http://37.27.184.85:8443/health
+curl https://connect.yaver.io/health
 
 # Active tunnels
-curl http://37.27.184.85:8443/tunnels
+curl https://connect.yaver.io/tunnels
 
 # Server resources
 ssh root@37.27.184.85 'df -h / && free -h && docker ps'

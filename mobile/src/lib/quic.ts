@@ -78,7 +78,7 @@ type EventName = keyof EventMap;
 export interface RelayServer {
   id: string;
   quicAddr: string;
-  httpUrl: string;  // e.g. "http://37.27.184.85:8443"
+  httpUrl: string;  // e.g. "https://connect.yaver.io"
   region: string;
   priority: number;
 }
@@ -166,9 +166,9 @@ export class QuicClient {
             console.log("[QUIC] Relay", relay.id, "unreachable:", e);
           }
         }
-        console.warn("[QUIC] No relay available — staying on direct");
+        console.warn("[QUIC] No relay available — staying on current mode");
       } else {
-        // Switch back to direct
+        // Switch to direct — only if host is reachable
         try {
           const directUrl = `http://${this.host}:${this.port}`;
           const res = await this.fetchWithTimeout(`${directUrl}/health`, {
@@ -594,35 +594,23 @@ export class QuicClient {
     return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
   }
 
+  /** Check if an IP address is private (192.168.x.x, 10.x.x.x, 172.16-31.x.x). */
+  private isPrivateIP(host: string): boolean {
+    return /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
+  }
+
   private async attemptConnect(): Promise<void> {
     this.setConnectionState("connecting");
-    this._connectionMode = null; // Reset so it's properly set by the winning path
+    this.activeRelayUrl = null;
+    this.setConnectionMode(null);
     try {
       let connected = false;
 
-      // 1. Try direct connection first (lowest latency) — skip if forceRelay
-      if (!this._forceRelay) {
-        try {
-          const directUrl = `http://${this.host}:${this.port}`;
-          console.log("[QUIC] Trying direct:", directUrl);
-          const res = await this.fetchWithTimeout(`${directUrl}/health`, {
-            headers: this.authHeaders,
-          }, 3000);
-          if (res.ok) {
-            this.activeRelayUrl = null;
-            this.setConnectionMode("direct");
-            connected = true;
-            console.log("[QUIC] Direct connection succeeded");
-          }
-        } catch (e) {
-          console.log("[QUIC] Direct failed:", e);
-        }
-      } else {
-        console.log("[QUIC] Skipping direct (force relay enabled)");
-      }
+      // Strategy: relay-first for mobile (more reliable on 4G/roaming),
+      // with direct fallback for same-network (private IP) connections.
 
-      // 2. Try relay servers in priority order
-      if (!connected && this.deviceId) {
+      // 1. Try relay servers first (always, when available)
+      if (this.deviceId && this.relayServers.length > 0) {
         console.log("[QUIC] Trying", this.relayServers.length, "relay server(s)");
         for (const relay of this.relayServers) {
           try {
@@ -644,14 +632,27 @@ export class QuicClient {
         }
       }
 
-      if (!connected) {
-        throw new Error("Could not reach agent (direct or via relay)");
+      // 2. Try direct connection as fallback (only if not force-relay and relay failed)
+      if (!connected && !this._forceRelay) {
+        try {
+          const directUrl = `http://${this.host}:${this.port}`;
+          console.log("[QUIC] Trying direct:", directUrl);
+          const res = await this.fetchWithTimeout(`${directUrl}/health`, {
+            headers: this.authHeaders,
+          }, 3000);
+          if (res.ok) {
+            this.activeRelayUrl = null;
+            this.setConnectionMode("direct");
+            connected = true;
+            console.log("[QUIC] Direct connection succeeded");
+          }
+        } catch (e) {
+          console.log("[QUIC] Direct failed:", e);
+        }
       }
 
-      // Defensive: ensure connectionMode is set based on activeRelayUrl
-      if (this._connectionMode === null) {
-        this._connectionMode = this.activeRelayUrl ? "relay" : "direct";
-        console.log("[QUIC] Mode was null after connect, inferred:", this._connectionMode);
+      if (!connected) {
+        throw new Error("Could not reach agent (direct or via relay)");
       }
 
       this.reconnectAttempt = 0;
