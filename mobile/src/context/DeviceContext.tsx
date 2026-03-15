@@ -131,7 +131,13 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           os: d.platform || d.os || "",
           runners: d.runners ?? [],
         }));
-        setDevices(mapped);
+        // Deduplicate by name — keep the entry with the latest lastSeen
+        const seen = new Map<string, Device>();
+        for (const d of mapped) {
+          const existing = seen.get(d.name);
+          if (!existing || d.lastSeen > existing.lastSeen) seen.set(d.name, d);
+        }
+        setDevices([...seen.values()]);
       } else {
         appLog("warn", `/devices/list failed: ${devicesRes.status}`);
       }
@@ -205,8 +211,13 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       } else if (state === "connecting") {
         setConnectionStatus("connecting");
       } else if (state === "error") {
+        // Check if max retries reached (reconnectAttempt stays at max)
+        const gaveUp = quicClient.reconnectAttempt >= 5;
         setConnectionStatus("error");
-        setLastError("Connection lost — reconnecting...");
+        setLastError(gaveUp ? "Could not connect to device" : "Connection lost — reconnecting...");
+        if (gaveUp) {
+          setActiveDevice(null);
+        }
       } else if (state === "disconnected") {
         // QUIC client fully disconnected (e.g., via disconnect() call)
         // Don't clear activeDevice here — that's handled by the disconnect() callback

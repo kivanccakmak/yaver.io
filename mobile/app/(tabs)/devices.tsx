@@ -51,7 +51,6 @@ function DeviceCard({
 }) {
   const c = useColors();
   const [pingState, setPingState] = useState<{ pinging: boolean; rttMs?: number; ok?: boolean }>({ pinging: false });
-  const [showMenu, setShowMenu] = useState(false);
   const [killing, setKilling] = useState<string | null>(null);
   const HEARTBEAT_STALE_MS = 5 * 60 * 1000;
   const isRecentlyActive = device.lastSeen > 0 && (Date.now() - device.lastSeen) < HEARTBEAT_STALE_MS;
@@ -129,7 +128,6 @@ function DeviceCard({
               headers: { Authorization: `Bearer ${token}` },
             });
           } catch {}
-          setShowMenu(false);
         },
       },
     ]);
@@ -158,9 +156,6 @@ function DeviceCard({
           </Text>
         </View>
         <View style={styles.cardRight}>
-          <Pressable onPress={() => setShowMenu(!showMenu)} hitSlop={8}>
-            <Text style={{ fontSize: 18, color: c.textMuted }}>...</Text>
-          </Pressable>
           <View style={[styles.onlineDot, { backgroundColor: isOnline ? c.success : c.textMuted }]} />
           <Text style={[styles.lastSeen, { color: c.textMuted }]}>
             {isOnline ? "online" : "offline"}
@@ -186,8 +181,8 @@ function DeviceCard({
         </View>
       )}
 
-      {/* Expanded menu: runner list + actions */}
-      {showMenu && (
+      {/* Runner list + actions — always visible */}
+      {isOnline && (
         <View style={[styles.menuSection, { borderTopColor: c.border }]}>
           {activeRunners.length > 0 && (
             <>
@@ -403,10 +398,10 @@ export default function DevicesScreen() {
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
       <View style={styles.container}>
-        {activeDevice && (
+        {activeDevice && connectionStatus !== "disconnected" && (
           <View style={[styles.statusBar, { borderBottomColor: c.border }]}>
             <ConnectionBadge status={connectionStatus} />
-            {connectionStatus === "connected" && (
+            {(connectionStatus === "connected" || connectionStatus === "error") && (
               <Pressable style={[styles.disconnectBtn, { backgroundColor: c.bgCardElevated }]} onPress={disconnect}>
                 <Text style={[styles.disconnectText, { color: c.error }]}>Disconnect</Text>
               </Pressable>
@@ -415,15 +410,7 @@ export default function DevicesScreen() {
         )}
 
         <FlatList
-          data={(() => {
-            // Deduplicate by name — keep the entry with the latest lastSeen
-            const seen = new Map<string, typeof devices[0]>();
-            for (const d of devices) {
-              const existing = seen.get(d.name);
-              if (!existing || d.lastSeen > existing.lastSeen) seen.set(d.name, d);
-            }
-            return [...seen.values()];
-          })()}
+          data={devices}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           refreshing={isLoadingDevices}

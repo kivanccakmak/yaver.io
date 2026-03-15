@@ -111,10 +111,11 @@ export class QuicClient {
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
 
-  // Reconnection — unlimited retries for seamless WiFi↔cellular roaming
+  // Reconnection — max 5 retries, then give up
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private reconnectAttempt = 0;
+  reconnectAttempt = 0;
   private readonly baseBackoffMs = 1000;
+  private readonly maxReconnectAttempts = 5;
 
   private _connectionMode: ConnectionMode = null;
 
@@ -176,7 +177,7 @@ export class QuicClient {
             const relayDeviceUrl = `${relay.httpUrl}/d/${this.deviceId}`;
             const res = await this.fetchWithTimeout(`${relayDeviceUrl}/health`, {
               headers: this.authHeaders,
-            }, 5000);
+            }, 8000);
             if (res.ok) {
               this.activeRelayUrl = relay.httpUrl;
               this.setConnectionMode("relay");
@@ -194,7 +195,7 @@ export class QuicClient {
           const directUrl = `http://${this.host}:${this.port}`;
           const res = await this.fetchWithTimeout(`${directUrl}/health`, {
             headers: this.authHeaders,
-          }, 3000);
+          }, 5000);
           if (res.ok) {
             this.activeRelayUrl = null;
             this.setConnectionMode("direct");
@@ -671,7 +672,7 @@ export class QuicClient {
             console.log("[QUIC] Trying relay:", relay.id, relayDeviceUrl);
             const res = await this.fetchWithTimeout(`${relayDeviceUrl}/health`, {
               headers: this.authHeaders,
-            }, 5000);
+            }, 8000);
             if (res.ok) {
               this.activeRelayUrl = relay.httpUrl;
               this.setConnectionMode("relay");
@@ -692,7 +693,7 @@ export class QuicClient {
           console.log("[QUIC] Trying direct:", directUrl);
           const res = await this.fetchWithTimeout(`${directUrl}/health`, {
             headers: this.authHeaders,
-          }, 3000);
+          }, 5000);
           if (res.ok) {
             this.activeRelayUrl = null;
             this.setConnectionMode("direct");
@@ -748,6 +749,13 @@ export class QuicClient {
 
   private scheduleReconnect(): void {
     if (!this.host || !this.port || !this.token) return;
+
+    // Give up after max retries
+    if (this.reconnectAttempt >= this.maxReconnectAttempts) {
+      console.log("[QUIC] Max reconnect attempts reached, giving up");
+      this.setConnectionState("error");
+      return;
+    }
 
     const delay = Math.min(
       this.baseBackoffMs * Math.pow(2, this.reconnectAttempt),
