@@ -19,6 +19,7 @@ import type * as downloads from "../downloads.js";
 import type * as http from "../http.js";
 import type * as mobileStreamLogs from "../mobileStreamLogs.js";
 import type * as platformConfig from "../platformConfig.js";
+import type * as runnerUsage from "../runnerUsage.js";
 import type * as subscriptions from "../subscriptions.js";
 import type * as survey from "../survey.js";
 import type * as userSettings from "../userSettings.js";
@@ -41,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   mobileStreamLogs: typeof mobileStreamLogs;
   platformConfig: typeof platformConfig;
+  runnerUsage: typeof runnerUsage;
   subscriptions: typeof subscriptions;
   survey: typeof survey;
   userSettings: typeof userSettings;
