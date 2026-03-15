@@ -24,6 +24,7 @@ import { useColors } from "../../src/context/ThemeContext";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
 import {
+  AgentStatus,
   ConnectionMode,
   ConnectionState,
   quicClient,
@@ -300,6 +301,12 @@ export default function TasksScreen() {
   const [reconnectError, setReconnectError] = useState<string | null>(null);
   const [quicState, setQuicState] = useState<ConnectionState>(quicClient.connectionState);
   const [connMode, setConnMode] = useState<ConnectionMode>(quicClient.connectionMode);
+  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+  const [pingRtt, setPingRtt] = useState<number | null>(null);
+  const [isPinging, setIsPinging] = useState(false);
+  const [pingResult, setPingResult] = useState<{ ok: boolean; rttMs: number; hostname?: string; mode?: string } | null>(null);
+  const [showPingResult, setShowPingResult] = useState(false);
+  const [isRestartingRunner, setIsRestartingRunner] = useState(false);
   const chatScrollRef = useRef<ScrollView>(null);
   const pendingOpenTaskRef = useRef<Task | null>(null);
 
@@ -309,6 +316,70 @@ export default function TasksScreen() {
     const unsub2 = quicClient.on("connectionMode", setConnMode);
     return () => { unsub1(); unsub2(); };
   }, []);
+
+  // Fetch agent status when connected
+  useEffect(() => {
+    if (connectionStatus !== "connected") {
+      setAgentStatus(null);
+      return;
+    }
+    const fetchStatus = () => {
+      quicClient.getAgentStatus().then(s => { if (s) setAgentStatus(s); });
+    };
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 30000);
+    return () => clearInterval(interval);
+  }, [connectionStatus]);
+
+  // Ping agent every 10s when connected
+  useEffect(() => {
+    if (connectionStatus !== "connected") {
+      setPingRtt(null);
+      return;
+    }
+    const doPing = async () => {
+      const result = await quicClient.ping();
+      if (result.ok) setPingRtt(result.rttMs);
+      else setPingRtt(null);
+    };
+    doPing();
+    const interval = setInterval(doPing, 10000);
+    return () => clearInterval(interval);
+  }, [connectionStatus]);
+
+  // On-demand ping (like tailscale ping)
+  const handlePing = async () => {
+    setIsPinging(true);
+    setShowPingResult(true);
+    const result = await quicClient.ping();
+    setPingResult({
+      ok: result.ok,
+      rttMs: result.rttMs,
+      hostname: result.hostname,
+      mode: connMode || undefined,
+    });
+    if (result.ok) setPingRtt(result.rttMs);
+    setIsPinging(false);
+  };
+
+  // Restart runner from mobile
+  const handleRestartRunner = async () => {
+    setIsRestartingRunner(true);
+    try {
+      const ok = await quicClient.restartRunner();
+      if (ok) {
+        // Refresh status
+        const s = await quicClient.getAgentStatus();
+        if (s) setAgentStatus(s);
+      } else {
+        Alert.alert("Error", "Could not restart runner.");
+      }
+    } catch {
+      Alert.alert("Error", "Failed to restart runner.");
+    } finally {
+      setIsRestartingRunner(false);
+    }
+  };
 
   // Fetch tasks
   const fetchTasks = useCallback(async () => {
@@ -412,7 +483,9 @@ export default function TasksScreen() {
       setShowNewTask(false);
       // Refresh from server in background
       fetchTasks();
-    } catch {
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      Alert.alert("Task failed", msg);
     } finally {
       setIsSubmitting(false);
     }
@@ -504,12 +577,77 @@ export default function TasksScreen() {
     <SafeAreaView style={[s.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
       <View style={s.container}>
         {/* Connection banner */}
-        <View style={[s.banner, { backgroundColor: banner.bg, borderBottomColor: banner.border }]}>
-          <View style={[s.dot, { backgroundColor: banner.dot }]} />
-          <Text style={[s.bannerText, { color: banner.text }]}>
-            {banner.label}{modeLabel}{activeDevice ? ` \u00b7 ${activeDevice.name}` : ""}
-          </Text>
+        <View style={[s.banner, { backgroundColor: banner.bg, borderBottomColor: banner.border, flexDirection: "column", alignItems: "flex-start" }]}>
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <View style={[s.dot, { backgroundColor: banner.dot }]} />
+            <Text style={[s.bannerText, { color: banner.text }]}>
+              {banner.label}{modeLabel}{activeDevice ? ` \u00b7 ${activeDevice.name}` : ""}
+            </Text>
+            {pingRtt !== null && isEffectivelyConnected && (
+              <Pressable onPress={handlePing} style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: (pingRtt < 100 ? "#22c55e" : pingRtt < 300 ? "#eab308" : "#ef4444") + "18" }}>
+                <Text style={{ color: pingRtt < 100 ? "#4ade80" : pingRtt < 300 ? "#facc15" : "#f87171", fontSize: 11, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }}>
+                  {isPinging ? "..." : `${pingRtt}ms`}
+                </Text>
+              </Pressable>
+            )}
+            {pingRtt === null && isEffectivelyConnected && (
+              <Pressable onPress={handlePing} style={{ marginLeft: 8 }}>
+                <Text style={{ color: banner.text, fontSize: 11 }}>{isPinging ? "pinging..." : "ping"}</Text>
+              </Pressable>
+            )}
+          </View>
+          {agentStatus && isEffectivelyConnected && (
+            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 2, marginLeft: 18 }}>
+              <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: agentStatus.runner.installed ? "#22c55e" : "#ef4444" }} />
+              <Text style={{ color: agentStatus.runner.installed ? "#4ade80" : "#f87171", fontSize: 11, marginLeft: 6 }}>
+                {agentStatus.runner.name} {agentStatus.runner.installed ? "ready" : "not found"}
+                {agentStatus.runningTasks > 0 ? ` \u00b7 ${agentStatus.runningTasks} running` : ""}
+              </Text>
+              {agentStatus.runner.installed === false && (
+                <Pressable
+                  onPress={handleRestartRunner}
+                  disabled={isRestartingRunner}
+                  style={{ marginLeft: 8, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, backgroundColor: "#6366f122" }}
+                >
+                  <Text style={{ color: "#818cf8", fontSize: 11 }}>
+                    {isRestartingRunner ? "Restarting..." : "Restart"}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          )}
         </View>
+
+        {/* Ping result overlay */}
+        {showPingResult && pingResult && (
+          <Pressable
+            style={[s.pingOverlay, { backgroundColor: c.bgCard, borderColor: c.border }]}
+            onPress={() => setShowPingResult(false)}
+          >
+            <Text style={[s.pingTitle, { color: c.textPrimary }]}>
+              {pingResult.ok ? "Pong!" : "Ping failed"}
+            </Text>
+            {pingResult.ok ? (
+              <>
+                <Text style={[s.pingDetail, { color: c.textSecondary }]}>
+                  {pingResult.hostname || activeDevice?.name}
+                </Text>
+                <Text style={[s.pingDetail, { color: c.textSecondary }]}>
+                  via {pingResult.mode || "unknown"} {"\u00b7"} {pingResult.rttMs}ms
+                </Text>
+                <View style={[s.pingBar, { backgroundColor: c.border }]}>
+                  <View style={[s.pingBarFill, {
+                    width: `${Math.min(100, Math.max(5, pingResult.rttMs / 5))}%`,
+                    backgroundColor: pingResult.rttMs < 100 ? "#22c55e" : pingResult.rttMs < 300 ? "#eab308" : "#ef4444",
+                  }]} />
+                </View>
+              </>
+            ) : (
+              <Text style={[s.pingDetail, { color: "#ef4444" }]}>Agent unreachable</Text>
+            )}
+            <Text style={[s.pingDismiss, { color: c.textMuted }]}>tap to dismiss</Text>
+          </Pressable>
+        )}
 
         {/* Action bar */}
         {tasks.length > 0 && isEffectivelyConnected && (
@@ -926,6 +1064,14 @@ const s = StyleSheet.create({
   banner: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1 },
   dot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
   bannerText: { fontSize: 13, fontWeight: "500" },
+
+  // Ping overlay
+  pingOverlay: { marginHorizontal: 16, marginTop: 8, padding: 14, borderRadius: 12, borderWidth: 1 },
+  pingTitle: { fontSize: 15, fontWeight: "700", marginBottom: 4 },
+  pingDetail: { fontSize: 12, marginBottom: 2 },
+  pingBar: { height: 4, borderRadius: 2, marginTop: 8, overflow: "hidden" as const },
+  pingBarFill: { height: 4, borderRadius: 2 },
+  pingDismiss: { fontSize: 10, marginTop: 6, textAlign: "center" as const },
 
   // List
   listContent: { padding: 16, paddingBottom: 100 },

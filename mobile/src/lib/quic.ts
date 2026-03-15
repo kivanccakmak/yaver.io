@@ -39,6 +39,25 @@ export interface Task {
   deviceName?: string;
 }
 
+export interface AgentStatus {
+  runner: {
+    id: string;
+    name: string;
+    command: string;
+    installed: boolean;
+    error?: string;
+  };
+  runningTasks: number;
+  totalTasks: number;
+  runnerProcesses: Array<{ pid: number; command: string }>;
+  system: {
+    hostname: string;
+    os: string;
+    arch: string;
+    memoryMb?: number;
+  };
+}
+
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 export type ConnectionMode = "direct" | "relay" | null;
 
@@ -71,7 +90,7 @@ export class QuicClient {
   private deviceId: string | null = null;
   private relayServers: RelayServer[] = [];  // all available relay servers
   private activeRelayUrl: string | null = null; // currently working relay base URL
-  private _forceRelay = false; // skip direct connection attempts
+  private _forceRelay = true; // default to relay — more reliable for emulators and mobile networks
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -210,7 +229,14 @@ export class QuicClient {
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ title, description, ...(model ? { model } : {}) }),
     });
-    if (!res.ok) throw new Error(`Failed to create task: ${res.status}`);
+    if (!res.ok) {
+      let msg = `Failed to create task: ${res.status}`;
+      try {
+        const errData = await res.json();
+        if (errData.error) msg = errData.error;
+      } catch {}
+      throw new Error(msg);
+    }
     const data = await res.json();
     // Agent returns { ok, taskId, status }
     return {
@@ -365,6 +391,73 @@ export class QuicClient {
       };
     } catch {
       return null;
+    }
+  }
+
+  /** Get detailed agent status (runner health, processes, system info). */
+  async getAgentStatus(): Promise<AgentStatus | null> {
+    if (!this.isConnected && !this.hasConnectionInfo) return null;
+    try {
+      const res = await fetch(`${this.baseUrl}/agent/status`, {
+        headers: this.authHeaders,
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.status || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Ping the agent and return round-trip time in milliseconds. */
+  async ping(): Promise<{ ok: boolean; rttMs: number; hostname?: string; version?: string }> {
+    if (!this.isConnected && !this.hasConnectionInfo) {
+      return { ok: false, rttMs: -1 };
+    }
+    const start = Date.now();
+    try {
+      const res = await fetch(`${this.baseUrl}/health`, {
+        headers: this.authHeaders,
+      });
+      const rttMs = Date.now() - start;
+      if (!res.ok) return { ok: false, rttMs };
+      const data = await res.json();
+      return {
+        ok: true,
+        rttMs,
+        hostname: data.hostname,
+        version: data.version,
+      };
+    } catch {
+      return { ok: false, rttMs: Date.now() - start };
+    }
+  }
+
+  /** Shutdown the yaver agent remotely. */
+  async shutdownAgent(): Promise<boolean> {
+    if (!this.isConnected && !this.hasConnectionInfo) return false;
+    try {
+      const res = await fetch(`${this.baseUrl}/agent/shutdown`, {
+        method: "POST",
+        headers: this.authHeaders,
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Restart the runner on the desktop agent (e.g. after all crash retries exhausted). */
+  async restartRunner(): Promise<boolean> {
+    if (!this.isConnected && !this.hasConnectionInfo) return false;
+    try {
+      const res = await fetch(`${this.baseUrl}/agent/runner/restart`, {
+        method: "POST",
+        headers: this.authHeaders,
+      });
+      return res.ok;
+    } catch {
+      return false;
     }
   }
 

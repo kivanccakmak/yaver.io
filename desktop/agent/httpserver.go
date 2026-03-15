@@ -21,6 +21,7 @@ type HTTPServer struct {
 	hostname    string
 	taskMgr     *TaskManager
 	server      *http.Server
+	onShutdown  func() // called when mobile requests agent shutdown
 
 	// Cache validated tokens (token -> userId) to avoid repeated Convex calls
 	tokenCache sync.Map
@@ -49,6 +50,9 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/tasks", s.auth(s.handleTasks))
 	mux.HandleFunc("/tasks/", s.auth(s.handleTaskByID))
 	mux.HandleFunc("/info", s.auth(s.handleInfo))
+	mux.HandleFunc("/agent/status", s.auth(s.handleAgentStatus))
+	mux.HandleFunc("/agent/runner/restart", s.auth(s.handleRunnerRestart))
+	mux.HandleFunc("/agent/shutdown", s.auth(s.handleShutdown))
 
 	// MCP (Model Context Protocol) endpoint — JSON-RPC 2.0 over HTTP
 	mux.HandleFunc("/mcp", s.handleMCP)
@@ -157,6 +161,84 @@ func (s *HTTPServer) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"version":  version,
 		"workDir":  s.taskMgr.workDir,
 	})
+}
+
+// handleAgentStatus returns detailed agent and runner health status.
+func (s *HTTPServer) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "use GET")
+		return
+	}
+	status := s.taskMgr.GetAgentStatus()
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":     true,
+		"status": status,
+	})
+}
+
+// handleRunnerRestart checks if the runner is healthy and clears the runnerDown flag.
+// Mobile can call this to "restart" the runner after all retries were exhausted.
+func (s *HTTPServer) handleRunnerRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+
+	// Check runner health
+	if err := s.taskMgr.CheckRunner(); err != nil {
+		jsonError(w, http.StatusServiceUnavailable, fmt.Sprintf("runner not available: %v", err))
+		return
+	}
+
+	// Clear runnerDown flag in Convex
+	if s.taskMgr.ConvexURL != "" {
+		go func() {
+			_ = SetRunnerDown(s.taskMgr.ConvexURL, s.taskMgr.AuthToken, s.taskMgr.DeviceID, false)
+			_ = ReportDeviceEvent(s.taskMgr.ConvexURL, s.taskMgr.AuthToken, s.taskMgr.DeviceID, "restart", "manual restart from mobile")
+		}()
+	}
+
+	log.Printf("[HTTP] Runner restart triggered from mobile — runner is healthy")
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":      true,
+		"message": "Runner is healthy, runnerDown flag cleared",
+	})
+}
+
+// handleShutdown gracefully shuts down the yaver agent. Called from mobile.
+func (s *HTTPServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+
+	log.Printf("[HTTP] Shutdown requested from mobile")
+
+	// Stop all running tasks first
+	stopped := s.taskMgr.StopAllTasks()
+	log.Printf("[HTTP] Stopped %d tasks before shutdown", stopped)
+
+	// Report event to Convex
+	if s.taskMgr.ConvexURL != "" {
+		go func() {
+			_ = ReportDeviceEvent(s.taskMgr.ConvexURL, s.taskMgr.AuthToken, s.taskMgr.DeviceID, "stopped", "shutdown from mobile")
+			_ = MarkOffline(s.taskMgr.ConvexURL, s.taskMgr.AuthToken, s.taskMgr.DeviceID)
+		}()
+	}
+
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":      true,
+		"message": "Agent shutting down",
+		"stopped": stopped,
+	})
+
+	// Trigger shutdown after response is sent
+	if s.onShutdown != nil {
+		go func() {
+			time.Sleep(500 * time.Millisecond) // let response flush
+			s.onShutdown()
+		}()
+	}
 }
 
 // handleTasks handles GET /tasks (list) and POST /tasks (create).

@@ -476,6 +476,137 @@ http.route({
   }),
 });
 
+// ── Device Metrics & Events ──────────────────────────────────────────
+
+/** POST /devices/metrics — Report CPU/RAM metrics (authed, called by agent every 60s). */
+http.route({
+  path: "/devices/metrics",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const body = await request.json();
+    try {
+      await ctx.runMutation(api.deviceMetrics.report, {
+        tokenHash,
+        deviceId: body.deviceId,
+        cpuPercent: body.cpuPercent,
+        memoryUsedMb: body.memoryUsedMb,
+        memoryTotalMb: body.memoryTotalMb,
+      });
+      return jsonResponse({ ok: true });
+    } catch (e: any) {
+      return errorResponse(e.message || "Failed to report metrics", 500);
+    }
+  }),
+});
+
+/** GET /devices/metrics?deviceId=xxx — Get metrics for a device (authed). */
+http.route({
+  path: "/devices/metrics",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const url = new URL(request.url);
+    const deviceId = url.searchParams.get("deviceId");
+    if (!deviceId) return errorResponse("deviceId required", 400);
+
+    const metrics = await ctx.runQuery(api.deviceMetrics.getMetrics, {
+      tokenHash,
+      deviceId,
+    });
+    return jsonResponse({ metrics });
+  }),
+});
+
+/** POST /devices/event — Record a device event (crash, restart, etc.) (authed). */
+http.route({
+  path: "/devices/event",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const body = await request.json();
+    try {
+      await ctx.runMutation(api.deviceEvents.record, {
+        tokenHash,
+        deviceId: body.deviceId,
+        event: body.event,
+        details: body.details,
+      });
+      return jsonResponse({ ok: true });
+    } catch (e: any) {
+      return errorResponse(e.message || "Failed to record event", 500);
+    }
+  }),
+});
+
+/** GET /devices/events?deviceId=xxx — Get recent events for a device (authed). */
+http.route({
+  path: "/devices/events",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const url = new URL(request.url);
+    const deviceId = url.searchParams.get("deviceId");
+    if (!deviceId) return errorResponse("deviceId required", 400);
+
+    const events = await ctx.runQuery(api.deviceEvents.getEvents, {
+      tokenHash,
+      deviceId,
+    });
+    return jsonResponse({ events });
+  }),
+});
+
+/** POST /devices/runner-down — Set runner down/up flag (authed). */
+http.route({
+  path: "/devices/runner-down",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const body = await request.json();
+    try {
+      await ctx.runMutation(api.devices.setRunnerDown, {
+        tokenHash,
+        deviceId: body.deviceId,
+        runnerDown: body.runnerDown,
+      });
+      return jsonResponse({ ok: true });
+    } catch (e: any) {
+      return errorResponse(e.message || "Failed to update runner status", 500);
+    }
+  }),
+});
+
 // ── Account Deletion ────────────────────────────────────────────────
 
 /** POST /auth/delete-account — Delete user account and all data (authed). */
@@ -816,7 +947,7 @@ http.route({
     const settings = await ctx.runQuery(api.userSettings.get, { userId: user.userId as any });
     return jsonResponse({
       ok: true,
-      settings: settings || { forceRelay: false, runnerId: undefined, customRunnerCommand: undefined },
+      settings: settings || { forceRelay: true, runnerId: undefined, customRunnerCommand: undefined },
     });
   }),
 });

@@ -25,7 +25,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.8.0"
+const version = "1.10.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -51,6 +51,12 @@ func main() {
 		runClearLogs()
 	case "restart":
 		runRestart(os.Args[2:])
+	case "shutdown":
+		runShutdown()
+	case "ping":
+		runPing(os.Args[2:])
+	case "attach":
+		runAttach(os.Args[2:])
 	case "status":
 		runStatus()
 	case "devices":
@@ -85,8 +91,10 @@ Usage:
   yaver auth        Sign in and start agent (opens browser)
   yaver signout     Sign out and clear credentials
   yaver connect     Connect to your dev machine
+  yaver ping        Ping a device (direct or via relay)
   yaver stop        Stop the running agent
   yaver restart     Restart the agent
+  yaver attach      Interactive terminal — see tasks, type prompts (like Claude Code)
   yaver serve       Start the agent manually (advanced)
   yaver logs        Show agent logs
   yaver clear-logs  Clear agent log file
@@ -104,7 +112,16 @@ Flags for serve:
   --port            HTTP server port (default 18080)
   --quic-port       QUIC server port (default 4433)
   --no-relay        Disable relay tunnels (direct connections only)
+  --wait-for-session Wait for other Claude Code sessions to finish before starting tasks
   --work-dir        Working directory for tasks (default .)
+
+Flags for connect:
+  --host            Agent host (auto-discovers if not set)
+  --port            Agent QUIC port (default 4433)
+  --device          Device ID to connect to
+  --relay           Connect through relay server (default: true)
+  --direct          Connect directly via QUIC (skip relay)
+  --relay-server    Relay server URL (auto-fetched from Convex if not set)
 
 Examples:
   yaver set-runner claude           Use Claude Code (default)
@@ -331,17 +348,134 @@ func runPurge() {
 // connect — connect to a remote agent interactively
 // ---------------------------------------------------------------------------
 
+func runPing(args []string) {
+	fs := flag.NewFlagSet("ping", flag.ExitOnError)
+	deviceID := fs.String("device", "", "Device ID to ping")
+	useRelay := fs.Bool("relay", true, "Ping through relay server (default: true)")
+	relayURL := fs.String("relay-server", "", "Relay server URL (auto-fetched if not set)")
+	count := fs.Int("c", 5, "Number of pings")
+	fs.Parse(args)
+
+	cfg := mustLoadAuthConfig()
+
+	// Auto-discover device
+	devices, err := listDevices(cfg.ConvexSiteURL, cfg.AuthToken)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing devices: %v\n", err)
+		os.Exit(1)
+	}
+	if len(devices) == 0 {
+		fmt.Fprintln(os.Stderr, "No devices found.")
+		os.Exit(1)
+	}
+
+	var target *DeviceInfo
+	for i := range devices {
+		if *deviceID != "" && devices[i].DeviceID == *deviceID {
+			target = &devices[i]
+			break
+		}
+		if *deviceID == "" && devices[i].IsOnline {
+			target = &devices[i]
+			break
+		}
+	}
+	if target == nil {
+		fmt.Fprintln(os.Stderr, "No matching online device.")
+		os.Exit(1)
+	}
+
+	authHeader := "Bearer " + cfg.AuthToken
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	// Determine base URL
+	var baseURL string
+	var mode string
+
+	if *useRelay || *relayURL != "" {
+		if *relayURL == "" {
+			relays, err := FetchRelayServers(cfg.ConvexSiteURL)
+			if err != nil || len(relays) == 0 {
+				fmt.Fprintln(os.Stderr, "No relay servers available.")
+				os.Exit(1)
+			}
+			*relayURL = relays[0].HttpURL
+		}
+		baseURL = fmt.Sprintf("%s/d/%s", strings.TrimRight(*relayURL, "/"), target.DeviceID)
+		mode = "relay"
+	} else {
+		baseURL = fmt.Sprintf("http://%s:%d", target.QuicHost, target.QuicPort)
+		mode = "direct"
+	}
+
+	fmt.Printf("PING %s (%s) via %s\n", target.Name, target.DeviceID[:8], mode)
+
+	var totalMs float64
+	var minMs, maxMs float64
+	success := 0
+	minMs = 999999
+
+	for i := 0; i < *count; i++ {
+		start := time.Now()
+		req, _ := http.NewRequest("GET", baseURL+"/health", nil)
+		req.Header.Set("Authorization", authHeader)
+		resp, err := client.Do(req)
+		rtt := time.Since(start)
+		rttMs := float64(rtt.Microseconds()) / 1000.0
+
+		if err != nil {
+			fmt.Printf("ping %d: error — %v\n", i+1, err)
+		} else {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				fmt.Printf("pong from %s: time=%.1fms via=%s\n", target.Name, rttMs, mode)
+				totalMs += rttMs
+				if rttMs < minMs {
+					minMs = rttMs
+				}
+				if rttMs > maxMs {
+					maxMs = rttMs
+				}
+				success++
+			} else {
+				fmt.Printf("ping %d: HTTP %d\n", i+1, resp.StatusCode)
+			}
+		}
+
+		if i < *count-1 {
+			time.Sleep(1 * time.Second)
+		}
+	}
+
+	fmt.Printf("\n--- %s ping statistics ---\n", target.Name)
+	fmt.Printf("%d packets transmitted, %d received, %.0f%% loss\n",
+		*count, success, float64(*count-success)/float64(*count)*100)
+	if success > 0 {
+		fmt.Printf("rtt min/avg/max = %.1f/%.1f/%.1f ms\n",
+			minMs, totalMs/float64(success), maxMs)
+	}
+}
+
 func runConnect(args []string) {
 	fs := flag.NewFlagSet("connect", flag.ExitOnError)
 	host := fs.String("host", "", "Agent host (auto-discovers if not set)")
 	port := fs.Int("port", 4433, "Agent QUIC port")
 	deviceID := fs.String("device", "", "Device ID to connect to")
+	useRelay := fs.Bool("relay", true, "Connect through relay server (default: true)")
+	direct := fs.Bool("direct", false, "Connect directly via QUIC (skip relay)")
+	relayURL := fs.String("relay-server", "", "Relay server URL (e.g. http://37.27.184.85:8443). Auto-fetched if not set")
 	fs.Parse(args)
+
+	// --direct overrides --relay
+	if *direct {
+		*useRelay = false
+	}
 
 	cfg := mustLoadAuthConfig()
 
-	// Auto-discover device if host not specified
-	if *host == "" {
+	// Auto-discover device
+	var targetDeviceID string
+	if *host == "" || *useRelay {
 		devices, err := listDevices(cfg.ConvexSiteURL, cfg.AuthToken)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error listing devices: %v\n", err)
@@ -377,8 +511,11 @@ func runConnect(args []string) {
 			os.Exit(1)
 		}
 
-		*host = target.QuicHost
-		*port = target.QuicPort
+		if *host == "" {
+			*host = target.QuicHost
+			*port = target.QuicPort
+		}
+		targetDeviceID = target.DeviceID
 		fmt.Printf("Connecting to %s (%s)...\n", target.Name, target.DeviceID[:8])
 	}
 
@@ -393,9 +530,34 @@ func runConnect(args []string) {
 		cancel()
 	}()
 
-	if err := RunClient(ctx, *host, *port, cfg.AuthToken); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	if *useRelay || *relayURL != "" {
+		// Connect via relay HTTP proxy
+		if *relayURL == "" {
+			// Auto-fetch relay servers from Convex
+			relays, err := FetchRelayServers(cfg.ConvexSiteURL)
+			if err != nil || len(relays) == 0 {
+				fmt.Fprintln(os.Stderr, "No relay servers available. Check your Convex config.")
+				os.Exit(1)
+			}
+			*relayURL = relays[0].HttpURL
+			fmt.Printf("Using relay: %s (%s)\n", relays[0].ID, relays[0].Region)
+		}
+
+		if targetDeviceID == "" {
+			fmt.Fprintln(os.Stderr, "Device ID required for relay connection. Use --device flag.")
+			os.Exit(1)
+		}
+
+		baseURL := fmt.Sprintf("%s/d/%s", strings.TrimRight(*relayURL, "/"), targetDeviceID)
+		if err := RunClientHTTP(ctx, baseURL, cfg.AuthToken); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		if err := RunClient(ctx, *host, *port, cfg.AuthToken); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
 
@@ -446,6 +608,7 @@ func runServe(args []string) {
 	workDir := fs.String("work-dir", ".", "Working directory for tasks")
 	noQUIC := fs.Bool("no-quic", false, "Disable QUIC server (HTTP only)")
 	noRelay := fs.Bool("no-relay", false, "Disable relay tunnel (direct only)")
+	waitForSession := fs.Bool("wait-for-session", false, "Wait for other Claude Code sessions to finish before starting tasks")
 	debug := fs.Bool("debug", false, "Run in foreground with verbose logging")
 	fs.Parse(args)
 
@@ -498,6 +661,9 @@ func runServe(args []string) {
 		}
 		if *noRelay {
 			childArgs = append(childArgs, "--no-relay")
+		}
+		if *waitForSession {
+			childArgs = append(childArgs, "--wait-for-session")
 		}
 
 		cmd := osexec.Command(execPath, childArgs...)
@@ -636,14 +802,33 @@ func runServe(args []string) {
 		log.Fatalf("failed to create task store: %v", err)
 	}
 	taskMgr := NewTaskManager(*workDir, taskStore, runner)
+	taskMgr.WaitForSlot = *waitForSession
+	taskMgr.ConvexURL = cfg.ConvexSiteURL
+	taskMgr.AuthToken = cfg.AuthToken
+	taskMgr.DeviceID = cfg.DeviceID
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	go heartbeatLoop(ctx, cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID)
+	go metricsLoop(ctx, cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID)
+
+	// Warm up the runner — fork Claude at startup to establish a session
+	go taskMgr.WarmUp()
+
+	// Report agent started event
+	go func() {
+		if err := ReportDeviceEvent(cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID, "started", fmt.Sprintf("yaver %s", version)); err != nil {
+			log.Printf("[event] Failed to report start: %v", err)
+		}
+	}()
 
 	// Start HTTP server (V1 — primary, also serves MCP)
 	httpServer := NewHTTPServer(*httpPort, cfg.AuthToken, ownerUserID, cfg.ConvexSiteURL, hostname, taskMgr)
+	httpServer.onShutdown = func() {
+		log.Println("Shutdown requested via API — stopping agent")
+		cancel() // cancel the main context, triggers graceful shutdown
+	}
 	go func() {
 		if err := httpServer.Start(ctx); err != nil {
 			log.Fatalf("HTTP server error: %v", err)
@@ -754,6 +939,55 @@ func runStop() {
 
 	os.Remove(pidFilePath())
 	fmt.Printf("Yaver agent stopped (was PID %d).\n", pid)
+}
+
+// ---------------------------------------------------------------------------
+// shutdown — gracefully stop the agent via its HTTP API (same as mobile)
+// ---------------------------------------------------------------------------
+
+func runShutdown() {
+	pid, running := isAgentRunning()
+	if !running {
+		fmt.Println("Yaver agent is not running.")
+		return
+	}
+
+	cfg, err := LoadConfig()
+	if err != nil || cfg.AuthToken == "" {
+		fmt.Println("Not signed in — using kill instead.")
+		runStop()
+		return
+	}
+
+	// Call the agent's HTTP shutdown endpoint
+	url := fmt.Sprintf("http://127.0.0.1:%d/agent/shutdown", 18080) // default port
+	req, _ := http.NewRequest("POST", url, nil)
+	req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("Could not reach agent API — falling back to kill (PID %d)\n", pid)
+		runStop()
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 200 {
+		fmt.Printf("Shutdown signal sent to agent (PID %d) — stopping gracefully.\n", pid)
+		// Wait for process to exit
+		for i := 0; i < 50; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if !isProcessAlive(pid) {
+				break
+			}
+		}
+		os.Remove(pidFilePath())
+		fmt.Println("Agent stopped.")
+	} else {
+		fmt.Printf("Shutdown API returned %d — falling back to kill\n", resp.StatusCode)
+		runStop()
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1050,6 +1284,7 @@ func runStatus() {
 	if pid, running := isAgentRunning(); running {
 		agentStatus = fmt.Sprintf("running (PID %d)", pid)
 	}
+	fmt.Printf("Yaver:    v%s\n", version)
 
 	// Print local info immediately
 	fmt.Printf("Agent:    %s\n", agentStatus)
@@ -1108,6 +1343,54 @@ func runStatus() {
 		}
 	}
 	fmt.Printf("Runner:   %s (%s)\n", runnerName, runnerID)
+
+	// Check runner binary
+	runnerCmd := runnerID
+	if path, lookErr := osexec.LookPath(runnerCmd); lookErr != nil {
+		fmt.Printf("  Status: not installed (%s not found in PATH)\n", runnerCmd)
+	} else {
+		fmt.Printf("  Binary: %s\n", path)
+	}
+
+	// Query the running agent's API for forked processes
+	if pid, running := isAgentRunning(); running {
+		agentURL := fmt.Sprintf("http://127.0.0.1:%d/agent/status", 18080)
+		req, _ := http.NewRequest("GET", agentURL, nil)
+		req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+		statusResp, err := statusClient.Do(req)
+		if err == nil {
+			defer statusResp.Body.Close()
+			if statusResp.StatusCode == 200 {
+				var statusBody struct {
+					Status AgentStatus `json:"status"`
+				}
+				if json.NewDecoder(statusResp.Body).Decode(&statusBody) == nil {
+					procs := statusBody.Status.RunnerProcesses
+					if len(procs) > 0 {
+						fmt.Printf("  Forked: %d process(es)\n", len(procs))
+						for _, p := range procs {
+							cmdPreview := p.Command
+							if len(cmdPreview) > 60 {
+								cmdPreview = cmdPreview[:60] + "..."
+							}
+							fmt.Printf("    PID %d: %s\n", p.PID, cmdPreview)
+						}
+					} else {
+						fmt.Printf("  Forked: none\n")
+					}
+
+					// Show task summary
+					total := int(statusBody.Status.TotalTasks)
+					running := int(statusBody.Status.RunningTasks)
+					// TODO: warm session shown via Forked line above
+					if total > 0 {
+						fmt.Printf("  Tasks:  %d total, %d running\n", total, running)
+					}
+				}
+			}
+		}
+		_ = pid
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1438,6 +1721,43 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string) {
 				log.Printf("heartbeat failed: %v", err)
 			} else {
 				log.Println("Heartbeat sent.")
+			}
+		}
+	}
+}
+
+// metricsLoop collects CPU/RAM every 60s and reports to Convex.
+func metricsLoop(ctx context.Context, baseURL, token, deviceID string) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cpuPct, cpuErr := getCPUPercent()
+			if cpuErr != nil {
+				log.Printf("[metrics] CPU error: %v", cpuErr)
+				cpuPct = 0
+			}
+
+			memUsed, memErr := getMemoryUsedMB()
+			if memErr != nil {
+				log.Printf("[metrics] Memory used error: %v", memErr)
+				memUsed = 0
+			}
+
+			memTotal, totalErr := getSystemMemoryMB()
+			if totalErr != nil {
+				log.Printf("[metrics] Memory total error: %v", totalErr)
+				memTotal = 0
+			}
+
+			log.Printf("[metrics] CPU=%.1f%% RAM=%dMB/%dMB", cpuPct, memUsed, memTotal)
+
+			if err := ReportMetrics(baseURL, token, deviceID, cpuPct, float64(memUsed), float64(memTotal)); err != nil {
+				log.Printf("[metrics] Report failed: %v", err)
 			}
 		}
 	}

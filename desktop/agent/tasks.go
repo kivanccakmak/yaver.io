@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -137,6 +138,116 @@ type ConversationTurn struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+const maxProcessRetries = 4 // Max auto-restart attempts when Claude crashes (2s, 4s, 8s, 16s)
+
+// RunnerProcess describes a running process found via ps/tasklist.
+type RunnerProcess struct {
+	PID     int    `json:"pid"`
+	Command string `json:"command"`
+}
+
+// AgentStatus is returned by the /agent/status endpoint.
+type AgentStatus struct {
+	Runner          RunnerStatusInfo  `json:"runner"`
+	RunningTasks    int               `json:"runningTasks"`
+	TotalTasks      int               `json:"totalTasks"`
+	RunnerProcesses []RunnerProcess   `json:"runnerProcesses"`
+	System          SystemInfo        `json:"system"`
+}
+
+// RunnerStatusInfo describes the configured runner.
+type RunnerStatusInfo struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Command   string `json:"command"`
+	Installed bool   `json:"installed"`
+	Error     string `json:"error,omitempty"`
+}
+
+// SystemInfo describes the host machine.
+type SystemInfo struct {
+	Hostname string  `json:"hostname"`
+	OS       string  `json:"os"`
+	Arch     string  `json:"arch"`
+	MemoryMB int64   `json:"memoryMb,omitempty"`
+}
+
+// GetOwnRunnerProcesses returns PIDs of runner processes spawned by this agent.
+func (tm *TaskManager) GetOwnRunnerProcesses() []RunnerProcess {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	var procs []RunnerProcess
+
+	// Warm session process
+	if tm.warmPID > 0 {
+		procs = append(procs, RunnerProcess{
+			PID:     tm.warmPID,
+			Command: fmt.Sprintf("warm session (id=%s)", tm.warmSessionID),
+		})
+	}
+
+	// Task processes
+	for _, t := range tm.tasks {
+		if t.cmd != nil && t.cmd.Process != nil && (t.Status == TaskStatusRunning || t.Status == TaskStatusQueued) {
+			procs = append(procs, RunnerProcess{
+				PID:     t.cmd.Process.Pid,
+				Command: fmt.Sprintf("task %s: %s", t.ID, t.Title),
+			})
+		}
+	}
+	return procs
+}
+
+// GetAgentStatus returns the current agent and runner health.
+func (tm *TaskManager) GetAgentStatus() AgentStatus {
+	// Check runner binary
+	runnerInfo := RunnerStatusInfo{
+		ID:      tm.runner.RunnerID,
+		Name:    tm.runner.Name,
+		Command: tm.runner.Command,
+	}
+	if err := tm.CheckRunner(); err != nil {
+		runnerInfo.Installed = false
+		runnerInfo.Error = err.Error()
+	} else {
+		runnerInfo.Installed = true
+	}
+
+	// Count running tasks
+	tm.mu.RLock()
+	running := 0
+	for _, t := range tm.tasks {
+		if t.Status == TaskStatusRunning {
+			running++
+		}
+	}
+	total := len(tm.tasks)
+	tm.mu.RUnlock()
+
+	// Only show runner processes that this agent forked
+	procs := tm.GetOwnRunnerProcesses()
+
+	// System info
+	hostname, _ := os.Hostname()
+	var memMB int64
+	if m, err := getSystemMemoryMB(); err == nil {
+		memMB = m
+	}
+
+	return AgentStatus{
+		Runner:          runnerInfo,
+		RunningTasks:    running,
+		TotalTasks:      total,
+		RunnerProcesses: procs,
+		System: SystemInfo{
+			Hostname: hostname,
+			OS:       runtime.GOOS,
+			Arch:     runtime.GOARCH,
+			MemoryMB: memMB,
+		},
+	}
+}
+
 // Task represents a single Claude CLI task running as a subprocess.
 type Task struct {
 	ID          string     `json:"id"`
@@ -154,11 +265,12 @@ type Task struct {
 	StartedAt   *time.Time `json:"started_at,omitempty"`
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 
-	cmd       *exec.Cmd
-	cancel    context.CancelFunc
-	stdin     io.WriteCloser
-	outputCh  chan string
-	doneCh    chan struct{}
+	cmd          *exec.Cmd
+	cancel       context.CancelFunc
+	stdin        io.WriteCloser
+	outputCh     chan string
+	doneCh       chan struct{}
+	retryCount   int  // Number of auto-restart attempts so far
 }
 
 // TaskInfo is the JSON-safe subset returned in listings.
@@ -179,11 +291,22 @@ type TaskInfo struct {
 
 // TaskManager manages the lifecycle of tasks.
 type TaskManager struct {
-	mu      sync.RWMutex
-	tasks   map[string]*Task
-	workDir string
-	store   *TaskStore
-	runner  RunnerConfig
+	mu           sync.RWMutex
+	tasks        map[string]*Task
+	workDir      string
+	store        *TaskStore
+	runner       RunnerConfig
+	WaitForSlot  bool // If true, wait for other Claude Code sessions to finish before starting
+
+	// Convex reporting (set after construction)
+	ConvexURL string
+	AuthToken string
+	DeviceID  string
+
+	// Warm session: forked at startup, reused for all tasks
+	warmSessionID  string     // Claude session ID from warmup
+	warmPID        int        // PID of the warmup process (0 if not running)
+	warmReady      bool       // true once warmup completed successfully
 }
 
 // NewTaskManager creates a new TaskManager. If store is non-nil, previously
@@ -212,6 +335,90 @@ func NewTaskManager(workDir string, store *TaskStore, runner RunnerConfig) *Task
 	return tm
 }
 
+// WarmUp forks the runner at startup to establish a session.
+// This avoids cold-start delays and keeps us in one session for rate limiting.
+func (tm *TaskManager) WarmUp() {
+	if err := tm.CheckRunner(); err != nil {
+		log.Printf("[warmup] Runner not available: %v — skipping warmup", err)
+		return
+	}
+
+	log.Printf("[warmup] Forking %s to establish warm session...", tm.runner.Name)
+
+	warmPrompt := "You are a warm session. Reply with just: ready"
+	args := tm.buildArgs(warmPrompt)
+
+	cmd := exec.CommandContext(context.Background(), tm.runner.Command, args...)
+	cmd.Dir = tm.workDir
+
+	// Set PATH
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		existingPath := os.Getenv("PATH")
+		extraPaths := filepath.Join(home, ".local", "bin") + ":" +
+			"/opt/homebrew/bin" + ":" +
+			"/usr/local/bin"
+		cmd.Env = append(os.Environ(), "PATH="+extraPaths+":"+existingPath)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Printf("[warmup] Failed to create stdout pipe: %v", err)
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		log.Printf("[warmup] Failed to start: %v", err)
+		return
+	}
+
+	tm.mu.Lock()
+	tm.warmPID = cmd.Process.Pid
+	tm.mu.Unlock()
+
+	log.Printf("[warmup] %s started (PID %d)", tm.runner.Name, cmd.Process.Pid)
+
+	// Read output to get session ID
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+			var event ClaudeEvent
+			if json.Unmarshal(line, &event) == nil && event.SessionID != "" {
+				tm.mu.Lock()
+				tm.warmSessionID = event.SessionID
+				tm.mu.Unlock()
+				log.Printf("[warmup] Got session ID: %s", event.SessionID)
+			}
+		}
+	}()
+
+	// Wait for process to finish
+	go func() {
+		err := cmd.Wait()
+		tm.mu.Lock()
+		if tm.warmSessionID != "" {
+			tm.warmReady = true
+			log.Printf("[warmup] Session ready (id=%s)", tm.warmSessionID)
+		} else {
+			log.Printf("[warmup] Process exited without session ID: %v", err)
+		}
+		tm.warmPID = 0
+		tm.mu.Unlock()
+	}()
+}
+
+// GetWarmSessionID returns the warm session ID if available.
+func (tm *TaskManager) GetWarmSessionID() string {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	return tm.warmSessionID
+}
+
 // persist saves the current task map to disk if a store is configured.
 // Must be called while tm.mu is held (read or write).
 func (tm *TaskManager) persist() {
@@ -220,10 +427,58 @@ func (tm *TaskManager) persist() {
 	}
 }
 
+// CheckRunner verifies that the configured runner binary exists and is callable.
+// Returns nil if the runner is healthy, or an error with a user-friendly message.
+func (tm *TaskManager) CheckRunner() error {
+	// 1. Check if the binary exists in PATH
+	path, err := exec.LookPath(tm.runner.Command)
+	if err != nil {
+		return fmt.Errorf("%s not found in PATH — install it first (https://docs.anthropic.com/en/docs/claude-code)", tm.runner.Command)
+	}
+	log.Printf("[runner-check] Found %s at %s", tm.runner.Command, path)
+
+	// 2. Quick version check to verify it's callable
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, tm.runner.Command, "--version")
+	// Use same env setup as startProcess
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		existingPath := os.Getenv("PATH")
+		extraPaths := filepath.Join(home, ".local", "bin") + ":" +
+			"/opt/homebrew/bin" + ":" +
+			"/usr/local/bin"
+		cmd.Env = append(os.Environ(), "PATH="+extraPaths+":"+existingPath)
+	}
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s found but not working: %v (output: %s)", tm.runner.Command, err, strings.TrimSpace(string(out)))
+	}
+	log.Printf("[runner-check] %s version: %s", tm.runner.Command, strings.TrimSpace(string(out)))
+	return nil
+}
+
 // CreateTask creates a new task and runs the configured runner.
 // model overrides the default model (e.g. "opus", "sonnet", "haiku") — empty uses runner default.
 // source indicates where the task originated: "mobile", "mcp", or "cli" — defaults to "mobile".
 func (tm *TaskManager) CreateTask(title, description, model, source string) (*Task, error) {
+	// Enforce single-fork limit: only one running task at a time
+	tm.mu.RLock()
+	for _, t := range tm.tasks {
+		if t.Status == TaskStatusRunning || t.Status == TaskStatusQueued {
+			tm.mu.RUnlock()
+			return nil, fmt.Errorf("another task is already running (id=%s) — stop it first or wait", t.ID)
+		}
+	}
+	tm.mu.RUnlock()
+
+	// Pre-flight: verify the runner is available before creating the task.
+	if err := tm.CheckRunner(); err != nil {
+		return nil, fmt.Errorf("runner not ready: %w", err)
+	}
+
 	if source == "" {
 		source = "mobile"
 	}
@@ -273,8 +528,79 @@ func (tm *TaskManager) buildArgs(prompt string) []string {
 	return args
 }
 
+// countOtherClaudeProcesses counts how many `claude` processes are running
+// that are NOT spawned by this yaver agent (i.e. other interactive sessions).
+func countOtherClaudeProcesses(ownPids map[int]bool) int {
+	out, err := exec.Command("pgrep", "-f", "claude.*-p\\b|claude.*--resume").CombinedOutput()
+	if err != nil {
+		return 0 // pgrep returns 1 if no match
+	}
+	count := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		var pid int
+		if _, err := fmt.Sscanf(line, "%d", &pid); err == nil {
+			if !ownPids[pid] {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// waitForSessionSlot waits until no other Claude Code sessions are active.
+// Emits progress messages to the task output so the mobile user sees what's happening.
+func (tm *TaskManager) waitForSessionSlot(task *Task) {
+	if !tm.WaitForSlot {
+		return
+	}
+
+	// Collect PIDs of tasks we own
+	ownPids := make(map[int]bool)
+	tm.mu.RLock()
+	for _, t := range tm.tasks {
+		if t.cmd != nil && t.cmd.Process != nil {
+			ownPids[t.cmd.Process.Pid] = true
+		}
+	}
+	tm.mu.RUnlock()
+
+	others := countOtherClaudeProcesses(ownPids)
+	if others == 0 {
+		return
+	}
+
+	log.Printf("[task %s] Waiting for %d other Claude Code session(s) to finish...", task.ID, others)
+	var output strings.Builder
+	tm.mu.RLock()
+	output.WriteString(task.Output)
+	tm.mu.RUnlock()
+	tm.emit(task, &output, fmt.Sprintf("⏳ Waiting for %d other Claude Code session(s) to finish...\n", others))
+
+	for {
+		time.Sleep(5 * time.Second)
+		tm.mu.RLock()
+		status := task.Status
+		tm.mu.RUnlock()
+		if status != TaskStatusQueued && status != TaskStatusRunning {
+			return // Task was cancelled
+		}
+		others = countOtherClaudeProcesses(ownPids)
+		if others == 0 {
+			log.Printf("[task %s] Session slot available, proceeding", task.ID)
+			tm.emit(task, &output, "✅ Session available, starting task...\n")
+			return
+		}
+	}
+}
+
 // startProcess spawns the configured runner with the task's prompt.
 func (tm *TaskManager) startProcess(task *Task) error {
+	// Wait for other Claude Code sessions to finish (if --wait-for-session is set)
+	tm.waitForSessionSlot(task)
+
 	prompt := task.Title
 	if task.Description != "" && task.Description != task.Title {
 		prompt = task.Title + "\n\n" + task.Description
@@ -308,6 +634,17 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	task.cancel = cancel
 
 	args := tm.buildArgs(prompt)
+
+	// Use warm session if available (resume = same rate-limit bucket)
+	tm.mu.RLock()
+	warmSID := tm.warmSessionID
+	tm.mu.RUnlock()
+	if warmSID != "" && tm.runner.ResumeSupported && len(tm.runner.ResumeArgs) > 0 {
+		for _, ra := range tm.runner.ResumeArgs {
+			args = append(args, strings.ReplaceAll(ra, "{sessionId}", warmSID))
+		}
+		log.Printf("[task %s] Resuming warm session %s", task.ID, warmSID)
+	}
 
 	// Override model if specified on the task (e.g. "opus", "sonnet", "haiku").
 	if task.Model != "" {
@@ -385,12 +722,96 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		}
 	}()
 
-	// Wait for process to exit.
+	// Watchdog: if no output after 30s, emit a warning to the mobile user.
+	go func() {
+		time.Sleep(30 * time.Second)
+		tm.mu.RLock()
+		hasOutput := len(task.Output) > 0
+		status := task.Status
+		tm.mu.RUnlock()
+		if !hasOutput && status == TaskStatusRunning {
+			log.Printf("[task %s] WARNING: no output after 30s — runner may be rate-limited or stuck", task.ID)
+			var output strings.Builder
+			tm.mu.RLock()
+			output.WriteString(task.Output)
+			tm.mu.RUnlock()
+			tm.emit(task, &output, "⏳ Waiting for response from AI agent... this may take longer if another session is active.\n")
+		}
+	}()
+
+	// Wait for process to exit; auto-restart on unexpected crash.
 	go func() {
 		err := cmd.Wait()
 		tm.mu.Lock()
 		if task.Status == TaskStatusRunning {
 			if err != nil {
+				outputLen := len(task.Output)
+				retries := task.retryCount
+
+				// Auto-restart if the process crashed with little/no output
+				// and we haven't exhausted retries. This covers cases where
+				// Claude gets OOM-killed, segfaults, or is terminated externally.
+				if retries < maxProcessRetries && outputLen < 100 {
+					task.retryCount++
+					backoff := time.Duration(2<<uint(retries)) * time.Second // 2s, 4s, 8s, 16s
+					log.Printf("[task %s] %s crashed (exit: %v, output_len=%d) — auto-restarting in %v (attempt %d/%d)",
+						task.ID, tm.runner.Name, err, outputLen, backoff, retries+1, maxProcessRetries)
+
+					// Report crash event to Convex
+					go func() {
+						if tm.ConvexURL != "" {
+							detail := fmt.Sprintf("exit: %v, output_len=%d, attempt %d/%d, backoff %v", err, outputLen, retries+1, maxProcessRetries, backoff)
+							_ = ReportDeviceEvent(tm.ConvexURL, tm.AuthToken, tm.DeviceID, "crash", detail)
+						}
+					}()
+
+					// Emit status to mobile user
+					restartMsg := fmt.Sprintf("\n⚠️ Agent process crashed — restarting (attempt %d/%d)...\n", retries+1, maxProcessRetries)
+					task.Output += restartMsg
+					select {
+					case task.outputCh <- restartMsg:
+					default:
+					}
+
+					tm.persist()
+					tm.mu.Unlock()
+
+					time.Sleep(backoff)
+
+					// Re-create channels for the new process
+					task.outputCh = make(chan string, 512)
+					task.doneCh = make(chan struct{})
+
+					if restartErr := tm.startProcess(task); restartErr != nil {
+						log.Printf("[task %s] Auto-restart failed: %v", task.ID, restartErr)
+						tm.mu.Lock()
+						task.Status = TaskStatusFailed
+						finishNow := time.Now()
+						task.FinishedAt = &finishNow
+						tm.persist()
+						tm.mu.Unlock()
+						close(task.doneCh)
+					} else {
+						// Report successful restart
+						go func() {
+							if tm.ConvexURL != "" {
+								_ = ReportDeviceEvent(tm.ConvexURL, tm.AuthToken, tm.DeviceID, "restart", fmt.Sprintf("attempt %d/%d succeeded", retries+1, maxProcessRetries))
+								_ = SetRunnerDown(tm.ConvexURL, tm.AuthToken, tm.DeviceID, false)
+							}
+						}()
+					}
+					return
+				}
+
+				// All retries exhausted — mark runner as down in Convex
+				go func() {
+					if tm.ConvexURL != "" {
+						detail := fmt.Sprintf("all %d retries exhausted, exit: %v", maxProcessRetries, err)
+						_ = ReportDeviceEvent(tm.ConvexURL, tm.AuthToken, tm.DeviceID, "crash", detail)
+						_ = SetRunnerDown(tm.ConvexURL, tm.AuthToken, tm.DeviceID, true)
+					}
+				}()
+
 				task.Status = TaskStatusFailed
 				log.Printf("[task %s] %s process failed: %v", task.ID, tm.runner.Name, err)
 			} else {
@@ -467,6 +888,8 @@ func (tm *TaskManager) emit(task *Task, output *strings.Builder, text string) {
 func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 	defer close(task.outputCh)
 
+	log.Printf("[task %s] Stream JSON reader started", task.ID)
+
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 
@@ -480,11 +903,21 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 	var toolInputAccum strings.Builder
 	inToolUse := false
 	lastEmittedCmd := "" // Prevent duplicate command emissions
+	lineCount := 0
 
 	for scanner.Scan() {
+		lineCount++
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
+		}
+
+		// Log raw stdout for debugging (truncate long lines)
+		rawLine := string(line)
+		if len(rawLine) > 300 {
+			log.Printf("[task %s] stdout[%d]: %s...(truncated, total %d)", task.ID, lineCount, rawLine[:300], len(rawLine))
+		} else {
+			log.Printf("[task %s] stdout[%d]: %s", task.ID, lineCount, rawLine)
 		}
 
 		var event ClaudeEvent
@@ -614,7 +1047,10 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 	if err := scanner.Err(); err != nil {
 		log.Printf("[task %s] scanner error: %v", task.ID, err)
 	}
-	log.Printf("[task %s] Stream reader finished (output_len=%d)", task.ID, output.Len())
+	if lineCount == 0 {
+		log.Printf("[task %s] WARNING: Stream reader got zero lines from %s — process may have hung or crashed before producing output", task.ID, tm.runner.Name)
+	}
+	log.Printf("[task %s] Stream reader finished (output_len=%d, lines=%d)", task.ID, output.Len(), lineCount)
 }
 
 func truncate(s string, max int) string {

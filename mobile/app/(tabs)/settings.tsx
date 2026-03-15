@@ -19,11 +19,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
-import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner } from "../../src/lib/auth";
+import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent } from "../../src/lib/auth";
 import { clearCache } from "../../src/lib/storage";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, clearLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
-import { quicClient } from "../../src/lib/quic";
+import { quicClient, type AgentStatus } from "../../src/lib/quic";
 import {
   type SubscriptionStatus,
   getSubscriptionStatus,
@@ -60,6 +60,13 @@ export default function SettingsScreen() {
   const [customRunnerCommand, setCustomRunnerCommand] = useState("");
   const [agentVersion, setAgentVersion] = useState<string | null>(null);
   const [agentLastPing, setAgentLastPing] = useState<Date | null>(null);
+  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+  const [pingRtt, setPingRtt] = useState<number | null>(null);
+  const [isPinging, setIsPinging] = useState(false);
+  const [isShuttingDown, setIsShuttingDown] = useState(false);
+  const [metrics, setMetrics] = useState<DeviceMetric[]>([]);
+  const [events, setEvents] = useState<DeviceEvent[]>([]);
+  const [showMetrics, setShowMetrics] = useState(false);
 
   // Load user settings and runners from Convex
   useEffect(() => {
@@ -85,20 +92,92 @@ export default function SettingsScreen() {
     if (connectionStatus !== "connected" || !activeDevice) {
       setAgentVersion(null);
       setAgentLastPing(null);
+      setAgentStatus(null);
       return;
     }
     (async () => {
       try {
-        const res = await quicClient.getInfo();
-        if (res) {
-          setAgentVersion(res.version || null);
+        const [info, status] = await Promise.all([
+          quicClient.getInfo(),
+          quicClient.getAgentStatus(),
+        ]);
+        if (info) {
+          setAgentVersion(info.version || null);
           setAgentLastPing(new Date());
         }
+        if (status) setAgentStatus(status);
       } catch {
         // Agent unreachable — leave as null
       }
     })();
   }, [connectionStatus, activeDevice]);
+
+  // Ping agent every 10s when connected
+  useEffect(() => {
+    if (connectionStatus !== "connected") {
+      setPingRtt(null);
+      return;
+    }
+    const doPing = async () => {
+      const result = await quicClient.ping();
+      if (result.ok) setPingRtt(result.rttMs);
+    };
+    doPing();
+    const interval = setInterval(doPing, 10000);
+    return () => clearInterval(interval);
+  }, [connectionStatus]);
+
+  const handlePing = async () => {
+    setIsPinging(true);
+    const result = await quicClient.ping();
+    setPingRtt(result.ok ? result.rttMs : null);
+    setIsPinging(false);
+  };
+
+  const handleShutdownAgent = () => {
+    Alert.alert(
+      "Shutdown Agent",
+      "This will stop the Yaver agent on your desktop. You won't be able to send tasks until it's restarted.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Shutdown",
+          style: "destructive",
+          onPress: async () => {
+            setIsShuttingDown(true);
+            const ok = await quicClient.shutdownAgent();
+            setIsShuttingDown(false);
+            if (ok) {
+              disconnect();
+              Alert.alert("Done", "Agent has been shut down.");
+            } else {
+              Alert.alert("Error", "Failed to shutdown agent.");
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // Fetch device metrics every 60s when connected
+  useEffect(() => {
+    if (!token || !activeDevice || connectionStatus !== "connected") {
+      setMetrics([]);
+      setEvents([]);
+      return;
+    }
+    const fetchMetrics = async () => {
+      const [m, e] = await Promise.all([
+        getDeviceMetrics(token, activeDevice.id),
+        getDeviceEvents(token, activeDevice.id),
+      ]);
+      setMetrics(m);
+      setEvents(e);
+    };
+    fetchMetrics();
+    const interval = setInterval(fetchMetrics, 60000);
+    return () => clearInterval(interval);
+  }, [token, activeDevice, connectionStatus]);
 
   const fetchSubscription = useCallback(async () => {
     if (!token) {
@@ -389,6 +468,58 @@ export default function SettingsScreen() {
                   </Text>
                 </View>
               </View>
+              {/* Ping + Shutdown row */}
+              <View style={[styles.deviceDetails, { borderTopColor: c.borderSubtle }]}>
+                <Pressable
+                  style={({ pressed }) => [
+                    { flexDirection: "row", alignItems: "center", paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: c.bgCardElevated },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                  onPress={handlePing}
+                  disabled={isPinging}
+                >
+                  <Text style={{ fontSize: 13, color: c.accent }}>
+                    {isPinging ? "Pinging..." : pingRtt !== null ? `${pingRtt}ms` : "Ping"}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [
+                    { paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: c.errorBg },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                  onPress={handleShutdownAgent}
+                  disabled={isShuttingDown}
+                >
+                  <Text style={{ fontSize: 13, color: c.error }}>
+                    {isShuttingDown ? "Stopping..." : "Shutdown"}
+                  </Text>
+                </Pressable>
+              </View>
+              {/* Runner status */}
+              {agentStatus && (
+                <View style={[styles.deviceDetails, { borderTopColor: c.borderSubtle }]}>
+                  <View style={styles.detailItem}>
+                    <Text style={[styles.detailLabel, { color: c.textMuted }]}>Runner</Text>
+                    <Text style={[styles.detailValue, { color: c.textPrimary }]}>
+                      {agentStatus.runner.name}
+                    </Text>
+                  </View>
+                  <View style={styles.detailItem}>
+                    <Text style={[styles.detailLabel, { color: c.textMuted }]}>Status</Text>
+                    <Text style={[styles.detailValue, {
+                      color: agentStatus.runner.installed ? c.success : c.error,
+                    }]}>
+                      {agentStatus.runner.installed ? "Ready" : "Not found"}
+                    </Text>
+                  </View>
+                  <View style={styles.detailItem}>
+                    <Text style={[styles.detailLabel, { color: c.textMuted }]}>Tasks</Text>
+                    <Text style={[styles.detailValue, { color: c.textPrimary }]}>
+                      {agentStatus.runningTasks}/{agentStatus.totalTasks}
+                    </Text>
+                  </View>
+                </View>
+              )}
             </View>
           ) : (
             <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
@@ -398,6 +529,99 @@ export default function SettingsScreen() {
             </View>
           )}
         </View>
+
+        {/* Device Metrics */}
+        {activeDevice && connectionStatus === "connected" && (
+          <View style={styles.section}>
+            <Pressable onPress={() => setShowMetrics(!showMetrics)}>
+              <Text style={[styles.sectionLabel, { color: c.textMuted }]}>
+                Device Metrics {showMetrics ? "\u2303" : "\u2304"}
+              </Text>
+            </Pressable>
+            {showMetrics && (
+              <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+                {metrics.length === 0 ? (
+                  <Text style={[{ fontSize: 13, color: c.textMuted, textAlign: "center", paddingVertical: 12 }]}>
+                    Waiting for metrics... (updates every 60s)
+                  </Text>
+                ) : (
+                  <>
+                    {/* CPU Chart */}
+                    <Text style={[styles.detailLabel, { color: c.textMuted, marginBottom: 6 }]}>
+                      CPU — {metrics.length > 0 ? `${metrics[metrics.length - 1].cpuPercent.toFixed(1)}%` : "—"}
+                    </Text>
+                    <View style={metricsStyles.chartContainer}>
+                      {metrics.slice(-60).map((m, i) => (
+                        <View
+                          key={i}
+                          style={[
+                            metricsStyles.bar,
+                            {
+                              height: `${Math.max(m.cpuPercent, 2)}%` as any,
+                              backgroundColor: m.cpuPercent > 80 ? c.error : m.cpuPercent > 50 ? c.warn : c.accent,
+                            },
+                          ]}
+                        />
+                      ))}
+                    </View>
+
+                    {/* RAM Chart */}
+                    <Text style={[styles.detailLabel, { color: c.textMuted, marginBottom: 6, marginTop: 16 }]}>
+                      RAM — {metrics.length > 0
+                        ? `${(metrics[metrics.length - 1].memoryUsedMb / 1024).toFixed(1)} / ${(metrics[metrics.length - 1].memoryTotalMb / 1024).toFixed(1)} GB`
+                        : "—"}
+                    </Text>
+                    <View style={metricsStyles.chartContainer}>
+                      {metrics.slice(-60).map((m, i) => {
+                        const pct = m.memoryTotalMb > 0 ? (m.memoryUsedMb / m.memoryTotalMb) * 100 : 0;
+                        return (
+                          <View
+                            key={i}
+                            style={[
+                              metricsStyles.bar,
+                              {
+                                height: `${Math.max(pct, 2)}%` as any,
+                                backgroundColor: pct > 85 ? c.error : pct > 60 ? c.warn : c.success,
+                              },
+                            ]}
+                          />
+                        );
+                      })}
+                    </View>
+
+                    {/* Time range label */}
+                    <View style={metricsStyles.timeLabels}>
+                      <Text style={[{ fontSize: 10, color: c.textMuted }]}>-60 min</Text>
+                      <Text style={[{ fontSize: 10, color: c.textMuted }]}>now</Text>
+                    </View>
+                  </>
+                )}
+
+                {/* Recent events */}
+                {events.length > 0 && (
+                  <View style={{ marginTop: 16, borderTopWidth: 1, borderTopColor: c.borderSubtle, paddingTop: 12 }}>
+                    <Text style={[styles.detailLabel, { color: c.textMuted, marginBottom: 8 }]}>
+                      Recent Events
+                    </Text>
+                    {events.slice(0, 5).map((e, i) => (
+                      <View key={i} style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}>
+                        <Text style={{ fontSize: 11, color: e.event === "crash" || e.event === "oom" ? c.error : e.event === "restart" ? c.warn : c.success }}>
+                          {e.event === "crash" ? "\u26A0" : e.event === "started" ? "\u25B6" : e.event === "restart" ? "\u21BB" : e.event === "stopped" ? "\u25A0" : "\u26A0"}
+                        </Text>
+                        <Text style={{ fontSize: 11, color: c.textSecondary, marginLeft: 6, flex: 1 }}>
+                          {e.event} {e.details ? `— ${e.details}` : ""}
+                        </Text>
+                        <Text style={{ fontSize: 10, color: c.textMuted }}>
+                          {new Date(e.timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+            )}
+          </View>
+        )}
 
         {/* AI Runner */}
         <View style={styles.section}>
@@ -910,4 +1134,28 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   deleteAccountText: { fontSize: 14, fontWeight: "600" },
+});
+
+const metricsStyles = StyleSheet.create({
+  chartContainer: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    height: 60,
+    gap: 1,
+    backgroundColor: "rgba(255,255,255,0.03)",
+    borderRadius: 6,
+    paddingHorizontal: 2,
+    paddingVertical: 2,
+    overflow: "hidden",
+  },
+  bar: {
+    flex: 1,
+    minWidth: 2,
+    borderRadius: 1,
+  },
+  timeLabels: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 4,
+  },
 });

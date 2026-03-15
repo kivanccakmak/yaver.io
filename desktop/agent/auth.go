@@ -190,6 +190,92 @@ func SendHeartbeat(baseURL, token, deviceID string) error {
 	return nil
 }
 
+// ReportMetrics sends CPU/RAM metrics to Convex.
+func ReportMetrics(baseURL, token, deviceID string, cpuPercent, memUsedMB, memTotalMB float64) error {
+	payload := map[string]interface{}{
+		"deviceId":      deviceID,
+		"cpuPercent":    cpuPercent,
+		"memoryUsedMb":  memUsedMB,
+		"memoryTotalMb": memTotalMB,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal metrics: %w", err)
+	}
+
+	req, err := newBearerRequest("POST", baseURL+"/devices/metrics", token, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create metrics request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("metrics request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("metrics failed (status %d): %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// ReportDeviceEvent sends a lifecycle event (crash, restart, etc.) to Convex.
+func ReportDeviceEvent(baseURL, token, deviceID, event, details string) error {
+	payload := map[string]interface{}{
+		"deviceId": deviceID,
+		"event":    event,
+		"details":  details,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal event: %w", err)
+	}
+
+	req, err := newBearerRequest("POST", baseURL+"/devices/event", token, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create event request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("event request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("event report failed (status %d): %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// SetRunnerDown updates the runnerDown flag on the device in Convex.
+func SetRunnerDown(baseURL, token, deviceID string, down bool) error {
+	payload := map[string]interface{}{
+		"deviceId":   deviceID,
+		"runnerDown": down,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal runner-down: %w", err)
+	}
+
+	req, err := newBearerRequest("POST", baseURL+"/devices/runner-down", token, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create runner-down request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("runner-down request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	return nil
+}
+
 // MarkOffline tells the backend this device is going offline.
 func MarkOffline(baseURL, token, deviceID string) error {
 	payload := map[string]string{"deviceId": deviceID}

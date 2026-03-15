@@ -119,6 +119,34 @@ cd backend && node cleanup-user.mjs --confirm        # actually delete
 ```
 Edit `backend/cleanup-user.mjs` to change the target emails. Uses `backend/convex/admin.ts` functions.
 
+## Test Credentials (Email/Password — no OAuth required)
+```
+Email:    test-relay@yaver.io
+Password: testtest123
+```
+Sign up / login via:
+```bash
+# Signup (one-time)
+curl -X POST https://shocking-echidna-394.eu-west-1.convex.site/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test-relay@yaver.io","fullName":"Relay Test","password":"testtest123"}'
+
+# Login (returns token)
+curl -X POST https://shocking-echidna-394.eu-west-1.convex.site/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test-relay@yaver.io","password":"testtest123"}'
+```
+
+## Tests
+```bash
+cd desktop/agent && go test -v ./...    # Run all agent tests (HTTP API, auth, MCP, ping, shutdown)
+```
+
+Tests spin up real HTTP servers on random ports — no mocks, no external dependencies. Covers:
+- Health, auth, CORS, task CRUD, agent status, ping/pong, shutdown
+- **Server-client integration**: two agents on the same machine, verifies token isolation and task separation
+- **MCP protocol**: initialize + tools/list JSON-RPC
+
 ## Local Development
 - `cd backend && npx convex dev` — Start Convex dev server
 - `cd web && npm run dev` — Start web dev server

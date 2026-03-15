@@ -12,6 +12,8 @@ import type * as admin from "../admin.js";
 import type * as aiRunners from "../aiRunners.js";
 import type * as auth from "../auth.js";
 import type * as authLogs from "../authLogs.js";
+import type * as deviceEvents from "../deviceEvents.js";
+import type * as deviceMetrics from "../deviceMetrics.js";
 import type * as devices from "../devices.js";
 import type * as downloads from "../downloads.js";
 import type * as http from "../http.js";
@@ -32,6 +34,8 @@ declare const fullApi: ApiFromModules<{
   aiRunners: typeof aiRunners;
   auth: typeof auth;
   authLogs: typeof authLogs;
+  deviceEvents: typeof deviceEvents;
+  deviceMetrics: typeof deviceMetrics;
   devices: typeof devices;
   downloads: typeof downloads;
   http: typeof http;

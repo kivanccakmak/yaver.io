@@ -99,6 +99,45 @@ export function getConvexSiteUrl(): string {
   return "https://shocking-echidna-394.eu-west-1.convex.site";
 }
 
+export interface DeviceMetric {
+  timestamp: number;
+  cpuPercent: number;
+  memoryUsedMb: number;
+  memoryTotalMb: number;
+}
+
+export interface DeviceEvent {
+  event: "crash" | "restart" | "oom" | "started" | "stopped";
+  details?: string;
+  timestamp: number;
+}
+
+export async function getDeviceMetrics(token: string, deviceId: string): Promise<DeviceMetric[]> {
+  try {
+    const res = await fetch(`${getConvexSiteUrl()}/devices/metrics?deviceId=${deviceId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.metrics || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getDeviceEvents(token: string, deviceId: string): Promise<DeviceEvent[]> {
+  try {
+    const res = await fetch(`${getConvexSiteUrl()}/devices/events?deviceId=${deviceId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.events || [];
+  } catch {
+    return [];
+  }
+}
+
 export function getOAuthUrl(provider: OAuthProvider): string {
   const base = getWebBaseUrl();
   return `${base}/api/auth/oauth/${provider}?client=mobile`;

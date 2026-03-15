@@ -112,8 +112,36 @@ export const listMyDevices = query({
       quicHost: d.quicHost,
       quicPort: d.quicPort,
       isOnline: d.isOnline,
+      runnerDown: d.runnerDown ?? false,
       lastHeartbeat: d.lastHeartbeat,
     }));
+  },
+});
+
+/**
+ * Update the runnerDown flag for a device.
+ * Called by the desktop agent when runner crashes with all retries exhausted,
+ * or when runner is successfully restarted.
+ */
+export const setRunnerDown = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+    runnerDown: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+
+    if (!device) throw new Error("Device not found");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    await ctx.db.patch(device._id, { runnerDown: args.runnerDown });
   },
 });
 

@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -242,6 +244,273 @@ func clientContinueTask(ctx context.Context, conn quic.Connection, taskID, input
 		}
 	}
 
+	return scanner.Err()
+}
+
+// RunClientHTTP connects to a remote Yaver agent over HTTP (via relay or direct)
+// and provides the same interactive terminal as RunClient.
+func RunClientHTTP(ctx context.Context, baseURL string, token string) error {
+	log.Printf("Connecting via HTTP to %s...", baseURL)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	authHeader := "Bearer " + token
+
+	// Health check to verify connectivity
+	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/health", nil)
+	if err != nil {
+		return fmt.Errorf("build health request: %w", err)
+	}
+	req.Header.Set("Authorization", authHeader)
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("agent unreachable at %s: %w", baseURL, err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("agent health check failed: HTTP %d", resp.StatusCode)
+	}
+
+	// Get agent info
+	req, _ = http.NewRequestWithContext(ctx, "GET", baseURL+"/info", nil)
+	req.Header.Set("Authorization", authHeader)
+	resp, err = client.Do(req)
+	if err == nil && resp.StatusCode == 200 {
+		var info struct {
+			Hostname string `json:"hostname"`
+			Version  string `json:"version"`
+			WorkDir  string `json:"workDir"`
+		}
+		json.NewDecoder(resp.Body).Decode(&info)
+		resp.Body.Close()
+		fmt.Printf("Connected to %s (v%s) via relay\n\n", info.Hostname, info.Version)
+	} else {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		fmt.Printf("Connected via relay\n\n")
+	}
+
+	// Interactive loop
+	reader := bufio.NewReader(os.Stdin)
+
+	for {
+		fmt.Print("yaver> ")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				fmt.Println()
+				return nil
+			}
+			return fmt.Errorf("read input: %w", err)
+		}
+
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		switch {
+		case line == "exit" || line == "quit":
+			return nil
+		case line == "help":
+			printHelp()
+			continue
+		case line == "tasks" || line == "list":
+			if err := httpListTasks(ctx, client, baseURL, authHeader); err != nil {
+				fmt.Printf("error: %v\n", err)
+			}
+			continue
+		case strings.HasPrefix(line, "stop "):
+			taskID := strings.TrimSpace(strings.TrimPrefix(line, "stop "))
+			if err := httpStopTask(ctx, client, baseURL, authHeader, taskID); err != nil {
+				fmt.Printf("error: %v\n", err)
+			}
+			continue
+		case strings.HasPrefix(line, "continue "):
+			parts := strings.SplitN(line, " ", 3)
+			if len(parts) < 3 {
+				fmt.Println("usage: continue <taskId> <message>")
+				continue
+			}
+			if err := httpContinueTask(ctx, client, baseURL, authHeader, parts[1], parts[2]); err != nil {
+				fmt.Printf("error: %v\n", err)
+			}
+			continue
+		}
+
+		// Default: create a new task
+		if err := httpCreateTask(ctx, client, baseURL, authHeader, line); err != nil {
+			fmt.Printf("error: %v\n", err)
+		}
+	}
+}
+
+func httpCreateTask(ctx context.Context, client *http.Client, baseURL, authHeader, prompt string) error {
+	body, _ := json.Marshal(map[string]string{
+		"title":       prompt,
+		"description": prompt,
+	})
+	req, _ := http.NewRequestWithContext(ctx, "POST", baseURL+"/tasks", bytes.NewReader(body))
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("create task: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK     bool   `json:"ok"`
+		TaskID string `json:"taskId"`
+		Error  string `json:"error"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if !result.OK {
+		return fmt.Errorf("create task: %s", result.Error)
+	}
+
+	fmt.Printf("[task %s] created\n", result.TaskID)
+
+	// Stream output via SSE
+	sseClient := &http.Client{Timeout: 10 * time.Minute}
+	sseReq, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/tasks/"+result.TaskID+"/output", nil)
+	sseReq.Header.Set("Authorization", authHeader)
+
+	sseResp, err := sseClient.Do(sseReq)
+	if err != nil {
+		return fmt.Errorf("stream output: %w", err)
+	}
+	defer sseResp.Body.Close()
+
+	scanner := bufio.NewScanner(sseResp.Body)
+	scanner.Buffer(make([]byte, 1<<20), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		var event struct {
+			Type   string `json:"type"`
+			Text   string `json:"text"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			continue
+		}
+		switch event.Type {
+		case "output":
+			fmt.Print(event.Text)
+		case "done":
+			fmt.Println()
+			return nil
+		}
+	}
+	return scanner.Err()
+}
+
+func httpListTasks(ctx context.Context, client *http.Client, baseURL, authHeader string) error {
+	req, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/tasks", nil)
+	req.Header.Set("Authorization", authHeader)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Tasks []struct {
+			ID     string `json:"id"`
+			Title  string `json:"title"`
+			Status string `json:"status"`
+		} `json:"tasks"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if len(result.Tasks) == 0 {
+		fmt.Println("No tasks.")
+		return nil
+	}
+	for _, t := range result.Tasks {
+		fmt.Printf("  %s  %-10s  %s\n", t.ID, t.Status, t.Title)
+	}
+	return nil
+}
+
+func httpStopTask(ctx context.Context, client *http.Client, baseURL, authHeader, taskID string) error {
+	req, _ := http.NewRequestWithContext(ctx, "POST", baseURL+"/tasks/"+taskID+"/stop", nil)
+	req.Header.Set("Authorization", authHeader)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("stop failed: HTTP %d", resp.StatusCode)
+	}
+	fmt.Printf("Task %s stopped.\n", taskID)
+	return nil
+}
+
+func httpContinueTask(ctx context.Context, client *http.Client, baseURL, authHeader, taskID, input string) error {
+	body, _ := json.Marshal(map[string]string{"input": input})
+	req, _ := http.NewRequestWithContext(ctx, "POST", baseURL+"/tasks/"+taskID+"/continue", bytes.NewReader(body))
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if !result.OK {
+		return fmt.Errorf("continue: %s", result.Error)
+	}
+
+	fmt.Printf("[task %s] resumed\n", taskID)
+
+	// Stream output
+	sseClient := &http.Client{Timeout: 10 * time.Minute}
+	sseReq, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/tasks/"+taskID+"/output", nil)
+	sseReq.Header.Set("Authorization", authHeader)
+
+	sseResp, err := sseClient.Do(sseReq)
+	if err != nil {
+		return fmt.Errorf("stream output: %w", err)
+	}
+	defer sseResp.Body.Close()
+
+	scanner := bufio.NewScanner(sseResp.Body)
+	scanner.Buffer(make([]byte, 1<<20), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		var event struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			continue
+		}
+		switch event.Type {
+		case "output":
+			fmt.Print(event.Text)
+		case "done":
+			fmt.Println()
+			return nil
+		}
+	}
 	return scanner.Err()
 }
 

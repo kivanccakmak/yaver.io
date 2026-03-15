@@ -39,6 +39,7 @@ export default defineSchema({
     quicHost: v.string(),
     quicPort: v.number(),
     isOnline: v.boolean(),
+    runnerDown: v.optional(v.boolean()),  // true when runner crashed and all retries exhausted
     lastHeartbeat: v.number(),
     createdAt: v.number(),
   })
@@ -132,6 +133,31 @@ export default defineSchema({
     isDefault: v.optional(v.boolean()),
     sortOrder: v.number(),
   }).index("by_runnerId", ["runnerId"]),
+
+  // Per-minute CPU/RAM metrics from desktop agents (last 1 hour kept)
+  deviceMetrics: defineTable({
+    deviceId: v.string(),       // matches devices.deviceId
+    timestamp: v.number(),      // epoch ms
+    cpuPercent: v.number(),     // 0-100
+    memoryUsedMb: v.number(),
+    memoryTotalMb: v.number(),
+  })
+    .index("by_deviceId", ["deviceId", "timestamp"]),
+
+  // Device lifecycle events (crashes, restarts, OOM, etc.)
+  deviceEvents: defineTable({
+    deviceId: v.string(),
+    event: v.union(
+      v.literal("crash"),
+      v.literal("restart"),
+      v.literal("oom"),
+      v.literal("started"),
+      v.literal("stopped"),
+    ),
+    details: v.optional(v.string()),
+    timestamp: v.number(),
+  })
+    .index("by_deviceId", ["deviceId", "timestamp"]),
 
   mobileStreamLogs: defineTable({
     userId: v.optional(v.string()),
