@@ -43,6 +43,31 @@ export const createDownload = mutation({
   },
 });
 
+/** Delete a download entry and its storage file. */
+export const deleteDownload = mutation({
+  args: {
+    platform: v.union(
+      v.literal("macos"),
+      v.literal("windows"),
+      v.literal("linux")
+    ),
+    arch: v.string(),
+    format: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("downloads")
+      .withIndex("by_platform_arch_format", (q) =>
+        q.eq("platform", args.platform).eq("arch", args.arch).eq("format", args.format)
+      )
+      .first();
+    if (!existing) return null;
+    await ctx.storage.delete(existing.storageId);
+    await ctx.db.delete(existing._id);
+    return existing.filename;
+  },
+});
+
 /** List all available downloads. */
 export const listDownloads = query({
   args: {},
