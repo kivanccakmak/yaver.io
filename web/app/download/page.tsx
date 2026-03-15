@@ -279,12 +279,9 @@ export default function DownloadPage() {
               <p className="mb-5 text-xs text-surface-500">
                 iOS 16+. iPhone and iPad.
               </p>
-              <a
-                href="https://testflight.apple.com/join/yaver"
-                className="btn-primary py-2 px-4 text-xs"
-              >
-                TestFlight (Early Access)
-              </a>
+              <span className="inline-flex items-center justify-center rounded-lg border border-surface-800 bg-surface-900 px-4 py-2 text-xs text-surface-600 cursor-not-allowed">
+                App Store (coming soon)
+              </span>
             </div>
             <div
               className={`card ${platform === "android" ? "border-surface-600" : ""}`}
