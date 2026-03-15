@@ -23,7 +23,7 @@ export const record = mutation({
     if (!session) return;
 
     await ctx.db.insert("runnerUsage", {
-      userId: session.userId,
+      userId: session.user.userId,
       deviceId: args.deviceId,
       taskId: args.taskId,
       runner: args.runner,
@@ -54,7 +54,7 @@ export const getUsage = query({
     const entries = await ctx.db
       .query("runnerUsage")
       .withIndex("by_userId", (q) =>
-        q.eq("userId", session.userId).gte("startedAt", since)
+        q.eq("userId", session.user.userId).gte("startedAt", since)
       )
       .collect();
 
