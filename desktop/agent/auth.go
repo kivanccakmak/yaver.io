@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+// RunnerInfo describes an active runner process for heartbeat reporting.
+type RunnerInfo struct {
+	TaskID   string `json:"taskId"`
+	RunnerID string `json:"runnerId"`
+	Model    string `json:"model,omitempty"`
+	PID      int    `json:"pid"`
+	Status   string `json:"status"` // "running" or "idle"
+	Title    string `json:"title"`
+}
+
 // newBearerRequest creates an HTTP request with Authorization: Bearer header.
 func newBearerRequest(method, url, token string, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequest(method, url, body)
@@ -188,9 +198,12 @@ func RegisterDevice(baseURL string, r RegisterDeviceRequest) error {
 }
 
 // SendHeartbeat sends a heartbeat to the Convex backend so the device stays
-// marked as online.
-func SendHeartbeat(baseURL, token, deviceID string) error {
-	payload := map[string]string{"deviceId": deviceID}
+// marked as online. Includes active runner info if any.
+func SendHeartbeat(baseURL, token, deviceID string, runners []RunnerInfo) error {
+	payload := map[string]interface{}{
+		"deviceId": deviceID,
+		"runners":  runners,
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal heartbeat: %w", err)

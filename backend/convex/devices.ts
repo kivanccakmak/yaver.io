@@ -68,6 +68,14 @@ export const heartbeat = mutation({
   args: {
     tokenHash: v.string(),
     deviceId: v.string(),
+    runners: v.optional(v.array(v.object({
+      taskId: v.string(),
+      runnerId: v.string(),
+      model: v.optional(v.string()),
+      pid: v.number(),
+      status: v.string(),
+      title: v.string(),
+    }))),
   },
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.tokenHash);
@@ -84,6 +92,7 @@ export const heartbeat = mutation({
     await ctx.db.patch(device._id, {
       isOnline: true,
       lastHeartbeat: Date.now(),
+      runners: args.runners ?? [],
     });
   },
 });
@@ -113,6 +122,7 @@ export const listMyDevices = query({
       quicPort: d.quicPort,
       isOnline: d.isOnline,
       runnerDown: d.runnerDown ?? false,
+      runners: d.runners ?? [],
       lastHeartbeat: d.lastHeartbeat,
     }));
   },

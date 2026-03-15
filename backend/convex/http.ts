@@ -428,6 +428,7 @@ http.route({
     await ctx.runMutation(api.devices.heartbeat, {
       tokenHash,
       deviceId: body.deviceId,
+      runners: body.runners,
     });
 
     return jsonResponse({ ok: true });

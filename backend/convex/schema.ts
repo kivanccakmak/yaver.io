@@ -40,6 +40,14 @@ export default defineSchema({
     quicPort: v.number(),
     isOnline: v.boolean(),
     runnerDown: v.optional(v.boolean()),  // true when runner crashed and all retries exhausted
+    runners: v.optional(v.array(v.object({
+      taskId: v.string(),
+      runnerId: v.string(),
+      model: v.optional(v.string()),
+      pid: v.number(),
+      status: v.string(),
+      title: v.string(),
+    }))),
     lastHeartbeat: v.number(),
     createdAt: v.number(),
   })

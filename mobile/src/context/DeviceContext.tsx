@@ -26,6 +26,15 @@ const CONVEX_SITE_URL = "https://shocking-echidna-394.eu-west-1.convex.site";
 // Heartbeat is sent every 2 minutes; consider "recently active" if within 5 min
 const HEARTBEAT_STALE_MS = 5 * 60 * 1000;
 
+export interface RunnerInfo {
+  taskId: string;
+  runnerId: string;
+  model?: string;
+  pid: number;
+  status: string;
+  title: string;
+}
+
 export interface Device {
   id: string;
   name: string;
@@ -34,6 +43,7 @@ export interface Device {
   online: boolean;
   lastSeen: number;
   os: string;
+  runners: RunnerInfo[];
 }
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
@@ -119,6 +129,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           online: d.isOnline ?? d.online ?? false,
           lastSeen: d.lastHeartbeat || d.lastSeen || 0,
           os: d.platform || d.os || "",
+          runners: d.runners ?? [],
         }));
         setDevices(mapped);
       } else {

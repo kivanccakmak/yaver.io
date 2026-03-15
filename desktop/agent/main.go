@@ -873,7 +873,7 @@ func runServe(args []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go heartbeatLoop(ctx, cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID)
+	go heartbeatLoop(ctx, cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID, taskMgr)
 	go metricsLoop(ctx, cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID)
 
 	// Warm up the runner — fork Claude at startup to establish a session
@@ -1769,7 +1769,7 @@ func execOpen(name string, args ...string) {
 	cmd.Start()
 }
 
-func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string) {
+func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr *TaskManager) {
 	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 
@@ -1778,7 +1778,8 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := SendHeartbeat(baseURL, token, deviceID); err != nil {
+			runners := taskMgr.GetRunnerInfos()
+			if err := SendHeartbeat(baseURL, token, deviceID, runners); err != nil {
 				log.Printf("heartbeat failed: %v", err)
 			} else {
 				log.Println("Heartbeat sent.")

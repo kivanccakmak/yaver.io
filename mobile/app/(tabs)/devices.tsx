@@ -11,7 +11,8 @@ import {
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Device, useDevice } from "../../src/context/DeviceContext";
+import { Alert } from "react-native";
+import { Device, RunnerInfo, useDevice } from "../../src/context/DeviceContext";
 import { useAuth } from "../../src/context/AuthContext";
 import { useColors } from "../../src/context/ThemeContext";
 import { quicClient } from "../../src/lib/quic";
@@ -31,6 +32,12 @@ function ConnectionBadge({ status }: { status: string }) {
   );
 }
 
+function buildDeviceUrl(device: Device, token: string | null): string | null {
+  const relays = quicClient.getRelayServers();
+  if (relays.length > 0) return `${relays[0].httpUrl}/d/${device.id}`;
+  return `http://${device.host}:${device.port}`;
+}
+
 function DeviceCard({
   device,
   isActive,
@@ -44,9 +51,13 @@ function DeviceCard({
 }) {
   const c = useColors();
   const [pingState, setPingState] = useState<{ pinging: boolean; rttMs?: number; ok?: boolean }>({ pinging: false });
-  const HEARTBEAT_STALE_MS = 5 * 60 * 1000; // 5 minutes
+  const [showMenu, setShowMenu] = useState(false);
+  const [killing, setKilling] = useState<string | null>(null);
+  const HEARTBEAT_STALE_MS = 5 * 60 * 1000;
   const isRecentlyActive = device.lastSeen > 0 && (Date.now() - device.lastSeen) < HEARTBEAT_STALE_MS;
   const isOnline = device.online && isRecentlyActive;
+  const runners = device.runners || [];
+  const activeRunners = runners.filter((r) => r.status === "running");
 
   const timeSince = (ts: number) => {
     if (!ts) return "never";
@@ -86,6 +97,50 @@ function DeviceCard({
     setPingState({ pinging: false, ok: false });
   };
 
+  const killTask = async (taskId: string) => {
+    const baseUrl = buildDeviceUrl(device, token);
+    if (!baseUrl || !token) return;
+    setKilling(taskId);
+    try {
+      await fetch(`${baseUrl}/tasks/${taskId}/stop`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {}
+    setKilling(null);
+  };
+
+  const killAll = async () => {
+    for (const r of activeRunners) {
+      await killTask(r.taskId);
+    }
+  };
+
+  const shutdownAgent = () => {
+    Alert.alert("Shutdown Agent", `Stop the Yaver agent on ${device.name}?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Shutdown", style: "destructive", onPress: async () => {
+          const baseUrl = buildDeviceUrl(device, token);
+          if (!baseUrl || !token) return;
+          try {
+            await fetch(`${baseUrl}/agent/shutdown`, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${token}` },
+            });
+          } catch {}
+          setShowMenu(false);
+        },
+      },
+    ]);
+  };
+
+  // Group runners by runnerId for summary
+  const runnerCounts = activeRunners.reduce<Record<string, number>>((acc, r) => {
+    acc[r.runnerId] = (acc[r.runnerId] || 0) + 1;
+    return acc;
+  }, {});
+
   return (
     <Pressable
       style={({ pressed }) => [
@@ -103,12 +158,10 @@ function DeviceCard({
           </Text>
         </View>
         <View style={styles.cardRight}>
-          <View
-            style={[
-              styles.onlineDot,
-              { backgroundColor: isOnline ? c.success : c.textMuted },
-            ]}
-          />
+          <Pressable onPress={() => setShowMenu(!showMenu)} hitSlop={8}>
+            <Text style={{ fontSize: 18, color: c.textMuted }}>...</Text>
+          </Pressable>
+          <View style={[styles.onlineDot, { backgroundColor: isOnline ? c.success : c.textMuted }]} />
           <Text style={[styles.lastSeen, { color: c.textMuted }]}>
             {isOnline ? "online" : "offline"}
           </Text>
@@ -119,6 +172,67 @@ function DeviceCard({
           )}
         </View>
       </View>
+
+      {/* Runner summary badges */}
+      {activeRunners.length > 0 && (
+        <View style={styles.runnerBadges}>
+          {Object.entries(runnerCounts).map(([rid, count]) => (
+            <View key={rid} style={[styles.runnerBadge, { backgroundColor: c.accent + "18" }]}>
+              <Text style={[styles.runnerBadgeText, { color: c.accent }]}>
+                {rid} x{count}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* Expanded menu: runner list + actions */}
+      {showMenu && (
+        <View style={[styles.menuSection, { borderTopColor: c.border }]}>
+          {activeRunners.length > 0 && (
+            <>
+              {activeRunners.map((r) => (
+                <View key={r.taskId} style={styles.runnerRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.runnerTitle, { color: c.textPrimary }]} numberOfLines={1}>
+                      {r.title}
+                    </Text>
+                    <Text style={[styles.runnerMeta, { color: c.textMuted }]}>
+                      {r.runnerId}{r.model ? ` / ${r.model}` : ""} &middot; PID {r.pid}
+                    </Text>
+                  </View>
+                  <Pressable
+                    style={[styles.killBtn, { backgroundColor: c.error + "18" }]}
+                    onPress={() => killTask(r.taskId)}
+                    disabled={killing === r.taskId}
+                  >
+                    <Text style={[styles.killBtnText, { color: c.error }]}>
+                      {killing === r.taskId ? "..." : "Kill"}
+                    </Text>
+                  </Pressable>
+                </View>
+              ))}
+              {activeRunners.length > 1 && (
+                <Pressable
+                  style={[styles.killAllBtn, { backgroundColor: c.error + "12" }]}
+                  onPress={killAll}
+                >
+                  <Text style={[styles.killBtnText, { color: c.error }]}>Kill All</Text>
+                </Pressable>
+              )}
+            </>
+          )}
+          {activeRunners.length === 0 && (
+            <Text style={[styles.runnerMeta, { color: c.textMuted, paddingVertical: 4 }]}>No active runners</Text>
+          )}
+          <View style={[styles.menuActions, { borderTopColor: c.border }]}>
+            <Pressable style={[styles.menuActionBtn, { backgroundColor: c.error + "12" }]} onPress={shutdownAgent}>
+              <Text style={[styles.menuActionText, { color: c.error }]}>Shutdown Agent</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
       <View style={styles.cardBottom}>
         {isActive && (
           <View style={[styles.activeLabel, { backgroundColor: c.accent + "22" }]}>
@@ -127,7 +241,7 @@ function DeviceCard({
         )}
         <Pressable
           style={[styles.pingBtn, { backgroundColor: c.bgCardElevated || c.bg }]}
-          onPress={(e) => { e.stopPropagation; handlePing(); }}
+          onPress={() => handlePing()}
           disabled={pingState.pinging}
         >
           <Text style={[styles.pingBtnText, {
@@ -468,4 +582,17 @@ const styles = StyleSheet.create({
     marginLeft: "auto",
   },
   pingBtnText: { fontSize: 12, fontWeight: "600" },
+  runnerBadges: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
+  runnerBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  runnerBadgeText: { fontSize: 11, fontWeight: "600" },
+  menuSection: { marginTop: 10, paddingTop: 10, borderTopWidth: 1 },
+  runnerRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  runnerTitle: { fontSize: 13, fontWeight: "500" },
+  runnerMeta: { fontSize: 11, marginTop: 1 },
+  killBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, marginLeft: 8 },
+  killAllBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, alignSelf: "flex-start", marginTop: 4 },
+  killBtnText: { fontSize: 12, fontWeight: "600" },
+  menuActions: { marginTop: 8, paddingTop: 8, borderTopWidth: 1 },
+  menuActionBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, alignSelf: "flex-start" },
+  menuActionText: { fontSize: 12, fontWeight: "600" },
 });

@@ -246,6 +246,34 @@ type SystemInfo struct {
 	MemoryMB int64   `json:"memoryMb,omitempty"`
 }
 
+// GetRunnerInfos returns info about active runner processes for heartbeat reporting.
+func (tm *TaskManager) GetRunnerInfos() []RunnerInfo {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	var infos []RunnerInfo
+	for _, t := range tm.tasks {
+		if t.Status == TaskStatusRunning || t.Status == TaskStatusQueued {
+			pid := 0
+			if t.cmd != nil && t.cmd.Process != nil {
+				pid = t.cmd.Process.Pid
+			}
+			status := "running"
+			if t.Status == TaskStatusQueued {
+				status = "idle"
+			}
+			infos = append(infos, RunnerInfo{
+				TaskID:   t.ID,
+				RunnerID: t.RunnerID,
+				Model:    t.Model,
+				PID:      pid,
+				Status:   status,
+				Title:    t.Title,
+			})
+		}
+	}
+	return infos
+}
+
 // GetOwnRunnerProcesses returns PIDs of runner processes spawned by this agent.
 func (tm *TaskManager) GetOwnRunnerProcesses() []RunnerProcess {
 	tm.mu.RLock()
