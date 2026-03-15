@@ -193,31 +193,6 @@ export default function DownloadPage() {
                     downloadButton(btn.label, btn.plat, btn.arch, btn.format, btn.primary)
                   )}
                 </div>
-                {p.name === "Linux" && (
-                  <div className="mt-4 border-t border-surface-800 pt-4">
-                    <p className="mb-2 text-xs text-surface-500">Or install via APT:</p>
-                    <div className="rounded-lg bg-surface-950 px-3 py-2 font-mono text-[11px] space-y-1">
-                      <div>
-                        <span className="text-surface-500">$</span>{" "}
-                        <span className="text-surface-400 select-all">
-                          curl -fsSL https://kivanccakmak.github.io/apt-yaver/KEY.gpg | sudo gpg --dearmor -o /usr/share/keyrings/yaver.gpg
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-surface-500">$</span>{" "}
-                        <span className="text-surface-400 select-all">
-                          {`echo "deb [signed-by=/usr/share/keyrings/yaver.gpg] https://kivanccakmak.github.io/apt-yaver stable main" | sudo tee /etc/apt/sources.list.d/yaver.list`}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-surface-500">$</span>{" "}
-                        <span className="text-surface-400 select-all">
-                          sudo apt-get update && sudo apt-get install yaver
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
             ))}
           </div>
