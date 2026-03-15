@@ -80,6 +80,7 @@ export default function DownloadPage() {
     const d = findDownload(plat, arch, format);
     const available = d?.url;
     const sizeLabel = d ? ` (${formatSize(d.size)})` : "";
+    const versionLabel = d?.version ? ` v${d.version}` : "";
 
     if (available) {
       return (
@@ -251,7 +252,7 @@ export default function DownloadPage() {
               <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
                 <span className="text-surface-500">$</span>{" "}
                 <span className="text-surface-300 select-all">
-                  sudo rpm -i https://github.com/kivanccakmak/yaver-cli/releases/latest/download/yaver_1.25.0_aarch64.rpm
+                  sudo rpm -i https://github.com/kivanccakmak/yaver-cli/releases/latest/download/yaver_{cliVersion || "latest"}_aarch64.rpm
                 </span>
               </div>
             </div>
