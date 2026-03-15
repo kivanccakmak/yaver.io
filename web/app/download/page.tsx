@@ -214,29 +214,6 @@ export default function DownloadPage() {
               </div>
             </div>
             <div>
-              <p className="mb-2 text-xs text-surface-500">APT (Debian / Ubuntu)</p>
-              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px] space-y-1">
-                <div>
-                  <span className="text-surface-500">$</span>{" "}
-                  <span className="text-surface-300 select-all">
-                    curl -fsSL https://kivanccakmak.github.io/apt-yaver/KEY.gpg | sudo gpg --dearmor -o /usr/share/keyrings/yaver.gpg
-                  </span>
-                </div>
-                <div>
-                  <span className="text-surface-500">$</span>{" "}
-                  <span className="text-surface-300 select-all">
-                    {`echo "deb [signed-by=/usr/share/keyrings/yaver.gpg] https://kivanccakmak.github.io/apt-yaver stable main" | sudo tee /etc/apt/sources.list.d/yaver.list`}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-surface-500">$</span>{" "}
-                  <span className="text-surface-300 select-all">
-                    sudo apt-get update && sudo apt-get install yaver
-                  </span>
-                </div>
-              </div>
-            </div>
-            <div>
               <p className="mb-2 text-xs text-surface-500">Arch Linux (AUR)</p>
               <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px] space-y-1">
                 <div>
