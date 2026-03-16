@@ -1315,7 +1315,7 @@ const s = StyleSheet.create({
   agentPickerSection: { fontSize: 11, fontWeight: "600", letterSpacing: 0.5, marginTop: 16, marginBottom: 8, marginLeft: 20 },
   agentPickerChips: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, marginBottom: 4 },
   input: { borderWidth: 1, borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 12 },
-  inputMultiline: { minHeight: 150 },
+  inputMultiline: { minHeight: 375 },
   modalButtons: { flexDirection: "row", gap: 12, marginTop: 8 },
   cancelButton: { flex: 1, paddingVertical: 14, borderRadius: 10, alignItems: "center" },
   cancelButtonText: { fontWeight: "600", fontSize: 15 },
@@ -1374,7 +1374,7 @@ const s = StyleSheet.create({
   chatInputBar: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 12, paddingVertical: 8, paddingBottom: Platform.OS === "ios" ? 24 : 8, borderTopWidth: 1, gap: 8 },
   chatInputBarRunning: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 8 },
   chatRunningText: { fontSize: 14 },
-  chatInput: { flex: 1, borderWidth: 1, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontSize: 15, maxHeight: 100, minHeight: 40 },
+  chatInput: { flex: 1, borderWidth: 1, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 12, fontSize: 15, maxHeight: 200, minHeight: 190 },
   chatSendBtn: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   chatSendText: { color: "#fff", fontSize: 18, fontWeight: "700" },
 

@@ -52,9 +52,7 @@ function DeviceCard({
   const c = useColors();
   const [pingState, setPingState] = useState<{ pinging: boolean; rttMs?: number; ok?: boolean }>({ pinging: false });
   const [killing, setKilling] = useState<string | null>(null);
-  const HEARTBEAT_STALE_MS = 5 * 60 * 1000;
-  const isRecentlyActive = device.lastSeen > 0 && (Date.now() - device.lastSeen) < HEARTBEAT_STALE_MS;
-  const isOnline = device.online && isRecentlyActive;
+  const isOnline = device.online;
   const runners = device.runners || [];
   const activeRunners = runners.filter((r) => r.status === "running");
 

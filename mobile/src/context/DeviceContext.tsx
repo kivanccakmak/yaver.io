@@ -126,7 +126,11 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           name: d.name,
           host: d.quicHost || d.host,
           port: d.quicPort || d.port,
-          online: d.isOnline ?? d.online ?? false,
+          online: (() => {
+            const flag = d.isOnline ?? d.online ?? false;
+            const lastSeen = d.lastHeartbeat || d.lastSeen || 0;
+            return flag && lastSeen > 0 && (Date.now() - lastSeen) < HEARTBEAT_STALE_MS;
+          })(),
           lastSeen: d.lastHeartbeat || d.lastSeen || 0,
           os: d.platform || d.os || "",
           runners: d.runners ?? [],
@@ -279,9 +283,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!token || !relaysReady || activeDevice || connectionStatus === "connecting" || userDisconnected) return;
 
-    const recentDevices = devices.filter(
-      (d) => d.online && Date.now() - d.lastSeen < HEARTBEAT_STALE_MS
-    );
+    const recentDevices = devices.filter((d) => d.online);
 
     if (recentDevices.length === 1) {
       console.log("[DeviceContext] Auto-connecting to single online device:", recentDevices[0].name);
