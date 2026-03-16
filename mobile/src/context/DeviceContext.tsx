@@ -173,10 +173,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           host: device.host, port: device.port, deviceId: device.id.slice(0, 8),
           relayCount: quicClient.relayServerCount,
         }));
-        // Race connect against a 15s timeout
+        // Race connect against a 10s timeout
         const connectPromise = quicClient.connect(device.host, device.port, token, device.id);
         const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Connection timed out (15s)")), 15000)
+          setTimeout(() => reject(new Error("Could not connect in 10s")), 10000)
         );
         await Promise.race([connectPromise, timeoutPromise]);
         sendTelemetry(token, "connect-success", `Connected via ${quicClient.connectionMode}`, device.name);
@@ -188,7 +188,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           host: device.host, port: device.port, deviceId: device.id.slice(0, 8),
           relayCount: quicClient.relayServerCount,
         }));
-        setConnectionStatus("error");
+        // Stop any background reconnection attempts
+        quicClient.disconnect();
+        setConnectionStatus("disconnected");
+        setActiveDevice(null);
         setLastError(errMsg);
       }
     },
@@ -215,12 +218,15 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       } else if (state === "connecting") {
         setConnectionStatus("connecting");
       } else if (state === "error") {
-        // Check if max retries reached (reconnectAttempt stays at max)
         const gaveUp = quicClient.reconnectAttempt >= 5;
-        setConnectionStatus("error");
-        setLastError(gaveUp ? "Could not connect to device" : "Connection lost — reconnecting...");
         if (gaveUp) {
+          quicClient.disconnect();
+          setConnectionStatus("disconnected");
           setActiveDevice(null);
+          setLastError("Could not connect to device");
+        } else {
+          setConnectionStatus("error");
+          setLastError("Connection lost — reconnecting...");
         }
       } else if (state === "disconnected") {
         // QUIC client fully disconnected (e.g., via disconnect() call)
