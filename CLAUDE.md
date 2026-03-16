@@ -1,7 +1,8 @@
 # Yaver.io — Claude Code Project Guide
 
 ## Important Rules
-- **Never push or commit without explicit user permission.** Vercel auto-deploys on push to main, which costs money.
+- **Never push or commit without explicit user permission.** Vercel auto-deploy is disabled; use `./scripts/deploy-vercel.sh` for production deploys.
+- **Vercel deploy size guard**: `web/` must stay under 10 MB. The deploy script enforces this. Do not add large assets to `web/`.
 
 ## What is Yaver?
 Yaver is a P2P tool that lets developers use Claude from their mobile device or any terminal, connecting directly to their development machines. Task data flows peer-to-peer between your devices — our servers only handle auth and peer discovery.
@@ -238,7 +239,16 @@ npx convex deploy --yes
 - **Prod**: `https://perceptive-minnow-557.eu-west-1.convex.cloud`
 
 ### Web (Vercel)
-Deploys automatically on push to main. Domain: `yaver.io`
+
+> **WARNING — Vercel deploy size limit**: The `web/` directory must stay under **10 MB** (excluding `node_modules/` and `.next/`). Vercel charges per-deploy and large payloads cause slow builds. Do NOT commit binaries, large images, or videos to `web/`. Always use the size-guarded deploy script below.
+
+> **Auto-deploy is disabled** in `vercel.json` (`git.deploymentEnabled: false`). Deploy manually:
+> ```bash
+> ./scripts/deploy-vercel.sh
+> ```
+> The script checks `.vercelignore` exists, calculates `web/` size, aborts if over 10 MB, then runs `vercel --prod`.
+
+Domain: `yaver.io`
 
 Required Vercel env vars:
 - `CONVEX_SITE_URL` — `https://shocking-echidna-394.eu-west-1.convex.site`
