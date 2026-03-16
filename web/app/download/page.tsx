@@ -269,6 +269,51 @@ export default function DownloadPage() {
           </div>
         </div>
 
+        {/* Update existing installation */}
+        <div className="mb-12">
+          <h2 className="mb-6 text-xs font-semibold uppercase tracking-wider text-surface-500">
+            Update existing installation
+          </h2>
+          <div className="card space-y-4">
+            <div>
+              <p className="mb-2 text-xs text-surface-500">Homebrew (macOS / Linux)</p>
+              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
+                <span className="text-surface-500">$</span>{" "}
+                <span className="text-surface-300 select-all">
+                  brew upgrade yaver
+                </span>
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-xs text-surface-500">Scoop (Windows)</p>
+              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
+                <span className="text-surface-500">&gt;</span>{" "}
+                <span className="text-surface-300 select-all">
+                  scoop update yaver
+                </span>
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-xs text-surface-500">Quick update (macOS / Linux)</p>
+              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
+                <span className="text-surface-500">$</span>{" "}
+                <span className="text-surface-300 select-all">
+                  curl -fsSL https://yaver.io/install.sh | sh
+                </span>
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-xs text-surface-500">Check current version</p>
+              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
+                <span className="text-surface-500">$</span>{" "}
+                <span className="text-surface-300 select-all">
+                  yaver version
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Mobile */}
         <div className="mb-12">
           <h2 className="mb-6 text-xs font-semibold uppercase tracking-wider text-surface-500">
