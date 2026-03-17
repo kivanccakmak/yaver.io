@@ -332,7 +332,7 @@ export default function DownloadPage() {
         {/* Mobile app */}
         <div className="mb-12">
           <h2 className="mb-6 text-xs font-semibold uppercase tracking-wider text-surface-500">
-            Mobile app
+            Mobile app <span className="normal-case tracking-normal text-surface-600">v1.5.0</span>
           </h2>
 
           {!mobileUnlocked ? (
