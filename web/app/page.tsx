@@ -504,7 +504,7 @@ export default function HomePage() {
           <code className="mb-4 inline-block rounded-lg bg-surface-900 px-5 py-2.5 text-sm text-surface-300">
             brew install kivanccakmak/yaver/yaver
           </code>
-          <p className="mb-8 text-xs text-surface-500">CLI v1.27.0 &mdash; macOS, Linux, Windows</p>
+          <p className="mb-8 text-xs text-surface-500">CLI v1.27.1 &mdash; macOS, Linux, Windows</p>
           <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Link href="/download" className="btn-primary px-8 py-3.5 text-sm">
               Get started free

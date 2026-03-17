@@ -25,7 +25,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.27.0"
+const version = "1.27.1"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -100,7 +100,7 @@ Usage:
   yaver clear-logs  Clear agent log file
   yaver config      Show current configuration
   yaver config set <key> <value>  Set a config value (auto-start, auto-update)
-  yaver set-runner  Set which AI agent to use (claude, codex, aider, custom)
+  yaver set-runner  Set default AI agent (also settable from mobile app, per task)
   yaver status      Show auth and connection status
   yaver devices     List your registered devices
   yaver purge       Remove all local data (auth, sessions, tasks, logs)
@@ -131,6 +131,7 @@ Examples:
   yaver set-runner aider            Use Aider
   yaver set-runner custom "my-ai --auto {prompt}"   Use a custom command
   yaver set-runner                  List available runners
+  (Agent is also selectable per task from the mobile app)
   yaver config set auto-start true  Start Yaver on login
   yaver config set auto-update true Check for updates on startup
 
@@ -1308,6 +1309,10 @@ func runSetRunner(args []string) {
 		fmt.Println("  yaver set-runner codex            Use OpenAI Codex")
 		fmt.Println("  yaver set-runner aider            Use Aider")
 		fmt.Printf("  yaver set-runner custom \"cmd\"      Use a custom command\n")
+		fmt.Println()
+		fmt.Println("Tip: You can also pick the AI agent from the Yaver mobile app when")
+		fmt.Println("creating a task. Each task can use a different agent — this command")
+		fmt.Println("sets the default for new tasks.")
 		fmt.Println()
 		if currentRunner != "" {
 			fmt.Printf("Current runner: %s\n", currentRunner)

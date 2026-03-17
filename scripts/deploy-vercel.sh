@@ -17,17 +17,17 @@ if [ ! -f "$REPO_ROOT/.vercelignore" ]; then
 fi
 
 # 2. Calculate deployed directory size (excluding node_modules and .next)
-SIZE_KB=$(du -sk --exclude='node_modules' --exclude='.next' "$DEPLOY_DIR" 2>/dev/null \
-  || du -sk "$DEPLOY_DIR" 2>/dev/null | awk '{print $1}')
+# macOS du doesn't support --exclude; use find + stat instead
+SIZE_KB=$(find "$DEPLOY_DIR" \
+  -not -path '*/node_modules/*' \
+  -not -path '*/.next/*' \
+  -type f -print0 \
+  | xargs -0 stat -f%z 2>/dev/null \
+  | awk '{s+=$1} END {printf "%.0f", s/1024}')
 
-# macOS du doesn't support --exclude; fall back to find + awk
+# Fallback for Linux (stat -f%z is macOS-specific)
 if [ -z "$SIZE_KB" ] || [ "$SIZE_KB" = "0" ]; then
-  SIZE_KB=$(find "$DEPLOY_DIR" \
-    -not -path '*/node_modules/*' \
-    -not -path '*/.next/*' \
-    -type f -print0 \
-    | xargs -0 stat -f%z 2>/dev/null \
-    | awk '{s+=$1} END {printf "%.0f", s/1024}')
+  SIZE_KB=$(du -sk --exclude='node_modules' --exclude='.next' "$DEPLOY_DIR" 2>/dev/null | awk '{print $1}')
 fi
 
 SIZE_MB=$(awk "BEGIN {printf \"%.2f\", $SIZE_KB / 1024}")
