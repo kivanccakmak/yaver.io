@@ -3,6 +3,7 @@
  *
  * Mirrors the mobile QuicClient API but runs in the browser using fetch().
  * Uses HTTP as the transport (same fallback path as mobile).
+ * Supports relay-first connection strategy with direct fallback.
  */
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -31,6 +32,14 @@ export interface Task {
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
+export interface RelayServer {
+  id: string;
+  quicAddr: string;
+  httpUrl: string;
+  region: string;
+  priority: number;
+}
+
 export type OutputCallback = (taskId: string, line: string) => void;
 export type ConnectionStateCallback = (state: ConnectionState) => void;
 
@@ -47,6 +56,9 @@ class AgentClient {
   private host: string | null = null;
   private port: number | null = null;
   private token: string | null = null;
+  private deviceId: string | null = null;
+  private relayServers: RelayServer[] = [];
+  private activeRelayUrl: string | null = null;
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -55,6 +67,10 @@ class AgentClient {
   private reconnectAttempt = 0;
   private readonly maxReconnectAttempt = 8;
   private readonly baseBackoffMs = 1000;
+
+  // Browser network event listeners
+  private onlineHandler: (() => void) | null = null;
+  private networkChangeHandler: (() => void) | null = null;
 
   // Event listeners
   private listeners: { [K in EventName]: Array<EventMap[K]> } = {
@@ -72,23 +88,58 @@ class AgentClient {
     return this._connectionState;
   }
 
+  // ── Relay server config ────────────────────────────────────────────
+
+  /** Set relay servers fetched from platform config. Sorted by priority. */
+  setRelayServers(servers: RelayServer[]): void {
+    this.relayServers = servers.sort((a, b) => a.priority - b.priority);
+  }
+
   // ── Connection lifecycle ───────────────────────────────────────────
 
-  async connect(host: string, port: number, token: string): Promise<void> {
+  async connect(host: string, port: number, token: string, deviceId?: string): Promise<void> {
     this.host = host;
     this.port = port;
     this.token = token;
+    this.deviceId = deviceId ?? null;
+    this.activeRelayUrl = null;
     this.reconnectAttempt = 0;
 
+    this.setupNetworkListeners();
     await this.attemptConnect();
   }
 
   disconnect(): void {
     this.clearTimers();
+    this.teardownNetworkListeners();
     this.setConnectionState("disconnected");
     this.host = null;
     this.port = null;
     this.token = null;
+    this.deviceId = null;
+    this.activeRelayUrl = null;
+  }
+
+  /**
+   * Force an immediate reconnection attempt (e.g. on network change).
+   * Resets backoff so the first retry is instant.
+   */
+  triggerReconnect(): void {
+    if (!this.host || !this.port || !this.token) return;
+    if (this._connectionState === "connected") {
+      // Re-probe: the current path may be dead after a network switch.
+      this.clearTimers();
+      this.reconnectAttempt = 0;
+      this.attemptConnect().catch(() => {});
+      return;
+    }
+    // Cancel any pending backoff timer and reconnect immediately
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempt = 0;
+    this.attemptConnect().catch(() => {});
   }
 
   // ── Task API ───────────────────────────────────────────────────────
@@ -249,6 +300,9 @@ class AgentClient {
   // ── Private helpers ────────────────────────────────────────────────
 
   private get baseUrl(): string {
+    if (this.activeRelayUrl && this.deviceId) {
+      return `${this.activeRelayUrl}/d/${this.deviceId}`;
+    }
     return `http://${this.host}:${this.port}`;
   }
 
@@ -295,15 +349,104 @@ class AgentClient {
     }
   }
 
+  // ── Browser network event listeners ────────────────────────────────
+
+  private setupNetworkListeners(): void {
+    if (typeof window === "undefined") return;
+
+    this.onlineHandler = () => {
+      console.log("[AgentClient] Browser came online — triggering reconnect");
+      this.triggerReconnect();
+    };
+    window.addEventListener("online", this.onlineHandler);
+
+    // Network Information API (Chrome/Edge) — detect WiFi/cellular switch
+    const nav = navigator as any;
+    if (nav.connection) {
+      this.networkChangeHandler = () => {
+        console.log("[AgentClient] Network change detected — triggering reconnect");
+        this.triggerReconnect();
+      };
+      nav.connection.addEventListener("change", this.networkChangeHandler);
+    }
+  }
+
+  private teardownNetworkListeners(): void {
+    if (typeof window === "undefined") return;
+
+    if (this.onlineHandler) {
+      window.removeEventListener("online", this.onlineHandler);
+      this.onlineHandler = null;
+    }
+    if (this.networkChangeHandler) {
+      const nav = navigator as any;
+      if (nav.connection) {
+        nav.connection.removeEventListener("change", this.networkChangeHandler);
+      }
+      this.networkChangeHandler = null;
+    }
+  }
+
+  // ── Fetch with timeout ─────────────────────────────────────────────
+
+  private fetchWithTimeout(url: string, opts: RequestInit, timeoutMs: number): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+  }
+
   // ── Connection + reconnection ──────────────────────────────────────
 
   private async attemptConnect(): Promise<void> {
     this.setConnectionState("connecting");
+    this.activeRelayUrl = null;
     try {
-      const res = await fetch(`${this.baseUrl}/health`, {
-        headers: this.authHeaders,
-      });
-      if (!res.ok) throw new Error(`Agent responded with ${res.status}`);
+      let connected = false;
+
+      // Strategy: relay-first (more reliable across networks),
+      // with direct fallback for same-network connections.
+
+      // 1. Try relay servers first (when deviceId and relays are available)
+      if (this.deviceId && this.relayServers.length > 0) {
+        for (const relay of this.relayServers) {
+          try {
+            const relayDeviceUrl = `${relay.httpUrl}/d/${this.deviceId}`;
+            const res = await this.fetchWithTimeout(`${relayDeviceUrl}/health`, {
+              headers: this.authHeaders,
+            }, 8000);
+            if (res.ok) {
+              this.activeRelayUrl = relay.httpUrl;
+              connected = true;
+              console.log("[AgentClient] Relay connection succeeded via", relay.id);
+              break;
+            }
+          } catch (e) {
+            console.log("[AgentClient] Relay", relay.id, "failed:", e);
+          }
+        }
+      }
+
+      // 2. Try direct connection as fallback
+      if (!connected) {
+        try {
+          const directUrl = `http://${this.host}:${this.port}`;
+          const res = await this.fetchWithTimeout(`${directUrl}/health`, {
+            headers: this.authHeaders,
+          }, 5000);
+          if (res.ok) {
+            this.activeRelayUrl = null;
+            connected = true;
+            console.log("[AgentClient] Direct connection succeeded");
+          }
+        } catch (e) {
+          console.log("[AgentClient] Direct failed:", e);
+        }
+      }
+
+      if (!connected) {
+        throw new Error("Could not reach agent (direct or via relay)");
+      }
+
       this.reconnectAttempt = 0;
       this.setConnectionState("connected");
       this.startPolling();

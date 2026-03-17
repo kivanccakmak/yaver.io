@@ -25,7 +25,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.26.0"
+const version = "1.27.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -62,7 +62,7 @@ func main() {
 	case "devices":
 		runDevices()
 	case "config":
-		runConfig()
+		runConfig(os.Args[2:])
 	case "set-runner":
 		runSetRunner(os.Args[2:])
 	case "discover":
@@ -99,6 +99,7 @@ Usage:
   yaver logs        Show agent logs
   yaver clear-logs  Clear agent log file
   yaver config      Show current configuration
+  yaver config set <key> <value>  Set a config value (auto-start, auto-update)
   yaver set-runner  Set which AI agent to use (claude, codex, aider, custom)
   yaver status      Show auth and connection status
   yaver devices     List your registered devices
@@ -130,6 +131,8 @@ Examples:
   yaver set-runner aider            Use Aider
   yaver set-runner custom "my-ai --auto {prompt}"   Use a custom command
   yaver set-runner                  List available runners
+  yaver config set auto-start true  Start Yaver on login
+  yaver config set auto-update true Check for updates on startup
 
 Run 'yaver <command> -h' for command-specific options.
 `)
@@ -649,6 +652,9 @@ func runServe(args []string) {
 
 	cfg := mustLoadAuthConfig()
 
+	// Check for auto-update before forking
+	checkAutoUpdate(cfg)
+
 	// Validate token before forking
 	if _, err := ValidateTokenUser(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
 		fmt.Fprintf(os.Stderr, "Token expired or invalid. Run 'yaver auth' to re-authenticate.\n")
@@ -1058,7 +1064,13 @@ func runShutdown() {
 // config — dump current CLI configuration
 // ---------------------------------------------------------------------------
 
-func runConfig() {
+func runConfig(args []string) {
+	// Handle "yaver config set <key> <value>"
+	if len(args) >= 3 && args[0] == "set" {
+		runConfigSet(args[1], args[2])
+		return
+	}
+
 	cfg, err := LoadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
@@ -1100,6 +1112,59 @@ func runConfig() {
 	fmt.Printf("auth_token:      %s\n", token)
 	fmt.Printf("device_id:       %s\n", valueOrEmpty(cfg.DeviceID))
 	fmt.Printf("convex_site_url: %s\n", valueOrEmpty(cfg.ConvexSiteURL))
+	fmt.Printf("auto_start:      %v\n", cfg.AutoStart)
+	fmt.Printf("auto_update:     %v\n", cfg.AutoUpdate)
+}
+
+func runConfigSet(key, value string) {
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	switch key {
+	case "auto-start":
+		enabled := value == "true" || value == "1" || value == "yes"
+		cfg.AutoStart = enabled
+		if err := SaveConfig(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+			os.Exit(1)
+		}
+		if enabled {
+			exePath, err := os.Executable()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error finding executable: %v\n", err)
+				os.Exit(1)
+			}
+			workDir, _ := os.Getwd()
+			if err := installAutoStart(exePath, workDir); err != nil {
+				fmt.Fprintf(os.Stderr, "Error installing auto-start: %v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			removeAutoStart()
+			fmt.Println("Auto-start disabled. Yaver will no longer start on login.")
+		}
+
+	case "auto-update":
+		enabled := value == "true" || value == "1" || value == "yes"
+		cfg.AutoUpdate = enabled
+		if err := SaveConfig(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+			os.Exit(1)
+		}
+		if enabled {
+			fmt.Println("Auto-update enabled. Yaver will check for updates on startup.")
+		} else {
+			fmt.Println("Auto-update disabled.")
+		}
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown config key: %s\n", key)
+		fmt.Fprintf(os.Stderr, "Supported keys: auto-start, auto-update\n")
+		os.Exit(1)
+	}
 }
 
 func valueOrEmpty(s string) string {
@@ -1107,6 +1172,98 @@ func valueOrEmpty(s string) string {
 		return "(not set)"
 	}
 	return s
+}
+
+// checkAutoUpdate checks for a newer release on GitHub and self-updates the binary.
+// Returns silently if auto-update is disabled or if already up-to-date.
+func checkAutoUpdate(cfg *Config) {
+	if !cfg.AutoUpdate {
+		return
+	}
+
+	log.Println("[auto-update] Checking for updates...")
+
+	type ghRelease struct {
+		TagName string `json:"tag_name"`
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get("https://api.github.com/repos/kivanccakmak/yaver-cli/releases/latest")
+	if err != nil {
+		log.Printf("[auto-update] Failed to check for updates: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		log.Printf("[auto-update] GitHub API returned %d", resp.StatusCode)
+		return
+	}
+
+	var release ghRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		log.Printf("[auto-update] Failed to parse release: %v", err)
+		return
+	}
+
+	latestVersion := strings.TrimPrefix(release.TagName, "v")
+	if latestVersion == "" || latestVersion == version {
+		log.Printf("[auto-update] Already up-to-date (v%s)", version)
+		return
+	}
+
+	// Simple semver comparison: if latest == current, skip
+	// For a proper comparison we just check inequality since GitHub returns the latest
+	log.Printf("[auto-update] New version available: v%s (current: v%s)", latestVersion, version)
+
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+	binaryName := fmt.Sprintf("yaver-%s-%s", goos, goarch)
+	downloadURL := fmt.Sprintf("https://github.com/kivanccakmak/yaver-cli/releases/download/v%s/%s", latestVersion, binaryName)
+
+	log.Printf("[auto-update] Downloading %s", downloadURL)
+	dlResp, err := client.Get(downloadURL)
+	if err != nil {
+		log.Printf("[auto-update] Download failed: %v", err)
+		return
+	}
+	defer dlResp.Body.Close()
+
+	if dlResp.StatusCode != 200 {
+		log.Printf("[auto-update] Download returned %d", dlResp.StatusCode)
+		return
+	}
+
+	// Write to a temp file next to the current binary
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Printf("[auto-update] Cannot find executable path: %v", err)
+		return
+	}
+
+	tmpPath := exePath + ".update"
+	tmpFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		log.Printf("[auto-update] Cannot create temp file: %v", err)
+		return
+	}
+
+	if _, err := io.Copy(tmpFile, dlResp.Body); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		log.Printf("[auto-update] Failed to write update: %v", err)
+		return
+	}
+	tmpFile.Close()
+
+	// Replace the current binary with the new one
+	if err := os.Rename(tmpPath, exePath); err != nil {
+		os.Remove(tmpPath)
+		log.Printf("[auto-update] Failed to replace binary: %v", err)
+		return
+	}
+
+	log.Printf("[auto-update] Updated to v%s. The new version will take effect on next restart.", latestVersion)
 }
 
 // ---------------------------------------------------------------------------

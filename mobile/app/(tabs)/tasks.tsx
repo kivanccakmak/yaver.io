@@ -1315,7 +1315,7 @@ const s = StyleSheet.create({
   agentPickerSection: { fontSize: 11, fontWeight: "600", letterSpacing: 0.5, marginTop: 16, marginBottom: 8, marginLeft: 20 },
   agentPickerChips: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, marginBottom: 4 },
   input: { borderWidth: 1, borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 12 },
-  inputMultiline: { minHeight: 375 },
+  inputMultiline: { minHeight: 300 },
   modalButtons: { flexDirection: "row", gap: 12, marginTop: 8 },
   cancelButton: { flex: 1, paddingVertical: 14, borderRadius: 10, alignItems: "center" },
   cancelButtonText: { fontWeight: "600", fontSize: 15 },

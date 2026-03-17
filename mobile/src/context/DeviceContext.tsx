@@ -218,7 +218,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       } else if (state === "connecting") {
         setConnectionStatus("connecting");
       } else if (state === "error") {
-        const gaveUp = quicClient.reconnectAttempt >= 5;
+        const gaveUp = quicClient.reconnectAttempt >= 15;
         if (gaveUp) {
           quicClient.disconnect();
           setConnectionStatus("disconnected");
@@ -303,13 +303,26 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   // Trigger immediate reconnection on network change (WiFi↔cellular roaming)
   useEffect(() => {
+    let lastType: string | null = null;
     const unsubscribe = NetInfo.addEventListener((state) => {
+      const currentType = state.type; // "wifi", "cellular", "none", etc.
+
       if (state.isConnected && activeDevice) {
-        quicClient.triggerReconnect();
+        // Trigger full reconnect on network type change (WiFi → cellular, cellular → WiFi)
+        // This clears stale relay URLs and re-probes all paths from scratch
+        if (lastType && lastType !== currentType) {
+          console.log(`[DeviceContext] Network changed: ${lastType} → ${currentType}`);
+          sendTelemetry(token, "network-change", `${lastType} → ${currentType}`);
+          quicClient.fullReconnect();
+        } else if (!lastType) {
+          // First event after mount or reconnection — just probe to be safe
+          quicClient.triggerReconnect();
+        }
       }
+      lastType = currentType;
     });
     return () => unsubscribe();
-  }, [activeDevice]);
+  }, [activeDevice, token]);
 
   const value = useMemo<DeviceState>(
     () => ({

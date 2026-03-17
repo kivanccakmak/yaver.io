@@ -111,11 +111,11 @@ export class QuicClient {
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
 
-  // Reconnection — max 5 retries, then give up
+  // Reconnection — max 15 retries, then give up (needs headroom for network transitions)
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   reconnectAttempt = 0;
   private readonly baseBackoffMs = 1000;
-  private readonly maxReconnectAttempts = 5;
+  private readonly maxReconnectAttempts = 15;
 
   private _connectionMode: ConnectionMode = null;
 
@@ -639,6 +639,20 @@ export class QuicClient {
     }
   }
 
+  /**
+   * Full reconnect: clears stale relay state, resets attempts, and re-probes
+   * all relay paths from scratch. Use this when the network path has changed
+   * (e.g. WiFi → cellular) and the current activeRelayUrl is likely stale.
+   */
+  fullReconnect(): void {
+    if (!this.host || !this.port || !this.token) return;
+    console.log("[QUIC] Full reconnect — clearing stale relay and re-probing all paths");
+    this.clearTimers();
+    this.activeRelayUrl = null;
+    this.reconnectAttempt = 0;
+    this.attemptConnect().catch(() => {});
+  }
+
   // ── Connection + reconnection ──────────────────────────────────────
 
   /** Create a fetch with a manual timeout (AbortSignal.timeout may not exist in Hermes). */
@@ -808,10 +822,9 @@ export class QuicClient {
           }
         }
       } catch (e) {
-        console.warn("[QUIC] Polling failed, triggering reconnect:", e);
+        console.warn("[QUIC] Polling failed, triggering full reconnect:", e);
         this.setConnectionState("error");
-        this.clearTimers();
-        this.scheduleReconnect();
+        this.fullReconnect();
       }
     }, 3000);
   }

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { agentClient, type ConnectionState } from "./agent-client";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { agentClient, type ConnectionState, type RelayServer } from "./agent-client";
 
 const CONVEX_URL = "https://shocking-echidna-394.eu-west-1.convex.site";
 
@@ -28,6 +28,26 @@ export function useDevices(token: string | null): DevicesState {
   const [devices, setDevices] = useState<Device[]>([]);
   const [activeDevice, setActiveDevice] = useState<Device | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionState>("disconnected");
+  const relaysFetched = useRef(false);
+
+  // Fetch relay servers from Convex /config endpoint on mount
+  useEffect(() => {
+    if (relaysFetched.current) return;
+    relaysFetched.current = true;
+
+    (async () => {
+      try {
+        const res = await fetch(`${CONVEX_URL}/config`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data.relayServers) && data.relayServers.length > 0) {
+          agentClient.setRelayServers(data.relayServers as RelayServer[]);
+        }
+      } catch {
+        // Non-critical — relay config fetch failure is OK, direct still works.
+      }
+    })();
+  }, []);
 
   const refreshDevices = useCallback(async () => {
     if (!token) return;
@@ -48,7 +68,7 @@ export function useDevices(token: string | null): DevicesState {
     async (device: Device) => {
       if (!token) return;
       try {
-        await agentClient.connect(device.host, device.port, token);
+        await agentClient.connect(device.host, device.port, token, device.id);
         setActiveDevice(device);
       } catch {
         // Connection failed -- state is tracked via the listener.

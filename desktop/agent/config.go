@@ -16,6 +16,8 @@ type Config struct {
 	ConvexSiteURL string `json:"convex_site_url,omitempty"`
 	TLSCert       string `json:"tls_cert,omitempty"`
 	TLSKey        string `json:"tls_key,omitempty"`
+	AutoStart     bool   `json:"auto_start,omitempty"`
+	AutoUpdate    bool   `json:"auto_update,omitempty"`
 }
 
 // ConfigDir returns the path to ~/.yaver/, creating it if needed.

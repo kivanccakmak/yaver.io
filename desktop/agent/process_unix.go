@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	osexec "os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -187,11 +189,142 @@ func getSystemMemoryMB() (int64, error) {
 // installAutoStart registers the agent to start on login.
 // macOS: launchd plist, Linux: systemd user service.
 func installAutoStart(exePath, workDir string) error {
-	// Not called automatically — placeholder for future use.
+	switch runtime.GOOS {
+	case "darwin":
+		return installAutoStartDarwin(exePath, workDir)
+	case "linux":
+		return installAutoStartLinux(exePath, workDir)
+	default:
+		return fmt.Errorf("auto-start not supported on %s", runtime.GOOS)
+	}
+}
+
+func installAutoStartDarwin(exePath, workDir string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("get home dir: %w", err)
+	}
+
+	logDir := filepath.Join(home, ".yaver")
+	os.MkdirAll(logDir, 0700)
+
+	plistDir := filepath.Join(home, "Library", "LaunchAgents")
+	os.MkdirAll(plistDir, 0755)
+	plistPath := filepath.Join(plistDir, "io.yaver.agent.plist")
+
+	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.yaver.agent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>%s</string>
+        <string>serve</string>
+        <string>--debug</string>
+        <string>--work-dir=%s</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>%s</string>
+    <key>StandardErrorPath</key>
+    <string>%s</string>
+</dict>
+</plist>
+`, exePath, workDir,
+		filepath.Join(logDir, "launchd-stdout.log"),
+		filepath.Join(logDir, "launchd-stderr.log"))
+
+	if err := os.WriteFile(plistPath, []byte(plist), 0644); err != nil {
+		return fmt.Errorf("write plist: %w", err)
+	}
+
+	// Unload first in case it's already loaded (ignore errors)
+	osexec.Command("launchctl", "unload", plistPath).Run()
+
+	if out, err := osexec.Command("launchctl", "load", plistPath).CombinedOutput(); err != nil {
+		return fmt.Errorf("launchctl load: %s: %w", string(out), err)
+	}
+
+	fmt.Printf("LaunchAgent installed: %s\n", plistPath)
+	fmt.Println("Yaver will start automatically on login.")
+	return nil
+}
+
+func installAutoStartLinux(exePath, workDir string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("get home dir: %w", err)
+	}
+
+	unitDir := filepath.Join(home, ".config", "systemd", "user")
+	os.MkdirAll(unitDir, 0755)
+	unitPath := filepath.Join(unitDir, "yaver.service")
+
+	unit := fmt.Sprintf(`[Unit]
+Description=Yaver Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%s serve --debug --work-dir=%s
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`, exePath, workDir)
+
+	if err := os.WriteFile(unitPath, []byte(unit), 0644); err != nil {
+		return fmt.Errorf("write unit file: %w", err)
+	}
+
+	cmds := [][]string{
+		{"systemctl", "--user", "daemon-reload"},
+		{"systemctl", "--user", "enable", "yaver"},
+		{"systemctl", "--user", "start", "yaver"},
+	}
+	for _, c := range cmds {
+		if out, err := osexec.Command(c[0], c[1:]...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%s: %s: %w", strings.Join(c, " "), string(out), err)
+		}
+	}
+
+	// Enable linger so user services run without login
+	user := os.Getenv("USER")
+	if user != "" {
+		osexec.Command("loginctl", "enable-linger", user).Run()
+	}
+
+	fmt.Printf("Systemd user service installed: %s\n", unitPath)
+	fmt.Println("Yaver will start automatically on login.")
 	return nil
 }
 
 // removeAutoStart removes auto-start registration.
 func removeAutoStart() {
-	// Handled inline in runUninstall for macOS/Linux.
+	switch runtime.GOOS {
+	case "darwin":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return
+		}
+		plistPath := filepath.Join(home, "Library", "LaunchAgents", "io.yaver.agent.plist")
+		osexec.Command("launchctl", "unload", plistPath).Run()
+		os.Remove(plistPath)
+	case "linux":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return
+		}
+		osexec.Command("systemctl", "--user", "stop", "yaver").Run()
+		osexec.Command("systemctl", "--user", "disable", "yaver").Run()
+		unitPath := filepath.Join(home, ".config", "systemd", "user", "yaver.service")
+		os.Remove(unitPath)
+		osexec.Command("systemctl", "--user", "daemon-reload").Run()
+	}
 }
