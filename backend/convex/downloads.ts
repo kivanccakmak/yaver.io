@@ -13,7 +13,8 @@ export const createDownload = mutation({
       v.literal("macos"),
       v.literal("windows"),
       v.literal("linux"),
-      v.literal("android")
+      v.literal("android"),
+      v.literal("ios")
     ),
     arch: v.string(),
     format: v.string(),
@@ -51,7 +52,8 @@ export const deleteDownload = mutation({
       v.literal("macos"),
       v.literal("windows"),
       v.literal("linux"),
-      v.literal("android")
+      v.literal("android"),
+      v.literal("ios")
     ),
     arch: v.string(),
     format: v.string(),
