@@ -182,7 +182,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           setTimeout(() => reject(new Error("Could not connect in 10s")), 10000)
         );
         await Promise.race([connectPromise, timeoutPromise]);
-        sendTelemetry(token, "connect-success", `Connected via ${quicClient.connectionMode}`, device.name);
+        sendTelemetry(token, "connect-success", `Connected via ${quicClient.connectionMode}`, JSON.stringify({
+          device: device.name, path: quicClient.connectionPath, network: quicClient.networkType, mode: quicClient.connectionMode,
+        }));
         setConnectionStatus("connected");
         setLastError(null);
       } catch (e) {

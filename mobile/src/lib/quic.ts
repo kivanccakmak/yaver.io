@@ -79,6 +79,8 @@ export interface AgentStatus {
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 export type ConnectionMode = "direct" | "relay" | null;
+/** How the connection was established — tracked for diagnostics and faster reconnection. */
+export type ConnectionPath = "lan-beacon" | "lan-convex-ip" | "relay" | null;
 
 export type OutputCallback = (taskId: string, line: string) => void;
 export type ConnectionStateCallback = (state: ConnectionState) => void;
@@ -120,6 +122,8 @@ export class QuicClient {
   private readonly maxReconnectAttempts = 15;
 
   private _connectionMode: ConnectionMode = null;
+  private _connectionPath: ConnectionPath = null;
+  private _networkType: string | null = null; // "wifi" | "cellular" | etc.
 
   // Event listeners
   private listeners: { [K in EventName]: Array<EventMap[K]> } = {
@@ -145,6 +149,16 @@ export class QuicClient {
 
   get connectionMode(): ConnectionMode {
     return this._connectionMode;
+  }
+
+  /** How the current connection was established (for diagnostics). */
+  get connectionPath(): ConnectionPath {
+    return this._connectionPath;
+  }
+
+  /** Last detected network type ("wifi", "cellular", etc.). */
+  get networkType(): string | null {
+    return this._networkType;
   }
 
   get relayServerCount(): number {
@@ -673,12 +687,14 @@ export class QuicClient {
     this.setConnectionState("connecting");
     this.activeRelayUrl = null;
     this.setConnectionMode(null);
+    this._connectionPath = null;
     try {
       let connected = false;
 
       // Check if we're on WiFi (direct connection possible) or cellular (relay only)
       const netState = await NetInfo.fetch();
       const isWifi = netState.type === "wifi" || netState.type === "ethernet";
+      this._networkType = netState.type;
 
       // Strategy: direct-first on WiFi (lowest latency), relay-fallback.
       // On cellular: skip direct, go straight to relay.
@@ -697,6 +713,7 @@ export class QuicClient {
             if (res.ok) {
               this.activeRelayUrl = null;
               this.setConnectionMode("direct");
+              this._connectionPath = "lan-beacon";
               connected = true;
               console.log("[QUIC] Direct connection via LAN beacon succeeded");
             }
@@ -716,6 +733,7 @@ export class QuicClient {
             if (res.ok) {
               this.activeRelayUrl = null;
               this.setConnectionMode("direct");
+              this._connectionPath = "lan-convex-ip";
               connected = true;
               console.log("[QUIC] Direct connection via Convex IP succeeded");
             }
@@ -738,6 +756,7 @@ export class QuicClient {
             if (res.ok) {
               this.activeRelayUrl = relay.httpUrl;
               this.setConnectionMode("relay");
+              this._connectionPath = "relay";
               connected = true;
               console.log("[QUIC] Relay connection succeeded via", relay.id);
               break;
