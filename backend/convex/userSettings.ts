@@ -31,6 +31,8 @@ export const set = mutation({
     forceRelay: v.optional(v.boolean()),
     runnerId: v.optional(v.string()),
     customRunnerCommand: v.optional(v.string()),
+    relayUrl: v.optional(v.string()),
+    relayPassword: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -41,6 +43,8 @@ export const set = mutation({
       forceRelay: args.forceRelay,
       runnerId: args.runnerId,
       customRunnerCommand: args.customRunnerCommand,
+      relayUrl: args.relayUrl,
+      relayPassword: args.relayPassword,
     };
     if (existing) {
       await ctx.db.patch(existing._id, patch);
@@ -60,6 +64,8 @@ export const setByToken = mutation({
     forceRelay: v.optional(v.boolean()),
     runnerId: v.optional(v.string()),
     customRunnerCommand: v.optional(v.string()),
+    relayUrl: v.optional(v.string()),
+    relayPassword: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.tokenHash);
@@ -73,6 +79,8 @@ export const setByToken = mutation({
       forceRelay: args.forceRelay,
       runnerId: args.runnerId,
       customRunnerCommand: args.customRunnerCommand,
+      relayUrl: args.relayUrl,
+      relayPassword: args.relayPassword,
     };
     if (existing) {
       await ctx.db.patch(existing._id, patch);

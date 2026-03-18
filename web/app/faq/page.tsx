@@ -8,50 +8,62 @@ const faqs = [
     category: "Getting Started",
     items: [
       {
-        q: "Do I need my own Claude API key?",
-        a: "Yes. Yaver connects your devices to run Claude SDK on your own machine using your own API key or Claude subscription. We don't proxy or store your API keys.",
+        q: "What AI agents does Yaver work with?",
+        a: "Anything that runs in a terminal. Claude Code, Codex CLI, OpenCode, Goose, Amp, Aider, Ollama, Qwen, Continue, or any custom command. Run local models with Ollama for zero-cost, fully private AI coding. Switch agents per task or set a default with `yaver set-runner <name>`.",
+      },
+      {
+        q: "Do I need API keys?",
+        a: "Depends on the agent. Cloud agents like Claude Code or Codex need their own API keys or subscriptions. Local models via Ollama need nothing — just download the model and go. Yaver itself has no API keys and no paid tiers.",
+      },
+      {
+        q: "Don't some agents already have remote access?",
+        a: "Yes — Claude Code has a remote control feature (code.claude.com), and OpenAI Codex runs in the cloud. Yaver is useful when you want a single interface across multiple agents, when you use local models that have no cloud option, or when you want full control over your infrastructure.",
       },
       {
         q: "Does Yaver auto-start when my PC boots?",
-        a: "Yes. During installation, Yaver registers itself as a system service. On macOS it uses a LaunchAgent, on Linux a systemd user service, and on Windows a startup entry. After a reboot, `yaver serve` starts automatically in the background — no manual intervention needed. You can disable this with `yaver config set auto-start false`.",
+        a: "Yes. During installation, Yaver registers itself as a system service. On macOS it uses a LaunchAgent, on Linux a systemd user service, and on Windows a startup entry. After a reboot, `yaver serve` starts automatically. You can disable this with `yaver config set auto-start false`.",
       },
       {
         q: "Do I need to re-authenticate after a reboot?",
-        a: "No. Once you run `yaver auth` the first time, your session is saved locally on your machine. It persists across reboots indefinitely. The CLI uses this saved session every time it starts — no browser interaction needed after the initial sign-in.",
+        a: "No. Once you run `yaver auth` the first time, your session is saved locally. It persists across reboots indefinitely.",
       },
     ],
   },
   {
-    category: "Networking & VPN",
+    category: "Networking",
     items: [
+      {
+        q: "Do I need a relay server?",
+        a: "Only if your phone and dev machine aren't on the same network. On the same WiFi, Yaver finds your machine automatically via LAN broadcast. For remote access you can self-host a relay (one Docker command), use Tailscale, or use Cloudflare Tunnel.",
+      },
+      {
+        q: "Can I use Tailscale instead of a relay?",
+        a: "Yes. If both devices are on your tailnet, Yaver connects directly via the Tailscale IP. No relay needed. Tailscale's DERP servers handle hard NAT cases automatically, so it works even behind restrictive firewalls.",
+      },
       {
         q: "Can I use Yaver with a VPN?",
-        a: "Yes. Yaver works perfectly alongside any VPN — you don't even have to think about it. As long as both your phone and dev machine have internet access, Yaver will connect.",
+        a: "Yes. Yaver operates at the application layer — no TUN/TAP, no VPN conflicts. As long as both devices have internet access, it works alongside any VPN.",
       },
       {
-        q: "What happens if my P2P connection fails?",
-        a: "If a direct P2P connection cannot be established (e.g., restrictive NAT or different networks), Yaver automatically falls back to an encrypted relay. Your data is still end-to-end encrypted even through the relay. The mobile app tries direct connection first (3s timeout), then each relay server in priority order.",
-      },
-      {
-        q: "What happens when I switch from WiFi to cellular?",
-        a: "When your phone switches networks (e.g., leaving home WiFi for 4G/5G), Yaver detects the disconnection and automatically reconnects — trying direct connection first, then relay servers. This works like WhatsApp or any modern messaging app. Your in-progress tasks continue from where they left off.",
+        q: "What happens if my connection fails?",
+        a: "Yaver tries direct connection first, then falls back to relay servers in priority order. If a relay goes down, traffic routes through remaining relays. The CLI reconnects with exponential backoff (up to 30s). Network changes (WiFi to cellular) trigger an automatic reconnect — no manual intervention.",
       },
     ],
   },
   {
-    category: "Reliability & Uptime",
+    category: "Self-Hosting",
     items: [
       {
-        q: "What if there's a power outage and my PC restarts?",
-        a: "Yaver is designed for always-on operation. If power goes out and comes back: (1) Configure your PC's BIOS/firmware to auto-boot on power restore, (2) Your OS starts automatically, (3) Yaver's system service starts `yaver serve` in the background, (4) The CLI reconnects to relay servers using your saved auth token. No manual intervention at any step. See our auto-boot guide in the Manuals section for step-by-step setup on macOS, Linux, and desktop PCs.",
+        q: "How do I self-host a relay?",
+        a: "One Docker command: `RELAY_PASSWORD=secret docker compose up -d`. For production with HTTPS, use the setup script: `./scripts/setup-relay.sh <ip> <domain> --password <pass>`. See the self-hosting guide for full details.",
       },
       {
-        q: "Can I run Yaver on a headless server or Mac Mini?",
-        a: "Absolutely. This is one of the most popular setups. Install the CLI, run `yaver auth` once (it will open a browser on the machine or you can use `yaver auth --token <token>` for headless auth), then `yaver serve`. Combined with auto-boot and auto-start, your Mac Mini or Linux server becomes a persistent AI development machine you control from your phone — even if you're on the other side of the world.",
+        q: "Can I run everything locally with no cloud?",
+        a: "Yes. Use Ollama for local models + Tailscale for networking. Zero cloud, zero API keys, zero cost. Your code, your models, your hardware. The only cloud component is the Convex auth bridge for OAuth sign-in, and you can deploy your own instance of that too.",
       },
       {
-        q: "Does Yaver reconnect automatically if the relay goes down?",
-        a: "Yes. Yaver supports multiple relay servers for redundancy. If one relay goes down, traffic automatically routes through the remaining relays. The CLI reconnects with exponential backoff (1s, 2s, 4s, 8s, up to 30s max). You can see the active relays with `yaver status`.",
+        q: "What about Cloudflare Tunnel?",
+        a: "If you're behind a corporate firewall that blocks UDP, Cloudflare Tunnel can forward traffic to your agent's HTTP port. Install cloudflared, create a tunnel pointing to localhost:18080, and use the tunnel URL in the mobile app.",
       },
     ],
   },
@@ -59,42 +71,49 @@ const faqs = [
     category: "Privacy & Security",
     items: [
       {
-        q: "Is my data encrypted?",
-        a: "All data flows directly between your devices over QUIC with end-to-end encryption. Task data, code, and output never pass through our servers. We only handle authentication and peer discovery.",
+        q: "Is my code safe?",
+        a: "Yaver connects your phone directly to your dev machine. CLI-to-relay uses QUIC (TLS encrypted), mobile-to-relay uses HTTPS. The relay is password-protected and forwards bytes without inspecting them. On Tailscale, you get full WireGuard end-to-end encryption. On LAN, the beacon uses a SHA-256 token fingerprint so only your devices can discover each other. No code, tasks, or output ever reach any server. All of this is open source — read the code yourself.",
       },
       {
-        q: "What is your privacy model?",
-        a: "Yaver uses a zero-knowledge architecture. All code, prompts, and outputs flow directly between your devices over P2P connections. Our servers only handle authentication and peer discovery — we never see, store, or process your data. Even if our servers were compromised, your code and task data would not be exposed because it never passes through them.",
-      },
-    ],
-  },
-  {
-    category: "Pricing & Plans",
-    items: [
-      {
-        q: "Is it really free?",
-        a: "Yes. Yaver is in early access and all features across all tiers are completely free. We will give at least 60 days notice before any paid plans begin.",
+        q: "What is the privacy model?",
+        a: "Zero-knowledge. All code, prompts, and outputs flow P2P between your devices. The backend only handles OAuth sign-in and device discovery — it never sees your data. The website is just for registration and account management, not a control plane. Even if the auth backend were compromised, your code would be safe because it never passes through it.",
       },
       {
-        q: "Can I cancel my subscription anytime?",
-        a: "Yes. Cancel anytime from your account settings. You'll keep access until the end of your billing period.",
+        q: "How does authentication work?",
+        a: "You sign in via OAuth (Apple, Google, or Microsoft). Both the CLI and mobile app receive a session token from Convex. This token authenticates all API requests and device registration. The relay server has a separate shared password that prevents unauthorized agents from connecting. On LAN, the UDP beacon includes a fingerprint derived from your user ID (first 8 hex chars of SHA-256), so only devices signed in to the same account will discover each other.",
       },
       {
-        q: "Do you support team accounts?",
-        a: "Team features are coming soon. Enterprise customers can contact us for early access to team management, shared devices, and audit logging.",
+        q: "What encryption is used?",
+        a: "It depends on the connection path. CLI-to-relay: QUIC with TLS (encrypted transport). Mobile-to-relay: HTTPS with TLS certificate. Tailscale path: WireGuard (full end-to-end encryption, no relay involved). Direct LAN: HTTP on your local network (no encryption, but traffic stays on your WiFi). The relay is a pass-through — since you self-host it, you control it.",
+      },
+      {
+        q: "Where are my relay credentials stored?",
+        a: "You choose. By default, relay server URL and password are stored locally on each device (AsyncStorage on mobile, config.json on CLI). You can optionally enable cloud sync to store them in your Convex account so they sync across devices. The web dashboard always stores to your account. If privacy is a concern, use local-only storage and configure each device separately.",
       },
     ],
   },
   {
-    category: "CLI Features",
+    category: "CLI & Usage",
     items: [
       {
-        q: "Does Yaver auto-update the CLI?",
-        a: "Yes, optionally. You can enable auto-update with `yaver config set auto-update true`. When enabled, the CLI checks for new versions on startup and updates itself in the background. If you prefer manual control (e.g., via Homebrew or Scoop), leave it disabled — the default is off. You can always update manually with `brew upgrade yaver` or `scoop update yaver`.",
+        q: "Does the CLI auto-update?",
+        a: "Optionally. Enable with `yaver config set auto-update true`. Otherwise update manually via your package manager (`brew upgrade yaver` or `scoop update yaver`).",
       },
       {
-        q: "Can I use Yaver with any AI tool, not just Claude?",
-        a: "Yes. Yaver supports Claude Code, OpenAI Codex, Aider, and any custom CLI command. Switch agents anytime with `yaver set-runner <name>` or bring your own tool with `yaver set-runner custom \"my-command {prompt}\"`.",
+        q: "Can I use Yaver without the mobile app?",
+        a: "Yes. Run `yaver connect` from any terminal to connect to your remote dev machine. Laptop to desktop, server to server, SSH session to home machine — same connection strategy, same agent support. The mobile app is just one way to interact with your agent.",
+      },
+      {
+        q: "What is the website for?",
+        a: "The yaver.io website is only for initial registration and basic account management — signing in via OAuth, viewing your registered devices, and managing your account. It is not a control plane. All actual interaction with your AI agents happens from the CLI (`yaver serve`, `yaver connect`) and the mobile app.",
+      },
+      {
+        q: "Can I run multiple agents per machine?",
+        a: "Yes. Each `yaver serve` instance manages its own tmux sessions. You can run different AI agents side by side and switch between them from the mobile app.",
+      },
+      {
+        q: "Can I use Yaver on a headless server?",
+        a: "Yes. Install the CLI, run `yaver auth` once (or use `yaver auth --token <token>` for headless), then `yaver serve`. Combined with auto-boot, a Mac Mini or Linux server becomes a persistent AI dev machine you control from your phone.",
       },
     ],
   },
@@ -108,10 +127,10 @@ export default function FAQPage() {
       <div className="mx-auto max-w-3xl">
         <div className="mb-16 text-center">
           <h1 className="mb-4 text-3xl font-bold text-surface-50 md:text-4xl">
-            Frequently Asked Questions
+            FAQ
           </h1>
           <p className="text-sm text-surface-500">
-            Everything you need to know about Yaver.
+            Common questions about Yaver.
           </p>
         </div>
 
@@ -151,13 +170,15 @@ export default function FAQPage() {
 
         <div className="mt-12 rounded-lg border border-surface-800 bg-surface-900/50 p-6 text-center">
           <p className="text-sm text-surface-400">
-            Can&apos;t find what you&apos;re looking for?
+            Found a bug or have a feature request?
           </p>
           <a
-            href="mailto:support@yaver.io"
+            href="https://github.com/kivanccakmak/yaver/issues"
+            target="_blank"
+            rel="noopener noreferrer"
             className="mt-2 inline-block text-sm font-medium text-surface-200 underline underline-offset-2 hover:text-surface-50"
           >
-            Contact support
+            Open a GitHub issue
           </a>
         </div>
 

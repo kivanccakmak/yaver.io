@@ -40,7 +40,12 @@ export const getClientConfig = query({
   },
 });
 
-/** Set a config value (admin only — called from Convex dashboard or scripts). */
+/**
+ * Set a config value.
+ * This mutation is only callable from the Convex dashboard or via `npx convex run`.
+ * It is NOT exposed via any HTTP endpoint, so users who clone this repo
+ * cannot modify platform config from the client side.
+ */
 export const set = mutation({
   args: {
     key: v.string(),

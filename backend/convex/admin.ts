@@ -51,7 +51,6 @@ export const deleteAllUserData = mutation({
       "devices",
       "userSettings",
       "developerSurveys",
-      "subscriptions",
       "runnerUsage",
       "dailyTaskCounts",
       "deviceMetrics",

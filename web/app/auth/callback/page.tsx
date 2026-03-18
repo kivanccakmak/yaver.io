@@ -3,8 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense } from "react";
-
-const CONVEX_URL = "https://shocking-echidna-394.eu-west-1.convex.site";
+import { CONVEX_URL } from "@/lib/constants";
 
 function CallbackHandler() {
   const searchParams = useSearchParams();
@@ -46,12 +45,7 @@ function CallbackHandler() {
         })
         .then((data) => {
           if (!data) return;
-          const userData = data.user ?? data;
-          if (userData.surveyCompleted === false || !userData.surveyCompleted) {
-            router.push("/survey");
-          } else {
-            router.push("/dashboard");
-          }
+          router.push("/dashboard");
         })
         .catch(() => {
           // On error, default to dashboard

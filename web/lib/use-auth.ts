@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-
-const CONVEX_URL = "https://shocking-echidna-394.eu-west-1.convex.site";
+import { CONVEX_URL } from "@/lib/constants";
 
 interface User {
   id: string;

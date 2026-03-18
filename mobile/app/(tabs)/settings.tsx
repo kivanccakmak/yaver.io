@@ -1,6 +1,6 @@
 import Constants from "expo-constants";
 import { router } from "expo-router";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -16,19 +16,16 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
+import { CUSTOM_RELAYS_KEY } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent, getUsageSummary, type UsageSummary } from "../../src/lib/auth";
 import { clearCache } from "../../src/lib/storage";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, clearLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
-import { quicClient, type AgentStatus } from "../../src/lib/quic";
-import {
-  type SubscriptionStatus,
-  getSubscriptionStatus,
-  getCustomerPortal,
-} from "../../src/lib/subscription";
+import { quicClient, type AgentStatus, type RelayServer } from "../../src/lib/quic";
 
 const APP_VERSION = Constants.expoConfig?.version ?? "1.0.0";
 const BUILD_NUMBER =
@@ -49,9 +46,6 @@ export default function SettingsScreen() {
   const [isClearing, setIsClearing] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
   const [deletingAccount, setDeletingAccount] = useState(false);
-  const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
-  const [isLoadingSubscription, setIsLoadingSubscription] = useState(true);
-  const [isOpeningPortal, setIsOpeningPortal] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>(getLogEntries());
   const [forceRelay, setForceRelay] = useState(quicClient.forceRelay);
@@ -68,6 +62,132 @@ export default function SettingsScreen() {
   const [events, setEvents] = useState<DeviceEvent[]>([]);
   const [showMetrics, setShowMetrics] = useState(false);
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
+
+  // Relay servers
+  const [customRelays, setCustomRelays] = useState<RelayServer[]>([]);
+  const [showAddRelay, setShowAddRelay] = useState(false);
+  const [newRelayUrl, setNewRelayUrl] = useState("");
+  const [newRelayPassword, setNewRelayPassword] = useState("");
+  const [newRelayLabel, setNewRelayLabel] = useState("");
+  const [testingRelayId, setTestingRelayId] = useState<string | null>(null);
+  const [relayTestResults, setRelayTestResults] = useState<Record<string, { ok: boolean; ms?: number; error?: string }>>({});
+  const [relaySyncEnabled, setRelaySyncEnabled] = useState(false);
+
+  // Load custom relay servers and sync preference from AsyncStorage
+  useEffect(() => {
+    AsyncStorage.getItem(CUSTOM_RELAYS_KEY).then((raw) => {
+      if (raw) {
+        try {
+          setCustomRelays(JSON.parse(raw));
+        } catch {}
+      }
+    });
+    AsyncStorage.getItem("@yaver/relay_sync_enabled").then((val) => {
+      setRelaySyncEnabled(val === "true");
+    });
+  }, []);
+
+  const saveCustomRelays = async (relays: RelayServer[]) => {
+    setCustomRelays(relays);
+    await AsyncStorage.setItem(CUSTOM_RELAYS_KEY, JSON.stringify(relays));
+    if (relays.length > 0) {
+      quicClient.setRelayServers(relays);
+    }
+    // Sync primary relay to Convex user settings only if cloud sync is enabled
+    const syncEnabled = await AsyncStorage.getItem("@yaver/relay_sync_enabled");
+    if (token && syncEnabled === "true") {
+      const primary = relays.length > 0 ? relays[0] : null;
+      saveUserSettings(token, {
+        relayUrl: primary?.httpUrl ?? "",
+        relayPassword: primary?.password ?? "",
+      });
+    }
+  };
+
+  const handleToggleRelaySync = async (enabled: boolean) => {
+    setRelaySyncEnabled(enabled);
+    await AsyncStorage.setItem("@yaver/relay_sync_enabled", enabled ? "true" : "false");
+    if (enabled && token) {
+      // Sync current relay settings to Convex
+      const primary = customRelays.length > 0 ? customRelays[0] : null;
+      saveUserSettings(token, {
+        relayUrl: primary?.httpUrl ?? "",
+        relayPassword: primary?.password ?? "",
+      });
+    } else if (!enabled && token) {
+      // Clear relay settings from Convex
+      saveUserSettings(token, { relayUrl: "", relayPassword: "" });
+    }
+  };
+
+  const handleAddRelay = async () => {
+    const url = newRelayUrl.trim().replace(/\/+$/, "");
+    if (!url) {
+      Alert.alert("Error", "URL is required.");
+      return;
+    }
+
+    // Generate ID from URL hash
+    let h = 0;
+    for (let i = 0; i < url.length; i++) {
+      h = ((h * 31) + url.charCodeAt(i)) >>> 0;
+    }
+    const id = h.toString(16).slice(0, 8);
+
+    // Check duplicate
+    if (customRelays.some((r) => r.httpUrl === url)) {
+      Alert.alert("Error", "This relay server is already configured.");
+      return;
+    }
+
+    // Infer QUIC address
+    let host = url.replace(/^https?:\/\//, "").replace(/:\d+$/, "").replace(/\/.*$/, "");
+    const quicAddr = host + ":4433";
+
+    const relay: RelayServer = {
+      id,
+      quicAddr,
+      httpUrl: url,
+      region: newRelayLabel.trim() || "custom",
+      priority: customRelays.length + 1,
+      password: newRelayPassword.trim() || undefined,
+    };
+
+    await saveCustomRelays([...customRelays, relay]);
+    setNewRelayUrl("");
+    setNewRelayPassword("");
+    setNewRelayLabel("");
+    setShowAddRelay(false);
+  };
+
+  const handleRemoveRelay = (relayId: string) => {
+    Alert.alert("Remove Relay", "Remove this relay server?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: () => saveCustomRelays(customRelays.filter((r) => r.id !== relayId)),
+      },
+    ]);
+  };
+
+  const handleTestRelay = async (relay: RelayServer) => {
+    setTestingRelayId(relay.id);
+    try {
+      const start = Date.now();
+      const res = await fetch(relay.httpUrl + "/health", { method: "GET" });
+      const ms = Date.now() - start;
+      if (res.ok) {
+        setRelayTestResults((prev) => ({ ...prev, [relay.id]: { ok: true, ms } }));
+      } else {
+        setRelayTestResults((prev) => ({ ...prev, [relay.id]: { ok: false, error: `HTTP ${res.status}` } }));
+      }
+    } catch (e) {
+      setRelayTestResults((prev) => ({ ...prev, [relay.id]: { ok: false, error: String(e) } }));
+    } finally {
+      setTestingRelayId(null);
+    }
+  };
 
   // Load user settings, runners, and usage from Convex
   useEffect(() => {
@@ -181,43 +301,6 @@ export default function SettingsScreen() {
     return () => clearInterval(interval);
   }, [token, activeDevice, connectionStatus]);
 
-  const fetchSubscription = useCallback(async () => {
-    if (!token) {
-      setIsLoadingSubscription(false);
-      return;
-    }
-    try {
-      const status = await getSubscriptionStatus(token);
-      setSubscription(status);
-    } catch {
-      setSubscription({ plan: "Early Access", status: "active" });
-    } finally {
-      setIsLoadingSubscription(false);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    fetchSubscription();
-  }, [fetchSubscription]);
-
-  const handleManageSubscription = async () => {
-    if (!token) return;
-    setIsOpeningPortal(true);
-    try {
-      const portalUrl = await getCustomerPortal(token);
-      if (portalUrl) {
-        await Linking.openURL(portalUrl);
-      } else {
-        Alert.alert("Unavailable", "Subscription management is not available yet.");
-      }
-    } catch {
-      Alert.alert("Error", "Could not open subscription management.");
-    } finally {
-      setIsOpeningPortal(false);
-    }
-  };
-
-  const isEarlyAccess = !subscription || subscription.plan === "Early Access" || subscription.plan === "early_access";
 
   const handleSaveName = async () => {
     if (!token || !editName.trim()) return;
@@ -350,69 +433,6 @@ export default function SettingsScreen() {
             </Pressable>
           </View>
         )}
-
-        {/* Subscription */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Subscription</Text>
-          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-            {isLoadingSubscription ? (
-              <View style={styles.subscriptionLoading}>
-                <ActivityIndicator size="small" color={c.accent} />
-              </View>
-            ) : (
-              <>
-                <View style={styles.subscriptionRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.subscriptionPlan, { color: c.textPrimary }]}>
-                      {isEarlyAccess ? "Early Access" : subscription?.plan ?? "Early Access"}
-                    </Text>
-                    <Text style={[styles.subscriptionMeta, { color: c.textSecondary }]}>
-                      {isEarlyAccess
-                        ? "Free during early access period"
-                        : `Status: ${subscription?.status ?? "active"}`}
-                    </Text>
-                    {!isEarlyAccess && subscription?.renewalDate && (
-                      <Text style={[styles.subscriptionMeta, { color: c.textMuted, marginTop: 2 }]}>
-                        Renews {new Date(subscription.renewalDate).toLocaleDateString()}
-                      </Text>
-                    )}
-                  </View>
-                  {isEarlyAccess ? (
-                    <View style={[styles.freeBadge, { backgroundColor: c.successBg, borderColor: c.successBorder }]}>
-                      <Text style={[styles.freeBadgeText, { color: c.success }]}>FREE</Text>
-                    </View>
-                  ) : (
-                    <View style={[styles.statusBadge, {
-                      backgroundColor: subscription?.status === "active" ? c.successBg : c.errorBg,
-                      borderColor: subscription?.status === "active" ? c.successBorder : c.error,
-                    }]}>
-                      <Text style={[styles.freeBadgeText, {
-                        color: subscription?.status === "active" ? c.success : c.error,
-                      }]}>
-                        {(subscription?.status ?? "active").toUpperCase()}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                {!isEarlyAccess && (
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.manageButton,
-                      { borderColor: c.border },
-                      pressed && { opacity: 0.7 },
-                    ]}
-                    onPress={handleManageSubscription}
-                    disabled={isOpeningPortal}
-                  >
-                    <Text style={[styles.manageButtonText, { color: c.accent }]}>
-                      {isOpeningPortal ? "Opening..." : "Manage Subscription"}
-                    </Text>
-                  </Pressable>
-                )}
-              </>
-            )}
-          </View>
-        </View>
 
         {/* Connected device */}
         <View style={styles.section}>
@@ -802,6 +822,151 @@ export default function SettingsScreen() {
             </View>
           </View>
 
+          {/* Relay Servers */}
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 8 }]}>
+            <View style={styles.themeRow}>
+              <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Relay Servers</Text>
+              <Pressable
+                style={({ pressed }) => [
+                  { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 6, backgroundColor: c.accent },
+                  pressed && { opacity: 0.7 },
+                ]}
+                onPress={() => setShowAddRelay(!showAddRelay)}
+              >
+                <Text style={{ fontSize: 13, color: "#fff", fontWeight: "600" }}>
+                  {showAddRelay ? "Cancel" : "+ Add"}
+                </Text>
+              </Pressable>
+            </View>
+
+            {showAddRelay && (
+              <View style={{ marginTop: 12, gap: 8 }}>
+                <TextInput
+                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
+                  placeholder="https://relay.example.com"
+                  placeholderTextColor={c.textMuted}
+                  value={newRelayUrl}
+                  onChangeText={setNewRelayUrl}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                />
+                <TextInput
+                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
+                  placeholder="Password (optional)"
+                  placeholderTextColor={c.textMuted}
+                  value={newRelayPassword}
+                  onChangeText={setNewRelayPassword}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  secureTextEntry
+                />
+                <TextInput
+                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
+                  placeholder="Label (optional) e.g. My VPS"
+                  placeholderTextColor={c.textMuted}
+                  value={newRelayLabel}
+                  onChangeText={setNewRelayLabel}
+                  autoCapitalize="none"
+                />
+                <Pressable
+                  style={({ pressed }) => [
+                    { paddingVertical: 10, borderRadius: 8, backgroundColor: c.accent, alignItems: "center" as const },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                  onPress={handleAddRelay}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "600", fontSize: 14 }}>Add Relay Server</Text>
+                </Pressable>
+              </View>
+            )}
+
+            {customRelays.length === 0 && !showAddRelay && (
+              <View style={{ marginTop: 8 }}>
+                <Text style={{ fontSize: 12, color: c.textMuted }}>
+                  Using default relay servers. Add your own to use a self-hosted relay.
+                </Text>
+                <Text
+                  style={{ fontSize: 12, color: c.accent, marginTop: 4 }}
+                  onPress={() => Linking.openURL("https://yaver.io/docs/self-hosting")}
+                >
+                  Learn more about self-hosting a relay
+                </Text>
+              </View>
+            )}
+
+            {customRelays.map((relay) => {
+              const testResult = relayTestResults[relay.id];
+              return (
+                <View
+                  key={relay.id}
+                  style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: c.borderSubtle }}
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 14, color: c.textPrimary, fontWeight: "500" }}>
+                        {relay.region !== "custom" ? relay.region : relay.httpUrl}
+                      </Text>
+                      {relay.region !== "custom" && (
+                        <Text style={{ fontSize: 11, color: c.textMuted, marginTop: 2 }}>{relay.httpUrl}</Text>
+                      )}
+                    </View>
+                    {testResult && (
+                      <View style={{
+                        width: 8, height: 8, borderRadius: 4, marginRight: 8,
+                        backgroundColor: testResult.ok ? c.success : c.error,
+                      }} />
+                    )}
+                  </View>
+                  <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+                    <Pressable
+                      style={({ pressed }) => [
+                        { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 6, backgroundColor: c.bgCardElevated },
+                        pressed && { opacity: 0.7 },
+                      ]}
+                      onPress={() => handleTestRelay(relay)}
+                      disabled={testingRelayId === relay.id}
+                    >
+                      {testingRelayId === relay.id ? (
+                        <ActivityIndicator size="small" color={c.accent} />
+                      ) : (
+                        <Text style={{ fontSize: 12, color: c.accent }}>
+                          {testResult ? (testResult.ok ? `OK ${testResult.ms}ms` : "Failed") : "Test"}
+                        </Text>
+                      )}
+                    </Pressable>
+                    <Pressable
+                      style={({ pressed }) => [
+                        { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 6, backgroundColor: c.errorBg },
+                        pressed && { opacity: 0.7 },
+                      ]}
+                      onPress={() => handleRemoveRelay(relay.id)}
+                    >
+                      <Text style={{ fontSize: 12, color: c.error }}>Remove</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            })}
+
+            {/* Sync to cloud toggle */}
+            <View style={{ marginTop: 16, paddingTop: 12, borderTopWidth: 1, borderTopColor: c.borderSubtle }}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <View style={{ flex: 1, marginRight: 12 }}>
+                  <Text style={{ fontSize: 14, color: c.textPrimary, fontWeight: "500" }}>Sync to cloud</Text>
+                  <Text style={{ fontSize: 11, color: c.textMuted, marginTop: 2 }}>
+                    Store relay settings in your account (syncs across devices). When off, settings are stored only on this device.
+                  </Text>
+                </View>
+                <Switch
+                  value={relaySyncEnabled}
+                  onValueChange={handleToggleRelaySync}
+                  trackColor={{ false: c.border, true: c.accent }}
+                />
+              </View>
+            </View>
+          </View>
+
           {showLogs && (
             <View style={[styles.logsContainer, { backgroundColor: c.bgCard, borderColor: c.border }]}>
               <View style={styles.logsActions}>
@@ -980,40 +1145,6 @@ const styles = StyleSheet.create({
   },
   editNameButtonText: { color: "#fff", fontSize: 13, fontWeight: "600" },
 
-  // Subscription
-  subscriptionRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  subscriptionPlan: { fontSize: 16, fontWeight: "600" },
-  subscriptionMeta: { fontSize: 13, marginTop: 2 },
-  freeBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  freeBadgeText: { fontSize: 12, fontWeight: "700" },
-  statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  subscriptionLoading: {
-    paddingVertical: 12,
-    alignItems: "center",
-  },
-  manageButton: {
-    marginTop: 14,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    alignItems: "center",
-  },
-  manageButtonText: { fontSize: 14, fontWeight: "600" },
-
   card: {
     borderRadius: 12,
     padding: 16,
@@ -1183,6 +1314,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   deleteAccountText: { fontSize: 14, fontWeight: "600" },
+
+  // Relay input
+  relayInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    fontSize: 14,
+  },
 });
 
 const metricsStyles = StyleSheet.create({

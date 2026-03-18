@@ -22,9 +22,10 @@ package main
 
 // RegisterMsg is sent by the agent on the first QUIC stream after connecting.
 type RegisterMsg struct {
-	Type     string `json:"type"`     // "register"
-	DeviceID string `json:"deviceId"` // agent's device ID from config
-	Token    string `json:"token"`    // auth token for validation
+	Type     string `json:"type"`               // "register"
+	DeviceID string `json:"deviceId"`           // agent's device ID from config
+	Token    string `json:"token"`              // auth token for validation
+	Password string `json:"password,omitempty"` // shared relay password
 }
 
 // RegisterResp is sent by the relay back to the agent.

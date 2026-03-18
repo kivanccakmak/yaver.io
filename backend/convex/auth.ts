@@ -36,7 +36,6 @@ export async function validateSessionInternal(
     providerId: string;
     passwordHash?: string;
     avatarUrl?: string;
-    plan?: "free" | "pro" | "enterprise" | "early_access";
     surveyCompleted?: boolean;
     createdAt: number;
   };
@@ -120,7 +119,6 @@ export const createOrUpdateUser = mutation({
       provider: args.provider,
       providerId: args.providerId,
       avatarUrl: args.avatarUrl,
-      plan: "early_access",
       createdAt: Date.now(),
     });
     // Create default settings for new user
@@ -220,7 +218,6 @@ export const createEmailUser = mutation({
       provider: "email",
       providerId: args.email,
       passwordHash: args.passwordHash,
-      plan: "early_access",
       createdAt: Date.now(),
     });
     // Create default settings for new user

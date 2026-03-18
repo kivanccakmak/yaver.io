@@ -61,7 +61,7 @@ function UserMenu({ user, logout }: { user: { email: string; name?: string; avat
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
             </svg>
-            Dashboard
+            Account
           </Link>
           <button
             onClick={() => { setOpen(false); logout(); }}
@@ -92,16 +92,13 @@ export default function Header() {
               yaver<span className="font-normal text-surface-500">.io</span>
             </span>
           </Link>
-          <span className="hidden rounded-full border border-green-300 bg-green-50 px-2.5 py-0.5 text-[10px] font-semibold tracking-wide text-green-700 dark:border-green-800/60 dark:bg-green-950/50 dark:text-green-400 sm:inline-flex">
-            Early Access
-          </span>
         </div>
 
         <div className="hidden items-center gap-8 md:flex">
           {!isLoading && isAuthenticated && user ? (
             <>
               <Link href="/dashboard" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
-                Dashboard
+                Account
               </Link>
               <button
                 onClick={toggle}
@@ -125,14 +122,14 @@ export default function Header() {
               <Link href="/#features" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
                 Features
               </Link>
-              <Link href="/pricing" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
-                Pricing
-              </Link>
               <Link href="/faq" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
                 FAQ
               </Link>
-              <Link href="/manuals" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
-                Manuals
+              <Link href="/docs/self-hosting" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
+                Docs
+              </Link>
+              <Link href="/docs/developers" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
+                Developers
               </Link>
               <Link href="/download" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
                 Download
@@ -199,9 +196,9 @@ export default function Header() {
         <div className="border-t border-surface-800 bg-surface-950 px-6 py-4 md:hidden">
           <div className="flex flex-col gap-4">
             <Link href="/#features" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Features</Link>
-            <Link href="/pricing" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Pricing</Link>
             <Link href="/faq" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>FAQ</Link>
-            <Link href="/manuals" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Manuals</Link>
+            <Link href="/docs/self-hosting" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Docs</Link>
+            <Link href="/docs/developers" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Developers</Link>
             <Link href="/download" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Download</Link>
             <Link href="/auth" className="btn-primary text-center text-sm" onClick={() => setMobileOpen(false)}>Log in</Link>
           </div>

@@ -102,6 +102,7 @@ export interface RelayServer {
   httpUrl: string;  // e.g. "https://connect.yaver.io"
   region: string;
   priority: number;
+  password?: string;
 }
 
 export class QuicClient {
@@ -111,6 +112,7 @@ export class QuicClient {
   private deviceId: string | null = null;
   private relayServers: RelayServer[] = [];  // all available relay servers
   private activeRelayUrl: string | null = null; // currently working relay base URL
+  private activeRelayPassword: string | null = null; // password for the active relay (if any)
   private _forceRelay = false; // default to direct-first — try LAN/local before relay
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -191,11 +193,16 @@ export class QuicClient {
         for (const relay of this.relayServers) {
           try {
             const relayDeviceUrl = `${relay.httpUrl}/d/${this.deviceId}`;
+            const probeHeaders: Record<string, string> = { ...this.authHeaders };
+            if (relay.password) {
+              probeHeaders['X-Relay-Password'] = relay.password;
+            }
             const res = await this.fetchWithTimeout(`${relayDeviceUrl}/health`, {
-              headers: this.authHeaders,
+              headers: probeHeaders,
             }, 8000);
             if (res.ok) {
               this.activeRelayUrl = relay.httpUrl;
+              this.activeRelayPassword = relay.password || null;
               this.setConnectionMode("relay");
               console.log("[QUIC] Switched to relay:", relay.id);
               return;
@@ -214,6 +221,7 @@ export class QuicClient {
           }, 5000);
           if (res.ok) {
             this.activeRelayUrl = null;
+            this.activeRelayPassword = null;
             this.setConnectionMode("direct");
             console.log("[QUIC] Switched to direct");
             return;
@@ -240,6 +248,7 @@ export class QuicClient {
     this.token = token;
     this.deviceId = deviceId;
     this.activeRelayUrl = null;
+    this.activeRelayPassword = null;
     this.reconnectAttempt = 0;
 
     await this.attemptConnect();
@@ -255,6 +264,7 @@ export class QuicClient {
     this.token = null;
     this.deviceId = null;
     this.activeRelayUrl = null;
+    this.activeRelayPassword = null;
   }
 
   // ── Task API ───────────────────────────────────────────────────────
@@ -596,7 +606,11 @@ export class QuicClient {
   }
 
   private get authHeaders(): Record<string, string> {
-    return { Authorization: `Bearer ${this.token}` };
+    const headers: Record<string, string> = { Authorization: `Bearer ${this.token}` };
+    if (this.activeRelayUrl && this.activeRelayPassword) {
+      headers['X-Relay-Password'] = this.activeRelayPassword;
+    }
+    return headers;
   }
 
   /** True when we have enough info to attempt API calls (even during reconnection). */
@@ -665,6 +679,7 @@ export class QuicClient {
     console.log("[QUIC] Full reconnect — clearing stale relay and re-probing all paths");
     this.clearTimers();
     this.activeRelayUrl = null;
+    this.activeRelayPassword = null;
     this.reconnectAttempt = 0;
     this.attemptConnect().catch(() => {});
   }
@@ -686,6 +701,7 @@ export class QuicClient {
   private async attemptConnect(): Promise<void> {
     this.setConnectionState("connecting");
     this.activeRelayUrl = null;
+    this.activeRelayPassword = null;
     this.setConnectionMode(null);
     this._connectionPath = null;
     try {
@@ -750,11 +766,16 @@ export class QuicClient {
           try {
             const relayDeviceUrl = `${relay.httpUrl}/d/${this.deviceId}`;
             console.log("[QUIC] Trying relay:", relay.id, relayDeviceUrl);
+            const probeHeaders: Record<string, string> = { Authorization: `Bearer ${this.token}` };
+            if (relay.password) {
+              probeHeaders['X-Relay-Password'] = relay.password;
+            }
             const res = await this.fetchWithTimeout(`${relayDeviceUrl}/health`, {
-              headers: this.authHeaders,
+              headers: probeHeaders,
             }, 8000);
             if (res.ok) {
               this.activeRelayUrl = relay.httpUrl;
+              this.activeRelayPassword = relay.password || null;
               this.setConnectionMode("relay");
               this._connectionPath = "relay";
               connected = true;

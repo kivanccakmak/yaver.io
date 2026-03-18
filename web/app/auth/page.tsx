@@ -3,8 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
-
-const CONVEX_URL = "https://shocking-echidna-394.eu-west-1.convex.site";
+import { CONVEX_URL } from "@/lib/constants";
 
 function AuthContent() {
   const params = useSearchParams();
@@ -78,12 +77,7 @@ function AuthContent() {
         return;
       }
 
-      // Redirect based on survey status
-      if (data.surveyCompleted === false || !data.surveyCompleted) {
-        window.location.href = "/survey";
-      } else {
-        window.location.href = "/dashboard";
-      }
+      window.location.href = "/dashboard";
     } catch {
       setFormError("Network error. Please try again.");
       setLoading(false);

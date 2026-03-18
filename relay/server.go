@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,12 @@ type RelayServer struct {
 	quicPort int // QUIC port for agent tunnels
 	httpPort int // HTTP port for mobile clients
 
+	// password is protected by pwMu for runtime updates
+	pwMu     sync.RWMutex
+	password string // shared password for relay authentication (empty = no auth)
+
+	startedAt time.Time // server start time for uptime tracking
+
 	// deviceID -> active agent tunnel
 	mu      sync.RWMutex
 	tunnels map[string]*agentTunnel
@@ -40,12 +47,28 @@ type agentTunnel struct {
 	connAt   time.Time
 }
 
-func NewRelayServer(quicPort, httpPort int) *RelayServer {
+func NewRelayServer(quicPort, httpPort int, password string) *RelayServer {
 	return &RelayServer{
-		quicPort: quicPort,
-		httpPort: httpPort,
-		tunnels:  make(map[string]*agentTunnel),
+		quicPort:  quicPort,
+		httpPort:  httpPort,
+		password:  password,
+		startedAt: time.Now(),
+		tunnels:   make(map[string]*agentTunnel),
 	}
+}
+
+// getPassword returns the current relay password (thread-safe).
+func (s *RelayServer) getPassword() string {
+	s.pwMu.RLock()
+	defer s.pwMu.RUnlock()
+	return s.password
+}
+
+// setPassword updates the relay password in memory (thread-safe).
+func (s *RelayServer) setPassword(pw string) {
+	s.pwMu.Lock()
+	defer s.pwMu.Unlock()
+	s.password = pw
 }
 
 // Start runs both the QUIC tunnel listener and the HTTP proxy.
@@ -151,6 +174,15 @@ func (s *RelayServer) handleAgentConnection(ctx context.Context, conn quic.Conne
 		return
 	}
 
+	// Validate relay password if configured
+	if pw := s.getPassword(); pw != "" && reg.Password != pw {
+		resp, _ := json.Marshal(RegisterResp{Type: "error", OK: false, Message: "invalid relay password"})
+		stream.Write(resp)
+		stream.Close()
+		conn.CloseWithError(1, "invalid relay password")
+		return
+	}
+
 	// TODO: Validate token against Convex backend
 	// For now, accept any non-empty token (the agent already validated it)
 
@@ -197,6 +229,8 @@ func (s *RelayServer) runHTTPProxy(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/tunnels", s.handleListTunnels)
+	mux.HandleFunc("/admin/set-password", s.handleSetPassword)
+	mux.HandleFunc("/admin/status", s.handleAdminStatus)
 	mux.HandleFunc("/d/", s.handleProxy) // /d/{deviceId}/...
 
 	srv := &http.Server{
@@ -256,6 +290,79 @@ func (s *RelayServer) handleListTunnels(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// handleSetPassword allows runtime password changes via POST /admin/set-password.
+func (s *RelayServer) handleSetPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Password        string `json:"password"`
+		CurrentPassword string `json:"current_password"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "invalid request body",
+		})
+		return
+	}
+
+	if req.Password == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "password is required",
+		})
+		return
+	}
+
+	// If a password is currently set, require current_password to match
+	if currentPw := s.getPassword(); currentPw != "" {
+		if req.CurrentPassword != currentPw {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "invalid current password",
+			})
+			return
+		}
+	}
+
+	// Update password in memory
+	s.setPassword(req.Password)
+
+	// Persist to .relay-password file
+	if err := os.WriteFile(".relay-password", []byte(req.Password), 0600); err != nil {
+		log.Printf("[RELAY] Warning: could not write .relay-password file: %v", err)
+	}
+
+	log.Printf("[RELAY] Password updated via API")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":      true,
+		"message": "Password updated",
+	})
+}
+
+// handleAdminStatus returns relay status info via GET /admin/status.
+func (s *RelayServer) handleAdminStatus(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	tunnelCount := len(s.tunnels)
+	s.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":           true,
+		"password_set": s.getPassword() != "",
+		"tunnels":      tunnelCount,
+		"uptime":       time.Since(s.startedAt).Round(time.Second).String(),
+	})
+}
+
 // handleProxy proxies HTTP requests to agents via QUIC tunnel.
 // URL format: /d/{deviceId}/... -> forwarded as /... to the agent
 func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
@@ -271,6 +378,18 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	forwardPath := "/"
 	if len(parts) > 1 {
 		forwardPath = "/" + parts[1]
+	}
+
+	// Validate relay password if configured
+	if pw := s.getPassword(); pw != "" {
+		if r.Header.Get("X-Relay-Password") != pw {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "invalid relay password",
+			})
+			return
+		}
 	}
 
 	// Find the tunnel
@@ -445,7 +564,7 @@ func withRelayCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Relay-Password")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

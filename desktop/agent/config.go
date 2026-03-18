@@ -11,13 +11,26 @@ const configDirName = ".yaver"
 
 // Config holds persisted agent configuration.
 type Config struct {
-	AuthToken     string `json:"auth_token,omitempty"`
-	DeviceID      string `json:"device_id,omitempty"`
-	ConvexSiteURL string `json:"convex_site_url,omitempty"`
-	TLSCert       string `json:"tls_cert,omitempty"`
-	TLSKey        string `json:"tls_key,omitempty"`
-	AutoStart     bool   `json:"auto_start,omitempty"`
-	AutoUpdate    bool   `json:"auto_update,omitempty"`
+	AuthToken     string              `json:"auth_token,omitempty"`
+	DeviceID      string              `json:"device_id,omitempty"`
+	ConvexSiteURL string              `json:"convex_site_url,omitempty"`
+	TLSCert       string              `json:"tls_cert,omitempty"`
+	TLSKey        string              `json:"tls_key,omitempty"`
+	AutoStart     bool                `json:"auto_start,omitempty"`
+	AutoUpdate    bool                `json:"auto_update,omitempty"`
+	RelayPassword string              `json:"relay_password,omitempty"`
+	RelayServers  []RelayServerConfig `json:"relay_servers,omitempty"`
+}
+
+// RelayServerConfig describes a relay server configured in config.json.
+type RelayServerConfig struct {
+	ID       string `json:"id"`
+	QuicAddr string `json:"quic_addr"`
+	HttpURL  string `json:"http_url,omitempty"`
+	Password string `json:"password,omitempty"`
+	Region   string `json:"region,omitempty"`
+	Priority int    `json:"priority,omitempty"`
+	Label    string `json:"label,omitempty"`
 }
 
 // ConfigDir returns the path to ~/.yaver/, creating it if needed.

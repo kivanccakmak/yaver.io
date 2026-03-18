@@ -50,5 +50,6 @@ npm-debug.log*
 *.tsbuildinfo
 .vercel
 .env*.local
-keys/*.p8
+# Private keys and signing scripts
+keys/
 *.p8

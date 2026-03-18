@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { CONVEX_URL } from "@/lib/constants";
 
 type Platform = "macos" | "windows" | "linux" | "ios" | "android" | "unknown";
 
@@ -31,7 +32,6 @@ function formatSize(bytes: number): string {
 }
 
 const GITHUB_RELEASE = "https://github.com/kivanccakmak/yaver-cli/releases/latest";
-const MOBILE_PASSWORD = "air-visualizer";
 
 export default function DownloadPage() {
   const [platform, setPlatform] = useState<Platform>("unknown");
@@ -39,16 +39,13 @@ export default function DownloadPage() {
   const [cliVersion, setCliVersion] = useState<string>("");
   const [mobileVersion, setMobileVersion] = useState<string>("");
   const [loading, setLoading] = useState(true);
-  const [mobilePassword, setMobilePassword] = useState("");
-  const [mobileUnlocked, setMobileUnlocked] = useState(false);
-  const [passwordError, setPasswordError] = useState(false);
 
   useEffect(() => {
     setPlatform(detectPlatform());
 
     // Fetch downloads list
     fetch(
-      `${process.env.NEXT_PUBLIC_CONVEX_SITE_URL || "https://shocking-echidna-394.eu-west-1.convex.site"}/downloads/list`
+      `${CONVEX_URL}/downloads/list`
     )
       .then((res) => res.json())
       .then((data) => setDownloads(data.downloads || []))
@@ -57,7 +54,7 @@ export default function DownloadPage() {
 
     // Fetch CLI version from config
     fetch(
-      `${process.env.NEXT_PUBLIC_CONVEX_SITE_URL || "https://shocking-echidna-394.eu-west-1.convex.site"}/config`
+      `${CONVEX_URL}/config`
     )
       .then((res) => res.json())
       .then((data) => {
@@ -116,15 +113,6 @@ export default function DownloadPage() {
         {label}
       </a>
     );
-  }
-
-  function handleMobileUnlock() {
-    if (mobilePassword === MOBILE_PASSWORD) {
-      setMobileUnlocked(true);
-      setPasswordError(false);
-    } else {
-      setPasswordError(true);
-    }
   }
 
   const versionBadge = cliVersion ? (
@@ -337,91 +325,61 @@ export default function DownloadPage() {
             Mobile app {mobileVersion && <span className="normal-case tracking-normal text-surface-600">v{mobileVersion}</span>}
           </h2>
 
-          {!mobileUnlocked ? (
-            <div className="card text-center">
-              <p className="mb-4 text-sm text-surface-400">
-                Mobile app downloads are password-protected during early access.
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div
+              className={`card ${platform === "ios" ? "border-surface-600" : ""}`}
+            >
+              {platform === "ios" && (
+                <div className="mb-3 text-xs text-surface-400">
+                  Detected your platform
+                </div>
+              )}
+              <h3 className="mb-1 text-base font-semibold text-surface-50">
+                iOS
+              </h3>
+              <p className="mb-5 text-xs text-surface-500">
+                iOS 16+. iPhone and iPad.
               </p>
-              <div className="mx-auto flex max-w-xs flex-col gap-3">
-                <input
-                  type="password"
-                  placeholder="Enter access password"
-                  value={mobilePassword}
-                  onChange={(e) => {
-                    setMobilePassword(e.target.value);
-                    setPasswordError(false);
-                  }}
-                  onKeyDown={(e) => e.key === "Enter" && handleMobileUnlock()}
-                  className="w-full rounded-lg border border-surface-700 bg-surface-900 px-4 py-2.5 text-sm text-surface-200 placeholder-surface-600 outline-none focus:border-surface-500"
-                />
-                {passwordError && (
-                  <p className="text-xs text-red-400">Incorrect password. Try again.</p>
+              <div className="flex flex-wrap gap-2">
+                {iosIpa?.url ? (
+                  <a href={iosIpa.url} className="btn-primary py-2 px-4 text-xs">
+                    Download IPA ({formatSize(iosIpa.size)})
+                  </a>
+                ) : (
+                  <a
+                    href="https://testflight.apple.com/join/yaver"
+                    className="btn-primary py-2 px-4 text-xs"
+                  >
+                    TestFlight Beta
+                  </a>
                 )}
-                <button
-                  onClick={handleMobileUnlock}
-                  className="btn-primary py-2.5 text-sm"
-                >
-                  Unlock downloads
-                </button>
               </div>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div
-                className={`card ${platform === "ios" ? "border-surface-600" : ""}`}
-              >
-                {platform === "ios" && (
-                  <div className="mb-3 text-xs text-surface-400">
-                    Detected your platform
-                  </div>
-                )}
-                <h3 className="mb-1 text-base font-semibold text-surface-50">
-                  iOS
-                </h3>
-                <p className="mb-5 text-xs text-surface-500">
-                  iOS 16+. iPhone and iPad.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {iosIpa?.url ? (
-                    <a href={iosIpa.url} className="btn-primary py-2 px-4 text-xs">
-                      Download IPA ({formatSize(iosIpa.size)})
-                    </a>
-                  ) : (
-                    <a
-                      href="https://testflight.apple.com/join/yaver"
-                      className="btn-primary py-2 px-4 text-xs"
-                    >
-                      TestFlight Beta
-                    </a>
-                  )}
+            <div
+              className={`card ${platform === "android" ? "border-surface-600" : ""}`}
+            >
+              {platform === "android" && (
+                <div className="mb-3 text-xs text-surface-400">
+                  Detected your platform
                 </div>
-              </div>
-              <div
-                className={`card ${platform === "android" ? "border-surface-600" : ""}`}
-              >
-                {platform === "android" && (
-                  <div className="mb-3 text-xs text-surface-400">
-                    Detected your platform
-                  </div>
+              )}
+              <h3 className="mb-1 text-base font-semibold text-surface-50">
+                Android
+              </h3>
+              <p className="mb-5 text-xs text-surface-500">Android 12+.</p>
+              <div className="flex flex-wrap gap-2">
+                {androidApk?.url ? (
+                  <a href={androidApk.url} className="btn-primary py-2 px-4 text-xs">
+                    Download APK ({formatSize(androidApk.size)})
+                  </a>
+                ) : (
+                  <span className="inline-flex items-center justify-center rounded-lg border border-surface-800 bg-surface-900 px-4 py-2 text-xs text-surface-600 cursor-not-allowed">
+                    APK not yet available
+                  </span>
                 )}
-                <h3 className="mb-1 text-base font-semibold text-surface-50">
-                  Android
-                </h3>
-                <p className="mb-5 text-xs text-surface-500">Android 12+.</p>
-                <div className="flex flex-wrap gap-2">
-                  {androidApk?.url ? (
-                    <a href={androidApk.url} className="btn-primary py-2 px-4 text-xs">
-                      Download APK ({formatSize(androidApk.size)})
-                    </a>
-                  ) : (
-                    <span className="inline-flex items-center justify-center rounded-lg border border-surface-800 bg-surface-900 px-4 py-2 text-xs text-surface-600 cursor-not-allowed">
-                      APK not yet available
-                    </span>
-                  )}
-                </div>
               </div>
             </div>
-          )}
+          </div>
         </div>
 
         {/* GitHub link */}

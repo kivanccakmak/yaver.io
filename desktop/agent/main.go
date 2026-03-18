@@ -27,6 +27,9 @@ import (
 
 const version = "1.28.0"
 
+// Default hosted Convex instance (public endpoint). Override with --convex-url flag or convex_site_url in config.json.
+const defaultConvexSiteURL = "https://shocking-echidna-394.eu-west-1.convex.site"
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -63,6 +66,8 @@ func main() {
 		runDevices()
 	case "config":
 		runConfig(os.Args[2:])
+	case "relay":
+		runRelay(os.Args[2:])
 	case "set-runner":
 		runSetRunner(os.Args[2:])
 	case "discover":
@@ -100,8 +105,14 @@ Usage:
   yaver clear-logs  Clear agent log file
   yaver config      Show current configuration
   yaver config set <key> <value>  Set a config value (auto-start, auto-update)
+  yaver relay add <url> [--password <pass>] [--label <name>]  Add a relay server
+  yaver relay list   List configured relay servers
+  yaver relay remove <id-or-url>  Remove a relay server
+  yaver relay test [url]  Test relay server health
+  yaver relay set-password <pass>  Set default relay password
+  yaver relay clear-password  Remove default relay password
   yaver set-runner  Set default AI agent (also settable from mobile app, per task)
-  yaver status      Show auth and connection status
+  yaver status      Show auth, relay, and connection status
   yaver devices     List your registered devices
   yaver purge       Remove all local data (auth, sessions, tasks, logs)
   yaver uninstall   Remove config, certs, and stop the agent
@@ -145,7 +156,7 @@ Run 'yaver <command> -h' for command-specific options.
 
 func runAuth(args []string) {
 	fs := flag.NewFlagSet("auth", flag.ExitOnError)
-	convexURL := fs.String("convex-url", "https://shocking-echidna-394.eu-west-1.convex.site", "Convex site URL")
+	convexURL := fs.String("convex-url", defaultConvexSiteURL, "Convex site URL")
 	token := fs.String("token", "", "Provide token directly (skip browser)")
 	fs.Parse(args)
 
@@ -632,6 +643,7 @@ func runServe(args []string) {
 	waitForSession := fs.Bool("wait-for-session", false, "Wait for other Claude Code sessions to finish before starting tasks")
 	debug := fs.Bool("debug", false, "Run in foreground with verbose logging")
 	dummy := fs.Bool("dummy", false, "Use dummy runner (fake responses for network testing)")
+	relayPassword := fs.String("relay-password", "", "Password for relay server authentication")
 	fs.Parse(args)
 
 	if *workDir == "." {
@@ -692,6 +704,9 @@ func runServe(args []string) {
 		}
 		if *dummy {
 			childArgs = append(childArgs, "--dummy")
+		}
+		if *relayPassword != "" {
+			childArgs = append(childArgs, fmt.Sprintf("--relay-password=%s", *relayPassword))
 		}
 
 		cmd := osexec.Command(execPath, childArgs...)
@@ -791,15 +806,43 @@ func runServe(args []string) {
 
 	// Fetch platform config (relay servers, runners, models) from Convex
 	var relayServers []RelayServerInfo
+	// relayPasswords maps relay QuicAddr to password for per-relay auth
+	relayPasswords := make(map[string]string)
+
+	// Determine relay password: --relay-password flag > config.relay_password
+	effectiveRelayPassword := *relayPassword
+	if effectiveRelayPassword == "" {
+		effectiveRelayPassword = cfg.RelayPassword
+	}
+
+	if !*noRelay && len(cfg.RelayServers) > 0 {
+		// Use relay servers from config.json (highest priority)
+		log.Printf("Using %d relay server(s) from config.json:", len(cfg.RelayServers))
+		for _, rs := range cfg.RelayServers {
+			relayServers = append(relayServers, RelayServerInfo{
+				ID:       rs.ID,
+				QuicAddr: rs.QuicAddr,
+				HttpURL:  rs.HttpURL,
+				Region:   rs.Region,
+				Priority: rs.Priority,
+			})
+			// Per-relay password takes priority over global relay password
+			if rs.Password != "" {
+				relayPasswords[rs.QuicAddr] = rs.Password
+			}
+			log.Printf("  [%s] %s (%s)", rs.ID, rs.QuicAddr, rs.Region)
+		}
+	}
+
 	platformCfg, platformErr := FetchPlatformConfig(cfg.ConvexSiteURL)
 	if platformErr != nil {
 		log.Printf("Warning: could not fetch platform config: %v", platformErr)
 	} else {
-		// Populate relay servers
-		if !*noRelay {
+		// Populate relay servers from Convex if not already set from config.json
+		if !*noRelay && len(relayServers) == 0 {
 			relayServers = platformCfg.RelayServers
 			if len(relayServers) > 0 {
-				log.Printf("Found %d relay server(s):", len(relayServers))
+				log.Printf("Found %d relay server(s) from Convex:", len(relayServers))
 				for _, rs := range relayServers {
 					log.Printf("  [%s] %s (%s)", rs.ID, rs.QuicAddr, rs.Region)
 				}
@@ -921,8 +964,13 @@ func runServe(args []string) {
 	// Start relay tunnels (connect to all relay servers for redundancy)
 	for _, rs := range relayServers {
 		rs := rs // capture loop variable
+		// Resolve password: per-relay password > global relay password
+		pw := relayPasswords[rs.QuicAddr]
+		if pw == "" {
+			pw = effectiveRelayPassword
+		}
 		log.Printf("Starting relay tunnel to %s (%s)...", rs.QuicAddr, rs.ID)
-		go runRelayTunnel(ctx, rs.QuicAddr, fmt.Sprintf("127.0.0.1:%d", *httpPort), cfg.DeviceID, cfg.AuthToken)
+		go runRelayTunnel(ctx, rs.QuicAddr, fmt.Sprintf("127.0.0.1:%d", *httpPort), cfg.DeviceID, cfg.AuthToken, pw)
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -1169,6 +1217,279 @@ func runConfigSet(key, value string) {
 		fmt.Fprintf(os.Stderr, "Supported keys: auto-start, auto-update\n")
 		os.Exit(1)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// relay — manage custom relay servers
+// ---------------------------------------------------------------------------
+
+func runRelay(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Usage:")
+		fmt.Println("  yaver relay add <url> [--password <pass>] [--label <name>]")
+		fmt.Println("  yaver relay list")
+		fmt.Println("  yaver relay remove <id-or-url>")
+		fmt.Println("  yaver relay test [url]")
+		fmt.Println("  yaver relay set-password <password>")
+		fmt.Println("  yaver relay clear-password")
+		os.Exit(0)
+	}
+
+	switch args[0] {
+	case "add":
+		runRelayAdd(args[1:])
+	case "list", "ls":
+		runRelayList()
+	case "remove", "rm":
+		runRelayRemove(args[1:])
+	case "test":
+		runRelayTest(args[1:])
+	case "set-password":
+		runRelaySetPassword(args[1:])
+	case "clear-password":
+		runRelayClearPassword()
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown relay subcommand: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func runRelayAdd(args []string) {
+	fs := flag.NewFlagSet("relay add", flag.ExitOnError)
+	password := fs.String("password", "", "Relay server password")
+	label := fs.String("label", "", "Human-readable label (e.g. 'My VPS')")
+	fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: yaver relay add <url> [--password <pass>] [--label <name>]")
+		os.Exit(1)
+	}
+
+	rawURL := fs.Arg(0)
+	// Normalize: strip trailing slash
+	rawURL = strings.TrimRight(rawURL, "/")
+
+	// Generate ID from URL: first 8 hex chars of a simple hash
+	id := fmt.Sprintf("%x", func() uint32 {
+		var h uint32
+		for _, c := range rawURL {
+			h = h*31 + uint32(c)
+		}
+		return h
+	}())
+	if len(id) > 8 {
+		id = id[:8]
+	}
+
+	// Infer QUIC address from URL (same host, port 4433)
+	host := rawURL
+	// Remove scheme
+	for _, prefix := range []string{"https://", "http://"} {
+		host = strings.TrimPrefix(host, prefix)
+	}
+	// Remove port if present
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	// Remove path
+	if idx := strings.Index(host, "/"); idx != -1 {
+		host = host[:idx]
+	}
+	quicAddr := host + ":4433"
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Check for duplicate URL
+	for _, rs := range cfg.RelayServers {
+		if rs.HttpURL == rawURL {
+			fmt.Fprintf(os.Stderr, "Relay server already configured: %s (id: %s)\n", rawURL, rs.ID)
+			os.Exit(1)
+		}
+	}
+
+	relay := RelayServerConfig{
+		ID:       id,
+		QuicAddr: quicAddr,
+		HttpURL:  rawURL,
+		Password: *password,
+		Label:    *label,
+		Priority: len(cfg.RelayServers) + 1,
+	}
+
+	cfg.RelayServers = append(cfg.RelayServers, relay)
+	if err := SaveConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+		os.Exit(1)
+	}
+
+	displayLabel := relay.Label
+	if displayLabel == "" {
+		displayLabel = relay.HttpURL
+	}
+	fmt.Printf("Added relay server: %s\n", displayLabel)
+	fmt.Printf("  ID:       %s\n", relay.ID)
+	fmt.Printf("  URL:      %s\n", relay.HttpURL)
+	fmt.Printf("  QUIC:     %s\n", relay.QuicAddr)
+	if relay.Password != "" {
+		fmt.Printf("  Password: ****\n")
+	}
+	fmt.Println("\nRestart 'yaver serve' to use the new relay server.")
+}
+
+func runRelayList() {
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(cfg.RelayServers) == 0 {
+		fmt.Println("No custom relay servers configured.")
+		fmt.Println("Relay servers from Convex platform config will be used.")
+		fmt.Println()
+		fmt.Println("Add one with: yaver relay add <url>")
+		return
+	}
+
+	fmt.Printf("%-10s %-35s %-12s %-10s\n", "ID", "URL", "Password", "Label")
+	fmt.Printf("%-10s %-35s %-12s %-10s\n", "------", "---", "--------", "-----")
+	for _, rs := range cfg.RelayServers {
+		pw := "(none)"
+		if rs.Password != "" {
+			pw = "****"
+		}
+		lbl := rs.Label
+		if lbl == "" {
+			lbl = "-"
+		}
+		fmt.Printf("%-10s %-35s %-12s %-10s\n", rs.ID, rs.HttpURL, pw, lbl)
+	}
+}
+
+func runRelayRemove(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: yaver relay remove <id-or-url>")
+		os.Exit(1)
+	}
+	target := args[0]
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	found := false
+	var remaining []RelayServerConfig
+	for _, rs := range cfg.RelayServers {
+		if rs.ID == target || rs.HttpURL == target {
+			found = true
+			fmt.Printf("Removed relay server: %s (%s)\n", rs.HttpURL, rs.ID)
+		} else {
+			remaining = append(remaining, rs)
+		}
+	}
+
+	if !found {
+		fmt.Fprintf(os.Stderr, "Relay server not found: %s\n", target)
+		os.Exit(1)
+	}
+
+	cfg.RelayServers = remaining
+	if err := SaveConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runRelayTest(args []string) {
+	var urls []string
+
+	if len(args) > 0 {
+		urls = []string{strings.TrimRight(args[0], "/")}
+	} else {
+		// Test all configured relays
+		cfg, err := LoadConfig()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+			os.Exit(1)
+		}
+		for _, rs := range cfg.RelayServers {
+			urls = append(urls, rs.HttpURL)
+		}
+		if len(urls) == 0 {
+			fmt.Println("No relay servers configured. Pass a URL: yaver relay test <url>")
+			os.Exit(0)
+		}
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	for _, u := range urls {
+		healthURL := u + "/health"
+		start := time.Now()
+		resp, err := client.Get(healthURL)
+		rtt := time.Since(start)
+		if err != nil {
+			fmt.Printf("FAIL  %s  error: %v\n", u, err)
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == 200 {
+			fmt.Printf("OK    %s  %dms  %s\n", u, rtt.Milliseconds(), strings.TrimSpace(string(body)))
+		} else {
+			fmt.Printf("FAIL  %s  status: %d  %s\n", u, resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+	}
+}
+
+func runRelaySetPassword(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: yaver relay set-password <password>")
+		os.Exit(1)
+	}
+	password := args[0]
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg.RelayPassword = password
+	if err := SaveConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Relay password saved.")
+	fmt.Println("Restart 'yaver serve' for the change to take effect.")
+}
+
+func runRelayClearPassword() {
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	if cfg.RelayPassword == "" {
+		fmt.Println("No relay password was set.")
+		return
+	}
+
+	cfg.RelayPassword = ""
+	if err := SaveConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Relay password cleared.")
+	fmt.Println("Restart 'yaver serve' for the change to take effect.")
 }
 
 func valueOrEmpty(s string) string {
@@ -1617,6 +1938,42 @@ func runStatus() {
 		}
 		_ = pid
 	}
+
+	// Relay server status
+	fmt.Println()
+	fmt.Println("Relay:")
+	if cfg.RelayPassword != "" {
+		fmt.Println("  Password: set")
+	} else {
+		fmt.Println("  Password: not set")
+	}
+
+	if len(cfg.RelayServers) == 0 {
+		fmt.Println("  Servers:  none configured (will fetch from Convex on serve)")
+	} else {
+		fmt.Println("  Servers:")
+		relayClient := &http.Client{Timeout: 5 * time.Second}
+		for _, rs := range cfg.RelayServers {
+			label := rs.ID
+			if label == "" {
+				label = rs.HttpURL
+			}
+			healthURL := rs.HttpURL + "/health"
+			start := time.Now()
+			resp, err := relayClient.Get(healthURL)
+			rtt := time.Since(start)
+			if err != nil {
+				fmt.Printf("    %-10s %-30s FAIL (timeout)\n", label, rs.HttpURL)
+			} else {
+				resp.Body.Close()
+				if resp.StatusCode == 200 {
+					fmt.Printf("    %-10s %-30s OK (%dms)\n", label, rs.HttpURL, rtt.Milliseconds())
+				} else {
+					fmt.Printf("    %-10s %-30s FAIL (status %d)\n", label, rs.HttpURL, resp.StatusCode)
+				}
+			}
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -2008,6 +2365,7 @@ type relayRegisterMsg struct {
 	Type     string `json:"type"`
 	DeviceID string `json:"deviceId"`
 	Token    string `json:"token"`
+	Password string `json:"password,omitempty"`
 }
 
 type relayRegisterResp struct {
@@ -2034,7 +2392,7 @@ type relayTunnelResponse struct {
 
 // runRelayTunnel connects to the relay and handles incoming proxied requests.
 // It reconnects automatically with exponential backoff.
-func runRelayTunnel(ctx context.Context, relayAddr, agentAddr, deviceID, token string) {
+func runRelayTunnel(ctx context.Context, relayAddr, agentAddr, deviceID, token, password string) {
 	backoff := time.Second
 
 	for {
@@ -2045,7 +2403,7 @@ func runRelayTunnel(ctx context.Context, relayAddr, agentAddr, deviceID, token s
 		}
 
 		log.Printf("[RELAY] Connecting to relay %s...", relayAddr)
-		err := relayConnectAndServe(ctx, relayAddr, agentAddr, deviceID, token)
+		err := relayConnectAndServe(ctx, relayAddr, agentAddr, deviceID, token, password)
 		if err != nil {
 			log.Printf("[RELAY] Connection lost: %v", err)
 		}
@@ -2068,7 +2426,7 @@ func runRelayTunnel(ctx context.Context, relayAddr, agentAddr, deviceID, token s
 	}
 }
 
-func relayConnectAndServe(ctx context.Context, relayAddr, agentAddr, deviceID, token string) error {
+func relayConnectAndServe(ctx context.Context, relayAddr, agentAddr, deviceID, token, password string) error {
 	tlsCfg := &tls.Config{
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"yaver-relay"},
@@ -2089,7 +2447,7 @@ func relayConnectAndServe(ctx context.Context, relayAddr, agentAddr, deviceID, t
 		return fmt.Errorf("open registration stream: %w", err)
 	}
 
-	regMsg := relayRegisterMsg{Type: "register", DeviceID: deviceID, Token: token}
+	regMsg := relayRegisterMsg{Type: "register", DeviceID: deviceID, Token: token, Password: password}
 	data, _ := json.Marshal(regMsg)
 	stream.Write(data)
 	stream.Close()

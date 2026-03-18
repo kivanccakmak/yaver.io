@@ -9,6 +9,20 @@ const manuals = [
     tags: ["macOS", "Linux", "Windows"],
   },
   {
+    title: "Relay server setup",
+    description:
+      "Deploy your own relay server so your phone can reach your dev machine from anywhere. Covers Docker setup, HTTPS with Let's Encrypt, client configuration, and maintenance.",
+    href: "/manuals/relay-setup",
+    tags: ["Docker", "VPS", "nginx"],
+  },
+  {
+    title: "Zero-cost local AI coding setup",
+    description:
+      "Run AI coding agents entirely on your own hardware — no API keys, no cloud services, no recurring costs. Set up Ollama, a coding agent, and Tailscale for remote access.",
+    href: "/manuals/local-llm",
+    tags: ["Ollama", "Free", "Local"],
+  },
+  {
     title: "Auto-boot on power restore",
     description:
       "Configure your macOS, Linux, or desktop PC to automatically boot when power is restored after an outage — so Yaver CLI starts without manual intervention.",

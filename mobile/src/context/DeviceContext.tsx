@@ -7,22 +7,26 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Platform } from "react-native";
+import { Alert, Linking, Platform } from "react-native";
 import Constants from "expo-constants";
 import NetInfo from "@react-native-community/netinfo";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { router } from "expo-router";
 import { quicClient, RelayServer } from "../lib/quic";
 import { useAuth } from "./AuthContext";
 import { getUserSettings } from "../lib/auth";
 import { appLog } from "../lib/logger";
 import { beaconListener } from "../lib/beacon";
+import { CONVEX_SITE_URL } from "../lib/constants";
+
+export const CUSTOM_RELAYS_KEY = "@yaver/custom_relays";
+const RELAY_ONBOARDING_KEY = "@yaver/relay_onboarding_done";
 
 const APP_VERSION = Constants.expoConfig?.version ?? "unknown";
 const BUILD_NUMBER =
   Constants.expoConfig?.ios?.buildNumber ??
   Constants.expoConfig?.android?.versionCode?.toString() ??
   "unknown";
-
-const CONVEX_SITE_URL = "https://shocking-echidna-394.eu-west-1.convex.site";
 
 // Heartbeat is sent every 2 minutes; consider "recently active" if within 5 min
 const HEARTBEAT_STALE_MS = 5 * 60 * 1000;
@@ -241,20 +245,60 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     return () => unsub();
   }, [activeDevice]);
 
-  // Fetch relay servers and user settings from platform config (once)
+  // Fetch relay servers: local AsyncStorage > Convex user settings > Convex platform config
   const relaysFetched = useRef(false);
   useEffect(() => {
     if (relaysFetched.current) return;
     relaysFetched.current = true;
     (async () => {
       try {
+        // 1. Check for user-configured custom relays in local storage first
+        const customRaw = await AsyncStorage.getItem(CUSTOM_RELAYS_KEY);
+        if (customRaw) {
+          const customRelays: RelayServer[] = JSON.parse(customRaw);
+          if (customRelays.length > 0) {
+            quicClient.setRelayServers(customRelays);
+            console.log("[DeviceContext] Using", customRelays.length, "custom relay server(s)");
+            sendTelemetry(token, "relays-loaded", `Loaded ${customRelays.length} custom relay(s)`, JSON.stringify(customRelays.map(s => s.id)));
+            return;
+          }
+        }
+
+        // 2. No local relays — check Convex user settings (account-level relay config)
+        if (token) {
+          try {
+            const settings = await getUserSettings(token);
+            if (settings.relayUrl) {
+              const accountRelay: RelayServer = {
+                id: "account",
+                quicAddr: "",
+                httpUrl: settings.relayUrl,
+                region: "account",
+                priority: 1,
+                password: settings.relayPassword,
+              };
+              quicClient.setRelayServers([accountRelay]);
+              // Persist to AsyncStorage so it works offline and on next launch
+              await AsyncStorage.setItem(CUSTOM_RELAYS_KEY, JSON.stringify([accountRelay]));
+              // Also enable relay sync so future changes propagate
+              await AsyncStorage.setItem("@yaver/relay_sync_enabled", "true");
+              console.log("[DeviceContext] Loaded relay from Convex user settings:", settings.relayUrl);
+              sendTelemetry(token, "relays-loaded", "Loaded relay from account settings", settings.relayUrl);
+              return;
+            }
+          } catch {
+            // Best-effort — fall through to platform config
+          }
+        }
+
+        // 3. No account-level relay — fall back to Convex platform config
         const res = await fetch(`${CONVEX_SITE_URL}/config`);
         if (res.ok) {
           const data = await res.json();
           const servers: RelayServer[] = data.relayServers || [];
           quicClient.setRelayServers(servers);
-          console.log("[DeviceContext] Loaded", servers.length, "relay server(s)");
-          sendTelemetry(token, "relays-loaded", `Loaded ${servers.length} relay(s)`, JSON.stringify(servers.map(s => s.id)));
+          console.log("[DeviceContext] Loaded", servers.length, "relay server(s) from Convex");
+          sendTelemetry(token, "relays-loaded", `Loaded ${servers.length} relay(s) from Convex`, JSON.stringify(servers.map(s => s.id)));
         }
       } catch {
         sendTelemetry(token, "relays-failed", "Could not fetch relay config");
@@ -262,7 +306,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         setRelaysReady(true);
       }
     })();
-  }, []);
+  }, [token]);
 
   // Load user settings (forceRelay) on startup
   const settingsLoaded = useRef(false);
@@ -276,6 +320,57 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       }
     });
   }, [token]);
+
+  // One-time relay onboarding alert after first login
+  const onboardingChecked = useRef(false);
+  useEffect(() => {
+    if (!token || !relaysReady || onboardingChecked.current) return;
+    onboardingChecked.current = true;
+    (async () => {
+      try {
+        const done = await AsyncStorage.getItem(RELAY_ONBOARDING_KEY);
+        if (done) return;
+        const customRaw = await AsyncStorage.getItem(CUSTOM_RELAYS_KEY);
+        if (customRaw) {
+          const parsed = JSON.parse(customRaw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            // Already has custom relays, skip onboarding
+            await AsyncStorage.setItem(RELAY_ONBOARDING_KEY, "1");
+            return;
+          }
+        }
+        Alert.alert(
+          "Relay Server Setup",
+          "A relay server lets you connect to your dev machine from anywhere. " +
+          "If you're always on the same WiFi or use Tailscale, you can skip this.",
+          [
+            {
+              text: "Set Up Relay",
+              onPress: () => {
+                AsyncStorage.setItem(RELAY_ONBOARDING_KEY, "1");
+                router.push("/(tabs)/settings");
+              },
+            },
+            {
+              text: "Learn More",
+              onPress: () => {
+                Linking.openURL("https://yaver.io/docs/self-hosting");
+              },
+            },
+            {
+              text: "Skip",
+              style: "cancel",
+              onPress: () => {
+                AsyncStorage.setItem(RELAY_ONBOARDING_KEY, "1");
+              },
+            },
+          ]
+        );
+      } catch {
+        // Best-effort
+      }
+    })();
+  }, [token, relaysReady]);
 
   // Start/stop LAN beacon listener based on auth state
   useEffect(() => {

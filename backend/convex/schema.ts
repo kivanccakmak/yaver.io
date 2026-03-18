@@ -11,7 +11,6 @@ export default defineSchema({
     surveyCompleted: v.optional(v.boolean()),
     providerId: v.string(),
     avatarUrl: v.optional(v.string()),
-    plan: v.optional(v.union(v.literal("free"), v.literal("pro"), v.literal("enterprise"), v.literal("early_access"))),
     createdAt: v.number(),
   })
     .index("by_email", ["email"])
@@ -73,30 +72,6 @@ export default defineSchema({
     .index("by_platform", ["platform"])
     .index("by_platform_arch_format", ["platform", "arch", "format"]),
 
-  subscriptions: defineTable({
-    userId: v.string(), // matches users.userId
-    platform: v.union(v.literal("web"), v.literal("ios"), v.literal("android")),
-    plan: v.union(v.literal("free"), v.literal("pro"), v.literal("enterprise")),
-    status: v.union(
-      v.literal("active"),
-      v.literal("cancelled"),
-      v.literal("expired"),
-      v.literal("past_due"),
-      v.literal("early_access"),
-    ),
-    lemonSqueezySubscriptionId: v.optional(v.string()),
-    lemonSqueezyCustomerId: v.optional(v.string()),
-    lemonSqueezyOrderId: v.optional(v.string()),
-    variantId: v.optional(v.string()),
-    productId: v.optional(v.string()),
-    currentPeriodEnd: v.optional(v.number()),
-    cancelledAt: v.optional(v.number()),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-  })
-    .index("by_userId", ["userId"])
-    .index("by_lemonSqueezySubscriptionId", ["lemonSqueezySubscriptionId"]),
-
   developerSurveys: defineTable({
     userId: v.id("users"),
     isDeveloper: v.boolean(),
@@ -128,6 +103,8 @@ export default defineSchema({
     forceRelay: v.optional(v.boolean()),
     runnerId: v.optional(v.string()),
     customRunnerCommand: v.optional(v.string()),
+    relayUrl: v.optional(v.string()),
+    relayPassword: v.optional(v.string()),
   }).index("by_userId", ["userId"]),
 
   aiRunners: defineTable({

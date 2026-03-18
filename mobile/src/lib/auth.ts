@@ -95,8 +95,11 @@ export function getWebBaseUrl(): string {
   return "https://yaver.io";
 }
 
+import { CONVEX_SITE_URL } from "./constants";
+export { CONVEX_SITE_URL };
+
 export function getConvexSiteUrl(): string {
-  return "https://shocking-echidna-394.eu-west-1.convex.site";
+  return CONVEX_SITE_URL;
 }
 
 export interface DeviceMetric {
@@ -265,6 +268,8 @@ export interface UserSettings {
   forceRelay?: boolean;
   runnerId?: string;
   customRunnerCommand?: string;
+  relayUrl?: string;
+  relayPassword?: string;
 }
 
 export interface AiRunner {

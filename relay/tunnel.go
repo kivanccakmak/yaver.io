@@ -23,18 +23,20 @@ type TunnelClient struct {
 	agentAddr  string // local agent HTTP address (e.g. "127.0.0.1:18080")
 	deviceID   string
 	token      string
+	password   string // shared relay password
 	httpClient *http.Client
 
 	mu   sync.Mutex
 	conn quic.Connection
 }
 
-func NewTunnelClient(relayAddr, agentAddr, deviceID, token string) *TunnelClient {
+func NewTunnelClient(relayAddr, agentAddr, deviceID, token, password string) *TunnelClient {
 	return &TunnelClient{
 		relayAddr: relayAddr,
 		agentAddr: agentAddr,
 		deviceID:  deviceID,
 		token:     token,
+		password:  password,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
 		},
@@ -127,6 +129,7 @@ func (t *TunnelClient) register(ctx context.Context, conn quic.Connection) error
 		Type:     "register",
 		DeviceID: t.deviceID,
 		Token:    t.token,
+		Password: t.password,
 	}
 
 	data, _ := json.Marshal(msg)
