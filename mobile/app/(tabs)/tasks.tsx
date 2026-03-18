@@ -1073,9 +1073,19 @@ export default function TasksScreen() {
               <View style={[s.chatModal, { backgroundColor: c.bg }]}>
                 {/* Header */}
                 <View style={[s.chatHeader, { borderBottomColor: c.border }]}>
-                  <Pressable onPress={() => { setSelectedTask(null); setFollowUpText(""); }} style={s.chatBackBtn}>
-                    <Text style={[s.chatBackText, { color: c.accent }]}>Close</Text>
-                  </Pressable>
+                  {/* Left: device info + connection status */}
+                  <View style={s.chatHeaderLeft}>
+                    {activeDevice && (
+                      <View style={s.chatHeaderDevice}>
+                        <View style={[s.statusDotSmall, { backgroundColor: connectionStatus === "connected" ? "#22c55e" : connectionStatus === "error" ? "#ef4444" : connectionStatus === "connecting" ? "#eab308" : "#666" }]} />
+                        <Text style={[s.chatHeaderDeviceText, { color: connectionStatus === "connected" ? c.textSecondary : connectionStatus === "error" ? "#ef4444" : "#eab308" }]} numberOfLines={1}>
+                          {activeDevice.name.replace(/\.local$/, "")}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Center: task title + status */}
                   <View style={s.chatHeaderCenter}>
                     <Text style={[s.chatHeaderTitle, { color: c.textPrimary }]} numberOfLines={1}>
                       {selectedTask.title}
@@ -1085,31 +1095,29 @@ export default function TasksScreen() {
                       <Text style={[s.chatHeaderStatus, { color: STATUS_COLORS[selectedTask.status] }]}>
                         {selectedTask.status}
                       </Text>
-                      {activeDevice && (
-                        <>
-                          <Text style={[s.chatHeaderStatus, { color: c.textMuted }]}> · </Text>
-                          <View style={[s.statusDotSmall, { backgroundColor: connectionStatus === "connected" ? "#22c55e" : connectionStatus === "error" ? "#ef4444" : connectionStatus === "connecting" ? "#eab308" : "#666" }]} />
-                          <Text style={[s.chatHeaderStatus, { color: connectionStatus === "connected" ? "#22c55e" : connectionStatus === "error" ? "#ef4444" : connectionStatus === "connecting" ? "#eab308" : "#666" }]}>
-                            {activeDevice.name.replace(/\.local$/, "")}
-                          </Text>
-                        </>
-                      )}
                     </View>
                   </View>
-                  {isRunning ? (
-                    <Pressable
-                      onPress={() => handleExitTask(selectedTask.id)}
-                      onLongPress={() => {
-                        Alert.alert("Force Stop", "Kill the process immediately?", [
-                          { text: "Cancel", style: "cancel" },
-                          { text: "Kill", style: "destructive", onPress: () => handleStopTask(selectedTask.id) },
-                        ]);
-                      }}
-                      style={s.chatStopBtn}
-                    >
-                      <Text style={s.chatStopText}>Exit</Text>
-                    </Pressable>
-                  ) : <View style={{ width: 50 }} />}
+
+                  {/* Right: Close / Exit */}
+                  <View style={s.chatHeaderRight}>
+                    {isRunning ? (
+                      <Pressable
+                        onPress={() => handleExitTask(selectedTask.id)}
+                        onLongPress={() => {
+                          Alert.alert("Force Stop", "Kill the process immediately?", [
+                            { text: "Cancel", style: "cancel" },
+                            { text: "Kill", style: "destructive", onPress: () => handleStopTask(selectedTask.id) },
+                          ]);
+                        }}
+                      >
+                        <Text style={s.chatStopText}>Exit</Text>
+                      </Pressable>
+                    ) : (
+                      <Pressable onPress={() => { setSelectedTask(null); setFollowUpText(""); }}>
+                        <Text style={[s.chatBackText, { color: c.accent }]}>Close</Text>
+                      </Pressable>
+                    )}
+                  </View>
                 </View>
 
                 {/* Chat messages */}
@@ -1343,16 +1351,19 @@ const s = StyleSheet.create({
   chatModal: { flex: 1, borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: "hidden" },
 
   // Chat header
-  chatHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 12, borderBottomWidth: 1 },
-  chatBackBtn: { width: 50 },
+  chatHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1 },
+  chatHeaderLeft: { width: 80, alignItems: "flex-start" },
+  chatHeaderDevice: { flexDirection: "row", alignItems: "center", gap: 4 },
+  chatHeaderDeviceText: { fontSize: 9, fontWeight: "500", textTransform: "uppercase", letterSpacing: 0.3 },
   chatBackText: { fontSize: 15, fontWeight: "600" },
   chatHeaderCenter: { flex: 1, alignItems: "center" },
   chatHeaderTitle: { fontSize: 14, fontWeight: "600" },
   chatHeaderMeta: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 },
+  chatHeaderRight: { width: 50, alignItems: "flex-end" },
   statusDotSmall: { width: 6, height: 6, borderRadius: 3 },
   chatHeaderStatus: { fontSize: 11, fontWeight: "500", textTransform: "uppercase" },
   chatHeaderCost: { fontSize: 11, marginLeft: 6 },
-  chatStopBtn: { width: 50, alignItems: "flex-end" },
+  // chatStopBtn removed — now using chatHeaderRight
   chatStopText: { color: "#ef4444", fontSize: 14, fontWeight: "600" },
 
   // Chat messages
