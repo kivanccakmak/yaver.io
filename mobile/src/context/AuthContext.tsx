@@ -17,6 +17,7 @@ import {
   getSurveyStatus,
   clearKeychainIfFreshInstall,
 } from "../lib/auth";
+import { clearCache } from "../lib/storage";
 
 interface AuthState {
   user: User | null;
@@ -101,6 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     await clearToken();
+    await clearCache(); // Clear cached tasks from previous session
     setToken(null);
     setUser(null);
     setSurveyCompleted(false);

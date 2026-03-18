@@ -387,11 +387,7 @@ export default function DevicesScreen() {
     refreshDevices,
   } = useDevice();
 
-  // Auto-refresh every 3 seconds (matches beacon frequency for live feel)
-  useEffect(() => {
-    const interval = setInterval(refreshDevices, 3000);
-    return () => clearInterval(interval);
-  }, [refreshDevices]);
+  // Device polling is handled by DeviceContext (every 3s from any screen)
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>

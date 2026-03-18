@@ -323,10 +323,13 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     return () => { unsubDiscover(); unsubLost(); };
   }, [token]);
 
-  // Fetch devices when token becomes available
+  // Fetch devices when token becomes available + auto-poll every 3s
   useEffect(() => {
     if (token) {
       refreshDevices();
+      // Poll every 3s so device status changes are picked up from any screen
+      const interval = setInterval(refreshDevices, 3000);
+      return () => clearInterval(interval);
     } else {
       setDevices([]);
       setActiveDevice(null);
