@@ -37,6 +37,7 @@ export default function DownloadPage() {
   const [platform, setPlatform] = useState<Platform>("unknown");
   const [downloads, setDownloads] = useState<Download[]>([]);
   const [cliVersion, setCliVersion] = useState<string>("");
+  const [mobileVersion, setMobileVersion] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [mobilePassword, setMobilePassword] = useState("");
   const [mobileUnlocked, setMobileUnlocked] = useState(false);
@@ -61,6 +62,7 @@ export default function DownloadPage() {
       .then((res) => res.json())
       .then((data) => {
         if (data.cliVersion) setCliVersion(data.cliVersion);
+        if (data.mobileVersion) setMobileVersion(data.mobileVersion);
       })
       .catch(() => {});
   }, []);
@@ -332,7 +334,7 @@ export default function DownloadPage() {
         {/* Mobile app */}
         <div className="mb-12">
           <h2 className="mb-6 text-xs font-semibold uppercase tracking-wider text-surface-500">
-            Mobile app <span className="normal-case tracking-normal text-surface-600">v1.5.0</span>
+            Mobile app {mobileVersion && <span className="normal-case tracking-normal text-surface-600">v{mobileVersion}</span>}
           </h2>
 
           {!mobileUnlocked ? (
