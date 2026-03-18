@@ -13,6 +13,8 @@
  */
 
 import { cacheTaskList, cacheTaskOutput, getCachedTaskList, getDeletedTaskIds } from "./storage";
+import { beaconListener } from "./beacon";
+import NetInfo from "@react-native-community/netinfo";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -107,7 +109,7 @@ export class QuicClient {
   private deviceId: string | null = null;
   private relayServers: RelayServer[] = [];  // all available relay servers
   private activeRelayUrl: string | null = null; // currently working relay base URL
-  private _forceRelay = true; // default to relay — more reliable for emulators and mobile networks
+  private _forceRelay = false; // default to direct-first — try LAN/local before relay
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -674,11 +676,57 @@ export class QuicClient {
     try {
       let connected = false;
 
-      // Strategy: relay-first for mobile (more reliable on 4G/roaming),
-      // with direct fallback for same-network (private IP) connections.
+      // Check if we're on WiFi (direct connection possible) or cellular (relay only)
+      const netState = await NetInfo.fetch();
+      const isWifi = netState.type === "wifi" || netState.type === "ethernet";
 
-      // 1. Try relay servers first (always, when available)
-      if (this.deviceId && this.relayServers.length > 0) {
+      // Strategy: direct-first on WiFi (lowest latency), relay-fallback.
+      // On cellular: skip direct, go straight to relay.
+
+      // 1. Try direct connection first (LAN beacon IP or Convex-known IP)
+      if (isWifi && !this._forceRelay) {
+        // 1a. Check if device is LAN-discovered via beacon (freshest IP)
+        const lanInfo = this.deviceId ? beaconListener.getLocalIP(this.deviceId) : null;
+        if (lanInfo) {
+          try {
+            const directUrl = `http://${lanInfo.ip}:${lanInfo.port}`;
+            console.log("[QUIC] Trying LAN-discovered direct:", directUrl);
+            const res = await this.fetchWithTimeout(`${directUrl}/health`, {
+              headers: this.authHeaders,
+            }, 2000);
+            if (res.ok) {
+              this.activeRelayUrl = null;
+              this.setConnectionMode("direct");
+              connected = true;
+              console.log("[QUIC] Direct connection via LAN beacon succeeded");
+            }
+          } catch (e) {
+            console.log("[QUIC] LAN beacon direct failed:", e);
+          }
+        }
+
+        // 1b. Try Convex-known IP (if beacon didn't work and IP is private)
+        if (!connected && this.host && this.isPrivateIP(this.host)) {
+          try {
+            const directUrl = `http://${this.host}:${this.port}`;
+            console.log("[QUIC] Trying Convex-known direct:", directUrl);
+            const res = await this.fetchWithTimeout(`${directUrl}/health`, {
+              headers: this.authHeaders,
+            }, 2000);
+            if (res.ok) {
+              this.activeRelayUrl = null;
+              this.setConnectionMode("direct");
+              connected = true;
+              console.log("[QUIC] Direct connection via Convex IP succeeded");
+            }
+          } catch (e) {
+            console.log("[QUIC] Convex IP direct failed:", e);
+          }
+        }
+      }
+
+      // 2. Try relay servers (fallback for cellular, or when direct failed)
+      if (!connected && this.deviceId && this.relayServers.length > 0) {
         console.log("[QUIC] Trying", this.relayServers.length, "relay server(s)");
         for (const relay of this.relayServers) {
           try {
@@ -697,25 +745,6 @@ export class QuicClient {
           } catch (e) {
             console.log("[QUIC] Relay", relay.id, "failed:", e);
           }
-        }
-      }
-
-      // 2. Try direct connection as fallback (only if not force-relay and relay failed)
-      if (!connected && !this._forceRelay) {
-        try {
-          const directUrl = `http://${this.host}:${this.port}`;
-          console.log("[QUIC] Trying direct:", directUrl);
-          const res = await this.fetchWithTimeout(`${directUrl}/health`, {
-            headers: this.authHeaders,
-          }, 5000);
-          if (res.ok) {
-            this.activeRelayUrl = null;
-            this.setConnectionMode("direct");
-            connected = true;
-            console.log("[QUIC] Direct connection succeeded");
-          }
-        } catch (e) {
-          console.log("[QUIC] Direct failed:", e);
         }
       }
 

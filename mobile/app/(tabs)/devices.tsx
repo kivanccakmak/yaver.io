@@ -387,9 +387,9 @@ export default function DevicesScreen() {
     refreshDevices,
   } = useDevice();
 
-  // Auto-refresh every 10 seconds
+  // Auto-refresh every 3 seconds (matches beacon frequency for live feel)
   useEffect(() => {
-    const interval = setInterval(refreshDevices, 10000);
+    const interval = setInterval(refreshDevices, 3000);
     return () => clearInterval(interval);
   }, [refreshDevices]);
 

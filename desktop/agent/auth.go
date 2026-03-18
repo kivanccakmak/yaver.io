@@ -199,10 +199,13 @@ func RegisterDevice(baseURL string, r RegisterDeviceRequest) error {
 
 // SendHeartbeat sends a heartbeat to the Convex backend so the device stays
 // marked as online. Includes active runner info if any.
-func SendHeartbeat(baseURL, token, deviceID string, runners []RunnerInfo) error {
+func SendHeartbeat(baseURL, token, deviceID string, runners []RunnerInfo, quicHost string) error {
 	payload := map[string]interface{}{
 		"deviceId": deviceID,
 		"runners":  runners,
+	}
+	if quicHost != "" {
+		payload["quicHost"] = quicHost
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

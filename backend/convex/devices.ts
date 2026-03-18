@@ -76,6 +76,7 @@ export const heartbeat = mutation({
       status: v.string(),
       title: v.string(),
     }))),
+    quicHost: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.tokenHash);
@@ -89,11 +90,16 @@ export const heartbeat = mutation({
     if (!device) throw new Error("Device not found");
     if (device.userId !== session.user._id) throw new Error("Unauthorized");
 
-    await ctx.db.patch(device._id, {
+    const patch: Record<string, unknown> = {
       isOnline: true,
       lastHeartbeat: Date.now(),
       runners: args.runners ?? [],
-    });
+    };
+    // Update stored IP if the agent reports a new one
+    if (args.quicHost && args.quicHost !== device.quicHost) {
+      patch.quicHost = args.quicHost;
+    }
+    await ctx.db.patch(device._id, patch);
   },
 });
 

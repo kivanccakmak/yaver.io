@@ -1085,6 +1085,15 @@ export default function TasksScreen() {
                       <Text style={[s.chatHeaderStatus, { color: STATUS_COLORS[selectedTask.status] }]}>
                         {selectedTask.status}
                       </Text>
+                      {activeDevice && (
+                        <>
+                          <Text style={[s.chatHeaderStatus, { color: c.textMuted }]}> · </Text>
+                          <View style={[s.statusDotSmall, { backgroundColor: connectionStatus === "connected" ? "#22c55e" : connectionStatus === "error" ? "#ef4444" : connectionStatus === "connecting" ? "#eab308" : "#666" }]} />
+                          <Text style={[s.chatHeaderStatus, { color: connectionStatus === "connected" ? "#22c55e" : connectionStatus === "error" ? "#ef4444" : connectionStatus === "connecting" ? "#eab308" : "#666" }]}>
+                            {activeDevice.name.replace(/\.local$/, "")}
+                          </Text>
+                        </>
+                      )}
                     </View>
                   </View>
                   {isRunning ? (
@@ -1304,8 +1313,8 @@ const s = StyleSheet.create({
   // New task modal
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "flex-end" },
   modalDismiss: { flex: 1 },
-  modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
-  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 20 },
+  modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingTop: 28, paddingBottom: 40 },
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 24 },
   modalTitle: { fontSize: 20, fontWeight: "700" },
   agentBadge: { flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, borderWidth: 1 },
   agentBadgeText: { fontSize: 12, fontWeight: "500" },
@@ -1315,8 +1324,8 @@ const s = StyleSheet.create({
   agentPickerSection: { fontSize: 11, fontWeight: "600", letterSpacing: 0.5, marginTop: 16, marginBottom: 8, marginLeft: 20 },
   agentPickerChips: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, marginBottom: 4 },
   input: { borderWidth: 1, borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 12 },
-  inputMultiline: { minHeight: 300 },
-  modalButtons: { flexDirection: "row", gap: 12, marginTop: 8 },
+  inputMultiline: { minHeight: 200 },
+  modalButtons: { flexDirection: "row", gap: 12, marginTop: 16 },
   cancelButton: { flex: 1, paddingVertical: 14, borderRadius: 10, alignItems: "center" },
   cancelButtonText: { fontWeight: "600", fontSize: 15 },
   submitButton: { flex: 1, paddingVertical: 14, borderRadius: 10, alignItems: "center" },

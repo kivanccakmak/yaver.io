@@ -14,6 +14,7 @@ import { quicClient, RelayServer } from "../lib/quic";
 import { useAuth } from "./AuthContext";
 import { getUserSettings } from "../lib/auth";
 import { appLog } from "../lib/logger";
+import { beaconListener } from "../lib/beacon";
 
 const APP_VERSION = Constants.expoConfig?.version ?? "unknown";
 const BUILD_NUMBER =
@@ -44,6 +45,8 @@ export interface Device {
   lastSeen: number;
   os: string;
   runners: RunnerInfo[];
+  /** true when device is discovered via LAN beacon (same network) */
+  local?: boolean;
 }
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
@@ -82,7 +85,7 @@ function sendTelemetry(token: string | null, step: string, message: string, deta
 }
 
 export function DeviceProvider({ children }: { children: React.ReactNode }) {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [devices, setDevices] = useState<Device[]>([]);
   const [activeDevice, setActiveDevice] = useState<Device | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
@@ -270,6 +273,54 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         appLog("info", `[settings] forceRelay=${s.forceRelay}`);
       }
     });
+  }, [token]);
+
+  // Start/stop LAN beacon listener based on auth state
+  useEffect(() => {
+    if (user?.id) {
+      beaconListener.setUserId(user.id).then(() => {
+        beaconListener.start();
+      });
+    }
+    return () => {
+      beaconListener.stop();
+    };
+  }, [user?.id]);
+
+  // Feed known device IDs to beacon listener for matching
+  useEffect(() => {
+    if (devices.length > 0) {
+      beaconListener.setKnownDevices(devices.map((d) => d.id));
+    }
+  }, [devices]);
+
+  // When beacon discovers/loses a device, update device list
+  useEffect(() => {
+    const unsubDiscover = beaconListener.onDiscovered((discovered) => {
+      setDevices((prev) =>
+        prev.map((d) => {
+          if (d.id.startsWith(discovered.deviceId)) {
+            return { ...d, host: discovered.ip, port: discovered.port, online: true, local: true };
+          }
+          return d;
+        })
+      );
+      sendTelemetry(token, "peer-matched", `${discovered.name} at ${discovered.ip}:${discovered.port}`, discovered.deviceId);
+    });
+
+    const unsubLost = beaconListener.onLost((deviceId) => {
+      setDevices((prev) =>
+        prev.map((d) => {
+          if (d.id.startsWith(deviceId)) {
+            return { ...d, local: false };
+          }
+          return d;
+        })
+      );
+      sendTelemetry(token, "peer-lost", `Device ${deviceId} beacon lost`);
+    });
+
+    return () => { unsubDiscover(); unsubLost(); };
   }, [token]);
 
   // Fetch devices when token becomes available

@@ -429,6 +429,7 @@ http.route({
       tokenHash,
       deviceId: body.deviceId,
       runners: body.runners,
+      quicHost: body.quicHost || undefined,
     });
 
     return jsonResponse({ ok: true });

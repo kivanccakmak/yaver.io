@@ -76,16 +76,105 @@ Yaver is a P2P tool that lets developers use Claude from their mobile device or 
 5. **Multi-relay redundancy** — Multiple relay servers can be configured. If one goes down, traffic routes through others. Clients try all relays in priority order.
 6. **Application-layer only** — No TUN/TAP, no VPN rights. Won't conflict with user's existing VPN (SurfShark, NordVPN, etc.).
 
-## Networking: QUIC Relay
+## Networking Stack
 
-Yaver uses application-layer QUIC relay servers for NAT traversal and roaming. No Tailscale, no TUN/TAP, no VPN rights required.
+Yaver's networking has three layers that work together for instant, reliable connections:
 
-### How it works
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    CONNECTION PRIORITY                               │
+│                                                                     │
+│  1. LAN Beacon (direct)  ──  ~5ms   ── same WiFi, instant discovery│
+│  2. Convex IP (direct)   ──  ~5ms   ── known IP from device registry│
+│  3. QUIC Relay (proxied) ──  ~50ms  ── roaming, NAT traversal      │
+│                                                                     │
+│  Silent roaming: transitions between layers are invisible to user   │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Layer 1: LAN Beacon Discovery (same network)
+
+Proprietary UDP broadcast protocol for instant same-network device discovery.
+
+- **CLI** broadcasts a beacon every 3s on UDP port `19837` (`255.255.255.255`)
+- **Mobile** listens on port `19837` via `react-native-udp`
+- **Auth-aware**: beacon includes a token fingerprint (`th` = first 8 hex chars of SHA256(userId)) — only same-user devices match
+- **Beacon payload** (~100 bytes):
+  ```json
+  {"v":1,"id":"dcbfdc50","p":18080,"n":"MacBook-Air","th":"a1b2c3d4"}
+  ```
+- Mobile matches beacon `id` against its Convex device list and `th` against its userId fingerprint
+- Discovered devices get a `local: true` flag and their IP is used for direct HTTP connection
+- If no beacon received for 10s → device marked as not local, falls back to relay
+- **Graceful degradation**: if UDP socket fails (OS restriction, permission denied), everything works via Convex + relay
+
+**Discovery events** (pushed to Convex telemetry for debugging):
+- `peer-matched` — beacon matched to a known device
+- `peer-lost` — beacon stopped (device offline or left network)
+- `peer-connected` — direct connection established via LAN
+- `peer-roamed` — silently switched between direct and relay
+
+### Layer 2: Convex Device Registry (cross-network)
+
+Central presence hub for auth, pairing, and cross-network visibility.
+
+- **CLI** registers on `yaver serve` start: sends `{deviceId, hostname, platform, localIP, httpPort}` to Convex
+- **CLI** heartbeat every 2 minutes includes current local IP (handles DHCP changes, VPN toggles)
+- **Mobile** polls device list every 3 seconds — sees devices come online within seconds
+- Device is "online" if `isOnline=true` AND `lastHeartbeat` within 5 minutes
+- On `yaver serve` stop, CLI marks device offline immediately
+
+### Layer 3: QUIC Relay (NAT traversal / roaming)
+
+Application-layer QUIC relay for when direct connection isn't possible.
+
 - **Desktop agent** connects outbound to all relay servers via QUIC tunnels on startup (solves NAT — no inbound ports needed)
 - **Mobile app** makes short-lived HTTP requests to relay (IP changes from Wi-Fi/5G roaming don't matter)
-- **Direct connection** is tried first (3s timeout) for lowest latency when on the same network
-- **Relay fallback** kicks in automatically if direct fails, trying each relay in priority order
+- **Relay is pass-through** — no task data, logs, or AI output is stored on relay servers
 - **Reconnection** uses exponential backoff (1s → 2s → 4s → 8s → max 30s)
+
+### Connection Flow
+
+```
+Mobile connects to a device:
+  │
+  ├─ On WiFi?
+  │   ├─ LAN beacon found? → direct HTTP to beacon IP:port (2s timeout)
+  │   │   └─ Success → mode = "direct" ✓
+  │   │
+  │   ├─ Convex IP is private? → direct HTTP to Convex IP:port (2s timeout)
+  │   │   └─ Success → mode = "direct" ✓
+  │   │
+  │   └─ Direct failed → try relay servers
+  │       └─ Success → mode = "relay" ✓
+  │
+  ├─ On Cellular? → skip direct, try relay servers immediately
+  │   └─ Success → mode = "relay" ✓
+  │
+  └─ All failed → error, reconnect with exponential backoff (max 15 attempts)
+
+Network changes (WiFi ↔ cellular):
+  → Full reconnect with new strategy
+  → WiFi→Cellular: relay (direct skipped)
+  → Cellular→WiFi: direct first (beacon rediscovered), relay fallback
+  → All transitions are silent — no UI disruption
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `desktop/agent/beacon.go` | UDP broadcast beacon (send every 3s) |
+| `desktop/agent/httpserver.go` | HTTP server on `0.0.0.0:18080` |
+| `desktop/agent/quic.go` | QUIC server on `0.0.0.0:4433` |
+| `mobile/src/lib/beacon.ts` | UDP beacon listener + auth matching |
+| `mobile/src/lib/quic.ts` | Connection strategy (direct-first, relay-fallback) |
+| `mobile/src/context/DeviceContext.tsx` | Device list, beacon integration, auto-connect |
+| `relay/` | QUIC relay server (Go, deployed to Hetzner) |
+
+## Networking: QUIC Relay (detailed)
+
+Yaver uses application-layer QUIC relay servers for NAT traversal and roaming. No Tailscale, no TUN/TAP, no VPN rights required.
 
 ### Relay server config
 Relay servers are stored in Convex `platformConfig` under the key `relay_servers` (JSON array). Clients auto-fetch from `GET /config` endpoint.

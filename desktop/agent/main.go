@@ -915,6 +915,9 @@ func runServe(args []string) {
 		}()
 	}
 
+	// Start LAN discovery beacon (UDP broadcast for same-network mobile discovery)
+	go startBeacon(ctx, cfg.DeviceID, *httpPort, hostname, ownerUserID)
+
 	// Start relay tunnels (connect to all relay servers for redundancy)
 	for _, rs := range relayServers {
 		rs := rs // capture loop variable
@@ -1935,13 +1938,22 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 
+	lastIP := getLocalIP()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			currentIP := getLocalIP()
 			runners := taskMgr.GetRunnerInfos()
-			if err := SendHeartbeat(baseURL, token, deviceID, runners); err != nil {
+
+			if currentIP != lastIP {
+				log.Printf("[heartbeat] Local IP changed: %s → %s", lastIP, currentIP)
+				lastIP = currentIP
+			}
+
+			if err := SendHeartbeat(baseURL, token, deviceID, runners, currentIP); err != nil {
 				log.Printf("heartbeat failed: %v", err)
 			} else {
 				log.Println("Heartbeat sent.")
