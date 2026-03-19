@@ -12,7 +12,7 @@ curl -s -X POST "$CONVEX_URL/settings" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
     "relayUrl": "https://connect.yaver.io",
-    "relayPassword": "Sikecem.31"
+    "relayPassword": "'"${RELAY_PASSWORD:?Set RELAY_PASSWORD env var}"'"
   }'
 
 echo ""

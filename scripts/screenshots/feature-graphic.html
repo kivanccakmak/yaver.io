@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; }
+  .banner {
+    width: 1024px; height: 500px;
+    background: linear-gradient(135deg, #0a0a1a 0%, #1a1033 40%, #0f0f23 70%, #0a0a1a 100%);
+    display: flex; align-items: center; justify-content: center; gap: 48px;
+    padding: 0 80px;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+    position: relative; overflow: hidden;
+  }
+  /* Subtle glow */
+  .banner::before {
+    content: '';
+    position: absolute;
+    width: 400px; height: 400px;
+    background: radial-gradient(circle, rgba(99,102,241,0.12) 0%, transparent 70%);
+    top: -100px; right: 100px;
+  }
+  .banner::after {
+    content: '';
+    position: absolute;
+    width: 300px; height: 300px;
+    background: radial-gradient(circle, rgba(34,197,94,0.08) 0%, transparent 70%);
+    bottom: -80px; left: 150px;
+  }
+  .text-side { flex: 1; z-index: 1; }
+  .text-side h1 {
+    color: #fff; font-size: 42px; font-weight: 800; line-height: 1.2; margin-bottom: 12px;
+    letter-spacing: -0.5px;
+  }
+  .text-side h1 .highlight { color: #818cf8; }
+  .text-side p { color: #888; font-size: 18px; line-height: 1.5; }
+  .phone-preview {
+    width: 180px; height: 360px; background: #000; border-radius: 24px; overflow: hidden;
+    box-shadow: 0 8px 40px rgba(99,102,241,0.2), 0 0 0 2px #333;
+    flex-shrink: 0; z-index: 1; position: relative;
+  }
+  .phone-preview .screen { padding: 12px; height: 100%; }
+  .phone-preview .sb {
+    height: 24px; display: flex; align-items: center; justify-content: space-between;
+    padding: 4px 8px 0; color: #fff; font-size: 10px; font-weight: 700;
+  }
+  .phone-preview .card {
+    background: #111; border: 1px solid #222; border-radius: 8px;
+    padding: 8px 10px; margin-top: 8px;
+  }
+  .phone-preview .card-title { color: #fff; font-size: 9px; font-weight: 600; }
+  .phone-preview .card-sub { color: #888; font-size: 7px; margin-top: 2px; }
+  .phone-preview .badge {
+    display: inline-block; padding: 1px 5px; border-radius: 4px;
+    font-size: 7px; font-weight: 600;
+  }
+  .phone-preview .row { display: flex; justify-content: space-between; align-items: center; }
+</style>
+</head>
+<body>
+<div class="banner" id="feature">
+  <div class="text-side">
+    <h1>Code from<br>your <span class="highlight">phone</span></h1>
+    <p>Run AI agents on your dev machine<br>from anywhere. Open source.</p>
+  </div>
+  <div class="phone-preview">
+    <div class="screen">
+      <div class="sb"><span>9:41</span><span style="font-size:8px;">5G</span></div>
+      <div class="card" style="display:flex;align-items:center;gap:6px;padding:6px 8px;">
+        <div style="width:6px;height:6px;border-radius:50%;background:#22c55e;"></div>
+        <span style="color:#fff;font-size:8px;font-weight:600;">MacBook Pro</span>
+        <span style="color:#22c55e;font-size:7px;margin-left:auto;">12ms</span>
+      </div>
+      <div class="card">
+        <div class="row">
+          <span class="card-title">Fix auth middleware</span>
+          <span class="badge" style="background:rgba(34,197,94,0.15);color:#22c55e;">Done</span>
+        </div>
+        <div class="card-sub">Claude &middot; 2m ago</div>
+      </div>
+      <div class="card" style="border-color:#1e1b4b;">
+        <div class="row">
+          <span class="card-title">Add rate limiting</span>
+          <span class="badge" style="background:rgba(99,102,241,0.15);color:#818cf8;">Running</span>
+        </div>
+        <div style="color:#a5b4fc;font-size:7px;margin-top:4px;font-family:monospace;background:#0a0a1a;padding:4px 6px;border-radius:4px;line-height:1.3;">
+          Analyzing routes...<br>Found 12 endpoints<span style="color:#555;">&#9608;</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row">
+          <span class="card-title">Write unit tests</span>
+          <span class="badge" style="background:rgba(234,179,8,0.15);color:#eab308;">Queued</span>
+        </div>
+        <div class="card-sub">Codex &middot; just now</div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
