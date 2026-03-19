@@ -1,4 +1,4 @@
-import { mutation } from "./_generated/server";
+import { mutation, internalMutation } from "./_generated/server";
 import { PREDEFINED_RUNNERS } from "./aiRunners";
 import { PREDEFINED_MODELS } from "./aiModels";
 
@@ -90,5 +90,52 @@ export const all = mutation({
       models: { created: modelsCreated, updated: modelsUpdated },
       config: { created: configCreated },
     };
+  },
+});
+
+/**
+ * Clear all user/session/device data. Keeps platform data intact.
+ *
+ * Run with: npx convex run seed:clearUserData
+ *
+ * KEEPS: aiRunners, aiModels, platformConfig, downloads
+ * DELETES: users, sessions, pendingAuth, deviceCodes, devices,
+ *          deviceMetrics, deviceEvents, userSettings, developerSurveys,
+ *          runnerUsage, dailyTaskCounts, authLogs, developerLogs,
+ *          mobileStreamLogs
+ */
+export const clearUserData = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const tablesToClear = [
+      "users",
+      "sessions",
+      "pendingAuth",
+      "deviceCodes",
+      "devices",
+      "deviceMetrics",
+      "deviceEvents",
+      "userSettings",
+      "developerSurveys",
+      "runnerUsage",
+      "dailyTaskCounts",
+      "authLogs",
+      "developerLogs",
+      "mobileStreamLogs",
+    ] as const;
+
+    const results: Record<string, number> = {};
+
+    for (const table of tablesToClear) {
+      let count = 0;
+      const docs = await ctx.db.query(table).collect();
+      for (const doc of docs) {
+        await ctx.db.delete(doc._id);
+        count++;
+      }
+      results[table] = count;
+    }
+
+    return results;
   },
 });
