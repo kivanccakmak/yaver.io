@@ -347,11 +347,74 @@ export default function HomePage() {
           </p>
 
           <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
-            {/* Left: Dev machine */}
+            {/* Left: Mobile app (install first) */}
             <div>
               <div className="mb-6 flex items-center gap-3">
                 <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-800 text-xs font-bold text-surface-300">
-                  A
+                  1
+                </span>
+                <h3 className="text-base font-semibold text-surface-50">
+                  Phone
+                </h3>
+              </div>
+
+              <div className="space-y-4">
+                <div className="card">
+                  <div className="flex items-start gap-4">
+                    <svg className="mt-0.5 h-6 w-6 shrink-0 text-surface-400" fill="currentColor" viewBox="0 0 24 24"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+                    <div>
+                      <h4 className="text-sm font-medium text-surface-200">App Store</h4>
+                      <p className="mt-1 text-xs text-surface-500">
+                        iOS 16+. iPhone and iPad.
+                      </p>
+                      <a
+                        href="https://testflight.apple.com/join/yaver"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 inline-block rounded-lg bg-surface-800 px-3 py-1.5 text-xs font-medium text-surface-300 hover:bg-surface-700 transition-colors"
+                      >
+                        Download on the App Store
+                      </a>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="flex items-start gap-4">
+                    <svg className="mt-0.5 h-6 w-6 shrink-0 text-surface-400" fill="currentColor" viewBox="0 0 24 24"><path d="M17.523 2.238l-1.931 3.334c1.88.907 3.261 2.565 3.713 4.608H4.694c.452-2.043 1.833-3.701 3.714-4.608L6.477 2.238a.357.357 0 01.13-.487.357.357 0 01.487.13l1.962 3.389A8.97 8.97 0 0112 4.749c1.07 0 2.088.188 3.039.521l1.962-3.389a.357.357 0 01.487-.13.357.357 0 01.13.487h-.095zM9.5 7.5a.75.75 0 100-1.5.75.75 0 000 1.5zm5 0a.75.75 0 100-1.5.75.75 0 000 1.5zM4.5 11.68h15c.276 0 .5.224.5.5v7.5c0 1.381-1.119 2.5-2.5 2.5h-11C5.119 22.18 4 21.061 4 19.68v-7.5c0-.276.224-.5.5-.5z"/></svg>
+                    <div>
+                      <h4 className="text-sm font-medium text-surface-200">Google Play</h4>
+                      <p className="mt-1 text-xs text-surface-500">
+                        Android 12+.
+                      </p>
+                      <span className="mt-2 inline-block rounded-lg bg-surface-800/50 px-3 py-1.5 text-xs font-medium text-surface-500">
+                        Coming soon
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="flex items-start gap-4">
+                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-800 text-[11px] font-bold text-surface-400">
+                      &rarr;
+                    </span>
+                    <div>
+                      <h4 className="text-sm font-medium text-surface-200">Sign in &amp; connect</h4>
+                      <p className="mt-1 text-xs text-surface-500">
+                        Sign in with Apple, Google, or Microsoft. Your dev machine shows up automatically. Pick an agent and go.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Right: Dev machine */}
+            <div>
+              <div className="mb-6 flex items-center gap-3">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-800 text-xs font-bold text-surface-300">
+                  2
                 </span>
                 <h3 className="text-base font-semibold text-surface-50">
                   Dev Machine
@@ -374,7 +437,7 @@ export default function HomePage() {
                     </span>
                   </div>
                   <div className="h-px bg-surface-800/60" />
-                  <div className="text-surface-500"># authenticate</div>
+                  <div className="text-surface-500"># authenticate (same account as the app)</div>
                   <div>
                     <span className="text-surface-400">$</span>{" "}
                     <span className="text-surface-200">yaver auth</span>
@@ -387,62 +450,6 @@ export default function HomePage() {
                   </div>
                   <div className="text-green-400/80 pl-2">
                     Ready. Waiting for tasks...
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Right: Mobile */}
-            <div>
-              <div className="mb-6 flex items-center gap-3">
-                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-800 text-xs font-bold text-surface-300">
-                  B
-                </span>
-                <h3 className="text-base font-semibold text-surface-50">
-                  Phone
-                </h3>
-              </div>
-
-              <div className="space-y-4">
-                <div className="card">
-                  <div className="flex items-start gap-4">
-                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-800 text-[11px] font-bold text-surface-400">
-                      1
-                    </span>
-                    <div>
-                      <h4 className="text-sm font-medium text-surface-200">Get the app</h4>
-                      <p className="mt-1 text-xs text-surface-500">
-                        App Store or Google Play. Free, no account needed to browse.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="card">
-                  <div className="flex items-start gap-4">
-                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-800 text-[11px] font-bold text-surface-400">
-                      2
-                    </span>
-                    <div>
-                      <h4 className="text-sm font-medium text-surface-200">Sign in</h4>
-                      <p className="mt-1 text-xs text-surface-500">
-                        Same Apple / Google / Microsoft account you used on the CLI.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="card">
-                  <div className="flex items-start gap-4">
-                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-800 text-[11px] font-bold text-surface-400">
-                      3
-                    </span>
-                    <div>
-                      <h4 className="text-sm font-medium text-surface-200">Pick your machine, start working</h4>
-                      <p className="mt-1 text-xs text-surface-500">
-                        Your dev machine shows up automatically. Choose an agent and go.
-                      </p>
-                    </div>
                   </div>
                 </div>
               </div>
