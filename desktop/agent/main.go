@@ -927,26 +927,90 @@ func runServe(args []string) {
 
 	// If no runner was explicitly set by user, auto-detect available agents
 	if runner.AutoDetected {
-		// Check if the resolved runner's binary actually exists
-		if _, err := osexec.LookPath(runner.Command); err != nil {
-			// Claude not found — try codex, then aider
-			if codexPath, err := osexec.LookPath("codex"); err == nil {
-				log.Printf("Runner: claude not found, detected codex at %s", codexPath)
-				if r, err := fetchRunner(&http.Client{Timeout: 5 * time.Second}, cfg.ConvexSiteURL, "codex"); err == nil {
+		// Scan all known agents to find what's installed
+		agentSearch := []struct{ id, cmd, name string }{
+			{"claude", "claude", "Claude Code"},
+			{"codex", "codex", "OpenAI Codex"},
+			{"aider", "aider", "Aider"},
+			{"ollama", "ollama", "Ollama"},
+			{"opencode", "opencode", "OpenCode"},
+			{"goose", "goose", "Goose"},
+			{"amp", "amp", "Amp"},
+			{"continue", "continue", "Continue"},
+		}
+
+		type detectedAgent struct {
+			id, cmd, name, path string
+		}
+		var available []detectedAgent
+		for _, a := range agentSearch {
+			var agentPath string
+			if p, err := osexec.LookPath(a.cmd); err == nil {
+				agentPath = p
+			} else if p := findInExpandedPath(a.cmd); p != "" {
+				agentPath = p
+			}
+			if agentPath != "" {
+				available = append(available, detectedAgent{a.id, a.cmd, a.name, agentPath})
+			}
+		}
+
+		if len(available) == 0 {
+			log.Printf("WARNING: No AI agent found. Install one to run tasks.")
+			log.Printf("  Claude Code: https://docs.anthropic.com/en/docs/claude-code")
+			log.Printf("  OpenAI Codex: https://github.com/openai/codex")
+			log.Printf("  Aider: https://aider.chat")
+			log.Printf("  Ollama: https://ollama.com")
+			log.Printf("  Or set a custom command: yaver set-runner custom \"your-command {prompt}\"")
+			log.Printf("Agent will start but tasks will fail until an AI agent is available.")
+		} else if len(available) == 1 {
+			// Only one agent found — use it automatically
+			a := available[0]
+			log.Printf("Runner: auto-detected %s at %s", a.name, a.path)
+			if r, err := fetchRunner(&http.Client{Timeout: 5 * time.Second}, cfg.ConvexSiteURL, a.id); err == nil {
+				runner = r
+			}
+		} else {
+			// Multiple agents found — ask user to pick (interactive, like Vercel)
+			fmt.Println()
+			fmt.Println("Multiple AI agents detected on your machine:")
+			fmt.Println()
+			for i, a := range available {
+				fmt.Printf("  %d. %s  (%s)\n", i+1, a.name, a.path)
+			}
+			fmt.Println()
+			fmt.Printf("Select your default agent [1-%d]: ", len(available))
+
+			reader := bufio.NewReader(os.Stdin)
+			input, _ := reader.ReadString('\n')
+			input = strings.TrimSpace(input)
+			choice := 0
+			if n, err := fmt.Sscanf(input, "%d", &choice); n == 1 && err == nil && choice >= 1 && choice <= len(available) {
+				a := available[choice-1]
+				log.Printf("Runner: selected %s at %s", a.name, a.path)
+				if r, err := fetchRunner(&http.Client{Timeout: 5 * time.Second}, cfg.ConvexSiteURL, a.id); err == nil {
 					runner = r
 				}
-			} else if aiderPath, err := osexec.LookPath("aider"); err == nil {
-				log.Printf("Runner: claude not found, detected aider at %s", aiderPath)
-				if r, err := fetchRunner(&http.Client{Timeout: 5 * time.Second}, cfg.ConvexSiteURL, "aider"); err == nil {
-					runner = r
-				}
+				// Save choice to Convex so it persists
+				go func() {
+					payload := map[string]string{"runnerId": a.id}
+					body, _ := json.Marshal(payload)
+					req, _ := http.NewRequest("POST", cfg.ConvexSiteURL+"/settings", bytes.NewReader(body))
+					req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+					req.Header.Set("Content-Type", "application/json")
+					resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+					if err == nil {
+						resp.Body.Close()
+						log.Printf("Runner preference saved to account: %s", a.id)
+					}
+				}()
 			} else {
-				log.Printf("WARNING: No AI agent found (claude, codex, aider). Install one to run tasks.")
-				log.Printf("  Claude Code: https://docs.anthropic.com/en/docs/claude-code")
-				log.Printf("  OpenAI Codex: https://github.com/openai/codex")
-				log.Printf("  Aider: https://aider.chat")
-				log.Printf("  Or set a custom command: yaver set-runner custom \"your-command {prompt}\"")
-				log.Printf("Agent will start but tasks will fail until an AI agent is available.")
+				// Invalid input — use first detected
+				a := available[0]
+				log.Printf("Runner: defaulting to %s at %s", a.name, a.path)
+				if r, err := fetchRunner(&http.Client{Timeout: 5 * time.Second}, cfg.ConvexSiteURL, a.id); err == nil {
+					runner = r
+				}
 			}
 		}
 	}

@@ -682,30 +682,99 @@ func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, c
 	return task, nil
 }
 
-// CheckRunnerBinary checks if a runner binary is available in PATH.
+// commonExtraPaths returns platform-appropriate extra binary search paths.
+func commonExtraPaths() string {
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return ""
+	}
+	paths := []string{
+		filepath.Join(home, ".local", "bin"),
+		filepath.Join(home, ".cargo", "bin"),
+		filepath.Join(home, "go", "bin"),
+		filepath.Join(home, ".npm-global", "bin"),
+		"/opt/homebrew/bin",
+		"/usr/local/bin",
+		"/usr/local/go/bin",
+		"/snap/bin",
+		filepath.Join(home, ".nix-profile", "bin"),
+		"/nix/var/nix/profiles/default/bin",
+	}
+	if runtime.GOOS == "windows" {
+		paths = append(paths,
+			filepath.Join(home, "AppData", "Local", "Microsoft", "WinGet", "Packages"),
+			filepath.Join(home, "scoop", "shims"),
+			filepath.Join(home, "AppData", "Roaming", "npm"),
+			filepath.Join(home, "AppData", "Local", "Programs", "Python", "Python311", "Scripts"),
+		)
+	}
+	if runtime.GOOS == "linux" {
+		paths = append(paths,
+			"/home/linuxbrew/.linuxbrew/bin",
+			filepath.Join(home, ".linuxbrew", "bin"),
+		)
+	}
+	return strings.Join(paths, ":")
+}
+
+// expandedPath returns PATH with common extra binary locations prepended.
+func expandedPath() string {
+	return commonExtraPaths() + ":" + os.Getenv("PATH")
+}
+
+// CheckRunnerBinary checks if a runner binary is available in PATH or common locations.
+// If found outside PATH, logs a hint about adding it to PATH.
 func CheckRunnerBinary(command string) error {
+	// First try standard PATH
 	path, err := exec.LookPath(command)
 	if err != nil {
-		return fmt.Errorf("%s not found in PATH", command)
+		// Try expanded PATH with common locations
+		path = findInExpandedPath(command)
+		if path == "" {
+			return fmt.Errorf("%s not found in PATH or common locations", command)
+		}
+		log.Printf("[runner-check] %s found at %s (not in default PATH — using expanded search)", command, path)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, command, "--version")
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		existingPath := os.Getenv("PATH")
-		extraPaths := filepath.Join(home, ".local", "bin") + ":" +
-			"/opt/homebrew/bin" + ":" +
-			"/usr/local/bin"
-		cmd.Env = append(os.Environ(), "PATH="+extraPaths+":"+existingPath)
-	}
+	cmd := exec.CommandContext(ctx, path, "--version")
+	cmd.Env = append(os.Environ(), "PATH="+expandedPath())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s found but not working: %v (output: %s)", command, err, strings.TrimSpace(string(out)))
 	}
 	log.Printf("[runner-check] %s at %s — %s", command, path, strings.TrimSpace(string(out)))
 	return nil
+}
+
+// findInExpandedPath searches for a command in common binary locations beyond PATH.
+func findInExpandedPath(command string) string {
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return ""
+	}
+	searchDirs := strings.Split(commonExtraPaths(), ":")
+	for _, dir := range searchDirs {
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, command)
+		if runtime.GOOS == "windows" {
+			// Try .exe and .cmd extensions on Windows
+			for _, ext := range []string{".exe", ".cmd", ".bat", ""} {
+				p := candidate + ext
+				if info, err := os.Stat(p); err == nil && !info.IsDir() {
+					return p
+				}
+			}
+		} else {
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				return candidate
+			}
+		}
+	}
+	return ""
 }
 
 // runDummyTask streams a fake response for network testing (no real runner).
@@ -894,14 +963,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	cmd.Dir = tm.workDir
 
 	// Ensure common tool paths are in PATH for background processes.
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		existingPath := os.Getenv("PATH")
-		extraPaths := filepath.Join(home, ".local", "bin") + ":" +
-			"/opt/homebrew/bin" + ":" +
-			"/usr/local/bin"
-		cmd.Env = append(os.Environ(), "PATH="+extraPaths+":"+existingPath)
-	}
+	cmd.Env = append(os.Environ(), "PATH="+expandedPath())
 
 	log.Printf("[task %s] Launching: %s %v (dir=%s)", task.ID, runner.Command, args[:2], tm.workDir)
 
