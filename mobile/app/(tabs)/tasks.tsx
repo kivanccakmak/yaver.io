@@ -1071,52 +1071,77 @@ export default function TasksScreen() {
             <Pressable style={s.chatModalDismissArea} onPress={() => setSelectedTask(null)} />
             {selectedTask && (
               <View style={[s.chatModal, { backgroundColor: c.bg }]}>
-                {/* Header */}
+                {/* Header — Back (left) | Title+Status+Device (center) | Stop (right) */}
                 <View style={[s.chatHeader, { borderBottomColor: c.border }]}>
-                  {/* Left: device info + connection status */}
-                  <View style={s.chatHeaderLeft}>
-                    {activeDevice && (
-                      <View style={s.chatHeaderDevice}>
-                        <View style={[s.statusDotSmall, { backgroundColor: connectionStatus === "connected" ? "#22c55e" : connectionStatus === "error" ? "#ef4444" : connectionStatus === "connecting" ? "#eab308" : "#666" }]} />
-                        <Text style={[s.chatHeaderDeviceText, { color: connectionStatus === "connected" ? c.textSecondary : connectionStatus === "error" ? "#ef4444" : "#eab308" }]} numberOfLines={1}>
-                          {activeDevice.name.replace(/\.local$/, "")}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
+                  {/* Left: Back button */}
+                  <Pressable
+                    style={({ pressed }) => [
+                      { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 6, paddingHorizontal: 10, paddingRight: 14, borderRadius: 8, backgroundColor: c.accent + "15" },
+                      pressed && { opacity: 0.6 },
+                    ]}
+                    onPress={() => { setSelectedTask(null); setFollowUpText(""); }}
+                  >
+                    <Text style={{ fontSize: 18, color: c.accent, fontWeight: "600" }}>{"\u2039"}</Text>
+                    <Text style={{ fontSize: 13, color: c.accent, fontWeight: "600" }}>Back</Text>
+                  </Pressable>
 
-                  {/* Center: task title + status */}
-                  <View style={s.chatHeaderCenter}>
+                  {/* Center: title + status + device (3 lines) */}
+                  <View style={{ flex: 1, alignItems: "center" }}>
                     <Text style={[s.chatHeaderTitle, { color: c.textPrimary }]} numberOfLines={1}>
                       {selectedTask.title}
                     </Text>
-                    <View style={s.chatHeaderMeta}>
+                    <View style={[s.chatHeaderMeta, { marginTop: 3 }]}>
                       <View style={[s.statusDotSmall, { backgroundColor: STATUS_COLORS[selectedTask.status] }]} />
                       <Text style={[s.chatHeaderStatus, { color: STATUS_COLORS[selectedTask.status] }]}>
                         {selectedTask.status}
                       </Text>
+                      {selectedTask.costUsd != null && selectedTask.costUsd > 0 && (
+                        <Text style={[s.chatHeaderCost, { color: c.textMuted }]}>
+                          ${selectedTask.costUsd.toFixed(3)}
+                        </Text>
+                      )}
                     </View>
-                  </View>
-
-                  {/* Right: Back + Exit/Close */}
-                  <View style={[s.chatHeaderRight, { gap: 16 }]}>
-                    <Pressable onPress={() => { setSelectedTask(null); setFollowUpText(""); }}>
-                      <Text style={[s.chatBackText, { color: c.accent }]}>Back</Text>
-                    </Pressable>
-                    {isRunning && (
-                      <Pressable
-                        onPress={() => handleExitTask(selectedTask.id)}
-                        onLongPress={() => {
-                          Alert.alert("Force Stop", "Kill the process immediately?", [
-                            { text: "Cancel", style: "cancel" },
-                            { text: "Kill", style: "destructive", onPress: () => handleStopTask(selectedTask.id) },
-                          ]);
-                        }}
-                      >
-                        <Text style={s.chatStopText}>Exit</Text>
-                      </Pressable>
+                    {activeDevice && (
+                      <Text style={{ fontSize: 10, color: c.textMuted, marginTop: 2 }} numberOfLines={1}>
+                        {activeDevice.name.replace(/\.local$/, "")}
+                      </Text>
                     )}
                   </View>
+
+                  {/* Right: Stop button (only when running) */}
+                  {isRunning ? (
+                    <Pressable
+                      style={({ pressed }) => [
+                        { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, backgroundColor: "#ef4444" + "18" },
+                        pressed && { opacity: 0.6 },
+                      ]}
+                      onPress={() => {
+                        Alert.alert(
+                          "Stop Task",
+                          "The AI agent will be stopped and this session will be terminated. You can send a follow-up to resume later.",
+                          [
+                            { text: "Cancel", style: "cancel" },
+                            { text: "Stop", style: "destructive", onPress: () => handleExitTask(selectedTask.id) },
+                          ]
+                        );
+                      }}
+                      onLongPress={() => {
+                        Alert.alert(
+                          "Force Kill",
+                          "The process will be killed immediately. Any unsaved progress will be lost.",
+                          [
+                            { text: "Cancel", style: "cancel" },
+                            { text: "Kill", style: "destructive", onPress: () => handleStopTask(selectedTask.id) },
+                          ]
+                        );
+                      }}
+                    >
+                      <Text style={{ fontSize: 14, color: "#ef4444" }}>{"\u25A0"}</Text>
+                      <Text style={{ fontSize: 13, color: "#ef4444", fontWeight: "600" }}>Stop</Text>
+                    </Pressable>
+                  ) : (
+                    <View style={{ width: 60 }} />
+                  )}
                 </View>
 
                 {/* Chat messages */}
@@ -1350,15 +1375,11 @@ const s = StyleSheet.create({
   chatModal: { flex: 1, borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: "hidden" },
 
   // Chat header
-  chatHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1 },
-  chatHeaderLeft: { width: 80, alignItems: "flex-start" },
+  chatHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1 },
   chatHeaderDevice: { flexDirection: "row", alignItems: "center", gap: 4 },
-  chatHeaderDeviceText: { fontSize: 9, fontWeight: "500", textTransform: "uppercase", letterSpacing: 0.3 },
-  chatBackText: { fontSize: 15, fontWeight: "600" },
-  chatHeaderCenter: { flex: 1, alignItems: "center" },
-  chatHeaderTitle: { fontSize: 14, fontWeight: "600" },
-  chatHeaderMeta: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 },
-  chatHeaderRight: { width: 50, alignItems: "flex-end" },
+  chatHeaderDeviceText: { fontSize: 10, fontWeight: "500" },
+  chatHeaderTitle: { fontSize: 15, fontWeight: "600" },
+  chatHeaderMeta: { flexDirection: "row", alignItems: "center", gap: 4 },
   statusDotSmall: { width: 6, height: 6, borderRadius: 3 },
   chatHeaderStatus: { fontSize: 11, fontWeight: "500", textTransform: "uppercase" },
   chatHeaderCost: { fontSize: 11, marginLeft: 6 },
