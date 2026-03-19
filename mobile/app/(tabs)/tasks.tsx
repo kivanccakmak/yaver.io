@@ -1098,9 +1098,12 @@ export default function TasksScreen() {
                     </View>
                   </View>
 
-                  {/* Right: Close / Exit */}
-                  <View style={s.chatHeaderRight}>
-                    {isRunning ? (
+                  {/* Right: Back + Exit/Close */}
+                  <View style={[s.chatHeaderRight, { gap: 16 }]}>
+                    <Pressable onPress={() => { setSelectedTask(null); setFollowUpText(""); }}>
+                      <Text style={[s.chatBackText, { color: c.accent }]}>Back</Text>
+                    </Pressable>
+                    {isRunning && (
                       <Pressable
                         onPress={() => handleExitTask(selectedTask.id)}
                         onLongPress={() => {
@@ -1111,10 +1114,6 @@ export default function TasksScreen() {
                         }}
                       >
                         <Text style={s.chatStopText}>Exit</Text>
-                      </Pressable>
-                    ) : (
-                      <Pressable onPress={() => { setSelectedTask(null); setFollowUpText(""); }}>
-                        <Text style={[s.chatBackText, { color: c.accent }]}>Close</Text>
                       </Pressable>
                     )}
                   </View>
