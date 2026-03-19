@@ -919,41 +919,153 @@ export default function HomePage() {
 
       {/* Self-Hosting */}
       <section className="border-t border-surface-800/60 px-6 py-24">
-        <div className="mx-auto max-w-3xl">
+        <div className="mx-auto max-w-4xl">
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
             Run your own relay
           </h2>
-          <p className="mb-12 text-center text-sm text-surface-400">
-            We recommend Tailscale for most users &mdash; no server to manage.
-            For full control, run your own relay with one Docker command.
-            Pair with Ollama for a fully local, zero-cost, zero-cloud setup.
+          <p className="mx-auto mb-12 max-w-2xl text-center text-sm text-surface-400">
+            Deploy a relay server on any VPS for NAT traversal. It&apos;s a pass-through
+            proxy &mdash; stores nothing. Or skip the relay entirely with Tailscale.
           </p>
 
-          <div className="terminal">
-            <div className="terminal-header">
-              <div className="terminal-dot bg-[#ff5f57]" />
-              <div className="terminal-dot bg-[#febc2e]" />
-              <div className="terminal-dot bg-[#28c840]" />
-              <span className="ml-3 text-xs text-surface-500">self-host</span>
-            </div>
-            <div className="terminal-body space-y-3 text-[13px]">
-              <div className="text-surface-500"># tailscale: no relay needed (recommended)</div>
-              <div>
-                <span className="text-surface-400">$</span>{" "}
-                <span className="text-surface-200">yaver serve --no-relay</span>
-              </div>
-              <div className="text-green-400/80 pl-2">
-                Listening on tailnet...
-              </div>
-              <div className="h-px bg-surface-800/60" />
-              <div className="text-surface-500"># or run your own relay for full control</div>
-              <div>
-                <span className="text-surface-400">$</span>{" "}
-                <span className="text-surface-200 select-all">
-                  RELAY_PASSWORD=changeme docker compose up -d
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {/* Option 1: Automated */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-400">
+                  recommended
                 </span>
+                <h3 className="text-sm font-semibold text-surface-100">One-command setup</h3>
+              </div>
+              <p className="mb-4 text-xs text-surface-400">
+                Installs Docker, nginx, Let&apos;s Encrypt SSL, firewall, and deploys the relay container.
+                Needs a VPS with SSH access and a DNS A record.
+              </p>
+              <div className="terminal">
+                <div className="terminal-header">
+                  <div className="terminal-dot bg-[#ff5f57]" />
+                  <div className="terminal-dot bg-[#febc2e]" />
+                  <div className="terminal-dot bg-[#28c840]" />
+                  <span className="ml-3 text-xs text-surface-500">your laptop</span>
+                </div>
+                <div className="terminal-body space-y-2 text-[13px]">
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200 select-all">
+                      ./scripts/setup-relay.sh 1.2.3.4 relay.example.com --password secret
+                    </span>
+                  </div>
+                  <div className="pl-2 text-green-400/80">
+                    Relay running at https://relay.example.com
+                  </div>
+                </div>
               </div>
             </div>
+
+            {/* Option 2: Docker manual */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+              <h3 className="mb-3 text-sm font-semibold text-surface-100">Docker (manual)</h3>
+              <p className="mb-4 text-xs text-surface-400">
+                Clone only the relay directory, set a password, start with Docker Compose.
+                Add nginx + Let&apos;s Encrypt for HTTPS.
+              </p>
+              <div className="terminal">
+                <div className="terminal-header">
+                  <div className="terminal-dot bg-[#ff5f57]" />
+                  <div className="terminal-dot bg-[#febc2e]" />
+                  <div className="terminal-dot bg-[#28c840]" />
+                  <span className="ml-3 text-xs text-surface-500">on your VPS</span>
+                </div>
+                <div className="terminal-body space-y-2 text-[13px]">
+                  <div className="text-surface-500"># sparse clone + start</div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200 select-all">
+                      RELAY_PASSWORD=secret docker compose up -d
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200">curl localhost:8443/health</span>
+                  </div>
+                  <div className="pl-2 text-green-400/80">
+                    {`{"status":"ok"}`}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Option 3: Native binary */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+              <h3 className="mb-3 text-sm font-semibold text-surface-100">Native binary (no Docker)</h3>
+              <p className="mb-4 text-xs text-surface-400">
+                Cross-compile the Go binary, copy to server, run directly or as a systemd service.
+                No container runtime needed.
+              </p>
+              <div className="terminal">
+                <div className="terminal-header">
+                  <div className="terminal-dot bg-[#ff5f57]" />
+                  <div className="terminal-dot bg-[#febc2e]" />
+                  <div className="terminal-dot bg-[#28c840]" />
+                  <span className="ml-3 text-xs text-surface-500">build &amp; deploy</span>
+                </div>
+                <div className="terminal-body space-y-2 text-[13px]">
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200 select-all">
+                      cd relay &amp;&amp; GOOS=linux go build -o yaver-relay .
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200 select-all">
+                      scp yaver-relay root@vps:/usr/local/bin/
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200">
+                      ssh root@vps &apos;RELAY_PASSWORD=secret yaver-relay serve&apos;
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Option 4: Tailscale */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+              <h3 className="mb-3 text-sm font-semibold text-surface-100">No relay (Tailscale)</h3>
+              <p className="mb-4 text-xs text-surface-400">
+                Skip the relay entirely. Install Tailscale on both devices, connect
+                over your tailnet. WireGuard end-to-end encryption, ~5ms latency.
+              </p>
+              <div className="terminal">
+                <div className="terminal-header">
+                  <div className="terminal-dot bg-[#ff5f57]" />
+                  <div className="terminal-dot bg-[#febc2e]" />
+                  <div className="terminal-dot bg-[#28c840]" />
+                  <span className="ml-3 text-xs text-surface-500">terminal</span>
+                </div>
+                <div className="terminal-body space-y-2 text-[13px]">
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200 select-all">
+                      yaver serve --no-relay
+                    </span>
+                  </div>
+                  <div className="pl-2 text-green-400/80">
+                    Listening on tailnet...
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mx-auto mt-8 max-w-2xl rounded-xl border border-surface-800 bg-surface-900/50 p-4">
+            <p className="text-center text-sm text-surface-400">
+              <strong className="text-surface-200">VPS requirements:</strong>{" "}
+              1 vCPU, 512 MB RAM, any Linux. Hetzner, DigitalOcean, Linode, AWS &mdash; any VPS works.
+            </p>
           </div>
 
           <div className="mt-6 text-center">
@@ -961,7 +1073,7 @@ export default function HomePage() {
               href="/docs/self-hosting"
               className="text-sm text-surface-300 underline underline-offset-2 hover:text-surface-100"
             >
-              Self-hosting guide &rarr;
+              Full self-hosting guide &rarr;
             </Link>
           </div>
         </div>

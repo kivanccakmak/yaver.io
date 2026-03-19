@@ -248,19 +248,156 @@ Tests cover: health, auth, CORS, task CRUD, agent status, MCP protocol, sandbox 
 
 ### Relay Server
 
-```bash
-# Docker
-cd relay && RELAY_PASSWORD=secret docker compose up -d
+The relay is a lightweight QUIC proxy for NAT traversal. It's pass-through only — no data is stored. Deploy on any VPS with a public IP.
 
-# Or use the setup script
+#### Automated Setup (recommended)
+
+The setup script handles everything: Docker, nginx, Let's Encrypt SSL, firewall, and relay deployment.
+
+```bash
+# Prerequisites: VPS with SSH access (root), DNS A record pointing to your VPS IP
 ./scripts/setup-relay.sh <server-ip> <domain> --password <relay-password>
+
+# Example
+./scripts/setup-relay.sh 1.2.3.4 relay.example.com --password mysecret
+
+# Without a domain (testing / IP-only access)
+./scripts/setup-relay.sh 1.2.3.4 --no-domain --password mysecret
+
+# Custom ports
+./scripts/setup-relay.sh 1.2.3.4 relay.example.com --password secret --quic-port 5433 --http-port 9443
+
+# Show all options
+./scripts/setup-relay.sh --help
 ```
 
+The script will:
+1. Install Docker on the VPS (if not present)
+2. Install nginx + certbot, obtain Let's Encrypt SSL certificate
+3. Configure nginx as HTTPS reverse proxy with SSE/streaming support
+4. Sparse-clone the relay directory to `/opt/yaver-relay`
+5. Build and start the relay Docker container
+6. Configure firewall (UFW) — TCP 443, UDP 4433, TCP 80
+7. Run a health check and print connection details
+
+#### Manual Setup (Docker)
+
+```bash
+# On your VPS
+git clone --depth 1 --filter=blob:none --sparse https://github.com/kivanccakmak/yaver.git /opt/yaver-relay
+cd /opt/yaver-relay && git sparse-checkout set relay && cd relay
+
+# Set password and start
+echo "RELAY_PASSWORD=your-secret" > .env
+docker compose up -d
+
+# Verify
+curl http://localhost:8443/health
+# {"status":"ok"}
+```
+
+#### Manual Setup (native binary, no Docker)
+
+```bash
+# Build the relay binary (requires Go 1.22+)
+cd relay
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o yaver-relay .
+
+# Copy to server
+scp yaver-relay root@<server-ip>:/usr/local/bin/yaver-relay
+
+# On the server: run directly
+RELAY_PASSWORD=your-secret yaver-relay serve --quic-port 4433 --http-port 8443
+
+# Or install as systemd service
+scp relay/deploy/yaver-relay.service root@<server-ip>:/etc/systemd/system/
+ssh root@<server-ip> 'systemctl daemon-reload && systemctl enable --now yaver-relay'
+```
+
+#### HTTPS with nginx (for production)
+
+If you set up manually (without the setup script), add nginx + Let's Encrypt for HTTPS:
+
+```bash
+# On your VPS — install nginx and certbot
+apt install -y nginx certbot python3-certbot-nginx
+
+# Get SSL certificate (point DNS A record to VPS IP first)
+certbot certonly --standalone -d relay.example.com
+
+# Copy nginx config template and edit domain
+cp relay/deploy/nginx-relay.conf /etc/nginx/sites-available/yaver-relay
+sed -i 's/DOMAIN/relay.example.com/g; s/HTTP_PORT/8443/g' /etc/nginx/sites-available/yaver-relay
+ln -sf /etc/nginx/sites-available/yaver-relay /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+
+# Open firewall
+ufw allow 443/tcp    # HTTPS
+ufw allow 4433/udp   # QUIC
+ufw allow 80/tcp     # HTTP redirect
+```
+
+#### Connect clients to your relay
+
+```bash
+# CLI — add relay to config
+yaver relay add my-relay \
+  --quic-addr <server-ip>:4433 \
+  --http-url https://relay.example.com \
+  --password your-secret
+
+# Or edit ~/.yaver/config.json directly
+```
+
+```json
+{
+  "relay_servers": [
+    {
+      "id": "my-relay",
+      "quic_addr": "<server-ip>:4433",
+      "http_url": "https://relay.example.com"
+    }
+  ],
+  "relay_password": "your-secret"
+}
+```
+
+Mobile app: Settings → Relay Servers → Add your relay URL and password.
+
+#### Relay management
+
+```bash
+# Health check
+curl https://relay.example.com/health
+
+# View connected tunnels
+curl https://relay.example.com/tunnels
+
+# Logs
+ssh root@<server-ip> 'cd /opt/yaver-relay/relay && docker compose logs -f'   # Docker
+ssh root@<server-ip> 'journalctl -u yaver-relay -f'                          # systemd
+
+# Stop / remove
+./relay/deploy/down.sh <server-ip>           # Stop
+./relay/deploy/down.sh <server-ip> --purge   # Stop and remove everything
+```
+
+#### VPS requirements
+
+- **CPU/RAM**: 1 vCPU, 512 MB RAM minimum (relay is very lightweight)
+- **Ports**: TCP 443 (HTTPS), UDP 4433 (QUIC), TCP 8443 (HTTP fallback), TCP 80 (Let's Encrypt)
+- **OS**: Any Linux with Docker (Ubuntu 22.04+ recommended)
+- **Providers**: Hetzner, DigitalOcean, Linode, AWS Lightsail, Vultr — any VPS works
+
 ### No Relay (Tailscale)
+
+If both devices are on your Tailscale tailnet, no relay is needed:
 
 ```bash
 yaver serve --no-relay  # Connect directly via Tailscale IP
 ```
+
+Tailscale client is open source (BSD 3-Clause). For a fully self-hosted alternative to the Tailscale coordination server, use [Headscale](https://github.com/juanfont/headscale).
 
 ## Legal
 
