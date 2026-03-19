@@ -1,0 +1,214 @@
+import { v } from "convex/values";
+import { mutation, query } from "./_generated/server";
+import { validateSessionInternal } from "./auth";
+
+/**
+ * Register or update a device for peer discovery.
+ * Requires a valid session tokenHash.
+ */
+export const registerDevice = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+    name: v.string(),
+    platform: v.union(
+      v.literal("macos"),
+      v.literal("windows"),
+      v.literal("linux")
+    ),
+    publicKey: v.optional(v.string()),
+    quicHost: v.string(),
+    quicPort: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const existing = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+
+    if (existing) {
+      // Only allow the owner to update their own device
+      if (existing.userId !== session.user._id) {
+        throw new Error("Device belongs to another user");
+      }
+      await ctx.db.patch(existing._id, {
+        name: args.name,
+        platform: args.platform,
+        publicKey: args.publicKey,
+        quicHost: args.quicHost,
+        quicPort: args.quicPort,
+        isOnline: true,
+        lastHeartbeat: Date.now(),
+      });
+      return existing._id;
+    }
+
+    return await ctx.db.insert("devices", {
+      userId: session.user._id,
+      deviceId: args.deviceId,
+      name: args.name,
+      platform: args.platform,
+      publicKey: args.publicKey,
+      quicHost: args.quicHost,
+      quicPort: args.quicPort,
+      isOnline: true,
+      lastHeartbeat: Date.now(),
+      createdAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Update device heartbeat — marks it as online.
+ */
+export const heartbeat = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+    runners: v.optional(v.array(v.object({
+      taskId: v.string(),
+      runnerId: v.string(),
+      model: v.optional(v.string()),
+      pid: v.number(),
+      status: v.string(),
+      title: v.string(),
+    }))),
+    quicHost: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+
+    if (!device) throw new Error("Device not found");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    const patch: Record<string, unknown> = {
+      isOnline: true,
+      lastHeartbeat: Date.now(),
+      runners: args.runners ?? [],
+    };
+    // Update stored IP if the agent reports a new one
+    if (args.quicHost && args.quicHost !== device.quicHost) {
+      patch.quicHost = args.quicHost;
+    }
+    await ctx.db.patch(device._id, patch);
+  },
+});
+
+/**
+ * List all devices belonging to the authenticated user.
+ */
+export const listMyDevices = query({
+  args: {
+    tokenHash: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const devices = await ctx.db
+      .query("devices")
+      .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
+      .collect();
+
+    return devices.map((d) => ({
+      deviceId: d.deviceId,
+      name: d.name,
+      platform: d.platform,
+      publicKey: d.publicKey,
+      quicHost: d.quicHost,
+      quicPort: d.quicPort,
+      isOnline: d.isOnline,
+      runnerDown: d.runnerDown ?? false,
+      runners: d.runners ?? [],
+      lastHeartbeat: d.lastHeartbeat,
+    }));
+  },
+});
+
+/**
+ * Update the runnerDown flag for a device.
+ * Called by the desktop agent when runner crashes with all retries exhausted,
+ * or when runner is successfully restarted.
+ */
+export const setRunnerDown = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+    runnerDown: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+
+    if (!device) throw new Error("Device not found");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    await ctx.db.patch(device._id, { runnerDown: args.runnerDown });
+  },
+});
+
+/**
+ * Mark a device as offline.
+ * Called by the desktop agent on stop/signout.
+ */
+export const markOffline = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+
+    if (!device) throw new Error("Device not found");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    await ctx.db.patch(device._id, {
+      isOnline: false,
+      lastHeartbeat: Date.now(),
+    });
+  },
+});
+
+/**
+ * Remove (unregister) a device.
+ */
+export const removeDevice = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+
+    if (!device) throw new Error("Device not found");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    await ctx.db.delete(device._id);
+  },
+});

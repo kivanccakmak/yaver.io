@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+
+# Go binaries
+desktop/agent/yaver
+desktop/agent/yaver-agent
+desktop/agent/agent
+desktop/agent/yaver-*
+
+# Expo / React Native
+mobile/.expo/
+mobile/ios/
+mobile/android/
+
+# Electron
+desktop/installer/dist/
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.test.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Convex
+backend/.convex/
+
+# Vercel
+web/.vercel/
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+.vercel
+.env*.local
+# Private keys and signing scripts
+keys/
+*.p8

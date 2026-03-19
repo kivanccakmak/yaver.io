@@ -1,0 +1,435 @@
+# Yaver
+
+**Your AI coding agent, on your phone.** Yaver is an open-source P2P tool that lets developers use any AI coding agent (Claude Code, Codex, Aider, Ollama, etc.) from their mobile device or any terminal, connecting directly to their development machines. Task data flows peer-to-peer — servers only handle auth and peer discovery.
+
+## How It Works
+
+```
+┌─────────────┐     HTTP         ┌──────────────┐    QUIC tunnel    ┌──────────────┐
+│  Mobile App │─────────────────►│ Relay Server │◄──────────────────│ Desktop Agent│
+│ (React Native)  short-lived    │  (optional)  │  persistent       │  (Go CLI)    │
+│  Wi-Fi/5G   │  HTTP requests   │  public IP   │  outbound conn    │  behind NAT  │
+└──────┬──────┘                  └──────┬───────┘                   └──────┬───────┘
+       │                                │                                  │
+       │  Auth only                     │  Platform config                 │  Register device
+       ▼                                ▼                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Convex Backend                                       │
+│  Auth + Peer Discovery + Platform Config (relay server list)                │
+│  Apple / Google / Microsoft Sign-In                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+No code, task data, or AI output ever touches our servers. The relay is a pass-through proxy. When you're on the same network, traffic goes direct.
+
+## Quick Start
+
+```bash
+# Install
+brew install kivanccakmak/yaver/yaver
+
+# Sign in & start agent
+yaver auth
+yaver serve
+```
+
+## MCP Integration
+
+Yaver implements the Model Context Protocol (MCP) with 30+ tools. Connect from Claude Desktop, Claude Web UI, or any MCP-compatible client.
+
+### Local MCP (stdio) — Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "yaver": {
+      "command": "yaver",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### Network MCP (HTTP) — Remote / Claude Web UI
+
+```bash
+yaver mcp --mode http --port 18090
+```
+
+Connect from any MCP client at `http://your-machine:18090/mcp`.
+
+### Available MCP Tools
+
+| Category | Tools |
+|----------|-------|
+| **Tasks** | `create_task`, `list_tasks`, `get_task`, `stop_task`, `continue_task` |
+| **System** | `get_info`, `get_system_info`, `get_config`, `set_work_dir`, `list_projects` |
+| **Runners** | `list_runners`, `switch_runner` |
+| **Relay** | `get_relay_config`, `add_relay_server`, `remove_relay_server` |
+| **Filesystem** | `read_file`, `write_file`, `list_directory`, `search_files` |
+| **Email** | `email_list_inbox`, `email_get`, `email_send`, `email_sync`, `email_search` |
+| **ACL** | `acl_list_peers`, `acl_add_peer`, `acl_remove_peer`, `acl_list_peer_tools`, `acl_call_peer_tool`, `acl_health` |
+
+See [MCP Integration Guide](https://yaver.io/docs/mcp) for full documentation.
+
+## Security Sandbox
+
+The command sandbox is enabled by default and blocks dangerous operations:
+
+- **Filesystem destruction**: `rm -rf /`, `rm -rf ~`, etc.
+- **Encryption/ransomware**: bulk encryption of home/root
+- **Privilege escalation**: `sudo`, `su`, `doas` (unless allowed)
+- **Disk manipulation**: `mkfs`, `fdisk`, `dd` to block devices
+- **Network exfiltration**: `curl|bash`, piping sensitive files
+- **System compromise**: overwriting `/etc/passwd`, disabling services
+
+### Configuration
+
+```json
+// ~/.yaver/config.json
+{
+  "sandbox": {
+    "enabled": true,
+    "allow_sudo": false,
+    "blocked_commands": ["terraform destroy", "kubectl delete namespace"],
+    "allowed_paths": ["/home/user/projects"],
+    "max_output_size_mb": 100
+  }
+}
+```
+
+```bash
+yaver config set sandbox.allow-sudo true    # Allow sudo
+yaver config set sandbox.enabled false      # Disable sandbox (not recommended)
+```
+
+## Multi-User Support
+
+Multiple users can share the same machine (e.g. shared GPU server with Ollama). Each user runs their own agent:
+
+```bash
+# User A
+yaver auth && yaver serve --port 18080
+
+# User B
+yaver auth && yaver serve --port 18081
+```
+
+Each agent instance has:
+- Separate auth token and user ID
+- Isolated task store (`~/.yaver/tasks.json`)
+- Own sandbox configuration
+- Independent relay connections
+- Auth-aware LAN beacon (only same-user devices discover each other)
+
+## Email Connectors
+
+Connect Office 365 or Gmail for AI-assisted email workflows.
+
+```bash
+# Setup
+yaver email setup     # Interactive — choose Office 365 or Gmail
+yaver email test      # Send a test email
+yaver email sync      # Sync emails to local SQLite database
+
+# Available as MCP tools: email_list_inbox, email_get, email_send, email_sync, email_search
+```
+
+### Office 365
+Requires Azure AD app registration with Microsoft Graph API permissions (`Mail.Read`, `Mail.Send`). Uses client credentials flow.
+
+### Gmail
+Requires Google Cloud OAuth2 credentials with Gmail API scope. Uses refresh token flow.
+
+Synced emails are stored locally in `~/.yaver/emails.db` (SQLite) for fast search and retrieval.
+
+## ACL — Agent Communication Layer
+
+Connect Yaver to other MCP servers for agent-to-agent workflows:
+
+```bash
+# Connect to local Ollama
+yaver acl add ollama http://localhost:11434/mcp
+
+# Connect to a filesystem MCP server (stdio)
+yaver acl add files --stdio "npx -y @modelcontextprotocol/server-filesystem /home"
+
+# Connect to a remote database
+yaver acl add mydb https://db.example.com/mcp --auth token123
+
+# List / manage peers
+yaver acl list
+yaver acl tools ollama
+yaver acl health
+yaver acl remove ollama
+```
+
+ACL peers are also accessible via MCP tools (`acl_list_peers`, `acl_call_peer_tool`, etc.), enabling Claude to chain tools across multiple MCP servers.
+
+## Components
+
+| Directory | What | Tech |
+|-----------|------|------|
+| `desktop/agent/` | CLI agent (QUIC server, MCP, runner, sandbox) | Go |
+| `desktop/installer/` | Installation GUI (DMG/EXE/DEB) | Electron |
+| `mobile/` | iOS & Android app | React Native |
+| `backend/` | Auth, peer discovery, platform config | Convex |
+| `relay/` | QUIC relay server for NAT traversal | Go (quic-go) |
+| `web/` | Landing page & docs | Next.js 15 on Vercel |
+
+## CLI Commands
+
+```
+yaver auth          Sign in (opens browser — Apple, Google, or Microsoft)
+yaver serve         Start the agent
+yaver mcp           Start MCP server (--mode stdio|http)
+yaver email         Email connector (setup, test, sync, status)
+yaver acl           Agent Communication Layer (add, list, remove, tools, health)
+yaver connect       Connect to a remote agent
+yaver attach        Interactive terminal
+yaver set-runner    Set default AI agent (claude/codex/aider/custom)
+yaver relay         Manage relay servers
+yaver config        Get/set configuration
+yaver status        Show auth and connection status
+yaver devices       List registered devices
+yaver stop          Stop the agent
+yaver logs          View agent logs
+yaver version       Print version
+```
+
+### Install
+
+```bash
+# macOS / Linux
+brew install kivanccakmak/yaver/yaver
+
+# Windows
+scoop bucket add yaver https://github.com/kivanccakmak/scoop-yaver
+scoop install yaver
+```
+
+## Networking
+
+Three-layer stack — no Tailscale, no TUN/TAP, no VPN rights. Application-layer only.
+
+```
+1. LAN Beacon (direct)  ──  ~5ms   ── same WiFi, instant discovery
+2. Convex IP (direct)   ──  ~5ms   ── known IP from device registry
+3. QUIC Relay (proxied) ──  ~50ms  ── roaming, NAT traversal
+```
+
+See [CLAUDE.md](CLAUDE.md) for detailed networking architecture.
+
+## Development
+
+```bash
+cd backend && npm install && npx convex dev    # Convex dev server
+cd web && npm install && npm run dev           # Web (localhost:3000)
+cd desktop/agent && go run . serve --debug     # Desktop agent
+cd relay && go run . serve --password secret   # Relay server (local)
+```
+
+### Tests
+
+```bash
+# Unit tests (no external deps)
+cd desktop/agent && go test -v ./...
+cd relay && go test -v ./...
+
+# Integration test suite
+./scripts/test-suite.sh                # Run all tests
+./scripts/test-suite.sh --unit         # Go unit tests only
+./scripts/test-suite.sh --builds       # Build verification (all platforms)
+./scripts/test-suite.sh --lan          # LAN direct connection (localhost)
+./scripts/test-suite.sh --relay        # Local relay server test
+./scripts/test-suite.sh --relay-docker # Deploy relay via Docker to remote server, test, teardown
+./scripts/test-suite.sh --relay-binary # Deploy relay binary to remote server, test, teardown
+./scripts/test-suite.sh --tailscale    # Tailscale cross-machine (local ↔ remote server)
+./scripts/test-suite.sh --cloudflare   # Cloudflare tunnel test
+./scripts/test-suite.sh --help         # Show all options
+```
+
+**No credentials needed:** `--unit`, `--lan`, and `--relay` work out of the box.
+
+**Remote server tests:** `--relay-docker`, `--relay-binary`, and `--tailscale` SSH into a remote server (e.g., Hetzner VPS) to deploy relay/agent binaries, run them, test cross-network connectivity, then tear everything down.
+
+**Credentials:** Set up via `.env.test` (gitignored) or `../talos/.env.test`:
+```bash
+cp .env.test.example .env.test   # fill in REMOTE_SERVER_IP, etc.
+```
+For CI, store as GitHub Actions secrets. See `.github/workflows/test-suite.yml`.
+
+## Auth
+
+- Apple Sign-In, Google Sign-In, Microsoft/Office 365
+- `yaver auth` opens `https://yaver.io/auth?client=desktop` → OAuth → callback to `http://127.0.0.1:19836/callback?token=<token>`
+
+## Self-Hosting
+
+### Relay Server
+
+The relay is a lightweight QUIC proxy for NAT traversal. It's pass-through only — no data is stored. Deploy on any VPS with a public IP.
+
+#### Automated Setup (recommended)
+
+The setup script handles everything: Docker, nginx, Let's Encrypt SSL, firewall, and relay deployment.
+
+```bash
+# Prerequisites: VPS with SSH access (root), DNS A record pointing to your VPS IP
+./scripts/setup-relay.sh <server-ip> <domain> --password <relay-password>
+
+# Example
+./scripts/setup-relay.sh 1.2.3.4 relay.example.com --password mysecret
+
+# Without a domain (testing / IP-only access)
+./scripts/setup-relay.sh 1.2.3.4 --no-domain --password mysecret
+
+# Custom ports
+./scripts/setup-relay.sh 1.2.3.4 relay.example.com --password secret --quic-port 5433 --http-port 9443
+
+# Show all options
+./scripts/setup-relay.sh --help
+```
+
+The script will:
+1. Install Docker on the VPS (if not present)
+2. Install nginx + certbot, obtain Let's Encrypt SSL certificate
+3. Configure nginx as HTTPS reverse proxy with SSE/streaming support
+4. Sparse-clone the relay directory to `/opt/yaver-relay`
+5. Build and start the relay Docker container
+6. Configure firewall (UFW) — TCP 443, UDP 4433, TCP 80
+7. Run a health check and print connection details
+
+#### Manual Setup (Docker)
+
+```bash
+# On your VPS
+git clone --depth 1 --filter=blob:none --sparse https://github.com/kivanccakmak/yaver.git /opt/yaver-relay
+cd /opt/yaver-relay && git sparse-checkout set relay && cd relay
+
+# Set password and start
+echo "RELAY_PASSWORD=your-secret" > .env
+docker compose up -d
+
+# Verify
+curl http://localhost:8443/health
+# {"status":"ok"}
+```
+
+#### Manual Setup (native binary, no Docker)
+
+```bash
+# Build the relay binary (requires Go 1.22+)
+cd relay
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o yaver-relay .
+
+# Copy to server
+scp yaver-relay root@<server-ip>:/usr/local/bin/yaver-relay
+
+# On the server: run directly
+RELAY_PASSWORD=your-secret yaver-relay serve --quic-port 4433 --http-port 8443
+
+# Or install as systemd service
+scp relay/deploy/yaver-relay.service root@<server-ip>:/etc/systemd/system/
+ssh root@<server-ip> 'systemctl daemon-reload && systemctl enable --now yaver-relay'
+```
+
+#### HTTPS with nginx (for production)
+
+If you set up manually (without the setup script), add nginx + Let's Encrypt for HTTPS:
+
+```bash
+# On your VPS — install nginx and certbot
+apt install -y nginx certbot python3-certbot-nginx
+
+# Get SSL certificate (point DNS A record to VPS IP first)
+certbot certonly --standalone -d relay.example.com
+
+# Copy nginx config template and edit domain
+cp relay/deploy/nginx-relay.conf /etc/nginx/sites-available/yaver-relay
+sed -i 's/DOMAIN/relay.example.com/g; s/HTTP_PORT/8443/g' /etc/nginx/sites-available/yaver-relay
+ln -sf /etc/nginx/sites-available/yaver-relay /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+
+# Open firewall
+ufw allow 443/tcp    # HTTPS
+ufw allow 4433/udp   # QUIC
+ufw allow 80/tcp     # HTTP redirect
+```
+
+#### Connect clients to your relay
+
+```bash
+# CLI — add relay to config
+yaver relay add my-relay \
+  --quic-addr <server-ip>:4433 \
+  --http-url https://relay.example.com \
+  --password your-secret
+
+# Or edit ~/.yaver/config.json directly
+```
+
+```json
+{
+  "relay_servers": [
+    {
+      "id": "my-relay",
+      "quic_addr": "<server-ip>:4433",
+      "http_url": "https://relay.example.com"
+    }
+  ],
+  "relay_password": "your-secret"
+}
+```
+
+Mobile app: Settings → Relay Servers → Add your relay URL and password.
+
+#### Relay management
+
+```bash
+# Health check
+curl https://relay.example.com/health
+
+# View connected tunnels
+curl https://relay.example.com/tunnels
+
+# Logs
+ssh root@<server-ip> 'cd /opt/yaver-relay/relay && docker compose logs -f'   # Docker
+ssh root@<server-ip> 'journalctl -u yaver-relay -f'                          # systemd
+
+# Stop / remove
+./relay/deploy/down.sh <server-ip>           # Stop
+./relay/deploy/down.sh <server-ip> --purge   # Stop and remove everything
+```
+
+#### VPS requirements
+
+- **CPU/RAM**: 1 vCPU, 512 MB RAM minimum (relay is very lightweight)
+- **Ports**: TCP 443 (HTTPS), UDP 4433 (QUIC), TCP 8443 (HTTP fallback), TCP 80 (Let's Encrypt)
+- **OS**: Any Linux with Docker (Ubuntu 22.04+ recommended)
+- **Providers**: Hetzner, DigitalOcean, Linode, AWS Lightsail, Vultr — any VPS works
+
+### No Relay (Tailscale)
+
+If both devices are on your Tailscale tailnet, no relay is needed:
+
+```bash
+yaver serve --no-relay  # Connect directly via Tailscale IP
+```
+
+Tailscale client is open source (BSD 3-Clause). For a fully self-hosted alternative to the Tailscale coordination server, use [Headscale](https://github.com/juanfont/headscale).
+
+## Legal
+
+- [Privacy Policy](https://yaver.io/privacy)
+- [Terms of Service](https://yaver.io/terms)
+
+Developed by **SIMKAB ELEKTRIK** — Istanbul, Turkey
+
+Contact: support@yaver.io
+
+## License
+
+MIT — Free and open source.

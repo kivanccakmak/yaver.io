@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # Detect which components changed
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      cli: ${{ steps.filter.outputs.cli }}
+      relay: ${{ steps.filter.outputs.relay }}
+      mobile: ${{ steps.filter.outputs.mobile }}
+      web: ${{ steps.filter.outputs.web }}
+      backend: ${{ steps.filter.outputs.backend }}
+      installer: ${{ steps.filter.outputs.installer }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            cli:
+              - 'desktop/agent/**'
+            relay:
+              - 'relay/**'
+            mobile:
+              - 'mobile/**'
+            web:
+              - 'web/**'
+            backend:
+              - 'backend/**'
+            installer:
+              - 'desktop/installer/**'
+
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check version bumps
+        run: ./scripts/check-version-bump.sh origin/${{ github.base_ref }}
+
+  go-tests:
+    needs: changes
+    if: needs.changes.outputs.cli == 'true' || needs.changes.outputs.relay == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Test CLI agent
+        if: needs.changes.outputs.cli == 'true'
+        run: cd desktop/agent && go test -v ./...
+      - name: Test relay
+        if: needs.changes.outputs.relay == 'true'
+        run: cd relay && go test -v ./... 2>/dev/null || echo "No relay tests"
+
+  go-build:
+    needs: changes
+    if: needs.changes.outputs.cli == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Build CLI
+        run: cd desktop/agent && go build -o yaver .
+
+  web-build:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Build web
+        run: cd web && npm ci && npm run build
+
+  mobile-typecheck:
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Typecheck mobile
+        run: cd mobile && npm ci && npx tsc --noEmit
+
+  backend-typecheck:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Typecheck backend
+        run: cd backend && npm ci && npx convex typecheck

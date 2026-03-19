@@ -1,0 +1,95 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --surface-50: 10 10 10;
+    --surface-100: 23 23 23;
+    --surface-200: 38 38 38;
+    --surface-300: 64 64 64;
+    --surface-400: 82 82 82;
+    --surface-500: 115 115 115;
+    --surface-600: 163 163 163;
+    --surface-700: 212 212 212;
+    --surface-800: 229 229 229;
+    --surface-850: 240 240 240;
+    --surface-900: 245 245 245;
+    --surface-950: 255 255 255;
+    --selection-bg: rgba(0, 0, 0, 0.08);
+  }
+
+  .dark {
+    --surface-50: 240 240 240;
+    --surface-100: 224 224 224;
+    --surface-200: 208 208 208;
+    --surface-300: 176 176 176;
+    --surface-400: 136 136 136;
+    --surface-500: 102 102 102;
+    --surface-600: 68 68 68;
+    --surface-700: 42 42 42;
+    --surface-800: 26 26 26;
+    --surface-850: 20 20 20;
+    --surface-900: 17 17 17;
+    --surface-950: 10 10 10;
+    --selection-bg: rgba(255, 255, 255, 0.12);
+  }
+
+  body {
+    @apply bg-surface-950 text-surface-200 antialiased;
+  }
+
+  ::selection {
+    background: var(--selection-bg);
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-lg bg-surface-50 px-6 py-3 text-sm font-medium text-surface-950 transition-all duration-150 hover:bg-surface-100 focus:outline-none focus:ring-2 focus:ring-surface-400;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center rounded-lg border border-surface-700 bg-transparent px-6 py-3 text-sm font-medium text-surface-200 transition-all duration-150 hover:border-surface-500 hover:text-surface-50 focus:outline-none focus:ring-2 focus:ring-surface-600;
+  }
+
+  .card {
+    @apply rounded-xl border border-surface-800 bg-surface-900 p-6 transition-colors duration-150 hover:border-surface-700;
+  }
+}
+
+/* Terminal mockup */
+.terminal {
+  @apply rounded-xl border border-surface-700 font-mono text-sm;
+  background-color: rgb(var(--surface-900));
+}
+
+.dark .terminal {
+  background-color: rgb(24, 24, 24);
+}
+
+.terminal-header {
+  @apply flex items-center gap-2 border-b border-surface-800 px-4 py-3;
+}
+
+.terminal-dot {
+  @apply h-3 w-3 rounded-full;
+}
+
+.terminal-body {
+  @apply p-5 leading-relaxed;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-surface-700;
+}

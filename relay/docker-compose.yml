@@ -1,0 +1,15 @@
+services:
+  relay:
+    build: .
+    container_name: yaver-relay
+    ports:
+      - "4433:4433/udp"
+      - "8443:8443/tcp"
+    environment:
+      - RELAY_PASSWORD=${RELAY_PASSWORD:-}
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,97 @@
+"use client";
+
+import Link from "next/link";
+import type { Device } from "@/lib/use-devices";
+
+function DeviceIcon({ platform }: { platform: string }) {
+  const isMobile = platform === "iOS" || platform === "Android";
+  if (isMobile) {
+    return (
+      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3" />
+      </svg>
+    );
+  }
+  return (
+    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25A2.25 2.25 0 015.25 3h13.5A2.25 2.25 0 0121 5.25z" />
+    </svg>
+  );
+}
+
+function platformLabel(platform: string): string {
+  switch (platform.toLowerCase()) {
+    case "darwin":
+      return "macOS";
+    case "linux":
+      return "Linux";
+    case "windows":
+      return "Windows";
+    default:
+      return platform;
+  }
+}
+
+interface DevicesViewProps {
+  devices: Device[];
+  onRefresh: () => Promise<void>;
+}
+
+export default function DevicesView({ devices, onRefresh }: DevicesViewProps) {
+  return (
+    <div className="mb-6">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-surface-50">Devices</h2>
+        <button
+          onClick={() => onRefresh()}
+          className="btn-secondary px-3 py-1.5 text-xs"
+        >
+          Refresh
+        </button>
+      </div>
+
+      {devices.length === 0 ? (
+        <div className="card p-8 text-center">
+          <p className="mb-2 text-sm text-surface-400">No devices registered.</p>
+          <p className="mb-4 text-xs text-surface-500">
+            Install the Yaver CLI on your machine and run <code className="rounded bg-surface-800 px-1.5 py-0.5 text-surface-300">yaver auth</code> to register.
+          </p>
+          <Link href="/download" className="btn-secondary px-4 py-2 text-sm">
+            Download Yaver
+          </Link>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {devices.map((device) => (
+            <div key={device.id} className="card flex items-center gap-4">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-surface-800 text-surface-400">
+                <DeviceIcon platform={device.platform} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-semibold text-surface-50">
+                    {device.name}
+                  </h3>
+                  <span
+                    className={`inline-flex h-2 w-2 rounded-full ${
+                      device.online ? "bg-green-400" : "bg-surface-600"
+                    }`}
+                  />
+                  <span className="text-xs text-surface-500">
+                    {device.online ? "Online" : "Offline"}
+                  </span>
+                </div>
+                <p className="text-sm text-surface-500">
+                  {platformLabel(device.platform)} -- Last seen {device.lastSeen}
+                </p>
+                <p className="text-xs text-surface-600 font-mono">
+                  {device.id.substring(0, 8)}...
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

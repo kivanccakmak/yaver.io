@@ -1,0 +1,1308 @@
+"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+
+function FAQItem({ question, answer }: { question: string; answer: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border-b border-surface-800/60">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center justify-between py-5 text-left"
+      >
+        <span className="text-sm font-medium text-surface-100">{question}</span>
+        <span className="ml-4 shrink-0 text-surface-500">{open ? "\u2212" : "+"}</span>
+      </button>
+      {open && (
+        <p className="pb-5 text-sm leading-relaxed text-surface-400">{answer}</p>
+      )}
+    </div>
+  );
+}
+
+function MCPIntegrationSection() {
+  const [mcpTab, setMcpTab] = useState<"stdio" | "http" | "cli">("stdio");
+
+  return (
+    <section className="border-t border-surface-800/60 px-6 py-24">
+      <div className="mx-auto max-w-4xl">
+        <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+          MCP Integration
+        </h2>
+        <p className="mx-auto mb-16 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
+          Connect Yaver as an MCP server from Claude Desktop, Claude Web UI, or any MCP-compatible client.
+        </p>
+
+        {/* Tabs */}
+        <div className="mb-6 flex items-center justify-center gap-2">
+          {(
+            [
+              { key: "stdio", label: "Local (stdio)" },
+              { key: "http", label: "Network (HTTP)" },
+              { key: "cli", label: "CLI setup" },
+            ] as const
+          ).map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setMcpTab(tab.key)}
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                mcpTab === tab.key
+                  ? "bg-surface-800 text-surface-100"
+                  : "text-surface-500 hover:text-surface-300"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab content */}
+        {mcpTab === "stdio" && (
+          <div className="terminal">
+            <div className="terminal-header">
+              <div className="terminal-dot bg-[#ff5f57]" />
+              <div className="terminal-dot bg-[#febc2e]" />
+              <div className="terminal-dot bg-[#28c840]" />
+              <span className="ml-3 text-xs text-surface-500">claude_desktop_config.json</span>
+            </div>
+            <div className="terminal-body text-[13px]">
+              <pre className="text-surface-200 whitespace-pre-wrap">{`{
+  "mcpServers": {
+    "yaver": {
+      "command": "yaver",
+      "args": ["mcp"]
+    }
+  }
+}`}</pre>
+            </div>
+          </div>
+        )}
+
+        {mcpTab === "http" && (
+          <div>
+            <p className="mb-4 text-center text-sm text-surface-400">
+              For remote access from Claude Web UI or other network clients:
+            </p>
+            <div className="terminal">
+              <div className="terminal-header">
+                <div className="terminal-dot bg-[#ff5f57]" />
+                <div className="terminal-dot bg-[#febc2e]" />
+                <div className="terminal-dot bg-[#28c840]" />
+                <span className="ml-3 text-xs text-surface-500">terminal</span>
+              </div>
+              <div className="terminal-body space-y-2 text-[13px]">
+                <div>
+                  <span className="text-surface-400">$</span>{" "}
+                  <span className="text-surface-200 select-all">
+                    yaver mcp --mode http --port 18090
+                  </span>
+                </div>
+                <div className="text-green-400/80 pl-2">
+                  MCP HTTP server listening on :18090
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {mcpTab === "cli" && (
+          <div className="terminal">
+            <div className="terminal-header">
+              <div className="terminal-dot bg-[#ff5f57]" />
+              <div className="terminal-dot bg-[#febc2e]" />
+              <div className="terminal-dot bg-[#28c840]" />
+              <span className="ml-3 text-xs text-surface-500">terminal</span>
+            </div>
+            <div className="terminal-body space-y-3 text-[13px]">
+              <div className="text-surface-500"># Install</div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200 select-all">
+                  brew install kivanccakmak/yaver/yaver
+                </span>
+              </div>
+              <div className="h-px bg-surface-800/60" />
+              <div className="text-surface-500"># Start MCP server (stdio for Claude Desktop)</div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200">yaver mcp</span>
+              </div>
+              <div className="h-px bg-surface-800/60" />
+              <div className="text-surface-500"># Start MCP server (HTTP for remote/web)</div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200">yaver mcp --mode http --port 18090</span>
+              </div>
+              <div className="h-px bg-surface-800/60" />
+              <div className="text-surface-500"># Configure email (optional)</div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200">yaver email setup</span>
+              </div>
+              <div className="h-px bg-surface-800/60" />
+              <div className="text-surface-500"># Connect to other MCP servers (optional)</div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200">
+                  yaver acl add ollama http://localhost:11434/mcp
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <>
+      {/* Hero */}
+      <section className="px-6 pb-24 pt-20 md:pt-32">
+        <div className="mx-auto max-w-6xl">
+          <div className="mb-16 text-center">
+            <div className="mb-6 inline-flex items-center rounded-full border border-surface-700 bg-surface-900 px-4 py-1.5 text-xs text-surface-400">
+              <span className="mr-2 inline-block h-1.5 w-1.5 rounded-full bg-green-500/70" />
+              MIT Licensed &middot; Free Forever
+            </div>
+            <h1 className="mb-6 text-4xl font-bold tracking-tight text-surface-50 sm:text-5xl md:text-6xl">
+              Control your AI coding agent
+              <br />
+              from your phone
+            </h1>
+            <p className="mx-auto max-w-2xl text-base leading-relaxed text-surface-400 md:text-lg">
+              An open-source mobile remote for terminal AI agents &mdash;
+              Claude Code, Codex, Aider, Ollama, OpenCode, and more.
+              Run local models for full privacy, or use cloud APIs. Your machine, your models, your rules.
+              Everything is peer-to-peer &mdash; no code ever leaves your devices.
+            </p>
+            <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
+              <a
+                href="https://github.com/kivanccakmak/yaver.io"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-primary px-8 py-3.5 text-sm"
+              >
+                Source Code
+              </a>
+              <Link href="/download" className="btn-secondary px-8 py-3.5 text-sm">
+                Install
+              </Link>
+            </div>
+          </div>
+
+          {/* Terminal mockup */}
+          <div className="mx-auto max-w-2xl">
+            <div className="terminal">
+              <div className="terminal-header">
+                <div className="terminal-dot bg-[#ff5f57]" />
+                <div className="terminal-dot bg-[#febc2e]" />
+                <div className="terminal-dot bg-[#28c840]" />
+                <span className="ml-3 text-xs text-surface-500">terminal</span>
+              </div>
+              <div className="terminal-body space-y-2 text-[13px]">
+                <div>
+                  <span className="text-surface-400">$</span>{" "}
+                  <span className="text-surface-200 select-all">
+                    brew install kivanccakmak/yaver/yaver
+                  </span>
+                </div>
+                <div>
+                  <span className="text-surface-400">$</span>{" "}
+                  <span className="text-surface-200">yaver auth</span>
+                </div>
+                <div>
+                  <span className="text-surface-400">$</span>{" "}
+                  <span className="text-surface-200">yaver serve</span>
+                </div>
+                <div className="text-green-400/80 pl-2">
+                  Ready. Waiting for tasks...
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* What is Yaver? */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-6xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            What does it do?
+          </h2>
+          <p className="mx-auto mb-16 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
+            Yaver turns your phone into a remote for AI coding agents on
+            your dev machine. Send tasks, read output, manage sessions &mdash; from
+            the couch, the bus, or anywhere with a signal.
+          </p>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Works with any agent</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Claude Code, Codex, OpenCode, Goose, Amp, Aider, Ollama, Qwen &mdash; anything that runs in a terminal. Bring your own models, bring your own API keys (or don&apos;t &mdash; local models need neither).
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Peer-to-peer</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Traffic flows directly between your phone and your machine. No middleman servers storing your code. The optional relay is a dumb pipe &mdash; it can&apos;t read what passes through.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Self-host everything</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Run your own relay, use Tailscale, or just be on the same WiFi. Pair with Ollama for a fully local, zero-cost, zero-cloud setup. MIT licensed &mdash; fork it, hack it, ship it.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Full On-Prem Free Stack */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-5xl">
+          <div className="mb-4 text-center">
+            <span className="inline-flex items-center rounded-full border border-green-500/20 bg-green-500/10 px-3 py-1 text-xs font-medium text-green-400">
+              $0/month &middot; Fully on-prem &middot; No API keys
+            </span>
+          </div>
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Full on-prem free stack
+          </h2>
+          <p className="mx-auto mb-12 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
+            Run a complete AI coding assistant on your own hardware for zero cost.
+            Every component is open source (MIT / Apache 2.0). Nothing leaves your network.
+          </p>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              {
+                name: "Ollama",
+                role: "LLM runtime",
+                detail: "Downloads and runs models locally",
+              },
+              {
+                name: "GLM-4.7-Flash",
+                role: "The AI model",
+                detail: "30B MoE, 59.2% SWE-bench Verified",
+              },
+              {
+                name: "Aider",
+                role: "Coding agent",
+                detail: "Git-aware AI pair programming",
+              },
+              {
+                name: "Yaver",
+                role: "Mobile remote",
+                detail: "Control it all from your phone",
+              },
+            ].map((item) => (
+              <div
+                key={item.name}
+                className="rounded-xl border border-green-500/10 bg-green-500/5 px-4 py-4"
+              >
+                <p className="text-sm font-semibold text-surface-100">
+                  {item.name}
+                </p>
+                <p className="text-xs text-green-400">{item.role}</p>
+                <p className="mt-2 text-xs text-surface-400">{item.detail}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mx-auto mt-8 max-w-3xl rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-medium text-surface-200">
+                  Runs on a PC with 24 GB RAM
+                </p>
+                <p className="mt-1 text-xs text-surface-400">
+                  Q4 quantization &mdash; 19 GB download, ~22 GB in memory.
+                  GPU optional but faster. Works on Apple Silicon, Linux, and Windows.
+                </p>
+              </div>
+              <Link
+                href="/manuals/free-onprem"
+                className="btn-primary shrink-0 px-6 py-2.5 text-sm text-center"
+              >
+                Setup guide &amp; SWE analysis
+              </Link>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* How It Works */}
+      <section id="how-it-works" className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-5xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Getting started
+          </h2>
+          <p className="mb-16 text-center text-sm text-surface-400">
+            Two things: the CLI on your machine, the app on your phone.
+          </p>
+
+          <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
+            {/* Left: Dev machine */}
+            <div>
+              <div className="mb-6 flex items-center gap-3">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-800 text-xs font-bold text-surface-300">
+                  A
+                </span>
+                <h3 className="text-base font-semibold text-surface-50">
+                  Dev Machine
+                </h3>
+              </div>
+
+              <div className="terminal">
+                <div className="terminal-header">
+                  <div className="terminal-dot bg-[#ff5f57]" />
+                  <div className="terminal-dot bg-[#febc2e]" />
+                  <div className="terminal-dot bg-[#28c840]" />
+                  <span className="ml-3 text-xs text-surface-500">terminal</span>
+                </div>
+                <div className="terminal-body space-y-3 text-[13px]">
+                  <div className="text-surface-500"># install</div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200 select-all">
+                      brew install kivanccakmak/yaver/yaver
+                    </span>
+                  </div>
+                  <div className="h-px bg-surface-800/60" />
+                  <div className="text-surface-500"># authenticate</div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200">yaver auth</span>
+                  </div>
+                  <div className="h-px bg-surface-800/60" />
+                  <div className="text-surface-500"># start the agent</div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200">yaver serve</span>
+                  </div>
+                  <div className="text-green-400/80 pl-2">
+                    Ready. Waiting for tasks...
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Right: Mobile */}
+            <div>
+              <div className="mb-6 flex items-center gap-3">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-800 text-xs font-bold text-surface-300">
+                  B
+                </span>
+                <h3 className="text-base font-semibold text-surface-50">
+                  Phone
+                </h3>
+              </div>
+
+              <div className="space-y-4">
+                <div className="card">
+                  <div className="flex items-start gap-4">
+                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-800 text-[11px] font-bold text-surface-400">
+                      1
+                    </span>
+                    <div>
+                      <h4 className="text-sm font-medium text-surface-200">Get the app</h4>
+                      <p className="mt-1 text-xs text-surface-500">
+                        App Store or Google Play. Free, no account needed to browse.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="flex items-start gap-4">
+                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-800 text-[11px] font-bold text-surface-400">
+                      2
+                    </span>
+                    <div>
+                      <h4 className="text-sm font-medium text-surface-200">Sign in</h4>
+                      <p className="mt-1 text-xs text-surface-500">
+                        Same Apple / Google / Microsoft account you used on the CLI.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="flex items-start gap-4">
+                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-800 text-[11px] font-bold text-surface-400">
+                      3
+                    </span>
+                    <div>
+                      <h4 className="text-sm font-medium text-surface-200">Pick your machine, start working</h4>
+                      <p className="mt-1 text-xs text-surface-500">
+                        Your dev machine shows up automatically. Choose an agent and go.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Architecture */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-6xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            What&apos;s in the box
+          </h2>
+          <p className="mb-16 text-center text-sm text-surface-400">
+            Every piece is open source. Self-host all of it, or just the parts you need.
+          </p>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="card">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg border border-surface-600 bg-surface-800">
+                <span className="text-sm font-bold text-surface-300">&gt;_</span>
+              </div>
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">CLI Agent</h3>
+              <p className="text-xs text-surface-500">Go</p>
+              <p className="mt-2 text-sm leading-relaxed text-surface-400">
+                Runs on your dev machine. Manages AI sessions in tmux. All connections are outbound &mdash; no port forwarding, no firewall holes.
+              </p>
+            </div>
+
+            <div className="card">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg border border-surface-600 bg-surface-800">
+                <span className="text-sm font-bold text-surface-300">M</span>
+              </div>
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Mobile App</h3>
+              <p className="text-xs text-surface-500">React Native &mdash; iOS &amp; Android</p>
+              <p className="mt-2 text-sm leading-relaxed text-surface-400">
+                Send tasks, read output, manage sessions. Works on WiFi and cellular. Discovers machines on your local network automatically.
+              </p>
+            </div>
+
+            <div className="card">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg border border-surface-600 bg-surface-800">
+                <span className="text-sm font-bold text-surface-300">R</span>
+              </div>
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Relay Server</h3>
+              <p className="text-xs text-surface-500">Go &mdash; optional, self-hostable</p>
+              <p className="mt-2 text-sm leading-relaxed text-surface-400">
+                QUIC relay for NAT traversal when direct connection isn&apos;t possible. Password-protected, stores nothing. Run your own with Docker or use Tailscale instead.
+              </p>
+            </div>
+
+            <div className="card">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg border border-surface-600 bg-surface-800">
+                <span className="text-sm font-bold text-surface-300">A</span>
+              </div>
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Auth Bridge</h3>
+              <p className="text-xs text-surface-500">Convex</p>
+              <p className="mt-2 text-sm leading-relaxed text-surface-400">
+                Handles OAuth (Apple / Google / Microsoft) sign-in, device discovery, and account management. The web UI is only for initial registration and viewing your devices &mdash; all control happens from the CLI and mobile app. No task data, no code, no logs touch this layer.
+              </p>
+            </div>
+
+            <div className="card sm:col-span-2 lg:col-span-2">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg border border-surface-600 bg-surface-800">
+                <span className="text-sm font-bold text-surface-300">~</span>
+              </div>
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Or just use Tailscale / Cloudflare Tunnel</h3>
+              <p className="mt-2 text-sm leading-relaxed text-surface-400">
+                Already on Tailscale? Skip the relay &mdash; connect over your tailnet directly. Behind a corporate firewall? Cloudflare Tunnel works too.
+                Tailscale&apos;s DERP servers handle hard NAT cases automatically. No extra infrastructure needed.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* How Connections Work */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-5xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            How connections work
+          </h2>
+          <p className="mb-16 text-center text-sm text-surface-400">
+            Three layers, tried in order. The fastest available path wins.
+          </p>
+
+          {/* Connection waterfall */}
+          <div className="mx-auto max-w-3xl space-y-4">
+            {/* Layer 1 */}
+            <div className="relative rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+              <div className="flex items-start gap-4">
+                <div className="flex flex-col items-center">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-500/10 text-sm font-bold text-green-400">
+                    1
+                  </span>
+                  <div className="mt-2 h-full w-px bg-surface-800" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-semibold text-surface-50">LAN Discovery</h3>
+                    <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-[11px] font-medium text-green-400">
+                      ~5ms
+                    </span>
+                    <span className="rounded-full bg-surface-800 px-2 py-0.5 text-[11px] font-medium text-surface-400">
+                      UDP broadcast
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-relaxed text-surface-400">
+                    On the same WiFi, the CLI broadcasts a UDP beacon every 3 seconds. The mobile app
+                    discovers your machine instantly &mdash; no configuration needed. Auth-aware: only
+                    your devices match, even on shared networks.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Layer 2 */}
+            <div className="relative rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+              <div className="flex items-start gap-4">
+                <div className="flex flex-col items-center">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-500/10 text-sm font-bold text-blue-400">
+                    2
+                  </span>
+                  <div className="mt-2 h-full w-px bg-surface-800" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-semibold text-surface-50">Direct Connection</h3>
+                    <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-400">
+                      ~5ms
+                    </span>
+                    <span className="rounded-full bg-surface-800 px-2 py-0.5 text-[11px] font-medium text-surface-400">
+                      HTTP
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-relaxed text-surface-400">
+                    If the mobile app knows your machine&apos;s IP (from the device registry), it
+                    tries a direct HTTP connection. Works when both devices are on the same network,
+                    or when the desktop has a reachable IP.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Layer 3 */}
+            <div className="relative rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+              <div className="flex items-start gap-4">
+                <div className="flex flex-col items-center">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-sm font-bold text-amber-400">
+                    3
+                  </span>
+                </div>
+                <div className="flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-semibold text-surface-50">Relay Server</h3>
+                    <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400">
+                      ~50ms
+                    </span>
+                    <span className="rounded-full bg-surface-800 px-2 py-0.5 text-[11px] font-medium text-surface-400">
+                      QUIC
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-relaxed text-surface-400">
+                    When direct connection isn&apos;t possible (different networks, NAT), traffic routes through
+                    a QUIC relay. The CLI connects outbound to the relay &mdash; no port forwarding needed.
+                    Mobile makes HTTP requests to the relay. The relay is a pass-through &mdash; it
+                    can&apos;t read the traffic.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Network behavior */}
+          <div className="mx-auto mt-12 max-w-3xl">
+            <div className="terminal">
+              <div className="terminal-header">
+                <div className="terminal-dot bg-[#ff5f57]" />
+                <div className="terminal-dot bg-[#febc2e]" />
+                <div className="terminal-dot bg-[#28c840]" />
+                <span className="ml-3 text-xs text-surface-500">network transitions</span>
+              </div>
+              <div className="terminal-body space-y-2 text-[13px]">
+                <div>
+                  <span className="text-surface-500">WiFi &rarr; cellular</span>
+                  <span className="text-surface-400"> &nbsp;&mdash;&nbsp; </span>
+                  <span className="text-surface-200">reconnects via relay, no disruption</span>
+                </div>
+                <div>
+                  <span className="text-surface-500">cellular &rarr; WiFi</span>
+                  <span className="text-surface-400"> &nbsp;&mdash;&nbsp; </span>
+                  <span className="text-surface-200">discovers machine on LAN, switches to direct</span>
+                </div>
+                <div>
+                  <span className="text-surface-500">relay goes down</span>
+                  <span className="text-surface-400"> &nbsp;&mdash;&nbsp; </span>
+                  <span className="text-surface-200">routes through other configured relays</span>
+                </div>
+                <div className="h-px bg-surface-800/60" />
+                <div className="text-surface-500">
+                  All transitions are silent &mdash; no UI disruption, no reconnect prompts.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Hard NAT note */}
+          <div className="mx-auto mt-8 max-w-3xl">
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">
+                Hard NAT / corporate firewalls
+              </h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                If even the relay&apos;s QUIC (UDP) is blocked, use
+                Tailscale (which has DERP relay servers built in for hard NAT) or
+                Cloudflare Tunnel (pure TCP/HTTPS, works through any firewall).
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Supported Agents & Tools */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-6xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Works with
+          </h2>
+          <p className="mb-16 text-center text-sm text-surface-400">
+            Anything that runs in a terminal. Switch agents per task or set a default.
+          </p>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {[
+              {
+                name: "Claude Code",
+                by: "Anthropic",
+                desc: "Terminal-based AI coding agent. Yaver launches it in a tmux session and streams output to your phone.",
+                url: "https://docs.anthropic.com/en/docs/claude-code",
+                oss: false,
+                local: false,
+              },
+              {
+                name: "Codex CLI",
+                by: "OpenAI",
+                desc: "OpenAI\u2019s terminal coding agent. Cloud-powered, needs an API key. Yaver runs it like any other CLI command.",
+                url: "https://github.com/openai/codex",
+                oss: true,
+                local: false,
+              },
+              {
+                name: "Ollama",
+                by: "ollama.com",
+                desc: "Run LLMs locally \u2014 Llama, Mistral, Qwen, CodeGemma, and more. No API keys, no cloud, fully private. Pair with Yaver for zero-cost mobile AI coding.",
+                url: "https://ollama.com",
+                oss: true,
+                local: true,
+              },
+              {
+                name: "Aider",
+                by: "aider.chat",
+                desc: "AI pair programming in the terminal. Works with many LLM backends (OpenAI, Anthropic, Ollama, etc.). Git-aware edits.",
+                url: "https://aider.chat",
+                oss: true,
+                local: false,
+              },
+              {
+                name: "OpenCode",
+                by: "open source",
+                desc: "Terminal AI coding tool with a TUI. Supports multiple LLM providers. Lightweight alternative to heavier agents.",
+                url: "https://github.com/opencode-ai/opencode",
+                oss: true,
+                local: false,
+              },
+              {
+                name: "Goose",
+                by: "Block",
+                desc: "Autonomous coding agent from Block. Runs tasks, edits files, executes shell commands. Open source.",
+                url: "https://github.com/block/goose",
+                oss: true,
+                local: false,
+              },
+              {
+                name: "Amp",
+                by: "Sourcegraph",
+                desc: "AI coding agent with deep codebase understanding. Terminal and editor modes. Powered by Sourcegraph\u2019s code graph.",
+                url: "https://ampcode.com",
+                oss: false,
+                local: false,
+              },
+              {
+                name: "Continue",
+                by: "continue.dev",
+                desc: "Open-source AI code assistant. IDE extension and CLI. Connects to any LLM \u2014 local or cloud.",
+                url: "https://continue.dev",
+                oss: true,
+                local: false,
+              },
+              {
+                name: "Any CLI agent",
+                by: "custom command",
+                desc: "Yaver can launch any command in a tmux session. If it runs in a terminal, Yaver can remote-control it.",
+                url: null,
+                oss: null,
+                local: null,
+              },
+            ].map((agent) => (
+              <div
+                key={agent.name}
+                className="rounded-xl border border-surface-800 bg-surface-900/50 px-4 py-4 transition-colors duration-150 hover:border-surface-700"
+              >
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-surface-200">{agent.name}</p>
+                  <div className="flex gap-1.5">
+                    {agent.oss && (
+                      <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-400">
+                        OSS
+                      </span>
+                    )}
+                    {agent.local && (
+                      <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-400">
+                        local
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <p className="mt-0.5 text-xs text-surface-500">{agent.by}</p>
+                <p className="mt-2 text-xs leading-relaxed text-surface-400">{agent.desc}</p>
+                {agent.url && (
+                  <a
+                    href={agent.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-block text-[11px] text-surface-500 underline underline-offset-2 hover:text-surface-300"
+                  >
+                    {agent.url.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <p className="mt-8 text-center text-xs text-surface-500">
+            Some agents already offer their own remote/mobile interfaces (e.g. Claude Code Remote, OpenAI Codex cloud).
+            Yaver is agent-agnostic and works with any of them, including local models that have no cloud option at all.
+          </p>
+
+          {/* Networking & infrastructure tools */}
+          <div className="mt-12">
+            <h3 className="mb-6 text-center text-sm font-semibold uppercase tracking-wider text-surface-500">
+              Networking &amp; Infrastructure
+            </h3>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                {
+                  name: "Tailscale",
+                  desc: "Mesh VPN built on WireGuard. Client is open source (BSD 3-Clause). Coordination server is proprietary \u2014 use Headscale for a fully self-hosted alternative. Free for personal use (100 devices).",
+                  url: "https://tailscale.com",
+                  oss: "Client: BSD",
+                },
+                {
+                  name: "Cloudflare Tunnel",
+                  desc: "Pure TCP/HTTPS tunnel through any firewall. Good fallback when UDP (QUIC) is blocked.",
+                  url: "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/",
+                  oss: null,
+                },
+                {
+                  name: "Convex",
+                  desc: "Backend-as-a-service used for Yaver\u2019s auth and device discovery. Not in the data path \u2014 no code or tasks pass through it.",
+                  url: "https://www.convex.dev",
+                  oss: null,
+                },
+                {
+                  name: "tmux",
+                  desc: "Terminal multiplexer. Yaver runs each agent session in a tmux window \u2014 sessions persist even if your SSH drops.",
+                  url: "https://github.com/tmux/tmux",
+                  oss: "MIT",
+                },
+              ].map((tool) => (
+                <div
+                  key={tool.name}
+                  className="rounded-xl border border-surface-800 bg-surface-900/50 px-4 py-4 transition-colors duration-150 hover:border-surface-700"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium text-surface-200">{tool.name}</p>
+                    {tool.oss && (
+                      <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-400">
+                        {tool.oss}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-surface-400">{tool.desc}</p>
+                  <a
+                    href={tool.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-block text-[11px] text-surface-500 underline underline-offset-2 hover:text-surface-300"
+                  >
+                    {tool.url.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                  </a>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mx-auto mt-8 max-w-3xl">
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">
+                CLI-to-CLI: connect from any terminal
+              </h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Don&apos;t need the mobile app? Use <code className="rounded bg-surface-800 px-1.5 py-0.5 text-xs text-surface-300">yaver connect</code> from
+                any terminal to connect to your remote dev machine &mdash; laptop to desktop, server to server, or SSH session to home machine.
+                Same connection strategy (direct, relay, Tailscale), same agent support. Works anywhere the CLI runs.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Enterprise & Privacy-First Use Cases */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-6xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Enterprise &amp; Privacy-First Use Cases
+          </h2>
+          <p className="mx-auto mb-16 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
+            From local-only AI coding to multi-user GPU servers and agent-to-agent orchestration.
+          </p>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Privacy-First AI Coding</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Run Ollama, Qwen, or any local LLM. Your code never leaves your network. Connect from Claude Web UI via MCP to use local models for sensitive codebases.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Shared GPU Servers</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Multiple developers share the same machine with isolated agents. Each user runs their own yaver serve with separate auth, tasks, and sandboxed execution.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">MCP Integration</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Connect Yaver as an MCP server from Claude Desktop, Claude Web UI, or any MCP-compatible client. 30+ built-in tools for tasks, files, email, and agent-to-agent communication.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Email Automation</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Office 365 and Gmail connectors let AI agents read, search, and send emails. Synced to a local database for fast retrieval. Perfect for automated workflows.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Agent-to-Agent (ACL)</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Agent Communication Layer connects Yaver with other MCP servers &mdash; local Ollama, remote databases, or other AI tools. Chain agents together for complex workflows.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Security Sandbox</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Built-in command sandbox blocks dangerous operations: no rm -rf /, no filesystem encryption, no privilege escalation. Configurable deny-list with secure defaults.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* MCP Integration */}
+      <MCPIntegrationSection />
+
+      {/* Self-Hosting */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-4xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Run your own relay
+          </h2>
+          <p className="mx-auto mb-12 max-w-2xl text-center text-sm text-surface-400">
+            Deploy a relay server on any VPS for NAT traversal. It&apos;s a pass-through
+            proxy &mdash; stores nothing. Or skip the relay entirely with Tailscale.
+          </p>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {/* Option 1: Automated */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-400">
+                  recommended
+                </span>
+                <h3 className="text-sm font-semibold text-surface-100">One-command setup</h3>
+              </div>
+              <p className="mb-4 text-xs text-surface-400">
+                Installs Docker, nginx, Let&apos;s Encrypt SSL, firewall, and deploys the relay container.
+                Needs a VPS with SSH access and a DNS A record.
+              </p>
+              <div className="terminal">
+                <div className="terminal-header">
+                  <div className="terminal-dot bg-[#ff5f57]" />
+                  <div className="terminal-dot bg-[#febc2e]" />
+                  <div className="terminal-dot bg-[#28c840]" />
+                  <span className="ml-3 text-xs text-surface-500">your laptop</span>
+                </div>
+                <div className="terminal-body space-y-2 text-[13px]">
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200 select-all">
+                      ./scripts/setup-relay.sh 1.2.3.4 relay.example.com --password secret
+                    </span>
+                  </div>
+                  <div className="pl-2 text-green-400/80">
+                    Relay running at https://relay.example.com
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Option 2: Docker manual */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+              <h3 className="mb-3 text-sm font-semibold text-surface-100">Docker (manual)</h3>
+              <p className="mb-4 text-xs text-surface-400">
+                Clone only the relay directory, set a password, start with Docker Compose.
+                Add nginx + Let&apos;s Encrypt for HTTPS.
+              </p>
+              <div className="terminal">
+                <div className="terminal-header">
+                  <div className="terminal-dot bg-[#ff5f57]" />
+                  <div className="terminal-dot bg-[#febc2e]" />
+                  <div className="terminal-dot bg-[#28c840]" />
+                  <span className="ml-3 text-xs text-surface-500">on your VPS</span>
+                </div>
+                <div className="terminal-body space-y-2 text-[13px]">
+                  <div className="text-surface-500"># sparse clone + start</div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200 select-all">
+                      RELAY_PASSWORD=secret docker compose up -d
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200">curl localhost:8443/health</span>
+                  </div>
+                  <div className="pl-2 text-green-400/80">
+                    {`{"status":"ok"}`}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Option 3: Native binary */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+              <h3 className="mb-3 text-sm font-semibold text-surface-100">Native binary (no Docker)</h3>
+              <p className="mb-4 text-xs text-surface-400">
+                Cross-compile the Go binary, copy to server, run directly or as a systemd service.
+                No container runtime needed.
+              </p>
+              <div className="terminal">
+                <div className="terminal-header">
+                  <div className="terminal-dot bg-[#ff5f57]" />
+                  <div className="terminal-dot bg-[#febc2e]" />
+                  <div className="terminal-dot bg-[#28c840]" />
+                  <span className="ml-3 text-xs text-surface-500">build &amp; deploy</span>
+                </div>
+                <div className="terminal-body space-y-2 text-[13px]">
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200 select-all">
+                      cd relay &amp;&amp; GOOS=linux go build -o yaver-relay .
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200 select-all">
+                      scp yaver-relay root@vps:/usr/local/bin/
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200">
+                      ssh root@vps &apos;RELAY_PASSWORD=secret yaver-relay serve&apos;
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Option 4: Tailscale */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+              <h3 className="mb-3 text-sm font-semibold text-surface-100">No relay (Tailscale)</h3>
+              <p className="mb-4 text-xs text-surface-400">
+                Skip the relay entirely. Install Tailscale on both devices, connect
+                over your tailnet. WireGuard end-to-end encryption, ~5ms latency.
+              </p>
+              <div className="terminal">
+                <div className="terminal-header">
+                  <div className="terminal-dot bg-[#ff5f57]" />
+                  <div className="terminal-dot bg-[#febc2e]" />
+                  <div className="terminal-dot bg-[#28c840]" />
+                  <span className="ml-3 text-xs text-surface-500">terminal</span>
+                </div>
+                <div className="terminal-body space-y-2 text-[13px]">
+                  <div>
+                    <span className="text-surface-400">$</span>{" "}
+                    <span className="text-surface-200 select-all">
+                      yaver serve --no-relay
+                    </span>
+                  </div>
+                  <div className="pl-2 text-green-400/80">
+                    Listening on tailnet...
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mx-auto mt-8 max-w-2xl rounded-xl border border-surface-800 bg-surface-900/50 p-4">
+            <p className="text-center text-sm text-surface-400">
+              <strong className="text-surface-200">VPS requirements:</strong>{" "}
+              1 vCPU, 512 MB RAM, any Linux. Hetzner, DigitalOcean, Linode, AWS &mdash; any VPS works.
+            </p>
+          </div>
+
+          <div className="mt-6 text-center">
+            <Link
+              href="/docs/self-hosting"
+              className="text-sm text-surface-300 underline underline-offset-2 hover:text-surface-100"
+            >
+              Full self-hosting guide &rarr;
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* Privacy */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-6xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Your data stays with you
+          </h2>
+          <p className="mb-16 text-center text-sm text-surface-400">
+            No telemetry, no analytics. Here&apos;s how it actually works.
+          </p>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {[
+              {
+                title: "Peer-to-peer",
+                desc: "Tasks, output, and code flow directly between your phone and your machine. There is no server in the middle that could store or inspect your data.",
+              },
+              {
+                title: "Transport encryption",
+                desc: "CLI-to-relay connections use QUIC with TLS. Mobile-to-relay connections use HTTPS (TLS). Direct LAN connections use HTTP on your local network. Tailscale path uses WireGuard for full end-to-end encryption.",
+              },
+              {
+                title: "OAuth + token auth",
+                desc: "Authentication uses OAuth (Apple / Google / Microsoft) via Convex. Both CLI and mobile receive a session token that authenticates all requests. The relay validates a shared password before accepting any connection.",
+              },
+              {
+                title: "Relay is a dumb pipe",
+                desc: "If you use a relay, it forwards bytes between endpoints. It\u2019s password-protected so only authorized agents can register. You self-host it, so you control who has access. The relay code is open source \u2014 read it yourself.",
+              },
+              {
+                title: "Auth-only backend",
+                desc: "The Convex backend handles OAuth sign-in and device discovery. It never sees your code, your tasks, or your AI output. Device registration includes only hostname, platform, and IP \u2014 no task data.",
+              },
+              {
+                title: "LAN beacon auth",
+                desc: "On local networks, the CLI broadcasts a UDP beacon with a token fingerprint (SHA-256 hash of your user ID). Only devices signed in to the same account will match. Other users on the same WiFi can\u2019t discover or connect to your machine.",
+              },
+              {
+                title: "Go fully local",
+                desc: "Ollama + Tailscale = no cloud, no API keys, no relay, no third-party servers at all. WireGuard encryption end-to-end. Everything runs on hardware you own.",
+              },
+              {
+                title: "Read the source",
+                desc: "Every component is MIT-licensed. Don\u2019t trust, verify. Or fork it and run your own instance of everything.",
+              },
+            ].map((item) => (
+              <div key={item.title} className="card">
+                <h3 className="mb-2 text-sm font-semibold text-surface-50">{item.title}</h3>
+                <p className="text-sm leading-relaxed text-surface-400">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-3xl">
+          <h2 className="mb-12 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            FAQ
+          </h2>
+
+          <div>
+            <FAQItem
+              question="What agents work with Yaver?"
+              answer="Anything that runs in a terminal. Claude Code, Codex CLI, OpenCode, Goose, Amp, Aider, Ollama, Qwen, Continue, or whatever custom command you want. Run local models with Ollama for zero-cost, fully private AI coding. Switch agents per task or set a default."
+            />
+            <FAQItem
+              question="Don't some agents already have remote access?"
+              answer="Yes — Claude Code has a remote control feature, and OpenAI Codex runs in the cloud. Yaver is useful when you want a single interface across multiple agents, when you use local models that have no cloud option, or when you want full control over your infrastructure. It's agent-agnostic by design."
+            />
+            <FAQItem
+              question="Do I need API keys?"
+              answer="Depends on the agent. Cloud agents like Claude Code or Codex need their own API keys or subscriptions. Local models via Ollama need nothing — just download the model and go. Yaver itself has no API keys and no paid tiers."
+            />
+            <FAQItem
+              question="Do I need a relay server?"
+              answer="It depends on your network setup. On the same WiFi, Yaver discovers your machine automatically via UDP LAN broadcast — no relay needed, connections are direct at ~5ms latency. When your phone is on cellular or a different network, you need a way to reach your machine: either a relay server (self-host with one Docker command), Tailscale (connect over your tailnet, DERP handles hard NAT), or Cloudflare Tunnel (pure TCP/HTTPS). The relay is a pass-through — it forwards encrypted bytes and cannot read your traffic. Relay credentials are stored locally on each device by default; you can optionally enable cloud sync in the mobile app to share them across devices."
+            />
+            <FAQItem
+              question="Is my code safe?"
+              answer="Yaver connects your phone directly to your dev machine. CLI-to-relay uses QUIC (TLS encrypted), mobile-to-relay uses HTTPS. The relay is password-protected and can't inspect traffic — it just forwards bytes. On Tailscale, you get full WireGuard end-to-end encryption. On LAN, the beacon uses a SHA-256 token fingerprint so only your devices can discover each other. No code, tasks, or output ever reach any server. All of this is open source — read the code yourself."
+            />
+            <FAQItem
+              question="Can I use Tailscale instead of a relay?"
+              answer="Yes. If both devices are on your tailnet, Yaver connects directly via the Tailscale IP. No relay needed. Tailscale's DERP servers handle hard NAT cases automatically."
+            />
+            <FAQItem
+              question="What if I'm behind a strict corporate firewall?"
+              answer="Yaver's relay uses QUIC, which runs over UDP. Some corporate firewalls block all UDP traffic, which would prevent the relay from working. In that case, you have two options: Tailscale (its DERP relay servers use HTTPS to punch through even the strictest firewalls, and it works with the Tailscale mobile app too), or Cloudflare Tunnel (pure TCP/HTTPS, works through any firewall that allows web browsing). Both options give you a direct connection to your machine without needing Yaver's relay at all."
+            />
+            <FAQItem
+              question="Can I use Yaver without the mobile app?"
+              answer="Yes. Run `yaver connect` from any terminal to connect to your remote dev machine. Laptop to desktop, server to server, SSH session to home machine — same connection strategy, same agent support. The mobile app is just one way to interact with your agent."
+            />
+            <FAQItem
+              question="Is it actually free?"
+              answer="Yes. MIT license, no paid tiers, no usage limits, no telemetry, no catch. If you find it useful, star the repo or contribute a patch."
+            />
+            <FAQItem
+              question="How do I contribute?"
+              answer="Fork the repo, hack on it, open a PR. Check the README for dev setup. Bug reports and feature ideas are welcome as GitHub issues."
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* Open Source */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-4xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Open source, open development
+          </h2>
+          <p className="mb-12 text-center text-sm text-surface-400">
+            MIT licensed. Fork it, run your own instance, contribute back.
+          </p>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Build freely</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Add new AI runner integrations, fix bugs, improve the mobile app, write docs.
+                Every component is open for contributions. Run your own Convex backend with one command.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Protected releases</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Releases, deploys, and production infrastructure are maintainer-only.
+                CI checks run on every PR. Nobody can push to TestFlight, Vercel, or Convex prod without approval.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Self-hostable</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Run your own Convex backend (cloud free tier or self-hosted Docker), your own relay server, your own LLMs.
+                Zero dependency on our infrastructure if you want.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <Link href="/docs/contributing" className="btn-primary px-6 py-3 text-sm">
+              Contributing Guide
+            </Link>
+            <Link href="/docs/developers" className="btn-secondary px-6 py-3 text-sm">
+              Developer Docs
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* Footer CTA */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-2xl text-center">
+          <h2 className="mb-4 text-2xl font-bold text-surface-50 md:text-3xl">
+            Code from anywhere
+          </h2>
+          <p className="mb-8 text-sm leading-relaxed text-surface-400">
+            Install the CLI, start the agent, open the app. That&apos;s it.
+          </p>
+          <code className="mb-4 inline-block rounded-lg bg-surface-900 px-5 py-2.5 text-sm text-surface-300">
+            brew install kivanccakmak/yaver/yaver
+          </code>
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <a
+              href="https://github.com/kivanccakmak/yaver.io"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-primary px-8 py-3.5 text-sm"
+            >
+              Source Code
+            </a>
+            <Link href="/download" className="btn-secondary px-8 py-3.5 text-sm">
+              Install
+            </Link>
+          </div>
+          <div className="mt-8 flex items-center justify-center gap-6 text-xs text-surface-500">
+            <a
+              href="https://github.com/kivanccakmak/yaver.io"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-surface-300"
+            >
+              GitHub
+            </a>
+            <Link href="/docs" className="hover:text-surface-300">
+              Docs
+            </Link>
+            <Link href="/docs/developers" className="hover:text-surface-300">
+              Developers
+            </Link>
+            <Link href="/docs/contributing" className="hover:text-surface-300">
+              Contributing
+            </Link>
+            <Link href="/download" className="hover:text-surface-300">
+              Download
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* SEO Links — related projects and tools */}
+      <section className="border-t border-surface-800/60 px-6 py-12">
+        <div className="mx-auto max-w-6xl">
+          <p className="mb-4 text-xs font-medium uppercase tracking-wider text-surface-600">Related Projects</p>
+          <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-surface-600">
+            <a href="https://docs.anthropic.com/en/docs/claude-code" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Claude Code</a>
+            <a href="https://code.claude.com/docs/en/remote-control" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Claude Code Remote</a>
+            <a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">OpenAI Codex CLI</a>
+            <a href="https://chatgpt.com/codex" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">OpenAI Codex Cloud</a>
+            <a href="https://github.com/opencode-ai/opencode" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">OpenCode</a>
+            <a href="https://github.com/block/goose" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Goose</a>
+            <a href="https://github.com/nichochar/amp" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Amp</a>
+            <a href="https://aider.chat" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Aider</a>
+            <a href="https://ollama.com" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Ollama</a>
+            <a href="https://github.com/QwenLM/Qwen" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Qwen</a>
+            <a href="https://continue.dev" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Continue</a>
+            <a href="https://tailscale.com" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Tailscale</a>
+            <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Cloudflare Tunnel</a>
+            <a href="https://www.convex.dev" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Convex</a>
+            <a href="https://github.com/tmux/tmux" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">tmux</a>
+          </div>
+        </div>
+      </section>
+    </>
+  );
+}

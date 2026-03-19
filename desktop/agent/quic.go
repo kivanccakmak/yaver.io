@@ -1,0 +1,363 @@
+package main
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"log"
+	"math/big"
+	"net"
+	"os"
+	"time"
+
+	"github.com/quic-go/quic-go"
+)
+
+// --- Protocol messages ---
+
+// IncomingMessage is a JSON message received from the mobile client.
+type IncomingMessage struct {
+	Type        string `json:"type"`
+	Token       string `json:"token,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	TaskID      string `json:"taskId,omitempty"`
+	Input       string `json:"input,omitempty"`
+	Source      string `json:"source,omitempty"` // "mobile" or "cli"
+}
+
+// OutgoingMessage is a JSON message sent back to the mobile client.
+type OutgoingMessage struct {
+	Type       string     `json:"type"`
+	DeviceName string     `json:"deviceName,omitempty"`
+	TaskID     string     `json:"taskId,omitempty"`
+	Status     string     `json:"status,omitempty"`
+	Text       string     `json:"text,omitempty"`
+	Final      bool       `json:"final,omitempty"`
+	Tasks      []TaskInfo `json:"tasks,omitempty"`
+	Message    string     `json:"message,omitempty"`
+}
+
+// QUICServer wraps a QUIC listener and dispatches incoming messages to a
+// TaskManager.
+type QUICServer struct {
+	port        int
+	taskManager *TaskManager
+	authToken   string // expected token from mobile clients
+	deviceName  string
+	listener    *quic.Listener
+}
+
+// NewQUICServer creates a QUICServer.
+func NewQUICServer(port int, authToken, deviceName string, tm *TaskManager) *QUICServer {
+	return &QUICServer{
+		port:        port,
+		taskManager: tm,
+		authToken:   authToken,
+		deviceName:  deviceName,
+	}
+}
+
+// Start begins listening for QUIC connections.
+func (s *QUICServer) Start(ctx context.Context) error {
+	tlsCfg, err := loadOrGenerateTLS()
+	if err != nil {
+		return fmt.Errorf("TLS setup: %w", err)
+	}
+
+	addr := fmt.Sprintf("0.0.0.0:%d", s.port)
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return fmt.Errorf("resolve addr: %w", err)
+	}
+
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return fmt.Errorf("listen udp: %w", err)
+	}
+
+	tr := &quic.Transport{Conn: conn}
+	listener, err := tr.Listen(tlsCfg, &quic.Config{
+		MaxIdleTimeout:  60 * time.Second,
+		KeepAlivePeriod: 15 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("quic listen: %w", err)
+	}
+	s.listener = listener
+
+	log.Printf("QUIC server listening on %s", addr)
+
+	go func() {
+		<-ctx.Done()
+		listener.Close()
+	}()
+
+	for {
+		session, err := listener.Accept(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil // shutting down
+			}
+			log.Printf("accept error: %v", err)
+			continue
+		}
+		go s.handleConnection(ctx, session)
+	}
+}
+
+// handleConnection processes all streams on a single QUIC connection.
+func (s *QUICServer) handleConnection(ctx context.Context, conn quic.Connection) {
+	defer conn.CloseWithError(0, "bye")
+
+	authenticated := false
+
+	for {
+		stream, err := conn.AcceptStream(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("accept stream error: %v", err)
+			return
+		}
+		go s.handleStream(ctx, stream, &authenticated)
+	}
+}
+
+// handleStream reads a single JSON message from a stream and sends a response.
+func (s *QUICServer) handleStream(ctx context.Context, stream quic.Stream, authenticated *bool) {
+	defer stream.Close()
+
+	data, err := io.ReadAll(io.LimitReader(stream, 1<<20)) // 1 MB limit
+	if err != nil {
+		log.Printf("read stream: %v", err)
+		return
+	}
+
+	var msg IncomingMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: "invalid JSON"})
+		return
+	}
+
+	// Auth message must come first.
+	if msg.Type == "auth" {
+		if msg.Token != s.authToken {
+			s.sendMessage(stream, OutgoingMessage{Type: "error", Message: "invalid token"})
+			return
+		}
+		*authenticated = true
+		s.sendMessage(stream, OutgoingMessage{Type: "auth_ok", DeviceName: s.deviceName})
+		return
+	}
+
+	if !*authenticated {
+		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: "not authenticated"})
+		return
+	}
+
+	switch msg.Type {
+	case "task_create":
+		s.handleTaskCreate(stream, msg)
+	case "task_stop":
+		s.handleTaskStop(stream, msg)
+	case "task_list":
+		s.handleTaskList(stream)
+	case "task_continue":
+		s.handleTaskContinue(stream, msg)
+	default:
+		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: fmt.Sprintf("unknown message type: %s", msg.Type)})
+	}
+}
+
+func (s *QUICServer) handleTaskCreate(stream quic.Stream, msg IncomingMessage) {
+	source := msg.Source
+	if source == "" {
+		source = "mobile"
+	}
+	task, err := s.taskManager.CreateTask(msg.Title, msg.Description, "", source, "", "")
+	if err != nil {
+		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: err.Error()})
+		return
+	}
+
+	s.sendMessage(stream, OutgoingMessage{
+		Type:   "task_created",
+		TaskID: task.ID,
+		Status: string(task.Status),
+	})
+
+	// Stream output in the background if the task has an output channel.
+	go s.streamTaskOutput(stream, task)
+}
+
+func (s *QUICServer) handleTaskStop(stream quic.Stream, msg IncomingMessage) {
+	if err := s.taskManager.StopTask(msg.TaskID); err != nil {
+		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: err.Error()})
+		return
+	}
+	s.sendMessage(stream, OutgoingMessage{
+		Type:   "task_output",
+		TaskID: msg.TaskID,
+		Text:   "Task stopped.",
+		Final:  true,
+	})
+}
+
+func (s *QUICServer) handleTaskList(stream quic.Stream) {
+	tasks := s.taskManager.ListTasks()
+	s.sendMessage(stream, OutgoingMessage{
+		Type:  "task_list",
+		Tasks: tasks,
+	})
+}
+
+func (s *QUICServer) handleTaskContinue(stream quic.Stream, msg IncomingMessage) {
+	task, err := s.taskManager.ResumeTask(msg.TaskID, msg.Input)
+	if err != nil {
+		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: err.Error()})
+		return
+	}
+	s.sendMessage(stream, OutgoingMessage{
+		Type:   "task_created",
+		TaskID: task.ID,
+		Status: string(task.Status),
+	})
+	go s.streamTaskOutput(stream, task)
+}
+
+// streamTaskOutput reads from the task's output channel and sends each line
+// back over the QUIC stream. This keeps the stream open until the task ends.
+func (s *QUICServer) streamTaskOutput(stream quic.Stream, task *Task) {
+	for line := range task.outputCh {
+		s.sendMessage(stream, OutgoingMessage{
+			Type:   "task_output",
+			TaskID: task.ID,
+			Text:   line,
+		})
+	}
+	// Send final message.
+	s.sendMessage(stream, OutgoingMessage{
+		Type:   "task_output",
+		TaskID: task.ID,
+		Text:   task.Output,
+		Final:  true,
+	})
+}
+
+// sendMessage writes a JSON message to a QUIC stream.
+func (s *QUICServer) sendMessage(stream quic.Stream, msg OutgoingMessage) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("marshal response: %v", err)
+		return
+	}
+	data = append(data, '\n')
+	if _, err := stream.Write(data); err != nil {
+		log.Printf("write stream: %v", err)
+	}
+}
+
+// --- TLS helpers ---
+
+// loadOrGenerateTLS loads TLS certs from ~/.yaver/ or generates a self-signed
+// certificate on first run.
+func loadOrGenerateTLS() (*tls.Config, error) {
+	certPath, err := TLSCertPath()
+	if err != nil {
+		return nil, err
+	}
+	keyPath, err := TLSKeyPath()
+	if err != nil {
+		return nil, err
+	}
+
+	// Try loading existing certs.
+	if _, err := os.Stat(certPath); err == nil {
+		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err == nil {
+			return &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				NextProtos:   []string{"yaver-p2p"},
+			}, nil
+		}
+		log.Printf("existing TLS cert invalid, regenerating: %v", err)
+	}
+
+	// Generate self-signed certificate.
+	log.Println("Generating self-signed TLS certificate...")
+	cert, err := generateSelfSignedCert(certPath, keyPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		NextProtos:   []string{"yaver-p2p"},
+	}, nil
+}
+
+func generateSelfSignedCert(certPath, keyPath string) (tls.Certificate, error) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate key: %w", err)
+	}
+
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate serial: %w", err)
+	}
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"Yaver Desktop Agent"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("create certificate: %w", err)
+	}
+
+	// Write cert PEM.
+	certFile, err := os.Create(certPath)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("create cert file: %w", err)
+	}
+	defer certFile.Close()
+	if err := pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: certDER}); err != nil {
+		return tls.Certificate{}, fmt.Errorf("encode cert: %w", err)
+	}
+
+	// Write key PEM.
+	privDER, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("marshal key: %w", err)
+	}
+	keyFile, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("create key file: %w", err)
+	}
+	defer keyFile.Close()
+	if err := pem.Encode(keyFile, &pem.Block{Type: "EC PRIVATE KEY", Bytes: privDER}); err != nil {
+		return tls.Certificate{}, fmt.Errorf("encode key: %w", err)
+	}
+
+	return tls.LoadX509KeyPair(certPath, keyPath)
+}

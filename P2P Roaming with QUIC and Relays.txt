@@ -1,0 +1,57 @@
+﻿This is the "Final Boss" of P2P networking. When a phone switches from Wi-Fi to 4G/5G, its IP address changes, which normally kills any active TCP connection.
+In 2026, the recommended way to handle this in a libp2p + nodejs-mobile setup is by using QUIC and Circuit Relays.
+________________
+1. The Modern Solution: QUIC (UDP-based)
+Instead of standard TCP, you should use the QUIC transport (@libp2p/quic).
+* Connection Migration: QUIC uses a "Connection ID" rather than a combination of IP + Port. When your phone switches to GSM, the IP changes, but the Connection ID stays the same. The Desktop app will see the new IP and simply continue the session without a handshake.
+* Hole Punching: QUIC is built on UDP, which is much better at "punching" through cellular NATs than TCP.
+2. The Fallback: Circuit Relay v2
+When you are on GSM (roaming), you are almost certainly behind a Symmetric NAT (carrier-grade NAT). This makes direct P2P nearly impossible.
+* How it works: Your mobile node connects to a "Relay Node" (a public server you or the community runs).
+
+* DCUtR: libp2p uses a protocol called Direct Connection Upgrade through Relay. The phone and PC "meet" at the relay, and then try to coordinate a direct UDP hole-punch to bypass the relay and talk directly.
+
+________________
+3. Updated Node.js Logic for Roaming
+You need to add quic and identify to your libp2p configuration so the nodes can announce their new IPs to each other when they change.
+
+
+JavaScript
+
+
+
+
+// Inside nodejs-project/main.js
+const { quic } = require('@libp2p/quic');
+const { identify } = require('@libp2p/identify');
+
+const node = await createLibp2p({
+ transports: [
+   quic(), // Use QUIC for roaming support
+   tcp()   // Keep TCP as a fallback for local Wi-Fi
+ ],
+ services: {
+   identify: identify(), // Crucial: Tells the other peer "Hey, my IP just changed!"
+ },
+ // ... other config
+});
+
+________________
+4. Handling "Dead Zones" in React Native
+Even with QUIC, a total loss of signal (e.g., in an elevator) will eventually drop the connection. To provide a "WhatsApp-like" experience, you must implement Connectivity Resilience:
+   1. Backoff Reconnect: In your rn-bridge logic, if the Node.js process reports a peer:disconnect, wait 2, 5, and 10 seconds to attempt a redial.
+   2. State Persistence: Since you are using nodejs-mobile, you can use the filesystem to save the PeerStore. This way, when the app restarts or regains signal, it already knows the last known IP and PeerID of the Desktop.
+Summary of Roaming Strategy
+Scenario
+	Transport Used
+	Success Rate
+	Wi-Fi to Wi-Fi
+	TCP / mDNS
+	100% (Instant)
+	Wi-Fi to 5G (Roaming)
+	QUIC
+	High (Seamless if Hole-punching works)
+	Strict Carrier NAT
+	Circuit Relay
+	100% (But higher latency)
+	Would you like me to show you how to set up a basic "Relay Node" on a cheap VPS so your app works even when both devices are on roaming data?

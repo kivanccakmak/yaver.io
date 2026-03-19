@@ -1,0 +1,43 @@
+{
+  "name": "yaver-installer",
+  "version": "1.0.1",
+  "description": "Yaver Desktop Agent Installer",
+  "author": {
+    "name": "Yaver",
+    "email": "hello@yaver.io"
+  },
+  "homepage": "https://yaver.io",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux"
+  },
+  "build": {
+    "appId": "io.yaver.installer",
+    "productName": "Yaver",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": ["dmg", "zip"],
+      "icon": "assets/icon.icns"
+    },
+    "win": {
+      "target": ["nsis"],
+      "icon": "assets/icon.ico"
+    },
+    "linux": {
+      "target": ["deb", "AppImage"],
+      "category": "Development",
+      "icon": "assets/icon.png"
+    },
+    "directories": {
+      "output": "dist"
+    }
+  },
+  "devDependencies": {
+    "electron": "^41.0.0",
+    "electron-builder": "^26.8.1"
+  }
+}

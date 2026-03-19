@@ -1,0 +1,128 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// persistedTask is the JSON-serializable subset of Task that gets written to disk.
+type persistedTask struct {
+	ID          string             `json:"id"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	Status      TaskStatus         `json:"status"`
+	SessionID   string             `json:"session_id,omitempty"`
+	Output      string             `json:"output,omitempty"`
+	ResultText  string             `json:"result_text,omitempty"`
+	CostUSD     float64            `json:"cost_usd,omitempty"`
+	Turns       []ConversationTurn `json:"turns,omitempty"`
+	CreatedAt   time.Time          `json:"created_at"`
+	StartedAt   *time.Time         `json:"started_at,omitempty"`
+	FinishedAt  *time.Time         `json:"finished_at,omitempty"`
+}
+
+// TaskStore persists task metadata to a JSON file under ~/.yaver/.
+type TaskStore struct {
+	path string
+}
+
+// NewTaskStore creates a TaskStore that reads/writes ~/.yaver/tasks.json.
+func NewTaskStore() (*TaskStore, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("task store config dir: %w", err)
+	}
+	return &TaskStore{
+		path: filepath.Join(dir, "tasks.json"),
+	}, nil
+}
+
+// Save writes the current task map to disk. Only the serializable fields are
+// persisted, and output is truncated to the last 2000 characters.
+func (s *TaskStore) Save(tasks map[string]*Task) {
+	records := make([]persistedTask, 0, len(tasks))
+	for _, t := range tasks {
+		output := t.Output
+		if len(output) > 2000 {
+			output = output[len(output)-2000:]
+		}
+		records = append(records, persistedTask{
+			ID:          t.ID,
+			Title:       t.Title,
+			Description: t.Description,
+			Status:      t.Status,
+			SessionID:   t.SessionID,
+			Output:      output,
+			ResultText:  t.ResultText,
+			CostUSD:     t.CostUSD,
+			Turns:       t.Turns,
+			CreatedAt:   t.CreatedAt,
+			StartedAt:   t.StartedAt,
+			FinishedAt:  t.FinishedAt,
+		})
+	}
+
+	data, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		log.Printf("task store: marshal error: %v", err)
+		return
+	}
+	if err := os.WriteFile(s.path, data, 0600); err != nil {
+		log.Printf("task store: write error: %v", err)
+	}
+}
+
+// Load reads persisted tasks from disk and returns them as a map.
+// Running/queued tasks from a previous session are marked as stopped since
+// the underlying processes no longer exist.
+func (s *TaskStore) Load() map[string]*Task {
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[string]*Task)
+		}
+		log.Printf("task store: read error: %v", err)
+		return make(map[string]*Task)
+	}
+
+	var records []persistedTask
+	if err := json.Unmarshal(data, &records); err != nil {
+		log.Printf("task store: parse error: %v", err)
+		return make(map[string]*Task)
+	}
+
+	tasks := make(map[string]*Task, len(records))
+	for _, r := range records {
+		status := r.Status
+		finishedAt := r.FinishedAt
+		// Tasks that were running or queued when we last exited can never be
+		// resumed — mark them as stopped so they appear as historical records.
+		if status == TaskStatusRunning || status == TaskStatusQueued {
+			status = TaskStatusStopped
+			if finishedAt == nil {
+				now := time.Now()
+				finishedAt = &now
+			}
+		}
+		tasks[r.ID] = &Task{
+			ID:          r.ID,
+			Title:       r.Title,
+			Description: r.Description,
+			Status:      status,
+			SessionID:   r.SessionID,
+			Output:      r.Output,
+			ResultText:  r.ResultText,
+			CostUSD:     r.CostUSD,
+			Turns:       r.Turns,
+			CreatedAt:   r.CreatedAt,
+			StartedAt:   r.StartedAt,
+			FinishedAt:  finishedAt,
+			// doneCh is left nil — these are historical records with no process.
+		}
+	}
+	return tasks
+}

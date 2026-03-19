@@ -1,0 +1,20 @@
+{
+  "name": "yaver-backend",
+  "version": "1.1.0",
+  "description": "Yaver.io Convex backend — auth + peer discovery",
+  "private": true,
+  "scripts": {
+    "dev": "npx convex dev",
+    "deploy": "npx convex deploy"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "convex": "^1.32.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.4.0",
+    "typescript": "^5.9.3"
+  }
+}

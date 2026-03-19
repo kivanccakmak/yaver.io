@@ -1,0 +1,1919 @@
+"use client";
+
+import Link from "next/link";
+
+function Terminal({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="terminal">
+      <div className="terminal-header">
+        <div className="terminal-dot bg-[#ff5f57]" />
+        <div className="terminal-dot bg-[#febc2e]" />
+        <div className="terminal-dot bg-[#28c840]" />
+        <span className="ml-3 text-xs text-surface-500">{title}</span>
+      </div>
+      <div className="terminal-body space-y-2 text-[13px]">{children}</div>
+    </div>
+  );
+}
+
+function Cmd({ children }: { children: React.ReactNode }) {
+  return (
+    <div>
+      <span className="text-surface-400">$</span>{" "}
+      <span className="text-surface-200 select-all">{children}</span>
+    </div>
+  );
+}
+
+function Comment({ children }: { children: React.ReactNode }) {
+  return <div className="text-surface-500">{children}</div>;
+}
+
+function Output({ children }: { children: React.ReactNode }) {
+  return <div className="text-green-400/80 pl-2">{children}</div>;
+}
+
+function Divider() {
+  return <div className="h-px bg-surface-800/60" />;
+}
+
+function SectionHeading({
+  id,
+  children,
+}: {
+  id: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <h2
+      id={id}
+      className="mb-4 text-2xl font-bold text-surface-50 md:text-3xl"
+    >
+      {children}
+    </h2>
+  );
+}
+
+function SubHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <h3 className="mb-3 text-lg font-semibold text-surface-100">{children}</h3>
+  );
+}
+
+function Prose({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="mb-6 text-sm leading-relaxed text-surface-400">{children}</p>
+  );
+}
+
+function InlineCode({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="rounded bg-surface-900 px-1.5 py-0.5 text-xs text-surface-300">
+      {children}
+    </code>
+  );
+}
+
+export default function DevelopersPage() {
+  return (
+    <div className="px-6 py-20">
+      <div className="mx-auto max-w-3xl">
+        {/* Back link */}
+        <Link
+          href="/"
+          className="mb-12 inline-block text-xs text-surface-500 hover:text-surface-50"
+        >
+          &larr; Back to home
+        </Link>
+
+        {/* Header */}
+        <div className="mb-16">
+          <h1 className="mb-4 text-3xl font-bold text-surface-50 md:text-4xl">
+            Developer Guide
+          </h1>
+          <p className="text-sm leading-relaxed text-surface-400">
+            Everything you need to build, run, and contribute to Yaver. This
+            guide covers project structure, build instructions, the backend API,
+            data model, relay protocol, and testing.
+          </p>
+        </div>
+
+        {/* Table of contents */}
+        <div className="mb-16 rounded-xl border border-surface-800 bg-surface-900 p-6">
+          <h3 className="mb-4 text-sm font-semibold text-surface-200">
+            On this page
+          </h3>
+          <nav className="space-y-2 text-sm">
+            {[
+              ["project-structure", "Project Structure"],
+              ["software-stack", "Software Stack"],
+              ["network-stack", "Network Stack"],
+              ["build-instructions", "Build Instructions"],
+              ["backend-api", "Backend API Reference"],
+              ["data-model", "What's Stored in Convex"],
+              ["relay-protocol", "Relay Server Protocol"],
+              ["running-tests", "Running Tests"],
+              ["integration-test-suite", "Integration Test Suite"],
+              ["pr-rules", "Pull Request Rules"],
+              ["contributing", "Contributing"],
+            ].map(([id, label]) => (
+              <a
+                key={id}
+                href={`#${id}`}
+                className="block text-surface-500 hover:text-surface-200"
+              >
+                {label}
+              </a>
+            ))}
+          </nav>
+        </div>
+
+        {/* ─── Section 1: Project Structure ─── */}
+        <section className="mb-20">
+          <SectionHeading id="project-structure">
+            Project Structure
+          </SectionHeading>
+          <Prose>
+            Yaver is a monorepo with five main components. Each can be built and
+            run independently.
+          </Prose>
+
+          <div className="mb-8">
+            <Terminal title="project-structure">
+              <pre className="text-surface-300">
+                {`yaver/
+├── desktop/agent/    # CLI agent (Go)
+├── mobile/           # Mobile app (React Native / Expo)
+├── relay/            # QUIC relay server (Go)
+├── backend/          # Convex backend (auth + device registry)
+├── web/              # Landing page + dashboard (Next.js)
+├── scripts/          # Build & deploy scripts
+└── keys/             # Private keys (gitignored)`}
+              </pre>
+            </Terminal>
+          </div>
+
+          <div className="space-y-4">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                desktop/agent/
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                The Go CLI binary. Runs an HTTP server on{" "}
+                <InlineCode>0.0.0.0:18080</InlineCode>, a QUIC server on{" "}
+                <InlineCode>0.0.0.0:4433</InlineCode>, broadcasts LAN beacons
+                on UDP <InlineCode>19837</InlineCode>, and manages AI runner
+                processes (Claude Code, Codex, Aider, Ollama, etc.) via tmux.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                mobile/
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                React Native app for iOS and Android. Connects to the desktop
+                agent directly over LAN or through the relay. Built with native
+                tooling (xcodebuild / Gradle), not Expo CLI.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                relay/
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Lightweight QUIC relay server in Go. Pass-through proxy for NAT
+                traversal &mdash; stores nothing. Deployed to Hetzner VPS via
+                Docker.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                backend/
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Convex backend for auth (Google, Apple, Microsoft, email/password),
+                device registry, platform config, and usage analytics. No task
+                data or code is ever stored here.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                web/
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Next.js 15 landing page deployed on Vercel at{" "}
+                <InlineCode>yaver.io</InlineCode>. Handles OAuth callbacks for
+                desktop CLI auth flow.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* ─── Software Stack ─── */}
+        <section className="mb-20">
+          <SectionHeading id="software-stack">Software Stack</SectionHeading>
+          <Prose>
+            Yaver&apos;s software stack from high-level user-facing components down
+            to low-level protocols and libraries.
+          </Prose>
+
+          <div className="mb-8">
+            <Terminal title="stack-overview">
+              <pre className="text-surface-300">
+                {`┌─────────────────────────────────────────────────────┐
+│                    User Layer                        │
+│                                                     │
+│  Mobile App          CLI Agent         Web Dashboard │
+│  (React Native)      (Go binary)       (Next.js)    │
+│  iOS + Android       macOS/Linux/Win   Vercel        │
+└─────────────┬────────────┬────────────┬──────────────┘
+              │            │            │
+              ▼            ▼            ▼`}
+              </pre>
+            </Terminal>
+          </div>
+
+          {/* High Level */}
+          <SubHeading>High Level &mdash; User-Facing Components</SubHeading>
+
+          <div className="mb-6 space-y-4">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Mobile App (React Native)
+              </h4>
+              <ul className="space-y-1 text-sm leading-relaxed text-surface-400">
+                <li>
+                  Framework: Expo (prebuild, no EAS) + React Native
+                </li>
+                <li>
+                  Navigation: <InlineCode>expo-router</InlineCode> (file-based)
+                </li>
+                <li>
+                  State: React Context (<InlineCode>DeviceContext</InlineCode>,{" "}
+                  <InlineCode>AuthContext</InlineCode>)
+                </li>
+                <li>
+                  Storage: AsyncStorage (relay config, settings),{" "}
+                  <InlineCode>SecureStore</InlineCode> (tokens)
+                </li>
+                <li>
+                  Networking: <InlineCode>fetch</InlineCode> API for HTTP,{" "}
+                  <InlineCode>react-native-udp</InlineCode> for LAN beacon
+                </li>
+                <li>
+                  Build: xcodebuild (iOS), Gradle (Android) &mdash; always
+                  native, never Expo Go
+                </li>
+              </ul>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                CLI Agent (Go)
+              </h4>
+              <ul className="space-y-1 text-sm leading-relaxed text-surface-400">
+                <li>Single binary, no runtime dependencies</li>
+                <li>AI session management via tmux</li>
+                <li>
+                  HTTP server on port <InlineCode>18080</InlineCode> (task API,
+                  health, status)
+                </li>
+                <li>
+                  QUIC server on port <InlineCode>4433</InlineCode> (direct
+                  connections)
+                </li>
+                <li>
+                  UDP beacon broadcaster on port{" "}
+                  <InlineCode>19837</InlineCode>
+                </li>
+                <li>
+                  Config stored in{" "}
+                  <InlineCode>~/.yaver/config.json</InlineCode>
+                </li>
+                <li>
+                  Auth token from OAuth flow via local HTTP callback server
+                </li>
+              </ul>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Web Dashboard (Next.js)
+              </h4>
+              <ul className="space-y-1 text-sm leading-relaxed text-surface-400">
+                <li>Next.js 15 with App Router</li>
+                <li>
+                  Tailwind CSS with custom{" "}
+                  <InlineCode>surface-*</InlineCode> color palette
+                </li>
+                <li>Client-side auth (tokens in localStorage + cookies)</li>
+                <li>Deployed on Vercel (static + serverless API routes)</li>
+                <li>
+                  API routes handle OAuth flow (Google, Apple, Microsoft)
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Mid Level */}
+          <SubHeading>Mid Level &mdash; Infrastructure Components</SubHeading>
+
+          <div className="mb-6 space-y-4">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Relay Server (Go)
+              </h4>
+              <ul className="space-y-1 text-sm leading-relaxed text-surface-400">
+                <li>Single binary, ~5MB</li>
+                <li>
+                  QUIC listener (<InlineCode>quic-go</InlineCode>) on UDP port{" "}
+                  <InlineCode>4433</InlineCode> &mdash; accepts agent tunnels
+                </li>
+                <li>
+                  HTTP server on TCP port <InlineCode>8443</InlineCode> &mdash;
+                  accepts mobile/CLI client requests
+                </li>
+                <li>
+                  In-memory device map (deviceID &rarr; QUIC connection)
+                </li>
+                <li>
+                  Password authentication on both QUIC registration and HTTP
+                  proxy
+                </li>
+                <li>
+                  Self-signed TLS for QUIC (agents skip verification)
+                </li>
+                <li>
+                  Production: nginx terminates HTTPS &rarr; proxy to HTTP 8443
+                </li>
+                <li>
+                  Docker image based on <InlineCode>alpine:3.19</InlineCode>{" "}
+                  (~15MB)
+                </li>
+              </ul>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Auth Backend (Convex)
+              </h4>
+              <ul className="space-y-1 text-sm leading-relaxed text-surface-400">
+                <li>Serverless backend-as-a-service (convex.dev)</li>
+                <li>
+                  Schema: <InlineCode>users</InlineCode>,{" "}
+                  <InlineCode>sessions</InlineCode>,{" "}
+                  <InlineCode>devices</InlineCode>,{" "}
+                  <InlineCode>userSettings</InlineCode>,{" "}
+                  <InlineCode>platformConfig</InlineCode>
+                </li>
+                <li>HTTP actions for OAuth callbacks</li>
+                <li>
+                  Mutations for writes (register device, update settings)
+                </li>
+                <li>Queries for reads (list devices, get config)</li>
+                <li>Real-time subscriptions (not used currently)</li>
+                <li>Deployed to Convex cloud (EU West)</li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Low Level */}
+          <SubHeading>Low Level &mdash; Libraries &amp; Protocols</SubHeading>
+
+          <div className="mb-6 space-y-4">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Go Dependencies
+              </h4>
+              <ul className="space-y-1 text-sm leading-relaxed text-surface-400">
+                <li>
+                  <InlineCode>github.com/quic-go/quic-go</InlineCode> &mdash;
+                  QUIC implementation (RFC 9000)
+                </li>
+                <li>
+                  Standard library:{" "}
+                  <InlineCode>crypto/tls</InlineCode>,{" "}
+                  <InlineCode>net/http</InlineCode>,{" "}
+                  <InlineCode>encoding/json</InlineCode>,{" "}
+                  <InlineCode>os/exec</InlineCode>
+                </li>
+                <li>
+                  No web framework &mdash; raw{" "}
+                  <InlineCode>net/http</InlineCode> handlers
+                </li>
+              </ul>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                JavaScript / TypeScript Dependencies
+              </h4>
+              <ul className="space-y-1 text-sm leading-relaxed text-surface-400">
+                <li>React 19, Next.js 15, React Native</li>
+                <li>
+                  <InlineCode>jose</InlineCode> &mdash; JWT handling for Apple
+                  OAuth
+                </li>
+                <li>
+                  <InlineCode>convex</InlineCode> &mdash; Convex client SDK
+                </li>
+                <li>
+                  <InlineCode>react-native-udp</InlineCode> &mdash; UDP socket
+                  for LAN beacon
+                </li>
+                <li>
+                  <InlineCode>expo-secure-store</InlineCode> &mdash; secure
+                  token storage on mobile
+                </li>
+              </ul>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Protocols Used
+              </h4>
+              <ul className="space-y-1 text-sm leading-relaxed text-surface-400">
+                <li>
+                  QUIC (RFC 9000) &mdash; agent-to-relay tunnel, multiplexed
+                  streams over UDP
+                </li>
+                <li>
+                  HTTP/1.1 &mdash; mobile-to-relay proxy, CLI HTTP API
+                </li>
+                <li>
+                  TLS 1.3 &mdash; transport encryption (QUIC and HTTPS)
+                </li>
+                <li>
+                  UDP broadcast &mdash; LAN device discovery beacon
+                </li>
+                <li>
+                  OAuth 2.0 / OpenID Connect &mdash; authentication (Apple,
+                  Google, Microsoft)
+                </li>
+                <li>
+                  JSON &mdash; all API payloads, config files, protocol
+                  messages
+                </li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        {/* ─── Network Stack ─── */}
+        <section className="mb-20">
+          <SectionHeading id="network-stack">Network Stack</SectionHeading>
+          <Prose>
+            How devices discover each other and establish connections, from
+            high-level discovery down to transport protocols.
+          </Prose>
+
+          {/* Discovery Layer */}
+          <SubHeading>Discovery Layer</SubHeading>
+          <Prose>
+            Three mechanisms are tried in order. The first successful connection
+            wins.
+          </Prose>
+
+          <div className="mb-8">
+            <Terminal title="connection-priority">
+              <pre className="text-surface-300">
+                {`┌─────────────────────────────────────────────────────────────────────┐
+│                    CONNECTION PRIORITY                               │
+│                                                                     │
+│  1. LAN Beacon (direct)  ──  ~5ms   ── same WiFi, instant discovery│
+│  2. Convex IP (direct)   ──  ~5ms   ── known IP from device registry│
+│  3. QUIC Relay (proxied) ──  ~50ms  ── roaming, NAT traversal      │
+│                                                                     │
+│  Silent roaming: transitions between layers are invisible to user   │
+└─────────────────────────────────────────────────────────────────────┘`}
+              </pre>
+            </Terminal>
+          </div>
+
+          {/* LAN Beacon */}
+          <div className="mb-8">
+            <h4 className="mb-3 text-sm font-medium text-surface-200">
+              1. LAN Beacon (UDP Broadcast)
+            </h4>
+            <Terminal title="lan-beacon-protocol">
+              <pre className="text-surface-300">
+                {`CLI Agent                                    Mobile App
+    │                                            │
+    ├── Every 3s: UDP broadcast ──────────────►  │
+    │   dst: 255.255.255.255:19837               │
+    │   payload: {"v":1,"id":"dcbfdc50",         │
+    │             "p":18080,"n":"MacBook",        │
+    │             "th":"a1b2c3d4"}                │
+    │                                            │
+    │   Mobile matches:                          │
+    │   1. beacon.id ∈ Convex device list        │
+    │   2. beacon.th == SHA256(userId)[:8]        │
+    │                                            │
+    │   If match → direct HTTP to beacon IP:port │
+    └────────────────────────────────────────────┘`}
+              </pre>
+            </Terminal>
+            <div className="mt-3 space-y-1 text-sm text-surface-400">
+              <p>
+                Auth-aware: <InlineCode>th</InlineCode> field = first 8 hex
+                chars of SHA-256(userId). Only same-user devices match, even on
+                shared WiFi.
+              </p>
+              <p>
+                Timeout: 10s without beacon &rarr; device marked as not local.
+              </p>
+              <p>
+                Graceful degradation: if UDP socket fails &rarr; falls back to
+                Convex.
+              </p>
+            </div>
+          </div>
+
+          {/* Convex Device Registry */}
+          <div className="mb-8">
+            <h4 className="mb-3 text-sm font-medium text-surface-200">
+              2. Convex Device Registry (HTTP Polling)
+            </h4>
+            <Terminal title="convex-device-registry">
+              <pre className="text-surface-300">
+                {`CLI Agent                 Convex                  Mobile App
+    │                       │                        │
+    ├── POST /devices/register ──►│                  │
+    │   {deviceId, hostname,      │                  │
+    │    platform, localIP, port} │                  │
+    │                             │                  │
+    ├── POST /devices/heartbeat ──►│ (every 2min)   │
+    │   {localIP, ...}            │                  │
+    │                             │                  │
+    │                             │◄── GET /devices ─┤ (every 3s)
+    │                             │──► device list ──►│
+    │                             │                   │
+    │   Mobile checks: isOnline && lastHeartbeat < 5min
+    │   If private IP → try direct HTTP connection   │
+    └─────────────────────────────────────────────────┘`}
+              </pre>
+            </Terminal>
+          </div>
+
+          {/* Relay */}
+          <div className="mb-8">
+            <h4 className="mb-3 text-sm font-medium text-surface-200">
+              3. Relay Server (QUIC Tunnel + HTTP Proxy)
+            </h4>
+            <Terminal title="relay-tunnel-protocol">
+              <pre className="text-surface-300">
+                {`CLI Agent              Relay Server              Mobile App
+    │                       │                        │
+    │── QUIC connect ──────►│                        │
+    │   (outbound, UDP 4433)│                        │
+    │                       │                        │
+    │── RegisterMsg ───────►│                        │
+    │   {deviceId, token,   │                        │
+    │    password}           │                        │
+    │                       │◄── HTTP request ───────┤
+    │                       │    GET /d/{id}/health   │
+    │                       │    X-Relay-Password: .. │
+    │                       │                        │
+    │◄── QUIC stream ──────┤    (proxied)            │
+    │    TunnelRequest      │                        │
+    │                       │                        │
+    │── TunnelResponse ────►│──── HTTP response ────►│
+    └───────────────────────┘────────────────────────┘`}
+              </pre>
+            </Terminal>
+          </div>
+
+          {/* Transport Layer */}
+          <SubHeading>Transport Layer</SubHeading>
+
+          <div className="mb-8">
+            <Terminal title="transport-paths">
+              <pre className="text-surface-300">
+                {`Direct connections (LAN / same network):
+─────────────────────────────────────────
+Mobile ──HTTP──► CLI Agent (:18080)
+                 No encryption (local network)
+                 Latency: ~5ms
+
+Relay connections (different networks):
+─────────────────────────────────────────
+Mobile ──HTTPS──► nginx ──HTTP──► Relay (:8443)
+                  TLS 1.3          │
+                                   │ (in-memory proxy)
+                                   │
+CLI Agent ◄──QUIC──────────────── Relay (:4433)
+              TLS 1.3 (self-signed)
+              Latency: ~50ms`}
+              </pre>
+            </Terminal>
+          </div>
+
+          {/* Connection State Machine */}
+          <SubHeading>Connection State Machine</SubHeading>
+
+          <div className="mb-8">
+            <Terminal title="connection-state-machine">
+              <pre className="text-surface-300">
+                {`            ┌──────────────┐
+            │ DISCONNECTED │
+            └──────┬───────┘
+                   │ connect()
+                   ▼
+            ┌──────────────┐
+            │  CONNECTING  │
+            └──────┬───────┘
+                   │
+          ┌────────┼─────────┐
+          ▼        ▼         ▼
+     ┌────────┐ ┌──────┐ ┌───────┐
+     │  LAN   │ │  IP  │ │ RELAY │
+     │ beacon │ │direct│ │       │
+     │ probe  │ │ (2s) │ │ try   │
+     │  (2s)  │ │      │ │ each  │
+     └───┬────┘ └──┬───┘ └──┬────┘
+         │         │        │
+         ▼         ▼        ▼
+     ┌────────────────────────────┐
+     │        CONNECTED           │
+     │   mode: direct | relay     │
+     └─────────────┬──────────────┘
+                   │ network change
+                   │ or disconnect
+                   ▼
+     ┌────────────────────────────┐
+     │      RECONNECTING          │
+     │   exponential backoff      │
+     │   1s → 2s → 4s → 30s max  │
+     └────────────────────────────┘`}
+              </pre>
+            </Terminal>
+          </div>
+
+          {/* Protocol Messages */}
+          <SubHeading>Protocol Messages</SubHeading>
+
+          <div className="mb-6 space-y-4">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                RegisterMsg (agent &rarr; relay, QUIC stream)
+              </h4>
+              <Terminal title="register-msg">
+                <pre className="text-surface-300">
+                  {`{
+  "type": "register",
+  "deviceId": "dcbfdc50-...",
+  "token": "eyJhbG...",
+  "password": "relay-secret"
+}`}
+                </pre>
+              </Terminal>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                TunnelRequest (relay &rarr; agent, QUIC stream)
+              </h4>
+              <Terminal title="tunnel-request">
+                <pre className="text-surface-300">
+                  {`{
+  "id": "req-uuid",
+  "method": "GET",
+  "path": "/health",
+  "query": "",
+  "headers": {"Authorization": "Bearer ..."},
+  "body": []
+}`}
+                </pre>
+              </Terminal>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                TunnelResponse (agent &rarr; relay, QUIC stream)
+              </h4>
+              <Terminal title="tunnel-response">
+                <pre className="text-surface-300">
+                  {`{
+  "id": "req-uuid",
+  "statusCode": 200,
+  "headers": {"Content-Type": "application/json"},
+  "body": [base64-encoded-bytes]
+}`}
+                </pre>
+              </Terminal>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                LAN Beacon (CLI &rarr; broadcast, UDP)
+              </h4>
+              <Terminal title="lan-beacon-msg">
+                <pre className="text-surface-300">
+                  {`{"v":1,"id":"dcbfdc50","p":18080,"n":"MacBook-Air","th":"a1b2c3d4"}`}
+                </pre>
+              </Terminal>
+            </div>
+          </div>
+
+          {/* SSE Streaming */}
+          <SubHeading>SSE Streaming (Server-Sent Events)</SubHeading>
+          <Prose>
+            For real-time task output streaming, the relay supports SSE
+            pass-through.
+          </Prose>
+          <div className="space-y-2 text-sm text-surface-400">
+            <p>
+              Path pattern: <InlineCode>/tasks/{"{id}"}/output</InlineCode> with{" "}
+              <InlineCode>GET</InlineCode> method
+            </p>
+            <p>
+              Relay detects SSE by path and switches to streaming mode
+            </p>
+            <p>
+              QUIC stream stays open, relay flushes chunks as they arrive
+            </p>
+            <p>
+              Timeout: 10 minutes (vs 30s for regular requests)
+            </p>
+          </div>
+        </section>
+
+        {/* ─── Build Instructions ─── */}
+        <section className="mb-20">
+          <SectionHeading id="build-instructions">
+            Build Instructions
+          </SectionHeading>
+          <Prose>
+            Each component builds independently. You only need to build the
+            components you&apos;re working on.
+          </Prose>
+
+          {/* CLI */}
+          <SubHeading>Build the CLI</SubHeading>
+          <div className="mb-8">
+            <Terminal title="cli-build">
+              <Cmd>cd desktop/agent</Cmd>
+              <Cmd>go build -o yaver .</Cmd>
+              <Divider />
+              <Comment># Cross-compile for other platforms</Comment>
+              <Cmd>
+                GOOS=linux GOARCH=amd64 go build -o yaver-linux-amd64 .
+              </Cmd>
+              <Cmd>
+                GOOS=windows GOARCH=amd64 go build -o yaver-windows-amd64.exe .
+              </Cmd>
+              <Cmd>
+                GOOS=darwin GOARCH=arm64 go build -o yaver-darwin-arm64 .
+              </Cmd>
+              <Divider />
+              <Comment># Run from source during development</Comment>
+              <Cmd>go run . serve</Cmd>
+              <Output>Listening on 0.0.0.0:18080</Output>
+            </Terminal>
+          </div>
+
+          {/* Mobile */}
+          <SubHeading>Build the Mobile App</SubHeading>
+          <div className="mb-4">
+            <p className="mb-3 text-sm font-medium text-surface-300">iOS</p>
+            <Terminal title="ios-build">
+              <Cmd>cd mobile</Cmd>
+              <Cmd>npx expo prebuild --platform ios</Cmd>
+              <Cmd>cd ios &amp;&amp; pod install</Cmd>
+              <Divider />
+              <Comment># Build via Xcode or xcodebuild</Comment>
+              <Cmd>
+                xcodebuild -workspace Yaver.xcworkspace -scheme Yaver
+                -configuration Release archive
+              </Cmd>
+            </Terminal>
+          </div>
+          <div className="mb-8">
+            <p className="mb-3 text-sm font-medium text-surface-300">
+              Android
+            </p>
+            <Terminal title="android-build">
+              <Cmd>cd mobile</Cmd>
+              <Cmd>npx expo prebuild --platform android</Cmd>
+              <Cmd>cd android</Cmd>
+              <Divider />
+              <Comment># Requires Java 17 (Gradle 8.10 doesn&apos;t support Java 24)</Comment>
+              <Cmd>
+                {"JAVA_HOME=$(/usr/libexec/java_home -v 17) ./gradlew bundleRelease"}
+              </Cmd>
+              <Output>
+                app/build/outputs/bundle/release/app-release.aab
+              </Output>
+            </Terminal>
+          </div>
+
+          {/* Relay */}
+          <SubHeading>Build the Relay Server</SubHeading>
+          <div className="mb-8">
+            <Terminal title="relay-build">
+              <Cmd>cd relay</Cmd>
+              <Cmd>go build -o yaver-relay .</Cmd>
+              <Divider />
+              <Comment># Or use Docker</Comment>
+              <Cmd>docker compose build</Cmd>
+              <Cmd>docker compose up -d</Cmd>
+            </Terminal>
+          </div>
+
+          {/* Website */}
+          <SubHeading>Build the Website</SubHeading>
+          <div className="mb-8">
+            <Terminal title="web-build">
+              <Cmd>cd web</Cmd>
+              <Cmd>npm install</Cmd>
+              <Cmd>npm run build</Cmd>
+              <Divider />
+              <Comment># Local dev server</Comment>
+              <Cmd>npm run dev</Cmd>
+              <Output>http://localhost:3000</Output>
+            </Terminal>
+          </div>
+
+          {/* Convex */}
+          <SubHeading>Deploy Your Own Convex Backend (Optional)</SubHeading>
+          <Prose>
+            Most contributors don&apos;t need their own backend &mdash; the
+            hosted instance works fine. But if you want full control, you can
+            deploy your own with a free Convex account.
+          </Prose>
+          <div className="mb-8">
+            <Terminal title="convex-deploy">
+              <Cmd>cd backend</Cmd>
+              <Cmd>npm install</Cmd>
+              <Cmd>npx convex dev</Cmd>
+              <Output>Convex dev server running</Output>
+            </Terminal>
+          </div>
+
+          <div className="rounded-xl border border-surface-800 bg-surface-900 p-6">
+            <h4 className="mb-2 text-sm font-medium text-surface-200">
+              Note on the Convex backend
+            </h4>
+            <p className="text-sm leading-relaxed text-surface-400">
+              The backend handles OAuth and device discovery only. No task data,
+              code, or AI output is stored. If you deploy your own, update the{" "}
+              <InlineCode>CONVEX_SITE_URL</InlineCode> environment variable in
+              the web and mobile projects to point to your instance.
+            </p>
+          </div>
+        </section>
+
+        {/* ─── Section 3: Backend API Reference ─── */}
+        <section className="mb-20">
+          <SectionHeading id="backend-api">
+            Backend API Reference
+          </SectionHeading>
+          <Prose>
+            The Convex backend exposes HTTP endpoints that the CLI and mobile
+            app call. All authenticated endpoints require a{" "}
+            <InlineCode>Authorization: Bearer &lt;token&gt;</InlineCode> header.
+            The base URL is your Convex site URL (set via the{" "}
+            <InlineCode>NEXT_PUBLIC_CONVEX_SITE_URL</InlineCode>{" "}
+            environment variable).
+          </Prose>
+
+          {/* Auth endpoints */}
+          <SubHeading>Authentication</SubHeading>
+          <div className="mb-8 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-surface-800 text-left">
+                  <th className="pb-3 pr-4 font-medium text-surface-200">
+                    Method
+                  </th>
+                  <th className="pb-3 pr-4 font-medium text-surface-200">
+                    Path
+                  </th>
+                  <th className="pb-3 pr-4 font-medium text-surface-200">
+                    Auth
+                  </th>
+                  <th className="pb-3 font-medium text-surface-200">
+                    Description
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="text-surface-400">
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/auth/signup</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">No</td>
+                  <td className="py-3">Email/password signup</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/auth/login</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">No</td>
+                  <td className="py-3">Email/password login</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/auth/apple-native</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">No</td>
+                  <td className="py-3">
+                    Native iOS Apple Sign-In (identity token)
+                  </td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>GET</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/auth/validate</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">Validate bearer token, return user info</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/auth/update-profile</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">Update user profile (name)</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/auth/delete-account</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">Delete user account and all data</td>
+                </tr>
+                <tr>
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/auth/upsert-user</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">No</td>
+                  <td className="py-3">
+                    Create or update user (called from web OAuth flow)
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Device endpoints */}
+          <SubHeading>Devices</SubHeading>
+          <div className="mb-8 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-surface-800 text-left">
+                  <th className="pb-3 pr-4 font-medium text-surface-200">
+                    Method
+                  </th>
+                  <th className="pb-3 pr-4 font-medium text-surface-200">
+                    Path
+                  </th>
+                  <th className="pb-3 pr-4 font-medium text-surface-200">
+                    Auth
+                  </th>
+                  <th className="pb-3 font-medium text-surface-200">
+                    Description
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="text-surface-400">
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/devices/register</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">Register a desktop agent device</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/devices/heartbeat</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">
+                    Device heartbeat (every 2 min, includes runner info)
+                  </td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>GET</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/devices/list</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">List user&apos;s registered devices</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/devices/offline</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">Mark device as offline</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/devices/remove</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">Remove a device from registry</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/devices/runner-down</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">Set runner down/up flag on a device</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/devices/metrics</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">Report CPU/RAM metrics (every 60s)</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>GET</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/devices/metrics</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">
+                    Get metrics for a device (?deviceId=xxx)
+                  </td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/devices/event</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">
+                    Record device event (crash, restart, etc.)
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-3 pr-4">
+                    <InlineCode>GET</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/devices/events</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">
+                    Get recent events (?deviceId=xxx)
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Settings & config endpoints */}
+          <SubHeading>Settings &amp; Configuration</SubHeading>
+          <div className="mb-8 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-surface-800 text-left">
+                  <th className="pb-3 pr-4 font-medium text-surface-200">
+                    Method
+                  </th>
+                  <th className="pb-3 pr-4 font-medium text-surface-200">
+                    Path
+                  </th>
+                  <th className="pb-3 pr-4 font-medium text-surface-200">
+                    Auth
+                  </th>
+                  <th className="pb-3 font-medium text-surface-200">
+                    Description
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="text-surface-400">
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>GET</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/settings</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">Get user settings (runner, relay config)</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/settings</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">Update user settings</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>GET</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/config</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">No</td>
+                  <td className="py-3">
+                    Platform config (relay servers, runners, models)
+                  </td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>GET</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/runners</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">No</td>
+                  <td className="py-3">List available AI runners</td>
+                </tr>
+                <tr>
+                  <td className="py-3 pr-4">
+                    <InlineCode>GET</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/models</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">No</td>
+                  <td className="py-3">List available AI models per runner</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Usage & logging endpoints */}
+          <SubHeading>Usage &amp; Logging</SubHeading>
+          <div className="mb-8 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-surface-800 text-left">
+                  <th className="pb-3 pr-4 font-medium text-surface-200">
+                    Method
+                  </th>
+                  <th className="pb-3 pr-4 font-medium text-surface-200">
+                    Path
+                  </th>
+                  <th className="pb-3 pr-4 font-medium text-surface-200">
+                    Auth
+                  </th>
+                  <th className="pb-3 font-medium text-surface-200">
+                    Description
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="text-surface-400">
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/usage/record</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">
+                    Record runner usage when a task finishes
+                  </td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>GET</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/usage</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">
+                    Usage summary with daily aggregation (?since=epoch)
+                  </td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/survey/submit</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Token</td>
+                  <td className="py-3">Submit developer survey</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>GET</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/downloads/list</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">No</td>
+                  <td className="py-3">List all available CLI downloads</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/dev/log</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Optional</td>
+                  <td className="py-3">Write a developer debug log</td>
+                </tr>
+                <tr>
+                  <td className="py-3 pr-4">
+                    <InlineCode>POST</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <InlineCode>/mobile/log</InlineCode>
+                  </td>
+                  <td className="py-3 pr-4">Optional</td>
+                  <td className="py-3">Write a mobile stream debug log</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* ─── Section 4: Data Model ─── */}
+        <section className="mb-20">
+          <SectionHeading id="data-model">
+            What&apos;s Stored in Convex
+          </SectionHeading>
+          <Prose>
+            Convex is purely for auth and device registry. No task data, no
+            code, no AI output, no logs are stored. Everything AI-related flows
+            peer-to-peer between mobile and desktop agent.
+          </Prose>
+
+          <div className="space-y-4">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                users
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                User accounts. Fields: <InlineCode>email</InlineCode>,{" "}
+                <InlineCode>fullName</InlineCode>,{" "}
+                <InlineCode>provider</InlineCode> (google / apple / microsoft /
+                email), <InlineCode>providerId</InlineCode>,{" "}
+                <InlineCode>passwordHash</InlineCode> (email auth only),{" "}
+                <InlineCode>avatarUrl</InlineCode>.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                sessions
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Auth sessions. Fields: <InlineCode>tokenHash</InlineCode>{" "}
+                (SHA-256 of bearer token), <InlineCode>userId</InlineCode>,{" "}
+                <InlineCode>expiresAt</InlineCode>. Tokens expire after 30 days.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                devices
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Registered desktop agents. Fields:{" "}
+                <InlineCode>deviceId</InlineCode>,{" "}
+                <InlineCode>name</InlineCode> (hostname),{" "}
+                <InlineCode>platform</InlineCode> (macos / windows / linux),{" "}
+                <InlineCode>quicHost</InlineCode>,{" "}
+                <InlineCode>quicPort</InlineCode>,{" "}
+                <InlineCode>isOnline</InlineCode>,{" "}
+                <InlineCode>runners</InlineCode> (active AI processes),{" "}
+                <InlineCode>lastHeartbeat</InlineCode>.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                userSettings
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Per-user preferences. Fields:{" "}
+                <InlineCode>forceRelay</InlineCode>,{" "}
+                <InlineCode>runnerId</InlineCode>,{" "}
+                <InlineCode>customRunnerCommand</InlineCode>,{" "}
+                <InlineCode>relayUrl</InlineCode> (custom relay),{" "}
+                <InlineCode>relayPassword</InlineCode>.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                platformConfig
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Global config managed by admins. Key-value pairs including{" "}
+                <InlineCode>relay_servers</InlineCode> (JSON array of relay
+                endpoints), <InlineCode>cli_version</InlineCode>, and{" "}
+                <InlineCode>mobile_version</InlineCode>.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                aiRunners &amp; aiModels
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Available AI runners (Claude Code, Codex, Aider, Ollama, etc.)
+                and their supported models. Managed centrally, fetched by
+                clients via <InlineCode>GET /config</InlineCode>.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                deviceMetrics &amp; deviceEvents
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Per-minute CPU/RAM metrics (last 1 hour kept) and device
+                lifecycle events (crash, restart, OOM, started, stopped). Used
+                for the monitoring dashboard.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                runnerUsage &amp; dailyTaskCounts
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Usage tracking: how long each AI runner ran per task, and daily
+                task counts per user. Used for analytics.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-6 rounded-xl border border-surface-800 bg-surface-900 p-6">
+            <h4 className="mb-2 text-sm font-medium text-surface-200">
+              Privacy guarantee
+            </h4>
+            <p className="text-sm leading-relaxed text-surface-400">
+              No task data, no source code, no AI output, no chat logs are ever
+              stored in Convex or on the relay server. The backend is purely for
+              auth, device discovery, and usage analytics. All AI interaction
+              flows peer-to-peer between your phone and your dev machine.
+            </p>
+          </div>
+        </section>
+
+        {/* ─── Section 5: Relay Protocol ─── */}
+        <section className="mb-20">
+          <SectionHeading id="relay-protocol">
+            Relay Server Protocol
+          </SectionHeading>
+          <Prose>
+            The relay server is a pass-through QUIC proxy that enables NAT
+            traversal. It stores nothing and sees encrypted traffic only.
+          </Prose>
+
+          <div className="mb-8">
+            <Terminal title="relay-protocol">
+              <pre className="text-surface-300">
+                {`Desktop Agent                  Relay Server                  Mobile App
+     │                              │                              │
+     │── QUIC connect (outbound) ──►│                              │
+     │── RegisterMsg ──────────────►│                              │
+     │   { deviceId, token, pass }  │                              │
+     │                              │◄── HTTP request ─────────────│
+     │                              │    GET /d/{deviceId}/health   │
+     │◄── forward via QUIC tunnel ──│                              │
+     │── response ─────────────────►│── forward HTTP response ────►│
+     │                              │                              │`}
+              </pre>
+            </Terminal>
+          </div>
+
+          <div className="space-y-4">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Agent &rarr; Relay (QUIC)
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                The CLI agent opens an outbound QUIC connection to the relay on
+                port <InlineCode>4433/udp</InlineCode>. This is outbound-only,
+                so it works behind NAT without any port forwarding. The agent
+                sends a <InlineCode>RegisterMsg</InlineCode> with its{" "}
+                <InlineCode>deviceId</InlineCode>, auth token, and relay
+                password. The relay maps the device ID to this QUIC tunnel.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Mobile &rarr; Relay (HTTP)
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                The mobile app sends short-lived HTTP requests to{" "}
+                <InlineCode>
+                  {"https://<relay>/d/{deviceId}/<path>"}
+                </InlineCode>
+                . The relay looks up the QUIC tunnel for that device ID and
+                forwards the request through the tunnel to the agent. The
+                response comes back the same way.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Reconnection
+              </h4>
+              <p className="text-sm leading-relaxed text-surface-400">
+                If the QUIC tunnel drops, the agent reconnects with exponential
+                backoff (1s &rarr; 2s &rarr; 4s &rarr; 8s &rarr; max 30s). The
+                mobile app tries all configured relay servers in priority order
+                with a 5-second timeout per server.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Connection priority
+              </h4>
+              <ul className="space-y-2 text-sm text-surface-400">
+                <li>
+                  &bull; <span className="text-surface-200">LAN Beacon</span>{" "}
+                  &mdash; direct HTTP, ~5ms (same WiFi)
+                </li>
+                <li>
+                  &bull;{" "}
+                  <span className="text-surface-200">Convex IP (direct)</span>{" "}
+                  &mdash; direct HTTP, ~5ms (known IP from device registry)
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">QUIC Relay</span>{" "}
+                  &mdash; proxied, ~50ms (any network)
+                </li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        {/* ─── Section 6: Running Tests ─── */}
+        <section className="mb-20">
+          <SectionHeading id="running-tests">Running Tests</SectionHeading>
+          <Prose>
+            Unit tests spin up real HTTP servers on random ports &mdash; no mocks,
+            no external dependencies. Run them with a single command:
+          </Prose>
+
+          <div className="mb-8">
+            <Terminal title="unit tests">
+              <Cmd>cd desktop/agent &amp;&amp; go test -v ./...</Cmd>
+              <Divider />
+              <Output>--- PASS: TestHealth</Output>
+              <Output>--- PASS: TestAuth</Output>
+              <Output>--- PASS: TestCORS</Output>
+              <Output>--- PASS: TestTaskCRUD</Output>
+              <Output>--- PASS: TestAgentStatus</Output>
+              <Output>--- PASS: TestPingPong</Output>
+              <Output>--- PASS: TestShutdown</Output>
+              <Output>--- PASS: TestServerClientIntegration</Output>
+              <Output>--- PASS: TestMCPProtocol</Output>
+              <Output>PASS</Output>
+              <Divider />
+              <Cmd>cd relay &amp;&amp; go test -v ./...</Cmd>
+              <Output>PASS</Output>
+            </Terminal>
+          </div>
+
+          <div className="space-y-4">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                What&apos;s covered
+              </h4>
+              <ul className="space-y-2 text-sm text-surface-400">
+                <li>&bull; Health check, auth, and CORS endpoints</li>
+                <li>&bull; Task CRUD and agent status</li>
+                <li>&bull; Ping/pong and graceful shutdown</li>
+                <li>
+                  &bull; Server-client integration: two agents on same
+                  machine, verifies token isolation and task separation
+                </li>
+                <li>
+                  &bull; MCP protocol: initialize + tools/list JSON-RPC (30 tools)
+                </li>
+                <li>&bull; Relay server registration and tunnel lifecycle</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        {/* ─── Integration Test Suite ─── */}
+        <section className="mb-20">
+          <SectionHeading id="integration-test-suite">Integration Test Suite</SectionHeading>
+          <Prose>
+            The full integration test suite verifies CLI-to-CLI connections across
+            every transport mode &mdash; LAN, relay server (local + remote Docker + remote
+            binary), Tailscale, and Cloudflare Tunnel. It also builds all
+            components and validates MCP protocol compliance.
+          </Prose>
+
+          <div className="mb-8">
+            <Terminal title="integration test suite">
+              <Comment># Run everything</Comment>
+              <Cmd>./scripts/test-suite.sh</Cmd>
+              <Divider />
+              <Comment># Or run specific sections</Comment>
+              <Cmd>./scripts/test-suite.sh --unit</Cmd>
+              <Cmd>./scripts/test-suite.sh --builds</Cmd>
+              <Cmd>./scripts/test-suite.sh --lan</Cmd>
+              <Cmd>./scripts/test-suite.sh --relay</Cmd>
+              <Cmd>./scripts/test-suite.sh --relay-docker</Cmd>
+              <Cmd>./scripts/test-suite.sh --relay-binary</Cmd>
+              <Cmd>./scripts/test-suite.sh --tailscale</Cmd>
+              <Cmd>./scripts/test-suite.sh --cloudflare</Cmd>
+              <Divider />
+              <Comment># Combine flags</Comment>
+              <Cmd>./scripts/test-suite.sh --unit --lan --relay</Cmd>
+            </Terminal>
+          </div>
+
+          <div className="mb-8 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-surface-800 text-left">
+                  <th className="pb-3 pr-4 text-surface-200">Flag</th>
+                  <th className="pb-3 pr-4 text-surface-200">What it tests</th>
+                  <th className="pb-3 text-surface-200">Requires</th>
+                </tr>
+              </thead>
+              <tbody className="text-surface-400">
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--unit</InlineCode></td>
+                  <td className="py-3 pr-4">Go agent + relay unit tests</td>
+                  <td className="py-3">Nothing</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--builds</InlineCode></td>
+                  <td className="py-3 pr-4">CLI, relay, web, backend typecheck, mobile typecheck, iOS, Android</td>
+                  <td className="py-3">Node.js, Go, Xcode, Java 17</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--lan</InlineCode></td>
+                  <td className="py-3 pr-4">Auth rejection, task flow via direct HTTP, MCP protocol</td>
+                  <td className="py-3">Nothing</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--relay</InlineCode></td>
+                  <td className="py-3 pr-4">Local relay + agent registration, proxy task flow, password rejection</td>
+                  <td className="py-3">Nothing</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--relay-docker</InlineCode></td>
+                  <td className="py-3 pr-4">Deploy relay via Docker to remote server, test, teardown</td>
+                  <td className="py-3">Remote server + SSH</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--relay-binary</InlineCode></td>
+                  <td className="py-3 pr-4">Deploy relay as native binary to remote server, test, teardown</td>
+                  <td className="py-3">Remote server + SSH</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--tailscale</InlineCode></td>
+                  <td className="py-3 pr-4">Deploy agent to remote server, connect via Tailscale IPs</td>
+                  <td className="py-3">Tailscale on both machines</td>
+                </tr>
+                <tr>
+                  <td className="py-3 pr-4"><InlineCode>--cloudflare</InlineCode></td>
+                  <td className="py-3 pr-4">Quick tunnel + optional named tunnel with CF Access</td>
+                  <td className="py-3"><InlineCode>cloudflared</InlineCode></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div className="space-y-4">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                No credentials needed
+              </h4>
+              <p className="text-sm text-surface-400">
+                <InlineCode>--unit</InlineCode>, <InlineCode>--lan</InlineCode>,
+                and <InlineCode>--relay</InlineCode> work out of the box. They spin up
+                local processes and use the Convex dev backend for test account
+                signup. Great for contributors who just want to verify their changes.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Remote server tests
+              </h4>
+              <p className="mb-3 text-sm text-surface-400">
+                <InlineCode>--relay-docker</InlineCode>, <InlineCode>--relay-binary</InlineCode>,
+                and <InlineCode>--tailscale</InlineCode> SSH into a remote Linux server
+                (e.g. Hetzner VPS), deploy binaries, test cross-network connectivity,
+                then tear everything down. Auto-detects CPU architecture (amd64 vs arm64).
+              </p>
+              <Terminal title="credentials setup">
+                <Comment># Copy the template (gitignored)</Comment>
+                <Cmd>cp .env.test.example .env.test</Cmd>
+                <Divider />
+                <Comment># Or keep credentials outside the repo</Comment>
+                <Cmd>cp .env.test.example ../private/.env.test</Cmd>
+              </Terminal>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                CI / GitHub Actions
+              </h4>
+              <p className="text-sm text-surface-400">
+                The test suite runs automatically on pushes to <InlineCode>main</InlineCode> when
+                CLI or relay code changes. It can also be triggered manually
+                via <InlineCode>workflow_dispatch</InlineCode> from the Actions tab.
+                Credentials are stored as GitHub Actions secrets.
+                See <InlineCode>.github/workflows/test-suite.yml</InlineCode>.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* ─── PR Rules ─── */}
+        <section className="mb-20">
+          <SectionHeading id="pr-rules">Pull Request Rules</SectionHeading>
+          <Prose>
+            All changes go through pull requests. The CI pipeline must pass before
+            merging. Here&apos;s what happens when you open a PR:
+          </Prose>
+
+          <div className="space-y-4">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                CI checks (automated)
+              </h4>
+              <ol className="space-y-2 text-sm text-surface-400 list-decimal list-inside">
+                <li>
+                  <span className="text-surface-300">Change detection</span> &mdash;
+                  only the components you touched are tested (CLI, relay, web, mobile, backend)
+                </li>
+                <li>
+                  <span className="text-surface-300">Version check</span> &mdash;
+                  if you changed a component, its version in <InlineCode>versions.json</InlineCode> must
+                  be bumped
+                </li>
+                <li>
+                  <span className="text-surface-300">Go tests</span> &mdash;
+                  <InlineCode>go test ./...</InlineCode> for CLI agent and relay
+                </li>
+                <li>
+                  <span className="text-surface-300">Go build</span> &mdash;
+                  verifies the CLI compiles
+                </li>
+                <li>
+                  <span className="text-surface-300">Web build</span> &mdash;
+                  <InlineCode>npm run build</InlineCode> for the Next.js landing page
+                </li>
+                <li>
+                  <span className="text-surface-300">Mobile typecheck</span> &mdash;
+                  <InlineCode>tsc --noEmit</InlineCode> for React Native
+                </li>
+                <li>
+                  <span className="text-surface-300">Backend typecheck</span> &mdash;
+                  <InlineCode>npx convex typecheck</InlineCode> for Convex functions
+                </li>
+              </ol>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Before submitting
+              </h4>
+              <ol className="space-y-2 text-sm text-surface-400 list-decimal list-inside">
+                <li>
+                  Run <InlineCode>./scripts/test-suite.sh --unit --lan --relay</InlineCode> locally &mdash;
+                  these catch most issues without needing remote infrastructure
+                </li>
+                <li>
+                  If you changed builds, run <InlineCode>./scripts/test-suite.sh --builds</InlineCode> to
+                  verify all components compile
+                </li>
+                <li>
+                  Bump the version in <InlineCode>versions.json</InlineCode> for any
+                  component you modified, then run <InlineCode>./scripts/sync-versions.sh</InlineCode>
+                </li>
+                <li>
+                  Keep PRs focused &mdash; one feature or fix per PR
+                </li>
+              </ol>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Version bumping
+              </h4>
+              <p className="mb-3 text-sm text-surface-400">
+                Every component has its own version in <InlineCode>versions.json</InlineCode>.
+                CI enforces that changed components have their version bumped.
+              </p>
+              <Terminal title="version bump">
+                <Comment># Edit versions.json, then sync everywhere</Comment>
+                <Cmd>./scripts/sync-versions.sh</Cmd>
+                <Divider />
+                <Comment># This updates: mobile/app.json, Info.plist,</Comment>
+                <Comment># project.pbxproj, build.gradle, etc.</Comment>
+              </Terminal>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Release process
+              </h4>
+              <ul className="space-y-2 text-sm text-surface-400">
+                <li>
+                  &bull; <span className="text-surface-200">Tags trigger releases</span>:
+                  push <InlineCode>cli/v1.30.0</InlineCode> to build + publish CLI binaries,
+                  update Homebrew/Scoop
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Tag format</span>:
+                  <InlineCode>cli/vX.Y.Z</InlineCode>, <InlineCode>relay/vX.Y.Z</InlineCode>,
+                  <InlineCode>mobile/vX.Y.Z</InlineCode>, <InlineCode>web/vX.Y.Z</InlineCode>
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Production deploys</span> require
+                  manual approval in the GitHub environment
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Web deploys</span> are manual:
+                  <InlineCode>./scripts/deploy-vercel.sh</InlineCode> (auto-deploy is disabled)
+                </li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        {/* ─── Contributing ─── */}
+        <section className="mb-20">
+          <SectionHeading id="contributing">Contributing</SectionHeading>
+          <Prose>
+            Contributions are welcome. See the full{" "}
+            <Link
+              href="/docs/contributing"
+              className="text-surface-200 underline underline-offset-2 hover:text-surface-50"
+            >
+              Contributing Guide
+            </Link>{" "}
+            for setup instructions, how to run your own Convex backend,
+            seed data, CI/CD policy, and how to add new AI runners.
+          </Prose>
+
+          <div className="space-y-4">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Quick start
+              </h4>
+              <ol className="space-y-2 text-sm text-surface-400 list-decimal list-inside">
+                <li>Fork the repository</li>
+                <li>Create a feature branch from <InlineCode>main</InlineCode></li>
+                <li>Make your changes</li>
+                <li>Bump version in <InlineCode>versions.json</InlineCode> and run <InlineCode>./scripts/sync-versions.sh</InlineCode></li>
+                <li>
+                  Run tests:{" "}
+                  <InlineCode>./scripts/test-suite.sh --unit --lan --relay</InlineCode>
+                </li>
+                <li>Open a pull request against <InlineCode>main</InlineCode></li>
+              </ol>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Conventions
+              </h4>
+              <ul className="space-y-2 text-sm text-surface-400">
+                <li>
+                  &bull; <span className="text-surface-200">Go code</span>:{" "}
+                  standard Go project layout, <InlineCode>gofmt</InlineCode>
+                </li>
+                <li>
+                  &bull;{" "}
+                  <span className="text-surface-200">TypeScript / React</span>:{" "}
+                  functional components, hooks, no class components
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Convex</span>:{" "}
+                  mutations for writes, queries for reads, HTTP actions for
+                  OAuth callbacks
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Mobile</span>:{" "}
+                  always native builds (xcodebuild for iOS, Gradle for Android),
+                  never Expo CLI
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Tests</span>:{" "}
+                  real servers on random ports, no mocks. If you add an endpoint,
+                  add a test.
+                </li>
+              </ul>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Areas we&apos;d love help with
+              </h4>
+              <ul className="space-y-2 text-sm text-surface-400">
+                <li>&bull; Additional AI runner integrations (Ollama, Qwen, LM Studio, etc.)</li>
+                <li>&bull; Windows and Linux desktop installer improvements</li>
+                <li>&bull; Relay server performance and benchmarking</li>
+                <li>&bull; Documentation, tutorials, and example configurations</li>
+                <li>&bull; Bug reports and test coverage improvements</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        {/* Bottom CTA */}
+        <div className="rounded-xl border border-surface-800 bg-surface-900 p-6 text-center">
+          <p className="mb-2 text-sm font-medium text-surface-200">
+            Questions or ideas?
+          </p>
+          <p className="text-sm text-surface-400">
+            Open an issue on{" "}
+            <a
+              href="https://github.com/kivanccakmak/yaver/issues"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-surface-200 underline underline-offset-2 hover:text-surface-50"
+            >
+              GitHub
+            </a>{" "}
+            or email{" "}
+            <a
+              href="mailto:support@yaver.io"
+              className="text-surface-200 underline underline-offset-2 hover:text-surface-50"
+            >
+              support@yaver.io
+            </a>
+          </p>
+        </div>
+
+        {/* Back to home */}
+        <div className="mt-8 text-center">
+          <Link
+            href="/"
+            className="text-xs text-surface-500 hover:text-surface-50"
+          >
+            Back to home
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,13 @@
+# Only the web/ directory is needed for Vercel
+desktop/
+mobile/
+backend/
+scripts/
+
+# Dependencies and build output — Vercel runs npm install and build
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+web/.next/
+web/node_modules/
