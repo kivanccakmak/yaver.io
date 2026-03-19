@@ -38,6 +38,8 @@ export default function DownloadPage() {
   const [downloads, setDownloads] = useState<Download[]>([]);
   const [cliVersion, setCliVersion] = useState<string>("");
   const [mobileVersion, setMobileVersion] = useState<string>("");
+  const [relayVersion, setRelayVersion] = useState<string>("");
+  const [webVersion, setWebVersion] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -60,6 +62,8 @@ export default function DownloadPage() {
       .then((data) => {
         if (data.cliVersion) setCliVersion(data.cliVersion);
         if (data.mobileVersion) setMobileVersion(data.mobileVersion);
+        if (data.relayVersion) setRelayVersion(data.relayVersion);
+        if (data.webVersion) setWebVersion(data.webVersion);
       })
       .catch(() => {});
   }, []);

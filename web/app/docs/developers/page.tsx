@@ -1552,18 +1552,26 @@ CLI Agent ◄──QUIC──────────────── Relay (:
         <section className="mb-20">
           <SectionHeading id="contributing">Contributing</SectionHeading>
           <Prose>
-            Contributions are welcome. Here&apos;s the typical workflow.
+            Contributions are welcome. See the full{" "}
+            <Link
+              href="/docs/contributing"
+              className="text-surface-200 underline underline-offset-2 hover:text-surface-50"
+            >
+              Contributing Guide
+            </Link>{" "}
+            for setup instructions, how to run your own Convex backend,
+            seed data, CI/CD policy, and how to add new AI runners.
           </Prose>
 
           <div className="space-y-4">
             <div className="card">
               <h4 className="mb-2 text-sm font-medium text-surface-200">
-                Workflow
+                Quick start
               </h4>
               <ol className="space-y-2 text-sm text-surface-400 list-decimal list-inside">
                 <li>Fork the repository</li>
                 <li>Create a feature branch from <InlineCode>main</InlineCode></li>
-                <li>Make your changes</li>
+                <li>Bump version in <InlineCode>versions.json</InlineCode> and run <InlineCode>./scripts/sync-versions.sh</InlineCode></li>
                 <li>
                   Run tests:{" "}
                   <InlineCode>cd desktop/agent &amp;&amp; go test ./...</InlineCode>
@@ -1604,7 +1612,7 @@ CLI Agent ◄──QUIC──────────────── Relay (:
                 Areas we&apos;d love help with
               </h4>
               <ul className="space-y-2 text-sm text-surface-400">
-                <li>&bull; Additional AI runner integrations</li>
+                <li>&bull; Additional AI runner integrations (Ollama, Qwen, etc.)</li>
                 <li>&bull; Windows and Linux desktop installer improvements</li>
                 <li>&bull; Documentation and tutorials</li>
                 <li>&bull; Bug reports and test coverage</li>

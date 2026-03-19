@@ -125,7 +125,7 @@ export default function Header() {
               <Link href="/faq" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
                 FAQ
               </Link>
-              <Link href="/docs/self-hosting" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
+              <Link href="/docs" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
                 Docs
               </Link>
               <Link href="/docs/developers" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
@@ -197,7 +197,7 @@ export default function Header() {
           <div className="flex flex-col gap-4">
             <Link href="/#features" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Features</Link>
             <Link href="/faq" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>FAQ</Link>
-            <Link href="/docs/self-hosting" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Docs</Link>
+            <Link href="/docs" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Docs</Link>
             <Link href="/docs/developers" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Developers</Link>
             <Link href="/download" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Download</Link>
             <Link href="/auth" className="btn-primary text-center text-sm" onClick={() => setMobileOpen(false)}>Log in</Link>

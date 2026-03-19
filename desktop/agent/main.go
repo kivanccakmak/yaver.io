@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -25,7 +26,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.28.0"
+const version = "1.29.0"
 
 // Default hosted Convex instance (public endpoint). Override with --convex-url flag or convex_site_url in config.json.
 const defaultConvexSiteURL = "https://shocking-echidna-394.eu-west-1.convex.site"
@@ -70,6 +71,12 @@ func main() {
 		runRelay(os.Args[2:])
 	case "set-runner":
 		runSetRunner(os.Args[2:])
+	case "mcp":
+		runMCP(os.Args[2:])
+	case "email":
+		runEmail(os.Args[2:])
+	case "acl":
+		runACL(os.Args[2:])
 	case "discover":
 		discoverProjects()
 		fp, _ := projectsFilePath()
@@ -82,6 +89,7 @@ func main() {
 		printUsage()
 	case "version", "--version", "-v":
 		fmt.Printf("yaver %s\n", version)
+		checkLatestVersion()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmd)
 		printUsage()
@@ -112,12 +120,19 @@ Usage:
   yaver relay set-password <pass>  Set default relay password
   yaver relay clear-password  Remove default relay password
   yaver set-runner  Set default AI agent (also settable from mobile app, per task)
+  yaver mcp         Start MCP server (local stdio or network HTTP)
+  yaver email       Email connector setup and management (Office 365 / Gmail)
+  yaver acl         Agent Communication Layer — connect to other MCP servers
   yaver status      Show auth, relay, and connection status
   yaver devices     List your registered devices
   yaver purge       Remove all local data (auth, sessions, tasks, logs)
   yaver uninstall   Remove config, certs, and stop the agent
   yaver help        Show this help message
   yaver version     Print version
+
+Flags for auth:
+  --headless        Use device code flow (for SSH/headless servers, auto-detected)
+  --token           Provide token directly (skip browser)
 
 Flags for serve:
   --debug           Run in foreground with verbose logging
@@ -158,6 +173,7 @@ func runAuth(args []string) {
 	fs := flag.NewFlagSet("auth", flag.ExitOnError)
 	convexURL := fs.String("convex-url", defaultConvexSiteURL, "Convex site URL")
 	token := fs.String("token", "", "Provide token directly (skip browser)")
+	headless := fs.Bool("headless", false, "Use device code flow (for headless/SSH servers)")
 	fs.Parse(args)
 
 	cfg, err := LoadConfig()
@@ -180,6 +196,38 @@ func runAuth(args []string) {
 	if *token != "" {
 		// Direct token
 		cfg.AuthToken = *token
+		cfg.ConvexSiteURL = *convexURL
+		if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: token validation failed: %v\n", err)
+			os.Exit(1)
+		}
+		if cfg.DeviceID == "" {
+			cfg.DeviceID = uuid.New().String()
+		}
+		if err := SaveConfig(cfg); err != nil {
+			log.Fatalf("save config: %v", err)
+		}
+		fmt.Println("Signed in successfully.")
+		fmt.Println()
+		fmt.Println("Run 'yaver serve' to start the agent.")
+		return
+	}
+
+	// Device code flow for headless machines (SSH, no display)
+	if *headless || isHeadless() {
+		if *headless {
+			fmt.Println("Using device code flow (--headless)...")
+		} else {
+			fmt.Println("Headless environment detected. Using device code flow...")
+		}
+
+		t, err := runDeviceCodeAuth(*convexURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		cfg.AuthToken = t
 		cfg.ConvexSiteURL = *convexURL
 		if err := ValidateToken(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: token validation failed: %v\n", err)
@@ -920,6 +968,14 @@ func runServe(args []string) {
 	taskMgr.DeviceID = cfg.DeviceID
 	taskMgr.OwnerEmail = ownerEmail
 
+	// Configure sandbox — defaults to enabled with secure settings
+	if cfg.Sandbox != nil {
+		taskMgr.Sandbox = *cfg.Sandbox
+	} else {
+		taskMgr.Sandbox = DefaultSandboxConfig()
+	}
+	log.Printf("Sandbox: enabled=%v, allow_sudo=%v", taskMgr.Sandbox.Enabled, taskMgr.Sandbox.AllowSudo)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -928,6 +984,27 @@ func runServe(args []string) {
 
 	// Warm up the runner — fork Claude at startup to establish a session
 	go taskMgr.WarmUp()
+
+	// Initialize ACL manager for MCP peer communication
+	var aclMgr *ACLManager
+	if len(cfg.ACLPeers) > 0 {
+		aclMgr = NewACLManager(cfg.ACLPeers)
+		log.Printf("ACL: %d peer(s) configured", len(cfg.ACLPeers))
+	} else {
+		aclMgr = NewACLManager(nil)
+	}
+
+	// Initialize email manager if configured
+	var emailMgr *EmailManager
+	if cfg.Email != nil && cfg.Email.Provider != "" {
+		var err error
+		emailMgr, err = NewEmailManager(cfg.Email)
+		if err != nil {
+			log.Printf("Warning: email setup failed: %v", err)
+		} else {
+			log.Printf("Email: %s (%s) configured", cfg.Email.Provider, cfg.Email.SenderEmail)
+		}
+	}
 
 	// Report agent started event
 	go func() {
@@ -938,6 +1015,8 @@ func runServe(args []string) {
 
 	// Start HTTP server (V1 — primary, also serves MCP)
 	httpServer := NewHTTPServer(*httpPort, cfg.AuthToken, ownerUserID, cfg.ConvexSiteURL, hostname, taskMgr)
+	httpServer.aclMgr = aclMgr
+	httpServer.emailMgr = emailMgr
 	httpServer.onShutdown = func() {
 		log.Println("Shutdown requested via API — stopping agent")
 		cancel() // cancel the main context, triggers graceful shutdown
@@ -2567,6 +2646,422 @@ func relayHandleProxiedRequest(stream quic.Stream, agentAddr string, client *htt
 	stream.Write(respJSON)
 }
 
+// ---------------------------------------------------------------------------
+// mcp — Start MCP server (local stdio or network HTTP)
+// ---------------------------------------------------------------------------
+
+func runMCP(args []string) {
+	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
+	mode := fs.String("mode", "stdio", "MCP transport: stdio (for Claude Desktop) or http (network)")
+	httpPort := fs.Int("port", 18090, "HTTP port for network MCP mode")
+	workDir := fs.String("work-dir", ".", "Working directory for tasks")
+	fs.Parse(args)
+
+	if *workDir == "." {
+		wd, _ := os.Getwd()
+		*workDir = wd
+	}
+
+	cfg, _ := LoadConfig()
+	if cfg == nil {
+		cfg = &Config{}
+	}
+
+	// Build a minimal task manager for MCP
+	taskStore, _ := NewTaskStore()
+	runner := defaultRunner
+	if r, ok := builtinRunners["claude"]; ok {
+		runner = r
+	}
+	taskMgr := NewTaskManager(*workDir, taskStore, runner)
+	if cfg.Sandbox != nil {
+		taskMgr.Sandbox = *cfg.Sandbox
+	} else {
+		taskMgr.Sandbox = DefaultSandboxConfig()
+	}
+
+	// Init ACL
+	aclMgr := NewACLManager(cfg.ACLPeers)
+
+	// Init email
+	var emailMgr *EmailManager
+	if cfg.Email != nil && cfg.Email.Provider != "" {
+		emailMgr, _ = NewEmailManager(cfg.Email)
+	}
+
+	switch *mode {
+	case "stdio":
+		fmt.Fprintf(os.Stderr, "Yaver MCP server (stdio) v%s — work dir: %s\n", version, *workDir)
+		runMCPStdio(taskMgr, aclMgr, emailMgr)
+	case "http":
+		fmt.Printf("Yaver MCP server (HTTP) v%s on port %d — work dir: %s\n", version, *httpPort, *workDir)
+		hostname, _ := os.Hostname()
+		srv := NewHTTPServer(*httpPort, "", "", "", hostname, taskMgr)
+		srv.aclMgr = aclMgr
+		srv.emailMgr = emailMgr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			cancel()
+		}()
+
+		if err := srv.Start(ctx); err != nil {
+			log.Fatalf("MCP HTTP server error: %v", err)
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown MCP mode: %s (use 'stdio' or 'http')\n", *mode)
+		os.Exit(1)
+	}
+}
+
+// runMCPStdio runs MCP over stdin/stdout (JSON-RPC 2.0, one request per line).
+func runMCPStdio(taskMgr *TaskManager, aclMgr *ACLManager, emailMgr *EmailManager) {
+	hostname, _ := os.Hostname()
+	srv := &HTTPServer{
+		hostname: hostname,
+		taskMgr:  taskMgr,
+		aclMgr:   aclMgr,
+		emailMgr: emailMgr,
+	}
+
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var req mcpRequest
+		if err := json.Unmarshal(line, &req); err != nil {
+			resp := mcpResponse{JSONRPC: "2.0", Error: &mcpError{Code: -32700, Message: "Parse error"}}
+			data, _ := json.Marshal(resp)
+			fmt.Println(string(data))
+			continue
+		}
+
+		var resp mcpResponse
+		resp.JSONRPC = "2.0"
+		resp.ID = req.ID
+
+		switch req.Method {
+		case "initialize":
+			resp.Result = map[string]interface{}{
+				"protocolVersion": "2024-11-05",
+				"capabilities":   map[string]interface{}{"tools": map[string]interface{}{}},
+				"serverInfo":     map[string]interface{}{"name": "yaver", "version": version},
+			}
+		case "tools/list":
+			// Reuse the same tool list from the HTTP handler
+			resp.Result = srv.getMCPToolsList()
+		case "tools/call":
+			resp.Result = srv.handleMCPToolCall(req.Params)
+		case "notifications/initialized":
+			resp.Result = map[string]interface{}{}
+		default:
+			resp.Error = &mcpError{Code: -32601, Message: "Method not found: " + req.Method}
+		}
+
+		data, _ := json.Marshal(resp)
+		fmt.Println(string(data))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// email — Email connector setup and management
+// ---------------------------------------------------------------------------
+
+func runEmail(args []string) {
+	if len(args) == 0 {
+		fmt.Print(`Yaver Email — connect Office 365 or Gmail
+
+Usage:
+  yaver email setup     Interactive email setup
+  yaver email test      Send a test email
+  yaver email sync      Sync emails from provider to local database
+  yaver email status    Show email configuration status
+`)
+		return
+	}
+
+	switch args[0] {
+	case "setup":
+		runEmailSetup()
+	case "test":
+		runEmailTest()
+	case "sync":
+		runEmailSync()
+	case "status":
+		runEmailStatus()
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown email command: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func runEmailSetup() {
+	cfg, err := LoadConfig()
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+
+	fmt.Println("Email Provider Setup")
+	fmt.Println()
+	fmt.Println("  1. Office 365 (Microsoft Graph API)")
+	fmt.Println("  2. Gmail (Google API)")
+	fmt.Print("\nSelect provider (1 or 2): ")
+
+	var choice string
+	fmt.Scanln(&choice)
+
+	if cfg.Email == nil {
+		cfg.Email = &EmailConfig{}
+	}
+
+	switch choice {
+	case "1":
+		cfg.Email.Provider = "office365"
+		fmt.Print("Azure Tenant ID: ")
+		fmt.Scanln(&cfg.Email.AzureTenantID)
+		fmt.Print("Azure Client ID: ")
+		fmt.Scanln(&cfg.Email.AzureClientID)
+		fmt.Print("Azure Client Secret: ")
+		fmt.Scanln(&cfg.Email.AzureClientSecret)
+		fmt.Print("Sender Email: ")
+		fmt.Scanln(&cfg.Email.SenderEmail)
+	case "2":
+		cfg.Email.Provider = "gmail"
+		fmt.Print("Google Client ID: ")
+		fmt.Scanln(&cfg.Email.GoogleClientID)
+		fmt.Print("Google Client Secret: ")
+		fmt.Scanln(&cfg.Email.GoogleClientSecret)
+		fmt.Print("Google Refresh Token: ")
+		fmt.Scanln(&cfg.Email.GoogleRefreshToken)
+		fmt.Print("Sender Email: ")
+		fmt.Scanln(&cfg.Email.SenderEmail)
+	default:
+		fmt.Fprintln(os.Stderr, "Invalid choice.")
+		os.Exit(1)
+	}
+
+	if err := SaveConfig(cfg); err != nil {
+		log.Fatalf("save config: %v", err)
+	}
+	fmt.Printf("\nEmail configured: %s (%s)\n", cfg.Email.Provider, cfg.Email.SenderEmail)
+	fmt.Println("Run 'yaver email test' to verify.")
+}
+
+func runEmailTest() {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.Email == nil || cfg.Email.Provider == "" {
+		fmt.Fprintln(os.Stderr, "Email not configured. Run 'yaver email setup' first.")
+		os.Exit(1)
+	}
+	mgr, err := NewEmailManager(cfg.Email)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Email init failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer mgr.Close()
+
+	fmt.Printf("Sending test email to %s...\n", cfg.Email.SenderEmail)
+	if err := mgr.SendEmail(cfg.Email.SenderEmail, "Yaver Email Test", "This is a test email from Yaver.io email connector.", ""); err != nil {
+		fmt.Fprintf(os.Stderr, "Send failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("Test email sent successfully!")
+}
+
+func runEmailSync() {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.Email == nil || cfg.Email.Provider == "" {
+		fmt.Fprintln(os.Stderr, "Email not configured. Run 'yaver email setup' first.")
+		os.Exit(1)
+	}
+	mgr, err := NewEmailManager(cfg.Email)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Email init failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer mgr.Close()
+
+	fmt.Println("Syncing emails...")
+	count, err := mgr.SyncEmails()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Sync failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Synced %d emails to local database.\n", count)
+}
+
+func runEmailStatus() {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.Email == nil || cfg.Email.Provider == "" {
+		fmt.Println("Email: not configured")
+		fmt.Println("Run 'yaver email setup' to configure.")
+		return
+	}
+	fmt.Printf("Email Provider: %s\n", cfg.Email.Provider)
+	fmt.Printf("Sender: %s\n", cfg.Email.SenderEmail)
+}
+
+// ---------------------------------------------------------------------------
+// acl — Agent Communication Layer
+// ---------------------------------------------------------------------------
+
+func runACL(args []string) {
+	if len(args) == 0 {
+		fmt.Print(`Yaver ACL — Agent Communication Layer
+
+Connect to other MCP servers (local or remote) to extend Yaver's capabilities.
+
+Usage:
+  yaver acl add <name> <url> [--auth <token>]     Add HTTP MCP peer
+  yaver acl add <name> --stdio "<command>"         Add stdio MCP peer
+  yaver acl list                                    List connected peers
+  yaver acl remove <id>                             Remove a peer
+  yaver acl tools <id>                              List peer's available tools
+  yaver acl health                                  Health check all peers
+
+Examples:
+  yaver acl add ollama http://localhost:11434/mcp
+  yaver acl add filesystem --stdio "npx -y @modelcontextprotocol/server-filesystem /home"
+  yaver acl add remote-db https://db.example.com/mcp --auth mytoken123
+`)
+		return
+	}
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+
+	switch args[0] {
+	case "add":
+		if len(args) < 3 {
+			fmt.Fprintln(os.Stderr, "Usage: yaver acl add <name> <url> [--auth <token>]")
+			fmt.Fprintln(os.Stderr, "       yaver acl add <name> --stdio \"<command>\"")
+			os.Exit(1)
+		}
+		name := args[1]
+		peer := ACLPeerConfig{
+			ID:   strings.ToLower(strings.ReplaceAll(name, " ", "-")),
+			Name: name,
+			Type: "http",
+		}
+
+		// Parse remaining args
+		for i := 2; i < len(args); i++ {
+			switch args[i] {
+			case "--stdio":
+				peer.Type = "stdio"
+				if i+1 < len(args) {
+					i++
+					peer.Command = args[i]
+				}
+			case "--auth":
+				if i+1 < len(args) {
+					i++
+					peer.Auth = args[i]
+				}
+			default:
+				if peer.URL == "" && peer.Type == "http" {
+					peer.URL = args[i]
+				}
+			}
+		}
+
+		cfg.ACLPeers = append(cfg.ACLPeers, peer)
+		if err := SaveConfig(cfg); err != nil {
+			log.Fatalf("save config: %v", err)
+		}
+		fmt.Printf("Added MCP peer: %s (%s)\n", name, func() string {
+			if peer.Type == "stdio" {
+				return "stdio: " + peer.Command
+			}
+			return peer.URL
+		}())
+
+	case "list":
+		if len(cfg.ACLPeers) == 0 {
+			fmt.Println("No MCP peers configured.")
+			fmt.Println("Use 'yaver acl add' to connect to an MCP server.")
+			return
+		}
+		for _, p := range cfg.ACLPeers {
+			target := p.URL
+			if p.Type == "stdio" {
+				target = "stdio: " + p.Command
+			}
+			fmt.Printf("  [%s] %s — %s\n", p.ID, p.Name, target)
+		}
+
+	case "remove":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: yaver acl remove <id>")
+			os.Exit(1)
+		}
+		id := args[1]
+		var remaining []ACLPeerConfig
+		found := false
+		for _, p := range cfg.ACLPeers {
+			if p.ID == id {
+				found = true
+				continue
+			}
+			remaining = append(remaining, p)
+		}
+		if !found {
+			fmt.Fprintf(os.Stderr, "Peer not found: %s\n", id)
+			os.Exit(1)
+		}
+		cfg.ACLPeers = remaining
+		if err := SaveConfig(cfg); err != nil {
+			log.Fatalf("save config: %v", err)
+		}
+		fmt.Printf("Removed peer: %s\n", id)
+
+	case "tools":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: yaver acl tools <peer-id>")
+			os.Exit(1)
+		}
+		aclMgr := NewACLManager(cfg.ACLPeers)
+		defer aclMgr.Shutdown()
+		tools, err := aclMgr.ListPeerTools(args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		for _, t := range tools {
+			name, _ := t["name"].(string)
+			desc, _ := t["description"].(string)
+			fmt.Printf("  %s — %s\n", name, desc)
+		}
+
+	case "health":
+		aclMgr := NewACLManager(cfg.ACLPeers)
+		defer aclMgr.Shutdown()
+		health := aclMgr.HealthCheck()
+		for id, ok := range health {
+			status := "healthy"
+			if !ok {
+				status = "unreachable"
+			}
+			fmt.Printf("  %s: %s\n", id, status)
+		}
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown ACL command: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
 func relaySendError(stream quic.Stream, id string, code int, msg string) {
 	resp := relayTunnelResponse{
 		ID:         id,
@@ -2576,4 +3071,45 @@ func relaySendError(stream quic.Stream, id string, code int, msg string) {
 	}
 	data, _ := json.Marshal(resp)
 	stream.Write(data)
+}
+
+// checkLatestVersion fetches the latest CLI version from Convex /config
+// and prints an upgrade notice if a newer version is available.
+func checkLatestVersion() {
+	convexURL := defaultConvexSiteURL
+	if cfg, err := LoadConfig(); err == nil && cfg.ConvexSiteURL != "" {
+		convexURL = cfg.ConvexSiteURL
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	req, err := http.NewRequest("GET", convexURL+"/config", nil)
+	if err != nil {
+		return
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return
+	}
+
+	var result struct {
+		CliVersion    string `json:"cliVersion"`
+		MobileVersion string `json:"mobileVersion"`
+		RelayVersion  string `json:"relayVersion"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return
+	}
+
+	if result.CliVersion != "" && result.CliVersion != version {
+		fmt.Printf("\nUpdate available: %s → %s\n", version, result.CliVersion)
+		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
+			fmt.Println("  brew upgrade yaver")
+		} else {
+			fmt.Println("  scoop update yaver")
+		}
+	}
 }

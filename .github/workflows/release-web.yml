@@ -1,0 +1,74 @@
+name: Release Web
+
+on:
+  push:
+    tags:
+      - "web/v*"
+
+# Only repo owner can push tags (configure tag protection rules in GitHub).
+# Deploy job requires the "production" environment (configure required reviewers in GitHub).
+
+concurrency:
+  group: release-web
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract and validate version
+        id: version
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/web/v}"
+          JSON_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('versions.json','utf8')).web)")
+          if [ "$TAG_VERSION" != "$JSON_VERSION" ]; then
+            echo "ERROR: Tag version ($TAG_VERSION) does not match versions.json ($JSON_VERSION)"
+            exit 1
+          fi
+          echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies and build
+        run: cd web && npm ci && npm run build
+
+      - name: Check size constraint
+        run: |
+          SIZE=$(du -sm web/ --exclude='node_modules' --exclude='.next' 2>/dev/null | cut -f1 || \
+                 du -sm web/ | cut -f1)
+          echo "web/ size: ${SIZE}MB"
+          if [ "$SIZE" -gt 10 ]; then
+            echo "ERROR: web/ exceeds 10 MB size limit (${SIZE}MB)"
+            exit 1
+          fi
+
+      - name: Deploy to Vercel
+        run: |
+          npm install -g vercel
+          cd web && vercel --prod --token "$VERCEL_TOKEN" --yes
+
+      - name: Update Convex web version
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: |
+          cd backend && npm ci
+          ../scripts/update-convex-version.sh web "$VERSION"

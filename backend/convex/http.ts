@@ -156,6 +156,13 @@ http.route({
       return errorResponse("Invalid email or password", 401);
     }
 
+    // Check if 2FA is enabled
+    const fullUser = await ctx.runQuery(api.auth.getUserWithTotp, { userId: user._id });
+    if (fullUser?.totpEnabled) {
+      const { pendingToken } = await ctx.runMutation(api.totp.createPendingAuth, { userId: user._id });
+      return jsonResponse({ requires2fa: true, pendingToken });
+    }
+
     const token = await createSessionToken(ctx, user._id);
     return jsonResponse({ token, userId: user.userId });
   }),
@@ -330,6 +337,13 @@ http.route({
       provider: "apple",
       providerId: sub,
     });
+
+    // Check if 2FA is enabled
+    const totpCheck = await ctx.runQuery(api.auth.getUserWithTotp, { userId });
+    if (totpCheck?.totpEnabled) {
+      const { pendingToken } = await ctx.runMutation(api.totp.createPendingAuth, { userId });
+      return jsonResponse({ requires2fa: true, pendingToken });
+    }
 
     // Create session
     const tokenBytes = new Uint8Array(32);
@@ -828,6 +842,211 @@ http.route({
   }),
 });
 
+// ── TOTP 2FA Endpoints ──────────────────────────────────────────────
+
+/** POST /auth/totp/setup — Generate TOTP secret (authenticated). */
+http.route({
+  path: "/auth/totp/setup",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+
+    try {
+      const result = await ctx.runMutation(api.totp.setupTotp, { tokenHash });
+      return jsonResponse(result);
+    } catch (e: any) {
+      return errorResponse(e.message || "Failed to setup TOTP", 400);
+    }
+  }),
+});
+
+/** POST /auth/totp/enable — Verify code and enable 2FA (authenticated). */
+http.route({
+  path: "/auth/totp/enable",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+
+    const body = await request.json();
+    if (!body.code) return errorResponse("code required", 400);
+
+    try {
+      const result = await ctx.runMutation(api.totp.verifyAndEnableTotp, {
+        tokenHash,
+        code: body.code,
+      });
+      return jsonResponse(result);
+    } catch (e: any) {
+      if (e.message === "INVALID_CODE") return errorResponse("Invalid verification code", 401);
+      return errorResponse(e.message || "Failed to enable TOTP", 400);
+    }
+  }),
+});
+
+/** POST /auth/totp/disable — Disable 2FA (authenticated, requires TOTP code). */
+http.route({
+  path: "/auth/totp/disable",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+
+    const body = await request.json();
+    if (!body.code) return errorResponse("code required", 400);
+
+    try {
+      await ctx.runMutation(api.totp.disableTotp, { tokenHash, code: body.code });
+      return jsonResponse({ ok: true });
+    } catch (e: any) {
+      if (e.message === "INVALID_CODE") return errorResponse("Invalid verification code", 401);
+      return errorResponse(e.message || "Failed to disable TOTP", 400);
+    }
+  }),
+});
+
+/** GET /auth/totp/status — Get 2FA status (authenticated). */
+http.route({
+  path: "/auth/totp/status",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+
+    const status = await ctx.runQuery(api.totp.getTotpStatus, { tokenHash });
+    if (!status) return errorResponse("Unauthorized", 401);
+    return jsonResponse(status);
+  }),
+});
+
+/** POST /auth/totp/check-user — Check if a user has 2FA enabled (server-to-server, takes userId). */
+http.route({
+  path: "/auth/totp/check-user",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const body = await request.json();
+    if (!body.userId) return errorResponse("userId required", 400);
+    const result = await ctx.runQuery(api.auth.getUserWithTotp, { userId: body.userId });
+    return jsonResponse({ totpEnabled: result?.totpEnabled ?? false });
+  }),
+});
+
+/** POST /auth/totp/create-pending — Create a pending auth for 2FA (server-to-server, takes userId). */
+http.route({
+  path: "/auth/totp/create-pending",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const body = await request.json();
+    if (!body.userId) return errorResponse("userId required", 400);
+    const result = await ctx.runMutation(api.totp.createPendingAuth, { userId: body.userId });
+    return jsonResponse(result);
+  }),
+});
+
+/** POST /auth/verify-totp — Verify TOTP for pending auth, get session token (unauthenticated). */
+http.route({
+  path: "/auth/verify-totp",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const body = await request.json();
+    if (!body.pendingToken || !body.code) {
+      return errorResponse("pendingToken and code required", 400);
+    }
+
+    try {
+      const result = await ctx.runMutation(api.totp.verifyTotpForLogin, {
+        pendingToken: body.pendingToken,
+        code: body.code,
+      });
+      return jsonResponse(result);
+    } catch (e: any) {
+      if (e.message === "INVALID_CODE") return errorResponse("Invalid code", 401);
+      if (e.message === "INVALID_PENDING") return errorResponse("Invalid or expired session", 404);
+      if (e.message === "PENDING_EXPIRED") return errorResponse("Session expired, please login again", 410);
+      if (e.message === "TOO_MANY_ATTEMPTS") return errorResponse("Too many attempts, please login again", 429);
+      return errorResponse(e.message || "Verification failed", 400);
+    }
+  }),
+});
+
+// ── Device Code Auth (Headless) ─────────────────────────────────────
+
+/** POST /auth/device-code — Create a new device code for headless auth (unauthenticated). */
+http.route({
+  path: "/auth/device-code",
+  method: "POST",
+  handler: httpAction(async (ctx) => {
+    const result = await ctx.runMutation(api.deviceCode.createDeviceCode, {});
+    return jsonResponse(result);
+  }),
+});
+
+/** GET /auth/device-code/poll — Poll device code status (unauthenticated, called by CLI). */
+http.route({
+  path: "/auth/device-code/poll",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const deviceCode = url.searchParams.get("device_code");
+    if (!deviceCode) {
+      return errorResponse("device_code required", 400);
+    }
+    const result = await ctx.runMutation(api.deviceCode.pollDeviceCode, { deviceCode });
+    return jsonResponse(result);
+  }),
+});
+
+/** POST /auth/device-code/authorize — Authorize a device code (authenticated). */
+http.route({
+  path: "/auth/device-code/authorize",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const user = await authenticateRequest(ctx, request);
+    if (!user) {
+      return errorResponse("Unauthorized", 401);
+    }
+
+    const body = await request.json();
+    const { userCode } = body;
+    if (!userCode) {
+      return errorResponse("userCode required", 400);
+    }
+
+    // Look up the user's _id from the session
+    const authHeader = request.headers.get("Authorization")!;
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+    const session = await ctx.runQuery(api.auth.validateSession, { tokenHash });
+    if (!session) {
+      return errorResponse("Unauthorized", 401);
+    }
+
+    // We need the user's document _id for the mutation. Get it via a dedicated query.
+    const userDoc = await ctx.runQuery(api.auth.getUserDocId, { tokenHash });
+    if (!userDoc) {
+      return errorResponse("User not found", 404);
+    }
+
+    try {
+      await ctx.runMutation(api.deviceCode.authorizeDeviceCode, {
+        userCode: userCode.toUpperCase().trim(),
+        userId: userDoc,
+      });
+      return jsonResponse({ ok: true });
+    } catch (e: any) {
+      if (e.message === "INVALID_CODE") return errorResponse("Invalid code", 404);
+      if (e.message === "CODE_EXPIRED") return errorResponse("Code expired", 410);
+      if (e.message === "CODE_ALREADY_USED") return errorResponse("Code already used", 409);
+      return errorResponse("Failed to authorize", 500);
+    }
+  }),
+});
+
 // ── Download Endpoints ──────────────────────────────────────────────
 
 /** GET /downloads/list — List all available downloads (public, no auth). */
@@ -874,6 +1093,9 @@ http.route({
         models,
         cliVersion: config.cli_version || null,
         mobileVersion: config.mobile_version || null,
+        relayVersion: config.relay_version || null,
+        webVersion: config.web_version || null,
+        backendVersion: config.backend_version || null,
       }),
       {
         status: 200,

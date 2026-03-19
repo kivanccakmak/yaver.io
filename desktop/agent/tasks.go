@@ -401,6 +401,7 @@ type TaskManager struct {
 	workDir      string
 	store        *TaskStore
 	runner       RunnerConfig
+	Sandbox      SandboxConfig // Command sandbox configuration
 	WaitForSlot  bool // If true, wait for other Claude Code sessions to finish before starting
 	DummyMode    bool // If true, use fake responses instead of launching a real runner
 
@@ -599,6 +600,10 @@ func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, c
 	var taskRunner RunnerConfig
 
 	if customCommand != "" {
+		// Sandbox: validate custom commands before execution
+		if err := ValidateCommand(customCommand, tm.Sandbox); err != nil {
+			return nil, fmt.Errorf("command blocked: %w", err)
+		}
 		// Ad-hoc custom command from mobile — run via sh -c
 		taskRunner = RunnerConfig{
 			RunnerID:   "custom",

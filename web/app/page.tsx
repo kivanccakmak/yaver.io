@@ -21,6 +21,141 @@ function FAQItem({ question, answer }: { question: string; answer: string }) {
   );
 }
 
+function MCPIntegrationSection() {
+  const [mcpTab, setMcpTab] = useState<"stdio" | "http" | "cli">("stdio");
+
+  return (
+    <section className="border-t border-surface-800/60 px-6 py-24">
+      <div className="mx-auto max-w-4xl">
+        <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+          MCP Integration
+        </h2>
+        <p className="mx-auto mb-16 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
+          Connect Yaver as an MCP server from Claude Desktop, Claude Web UI, or any MCP-compatible client.
+        </p>
+
+        {/* Tabs */}
+        <div className="mb-6 flex items-center justify-center gap-2">
+          {(
+            [
+              { key: "stdio", label: "Local (stdio)" },
+              { key: "http", label: "Network (HTTP)" },
+              { key: "cli", label: "CLI setup" },
+            ] as const
+          ).map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setMcpTab(tab.key)}
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                mcpTab === tab.key
+                  ? "bg-surface-800 text-surface-100"
+                  : "text-surface-500 hover:text-surface-300"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab content */}
+        {mcpTab === "stdio" && (
+          <div className="terminal">
+            <div className="terminal-header">
+              <div className="terminal-dot bg-[#ff5f57]" />
+              <div className="terminal-dot bg-[#febc2e]" />
+              <div className="terminal-dot bg-[#28c840]" />
+              <span className="ml-3 text-xs text-surface-500">claude_desktop_config.json</span>
+            </div>
+            <div className="terminal-body text-[13px]">
+              <pre className="text-surface-200 whitespace-pre-wrap">{`{
+  "mcpServers": {
+    "yaver": {
+      "command": "yaver",
+      "args": ["mcp"]
+    }
+  }
+}`}</pre>
+            </div>
+          </div>
+        )}
+
+        {mcpTab === "http" && (
+          <div>
+            <p className="mb-4 text-center text-sm text-surface-400">
+              For remote access from Claude Web UI or other network clients:
+            </p>
+            <div className="terminal">
+              <div className="terminal-header">
+                <div className="terminal-dot bg-[#ff5f57]" />
+                <div className="terminal-dot bg-[#febc2e]" />
+                <div className="terminal-dot bg-[#28c840]" />
+                <span className="ml-3 text-xs text-surface-500">terminal</span>
+              </div>
+              <div className="terminal-body space-y-2 text-[13px]">
+                <div>
+                  <span className="text-surface-400">$</span>{" "}
+                  <span className="text-surface-200 select-all">
+                    yaver mcp --mode http --port 18090
+                  </span>
+                </div>
+                <div className="text-green-400/80 pl-2">
+                  MCP HTTP server listening on :18090
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {mcpTab === "cli" && (
+          <div className="terminal">
+            <div className="terminal-header">
+              <div className="terminal-dot bg-[#ff5f57]" />
+              <div className="terminal-dot bg-[#febc2e]" />
+              <div className="terminal-dot bg-[#28c840]" />
+              <span className="ml-3 text-xs text-surface-500">terminal</span>
+            </div>
+            <div className="terminal-body space-y-3 text-[13px]">
+              <div className="text-surface-500"># Install</div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200 select-all">
+                  brew install kivanccakmak/yaver/yaver
+                </span>
+              </div>
+              <div className="h-px bg-surface-800/60" />
+              <div className="text-surface-500"># Start MCP server (stdio for Claude Desktop)</div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200">yaver mcp</span>
+              </div>
+              <div className="h-px bg-surface-800/60" />
+              <div className="text-surface-500"># Start MCP server (HTTP for remote/web)</div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200">yaver mcp --mode http --port 18090</span>
+              </div>
+              <div className="h-px bg-surface-800/60" />
+              <div className="text-surface-500"># Configure email (optional)</div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200">yaver email setup</span>
+              </div>
+              <div className="h-px bg-surface-800/60" />
+              <div className="text-surface-500"># Connect to other MCP servers (optional)</div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200">
+                  yaver acl add ollama http://localhost:11434/mcp
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function HomePage() {
   return (
     <>
@@ -121,6 +256,80 @@ export default function HomePage() {
               <p className="text-sm leading-relaxed text-surface-400">
                 Run your own relay, use Tailscale, or just be on the same WiFi. Pair with Ollama for a fully local, zero-cost, zero-cloud setup. MIT licensed &mdash; fork it, hack it, ship it.
               </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Full On-Prem Free Stack */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-5xl">
+          <div className="mb-4 text-center">
+            <span className="inline-flex items-center rounded-full border border-green-500/20 bg-green-500/10 px-3 py-1 text-xs font-medium text-green-400">
+              $0/month &middot; Fully on-prem &middot; No API keys
+            </span>
+          </div>
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Full on-prem free stack
+          </h2>
+          <p className="mx-auto mb-12 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
+            Run a complete AI coding assistant on your own hardware for zero cost.
+            Every component is open source (MIT / Apache 2.0). Nothing leaves your network.
+          </p>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              {
+                name: "Ollama",
+                role: "LLM runtime",
+                detail: "Downloads and runs models locally",
+              },
+              {
+                name: "GLM-4.7-Flash",
+                role: "The AI model",
+                detail: "30B MoE, 59.2% SWE-bench Verified",
+              },
+              {
+                name: "Aider",
+                role: "Coding agent",
+                detail: "Git-aware AI pair programming",
+              },
+              {
+                name: "Yaver",
+                role: "Mobile remote",
+                detail: "Control it all from your phone",
+              },
+            ].map((item) => (
+              <div
+                key={item.name}
+                className="rounded-xl border border-green-500/10 bg-green-500/5 px-4 py-4"
+              >
+                <p className="text-sm font-semibold text-surface-100">
+                  {item.name}
+                </p>
+                <p className="text-xs text-green-400">{item.role}</p>
+                <p className="mt-2 text-xs text-surface-400">{item.detail}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mx-auto mt-8 max-w-3xl rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-medium text-surface-200">
+                  Runs on a PC with 24 GB RAM
+                </p>
+                <p className="mt-1 text-xs text-surface-400">
+                  Q4 quantization &mdash; 19 GB download, ~22 GB in memory.
+                  GPU optional but faster. Works on Apple Silicon, Linux, and Windows.
+                </p>
+              </div>
+              <Link
+                href="/manuals/free-onprem"
+                className="btn-primary shrink-0 px-6 py-2.5 text-sm text-center"
+              >
+                Setup guide &amp; SWE analysis
+              </Link>
             </div>
           </div>
         </div>
@@ -456,7 +665,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Supported Agents */}
+      {/* Supported Agents & Tools */}
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-6xl">
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
@@ -466,25 +675,112 @@ export default function HomePage() {
             Anything that runs in a terminal. Switch agents per task or set a default.
           </p>
 
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {[
-              { name: "Claude Code", note: "Anthropic" },
-              { name: "Codex CLI", note: "OpenAI" },
-              { name: "OpenCode", note: "open source" },
-              { name: "Goose", note: "Block" },
-              { name: "Amp", note: "Sourcegraph" },
-              { name: "Aider", note: "open source" },
-              { name: "Ollama", note: "local models" },
-              { name: "Qwen", note: "local / cloud" },
-              { name: "Continue", note: "open source" },
-              { name: "Any CLI agent", note: "custom command" },
+              {
+                name: "Claude Code",
+                by: "Anthropic",
+                desc: "Terminal-based AI coding agent. Yaver launches it in a tmux session and streams output to your phone.",
+                url: "https://docs.anthropic.com/en/docs/claude-code",
+                oss: false,
+                local: false,
+              },
+              {
+                name: "Codex CLI",
+                by: "OpenAI",
+                desc: "OpenAI\u2019s terminal coding agent. Cloud-powered, needs an API key. Yaver runs it like any other CLI command.",
+                url: "https://github.com/openai/codex",
+                oss: true,
+                local: false,
+              },
+              {
+                name: "Ollama",
+                by: "ollama.com",
+                desc: "Run LLMs locally \u2014 Llama, Mistral, Qwen, CodeGemma, and more. No API keys, no cloud, fully private. Pair with Yaver for zero-cost mobile AI coding.",
+                url: "https://ollama.com",
+                oss: true,
+                local: true,
+              },
+              {
+                name: "Aider",
+                by: "aider.chat",
+                desc: "AI pair programming in the terminal. Works with many LLM backends (OpenAI, Anthropic, Ollama, etc.). Git-aware edits.",
+                url: "https://aider.chat",
+                oss: true,
+                local: false,
+              },
+              {
+                name: "OpenCode",
+                by: "open source",
+                desc: "Terminal AI coding tool with a TUI. Supports multiple LLM providers. Lightweight alternative to heavier agents.",
+                url: "https://github.com/opencode-ai/opencode",
+                oss: true,
+                local: false,
+              },
+              {
+                name: "Goose",
+                by: "Block",
+                desc: "Autonomous coding agent from Block. Runs tasks, edits files, executes shell commands. Open source.",
+                url: "https://github.com/block/goose",
+                oss: true,
+                local: false,
+              },
+              {
+                name: "Amp",
+                by: "Sourcegraph",
+                desc: "AI coding agent with deep codebase understanding. Terminal and editor modes. Powered by Sourcegraph\u2019s code graph.",
+                url: "https://ampcode.com",
+                oss: false,
+                local: false,
+              },
+              {
+                name: "Continue",
+                by: "continue.dev",
+                desc: "Open-source AI code assistant. IDE extension and CLI. Connects to any LLM \u2014 local or cloud.",
+                url: "https://continue.dev",
+                oss: true,
+                local: false,
+              },
+              {
+                name: "Any CLI agent",
+                by: "custom command",
+                desc: "Yaver can launch any command in a tmux session. If it runs in a terminal, Yaver can remote-control it.",
+                url: null,
+                oss: null,
+                local: null,
+              },
             ].map((agent) => (
               <div
                 key={agent.name}
-                className="rounded-xl border border-surface-800 bg-surface-900/50 px-4 py-4 text-center transition-colors duration-150 hover:border-surface-700"
+                className="rounded-xl border border-surface-800 bg-surface-900/50 px-4 py-4 transition-colors duration-150 hover:border-surface-700"
               >
-                <p className="text-sm font-medium text-surface-200">{agent.name}</p>
-                <p className="mt-1 text-xs text-surface-500">{agent.note}</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-surface-200">{agent.name}</p>
+                  <div className="flex gap-1.5">
+                    {agent.oss && (
+                      <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-400">
+                        OSS
+                      </span>
+                    )}
+                    {agent.local && (
+                      <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-400">
+                        local
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <p className="mt-0.5 text-xs text-surface-500">{agent.by}</p>
+                <p className="mt-2 text-xs leading-relaxed text-surface-400">{agent.desc}</p>
+                {agent.url && (
+                  <a
+                    href={agent.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-block text-[11px] text-surface-500 underline underline-offset-2 hover:text-surface-300"
+                  >
+                    {agent.url.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                  </a>
+                )}
               </div>
             ))}
           </div>
@@ -493,6 +789,64 @@ export default function HomePage() {
             Some agents already offer their own remote/mobile interfaces (e.g. Claude Code Remote, OpenAI Codex cloud).
             Yaver is agent-agnostic and works with any of them, including local models that have no cloud option at all.
           </p>
+
+          {/* Networking & infrastructure tools */}
+          <div className="mt-12">
+            <h3 className="mb-6 text-center text-sm font-semibold uppercase tracking-wider text-surface-500">
+              Networking &amp; Infrastructure
+            </h3>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                {
+                  name: "Tailscale",
+                  desc: "Mesh VPN built on WireGuard. Client is open source (BSD 3-Clause). Coordination server is proprietary \u2014 use Headscale for a fully self-hosted alternative. Free for personal use (100 devices).",
+                  url: "https://tailscale.com",
+                  oss: "Client: BSD",
+                },
+                {
+                  name: "Cloudflare Tunnel",
+                  desc: "Pure TCP/HTTPS tunnel through any firewall. Good fallback when UDP (QUIC) is blocked.",
+                  url: "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/",
+                  oss: null,
+                },
+                {
+                  name: "Convex",
+                  desc: "Backend-as-a-service used for Yaver\u2019s auth and device discovery. Not in the data path \u2014 no code or tasks pass through it.",
+                  url: "https://www.convex.dev",
+                  oss: null,
+                },
+                {
+                  name: "tmux",
+                  desc: "Terminal multiplexer. Yaver runs each agent session in a tmux window \u2014 sessions persist even if your SSH drops.",
+                  url: "https://github.com/tmux/tmux",
+                  oss: "MIT",
+                },
+              ].map((tool) => (
+                <div
+                  key={tool.name}
+                  className="rounded-xl border border-surface-800 bg-surface-900/50 px-4 py-4 transition-colors duration-150 hover:border-surface-700"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium text-surface-200">{tool.name}</p>
+                    {tool.oss && (
+                      <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-400">
+                        {tool.oss}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-surface-400">{tool.desc}</p>
+                  <a
+                    href={tool.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-block text-[11px] text-surface-500 underline underline-offset-2 hover:text-surface-300"
+                  >
+                    {tool.url.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                  </a>
+                </div>
+              ))}
+            </div>
+          </div>
 
           <div className="mx-auto mt-8 max-w-3xl">
             <div className="card">
@@ -508,6 +862,60 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+
+      {/* Enterprise & Privacy-First Use Cases */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-6xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Enterprise &amp; Privacy-First Use Cases
+          </h2>
+          <p className="mx-auto mb-16 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
+            From local-only AI coding to multi-user GPU servers and agent-to-agent orchestration.
+          </p>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Privacy-First AI Coding</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Run Ollama, Qwen, or any local LLM. Your code never leaves your network. Connect from Claude Web UI via MCP to use local models for sensitive codebases.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Shared GPU Servers</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Multiple developers share the same machine with isolated agents. Each user runs their own yaver serve with separate auth, tasks, and sandboxed execution.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">MCP Integration</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Connect Yaver as an MCP server from Claude Desktop, Claude Web UI, or any MCP-compatible client. 30+ built-in tools for tasks, files, email, and agent-to-agent communication.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Email Automation</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Office 365 and Gmail connectors let AI agents read, search, and send emails. Synced to a local database for fast retrieval. Perfect for automated workflows.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Agent-to-Agent (ACL)</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Agent Communication Layer connects Yaver with other MCP servers &mdash; local Ollama, remote databases, or other AI tools. Chain agents together for complex workflows.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Security Sandbox</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Built-in command sandbox blocks dangerous operations: no rm -rf /, no filesystem encryption, no privilege escalation. Configurable deny-list with secure defaults.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* MCP Integration */}
+      <MCPIntegrationSection />
 
       {/* Self-Hosting */}
       <section className="border-t border-surface-800/60 px-6 py-24">
@@ -665,6 +1073,51 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* Open Source */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-4xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Open source, open development
+          </h2>
+          <p className="mb-12 text-center text-sm text-surface-400">
+            MIT licensed. Fork it, run your own instance, contribute back.
+          </p>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Build freely</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Add new AI runner integrations, fix bugs, improve the mobile app, write docs.
+                Every component is open for contributions. Run your own Convex backend with one command.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Protected releases</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Releases, deploys, and production infrastructure are maintainer-only.
+                CI checks run on every PR. Nobody can push to TestFlight, Vercel, or Convex prod without approval.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Self-hostable</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Run your own Convex backend (cloud free tier or self-hosted Docker), your own relay server, your own LLMs.
+                Zero dependency on our infrastructure if you want.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <Link href="/docs/contributing" className="btn-primary px-6 py-3 text-sm">
+              Contributing Guide
+            </Link>
+            <Link href="/docs/developers" className="btn-secondary px-6 py-3 text-sm">
+              Developer Docs
+            </Link>
+          </div>
+        </div>
+      </section>
+
       {/* Footer CTA */}
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-2xl text-center">
@@ -699,11 +1152,14 @@ export default function HomePage() {
             >
               GitHub
             </a>
-            <Link href="/docs/self-hosting" className="hover:text-surface-300">
+            <Link href="/docs" className="hover:text-surface-300">
               Docs
             </Link>
             <Link href="/docs/developers" className="hover:text-surface-300">
               Developers
+            </Link>
+            <Link href="/docs/contributing" className="hover:text-surface-300">
+              Contributing
             </Link>
             <Link href="/download" className="hover:text-surface-300">
               Download

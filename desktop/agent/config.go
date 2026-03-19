@@ -20,6 +20,32 @@ type Config struct {
 	AutoUpdate    bool                `json:"auto_update,omitempty"`
 	RelayPassword string              `json:"relay_password,omitempty"`
 	RelayServers  []RelayServerConfig `json:"relay_servers,omitempty"`
+	Sandbox       *SandboxConfig      `json:"sandbox,omitempty"`
+	Email         *EmailConfig        `json:"email,omitempty"`
+	ACLPeers      []ACLPeerConfig     `json:"acl_peers,omitempty"`
+}
+
+// EmailConfig holds email provider credentials.
+type EmailConfig struct {
+	Provider          string `json:"provider,omitempty"`           // "office365" or "gmail"
+	AzureTenantID     string `json:"azure_tenant_id,omitempty"`
+	AzureClientID     string `json:"azure_client_id,omitempty"`
+	AzureClientSecret string `json:"azure_client_secret,omitempty"`
+	GoogleClientID     string `json:"google_client_id,omitempty"`
+	GoogleClientSecret string `json:"google_client_secret,omitempty"`
+	GoogleRefreshToken string `json:"google_refresh_token,omitempty"`
+	SenderEmail       string `json:"sender_email,omitempty"`
+	SenderName        string `json:"sender_name,omitempty"`
+}
+
+// ACLPeerConfig describes a connected MCP peer for the Agent Communication Layer.
+type ACLPeerConfig struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	URL     string `json:"url,omitempty"`      // HTTP MCP endpoint
+	Type    string `json:"type"`               // "http" or "stdio"
+	Command string `json:"command,omitempty"`   // for stdio transport
+	Auth    string `json:"auth,omitempty"`      // bearer token
 }
 
 // RelayServerConfig describes a relay server configured in config.json.

@@ -11,10 +11,22 @@ export default defineSchema({
     surveyCompleted: v.optional(v.boolean()),
     providerId: v.string(),
     avatarUrl: v.optional(v.string()),
+    totpSecret: v.optional(v.string()),
+    totpEnabled: v.optional(v.boolean()),
+    totpRecoveryCodes: v.optional(v.string()),
     createdAt: v.number(),
   })
     .index("by_email", ["email"])
     .index("by_provider", ["provider", "providerId"]),
+
+  pendingAuth: defineTable({
+    pendingToken: v.string(),
+    userId: v.id("users"),
+    attempts: v.number(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_pendingToken", ["pendingToken"]),
 
   sessions: defineTable({
     tokenHash: v.string(),
@@ -193,6 +205,17 @@ export default defineSchema({
   })
     .index("by_createdAt", ["createdAt"])
     .index("by_email", ["email", "createdAt"]),
+
+  deviceCodes: defineTable({
+    userCode: v.string(),
+    deviceCode: v.string(),
+    status: v.union(v.literal("pending"), v.literal("authorized"), v.literal("expired")),
+    pendingToken: v.optional(v.string()),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_userCode", ["userCode"])
+    .index("by_deviceCode", ["deviceCode"]),
 
   mobileStreamLogs: defineTable({
     userId: v.optional(v.string()),

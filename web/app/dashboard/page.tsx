@@ -5,6 +5,7 @@ import { useDevices } from "@/lib/use-devices";
 import DevicesView from "@/components/dashboard/DevicesView";
 import RelayServerView from "@/components/dashboard/RelayServerView";
 import SettingsView from "@/components/dashboard/SettingsView";
+import TwoFactorView from "@/components/dashboard/TwoFactorView";
 
 export default function DashboardPage() {
   const { user, token, isLoading, isAuthenticated, logout } = useAuth();
@@ -64,6 +65,9 @@ export default function DashboardPage() {
 
         {/* Relay Server */}
         <RelayServerView token={token} />
+
+        {/* Two-Factor Authentication */}
+        <TwoFactorView token={token} />
 
         {/* Account Actions */}
         <SettingsView user={user} onLogout={logout} />

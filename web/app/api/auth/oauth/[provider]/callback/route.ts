@@ -119,6 +119,43 @@ async function handleCallback(
     throw err;
   }
 
+  const baseUrl = getBaseUrl();
+
+  // Check if user has 2FA enabled before creating session
+  try {
+    const totpCheckRes = await fetch(`${convexSiteUrl}/auth/totp/check-user`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId }),
+    });
+
+    if (totpCheckRes.ok) {
+      const totpData = await totpCheckRes.json();
+      if (totpData.totpEnabled) {
+        // Create pending auth instead of session
+        const pendingRes = await fetch(`${convexSiteUrl}/auth/totp/create-pending`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId }),
+        });
+
+        if (pendingRes.ok) {
+          const { pendingToken } = await pendingRes.json();
+          await logToConvex(provider, "2fa_required", "info", "2FA required, redirecting to TOTP page");
+
+          // All clients go to web TOTP page first
+          const totpUrl = new URL("/auth/totp", baseUrl);
+          totpUrl.searchParams.set("pendingToken", pendingToken);
+          totpUrl.searchParams.set("client", state.client || "web");
+          return NextResponse.redirect(totpUrl.toString(), 303);
+        }
+      }
+    }
+  } catch (err) {
+    // If TOTP check fails, fall through to normal session creation
+    await logToConvex(provider, "2fa_check", "warn", "TOTP check failed, proceeding without 2FA");
+  }
+
   // Create session via Convex HTTP action
   const token = createSessionToken();
   const tokenHash = hashSessionToken(token);
@@ -146,7 +183,6 @@ async function handleCallback(
     throw err;
   }
 
-  const baseUrl = getBaseUrl();
   const deepLink = process.env.MOBILE_DEEP_LINK || "yaver://oauth-callback";
 
   // Mobile client: redirect to deep link

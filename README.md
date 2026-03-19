@@ -1,13 +1,13 @@
 # Yaver
 
-**Use Claude from anywhere.** Yaver connects your mobile device directly to your development machine — task data flows peer-to-peer between your devices. Our servers only handle auth and peer discovery.
+**Your AI coding agent, on your phone.** Yaver is an open-source P2P tool that lets developers use any AI coding agent (Claude Code, Codex, Aider, Ollama, etc.) from their mobile device or any terminal, connecting directly to their development machines. Task data flows peer-to-peer — servers only handle auth and peer discovery.
 
 ## How It Works
 
 ```
 ┌─────────────┐     HTTP         ┌──────────────┐    QUIC tunnel    ┌──────────────┐
 │  Mobile App │─────────────────►│ Relay Server │◄──────────────────│ Desktop Agent│
-│ (React Native)  short-lived    │  (Hetzner)   │  persistent       │  (Go CLI)    │
+│ (React Native)  short-lived    │  (optional)  │  persistent       │  (Go CLI)    │
 │  Wi-Fi/5G   │  HTTP requests   │  public IP   │  outbound conn    │  behind NAT  │
 └──────┬──────┘                  └──────┬───────┘                   └──────┬───────┘
        │                                │                                  │
@@ -20,179 +20,215 @@
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-No code, task data, or AI output ever touches our servers. The relay is a pass-through proxy — it forwards bytes without inspecting or storing them. When you're on the same network, traffic goes direct and skips the relay entirely.
+No code, task data, or AI output ever touches our servers. The relay is a pass-through proxy. When you're on the same network, traffic goes direct.
+
+## Quick Start
+
+```bash
+# Install
+brew install kivanccakmak/yaver/yaver
+
+# Sign in & start agent
+yaver auth
+yaver serve
+```
+
+## MCP Integration
+
+Yaver implements the Model Context Protocol (MCP) with 30+ tools. Connect from Claude Desktop, Claude Web UI, or any MCP-compatible client.
+
+### Local MCP (stdio) — Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "yaver": {
+      "command": "yaver",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### Network MCP (HTTP) — Remote / Claude Web UI
+
+```bash
+yaver mcp --mode http --port 18090
+```
+
+Connect from any MCP client at `http://your-machine:18090/mcp`.
+
+### Available MCP Tools
+
+| Category | Tools |
+|----------|-------|
+| **Tasks** | `create_task`, `list_tasks`, `get_task`, `stop_task`, `continue_task` |
+| **System** | `get_info`, `get_system_info`, `get_config`, `set_work_dir`, `list_projects` |
+| **Runners** | `list_runners`, `switch_runner` |
+| **Relay** | `get_relay_config`, `add_relay_server`, `remove_relay_server` |
+| **Filesystem** | `read_file`, `write_file`, `list_directory`, `search_files` |
+| **Email** | `email_list_inbox`, `email_get`, `email_send`, `email_sync`, `email_search` |
+| **ACL** | `acl_list_peers`, `acl_add_peer`, `acl_remove_peer`, `acl_list_peer_tools`, `acl_call_peer_tool`, `acl_health` |
+
+See [MCP Integration Guide](https://yaver.io/docs/mcp) for full documentation.
+
+## Security Sandbox
+
+The command sandbox is enabled by default and blocks dangerous operations:
+
+- **Filesystem destruction**: `rm -rf /`, `rm -rf ~`, etc.
+- **Encryption/ransomware**: bulk encryption of home/root
+- **Privilege escalation**: `sudo`, `su`, `doas` (unless allowed)
+- **Disk manipulation**: `mkfs`, `fdisk`, `dd` to block devices
+- **Network exfiltration**: `curl|bash`, piping sensitive files
+- **System compromise**: overwriting `/etc/passwd`, disabling services
+
+### Configuration
+
+```json
+// ~/.yaver/config.json
+{
+  "sandbox": {
+    "enabled": true,
+    "allow_sudo": false,
+    "blocked_commands": ["terraform destroy", "kubectl delete namespace"],
+    "allowed_paths": ["/home/user/projects"],
+    "max_output_size_mb": 100
+  }
+}
+```
+
+```bash
+yaver config set sandbox.allow-sudo true    # Allow sudo
+yaver config set sandbox.enabled false      # Disable sandbox (not recommended)
+```
+
+## Multi-User Support
+
+Multiple users can share the same machine (e.g. shared GPU server with Ollama). Each user runs their own agent:
+
+```bash
+# User A
+yaver auth && yaver serve --port 18080
+
+# User B
+yaver auth && yaver serve --port 18081
+```
+
+Each agent instance has:
+- Separate auth token and user ID
+- Isolated task store (`~/.yaver/tasks.json`)
+- Own sandbox configuration
+- Independent relay connections
+- Auth-aware LAN beacon (only same-user devices discover each other)
+
+## Email Connectors
+
+Connect Office 365 or Gmail for AI-assisted email workflows.
+
+```bash
+# Setup
+yaver email setup     # Interactive — choose Office 365 or Gmail
+yaver email test      # Send a test email
+yaver email sync      # Sync emails to local SQLite database
+
+# Available as MCP tools: email_list_inbox, email_get, email_send, email_sync, email_search
+```
+
+### Office 365
+Requires Azure AD app registration with Microsoft Graph API permissions (`Mail.Read`, `Mail.Send`). Uses client credentials flow.
+
+### Gmail
+Requires Google Cloud OAuth2 credentials with Gmail API scope. Uses refresh token flow.
+
+Synced emails are stored locally in `~/.yaver/emails.db` (SQLite) for fast search and retrieval.
+
+## ACL — Agent Communication Layer
+
+Connect Yaver to other MCP servers for agent-to-agent workflows:
+
+```bash
+# Connect to local Ollama
+yaver acl add ollama http://localhost:11434/mcp
+
+# Connect to a filesystem MCP server (stdio)
+yaver acl add files --stdio "npx -y @modelcontextprotocol/server-filesystem /home"
+
+# Connect to a remote database
+yaver acl add mydb https://db.example.com/mcp --auth token123
+
+# List / manage peers
+yaver acl list
+yaver acl tools ollama
+yaver acl health
+yaver acl remove ollama
+```
+
+ACL peers are also accessible via MCP tools (`acl_list_peers`, `acl_call_peer_tool`, etc.), enabling Claude to chain tools across multiple MCP servers.
 
 ## Components
 
 | Directory | What | Tech |
 |-----------|------|------|
-| `desktop/agent/` | CLI agent (QUIC server, Claude SDK runner, tmux manager) | Go |
+| `desktop/agent/` | CLI agent (QUIC server, MCP, runner, sandbox) | Go |
 | `desktop/installer/` | Installation GUI (DMG/EXE/DEB) | Electron |
 | `mobile/` | iOS & Android app | React Native |
 | `backend/` | Auth, peer discovery, platform config | Convex |
 | `relay/` | QUIC relay server for NAT traversal | Go (quic-go) |
-| `web/` | Landing page & sign-up | Next.js 15 on Vercel |
+| `web/` | Landing page & docs | Next.js 15 on Vercel |
 
-## Quick Start
-
-```bash
-# On your desktop:
-brew tap kivanccakmak/yaver && brew install yaver
-yaver auth          # Sign in via browser (Apple/Google/Microsoft)
-yaver serve         # Start the agent — connects to relays automatically
-
-# On your phone:
-# Download Yaver from the App Store / Google Play
-# Sign in with the same account, your desktop appears automatically
-```
-
-## Networking
-
-Yaver uses a three-layer networking stack. No Tailscale, no TUN/TAP, no VPN rights — application-layer only, so it won't conflict with your existing VPN.
-
-### Connection Priority
+## CLI Commands
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    CONNECTION PRIORITY                               │
-│                                                                     │
-│  1. LAN Beacon (direct)  ──  ~5ms   ── same WiFi, instant discovery│
-│  2. Convex IP (direct)   ──  ~5ms   ── known IP from device registry│
-│  3. QUIC Relay (proxied) ──  ~50ms  ── roaming, NAT traversal      │
-│                                                                     │
-│  Silent roaming: transitions between layers are invisible to user   │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### Layer 1: LAN Beacon Discovery (same network)
-
-Proprietary UDP broadcast protocol for instant same-network device discovery.
-
-- The CLI broadcasts a beacon every 3s on UDP port `19837` (`255.255.255.255`)
-- Mobile listens on port `19837` via `react-native-udp`
-- **Auth-aware**: beacon includes a token fingerprint (`th` = first 8 hex chars of SHA256(userId)) — only same-user devices match
-- Beacon payload (~100 bytes):
-  ```json
-  {"v":1,"id":"dcbfdc50","p":18080,"n":"MacBook-Air","th":"a1b2c3d4"}
-  ```
-- Mobile matches beacon `id` against its Convex device list and `th` against its userId fingerprint
-- Discovered devices get a `local: true` flag and their IP is used for direct HTTP connection
-- If no beacon received for 10s, the device is marked as not local and falls back to relay
-- **Graceful degradation**: if UDP socket fails (OS restriction, permission denied), everything works via Convex + relay
-
-### Layer 2: Convex Device Registry (cross-network)
-
-Central presence hub for auth, pairing, and cross-network visibility.
-
-- CLI registers on `yaver serve` start: sends `{deviceId, hostname, platform, localIP, httpPort}` to Convex
-- CLI heartbeat every 2 minutes includes current local IP (handles DHCP changes, VPN toggles)
-- Mobile polls device list every 3 seconds — sees devices come online within seconds
-- A device is "online" if `isOnline=true` AND `lastHeartbeat` within 5 minutes
-- On `yaver serve` stop, CLI marks the device offline immediately
-
-### Layer 3: QUIC Relay (NAT traversal / roaming)
-
-Application-layer QUIC relay for when direct connection isn't possible.
-
-- Desktop agent connects outbound to all relay servers via QUIC tunnels on startup (solves NAT — no inbound ports needed)
-- Mobile makes short-lived HTTP requests to the relay (IP changes from Wi-Fi/5G roaming don't matter)
-- Relay is pass-through — no data is stored
-- Multi-relay redundancy: multiple relay servers can be configured. If one goes down, traffic routes through remaining relays
-- Reconnection uses exponential backoff (1s → 2s → 4s → 8s → max 30s)
-
-### Connection Flow
-
-```
-Mobile connects to a device:
-  │
-  ├─ On WiFi?
-  │   ├─ LAN beacon found? → direct HTTP to beacon IP:port (2s timeout)
-  │   │   └─ Success → mode = "direct" ✓
-  │   │
-  │   ├─ Convex IP is private? → direct HTTP to Convex IP:port (2s timeout)
-  │   │   └─ Success → mode = "direct" ✓
-  │   │
-  │   └─ Direct failed → try relay servers in priority order
-  │       └─ Success → mode = "relay" ✓
-  │
-  ├─ On Cellular? → skip direct, try relay servers immediately
-  │   └─ Success → mode = "relay" ✓
-  │
-  └─ All failed → error, reconnect with exponential backoff (max 15 attempts)
-
-Network changes (WiFi ↔ cellular):
-  → Full reconnect with new strategy
-  → WiFi→Cellular: relay (direct skipped)
-  → Cellular→WiFi: direct first (beacon rediscovered), relay fallback
-  → All transitions are silent — no UI disruption
-```
-
-### Key Networking Files
-
-| File | Purpose |
-|------|---------|
-| `desktop/agent/beacon.go` | UDP broadcast beacon (send every 3s) |
-| `desktop/agent/httpserver.go` | HTTP server on `0.0.0.0:18080` |
-| `desktop/agent/quic.go` | QUIC server on `0.0.0.0:4433` |
-| `mobile/src/lib/beacon.ts` | UDP beacon listener + auth matching |
-| `mobile/src/lib/quic.ts` | Connection strategy (direct-first, relay-fallback) |
-| `mobile/src/context/DeviceContext.tsx` | Device list, beacon integration, auto-connect |
-| `relay/` | QUIC relay server (Go, deployed to Hetzner) |
-
-## CLI (`yaver`)
-
-```
-yaver auth        Sign in (opens browser — Apple, Google, or Microsoft)
-yaver signout     Sign out and clear credentials
-yaver serve       Start the agent on this machine
-yaver connect     Connect to your dev machine
-yaver status      Show auth and connection status
-yaver devices     List your registered devices
-yaver help        Show help
-yaver version     Print version
+yaver auth          Sign in (opens browser — Apple, Google, or Microsoft)
+yaver serve         Start the agent
+yaver mcp           Start MCP server (--mode stdio|http)
+yaver email         Email connector (setup, test, sync, status)
+yaver acl           Agent Communication Layer (add, list, remove, tools, health)
+yaver connect       Connect to a remote agent
+yaver attach        Interactive terminal
+yaver set-runner    Set default AI agent (claude/codex/aider/custom)
+yaver relay         Manage relay servers
+yaver config        Get/set configuration
+yaver status        Show auth and connection status
+yaver devices       List registered devices
+yaver stop          Stop the agent
+yaver logs          View agent logs
+yaver version       Print version
 ```
 
 ### Install
 
 ```bash
 # macOS / Linux
-brew tap kivanccakmak/yaver && brew install yaver
+brew install kivanccakmak/yaver/yaver
 
 # Windows
 scoop bucket add yaver https://github.com/kivanccakmak/scoop-yaver
 scoop install yaver
 ```
 
-### Cross-compile & Release
+## Networking
 
-```bash
-cd desktop/agent
-GOOS=darwin GOARCH=arm64 go build -o yaver-darwin-arm64 .
-GOOS=darwin GOARCH=amd64 go build -o yaver-darwin-amd64 .
-GOOS=linux  GOARCH=arm64 go build -o yaver-linux-arm64 .
-GOOS=linux  GOARCH=amd64 go build -o yaver-linux-amd64 .
-GOOS=windows GOARCH=amd64 go build -o yaver-windows-amd64.exe .
+Three-layer stack — no Tailscale, no TUN/TAP, no VPN rights. Application-layer only.
+
+```
+1. LAN Beacon (direct)  ──  ~5ms   ── same WiFi, instant discovery
+2. Convex IP (direct)   ──  ~5ms   ── known IP from device registry
+3. QUIC Relay (proxied) ──  ~50ms  ── roaming, NAT traversal
 ```
 
-Upload to [yaver-cli releases](https://github.com/kivanccakmak/yaver-cli/releases), then update SHA256 hashes in the [Homebrew tap](https://github.com/kivanccakmak/homebrew-yaver) and [Scoop manifest](https://github.com/kivanccakmak/scoop-yaver).
-
-## Auth
-
-- Apple Sign-In (native on iOS, web OAuth on desktop/Android)
-- Google Sign-In
-- Microsoft / Office 365
-- Email/password (test accounts only)
-
-`yaver auth` opens `https://yaver.io/auth?client=desktop` in the browser. The web app handles OAuth and redirects back to `http://127.0.0.1:19836/callback?token=<token>`. The CLI's local HTTP server receives the token and saves it to `~/.config/yaver/config.json`.
+See [CLAUDE.md](CLAUDE.md) for detailed networking architecture.
 
 ## Development
 
 ```bash
 cd backend && npm install && npx convex dev    # Convex dev server
 cd web && npm install && npm run dev           # Web (localhost:3000)
-cd desktop/agent && go run . serve             # Desktop agent
-cd relay && go run . serve                     # Relay server (local)
-cd mobile/ios && pod install                   # iOS (then build via Xcode)
+cd desktop/agent && go run . serve --debug     # Desktop agent
+cd relay && go run . serve --password secret   # Relay server (local)
 ```
 
 ### Tests
@@ -201,14 +237,29 @@ cd mobile/ios && pod install                   # iOS (then build via Xcode)
 cd desktop/agent && go test -v ./...
 ```
 
-Tests spin up real HTTP servers on random ports — no mocks, no external dependencies. Covers health, auth, CORS, task CRUD, agent status, ping/pong, shutdown, server-client integration, and MCP protocol.
+Tests cover: health, auth, CORS, task CRUD, agent status, MCP protocol, sandbox validation, and server-client integration.
 
-## Admin Scripts
+## Auth
+
+- Apple Sign-In, Google Sign-In, Microsoft/Office 365
+- `yaver auth` opens `https://yaver.io/auth?client=desktop` → OAuth → callback to `http://127.0.0.1:19836/callback?token=<token>`
+
+## Self-Hosting
+
+### Relay Server
 
 ```bash
-# Remove user data from Convex (dry-run first, then --confirm)
-cd backend && node cleanup-user.mjs
-cd backend && node cleanup-user.mjs --confirm
+# Docker
+cd relay && RELAY_PASSWORD=secret docker compose up -d
+
+# Or use the setup script
+./scripts/setup-relay.sh <server-ip> <domain> --password <relay-password>
+```
+
+### No Relay (Tailscale)
+
+```bash
+yaver serve --no-relay  # Connect directly via Tailscale IP
 ```
 
 ## Legal
@@ -216,10 +267,10 @@ cd backend && node cleanup-user.mjs --confirm
 - [Privacy Policy](https://yaver.io/privacy)
 - [Terms of Service](https://yaver.io/terms)
 
-Developed by **SIMKAB ELEKTRIK** — Yunus Emre Mah. Adalar Sokak No:12, Sancaktepe, Istanbul, Turkey
+Developed by **SIMKAB ELEKTRIK** — Istanbul, Turkey
 
 Contact: support@yaver.io
 
 ## License
 
-Proprietary — All rights reserved.
+MIT — Free and open source.

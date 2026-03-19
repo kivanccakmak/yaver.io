@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	osexec "os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,8 @@ type HTTPServer struct {
 	convexURL   string
 	hostname    string
 	taskMgr     *TaskManager
+	aclMgr      *ACLManager
+	emailMgr    *EmailManager
 	server      *http.Server
 	onShutdown  func() // called when mobile requests agent shutdown
 
@@ -830,86 +833,7 @@ func (s *HTTPServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case "tools/list":
-		resp.Result = map[string]interface{}{
-			"tools": []map[string]interface{}{
-				{
-					"name":        "create_task",
-					"description": "Create a new coding task. Claude will execute this task on the connected development machine, with full access to the codebase, terminal, and tools.",
-					"inputSchema": map[string]interface{}{
-						"type":     "object",
-						"required": []string{"prompt"},
-						"properties": map[string]interface{}{
-							"prompt": map[string]interface{}{
-								"type":        "string",
-								"description": "The task prompt describing what Claude should do",
-							},
-						},
-					},
-				},
-				{
-					"name":        "list_tasks",
-					"description": "List all tasks and their current status (queued, running, completed, failed, stopped).",
-					"inputSchema": map[string]interface{}{
-						"type":       "object",
-						"properties": map[string]interface{}{},
-					},
-				},
-				{
-					"name":        "get_task",
-					"description": "Get detailed information about a specific task, including its full output.",
-					"inputSchema": map[string]interface{}{
-						"type":     "object",
-						"required": []string{"task_id"},
-						"properties": map[string]interface{}{
-							"task_id": map[string]interface{}{
-								"type":        "string",
-								"description": "The task ID",
-							},
-						},
-					},
-				},
-				{
-					"name":        "stop_task",
-					"description": "Stop a running task.",
-					"inputSchema": map[string]interface{}{
-						"type":     "object",
-						"required": []string{"task_id"},
-						"properties": map[string]interface{}{
-							"task_id": map[string]interface{}{
-								"type":        "string",
-								"description": "The task ID to stop",
-							},
-						},
-					},
-				},
-				{
-					"name":        "continue_task",
-					"description": "Continue a stopped task with additional input/instructions.",
-					"inputSchema": map[string]interface{}{
-						"type":     "object",
-						"required": []string{"task_id", "input"},
-						"properties": map[string]interface{}{
-							"task_id": map[string]interface{}{
-								"type":        "string",
-								"description": "The task ID to continue",
-							},
-							"input": map[string]interface{}{
-								"type":        "string",
-								"description": "Follow-up instructions for the task",
-							},
-						},
-					},
-				},
-				{
-					"name":        "get_info",
-					"description": "Get information about the connected development machine (hostname, working directory, version).",
-					"inputSchema": map[string]interface{}{
-						"type":       "object",
-						"properties": map[string]interface{}{},
-					},
-				},
-			},
-		}
+		resp.Result = s.getMCPToolsList()
 
 	case "tools/call":
 		resp.Result = s.handleMCPToolCall(req.Params)
@@ -1016,9 +940,563 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		hostname, _ := os.Hostname()
 		return mcpToolResult(fmt.Sprintf("Hostname: %s\nVersion: %s\nWork Dir: %s", hostname, version, s.taskMgr.workDir))
 
+	// --- Runner Management ---
+	case "list_runners":
+		var sb strings.Builder
+		sb.WriteString("Available runners:\n")
+		defaultID := s.taskMgr.runner.RunnerID
+		for id, r := range builtinRunners {
+			_, err := osexec.LookPath(r.Command)
+			installed := "not installed"
+			if err == nil {
+				installed = "installed"
+			}
+			def := ""
+			if id == defaultID {
+				def = " (active)"
+			}
+			sb.WriteString(fmt.Sprintf("- %s: %s [%s]%s\n", id, r.Name, installed, def))
+		}
+		return mcpToolResult(sb.String())
+
+	case "switch_runner":
+		var args struct {
+			RunnerID string `json:"runner_id"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.RunnerID == "" {
+			return mcpToolError("runner_id is required")
+		}
+		r, ok := builtinRunners[args.RunnerID]
+		if !ok {
+			return mcpToolError(fmt.Sprintf("unknown runner: %s", args.RunnerID))
+		}
+		if _, err := osexec.LookPath(r.Command); err != nil {
+			return mcpToolError(fmt.Sprintf("%s is not installed on this machine", r.Command))
+		}
+		s.taskMgr.mu.Lock()
+		s.taskMgr.runner = r
+		s.taskMgr.mu.Unlock()
+		log.Printf("[MCP] Runner switched to %s", args.RunnerID)
+		return mcpToolResult(fmt.Sprintf("Runner switched to %s (%s)", r.Name, args.RunnerID))
+
+	// --- System & Config ---
+	case "get_system_info":
+		status := s.taskMgr.GetAgentStatus()
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Hostname: %s\n", status.System.Hostname))
+		sb.WriteString(fmt.Sprintf("OS: %s/%s\n", status.System.OS, status.System.Arch))
+		if status.System.MemoryMB > 0 {
+			sb.WriteString(fmt.Sprintf("Memory: %d MB\n", status.System.MemoryMB))
+		}
+		sb.WriteString(fmt.Sprintf("Runner: %s (%s) — %s\n", status.Runner.Name, status.Runner.ID, func() string {
+			if status.Runner.Installed {
+				return "installed"
+			}
+			return "not installed"
+		}()))
+		sb.WriteString(fmt.Sprintf("Running tasks: %d / %d total\n", status.RunningTasks, status.TotalTasks))
+		sb.WriteString(fmt.Sprintf("Work dir: %s\n", s.taskMgr.workDir))
+		sb.WriteString(fmt.Sprintf("Version: %s\n", version))
+		return mcpToolResult(sb.String())
+
+	case "get_config":
+		cfg, err := LoadConfig()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("load config: %v", err))
+		}
+		// Redact sensitive fields
+		safeCfg := map[string]interface{}{
+			"auto_start":   cfg.AutoStart,
+			"auto_update":  cfg.AutoUpdate,
+			"relay_count":  len(cfg.RelayServers),
+			"acl_peers":    len(cfg.ACLPeers),
+			"email_configured": cfg.Email != nil && cfg.Email.Provider != "",
+		}
+		if cfg.Sandbox != nil {
+			safeCfg["sandbox"] = map[string]interface{}{
+				"enabled":     cfg.Sandbox.Enabled,
+				"allow_sudo":  cfg.Sandbox.AllowSudo,
+			}
+		} else {
+			safeCfg["sandbox"] = "default (enabled, no sudo)"
+		}
+		data, _ := json.MarshalIndent(safeCfg, "", "  ")
+		return mcpToolResult(string(data))
+
+	case "set_work_dir":
+		var args struct {
+			Path string `json:"path"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Path == "" {
+			return mcpToolError("path is required")
+		}
+		info, err := os.Stat(args.Path)
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("path not accessible: %v", err))
+		}
+		if !info.IsDir() {
+			return mcpToolError("path is not a directory")
+		}
+		if err := ValidateWorkDir(args.Path, s.taskMgr.Sandbox); err != nil {
+			return mcpToolError(err.Error())
+		}
+		s.taskMgr.mu.Lock()
+		s.taskMgr.workDir = args.Path
+		s.taskMgr.mu.Unlock()
+		log.Printf("[MCP] Work dir changed to %s", args.Path)
+		return mcpToolResult(fmt.Sprintf("Working directory changed to: %s", args.Path))
+
+	case "list_projects":
+		fp, err := projectsFilePath()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("projects file: %v", err))
+		}
+		data, err := os.ReadFile(fp)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return mcpToolResult("No projects discovered yet. Run 'yaver discover' to scan.")
+			}
+			return mcpToolError(fmt.Sprintf("read projects: %v", err))
+		}
+		content := string(data)
+		if len(content) > 5000 {
+			content = content[:5000] + "\n... (truncated)"
+		}
+		return mcpToolResult(content)
+
+	// --- Relay Management ---
+	case "get_relay_config":
+		cfg, err := LoadConfig()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("load config: %v", err))
+		}
+		if len(cfg.RelayServers) == 0 {
+			return mcpToolResult("No relay servers configured. Use add_relay_server to add one.")
+		}
+		var sb strings.Builder
+		for _, rs := range cfg.RelayServers {
+			sb.WriteString(fmt.Sprintf("- [%s] %s", rs.ID, rs.QuicAddr))
+			if rs.Label != "" {
+				sb.WriteString(fmt.Sprintf(" (%s)", rs.Label))
+			}
+			if rs.Region != "" {
+				sb.WriteString(fmt.Sprintf(" region=%s", rs.Region))
+			}
+			sb.WriteString("\n")
+		}
+		return mcpToolResult(sb.String())
+
+	case "add_relay_server":
+		var args struct {
+			QuicAddr string `json:"quic_addr"`
+			HttpURL  string `json:"http_url"`
+			Password string `json:"password"`
+			Label    string `json:"label"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.QuicAddr == "" {
+			return mcpToolError("quic_addr is required")
+		}
+		cfg, err := LoadConfig()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("load config: %v", err))
+		}
+		newRelay := RelayServerConfig{
+			ID:       fmt.Sprintf("relay-%d", len(cfg.RelayServers)+1),
+			QuicAddr: args.QuicAddr,
+			HttpURL:  args.HttpURL,
+			Password: args.Password,
+			Label:    args.Label,
+		}
+		cfg.RelayServers = append(cfg.RelayServers, newRelay)
+		if err := SaveConfig(cfg); err != nil {
+			return mcpToolError(fmt.Sprintf("save config: %v", err))
+		}
+		log.Printf("[MCP] Relay server added: %s", args.QuicAddr)
+		return mcpToolResult(fmt.Sprintf("Relay server added: %s (ID: %s). Restart agent to connect.", args.QuicAddr, newRelay.ID))
+
+	case "remove_relay_server":
+		var args struct {
+			RelayID string `json:"relay_id"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.RelayID == "" {
+			return mcpToolError("relay_id is required")
+		}
+		cfg, err := LoadConfig()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("load config: %v", err))
+		}
+		found := false
+		var remaining []RelayServerConfig
+		for _, rs := range cfg.RelayServers {
+			if rs.ID == args.RelayID {
+				found = true
+				continue
+			}
+			remaining = append(remaining, rs)
+		}
+		if !found {
+			return mcpToolError("relay server not found: " + args.RelayID)
+		}
+		cfg.RelayServers = remaining
+		if err := SaveConfig(cfg); err != nil {
+			return mcpToolError(fmt.Sprintf("save config: %v", err))
+		}
+		return mcpToolResult(fmt.Sprintf("Relay server %s removed. Restart agent to apply.", args.RelayID))
+
+	// --- Filesystem ---
+	case "read_file":
+		var args struct {
+			Path string `json:"path"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Path == "" {
+			return mcpToolError("path is required")
+		}
+		filePath := s.resolveFilePath(args.Path)
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("read file: %v", err))
+		}
+		content := string(data)
+		if len(content) > 100*1024 {
+			content = content[:100*1024] + "\n... (truncated at 100KB)"
+		}
+		return mcpToolResult(content)
+
+	case "write_file":
+		var args struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Path == "" || args.Content == "" {
+			return mcpToolError("path and content are required")
+		}
+		filePath := s.resolveFilePath(args.Path)
+		dir := filepath.Dir(filePath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return mcpToolError(fmt.Sprintf("create directory: %v", err))
+		}
+		if err := os.WriteFile(filePath, []byte(args.Content), 0644); err != nil {
+			return mcpToolError(fmt.Sprintf("write file: %v", err))
+		}
+		return mcpToolResult(fmt.Sprintf("File written: %s (%d bytes)", filePath, len(args.Content)))
+
+	case "list_directory":
+		var args struct {
+			Path string `json:"path"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		dirPath := s.taskMgr.workDir
+		if args.Path != "" {
+			dirPath = s.resolveFilePath(args.Path)
+		}
+		entries, err := os.ReadDir(dirPath)
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("list directory: %v", err))
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Directory: %s\n\n", dirPath))
+		for _, e := range entries {
+			info, _ := e.Info()
+			if info != nil {
+				if info.IsDir() {
+					sb.WriteString(fmt.Sprintf("  %s/\n", e.Name()))
+				} else {
+					sb.WriteString(fmt.Sprintf("  %s (%d bytes)\n", e.Name(), info.Size()))
+				}
+			}
+		}
+		return mcpToolResult(sb.String())
+
+	case "search_files":
+		var args struct {
+			Pattern string `json:"pattern"`
+			Content string `json:"content"`
+			Path    string `json:"path"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		searchDir := s.taskMgr.workDir
+		if args.Path != "" {
+			searchDir = s.resolveFilePath(args.Path)
+		}
+
+		if args.Content != "" {
+			// Grep-style search using OS grep
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := osexec.CommandContext(ctx, "grep", "-rl", "--include="+args.Pattern, args.Content, searchDir)
+			out, _ := cmd.Output()
+			result := strings.TrimSpace(string(out))
+			if result == "" {
+				return mcpToolResult("No matches found.")
+			}
+			lines := strings.Split(result, "\n")
+			if len(lines) > 50 {
+				lines = lines[:50]
+				result = strings.Join(lines, "\n") + "\n... (50+ matches, truncated)"
+			}
+			return mcpToolResult(result)
+		}
+
+		if args.Pattern != "" {
+			// Glob-style file search
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := osexec.CommandContext(ctx, "find", searchDir, "-name", args.Pattern, "-type", "f")
+			out, _ := cmd.Output()
+			result := strings.TrimSpace(string(out))
+			if result == "" {
+				return mcpToolResult("No files found matching pattern.")
+			}
+			lines := strings.Split(result, "\n")
+			if len(lines) > 50 {
+				lines = lines[:50]
+				result = strings.Join(lines, "\n") + "\n... (50+ files, truncated)"
+			}
+			return mcpToolResult(result)
+		}
+
+		return mcpToolError("provide either 'pattern' (glob) or 'content' (grep) to search")
+
+	// --- Email ---
+	case "email_list_inbox":
+		if s.emailMgr == nil {
+			return mcpToolError("Email not configured. Run 'yaver email setup' first.")
+		}
+		var args struct {
+			Folder string `json:"folder"`
+			Search string `json:"search"`
+			Limit  int    `json:"limit"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Limit <= 0 {
+			args.Limit = 20
+		}
+		if args.Folder == "" {
+			args.Folder = "inbox"
+		}
+		emails, err := s.emailMgr.ListInbox(args.Folder, args.Search, args.Limit)
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("list inbox: %v", err))
+		}
+		if len(emails) == 0 {
+			return mcpToolResult("No emails found.")
+		}
+		data, _ := json.MarshalIndent(emails, "", "  ")
+		return mcpToolResult(string(data))
+
+	case "email_get":
+		if s.emailMgr == nil {
+			return mcpToolError("Email not configured. Run 'yaver email setup' first.")
+		}
+		var args struct {
+			EmailID string `json:"email_id"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.EmailID == "" {
+			return mcpToolError("email_id is required")
+		}
+		email, err := s.emailMgr.GetEmail(args.EmailID)
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("get email: %v", err))
+		}
+		data, _ := json.MarshalIndent(email, "", "  ")
+		return mcpToolResult(string(data))
+
+	case "email_send":
+		if s.emailMgr == nil {
+			return mcpToolError("Email not configured. Run 'yaver email setup' first.")
+		}
+		var args struct {
+			To      string `json:"to"`
+			Subject string `json:"subject"`
+			Body    string `json:"body"`
+			CC      string `json:"cc"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.To == "" || args.Subject == "" || args.Body == "" {
+			return mcpToolError("to, subject, and body are required")
+		}
+		if err := s.emailMgr.SendEmail(args.To, args.Subject, args.Body, args.CC); err != nil {
+			return mcpToolError(fmt.Sprintf("send email: %v", err))
+		}
+		return mcpToolResult(fmt.Sprintf("Email sent to %s: %s", args.To, args.Subject))
+
+	case "email_sync":
+		if s.emailMgr == nil {
+			return mcpToolError("Email not configured. Run 'yaver email setup' first.")
+		}
+		count, err := s.emailMgr.SyncEmails()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("sync failed: %v", err))
+		}
+		return mcpToolResult(fmt.Sprintf("Synced %d emails to local database.", count))
+
+	case "email_search":
+		if s.emailMgr == nil {
+			return mcpToolError("Email not configured. Run 'yaver email setup' first.")
+		}
+		var args struct {
+			Query string `json:"query"`
+			Limit int    `json:"limit"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Query == "" {
+			return mcpToolError("query is required")
+		}
+		if args.Limit <= 0 {
+			args.Limit = 20
+		}
+		emails, err := s.emailMgr.SearchEmails(args.Query, args.Limit)
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("search: %v", err))
+		}
+		if len(emails) == 0 {
+			return mcpToolResult("No emails found matching query.")
+		}
+		data, _ := json.MarshalIndent(emails, "", "  ")
+		return mcpToolResult(string(data))
+
+	// --- ACL (Agent Communication Layer) ---
+	case "acl_list_peers":
+		if s.aclMgr == nil {
+			return mcpToolResult("ACL not initialized. No peers configured.")
+		}
+		peers := s.aclMgr.ListPeers()
+		if len(peers) == 0 {
+			return mcpToolResult("No MCP peers connected. Use acl_add_peer to connect to another MCP server.")
+		}
+		data, _ := json.MarshalIndent(peers, "", "  ")
+		return mcpToolResult(string(data))
+
+	case "acl_add_peer":
+		if s.aclMgr == nil {
+			return mcpToolError("ACL not initialized")
+		}
+		var args struct {
+			Name string `json:"name"`
+			URL  string `json:"url"`
+			Auth string `json:"auth"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Name == "" || args.URL == "" {
+			return mcpToolError("name and url are required")
+		}
+		peer := ACLPeerConfig{
+			ID:   strings.ToLower(strings.ReplaceAll(args.Name, " ", "-")),
+			Name: args.Name,
+			URL:  args.URL,
+			Type: "http",
+			Auth: args.Auth,
+		}
+		if err := s.aclMgr.AddPeer(peer); err != nil {
+			return mcpToolError(fmt.Sprintf("add peer: %v", err))
+		}
+		// Persist to config
+		cfg, _ := LoadConfig()
+		if cfg != nil {
+			cfg.ACLPeers = append(cfg.ACLPeers, peer)
+			SaveConfig(cfg)
+		}
+		return mcpToolResult(fmt.Sprintf("Connected to MCP peer: %s (%s)", args.Name, args.URL))
+
+	case "acl_remove_peer":
+		if s.aclMgr == nil {
+			return mcpToolError("ACL not initialized")
+		}
+		var args struct {
+			PeerID string `json:"peer_id"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.PeerID == "" {
+			return mcpToolError("peer_id is required")
+		}
+		if err := s.aclMgr.RemovePeer(args.PeerID); err != nil {
+			return mcpToolError(err.Error())
+		}
+		// Persist removal to config
+		cfg, _ := LoadConfig()
+		if cfg != nil {
+			var remaining []ACLPeerConfig
+			for _, p := range cfg.ACLPeers {
+				if p.ID != args.PeerID {
+					remaining = append(remaining, p)
+				}
+			}
+			cfg.ACLPeers = remaining
+			SaveConfig(cfg)
+		}
+		return mcpToolResult(fmt.Sprintf("Disconnected from peer: %s", args.PeerID))
+
+	case "acl_list_peer_tools":
+		if s.aclMgr == nil {
+			return mcpToolError("ACL not initialized")
+		}
+		var args struct {
+			PeerID string `json:"peer_id"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.PeerID == "" {
+			return mcpToolError("peer_id is required")
+		}
+		tools, err := s.aclMgr.ListPeerTools(args.PeerID)
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("list tools: %v", err))
+		}
+		data, _ := json.MarshalIndent(tools, "", "  ")
+		return mcpToolResult(string(data))
+
+	case "acl_call_peer_tool":
+		if s.aclMgr == nil {
+			return mcpToolError("ACL not initialized")
+		}
+		var args struct {
+			PeerID   string          `json:"peer_id"`
+			ToolName string          `json:"tool_name"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.PeerID == "" || args.ToolName == "" {
+			return mcpToolError("peer_id and tool_name are required")
+		}
+		result, err := s.aclMgr.CallPeerTool(args.PeerID, args.ToolName, args.Arguments)
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("call tool: %v", err))
+		}
+		data, _ := json.MarshalIndent(result, "", "  ")
+		return mcpToolResult(string(data))
+
+	case "acl_health":
+		if s.aclMgr == nil {
+			return mcpToolResult("ACL not initialized. No peers configured.")
+		}
+		health := s.aclMgr.HealthCheck()
+		var sb strings.Builder
+		for id, ok := range health {
+			status := "healthy"
+			if !ok {
+				status = "unreachable"
+			}
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", id, status))
+		}
+		return mcpToolResult(sb.String())
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}
+}
+
+// resolveFilePath resolves a path relative to the work directory.
+func (s *HTTPServer) resolveFilePath(path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(s.taskMgr.workDir, path)
 }
 
 func mcpToolResult(text string) interface{} {

@@ -81,6 +81,13 @@ if [[ $# -eq 0 ]]; then
     usage
 fi
 
+# Check for --help anywhere in args
+for arg in "$@"; do
+    if [[ "$arg" == "--help" || "$arg" == "-h" ]]; then
+        usage
+    fi
+done
+
 # First positional arg is always server IP
 SERVER="$1"
 shift

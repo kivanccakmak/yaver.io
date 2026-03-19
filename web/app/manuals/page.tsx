@@ -2,6 +2,14 @@ import Link from "next/link";
 
 const manuals = [
   {
+    title: "Full On-Prem Free Stack",
+    description:
+      "Yaver + Ollama + GLM-4.7-Flash + Aider — a complete AI coding setup for $0/month. SWE-bench analysis, hardware requirements, step-by-step setup, and everything you need to know about local LLMs.",
+    href: "/manuals/free-onprem",
+    tags: ["Free", "On-Prem", "SWE-bench", "GLM-4.7-Flash"],
+    featured: true,
+  },
+  {
     title: "CLI setup & usage guide",
     description:
       "Install the Yaver CLI, sign in, choose your AI agent, and learn the most useful commands.",
@@ -49,19 +57,32 @@ export default function ManualsPage() {
             <Link
               key={manual.href}
               href={manual.href}
-              className="card block transition-colors hover:border-surface-600"
+              className={`card block transition-colors hover:border-surface-600 ${
+                manual.featured
+                  ? "border-green-500/20 bg-green-500/5"
+                  : ""
+              }`}
             >
+              {manual.featured && (
+                <span className="mb-3 inline-block rounded-full border border-green-500/20 bg-green-500/10 px-2.5 py-0.5 text-[11px] font-medium text-green-400">
+                  Recommended
+                </span>
+              )}
               <h2 className="mb-2 text-base font-semibold text-surface-100">
                 {manual.title}
               </h2>
               <p className="mb-3 text-sm leading-relaxed text-surface-400">
                 {manual.description}
               </p>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {manual.tags.map((tag) => (
                   <span
                     key={tag}
-                    className="rounded-full bg-surface-800 px-2.5 py-0.5 text-[11px] font-medium text-surface-400"
+                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
+                      manual.featured
+                        ? "bg-green-500/10 text-green-400"
+                        : "bg-surface-800 text-surface-400"
+                    }`}
                   >
                     {tag}
                   </span>

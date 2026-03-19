@@ -14,6 +14,7 @@ import type * as aiRunners from "../aiRunners.js";
 import type * as auth from "../auth.js";
 import type * as authLogs from "../authLogs.js";
 import type * as developerLogs from "../developerLogs.js";
+import type * as deviceCode from "../deviceCode.js";
 import type * as deviceEvents from "../deviceEvents.js";
 import type * as deviceMetrics from "../deviceMetrics.js";
 import type * as devices from "../devices.js";
@@ -22,7 +23,9 @@ import type * as http from "../http.js";
 import type * as mobileStreamLogs from "../mobileStreamLogs.js";
 import type * as platformConfig from "../platformConfig.js";
 import type * as runnerUsage from "../runnerUsage.js";
+import type * as seed from "../seed.js";
 import type * as survey from "../survey.js";
+import type * as totp from "../totp.js";
 import type * as userSettings from "../userSettings.js";
 
 import type {
@@ -38,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   authLogs: typeof authLogs;
   developerLogs: typeof developerLogs;
+  deviceCode: typeof deviceCode;
   deviceEvents: typeof deviceEvents;
   deviceMetrics: typeof deviceMetrics;
   devices: typeof devices;
@@ -46,7 +50,9 @@ declare const fullApi: ApiFromModules<{
   mobileStreamLogs: typeof mobileStreamLogs;
   platformConfig: typeof platformConfig;
   runnerUsage: typeof runnerUsage;
+  seed: typeof seed;
   survey: typeof survey;
+  totp: typeof totp;
   userSettings: typeof userSettings;
 }>;
 

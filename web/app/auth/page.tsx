@@ -9,6 +9,7 @@ function AuthContent() {
   const params = useSearchParams();
   const error = params.get("error");
   const client = params.get("client") || "web";
+  const returnUrl = params.get("return");
 
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [fullName, setFullName] = useState("");
@@ -59,6 +60,14 @@ function AuthContent() {
       }
 
       const data = await res.json();
+
+      // 2FA required
+      if (data.requires2fa && data.pendingToken) {
+        const totpUrl = `/auth/totp?pendingToken=${data.pendingToken}&client=${client}`;
+        window.location.href = totpUrl;
+        return;
+      }
+
       const token = data.token;
 
       if (!token) {
@@ -74,6 +83,12 @@ function AuthContent() {
       // Check if desktop client - redirect to localhost callback
       if (client === "desktop") {
         window.location.href = `http://127.0.0.1:19836/callback?token=${token}`;
+        return;
+      }
+
+      // Return to original page if specified (e.g. device code page)
+      if (returnUrl) {
+        window.location.href = returnUrl;
         return;
       }
 

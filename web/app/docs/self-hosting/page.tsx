@@ -260,6 +260,37 @@ export default function SelfHostingPage() {
             open.
           </Prose>
 
+          <div className="mb-8 rounded-xl border border-surface-800 bg-surface-900 p-6">
+            <h4 className="mb-2 text-sm font-medium text-surface-200">
+              Is Tailscale open source?
+            </h4>
+            <p className="text-sm leading-relaxed text-surface-400">
+              The Tailscale <strong className="text-surface-200">client</strong> is
+              open source under the BSD 3-Clause license (<a
+                href="https://github.com/tailscale/tailscale"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-surface-300 underline underline-offset-2 hover:text-surface-100"
+              >github.com/tailscale/tailscale</a>).
+              The <strong className="text-surface-200">coordination server</strong> (control
+              plane) is proprietary &mdash; it handles key exchange, ACLs, and device
+              management. If you want a fully open-source alternative, use{" "}
+              <a
+                href="https://github.com/juanfont/headscale"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-surface-300 underline underline-offset-2 hover:text-surface-100"
+              >Headscale</a>{" "}
+              &mdash; a community-built, self-hostable replacement for the Tailscale
+              coordination server. Headscale + Tailscale client = fully open-source
+              mesh VPN with no proprietary components.
+            </p>
+            <p className="mt-3 text-sm text-surface-400">
+              Tailscale is <strong className="text-surface-200">free for personal
+              use</strong> (up to 100 devices, 3 users). Paid plans start for teams.
+            </p>
+          </div>
+
           <div className="mb-8">
             <Terminal title="tailscale">
               <Comment># On your dev machine</Comment>
@@ -351,6 +382,95 @@ export default function SelfHostingPage() {
             </ul>
           </div>
 
+          {/* Automated setup script */}
+          <div className="mb-8 rounded-xl border border-green-500/10 bg-green-500/5 p-6">
+            <h4 className="mb-2 text-sm font-semibold text-green-400">
+              One-command setup script
+            </h4>
+            <p className="mb-4 text-sm leading-relaxed text-surface-400">
+              The repo includes{" "}
+              <InlineCode>scripts/setup-relay.sh</InlineCode> that automates the
+              entire production setup: Docker installation, nginx, Let&apos;s Encrypt
+              SSL, firewall rules, relay deployment, and health checks. One command,
+              done in under 2 minutes.
+            </p>
+            <Terminal title="automated setup">
+              <Comment># Prerequisites: a VPS with SSH access + a DNS A record pointing to it</Comment>
+              <Divider />
+              <Comment># Production setup with HTTPS</Comment>
+              <Cmd>./scripts/setup-relay.sh 1.2.3.4 relay.yourdomain.com --password your-secret</Cmd>
+              <Divider />
+              <Comment># Without a domain (testing / IP-only)</Comment>
+              <Cmd>./scripts/setup-relay.sh 1.2.3.4 --no-domain --password your-secret</Cmd>
+              <Divider />
+              <Comment># Custom ports</Comment>
+              <Cmd>./scripts/setup-relay.sh 1.2.3.4 relay.yourdomain.com --password secret --quic-port 5433 --http-port 9443</Cmd>
+            </Terminal>
+          </div>
+
+          <div className="mb-8 rounded-xl border border-surface-800 bg-surface-900 p-6">
+            <h4 className="mb-3 text-sm font-semibold text-surface-200">
+              What the script does
+            </h4>
+            <ol className="space-y-2 text-sm text-surface-400">
+              <li className="flex gap-3">
+                <span className="text-surface-300 font-medium">1.</span>
+                <span>
+                  <strong className="text-surface-200">Pre-flight checks</strong> &mdash;
+                  verifies SSH access to the server
+                </span>
+              </li>
+              <li className="flex gap-3">
+                <span className="text-surface-300 font-medium">2.</span>
+                <span>
+                  <strong className="text-surface-200">Installs Docker</strong> &mdash;
+                  skips if already installed
+                </span>
+              </li>
+              <li className="flex gap-3">
+                <span className="text-surface-300 font-medium">3.</span>
+                <span>
+                  <strong className="text-surface-200">HTTPS setup</strong> &mdash;
+                  installs nginx + certbot, obtains a Let&apos;s Encrypt certificate,
+                  configures reverse proxy with SSE/streaming support, enables auto-renewal
+                </span>
+              </li>
+              <li className="flex gap-3">
+                <span className="text-surface-300 font-medium">4.</span>
+                <span>
+                  <strong className="text-surface-200">Deploys relay</strong> &mdash;
+                  sparse-clones the relay directory to <InlineCode>/opt/yaver-relay</InlineCode>,
+                  writes <InlineCode>.env</InlineCode> with the password, builds and starts
+                  the Docker container
+                </span>
+              </li>
+              <li className="flex gap-3">
+                <span className="text-surface-300 font-medium">5.</span>
+                <span>
+                  <strong className="text-surface-200">Firewall</strong> &mdash;
+                  opens TCP 443 (HTTPS), UDP 4433 (QUIC), and TCP 80 (HTTP redirect) via UFW
+                </span>
+              </li>
+              <li className="flex gap-3">
+                <span className="text-surface-300 font-medium">6.</span>
+                <span>
+                  <strong className="text-surface-200">Health check</strong> &mdash;
+                  verifies the relay responds, prints a summary with connection details
+                  and useful commands (logs, restart, stop)
+                </span>
+              </li>
+            </ol>
+            <p className="mt-4 text-xs text-surface-500">
+              Source: <a
+                href="https://github.com/kivanccakmak/yaver/blob/main/scripts/setup-relay.sh"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-surface-400 underline underline-offset-2 hover:text-surface-200"
+              >scripts/setup-relay.sh</a> &mdash;
+              read it before running on your server.
+            </p>
+          </div>
+
           {/* Quick start */}
           <SubHeading>Quick Start (no HTTPS)</SubHeading>
           <Prose>
@@ -375,37 +495,33 @@ export default function SelfHostingPage() {
             </Terminal>
           </div>
 
-          {/* Production setup */}
-          <SubHeading>Production Setup (HTTPS + Let&apos;s Encrypt)</SubHeading>
+          {/* Production manual steps */}
+          <SubHeading>Manual Production Setup</SubHeading>
           <Prose>
-            For production, add HTTPS with nginx and Let&apos;s Encrypt so your
-            mobile app can connect securely over the internet.
+            If you prefer to run each step manually instead of using the setup script,
+            here&apos;s the full procedure. Point your domain&apos;s DNS A record to
+            your VPS IP first.
           </Prose>
 
           <div className="mb-6">
-            <Terminal title="production-setup">
-              <Comment># 1. Point DNS A record to your VPS IP</Comment>
-              <Comment>
-                # relay.yourdomain.com &rarr; 1.2.3.4
-              </Comment>
-              <Divider />
-              <Comment># 2. Install dependencies</Comment>
+            <Terminal title="production-setup (manual)">
+              <Comment># 1. Install dependencies</Comment>
               <Cmd>apt install -y nginx certbot python3-certbot-nginx</Cmd>
               <Divider />
-              <Comment># 3. Get Let&apos;s Encrypt certificate</Comment>
+              <Comment># 2. Get Let&apos;s Encrypt certificate</Comment>
               <Cmd>
                 certbot certonly --standalone -d relay.yourdomain.com
               </Cmd>
               <Divider />
-              <Comment># 4. Open firewall ports</Comment>
+              <Comment># 3. Open firewall ports</Comment>
               <Cmd>ufw allow 443/tcp</Cmd>
               <Cmd>ufw allow 4433/udp</Cmd>
               <Divider />
-              <Comment># 5. Start relay</Comment>
+              <Comment># 4. Start relay</Comment>
               <Cmd>cd yaver/relay</Cmd>
               <Cmd>RELAY_PASSWORD=your-secret docker compose up -d</Cmd>
               <Divider />
-              <Comment># 6. Verify</Comment>
+              <Comment># 5. Verify</Comment>
               <Cmd>curl https://relay.yourdomain.com/health</Cmd>
               <Output>{"{ \"status\": \"ok\" }"}</Output>
             </Terminal>
@@ -414,7 +530,7 @@ export default function SelfHostingPage() {
           {/* Nginx config */}
           <div className="mb-8">
             <p className="mb-3 text-sm font-medium text-surface-300">
-              Sample nginx configuration
+              Nginx configuration (auto-generated by the setup script, or create manually)
             </p>
             <div className="terminal">
               <div className="terminal-header">
@@ -428,7 +544,7 @@ export default function SelfHostingPage() {
               <div className="terminal-body text-[13px] leading-relaxed">
                 <pre className="text-surface-300">
                   {`server {
-    listen 443 ssl;
+    listen 443 ssl http2;
     server_name relay.yourdomain.com;
 
     ssl_certificate /etc/letsencrypt/live/relay.yourdomain.com/fullchain.pem;
@@ -437,17 +553,33 @@ export default function SelfHostingPage() {
     location / {
         proxy_pass http://127.0.0.1:8443;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_read_timeout 86400s;
-        proxy_send_timeout 86400s;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # SSE/streaming support
+        proxy_set_header Connection '';
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding on;
+
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
     }
+}
+
+server {
+    listen 80;
+    server_name relay.yourdomain.com;
+    return 301 https://$server_name$request_uri;
 }`}
                 </pre>
               </div>
             </div>
+            <p className="mt-2 text-xs text-surface-500">
+              Template source: <InlineCode>relay/deploy/nginx-relay.conf</InlineCode>
+            </p>
           </div>
 
           {/* Configure clients */}
@@ -832,6 +964,80 @@ AI Agent options:
                 </li>
               </ul>
             </div>
+          </div>
+        </section>
+
+        {/* ─── Self-Hosting the Backend ─── */}
+        <section className="mb-20">
+          <SectionHeading id="backend">Self-Hosting the Backend (Convex)</SectionHeading>
+          <Prose>
+            Yaver&apos;s backend uses Convex for auth and device discovery only &mdash; no task
+            data ever touches it. You can run your own Convex instance to be fully
+            independent of our infrastructure.
+          </Prose>
+
+          <div className="space-y-6">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Option A: Convex Cloud (free tier)
+              </h4>
+              <p className="mb-3 text-sm text-surface-400">
+                The easiest option. Convex offers a generous free tier (1M function
+                calls/month). No servers to manage.
+              </p>
+              <Terminal title="Convex Cloud">
+                <Cmd>cd backend &amp;&amp; npm install</Cmd>
+                <Cmd>npx convex dev</Cmd>
+                <Comment># Follow prompts to create a free project</Comment>
+                <div className="h-2" />
+                <Comment># Seed with predefined data (runners, models, config)</Comment>
+                <Cmd>npx convex run seed:all</Cmd>
+              </Terminal>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Option B: Self-hosted Convex (Docker)
+              </h4>
+              <p className="mb-3 text-sm text-surface-400">
+                Convex is open source. Run the entire backend on your own hardware.
+              </p>
+              <Terminal title="Self-Hosted Convex">
+                <Cmd>git clone https://github.com/get-convex/convex-backend.git</Cmd>
+                <Cmd>cd convex-backend &amp;&amp; just run-local-backend</Cmd>
+                <div className="h-2" />
+                <Comment># Point Yaver at your local Convex</Comment>
+                <Cmd>cd /path/to/yaver/backend</Cmd>
+                <Cmd>npx convex dev --url http://localhost:3210</Cmd>
+                <Cmd>npx convex run seed:all</Cmd>
+              </Terminal>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Configure clients
+              </h4>
+              <p className="text-sm text-surface-400">
+                Point the CLI at your backend with{" "}
+                <InlineCode>yaver config set convex_site_url https://your-project.convex.site</InlineCode>{" "}
+                or <InlineCode>yaver serve --convex-url &lt;url&gt;</InlineCode>.
+                For the mobile app, update <InlineCode>CONVEX_URL</InlineCode> in{" "}
+                <InlineCode>mobile/src/lib/constants.ts</InlineCode>.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-6">
+            <Prose>
+              See the full{" "}
+              <Link
+                href="/docs/contributing"
+                className="text-surface-200 underline underline-offset-2 hover:text-surface-50"
+              >
+                Contributing Guide
+              </Link>{" "}
+              for details on seed data, database schema, and adding new AI runners.
+            </Prose>
           </div>
         </section>
 

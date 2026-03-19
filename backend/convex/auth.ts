@@ -37,6 +37,9 @@ export async function validateSessionInternal(
     passwordHash?: string;
     avatarUrl?: string;
     surveyCompleted?: boolean;
+    totpSecret?: string;
+    totpEnabled?: boolean;
+    totpRecoveryCodes?: string;
     createdAt: number;
   };
   sessionId: Id<"sessions">;
@@ -249,6 +252,31 @@ export const lookupEmailUser = query({
       fullName: user.fullName,
       passwordHash: user.passwordHash,
     };
+  },
+});
+
+/**
+ * Check if a user has TOTP enabled. Used by login to decide if 2FA is required.
+ */
+export const getUserWithTotp = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) return null;
+    return { totpEnabled: user.totpEnabled ?? false };
+  },
+});
+
+/**
+ * Get the user document _id from a session token hash.
+ * Used by device code authorization to pass a typed Id<"users"> to mutations.
+ */
+export const getUserDocId = query({
+  args: { tokenHash: v.string() },
+  handler: async (ctx, args) => {
+    const result = await validateSessionInternal(ctx, args.tokenHash);
+    if (!result) return null;
+    return result.user._id;
   },
 });
 
