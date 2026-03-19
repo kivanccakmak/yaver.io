@@ -679,6 +679,29 @@ http.route({
   }),
 });
 
+// ── Logout (delete all sessions) ─────────────────────────────────────
+
+/** POST /auth/logout — Delete all sessions for the authenticated user. */
+http.route({
+  path: "/auth/logout",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    try {
+      await ctx.runMutation(api.auth.deleteAllSessions, { tokenHash });
+      return jsonResponse({ ok: true });
+    } catch {
+      return errorResponse("Failed to logout", 500);
+    }
+  }),
+});
+
 // ── Account Deletion ────────────────────────────────────────────────
 
 /** POST /auth/delete-account — Delete user account and all data (authed). */
@@ -738,7 +761,7 @@ http.route({
     const settings = await ctx.runQuery(api.userSettings.getByToken, { tokenHash });
     return jsonResponse({
       ok: true,
-      settings: settings || { forceRelay: true, runnerId: undefined, customRunnerCommand: undefined, relayUrl: undefined, relayPassword: undefined },
+      settings: settings || { forceRelay: false, runnerId: undefined, customRunnerCommand: undefined, relayUrl: undefined, relayPassword: undefined, tunnelUrl: undefined },
     });
   }),
 });
@@ -758,6 +781,7 @@ http.route({
       customRunnerCommand: body.customRunnerCommand,
       relayUrl: body.relayUrl,
       relayPassword: body.relayPassword,
+      tunnelUrl: body.tunnelUrl,
     });
     return jsonResponse({ ok: true });
   }),

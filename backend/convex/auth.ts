@@ -127,7 +127,7 @@ export const createOrUpdateUser = mutation({
     // Create default settings for new user
     await ctx.db.insert("userSettings", {
       userId: userDocId,
-      forceRelay: true,
+      forceRelay: false,
     });
     return userDocId;
   },
@@ -194,6 +194,28 @@ export const deleteSession = mutation({
 });
 
 /**
+ * Delete ALL sessions for a user (logout everywhere).
+ * Validates the token first, then deletes every session for that user.
+ */
+export const deleteAllSessions = mutation({
+  args: {
+    tokenHash: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const result = await validateSessionInternal(ctx, args.tokenHash);
+    if (!result) return;
+
+    const sessions = await ctx.db
+      .query("sessions")
+      .withIndex("by_userId", (q) => q.eq("userId", result.user._id))
+      .collect();
+    for (const session of sessions) {
+      await ctx.db.delete(session._id);
+    }
+  },
+});
+
+/**
  * Create a user with email/password.
  */
 export const createEmailUser = mutation({
@@ -226,7 +248,7 @@ export const createEmailUser = mutation({
     // Create default settings for new user
     await ctx.db.insert("userSettings", {
       userId: userDocId,
-      forceRelay: true,
+      forceRelay: false,
     });
     return userDocId;
   },

@@ -117,6 +117,7 @@ export default defineSchema({
     customRunnerCommand: v.optional(v.string()),
     relayUrl: v.optional(v.string()),
     relayPassword: v.optional(v.string()),
+    tunnelUrl: v.optional(v.string()),
   }).index("by_userId", ["userId"]),
 
   aiRunners: defineTable({

@@ -12,7 +12,7 @@ import Constants from "expo-constants";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
-import { quicClient, RelayServer } from "../lib/quic";
+import { quicClient, RelayServer, TunnelServer } from "../lib/quic";
 import { useAuth } from "./AuthContext";
 import { getUserSettings } from "../lib/auth";
 import { appLog } from "../lib/logger";
@@ -20,7 +20,14 @@ import { beaconListener } from "../lib/beacon";
 import { CONVEX_SITE_URL } from "../lib/constants";
 
 export const CUSTOM_RELAYS_KEY = "@yaver/custom_relays";
+export const CUSTOM_TUNNELS_KEY = "@yaver/custom_tunnels";
 const RELAY_ONBOARDING_KEY = "@yaver/relay_onboarding_done";
+
+let _debugLogsEnabled = false;
+// Load debug preference on module init
+AsyncStorage.getItem("@yaver/debug_logs_enabled").then((val) => {
+  _debugLogsEnabled = val === "true";
+});
 
 const APP_VERSION = Constants.expoConfig?.version ?? "unknown";
 const BUILD_NUMBER =
@@ -75,6 +82,7 @@ const DeviceContext = createContext<DeviceState | undefined>(undefined);
 function sendTelemetry(token: string | null, step: string, message: string, details?: string) {
   const level = step.includes("fail") ? "error" : "info";
   appLog(level as "info" | "error", `[${step}] ${message}${details ? " | " + details : ""}`);
+  if (!_debugLogsEnabled) return;
   fetch(`${CONVEX_SITE_URL}/mobile/log`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -128,20 +136,26 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         const data = await devicesRes.json();
         const raw = data.devices || data || [];
         appLog("info", `Found ${raw.length} device(s)`);
-        const mapped: Device[] = raw.map((d: any) => ({
-          id: d.deviceId || d.id,
-          name: d.name,
-          host: d.quicHost || d.host,
-          port: d.quicPort || d.port,
-          online: (() => {
-            const flag = d.isOnline ?? d.online ?? false;
-            const lastSeen = d.lastHeartbeat || d.lastSeen || 0;
-            return flag && lastSeen > 0 && (Date.now() - lastSeen) < HEARTBEAT_STALE_MS;
-          })(),
-          lastSeen: d.lastHeartbeat || d.lastSeen || 0,
-          os: d.platform || d.os || "",
-          runners: d.runners ?? [],
-        }));
+        const connectedDeviceId = quicClient.isConnected ? activeDevice?.id : null;
+        const mapped: Device[] = raw.map((d: any) => {
+          const deviceId = d.deviceId || d.id;
+          // If we're actively connected to this device, trust our connection over stale heartbeat
+          const isActivelyConnected = connectedDeviceId === deviceId;
+          return {
+            id: deviceId,
+            name: d.name,
+            host: d.quicHost || d.host,
+            port: d.quicPort || d.port,
+            online: isActivelyConnected || (() => {
+              const flag = d.isOnline ?? d.online ?? false;
+              const lastSeen = d.lastHeartbeat || d.lastSeen || 0;
+              return flag && lastSeen > 0 && (Date.now() - lastSeen) < HEARTBEAT_STALE_MS;
+            })(),
+            lastSeen: isActivelyConnected ? Date.now() : (d.lastHeartbeat || d.lastSeen || 0),
+            os: d.platform || d.os || "",
+            runners: d.runners ?? [],
+          };
+        });
         // Deduplicate by name — keep the entry with the latest lastSeen
         const seen = new Map<string, Device>();
         for (const d of mapped) {
@@ -304,6 +318,48 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         sendTelemetry(token, "relays-failed", "Could not fetch relay config");
       } finally {
         setRelaysReady(true);
+      }
+    })();
+  }, [token]);
+
+  // Fetch Cloudflare Tunnels from local storage or Convex user settings
+  const tunnelsFetched = useRef(false);
+  useEffect(() => {
+    if (tunnelsFetched.current) return;
+    tunnelsFetched.current = true;
+    (async () => {
+      try {
+        // 1. Check local storage first
+        const customRaw = await AsyncStorage.getItem(CUSTOM_TUNNELS_KEY);
+        if (customRaw) {
+          const customTunnels: TunnelServer[] = JSON.parse(customRaw);
+          if (customTunnels.length > 0) {
+            quicClient.setTunnelServers(customTunnels);
+            console.log("[DeviceContext] Using", customTunnels.length, "custom tunnel(s)");
+            return;
+          }
+        }
+
+        // 2. Check Convex user settings for synced tunnel URL
+        if (token) {
+          try {
+            const settings = await getUserSettings(token);
+            if (settings.tunnelUrl) {
+              const accountTunnel: TunnelServer = {
+                id: "account",
+                url: settings.tunnelUrl,
+                priority: 1,
+              };
+              quicClient.setTunnelServers([accountTunnel]);
+              await AsyncStorage.setItem(CUSTOM_TUNNELS_KEY, JSON.stringify([accountTunnel]));
+              console.log("[DeviceContext] Loaded tunnel from Convex user settings:", settings.tunnelUrl);
+            }
+          } catch {
+            // Best-effort
+          }
+        }
+      } catch {
+        // Best-effort
       }
     })();
   }, [token]);

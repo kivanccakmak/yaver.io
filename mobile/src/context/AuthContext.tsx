@@ -16,6 +16,7 @@ import {
   validateToken,
   getSurveyStatus,
   clearKeychainIfFreshInstall,
+  getConvexSiteUrl,
 } from "../lib/auth";
 import { clearCache } from "../lib/storage";
 
@@ -101,12 +102,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    // Best-effort: invalidate all sessions server-side before clearing locally
+    if (token) {
+      fetch(`${getConvexSiteUrl()}/auth/logout`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {});
+    }
     await clearToken();
     await clearCache(); // Clear cached tasks from previous session
     setToken(null);
     setUser(null);
     setSurveyCompleted(false);
-  }, []);
+  }, [token]);
 
   const markSurveyCompleted = useCallback(() => {
     setSurveyCompleted(true);

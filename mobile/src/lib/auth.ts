@@ -270,6 +270,7 @@ export interface UserSettings {
   customRunnerCommand?: string;
   relayUrl?: string;
   relayPassword?: string;
+  tunnelUrl?: string;
 }
 
 export interface AiRunner {

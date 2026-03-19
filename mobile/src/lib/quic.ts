@@ -78,9 +78,9 @@ export interface AgentStatus {
 }
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
-export type ConnectionMode = "direct" | "relay" | null;
+export type ConnectionMode = "direct" | "relay" | "tunnel" | null;
 /** How the connection was established — tracked for diagnostics and faster reconnection. */
-export type ConnectionPath = "lan-beacon" | "lan-convex-ip" | "relay" | null;
+export type ConnectionPath = "lan-beacon" | "lan-convex-ip" | "relay" | "cloudflare-tunnel" | null;
 
 export type OutputCallback = (taskId: string, line: string) => void;
 export type ConnectionStateCallback = (state: ConnectionState) => void;
@@ -105,6 +105,15 @@ export interface RelayServer {
   password?: string;
 }
 
+export interface TunnelServer {
+  id: string;
+  url: string;  // e.g. "https://my-tunnel.example.com"
+  cfAccessClientId?: string;
+  cfAccessClientSecret?: string;
+  label?: string;
+  priority: number;
+}
+
 export class QuicClient {
   private host: string | null = null;
   private port: number | null = null;
@@ -113,6 +122,9 @@ export class QuicClient {
   private relayServers: RelayServer[] = [];  // all available relay servers
   private activeRelayUrl: string | null = null; // currently working relay base URL
   private activeRelayPassword: string | null = null; // password for the active relay (if any)
+  private tunnelServers: TunnelServer[] = [];  // Cloudflare Tunnel endpoints
+  private _tunnelUrl: string | null = null;
+  private _tunnelHeaders: Record<string, string> = {};
   private _forceRelay = false; // default to direct-first — try LAN/local before relay
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -137,6 +149,19 @@ export class QuicClient {
   /** Set relay servers fetched from platform config. */
   setRelayServers(servers: RelayServer[]): void {
     this.relayServers = servers.sort((a, b) => a.priority - b.priority);
+  }
+
+  /** Set Cloudflare Tunnel endpoints. */
+  setTunnelServers(servers: TunnelServer[]): void {
+    this.tunnelServers = servers.sort((a, b) => a.priority - b.priority);
+  }
+
+  getTunnelServers(): TunnelServer[] {
+    return [...this.tunnelServers];
+  }
+
+  get tunnelServerCount(): number {
+    return this.tunnelServers.length;
   }
 
   // ── Public getters ─────────────────────────────────────────────────
@@ -598,6 +623,10 @@ export class QuicClient {
   // ── Private helpers ────────────────────────────────────────────────
 
   private get baseUrl(): string {
+    // Cloudflare Tunnel — direct HTTPS to tunnel URL (no relay proxy path)
+    if (this._tunnelUrl) {
+      return this._tunnelUrl;
+    }
     // Use active relay if we're going through a relay server
     if (this.activeRelayUrl) {
       return `${this.activeRelayUrl}/d/${this.deviceId}`;
@@ -610,6 +639,9 @@ export class QuicClient {
     const headers: Record<string, string> = { Authorization: `Bearer ${this.token}` };
     if (this.activeRelayUrl && this.activeRelayPassword) {
       headers['X-Relay-Password'] = this.activeRelayPassword;
+    }
+    if (this._tunnelUrl && this._tunnelHeaders) {
+      Object.assign(headers, this._tunnelHeaders);
     }
     return headers;
   }
@@ -681,6 +713,8 @@ export class QuicClient {
     this.clearTimers();
     this.activeRelayUrl = null;
     this.activeRelayPassword = null;
+    this._tunnelUrl = null;
+    this._tunnelHeaders = {};
     this.reconnectAttempt = 0;
     this.attemptConnect().catch(() => {});
   }
@@ -703,6 +737,8 @@ export class QuicClient {
     this.setConnectionState("connecting");
     this.activeRelayUrl = null;
     this.activeRelayPassword = null;
+    this._tunnelUrl = null;
+    this._tunnelHeaders = {};
     this.setConnectionMode(null);
     this._connectionPath = null;
     try {
@@ -760,7 +796,44 @@ export class QuicClient {
         }
       }
 
-      // 2. Try relay servers (fallback for cellular, or when direct failed)
+      // 2. Try Cloudflare Tunnels (works through any firewall)
+      if (!connected && this.tunnelServers.length > 0) {
+        console.log("[QUIC] Trying", this.tunnelServers.length, "Cloudflare Tunnel(s)");
+        for (const tunnel of this.tunnelServers) {
+          try {
+            console.log("[QUIC] Trying tunnel:", tunnel.label || tunnel.url);
+            const probeHeaders: Record<string, string> = { ...this.authHeaders };
+            if (tunnel.cfAccessClientId) {
+              probeHeaders['CF-Access-Client-Id'] = tunnel.cfAccessClientId;
+              probeHeaders['CF-Access-Client-Secret'] = tunnel.cfAccessClientSecret || '';
+            }
+            const res = await this.fetchWithTimeout(`${tunnel.url}/health`, {
+              headers: probeHeaders,
+            }, 8000);
+            if (res.ok) {
+              // Tunnel works like a direct connection — no relay proxy path needed
+              this.activeRelayUrl = null;
+              this.activeRelayPassword = null;
+              // Override host/port to use tunnel URL for subsequent requests
+              this._tunnelUrl = tunnel.url;
+              this._tunnelHeaders = {};
+              if (tunnel.cfAccessClientId) {
+                this._tunnelHeaders['CF-Access-Client-Id'] = tunnel.cfAccessClientId;
+                this._tunnelHeaders['CF-Access-Client-Secret'] = tunnel.cfAccessClientSecret || '';
+              }
+              this.setConnectionMode("tunnel");
+              this._connectionPath = "cloudflare-tunnel";
+              connected = true;
+              console.log("[QUIC] Cloudflare Tunnel connection succeeded:", tunnel.label || tunnel.url);
+              break;
+            }
+          } catch (e) {
+            console.log("[QUIC] Tunnel", tunnel.label || tunnel.url, "failed:", e);
+          }
+        }
+      }
+
+      // 3. Try relay servers (fallback for cellular, or when direct failed)
       if (!connected && this.deviceId && this.relayServers.length > 0) {
         console.log("[QUIC] Trying", this.relayServers.length, "relay server(s)");
         for (const relay of this.relayServers) {

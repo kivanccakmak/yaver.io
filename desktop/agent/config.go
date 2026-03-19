@@ -19,7 +19,8 @@ type Config struct {
 	AutoStart     bool                `json:"auto_start,omitempty"`
 	AutoUpdate    bool                `json:"auto_update,omitempty"`
 	RelayPassword string              `json:"relay_password,omitempty"`
-	RelayServers  []RelayServerConfig `json:"relay_servers,omitempty"`
+	RelayServers      []RelayServerConfig    `json:"relay_servers,omitempty"`
+	CloudflareTunnels []CloudflareTunnelConfig `json:"cloudflare_tunnels,omitempty"`
 	Sandbox       *SandboxConfig      `json:"sandbox,omitempty"`
 	Email         *EmailConfig        `json:"email,omitempty"`
 	ACLPeers      []ACLPeerConfig     `json:"acl_peers,omitempty"`
@@ -57,6 +58,16 @@ type RelayServerConfig struct {
 	Region   string `json:"region,omitempty"`
 	Priority int    `json:"priority,omitempty"`
 	Label    string `json:"label,omitempty"`
+}
+
+// CloudflareTunnelConfig describes a Cloudflare Tunnel endpoint in config.json.
+type CloudflareTunnelConfig struct {
+	ID                   string `json:"id"`
+	URL                  string `json:"url"`                           // e.g. "https://my-tunnel.example.com"
+	CFAccessClientId     string `json:"cf_access_client_id,omitempty"`
+	CFAccessClientSecret string `json:"cf_access_client_secret,omitempty"`
+	Label                string `json:"label,omitempty"`
+	Priority             int    `json:"priority,omitempty"`
 }
 
 // ConfigDir returns the path to ~/.yaver/, creating it if needed.

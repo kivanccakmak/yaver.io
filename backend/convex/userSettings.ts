@@ -33,6 +33,7 @@ export const set = mutation({
     customRunnerCommand: v.optional(v.string()),
     relayUrl: v.optional(v.string()),
     relayPassword: v.optional(v.string()),
+    tunnelUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -45,6 +46,7 @@ export const set = mutation({
       customRunnerCommand: args.customRunnerCommand,
       relayUrl: args.relayUrl,
       relayPassword: args.relayPassword,
+      tunnelUrl: args.tunnelUrl,
     };
     if (existing) {
       await ctx.db.patch(existing._id, patch);
@@ -66,6 +68,7 @@ export const setByToken = mutation({
     customRunnerCommand: v.optional(v.string()),
     relayUrl: v.optional(v.string()),
     relayPassword: v.optional(v.string()),
+    tunnelUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.tokenHash);
@@ -81,6 +84,7 @@ export const setByToken = mutation({
       customRunnerCommand: args.customRunnerCommand,
       relayUrl: args.relayUrl,
       relayPassword: args.relayPassword,
+      tunnelUrl: args.tunnelUrl,
     };
     if (existing) {
       await ctx.db.patch(existing._id, patch);
@@ -94,7 +98,7 @@ export const setByToken = mutation({
 });
 
 /**
- * Seed default settings (forceRelay: true) for all users who don't have settings yet.
+ * Seed default settings (forceRelay: false) for all users who don't have settings yet.
  * Run once: npx convex run userSettings:seedDefaults
  */
 export const seedDefaults = mutation({
@@ -110,11 +114,30 @@ export const seedDefaults = mutation({
       if (!existing) {
         await ctx.db.insert("userSettings", {
           userId: user._id,
-          forceRelay: true,
+          forceRelay: false,
         });
         seeded++;
       }
     }
     return { seeded, total: allUsers.length };
+  },
+});
+
+/**
+ * Migrate all existing users to forceRelay: false.
+ * Run once: npx convex run userSettings:migrateForceRelayOff
+ */
+export const migrateForceRelayOff = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const allSettings = await ctx.db.query("userSettings").collect();
+    let updated = 0;
+    for (const settings of allSettings) {
+      if (settings.forceRelay === true || settings.forceRelay === undefined) {
+        await ctx.db.patch(settings._id, { forceRelay: false });
+        updated++;
+      }
+    }
+    return { updated, total: allSettings.length };
   },
 });

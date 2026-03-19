@@ -19,13 +19,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
-import { CUSTOM_RELAYS_KEY } from "../../src/context/DeviceContext";
+import { CUSTOM_RELAYS_KEY, CUSTOM_TUNNELS_KEY } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent, getUsageSummary, type UsageSummary } from "../../src/lib/auth";
 import { clearCache } from "../../src/lib/storage";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, clearLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
-import { quicClient, type AgentStatus, type RelayServer } from "../../src/lib/quic";
+import { quicClient, type AgentStatus, type RelayServer, type TunnelServer } from "../../src/lib/quic";
 
 const APP_VERSION = Constants.expoConfig?.version ?? "1.0.0";
 const BUILD_NUMBER =
@@ -49,6 +49,7 @@ export default function SettingsScreen() {
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>(getLogEntries());
   const [forceRelay, setForceRelay] = useState(quicClient.forceRelay);
+  const [debugLogsEnabled, setDebugLogsEnabled] = useState(false);
   const [runners, setRunners] = useState<AiRunner[]>([]);
   const [selectedRunner, setSelectedRunner] = useState<string>("claude");
   const [customRunnerCommand, setCustomRunnerCommand] = useState("");
@@ -73,6 +74,16 @@ export default function SettingsScreen() {
   const [relayTestResults, setRelayTestResults] = useState<Record<string, { ok: boolean; ms?: number; error?: string }>>({});
   const [relaySyncEnabled, setRelaySyncEnabled] = useState(false);
 
+  // Cloudflare Tunnels
+  const [customTunnels, setCustomTunnels] = useState<TunnelServer[]>([]);
+  const [showAddTunnel, setShowAddTunnel] = useState(false);
+  const [newTunnelUrl, setNewTunnelUrl] = useState("");
+  const [newTunnelCfClientId, setNewTunnelCfClientId] = useState("");
+  const [newTunnelCfClientSecret, setNewTunnelCfClientSecret] = useState("");
+  const [newTunnelLabel, setNewTunnelLabel] = useState("");
+  const [testingTunnelId, setTestingTunnelId] = useState<string | null>(null);
+  const [tunnelTestResults, setTunnelTestResults] = useState<Record<string, { ok: boolean; ms?: number; error?: string }>>({});
+
   // Load custom relay servers and sync preference from AsyncStorage
   useEffect(() => {
     AsyncStorage.getItem(CUSTOM_RELAYS_KEY).then((raw) => {
@@ -84,6 +95,20 @@ export default function SettingsScreen() {
     });
     AsyncStorage.getItem("@yaver/relay_sync_enabled").then((val) => {
       setRelaySyncEnabled(val === "true");
+    });
+    AsyncStorage.getItem("@yaver/debug_logs_enabled").then((val) => {
+      setDebugLogsEnabled(val === "true");
+    });
+    AsyncStorage.getItem(CUSTOM_TUNNELS_KEY).then((raw) => {
+      if (raw) {
+        try {
+          const tunnels = JSON.parse(raw);
+          setCustomTunnels(tunnels);
+          if (tunnels.length > 0) {
+            quicClient.setTunnelServers(tunnels);
+          }
+        } catch {}
+      }
     });
   }, []);
 
@@ -99,7 +124,6 @@ export default function SettingsScreen() {
       const primary = relays.length > 0 ? relays[0] : null;
       saveUserSettings(token, {
         relayUrl: primary?.httpUrl ?? "",
-        relayPassword: primary?.password ?? "",
       });
     }
   };
@@ -108,15 +132,14 @@ export default function SettingsScreen() {
     setRelaySyncEnabled(enabled);
     await AsyncStorage.setItem("@yaver/relay_sync_enabled", enabled ? "true" : "false");
     if (enabled && token) {
-      // Sync current relay settings to Convex
       const primary = customRelays.length > 0 ? customRelays[0] : null;
+      const primaryTunnel = customTunnels.length > 0 ? customTunnels[0] : null;
       saveUserSettings(token, {
         relayUrl: primary?.httpUrl ?? "",
-        relayPassword: primary?.password ?? "",
+        tunnelUrl: primaryTunnel?.url ?? "",
       });
     } else if (!enabled && token) {
-      // Clear relay settings from Convex
-      saveUserSettings(token, { relayUrl: "", relayPassword: "" });
+      saveUserSettings(token, { relayUrl: "", tunnelUrl: "" });
     }
   };
 
@@ -186,6 +209,79 @@ export default function SettingsScreen() {
       setRelayTestResults((prev) => ({ ...prev, [relay.id]: { ok: false, error: String(e) } }));
     } finally {
       setTestingRelayId(null);
+    }
+  };
+
+  const saveCustomTunnels = async (tunnels: TunnelServer[]) => {
+    setCustomTunnels(tunnels);
+    await AsyncStorage.setItem(CUSTOM_TUNNELS_KEY, JSON.stringify(tunnels));
+    if (tunnels.length > 0) {
+      quicClient.setTunnelServers(tunnels);
+    }
+  };
+
+  const handleAddTunnel = async () => {
+    const url = newTunnelUrl.trim().replace(/\/+$/, "");
+    if (!url) {
+      Alert.alert("Error", "URL is required.");
+      return;
+    }
+    let h = 0;
+    for (let i = 0; i < url.length; i++) {
+      h = ((h * 31) + url.charCodeAt(i)) >>> 0;
+    }
+    const id = h.toString(16).slice(0, 8);
+    if (customTunnels.some((t) => t.url === url)) {
+      Alert.alert("Error", "This tunnel is already configured.");
+      return;
+    }
+    const tunnel: TunnelServer = {
+      id,
+      url,
+      cfAccessClientId: newTunnelCfClientId.trim() || undefined,
+      cfAccessClientSecret: newTunnelCfClientSecret.trim() || undefined,
+      label: newTunnelLabel.trim() || undefined,
+      priority: customTunnels.length + 1,
+    };
+    await saveCustomTunnels([...customTunnels, tunnel]);
+    setNewTunnelUrl("");
+    setNewTunnelCfClientId("");
+    setNewTunnelCfClientSecret("");
+    setNewTunnelLabel("");
+    setShowAddTunnel(false);
+  };
+
+  const handleRemoveTunnel = (tunnelId: string) => {
+    Alert.alert("Remove Tunnel", "Remove this Cloudflare Tunnel?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: () => saveCustomTunnels(customTunnels.filter((t) => t.id !== tunnelId)),
+      },
+    ]);
+  };
+
+  const handleTestTunnel = async (tunnel: TunnelServer) => {
+    setTestingTunnelId(tunnel.id);
+    try {
+      const start = Date.now();
+      const headers: Record<string, string> = {};
+      if (tunnel.cfAccessClientId) {
+        headers['CF-Access-Client-Id'] = tunnel.cfAccessClientId;
+        headers['CF-Access-Client-Secret'] = tunnel.cfAccessClientSecret || '';
+      }
+      const res = await fetch(tunnel.url + "/health", { method: "GET", headers });
+      const ms = Date.now() - start;
+      if (res.ok) {
+        setTunnelTestResults((prev) => ({ ...prev, [tunnel.id]: { ok: true, ms } }));
+      } else {
+        setTunnelTestResults((prev) => ({ ...prev, [tunnel.id]: { ok: false, error: `HTTP ${res.status}` } }));
+      }
+    } catch (e) {
+      setTunnelTestResults((prev) => ({ ...prev, [tunnel.id]: { ok: false, error: String(e) } }));
+    } finally {
+      setTestingTunnelId(null);
     }
   };
 
@@ -822,6 +918,26 @@ export default function SettingsScreen() {
             </View>
           </View>
 
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 8 }]}>
+            <View style={styles.themeRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Debug Logs</Text>
+                <Text style={[{ fontSize: 12, color: c.textMuted, marginTop: 2 }]}>
+                  Send connection diagnostics to Yaver servers for troubleshooting
+                </Text>
+              </View>
+              <Switch
+                value={debugLogsEnabled}
+                onValueChange={(v) => {
+                  setDebugLogsEnabled(v);
+                  AsyncStorage.setItem("@yaver/debug_logs_enabled", v ? "true" : "false");
+                }}
+                trackColor={{ false: c.border, true: c.accent }}
+                thumbColor="#ffffff"
+              />
+            </View>
+          </View>
+
           {/* Relay Servers */}
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 8 }]}>
             <View style={styles.themeRow}>
@@ -955,7 +1071,7 @@ export default function SettingsScreen() {
                 <View style={{ flex: 1, marginRight: 12 }}>
                   <Text style={{ fontSize: 14, color: c.textPrimary, fontWeight: "500" }}>Sync to cloud</Text>
                   <Text style={{ fontSize: 11, color: c.textMuted, marginTop: 2 }}>
-                    Store relay settings in your account (syncs across devices). When off, settings are stored only on this device.
+                    Sync relay and tunnel URLs to your account (accessible from other devices). Passwords and secrets are always stored locally only.
                   </Text>
                 </View>
                 <Switch
@@ -965,6 +1081,209 @@ export default function SettingsScreen() {
                 />
               </View>
             </View>
+          </View>
+
+          {/* Cloudflare Tunnel */}
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 8 }]}>
+            <View style={styles.themeRow}>
+              <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Cloudflare Tunnel</Text>
+              <Pressable
+                style={({ pressed }) => [
+                  { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 6, backgroundColor: c.accent },
+                  pressed && { opacity: 0.7 },
+                ]}
+                onPress={() => setShowAddTunnel(!showAddTunnel)}
+              >
+                <Text style={{ fontSize: 13, color: "#fff", fontWeight: "600" }}>
+                  {showAddTunnel ? "Cancel" : "+ Add"}
+                </Text>
+              </Pressable>
+            </View>
+
+            {showAddTunnel && (
+              <View style={{ marginTop: 12, gap: 8 }}>
+                <TextInput
+                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
+                  placeholder="https://tunnel.yourdomain.com"
+                  placeholderTextColor={c.textMuted}
+                  value={newTunnelUrl}
+                  onChangeText={setNewTunnelUrl}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                />
+                <TextInput
+                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
+                  placeholder="CF Access Client ID (optional)"
+                  placeholderTextColor={c.textMuted}
+                  value={newTunnelCfClientId}
+                  onChangeText={setNewTunnelCfClientId}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <TextInput
+                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
+                  placeholder="CF Access Client Secret (optional)"
+                  placeholderTextColor={c.textMuted}
+                  value={newTunnelCfClientSecret}
+                  onChangeText={setNewTunnelCfClientSecret}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  secureTextEntry
+                />
+                <TextInput
+                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
+                  placeholder="Label (optional) e.g. My Tunnel"
+                  placeholderTextColor={c.textMuted}
+                  value={newTunnelLabel}
+                  onChangeText={setNewTunnelLabel}
+                  autoCapitalize="none"
+                />
+                <Pressable
+                  style={({ pressed }) => [
+                    { paddingVertical: 10, borderRadius: 8, backgroundColor: c.accent, alignItems: "center" as const },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                  onPress={handleAddTunnel}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "600", fontSize: 14 }}>Add Tunnel</Text>
+                </Pressable>
+              </View>
+            )}
+
+            {customTunnels.length === 0 && !showAddTunnel && (
+              <View style={{ marginTop: 8 }}>
+                <Text style={{ fontSize: 12, color: c.textMuted }}>
+                  No Cloudflare Tunnels configured. Use tunnels to connect through firewalls via HTTPS.
+                </Text>
+              </View>
+            )}
+
+            {customTunnels.map((tunnel) => {
+              const testResult = tunnelTestResults[tunnel.id];
+              return (
+                <View
+                  key={tunnel.id}
+                  style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: c.borderSubtle }}
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 14, color: c.textPrimary, fontWeight: "500" }}>
+                        {tunnel.label || tunnel.url}
+                      </Text>
+                      {tunnel.label && (
+                        <Text style={{ fontSize: 11, color: c.textMuted, marginTop: 2 }}>{tunnel.url}</Text>
+                      )}
+                      {tunnel.cfAccessClientId && (
+                        <Text style={{ fontSize: 10, color: c.accent, marginTop: 2 }}>CF Access enabled</Text>
+                      )}
+                    </View>
+                    {testResult && (
+                      <View style={{
+                        width: 8, height: 8, borderRadius: 4, marginRight: 8,
+                        backgroundColor: testResult.ok ? c.success : c.error,
+                      }} />
+                    )}
+                  </View>
+                  <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+                    <Pressable
+                      style={({ pressed }) => [
+                        { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 6, backgroundColor: c.bgCardElevated },
+                        pressed && { opacity: 0.7 },
+                      ]}
+                      onPress={() => handleTestTunnel(tunnel)}
+                      disabled={testingTunnelId === tunnel.id}
+                    >
+                      {testingTunnelId === tunnel.id ? (
+                        <ActivityIndicator size="small" color={c.accent} />
+                      ) : (
+                        <Text style={{ fontSize: 12, color: c.accent }}>
+                          {testResult ? (testResult.ok ? `OK ${testResult.ms}ms` : "Failed") : "Test"}
+                        </Text>
+                      )}
+                    </Pressable>
+                    <Pressable
+                      style={({ pressed }) => [
+                        { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 6, backgroundColor: c.errorBg },
+                        pressed && { opacity: 0.7 },
+                      ]}
+                      onPress={() => handleRemoveTunnel(tunnel.id)}
+                    >
+                      <Text style={{ fontSize: 12, color: c.error }}>Remove</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+
+          {/* Setup Instructions */}
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 8 }]}>
+            <Text style={[styles.themeLabel, { color: c.textPrimary, marginBottom: 12 }]}>Setup Guide</Text>
+
+            <Text style={{ fontSize: 13, fontWeight: "600", color: c.textPrimary, marginBottom: 6 }}>
+              How connections work
+            </Text>
+            <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginBottom: 12 }}>
+              Yaver tries connections in this order:{"\n"}
+              1. LAN direct (same WiFi, ~5ms){"\n"}
+              2. Cloudflare Tunnel (any network, HTTPS){"\n"}
+              3. Relay server (any network, QUIC){"\n\n"}
+              On the same WiFi, your machine is discovered automatically. For remote access, set up a Cloudflare Tunnel or a relay server.
+            </Text>
+
+            <View style={{ height: 1, backgroundColor: c.borderSubtle, marginVertical: 12 }} />
+
+            <Text style={{ fontSize: 13, fontWeight: "600", color: c.textPrimary, marginBottom: 6 }}>
+              Cloudflare Tunnel setup
+            </Text>
+            <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginBottom: 4 }}>
+              Cloudflare Tunnel creates a secure HTTPS path from Cloudflare's edge to your machine. Works through any firewall.
+            </Text>
+            <Text style={{ fontSize: 11, color: c.textSecondary, fontFamily: "monospace", lineHeight: 18, marginBottom: 4, backgroundColor: c.bgCardElevated, padding: 10, borderRadius: 6, overflow: "hidden" }}>
+              {"# Install cloudflared\n"}
+              {"brew install cloudflared\n\n"}
+              {"# Quick tunnel (for testing)\n"}
+              {"cloudflared tunnel --url http://localhost:18080\n\n"}
+              {"# Named tunnel (permanent)\n"}
+              {"cloudflared tunnel create yaver\n"}
+              {"cloudflared tunnel route dns yaver tunnel.yourdomain.com\n"}
+              {"cloudflared tunnel run yaver\n\n"}
+              {"# Register in CLI\n"}
+              {"yaver tunnel add https://tunnel.yourdomain.com"}
+            </Text>
+            <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginBottom: 4 }}>
+              Then add the same tunnel URL above in this app.
+            </Text>
+
+            <View style={{ height: 1, backgroundColor: c.borderSubtle, marginVertical: 12 }} />
+
+            <Text style={{ fontSize: 13, fontWeight: "600", color: c.textPrimary, marginBottom: 6 }}>
+              Relay server setup
+            </Text>
+            <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginBottom: 4 }}>
+              Self-host a relay server on any VPS for NAT traversal. It's a pass-through proxy that stores nothing.
+            </Text>
+            <Text style={{ fontSize: 11, color: c.textSecondary, fontFamily: "monospace", lineHeight: 18, marginBottom: 4, backgroundColor: c.bgCardElevated, padding: 10, borderRadius: 6, overflow: "hidden" }}>
+              {"# One-command setup (Docker + nginx + SSL)\n"}
+              {"./scripts/setup-relay.sh IP DOMAIN --password SECRET\n\n"}
+              {"# Or Docker only\n"}
+              {"cd relay && RELAY_PASSWORD=secret docker compose up -d\n\n"}
+              {"# Register in CLI\n"}
+              {"yaver relay add https://relay.yourdomain.com --password secret"}
+            </Text>
+            <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginBottom: 4 }}>
+              Then add the relay URL and password above in this app.
+            </Text>
+
+            <View style={{ height: 1, backgroundColor: c.borderSubtle, marginVertical: 12 }} />
+
+            <Text style={{ fontSize: 13, fontWeight: "600", color: c.textPrimary, marginBottom: 6 }}>
+              Tailscale (alternative)
+            </Text>
+            <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18 }}>
+              If both your phone and machine are on a Tailscale network, no tunnel or relay is needed. Just run "yaver serve --no-relay" and the app connects directly via your Tailscale IP.
+            </Text>
           </View>
 
           {showLogs && (

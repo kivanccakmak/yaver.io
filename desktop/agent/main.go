@@ -26,7 +26,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.29.0"
+const version = "1.30.0"
 
 // Default hosted Convex instance (public endpoint). Override with --convex-url flag or convex_site_url in config.json.
 const defaultConvexSiteURL = "https://shocking-echidna-394.eu-west-1.convex.site"
@@ -69,6 +69,8 @@ func main() {
 		runConfig(os.Args[2:])
 	case "relay":
 		runRelay(os.Args[2:])
+	case "tunnel":
+		runTunnel(os.Args[2:])
 	case "set-runner":
 		runSetRunner(os.Args[2:])
 	case "mcp":
@@ -119,6 +121,11 @@ Usage:
   yaver relay test [url]  Test relay server health
   yaver relay set-password <pass>  Set default relay password
   yaver relay clear-password  Remove default relay password
+  yaver tunnel add <url> [--cf-client-id <id>] [--cf-client-secret <secret>] [--label <name>]
+  yaver tunnel list   List configured Cloudflare Tunnels
+  yaver tunnel remove <id-or-url>  Remove a tunnel
+  yaver tunnel test [url]  Test tunnel connectivity
+  yaver tunnel setup  Show Cloudflare Tunnel setup guide
   yaver set-runner  Set default AI agent (also settable from mobile app, per task)
   yaver mcp         Start MCP server (local stdio or network HTTP)
   yaver email       Email connector setup and management (Office 365 / Gmail)
@@ -1571,6 +1578,308 @@ func runRelayClearPassword() {
 	fmt.Println("Restart 'yaver serve' for the change to take effect.")
 }
 
+func runTunnel(args []string) {
+	if len(args) == 0 {
+		fmt.Print(`Yaver Tunnel — Cloudflare Tunnel configuration
+
+Usage:
+  yaver tunnel add <url> [--cf-client-id <id>] [--cf-client-secret <secret>] [--label <name>]
+  yaver tunnel list
+  yaver tunnel remove <id-or-url>
+  yaver tunnel test [url]
+  yaver tunnel setup
+
+Cloudflare Tunnel exposes your agent's HTTP server via a public HTTPS URL.
+This works through any firewall that allows HTTPS traffic.
+
+Connection priority: LAN direct → Cloudflare Tunnel → Relay Server
+`)
+		os.Exit(0)
+	}
+
+	switch args[0] {
+	case "add":
+		runTunnelAdd(args[1:])
+	case "list", "ls":
+		runTunnelList()
+	case "remove", "rm":
+		runTunnelRemove(args[1:])
+	case "test":
+		runTunnelTest(args[1:])
+	case "setup":
+		runTunnelSetup()
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown tunnel subcommand: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func runTunnelAdd(args []string) {
+	fs := flag.NewFlagSet("tunnel add", flag.ExitOnError)
+	cfClientId := fs.String("cf-client-id", "", "CF Access Service Token Client ID")
+	cfClientSecret := fs.String("cf-client-secret", "", "CF Access Service Token Client Secret")
+	label := fs.String("label", "", "Human-readable label")
+	fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: yaver tunnel add <url> [--cf-client-id <id>] [--cf-client-secret <secret>] [--label <name>]")
+		os.Exit(1)
+	}
+
+	rawURL := strings.TrimRight(fs.Arg(0), "/")
+
+	// Generate ID from URL hash
+	id := fmt.Sprintf("%x", func() uint32 {
+		var h uint32
+		for _, c := range rawURL {
+			h = h*31 + uint32(c)
+		}
+		return h
+	}())
+	if len(id) > 8 {
+		id = id[:8]
+	}
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Check duplicate
+	for _, t := range cfg.CloudflareTunnels {
+		if t.URL == rawURL {
+			fmt.Fprintf(os.Stderr, "Tunnel already configured: %s (id: %s)\n", rawURL, t.ID)
+			os.Exit(1)
+		}
+	}
+
+	tunnel := CloudflareTunnelConfig{
+		ID:                   id,
+		URL:                  rawURL,
+		CFAccessClientId:     *cfClientId,
+		CFAccessClientSecret: *cfClientSecret,
+		Label:                *label,
+		Priority:             len(cfg.CloudflareTunnels) + 1,
+	}
+
+	cfg.CloudflareTunnels = append(cfg.CloudflareTunnels, tunnel)
+	if err := SaveConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+		os.Exit(1)
+	}
+
+	displayLabel := tunnel.Label
+	if displayLabel == "" {
+		displayLabel = tunnel.URL
+	}
+	fmt.Printf("Added Cloudflare Tunnel: %s\n", displayLabel)
+	fmt.Printf("  ID:  %s\n", tunnel.ID)
+	fmt.Printf("  URL: %s\n", tunnel.URL)
+	if tunnel.CFAccessClientId != "" {
+		fmt.Printf("  CF Access: configured\n")
+	}
+	fmt.Println("\nThe mobile app will try this tunnel when connecting to your machine.")
+}
+
+func runTunnelList() {
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(cfg.CloudflareTunnels) == 0 {
+		fmt.Println("No Cloudflare Tunnels configured.")
+		fmt.Println()
+		fmt.Println("Add one with: yaver tunnel add <url>")
+		fmt.Println("Or run: yaver tunnel setup  for a setup guide")
+		return
+	}
+
+	fmt.Printf("%-10s %-40s %-12s %-10s\n", "ID", "URL", "CF Access", "Label")
+	fmt.Printf("%-10s %-40s %-12s %-10s\n", "------", "---", "---------", "-----")
+	for _, t := range cfg.CloudflareTunnels {
+		cfAccess := "(none)"
+		if t.CFAccessClientId != "" {
+			cfAccess = "configured"
+		}
+		lbl := t.Label
+		if lbl == "" {
+			lbl = "-"
+		}
+		fmt.Printf("%-10s %-40s %-12s %-10s\n", t.ID, t.URL, cfAccess, lbl)
+	}
+}
+
+func runTunnelRemove(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: yaver tunnel remove <id-or-url>")
+		os.Exit(1)
+	}
+	target := args[0]
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	found := false
+	var remaining []CloudflareTunnelConfig
+	for _, t := range cfg.CloudflareTunnels {
+		if t.ID == target || t.URL == target {
+			found = true
+			fmt.Printf("Removed Cloudflare Tunnel: %s (%s)\n", t.URL, t.ID)
+		} else {
+			remaining = append(remaining, t)
+		}
+	}
+
+	if !found {
+		fmt.Fprintf(os.Stderr, "Tunnel not found: %s\n", target)
+		os.Exit(1)
+	}
+
+	cfg.CloudflareTunnels = remaining
+	if err := SaveConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runTunnelTest(args []string) {
+	var tunnels []CloudflareTunnelConfig
+
+	if len(args) > 0 {
+		tunnels = []CloudflareTunnelConfig{{URL: strings.TrimRight(args[0], "/")}}
+	} else {
+		cfg, err := LoadConfig()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+			os.Exit(1)
+		}
+		tunnels = cfg.CloudflareTunnels
+		if len(tunnels) == 0 {
+			fmt.Println("No tunnels configured. Pass a URL: yaver tunnel test <url>")
+			os.Exit(0)
+		}
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	for _, t := range tunnels {
+		healthURL := t.URL + "/health"
+		req, _ := http.NewRequest("GET", healthURL, nil)
+		if t.CFAccessClientId != "" {
+			req.Header.Set("CF-Access-Client-Id", t.CFAccessClientId)
+			req.Header.Set("CF-Access-Client-Secret", t.CFAccessClientSecret)
+		}
+		start := time.Now()
+		resp, err := client.Do(req)
+		rtt := time.Since(start)
+		if err != nil {
+			fmt.Printf("FAIL  %s  error: %v\n", t.URL, err)
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == 200 {
+			fmt.Printf("OK    %s  %dms  %s\n", t.URL, rtt.Milliseconds(), strings.TrimSpace(string(body)))
+		} else {
+			fmt.Printf("FAIL  %s  status: %d  %s\n", t.URL, resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+	}
+}
+
+func runTunnelSetup() {
+	fmt.Print(`Cloudflare Tunnel Setup Guide
+═════════════════════════════
+
+Cloudflare Tunnel creates a secure HTTPS connection from Cloudflare's edge
+to your machine. No port forwarding, works through any firewall.
+
+── Prerequisites ─────────────────────────────────────────────────
+
+  1. A Cloudflare account (free tier works)
+  2. A domain on Cloudflare (or use quick tunnels for testing)
+  3. cloudflared CLI installed
+
+── Install cloudflared ───────────────────────────────────────────
+
+  macOS:   brew install cloudflared
+  Linux:   See https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+  Windows: winget install Cloudflare.cloudflared
+
+── Option A: Quick Tunnel (testing) ──────────────────────────────
+
+  # Start yaver agent first
+  $ yaver serve
+
+  # In another terminal, create a quick tunnel
+  $ cloudflared tunnel --url http://localhost:18080
+
+  # You'll see a URL like: https://abc123.trycloudflare.com
+  # Add it to yaver:
+  $ yaver tunnel add https://abc123.trycloudflare.com
+
+  Note: Quick tunnel URLs change each time. Use named tunnels for
+  a permanent setup.
+
+── Option B: Named Tunnel (production) ───────────────────────────
+
+  # 1. Login to Cloudflare
+  $ cloudflared tunnel login
+
+  # 2. Create a tunnel
+  $ cloudflared tunnel create yaver
+
+  # 3. Route DNS
+  $ cloudflared tunnel route dns yaver tunnel.yourdomain.com
+
+  # 4. Create config file (~/.cloudflared/config.yml):
+  tunnel: <tunnel-id>
+  credentials-file: ~/.cloudflared/tunnel-id.json
+  ingress:
+    - hostname: tunnel.yourdomain.com
+      service: http://localhost:18080
+    - service: http_status:404
+
+  # 5. Run the tunnel
+  $ cloudflared tunnel run yaver
+
+  # 6. Register in yaver
+  $ yaver tunnel add https://tunnel.yourdomain.com
+
+── Option C: Named Tunnel + CF Access (extra security) ───────────
+
+  If you want to restrict access with a service token:
+
+  1. Create a CF Access application for tunnel.yourdomain.com
+  2. Create a Service Token in Zero Trust → Access → Service Auth
+  3. Create a policy allowing the service token
+
+  $ yaver tunnel add https://tunnel.yourdomain.com \
+      --cf-client-id <service-token-client-id> \
+      --cf-client-secret <service-token-client-secret>
+
+── Mobile App ────────────────────────────────────────────────────
+
+  In the Yaver mobile app:
+    Settings → Cloudflare Tunnel → + Add
+    Enter the same tunnel URL (and CF Access credentials if used).
+
+  The app will try: LAN direct → Cloudflare Tunnel → Relay Server
+
+── Run on startup (systemd) ──────────────────────────────────────
+
+  $ sudo cloudflared service install
+  $ sudo systemctl enable cloudflared
+  $ sudo systemctl start cloudflared
+
+For more: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+`)
+}
+
 func valueOrEmpty(s string) string {
 	if s == "" {
 		return "(not set)"
@@ -2375,6 +2684,14 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 	defer ticker.Stop()
 
 	lastIP := getLocalIP()
+
+	// Send first heartbeat immediately (don't wait 2 min for ticker)
+	runners := taskMgr.GetRunnerInfos()
+	if err := SendHeartbeat(baseURL, token, deviceID, runners, lastIP); err != nil {
+		log.Printf("initial heartbeat failed: %v", err)
+	} else {
+		log.Println("Initial heartbeat sent.")
+	}
 
 	for {
 		select {
