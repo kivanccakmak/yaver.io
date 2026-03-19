@@ -250,7 +250,7 @@ type SystemInfo struct {
 func (tm *TaskManager) GetRunnerInfos() []RunnerInfo {
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
-	var infos []RunnerInfo
+	infos := make([]RunnerInfo, 0) // never nil — Convex expects [] not null
 	for _, t := range tm.tasks {
 		if t.Status == TaskStatusRunning || t.Status == TaskStatusQueued {
 			pid := 0

@@ -50,6 +50,8 @@ export default function SettingsScreen() {
   const [logs, setLogs] = useState<LogEntry[]>(getLogEntries());
   const [forceRelay, setForceRelay] = useState(quicClient.forceRelay);
   const [debugLogsEnabled, setDebugLogsEnabled] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
+  const [guideSection, setGuideSection] = useState<string | null>(null);
   const [runners, setRunners] = useState<AiRunner[]>([]);
   const [selectedRunner, setSelectedRunner] = useState<string>("claude");
   const [customRunnerCommand, setCustomRunnerCommand] = useState("");
@@ -1217,74 +1219,163 @@ export default function SettingsScreen() {
             })}
           </View>
 
-          {/* Setup Instructions */}
-          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 8 }]}>
-            <Text style={[styles.themeLabel, { color: c.textPrimary, marginBottom: 12 }]}>Setup Guide</Text>
+          {/* Setup Guide — collapsible */}
+          <Pressable
+            style={({ pressed }) => [
+              styles.actionRow,
+              { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 8 },
+              pressed && styles.actionRowPressed,
+            ]}
+            onPress={() => setShowGuide(!showGuide)}
+          >
+            <Text style={[styles.actionRowLabel, { color: c.textPrimary }]}>Setup Guide</Text>
+            <Text style={[styles.actionRowChevron, { color: c.textMuted }]}>{showGuide ? "\u2303" : "\u2304"}</Text>
+          </Pressable>
 
-            <Text style={{ fontSize: 13, fontWeight: "600", color: c.textPrimary, marginBottom: 6 }}>
-              How connections work
-            </Text>
-            <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginBottom: 12 }}>
-              Yaver tries connections in this order:{"\n"}
-              1. LAN direct (same WiFi, ~5ms){"\n"}
-              2. Cloudflare Tunnel (any network, HTTPS){"\n"}
-              3. Relay server (any network, QUIC){"\n\n"}
-              On the same WiFi, your machine is discovered automatically. For remote access, set up a Cloudflare Tunnel or a relay server.
-            </Text>
+          {showGuide && (
+            <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 4 }]}>
+              {/* How connections work */}
+              <Pressable onPress={() => setGuideSection(guideSection === "connections" ? null : "connections")}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 10 }}>
+                  <Text style={{ fontSize: 14, fontWeight: "600", color: c.textPrimary }}>How connections work</Text>
+                  <Text style={{ color: c.textMuted }}>{guideSection === "connections" ? "\u2303" : "\u2304"}</Text>
+                </View>
+              </Pressable>
+              {guideSection === "connections" && (
+                <View style={{ paddingBottom: 12 }}>
+                  <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18 }}>
+                    Yaver tries connections in this order:{"\n\n"}
+                    1. LAN direct (same WiFi, ~5ms){"\n"}
+                    2. Cloudflare Tunnel (any network, HTTPS){"\n"}
+                    3. Relay server (any network, QUIC){"\n\n"}
+                    On the same WiFi, your machine is discovered automatically via UDP beacon. No configuration needed.{"\n\n"}
+                    For remote access (phone on cellular, machine at home), set up a Cloudflare Tunnel or a relay server.{"\n\n"}
+                    Network transitions (WiFi to cellular and back) are seamless — the app reconnects automatically without interruption.
+                  </Text>
+                </View>
+              )}
 
-            <View style={{ height: 1, backgroundColor: c.borderSubtle, marginVertical: 12 }} />
+              <View style={{ height: 1, backgroundColor: c.borderSubtle }} />
 
-            <Text style={{ fontSize: 13, fontWeight: "600", color: c.textPrimary, marginBottom: 6 }}>
-              Cloudflare Tunnel setup
-            </Text>
-            <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginBottom: 4 }}>
-              Cloudflare Tunnel creates a secure HTTPS path from Cloudflare's edge to your machine. Works through any firewall.
-            </Text>
-            <Text style={{ fontSize: 11, color: c.textSecondary, fontFamily: "monospace", lineHeight: 18, marginBottom: 4, backgroundColor: c.bgCardElevated, padding: 10, borderRadius: 6, overflow: "hidden" }}>
-              {"# Install cloudflared\n"}
-              {"brew install cloudflared\n\n"}
-              {"# Quick tunnel (for testing)\n"}
-              {"cloudflared tunnel --url http://localhost:18080\n\n"}
-              {"# Named tunnel (permanent)\n"}
-              {"cloudflared tunnel create yaver\n"}
-              {"cloudflared tunnel route dns yaver tunnel.yourdomain.com\n"}
-              {"cloudflared tunnel run yaver\n\n"}
-              {"# Register in CLI\n"}
-              {"yaver tunnel add https://tunnel.yourdomain.com"}
-            </Text>
-            <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginBottom: 4 }}>
-              Then add the same tunnel URL above in this app.
-            </Text>
+              {/* Getting started */}
+              <Pressable onPress={() => setGuideSection(guideSection === "getting-started" ? null : "getting-started")}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 10 }}>
+                  <Text style={{ fontSize: 14, fontWeight: "600", color: c.textPrimary }}>Getting started</Text>
+                  <Text style={{ color: c.textMuted }}>{guideSection === "getting-started" ? "\u2303" : "\u2304"}</Text>
+                </View>
+              </Pressable>
+              {guideSection === "getting-started" && (
+                <View style={{ paddingBottom: 12 }}>
+                  <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18 }}>
+                    1. Install the CLI on your dev machine:{"\n\n"}
+                  </Text>
+                  <Text style={{ fontSize: 11, color: c.textSecondary, fontFamily: "monospace", lineHeight: 18, backgroundColor: c.bgCardElevated, padding: 10, borderRadius: 6, overflow: "hidden" }}>
+                    {"brew install kivanccakmak/yaver/yaver\n"}
+                    {"yaver auth\n"}
+                    {"yaver serve"}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginTop: 8 }}>
+                    2. Sign in here with the same account{"\n"}
+                    3. Your machine appears automatically{"\n"}
+                    4. Tap it to connect, then create a task
+                  </Text>
+                </View>
+              )}
 
-            <View style={{ height: 1, backgroundColor: c.borderSubtle, marginVertical: 12 }} />
+              <View style={{ height: 1, backgroundColor: c.borderSubtle }} />
 
-            <Text style={{ fontSize: 13, fontWeight: "600", color: c.textPrimary, marginBottom: 6 }}>
-              Relay server setup
-            </Text>
-            <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginBottom: 4 }}>
-              Self-host a relay server on any VPS for NAT traversal. It's a pass-through proxy that stores nothing.
-            </Text>
-            <Text style={{ fontSize: 11, color: c.textSecondary, fontFamily: "monospace", lineHeight: 18, marginBottom: 4, backgroundColor: c.bgCardElevated, padding: 10, borderRadius: 6, overflow: "hidden" }}>
-              {"# One-command setup (Docker + nginx + SSL)\n"}
-              {"./scripts/setup-relay.sh IP DOMAIN --password SECRET\n\n"}
-              {"# Or Docker only\n"}
-              {"cd relay && RELAY_PASSWORD=secret docker compose up -d\n\n"}
-              {"# Register in CLI\n"}
-              {"yaver relay add https://relay.yourdomain.com --password secret"}
-            </Text>
-            <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginBottom: 4 }}>
-              Then add the relay URL and password above in this app.
-            </Text>
+              {/* Cloudflare Tunnel */}
+              <Pressable onPress={() => setGuideSection(guideSection === "cloudflare" ? null : "cloudflare")}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 10 }}>
+                  <Text style={{ fontSize: 14, fontWeight: "600", color: c.textPrimary }}>Cloudflare Tunnel</Text>
+                  <Text style={{ color: c.textMuted }}>{guideSection === "cloudflare" ? "\u2303" : "\u2304"}</Text>
+                </View>
+              </Pressable>
+              {guideSection === "cloudflare" && (
+                <View style={{ paddingBottom: 12 }}>
+                  <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginBottom: 8 }}>
+                    Creates a secure HTTPS path from Cloudflare's edge to your machine. Works through any firewall that allows web browsing.
+                  </Text>
+                  <Text style={{ fontSize: 11, color: c.textSecondary, fontFamily: "monospace", lineHeight: 18, backgroundColor: c.bgCardElevated, padding: 10, borderRadius: 6, overflow: "hidden" }}>
+                    {"# Install cloudflared\n"}
+                    {"brew install cloudflared\n\n"}
+                    {"# Quick tunnel (testing)\n"}
+                    {"cloudflared tunnel --url http://localhost:18080\n\n"}
+                    {"# Named tunnel (permanent)\n"}
+                    {"cloudflared tunnel create yaver\n"}
+                    {"cloudflared tunnel route dns yaver \\\n"}
+                    {"  tunnel.yourdomain.com\n"}
+                    {"cloudflared tunnel run yaver\n\n"}
+                    {"# Register in CLI\n"}
+                    {"yaver tunnel add https://tunnel.yourdomain.com"}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginTop: 8 }}>
+                    Then add the same tunnel URL in the Cloudflare Tunnel section above.
+                  </Text>
+                </View>
+              )}
 
-            <View style={{ height: 1, backgroundColor: c.borderSubtle, marginVertical: 12 }} />
+              <View style={{ height: 1, backgroundColor: c.borderSubtle }} />
 
-            <Text style={{ fontSize: 13, fontWeight: "600", color: c.textPrimary, marginBottom: 6 }}>
-              Tailscale (alternative)
-            </Text>
-            <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18 }}>
-              If both your phone and machine are on a Tailscale network, no tunnel or relay is needed. Just run "yaver serve --no-relay" and the app connects directly via your Tailscale IP.
-            </Text>
-          </View>
+              {/* Relay server */}
+              <Pressable onPress={() => setGuideSection(guideSection === "relay" ? null : "relay")}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 10 }}>
+                  <Text style={{ fontSize: 14, fontWeight: "600", color: c.textPrimary }}>Self-hosted relay server</Text>
+                  <Text style={{ color: c.textMuted }}>{guideSection === "relay" ? "\u2303" : "\u2304"}</Text>
+                </View>
+              </Pressable>
+              {guideSection === "relay" && (
+                <View style={{ paddingBottom: 12 }}>
+                  <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginBottom: 8 }}>
+                    Deploy a QUIC relay on any VPS. It's a pass-through proxy — stores nothing, can't read your traffic. Password-protected.
+                  </Text>
+                  <Text style={{ fontSize: 11, color: c.textSecondary, fontFamily: "monospace", lineHeight: 18, backgroundColor: c.bgCardElevated, padding: 10, borderRadius: 6, overflow: "hidden" }}>
+                    {"# One-command setup\n"}
+                    {"# (Docker + nginx + Let's Encrypt)\n"}
+                    {"./scripts/setup-relay.sh IP DOMAIN \\\n"}
+                    {"  --password SECRET\n\n"}
+                    {"# Or Docker only\n"}
+                    {"cd relay\n"}
+                    {"RELAY_PASSWORD=secret \\\n"}
+                    {"  docker compose up -d\n\n"}
+                    {"# Register in CLI\n"}
+                    {"yaver relay add \\\n"}
+                    {"  https://relay.yourdomain.com \\\n"}
+                    {"  --password secret"}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginTop: 8 }}>
+                    Then add the relay URL and password in the Relay Servers section above.{"\n\n"}
+                    Requirements: 1 vCPU, 512 MB RAM, any Linux VPS.
+                  </Text>
+                </View>
+              )}
+
+              <View style={{ height: 1, backgroundColor: c.borderSubtle }} />
+
+              {/* Tailscale */}
+              <Pressable onPress={() => setGuideSection(guideSection === "tailscale" ? null : "tailscale")}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 10 }}>
+                  <Text style={{ fontSize: 14, fontWeight: "600", color: c.textPrimary }}>Tailscale</Text>
+                  <Text style={{ color: c.textMuted }}>{guideSection === "tailscale" ? "\u2303" : "\u2304"}</Text>
+                </View>
+              </Pressable>
+              {guideSection === "tailscale" && (
+                <View style={{ paddingBottom: 12 }}>
+                  <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18 }}>
+                    If both your phone and machine are on a Tailscale network, no tunnel or relay is needed.{"\n\n"}
+                    Install Tailscale on both devices, then run:{"\n"}
+                  </Text>
+                  <Text style={{ fontSize: 11, color: c.textSecondary, fontFamily: "monospace", lineHeight: 18, backgroundColor: c.bgCardElevated, padding: 10, borderRadius: 6, overflow: "hidden" }}>
+                    {"yaver serve --no-relay"}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: c.textMuted, lineHeight: 18, marginTop: 8 }}>
+                    The app connects directly via your Tailscale IP. WireGuard end-to-end encryption, ~5ms latency. Tailscale's DERP servers handle hard NAT automatically.{"\n\n"}
+                    Free for personal use (up to 100 devices).
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
 
           {showLogs && (
             <View style={[styles.logsContainer, { backgroundColor: c.bgCard, borderColor: c.border }]}>
