@@ -3,6 +3,26 @@
 ## Important Rules
 - **Never push or commit without explicit user permission.** Vercel auto-deploy is disabled; use `./scripts/deploy-vercel.sh` for production deploys.
 - **Vercel deploy size guard**: `web/` must stay under 10 MB. The deploy script enforces this. Do not add large assets to `web/`.
+- **NEVER commit credentials, IPs, API keys, or secrets to the repo.** The repo is open-source on GitHub. All credentials must go in `.env.test` (gitignored), env vars, or GitHub Actions secrets. This includes Hetzner server IPs, Apple Developer keys, SSH key paths, relay passwords, Tailscale IPs. If you see a hardcoded credential, replace it with an env var or placeholder immediately.
+
+## Repository & Deployment
+- **Source of truth**: GitLab (`gitlab.com/kivanccakmak/yaver.io`) — development happens here
+- **Public mirror**: GitHub (`github.com/kivanccakmak/yaver.io`) — open-source, single squashed initial commit, no git history
+- **To update GitHub mirror**: Push to GitLab first, then sync to GitHub with a squashed commit (see below)
+- **Vercel**: deploys from local via `./scripts/deploy-vercel.sh` (NOT from Git)
+- **Landing page links**: point to `https://github.com/kivanccakmak/yaver.io`
+
+### Syncing GitLab → GitHub
+```bash
+# After pushing to GitLab, create a fresh GitHub mirror:
+cd /tmp && rm -rf yaver-github-mirror && mkdir yaver-github-mirror && cd yaver-github-mirror
+git init && git remote add origin git@github.com:kivanccakmak/yaver.io.git
+rsync -a --exclude='.git' --exclude='node_modules' --exclude='.next' --exclude='.env.test' --exclude='.env.local' --exclude='backend/.env.local' --exclude='keys/' /path/to/yaver.io/ .
+rm -rf node_modules .next keys/ .env.test backend/.env.local mobile/ios/Pods/ web/.next/ web/node_modules/ mobile/node_modules/ backend/node_modules/ desktop/installer/node_modules/ 2>/dev/null
+# SCAN FOR CREDENTIALS before pushing:
+grep -rn '37\.27\|5SJZ4KA39A\|77Z6B543D5\|7bd9329e\|NJ2VE6KEM55' . --include='*.go' --include='*.ts' --include='*.sh' --include='*.py' --include='*.md'
+git add -A && git commit -m "Update open-source release" && git push --force origin main
+```
 
 ## What is Yaver?
 Yaver is an open-source P2P tool that lets developers use any AI coding agent (Claude Code, Codex, Aider, Ollama, etc.) from their mobile device or any terminal, connecting directly to their development machines. Task data flows peer-to-peer between your devices — servers only handle auth and peer discovery.
