@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Upload AAB to Google Play Internal Testing track."""
 
+import os
 import sys
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 PACKAGE = "io.yaver.mobile"
-KEY_FILE = "/Users/kivanccakmak/Workspace/talos/play-upload-key-elevathor.json"
-AAB_PATH = "/Users/kivanccakmak/Workspace/yaver.io/mobile/android/app/build/outputs/bundle/release/app-release.aab"
+KEY_FILE = os.environ.get("PLAY_STORE_KEY_FILE", "")
+AAB_PATH = os.path.join(os.path.dirname(__file__), "..", "mobile", "android", "app", "build", "outputs", "bundle", "release", "app-release.aab")
 TRACK = "internal"
 
 SCOPES = ["https://www.googleapis.com/auth/androidpublisher"]

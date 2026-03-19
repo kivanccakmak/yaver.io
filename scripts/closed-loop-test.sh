@@ -8,7 +8,7 @@ set -euo pipefail
 CONVEX_SITE_URL="${CONVEX_SITE_URL:-https://shocking-echidna-394.eu-west-1.convex.site}"
 AGENT_HTTP_PORT=18080
 AGENT_WORK_DIR="/tmp/yaver-test-workdir"
-AGENT_BIN_DIR="/Users/kivanccakmak/Workspace/yaver.io/desktop/agent"
+AGENT_BIN_DIR="$(cd "$(dirname "$0")/../desktop/agent" && pwd)"
 CONFIG_FILE="$HOME/.yaver/config.json"
 CONFIG_BACKUP="$HOME/.yaver/config.json.bak"
 

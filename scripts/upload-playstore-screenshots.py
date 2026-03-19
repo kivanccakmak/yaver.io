@@ -15,7 +15,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 PACKAGE = "io.yaver.mobile"
-KEY_FILE = "/Users/kivanccakmak/Workspace/talos/play-upload-key-elevathor.json"
+KEY_FILE = os.environ.get("PLAY_STORE_KEY_FILE", "")
 SCOPES = ["https://www.googleapis.com/auth/androidpublisher"]
 LANGUAGE = "en-US"
 
