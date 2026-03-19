@@ -138,7 +138,7 @@ export default function PrivacyPolicyScreen() {
         <Text style={[styles.body, { color: c.textSecondary }]}>
           If you have any questions about this Privacy Policy, you can contact us:
         </Text>
-        <Text style={[styles.bullet, { color: c.textSecondary }]}>{"\u2022 "}Email: support@yaver.io</Text>
+        <Text style={[styles.bullet, { color: c.textSecondary }]}>{"\u2022 "}Email: kivanc.cakmak@simkab.com</Text>
 
         <View style={[styles.footer, { borderTopColor: c.border }]}>
           <Text style={[styles.footerText, { color: c.textMuted }]}>

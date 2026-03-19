@@ -214,7 +214,7 @@ export default function PrivacyPolicyPage() {
         </h2>
         <p>If you have any questions about this Privacy Policy, you can contact us:</p>
         <ul className="list-disc space-y-2 pl-6">
-          <li>Email: <a href="mailto:support@yaver.io" className="text-indigo-400 hover:text-indigo-300">support@yaver.io</a></li>
+          <li>Email: <a href="mailto:kivanc.cakmak@simkab.com" className="text-indigo-400 hover:text-indigo-300">kivanc.cakmak@simkab.com</a></li>
         </ul>
 
         <div className="!mt-16 border-t border-surface-800 pt-6 text-xs text-surface-600">

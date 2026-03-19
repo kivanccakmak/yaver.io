@@ -4,7 +4,7 @@
   "description": "Yaver Desktop Agent Installer",
   "author": {
     "name": "Yaver",
-    "email": "hello@yaver.io"
+    "email": "kivanc.cakmak@simkab.com"
   },
   "homepage": "https://yaver.io",
   "main": "src/main.js",

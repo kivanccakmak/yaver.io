@@ -125,7 +125,7 @@ export default function TermsOfServiceScreen() {
       content: [
         "SIMKAB ELEKTRIK",
         "Yunus Emre Mah. Adalar Sokak No:12 Sancaktepe / Istanbul, Turkey",
-        "Email: support@yaver.io",
+        "Email: kivanc.cakmak@simkab.com",
       ],
     },
   ];

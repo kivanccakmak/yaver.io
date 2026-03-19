@@ -710,10 +710,10 @@ export default function McpPage() {
             </a>{" "}
             or email{" "}
             <a
-              href="mailto:support@yaver.io"
+              href="mailto:kivanc.cakmak@simkab.com"
               className="text-surface-200 underline underline-offset-2 hover:text-surface-50"
             >
-              support@yaver.io
+              kivanc.cakmak@simkab.com
             </a>
           </p>
         </div>

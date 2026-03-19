@@ -1339,7 +1339,7 @@ export default function SettingsScreen() {
               { label: "Website", onPress: () => Linking.openURL("https://yaver.io").catch(() => {}) },
               { label: "Privacy Policy", onPress: () => router.push("/legal/privacy") },
               { label: "Terms of Service", onPress: () => router.push("/legal/terms") },
-              { label: "Contact", onPress: () => Linking.openURL("mailto:support@yaver.io").catch(() => {}) },
+              { label: "Contact", onPress: () => Linking.openURL("mailto:kivanc.cakmak@simkab.com").catch(() => {}) },
             ].map((link, i) => (
               <React.Fragment key={link.label}>
                 {i > 0 && <View style={[styles.separator, { backgroundColor: c.borderSubtle }]} />}
