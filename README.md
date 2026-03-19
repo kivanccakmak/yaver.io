@@ -428,7 +428,7 @@ Tailscale client is open source (BSD 3-Clause). For a fully self-hosted alternat
 
 Developed by **SIMKAB ELEKTRIK** — Istanbul, Turkey
 
-Contact: support@yaver.io
+Contact: kivanc.cakmak@simkab.com
 
 ## License
 
