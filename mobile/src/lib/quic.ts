@@ -334,7 +334,7 @@ export class QuicClient {
           : t.startedAt
             ? new Date(t.startedAt).getTime()
             : t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
-        deviceName: this.host,
+        deviceName: this.host ?? undefined,
         resultText: t.resultText || undefined,
         costUsd: t.costUsd || undefined,
         turns: t.turns || undefined,
@@ -374,7 +374,7 @@ export class QuicClient {
         : t.startedAt
           ? new Date(t.startedAt).getTime()
           : t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
-      deviceName: this.host,
+      deviceName: this.host ?? undefined,
       resultText: t.resultText || undefined,
       costUsd: t.costUsd || undefined,
       turns: t.turns || undefined,
@@ -582,7 +582,8 @@ export class QuicClient {
     (this.listeners[event] as Array<EventMap[E]>).push(callback);
     return () => {
       const arr = this.listeners[event] as Array<EventMap[E]>;
-      this.listeners[event] = arr.filter((cb) => cb !== callback) as typeof arr;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (this.listeners as any)[event] = arr.filter((cb) => cb !== callback);
     };
   }
 

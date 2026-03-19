@@ -111,4 +111,4 @@ jobs:
         with:
           node-version: "20"
       - name: Typecheck backend
-        run: cd backend && npm ci && npx tsc --noEmit
+        run: cd backend && npm ci && npx convex typecheck

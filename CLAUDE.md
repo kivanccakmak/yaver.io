@@ -187,14 +187,74 @@ If you use Tailscale, you don't need a relay server at all. Just use `yaver serv
 - Mobile: always native builds (xcodebuild for iOS, Gradle for Android), never Expo CLI
 
 ## Tests
+
+### Unit Tests
 ```bash
 cd desktop/agent && go test -v ./...    # Run all agent tests (HTTP API, auth, MCP, ping, shutdown)
+cd relay && go test -v ./...            # Run relay tests
 ```
 
 Tests spin up real HTTP servers on random ports — no mocks, no external dependencies. Covers:
 - Health, auth, CORS, task CRUD, agent status, ping/pong, shutdown
 - **Server-client integration**: two agents on the same machine, verifies token isolation and task separation
 - **MCP protocol**: initialize + tools/list JSON-RPC
+
+### Integration Test Suite
+Full end-to-end test suite covering CLI-to-CLI connections via all transport modes, builds, and MCP.
+
+```bash
+# Run everything
+./scripts/test-suite.sh
+
+# Run specific test sections
+./scripts/test-suite.sh --unit           # Go unit tests only
+./scripts/test-suite.sh --builds         # Build verification (all platforms)
+./scripts/test-suite.sh --lan            # LAN direct connection (localhost)
+./scripts/test-suite.sh --relay          # Local relay server test
+./scripts/test-suite.sh --relay-docker   # Deploy relay to Hetzner via Docker, test, teardown
+./scripts/test-suite.sh --relay-binary   # Deploy relay to Hetzner as native binary, test, teardown
+./scripts/test-suite.sh --tailscale      # Tailscale cross-machine (local ↔ Hetzner)
+./scripts/test-suite.sh --cloudflare     # Cloudflare tunnel test
+
+# Combine flags
+./scripts/test-suite.sh --unit --lan --relay
+```
+
+**What it tests:**
+| Section | What | Infra needed |
+|---------|------|-------------|
+| `--unit` | Go agent + relay unit tests | None |
+| `--builds` | CLI (current + linux/amd64), relay, web, backend typecheck, mobile typecheck, iOS, Android | Node.js, Go, Xcode (macOS), Java 17 (Android) |
+| `--lan` | Auth rejection, task CRUD via direct HTTP, MCP protocol | Convex backend (for test account) |
+| `--relay` | Local relay + agent registration, task flow via relay proxy, password rejection | Convex backend |
+| `--relay-docker` | Deploy relay to Hetzner via Docker, register agent, test proxy, teardown | `REMOTE_SERVER_IP` + SSH key |
+| `--relay-binary` | Deploy relay binary to Hetzner, register agent, test proxy, teardown | `REMOTE_SERVER_IP` + SSH key |
+| `--tailscale` | Deploy agent to Hetzner, connect via Tailscale IPs, task flow | `REMOTE_SERVER_IP` + Tailscale on both machines |
+| `--cloudflare` | Quick tunnel + named tunnel with CF Access service token | `cloudflared` + CF credentials |
+
+**Credentials:** Loaded from (in priority order):
+1. Environment variables (for CI — use GitHub Actions secrets)
+2. `.env.test` in repo root (gitignored)
+3. `../talos/.env.test` (for keeping creds outside this repo)
+
+See `.env.test.example` for all available variables.
+
+**No credentials needed:** `--unit`, `--lan`, `--relay` work out of the box.
+**Need remote server:** `--relay-docker`, `--relay-binary`, `--tailscale` require `REMOTE_SERVER_IP` and SSH key.
+**Need Cloudflare:** `--cloudflare` requires `cloudflared` installed (`brew install cloudflared`).
+
+**CI:** Runs via `.github/workflows/test-suite.yml` on pushes to `main` and via manual `workflow_dispatch`.
+
+### Running remote tests (private — credentials in .env.test)
+The `.env.test` file (gitignored) contains credentials for the shared Hetzner server used by Talos/Yaver. It's loaded automatically by the test suite. To run remote tests:
+```bash
+# Remote relay + Tailscale + Cloudflare tests
+./scripts/test-suite.sh --relay-docker --relay-binary --tailscale --cloudflare
+
+# Full suite (all transports)
+./scripts/test-suite.sh --unit --lan --relay --relay-docker --relay-binary --tailscale --cloudflare
+```
+The test suite auto-detects the remote server's CPU architecture (aarch64 on the Hetzner server) and cross-compiles accordingly. Each remote test deploys, tests, and tears down — nothing is left running on the server after the test suite finishes. Credentials are in `.env.test` or `../talos/.env.test` — **never commit these to the repo**.
 
 ## Local Development
 - `cd backend && npx convex dev` — Start Convex dev server

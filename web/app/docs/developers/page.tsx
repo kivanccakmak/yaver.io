@@ -119,6 +119,8 @@ export default function DevelopersPage() {
               ["data-model", "What's Stored in Convex"],
               ["relay-protocol", "Relay Server Protocol"],
               ["running-tests", "Running Tests"],
+              ["integration-test-suite", "Integration Test Suite"],
+              ["pr-rules", "Pull Request Rules"],
               ["contributing", "Contributing"],
             ].map(([id, label]) => (
               <a
@@ -1506,12 +1508,12 @@ CLI Agent ◄──QUIC──────────────── Relay (:
         <section className="mb-20">
           <SectionHeading id="running-tests">Running Tests</SectionHeading>
           <Prose>
-            Tests spin up real HTTP servers on random ports &mdash; no mocks, no
-            external dependencies.
+            Unit tests spin up real HTTP servers on random ports &mdash; no mocks,
+            no external dependencies. Run them with a single command:
           </Prose>
 
           <div className="mb-8">
-            <Terminal title="tests">
+            <Terminal title="unit tests">
               <Cmd>cd desktop/agent &amp;&amp; go test -v ./...</Cmd>
               <Divider />
               <Output>--- PASS: TestHealth</Output>
@@ -1523,6 +1525,9 @@ CLI Agent ◄──QUIC──────────────── Relay (:
               <Output>--- PASS: TestShutdown</Output>
               <Output>--- PASS: TestServerClientIntegration</Output>
               <Output>--- PASS: TestMCPProtocol</Output>
+              <Output>PASS</Output>
+              <Divider />
+              <Cmd>cd relay &amp;&amp; go test -v ./...</Cmd>
               <Output>PASS</Output>
             </Terminal>
           </div>
@@ -1537,18 +1542,264 @@ CLI Agent ◄──QUIC──────────────── Relay (:
                 <li>&bull; Task CRUD and agent status</li>
                 <li>&bull; Ping/pong and graceful shutdown</li>
                 <li>
-                  &bull; Server-client integration: two agents on the same
+                  &bull; Server-client integration: two agents on same
                   machine, verifies token isolation and task separation
                 </li>
                 <li>
-                  &bull; MCP protocol: initialize + tools/list JSON-RPC
+                  &bull; MCP protocol: initialize + tools/list JSON-RPC (30 tools)
+                </li>
+                <li>&bull; Relay server registration and tunnel lifecycle</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        {/* ─── Integration Test Suite ─── */}
+        <section className="mb-20">
+          <SectionHeading id="integration-test-suite">Integration Test Suite</SectionHeading>
+          <Prose>
+            The full integration test suite verifies CLI-to-CLI connections across
+            every transport mode &mdash; LAN, relay server (local + remote Docker + remote
+            binary), Tailscale, and Cloudflare Tunnel. It also builds all
+            components and validates MCP protocol compliance.
+          </Prose>
+
+          <div className="mb-8">
+            <Terminal title="integration test suite">
+              <Comment># Run everything</Comment>
+              <Cmd>./scripts/test-suite.sh</Cmd>
+              <Divider />
+              <Comment># Or run specific sections</Comment>
+              <Cmd>./scripts/test-suite.sh --unit</Cmd>
+              <Cmd>./scripts/test-suite.sh --builds</Cmd>
+              <Cmd>./scripts/test-suite.sh --lan</Cmd>
+              <Cmd>./scripts/test-suite.sh --relay</Cmd>
+              <Cmd>./scripts/test-suite.sh --relay-docker</Cmd>
+              <Cmd>./scripts/test-suite.sh --relay-binary</Cmd>
+              <Cmd>./scripts/test-suite.sh --tailscale</Cmd>
+              <Cmd>./scripts/test-suite.sh --cloudflare</Cmd>
+              <Divider />
+              <Comment># Combine flags</Comment>
+              <Cmd>./scripts/test-suite.sh --unit --lan --relay</Cmd>
+            </Terminal>
+          </div>
+
+          <div className="mb-8 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-surface-800 text-left">
+                  <th className="pb-3 pr-4 text-surface-200">Flag</th>
+                  <th className="pb-3 pr-4 text-surface-200">What it tests</th>
+                  <th className="pb-3 text-surface-200">Requires</th>
+                </tr>
+              </thead>
+              <tbody className="text-surface-400">
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--unit</InlineCode></td>
+                  <td className="py-3 pr-4">Go agent + relay unit tests</td>
+                  <td className="py-3">Nothing</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--builds</InlineCode></td>
+                  <td className="py-3 pr-4">CLI, relay, web, backend typecheck, mobile typecheck, iOS, Android</td>
+                  <td className="py-3">Node.js, Go, Xcode, Java 17</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--lan</InlineCode></td>
+                  <td className="py-3 pr-4">Auth rejection, task flow via direct HTTP, MCP protocol</td>
+                  <td className="py-3">Nothing</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--relay</InlineCode></td>
+                  <td className="py-3 pr-4">Local relay + agent registration, proxy task flow, password rejection</td>
+                  <td className="py-3">Nothing</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--relay-docker</InlineCode></td>
+                  <td className="py-3 pr-4">Deploy relay via Docker to remote server, test, teardown</td>
+                  <td className="py-3">Remote server + SSH</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--relay-binary</InlineCode></td>
+                  <td className="py-3 pr-4">Deploy relay as native binary to remote server, test, teardown</td>
+                  <td className="py-3">Remote server + SSH</td>
+                </tr>
+                <tr className="border-b border-surface-800/50">
+                  <td className="py-3 pr-4"><InlineCode>--tailscale</InlineCode></td>
+                  <td className="py-3 pr-4">Deploy agent to remote server, connect via Tailscale IPs</td>
+                  <td className="py-3">Tailscale on both machines</td>
+                </tr>
+                <tr>
+                  <td className="py-3 pr-4"><InlineCode>--cloudflare</InlineCode></td>
+                  <td className="py-3 pr-4">Quick tunnel + optional named tunnel with CF Access</td>
+                  <td className="py-3"><InlineCode>cloudflared</InlineCode></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div className="space-y-4">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                No credentials needed
+              </h4>
+              <p className="text-sm text-surface-400">
+                <InlineCode>--unit</InlineCode>, <InlineCode>--lan</InlineCode>,
+                and <InlineCode>--relay</InlineCode> work out of the box. They spin up
+                local processes and use the Convex dev backend for test account
+                signup. Great for contributors who just want to verify their changes.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Remote server tests
+              </h4>
+              <p className="mb-3 text-sm text-surface-400">
+                <InlineCode>--relay-docker</InlineCode>, <InlineCode>--relay-binary</InlineCode>,
+                and <InlineCode>--tailscale</InlineCode> SSH into a remote Linux server
+                (e.g. Hetzner VPS), deploy binaries, test cross-network connectivity,
+                then tear everything down. Auto-detects CPU architecture (amd64 vs arm64).
+              </p>
+              <Terminal title="credentials setup">
+                <Comment># Copy the template (gitignored)</Comment>
+                <Cmd>cp .env.test.example .env.test</Cmd>
+                <Divider />
+                <Comment># Or keep credentials outside the repo</Comment>
+                <Cmd>cp .env.test.example ../private/.env.test</Cmd>
+              </Terminal>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                CI / GitHub Actions
+              </h4>
+              <p className="text-sm text-surface-400">
+                The test suite runs automatically on pushes to <InlineCode>main</InlineCode> when
+                CLI or relay code changes. It can also be triggered manually
+                via <InlineCode>workflow_dispatch</InlineCode> from the Actions tab.
+                Credentials are stored as GitHub Actions secrets.
+                See <InlineCode>.github/workflows/test-suite.yml</InlineCode>.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* ─── PR Rules ─── */}
+        <section className="mb-20">
+          <SectionHeading id="pr-rules">Pull Request Rules</SectionHeading>
+          <Prose>
+            All changes go through pull requests. The CI pipeline must pass before
+            merging. Here&apos;s what happens when you open a PR:
+          </Prose>
+
+          <div className="space-y-4">
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                CI checks (automated)
+              </h4>
+              <ol className="space-y-2 text-sm text-surface-400 list-decimal list-inside">
+                <li>
+                  <span className="text-surface-300">Change detection</span> &mdash;
+                  only the components you touched are tested (CLI, relay, web, mobile, backend)
+                </li>
+                <li>
+                  <span className="text-surface-300">Version check</span> &mdash;
+                  if you changed a component, its version in <InlineCode>versions.json</InlineCode> must
+                  be bumped
+                </li>
+                <li>
+                  <span className="text-surface-300">Go tests</span> &mdash;
+                  <InlineCode>go test ./...</InlineCode> for CLI agent and relay
+                </li>
+                <li>
+                  <span className="text-surface-300">Go build</span> &mdash;
+                  verifies the CLI compiles
+                </li>
+                <li>
+                  <span className="text-surface-300">Web build</span> &mdash;
+                  <InlineCode>npm run build</InlineCode> for the Next.js landing page
+                </li>
+                <li>
+                  <span className="text-surface-300">Mobile typecheck</span> &mdash;
+                  <InlineCode>tsc --noEmit</InlineCode> for React Native
+                </li>
+                <li>
+                  <span className="text-surface-300">Backend typecheck</span> &mdash;
+                  <InlineCode>npx convex typecheck</InlineCode> for Convex functions
+                </li>
+              </ol>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Before submitting
+              </h4>
+              <ol className="space-y-2 text-sm text-surface-400 list-decimal list-inside">
+                <li>
+                  Run <InlineCode>./scripts/test-suite.sh --unit --lan --relay</InlineCode> locally &mdash;
+                  these catch most issues without needing remote infrastructure
+                </li>
+                <li>
+                  If you changed builds, run <InlineCode>./scripts/test-suite.sh --builds</InlineCode> to
+                  verify all components compile
+                </li>
+                <li>
+                  Bump the version in <InlineCode>versions.json</InlineCode> for any
+                  component you modified, then run <InlineCode>./scripts/sync-versions.sh</InlineCode>
+                </li>
+                <li>
+                  Keep PRs focused &mdash; one feature or fix per PR
+                </li>
+              </ol>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Version bumping
+              </h4>
+              <p className="mb-3 text-sm text-surface-400">
+                Every component has its own version in <InlineCode>versions.json</InlineCode>.
+                CI enforces that changed components have their version bumped.
+              </p>
+              <Terminal title="version bump">
+                <Comment># Edit versions.json, then sync everywhere</Comment>
+                <Cmd>./scripts/sync-versions.sh</Cmd>
+                <Divider />
+                <Comment># This updates: mobile/app.json, Info.plist,</Comment>
+                <Comment># project.pbxproj, build.gradle, etc.</Comment>
+              </Terminal>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Release process
+              </h4>
+              <ul className="space-y-2 text-sm text-surface-400">
+                <li>
+                  &bull; <span className="text-surface-200">Tags trigger releases</span>:
+                  push <InlineCode>cli/v1.30.0</InlineCode> to build + publish CLI binaries,
+                  update Homebrew/Scoop
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Tag format</span>:
+                  <InlineCode>cli/vX.Y.Z</InlineCode>, <InlineCode>relay/vX.Y.Z</InlineCode>,
+                  <InlineCode>mobile/vX.Y.Z</InlineCode>, <InlineCode>web/vX.Y.Z</InlineCode>
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Production deploys</span> require
+                  manual approval in the GitHub environment
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Web deploys</span> are manual:
+                  <InlineCode>./scripts/deploy-vercel.sh</InlineCode> (auto-deploy is disabled)
                 </li>
               </ul>
             </div>
           </div>
         </section>
 
-        {/* ─── Section 7: Contributing ─── */}
+        {/* ─── Contributing ─── */}
         <section className="mb-20">
           <SectionHeading id="contributing">Contributing</SectionHeading>
           <Prose>
@@ -1571,10 +1822,11 @@ CLI Agent ◄──QUIC──────────────── Relay (:
               <ol className="space-y-2 text-sm text-surface-400 list-decimal list-inside">
                 <li>Fork the repository</li>
                 <li>Create a feature branch from <InlineCode>main</InlineCode></li>
+                <li>Make your changes</li>
                 <li>Bump version in <InlineCode>versions.json</InlineCode> and run <InlineCode>./scripts/sync-versions.sh</InlineCode></li>
                 <li>
                   Run tests:{" "}
-                  <InlineCode>cd desktop/agent &amp;&amp; go test ./...</InlineCode>
+                  <InlineCode>./scripts/test-suite.sh --unit --lan --relay</InlineCode>
                 </li>
                 <li>Open a pull request against <InlineCode>main</InlineCode></li>
               </ol>
@@ -1604,6 +1856,11 @@ CLI Agent ◄──QUIC──────────────── Relay (:
                   always native builds (xcodebuild for iOS, Gradle for Android),
                   never Expo CLI
                 </li>
+                <li>
+                  &bull; <span className="text-surface-200">Tests</span>:{" "}
+                  real servers on random ports, no mocks. If you add an endpoint,
+                  add a test.
+                </li>
               </ul>
             </div>
 
@@ -1612,10 +1869,11 @@ CLI Agent ◄──QUIC──────────────── Relay (:
                 Areas we&apos;d love help with
               </h4>
               <ul className="space-y-2 text-sm text-surface-400">
-                <li>&bull; Additional AI runner integrations (Ollama, Qwen, etc.)</li>
+                <li>&bull; Additional AI runner integrations (Ollama, Qwen, LM Studio, etc.)</li>
                 <li>&bull; Windows and Linux desktop installer improvements</li>
-                <li>&bull; Documentation and tutorials</li>
-                <li>&bull; Bug reports and test coverage</li>
+                <li>&bull; Relay server performance and benchmarking</li>
+                <li>&bull; Documentation, tutorials, and example configurations</li>
+                <li>&bull; Bug reports and test coverage improvements</li>
               </ul>
             </div>
           </div>

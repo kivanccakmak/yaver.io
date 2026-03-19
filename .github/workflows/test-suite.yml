@@ -1,0 +1,82 @@
+name: Integration Test Suite
+
+on:
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: "Tests to run (all, builds, lan, relay, tailscale, cloudflare, unit)"
+        required: false
+        default: "all"
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/agent/**'
+      - 'relay/**'
+      - 'scripts/test-suite.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  test-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: testing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run test suite
+        env:
+          # Core
+          CONVEX_SITE_URL: ${{ secrets.CONVEX_SITE_URL }}
+          # Relay
+          RELAY_QUIC_ADDR: ${{ secrets.RELAY_QUIC_ADDR }}
+          RELAY_HTTP_URL: ${{ secrets.RELAY_HTTP_URL }}
+          RELAY_PASSWORD: ${{ secrets.RELAY_PASSWORD }}
+          # Cloudflare
+          CF_TUNNEL_URL: ${{ secrets.CF_TUNNEL_URL }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          flag=""
+          if [ "${{ github.event.inputs.tests }}" != "" ] && [ "${{ github.event.inputs.tests }}" != "all" ]; then
+            flag="--${{ github.event.inputs.tests }}"
+          fi
+          ./scripts/test-suite.sh $flag
+
+  # Separate macOS job for iOS build verification
+  build-ios:
+    if: github.event.inputs.tests == 'all' || github.event.inputs.tests == 'builds' || github.event.inputs.tests == ''
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install mobile dependencies
+        run: cd mobile && npm ci
+
+      - name: Prebuild iOS
+        run: cd mobile && npx expo prebuild --platform ios --no-install
+
+      - name: Install CocoaPods
+        run: cd mobile/ios && pod install
+
+      - name: Build iOS (no codesign)
+        run: |
+          cd mobile/ios
+          xcodebuild -workspace Yaver.xcworkspace -scheme Yaver \
+            -configuration Release -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            -quiet build

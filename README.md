@@ -234,10 +234,32 @@ cd relay && go run . serve --password secret   # Relay server (local)
 ### Tests
 
 ```bash
+# Unit tests (no external deps)
 cd desktop/agent && go test -v ./...
+cd relay && go test -v ./...
+
+# Integration test suite
+./scripts/test-suite.sh                # Run all tests
+./scripts/test-suite.sh --unit         # Go unit tests only
+./scripts/test-suite.sh --builds       # Build verification (all platforms)
+./scripts/test-suite.sh --lan          # LAN direct connection (localhost)
+./scripts/test-suite.sh --relay        # Local relay server test
+./scripts/test-suite.sh --relay-docker # Deploy relay via Docker to remote server, test, teardown
+./scripts/test-suite.sh --relay-binary # Deploy relay binary to remote server, test, teardown
+./scripts/test-suite.sh --tailscale    # Tailscale cross-machine (local ↔ remote server)
+./scripts/test-suite.sh --cloudflare   # Cloudflare tunnel test
+./scripts/test-suite.sh --help         # Show all options
 ```
 
-Tests cover: health, auth, CORS, task CRUD, agent status, MCP protocol, sandbox validation, and server-client integration.
+**No credentials needed:** `--unit`, `--lan`, and `--relay` work out of the box.
+
+**Remote server tests:** `--relay-docker`, `--relay-binary`, and `--tailscale` SSH into a remote server (e.g., Hetzner VPS) to deploy relay/agent binaries, run them, test cross-network connectivity, then tear everything down.
+
+**Credentials:** Set up via `.env.test` (gitignored) or `../talos/.env.test`:
+```bash
+cp .env.test.example .env.test   # fill in REMOTE_SERVER_IP, etc.
+```
+For CI, store as GitHub Actions secrets. See `.github/workflows/test-suite.yml`.
 
 ## Auth
 

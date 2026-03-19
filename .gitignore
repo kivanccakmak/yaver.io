@@ -25,6 +25,7 @@ desktop/installer/dist/
 .env
 .env.*
 !.env.example
+!.env.test.example
 
 # OS files
 .DS_Store

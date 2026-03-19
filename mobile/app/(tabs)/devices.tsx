@@ -276,9 +276,9 @@ function CopyableCommand({ command }: { command: string }) {
   );
 }
 
-function PlatformIcon({ platform }: { platform: string }) {
+function PlatformIcon({ platform, color }: { platform: string; color?: string }) {
   const labels: Record<string, string> = { mac: "⌘", linux: "🐧", windows: "⊞" };
-  return <Text style={{ fontSize: 16, marginRight: 6 }}>{labels[platform] || ""}</Text>;
+  return <Text style={{ fontSize: 16, marginRight: 6, color }}>{labels[platform] || ""}</Text>;
 }
 
 function PlatformTab({

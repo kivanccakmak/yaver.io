@@ -1,0 +1,1158 @@
+#!/bin/bash
+# ═══════════════════════════════════════════════════════════════════
+# Yaver Integration Test Suite
+# ═══════════════════════════════════════════════════════════════════
+# Tests CLI-to-CLI connections via:
+#   1. LAN (direct HTTP + QUIC on localhost)
+#   2. Relay server — local (native binary)
+#   3. Relay server — remote Docker deploy to Hetzner
+#   4. Relay server — remote native binary deploy to Hetzner
+#   5. Tailscale (cross-machine: local ↔ Hetzner via TS IPs)
+#   6. Cloudflare Tunnel (HTTP through CF Access)
+#
+# Also verifies: unit tests, builds (CLI, relay, web, mobile, iOS, Android), MCP protocol.
+#
+# Credentials: loaded from env vars, .env.test, or ../talos/.env.test
+# Usage:
+#   ./scripts/test-suite.sh                    # Run all tests
+#   ./scripts/test-suite.sh --unit             # Go unit tests only
+#   ./scripts/test-suite.sh --builds           # Build verification only
+#   ./scripts/test-suite.sh --lan              # LAN direct connection test
+#   ./scripts/test-suite.sh --relay            # Local relay test (no remote infra)
+#   ./scripts/test-suite.sh --relay-docker     # Deploy relay to Hetzner via Docker, test, teardown
+#   ./scripts/test-suite.sh --relay-binary     # Deploy relay to Hetzner as binary, test, teardown
+#   ./scripts/test-suite.sh --tailscale        # Tailscale cross-machine test (local ↔ Hetzner)
+#   ./scripts/test-suite.sh --cloudflare       # Cloudflare tunnel test
+#   ./scripts/test-suite.sh --lan --relay      # Combine flags
+# ═══════════════════════════════════════════════════════════════════
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+TMPDIR="${TMPDIR:-/tmp}"
+TEST_DIR="$TMPDIR/yaver-test-suite-$$"
+
+# ── Colors ──────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+pass()  { echo -e "${GREEN}  ✓ $1${NC}"; PASS_COUNT=$((PASS_COUNT + 1)); }
+fail()  { echo -e "${RED}  ✗ $1${NC}"; FAIL_COUNT=$((FAIL_COUNT + 1)); FAILURES+=("$1"); }
+skip()  { echo -e "${YELLOW}  ⊘ $1 (skipped)${NC}"; SKIP_COUNT=$((SKIP_COUNT + 1)); }
+info()  { echo -e "${CYAN}  → $1${NC}"; }
+header(){ echo -e "\n${BOLD}${BLUE}══ $1 ══${NC}"; }
+
+PASS_COUNT=0
+FAIL_COUNT=0
+SKIP_COUNT=0
+FAILURES=()
+PIDS_TO_KILL=()
+AUTH_TOKENS=()
+REMOTE_CLEANUP_CMDS=()
+
+# ── Credential Loading ─────────────────────────────────────────────
+load_credentials() {
+    local envfile=""
+    if [ -f "$ROOT_DIR/.env.test" ]; then
+        envfile="$ROOT_DIR/.env.test"
+    elif [ -f "$ROOT_DIR/../talos/.env.test" ]; then
+        envfile="$ROOT_DIR/../talos/.env.test"
+    fi
+
+    if [ -n "$envfile" ]; then
+        info "Loading credentials from $envfile"
+        set -a
+        # shellcheck disable=SC1090
+        source "$envfile"
+        set +a
+    fi
+
+    # Defaults
+    CONVEX_SITE_URL="${CONVEX_SITE_URL:-https://shocking-echidna-394.eu-west-1.convex.site}"
+    REMOTE_SERVER_USER="${REMOTE_SERVER_USER:-root}"
+    REMOTE_SERVER_SSH_KEY="${REMOTE_SERVER_SSH_KEY:-$HOME/.ssh/id_rsa}"
+}
+
+# ── SSH helper ─────────────────────────────────────────────────────
+remote_ssh() {
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+        -i "$REMOTE_SERVER_SSH_KEY" \
+        "${REMOTE_SERVER_USER}@${REMOTE_SERVER_IP}" \
+        "$@"
+}
+
+remote_scp() {
+    local src="$1" dst="$2"
+    scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+        -i "$REMOTE_SERVER_SSH_KEY" \
+        "$src" "${REMOTE_SERVER_USER}@${REMOTE_SERVER_IP}:${dst}"
+}
+
+check_remote_server() {
+    if [ -z "${REMOTE_SERVER_IP:-}" ]; then
+        return 1
+    fi
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes \
+        -i "$REMOTE_SERVER_SSH_KEY" \
+        "${REMOTE_SERVER_USER}@${REMOTE_SERVER_IP}" \
+        "echo ok" > /dev/null 2>&1
+}
+
+# ── Cleanup ────────────────────────────────────────────────────────
+cleanup() {
+    info "Cleaning up..."
+
+    # Kill local background processes
+    for pid in "${PIDS_TO_KILL[@]+"${PIDS_TO_KILL[@]}"}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+        fi
+    done
+
+    # Run remote cleanup commands
+    for cmd in "${REMOTE_CLEANUP_CMDS[@]+"${REMOTE_CLEANUP_CMDS[@]}"}"; do
+        eval "$cmd" 2>/dev/null || true
+    done
+
+    # Delete test accounts
+    for token in "${AUTH_TOKENS[@]+"${AUTH_TOKENS[@]}"}"; do
+        curl -sf -X POST "${CONVEX_SITE_URL}/auth/delete-account" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" 2>/dev/null || true
+    done
+
+    # Restore config if backed up
+    if [ -f "$HOME/.yaver/config.json.test-bak" ]; then
+        cp "$HOME/.yaver/config.json.test-bak" "$HOME/.yaver/config.json"
+        rm "$HOME/.yaver/config.json.test-bak"
+        info "Config restored"
+    fi
+
+    rm -rf "$TEST_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# ── Helpers ────────────────────────────────────────────────────────
+get_free_port() {
+    python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"
+}
+
+gen_uuid() {
+    uuidgen 2>/dev/null || python3 -c 'import uuid;print(uuid.uuid4())' | tr '[:upper:]' '[:lower:]'
+}
+
+create_test_account() {
+    local email="test-$(date +%s)-$RANDOM@test.yaver.io"
+    local resp
+    resp=$(curl -sf -X POST "${CONVEX_SITE_URL}/auth/signup" \
+        -H "Content-Type: application/json" \
+        -d "{\"email\":\"${email}\",\"fullName\":\"Test User\",\"password\":\"testpass123\"}")
+
+    local token
+    token=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])" 2>/dev/null)
+    if [ -z "$token" ]; then
+        echo ""
+        return 1
+    fi
+    AUTH_TOKENS+=("$token")
+    echo "$token"
+}
+
+build_agent() {
+    local output="$1"
+    cd "$ROOT_DIR/desktop/agent"
+    go build -o "$output" . 2>&1
+}
+
+build_relay() {
+    local output="$1"
+    cd "$ROOT_DIR/relay"
+    go build -o "$output" . 2>&1
+}
+
+build_relay_linux() {
+    cd "$ROOT_DIR/relay"
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "$TEST_DIR/yaver-relay-linux-amd64" . 2>&1
+}
+
+build_agent_linux() {
+    cd "$ROOT_DIR/desktop/agent"
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "$TEST_DIR/yaver-linux-amd64" . 2>&1
+}
+
+# Detect remote arch and build accordingly
+detect_remote_arch() {
+    remote_ssh "uname -m" 2>/dev/null | tr -d '\n'
+}
+
+build_relay_for_remote() {
+    local arch
+    arch=$(detect_remote_arch)
+    local goarch="amd64"
+    [ "$arch" = "aarch64" ] || [ "$arch" = "arm64" ] && goarch="arm64"
+    cd "$ROOT_DIR/relay"
+    GOOS=linux GOARCH="$goarch" CGO_ENABLED=0 go build -ldflags="-s -w" -o "$TEST_DIR/yaver-relay-remote" . 2>&1
+}
+
+build_agent_for_remote() {
+    local arch
+    arch=$(detect_remote_arch)
+    local goarch="amd64"
+    [ "$arch" = "aarch64" ] || [ "$arch" = "arm64" ] && goarch="arm64"
+    cd "$ROOT_DIR/desktop/agent"
+    GOOS=linux GOARCH="$goarch" CGO_ENABLED=0 go build -ldflags="-s -w" -o "$TEST_DIR/yaver-agent-remote" . 2>&1
+}
+
+# Start an agent and wait for health
+start_agent() {
+    local binary="$1" http_port="$2" quic_port="$3" token="$4" device_id="$5" work_dir="$6"
+    shift 6
+
+    mkdir -p "$work_dir"
+    local config_dir="$work_dir/.yaver-config"
+    mkdir -p "$config_dir/.yaver"
+    cat > "$config_dir/.yaver/config.json" << EOF
+{
+  "auth_token": "${token}",
+  "device_id": "${device_id}",
+  "convex_site_url": "${CONVEX_SITE_URL}"
+}
+EOF
+
+    HOME="$config_dir" CLAUDECODE= "$binary" serve --debug \
+        --port "$http_port" --quic-port "$quic_port" \
+        --work-dir "$work_dir" --dummy \
+        "$@" > "$work_dir/agent.log" 2>&1 &
+    local pid=$!
+    PIDS_TO_KILL+=("$pid")
+
+    for i in $(seq 1 20); do
+        if curl -sf "http://127.0.0.1:${http_port}/health" > /dev/null 2>&1; then
+            echo "$pid"
+            return 0
+        fi
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "Agent exited. Log:" >&2
+            tail -20 "$work_dir/agent.log" >&2
+            return 1
+        fi
+        sleep 0.5
+    done
+    echo "Agent not ready after 10s." >&2
+    tail -20 "$work_dir/agent.log" >&2
+    return 1
+}
+
+start_relay() {
+    local binary="$1" quic_port="$2" http_port="$3" password="$4" log_file="$5"
+
+    RELAY_PASSWORD="$password" "$binary" serve \
+        --quic-port "$quic_port" --http-port "$http_port" \
+        > "$log_file" 2>&1 &
+    local pid=$!
+    PIDS_TO_KILL+=("$pid")
+
+    for i in $(seq 1 15); do
+        if curl -sf "http://127.0.0.1:${http_port}/health" > /dev/null 2>&1; then
+            echo "$pid"
+            return 0
+        fi
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "Relay exited." >&2
+            cat "$log_file" >&2
+            return 1
+        fi
+        sleep 0.5
+    done
+    echo "Relay not ready after 7.5s" >&2
+    return 1
+}
+
+# Verify task flow end-to-end: health → info → create task → poll → completed
+verify_task_flow() {
+    local base_url="$1" token="$2"
+    shift 2
+    local extra_headers=("$@")
+
+    local auth_header="Authorization: Bearer ${token}"
+    local curl_args=(-sf -H "$auth_header")
+    for h in "${extra_headers[@]+"${extra_headers[@]}"}"; do
+        curl_args+=(-H "$h")
+    done
+
+    # Health
+    local health
+    health=$(curl "${curl_args[@]}" "${base_url}/health" 2>/dev/null) || return 1
+    echo "$health" | python3 -c "import sys,json; assert json.load(sys.stdin)['ok']" 2>/dev/null || {
+        echo "Health check failed: $health" >&2; return 1
+    }
+
+    # Info
+    local info_resp hostname
+    info_resp=$(curl "${curl_args[@]}" "${base_url}/info" 2>/dev/null) || return 1
+    hostname=$(echo "$info_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('hostname',''))" 2>/dev/null)
+    [ -n "$hostname" ] || { echo "Info failed: $info_resp" >&2; return 1; }
+
+    # Create task
+    local task_resp task_id
+    task_resp=$(curl "${curl_args[@]}" -X POST "${base_url}/tasks" \
+        -H "Content-Type: application/json" \
+        -d '{"title":"test echo","description":"Respond with: hello from yaver test. No tools."}' 2>/dev/null) || return 1
+    task_id=$(echo "$task_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('taskId',''))" 2>/dev/null)
+    [ -n "$task_id" ] || { echo "Task creation failed: $task_resp" >&2; return 1; }
+
+    # Poll (max 90s)
+    local elapsed=0 status=""
+    while [ $elapsed -lt 90 ]; do
+        local detail
+        detail=$(curl "${curl_args[@]}" "${base_url}/tasks/${task_id}" 2>/dev/null) || true
+        status=$(echo "$detail" | python3 -c "import sys,json; print(json.load(sys.stdin).get('task',{}).get('status',''))" 2>/dev/null) || true
+        case "$status" in finished|completed|failed|stopped) break ;; esac
+        sleep 2; elapsed=$((elapsed + 2))
+    done
+
+    if [ "$status" = "finished" ] || [ "$status" = "completed" ]; then
+        echo "task_id=$task_id hostname=$hostname"
+        return 0
+    fi
+    echo "Task did not finish (status=$status after ${elapsed}s)" >&2
+    return 1
+}
+
+verify_mcp() {
+    local base_url="$1"
+    local init_resp server_name tools_resp tool_count
+
+    init_resp=$(curl -sf -X POST "${base_url}/mcp" \
+        -H "Content-Type: application/json" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}' 2>/dev/null)
+    server_name=$(echo "$init_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('result',{}).get('serverInfo',{}).get('name',''))" 2>/dev/null)
+    [ "$server_name" = "yaver" ] || { echo "MCP init failed: $init_resp" >&2; return 1; }
+
+    tools_resp=$(curl -sf -X POST "${base_url}/mcp" \
+        -H "Content-Type: application/json" \
+        -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' 2>/dev/null)
+    tool_count=$(echo "$tools_resp" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('result',{}).get('tools',[])))" 2>/dev/null)
+    [ "$tool_count" -ge 5 ] || { echo "MCP tools/list returned only $tool_count tools" >&2; return 1; }
+
+    echo "mcp_tools=$tool_count server=$server_name"
+}
+
+verify_auth_rejection() {
+    local base_url="$1"
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" "${base_url}/info" \
+        -H "Authorization: Bearer badtoken123" 2>/dev/null)
+    [ "$code" = "403" ] || { echo "Expected 403, got $code" >&2; return 1; }
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# TEST SECTIONS
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Unit Tests ─────────────────────────────────────────────────────
+run_unit_tests() {
+    header "Unit Tests"
+
+    info "Running Go agent tests..."
+    if (cd "$ROOT_DIR/desktop/agent" && go test -v -count=1 ./... > "$TEST_DIR/agent-test.log" 2>&1); then
+        pass "Agent unit tests passed"
+    else
+        fail "Agent unit tests failed"
+        tail -20 "$TEST_DIR/agent-test.log"
+    fi
+
+    info "Running Go relay tests..."
+    if (cd "$ROOT_DIR/relay" && go test -v -count=1 ./... > "$TEST_DIR/relay-test.log" 2>&1); then
+        pass "Relay unit tests passed"
+    else
+        if grep -q "no test files" "$TEST_DIR/relay-test.log" 2>/dev/null; then
+            skip "Relay has no unit tests"
+        else
+            fail "Relay unit tests failed"
+            tail -20 "$TEST_DIR/relay-test.log"
+        fi
+    fi
+}
+
+# ── Build Tests ────────────────────────────────────────────────────
+run_build_tests() {
+    header "Build Verification"
+
+    # CLI (current platform)
+    info "Building CLI (current platform)..."
+    if build_agent "$TEST_DIR/yaver" > "$TEST_DIR/build-cli.log" 2>&1; then
+        pass "CLI build OK ($(du -h "$TEST_DIR/yaver" | cut -f1))"
+    else
+        fail "CLI build failed"
+        cat "$TEST_DIR/build-cli.log"
+        return 1
+    fi
+
+    # CLI (linux/amd64)
+    info "Cross-compiling CLI (linux/amd64)..."
+    if build_agent_linux > "$TEST_DIR/build-cli-linux.log" 2>&1; then
+        pass "CLI cross-compile linux/amd64 OK"
+    else
+        fail "CLI cross-compile linux/amd64 failed"
+    fi
+
+    # Relay
+    info "Building relay server..."
+    if build_relay "$TEST_DIR/yaver-relay" > "$TEST_DIR/build-relay.log" 2>&1; then
+        pass "Relay build OK ($(du -h "$TEST_DIR/yaver-relay" | cut -f1))"
+    else
+        fail "Relay build failed"
+    fi
+
+    # Relay (linux/amd64)
+    info "Cross-compiling relay (linux/amd64)..."
+    if build_relay_linux > "$TEST_DIR/build-relay-linux.log" 2>&1; then
+        pass "Relay cross-compile linux/amd64 OK"
+    else
+        fail "Relay cross-compile linux/amd64 failed"
+    fi
+
+    # Web
+    info "Building web (Next.js)..."
+    if (cd "$ROOT_DIR/web" && npm ci --silent > /dev/null 2>&1 && npm run build > "$TEST_DIR/build-web.log" 2>&1); then
+        pass "Web build OK"
+    else
+        fail "Web build failed (see $TEST_DIR/build-web.log)"
+    fi
+
+    # Backend typecheck (uses convex typecheck, not raw tsc)
+    info "Typechecking backend (Convex)..."
+    if (cd "$ROOT_DIR/backend" && npm ci --silent > /dev/null 2>&1 && npx convex typecheck > "$TEST_DIR/build-backend.log" 2>&1); then
+        pass "Backend typecheck OK"
+    else
+        fail "Backend typecheck failed (see $TEST_DIR/build-backend.log)"
+    fi
+
+    # Mobile typecheck
+    info "Typechecking mobile (React Native)..."
+    if (cd "$ROOT_DIR/mobile" && npm ci --silent > /dev/null 2>&1 && npx tsc --noEmit > "$TEST_DIR/build-mobile.log" 2>&1); then
+        pass "Mobile typecheck OK"
+    else
+        fail "Mobile typecheck failed (see $TEST_DIR/build-mobile.log)"
+    fi
+
+    # iOS (macOS only)
+    if [ "$(uname)" = "Darwin" ] && [ -d "$ROOT_DIR/mobile/ios" ]; then
+        info "Building iOS (Release, no codesign)..."
+        if (cd "$ROOT_DIR/mobile/ios" && pod install --silent > "$TEST_DIR/pod-install.log" 2>&1 && \
+            xcodebuild -workspace Yaver.xcworkspace -scheme Yaver \
+            -configuration Release -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            -quiet build > "$TEST_DIR/build-ios.log" 2>&1); then
+            pass "iOS build OK"
+        else
+            fail "iOS build failed (see $TEST_DIR/build-ios.log)"
+        fi
+    else
+        skip "iOS build (not on macOS or no ios/ dir)"
+    fi
+
+    # Android
+    if [ -d "$ROOT_DIR/mobile/android" ] && command -v java &>/dev/null; then
+        info "Building Android (assembleRelease)..."
+        local java_home="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || echo "")}"
+        if [ -n "$java_home" ]; then
+            if (cd "$ROOT_DIR/mobile/android" && JAVA_HOME="$java_home" ./gradlew assembleRelease --no-daemon -q > "$TEST_DIR/build-android.log" 2>&1); then
+                pass "Android build OK"
+            else
+                fail "Android build failed (see $TEST_DIR/build-android.log)"
+            fi
+        else
+            skip "Android build (Java 17 not found)"
+        fi
+    else
+        skip "Android build (no android/ dir or java not available)"
+    fi
+}
+
+# ── LAN Test ───────────────────────────────────────────────────────
+run_lan_test() {
+    header "LAN — Direct CLI-to-CLI (localhost)"
+
+    local agent_bin="$TEST_DIR/yaver"
+    [ -f "$agent_bin" ] || build_agent "$agent_bin" > /dev/null 2>&1 || { fail "Cannot build agent"; return; }
+
+    local http_port quic_port
+    http_port=$(get_free_port); quic_port=$(get_free_port)
+
+    info "Creating test account..."
+    local token
+    token=$(create_test_account) || { fail "Cannot create test account"; return; }
+
+    local device_id="test-lan-$(gen_uuid)"
+    local work_dir="$TEST_DIR/lan-agent"
+
+    info "Starting agent (HTTP=$http_port, QUIC=$quic_port)..."
+    local agent_pid
+    agent_pid=$(start_agent "$agent_bin" "$http_port" "$quic_port" "$token" "$device_id" "$work_dir" --no-relay) || {
+        fail "Agent failed to start"; return
+    }
+
+    local base_url="http://127.0.0.1:${http_port}"
+
+    if verify_auth_rejection "$base_url"; then
+        pass "Auth rejection (bad token → 403)"
+    else
+        fail "Auth rejection test"
+    fi
+
+    info "Testing task flow via direct HTTP..."
+    local result
+    if result=$(verify_task_flow "$base_url" "$token"); then
+        pass "LAN task flow OK ($result)"
+    else
+        fail "LAN task flow failed"
+    fi
+
+    info "Testing MCP protocol..."
+    if result=$(verify_mcp "$base_url"); then
+        pass "MCP protocol OK ($result)"
+    else
+        fail "MCP protocol test"
+    fi
+
+    kill "$agent_pid" 2>/dev/null || true
+}
+
+# ── Local Relay Test ───────────────────────────────────────────────
+run_relay_test() {
+    header "Relay — Local CLI-to-CLI via Relay Server"
+
+    local agent_bin="$TEST_DIR/yaver"
+    local relay_bin="$TEST_DIR/yaver-relay"
+    [ -f "$agent_bin" ] || build_agent "$agent_bin" > /dev/null 2>&1 || { fail "Cannot build agent"; return; }
+    [ -f "$relay_bin" ] || build_relay "$relay_bin" > /dev/null 2>&1 || { fail "Cannot build relay"; return; }
+
+    local relay_quic_port relay_http_port agent_http_port agent_quic_port
+    relay_quic_port=$(get_free_port); relay_http_port=$(get_free_port)
+    agent_http_port=$(get_free_port); agent_quic_port=$(get_free_port)
+    local relay_password="test-relay-pass-$$"
+
+    info "Starting relay (QUIC=$relay_quic_port, HTTP=$relay_http_port)..."
+    local relay_pid
+    relay_pid=$(start_relay "$relay_bin" "$relay_quic_port" "$relay_http_port" "$relay_password" "$TEST_DIR/relay.log") || {
+        fail "Relay failed to start"; return
+    }
+
+    if curl -sf "http://127.0.0.1:${relay_http_port}/health" | python3 -c "import sys,json; assert json.load(sys.stdin)['ok']" 2>/dev/null; then
+        pass "Relay health OK"
+    else
+        fail "Relay health check"; return
+    fi
+
+    info "Creating test account..."
+    local token
+    token=$(create_test_account) || { fail "Cannot create test account"; return; }
+
+    local device_id="test-relay-$(gen_uuid)"
+    local work_dir="$TEST_DIR/relay-agent"
+    local config_dir="$work_dir/.yaver-config"
+    mkdir -p "$config_dir/.yaver"
+    cat > "$config_dir/.yaver/config.json" << EOF
+{
+  "auth_token": "${token}",
+  "device_id": "${device_id}",
+  "convex_site_url": "${CONVEX_SITE_URL}",
+  "relay_password": "${relay_password}",
+  "relay_servers": [{"id":"test-local","quic_addr":"127.0.0.1:${relay_quic_port}","http_url":"http://127.0.0.1:${relay_http_port}","region":"local","priority":1}]
+}
+EOF
+
+    info "Starting agent with relay config..."
+    HOME="$config_dir" CLAUDECODE= "$agent_bin" serve --debug \
+        --port "$agent_http_port" --quic-port "$agent_quic_port" \
+        --work-dir "$work_dir" --dummy \
+        --relay-password "$relay_password" \
+        > "$work_dir/agent.log" 2>&1 &
+    local agent_pid=$!
+    PIDS_TO_KILL+=("$agent_pid")
+
+    for i in $(seq 1 20); do
+        curl -sf "http://127.0.0.1:${agent_http_port}/health" > /dev/null 2>&1 && break
+        sleep 0.5
+    done
+    if ! curl -sf "http://127.0.0.1:${agent_http_port}/health" > /dev/null 2>&1; then
+        fail "Agent failed to start with relay config"; tail -20 "$work_dir/agent.log"; return
+    fi
+    pass "Agent started with relay config"
+
+    info "Waiting for relay registration..."
+    sleep 3
+
+    local tunnel_count
+    tunnel_count=$(curl -sf "http://127.0.0.1:${relay_http_port}/tunnels" 2>/dev/null | \
+        python3 -c "import sys,json; print(len(json.load(sys.stdin).get('tunnels',[])))" 2>/dev/null)
+    if [ "${tunnel_count:-0}" -gt 0 ]; then
+        pass "Agent registered with relay ($tunnel_count tunnel(s))"
+    else
+        fail "Agent did not register with relay"; return
+    fi
+
+    info "Testing task flow via relay proxy..."
+    local result
+    if result=$(verify_task_flow "http://127.0.0.1:${relay_http_port}/d/${device_id}" "$token" "X-Relay-Password: $relay_password"); then
+        pass "Relay proxy task flow OK ($result)"
+    else
+        fail "Relay proxy task flow"
+    fi
+
+    local bad_pw_status
+    bad_pw_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "http://127.0.0.1:${relay_http_port}/d/${device_id}/health" \
+        -H "X-Relay-Password: wrong-password" 2>/dev/null)
+    if [ "$bad_pw_status" = "401" ]; then
+        pass "Relay password rejection (wrong password → 401)"
+    else
+        fail "Relay password rejection (expected 401, got $bad_pw_status)"
+    fi
+
+    kill "$agent_pid" 2>/dev/null || true
+    kill "$relay_pid" 2>/dev/null || true
+}
+
+# ── Remote Relay Test — Docker Deploy to Hetzner ──────────────────
+run_relay_docker_test() {
+    header "Relay Docker — Deploy to Hetzner, test, teardown"
+
+    if ! check_remote_server; then
+        skip "Relay Docker test (REMOTE_SERVER_IP not set or SSH unreachable)"
+        return
+    fi
+
+    local relay_password="test-docker-relay-$$"
+
+    info "Deploying relay via Docker to $REMOTE_SERVER_IP..."
+
+    # Copy relay source to server and build with Docker
+    local relay_tar="$TEST_DIR/relay.tar.gz"
+    (cd "$ROOT_DIR" && tar czf "$relay_tar" relay/) || { fail "Cannot tar relay/"; return; }
+    remote_scp "$relay_tar" "/tmp/yaver-relay-test.tar.gz"
+
+    # Register cleanup BEFORE deploying
+    REMOTE_CLEANUP_CMDS+=("remote_ssh 'docker stop yaver-relay-test 2>/dev/null; docker rm yaver-relay-test 2>/dev/null; rm -rf /tmp/yaver-relay-test*'")
+
+    remote_ssh "cd /tmp && rm -rf yaver-relay-test && mkdir yaver-relay-test && cd yaver-relay-test && tar xzf /tmp/yaver-relay-test.tar.gz && cd relay && docker build -t yaver-relay-test . > /dev/null 2>&1 && docker rm -f yaver-relay-test 2>/dev/null; docker run -d --name yaver-relay-test -p 14433:4433/udp -p 18443:8443/tcp -e RELAY_PASSWORD='${relay_password}' yaver-relay-test" \
+        || { fail "Docker deploy failed"; return; }
+
+    sleep 3
+
+    # Health check
+    local relay_http="http://${REMOTE_SERVER_IP}:18443"
+    if curl -sf --connect-timeout 10 "${relay_http}/health" | python3 -c "import sys,json; assert json.load(sys.stdin)['ok']" 2>/dev/null; then
+        pass "Docker relay health OK (${relay_http})"
+    else
+        fail "Docker relay health check"
+        remote_ssh "docker logs yaver-relay-test 2>&1 | tail -20"
+        return
+    fi
+
+    # Start local agent, register with remote Docker relay
+    local agent_bin="$TEST_DIR/yaver"
+    [ -f "$agent_bin" ] || build_agent "$agent_bin" > /dev/null 2>&1 || { fail "Cannot build agent"; return; }
+
+    local token
+    token=$(create_test_account) || { fail "Cannot create test account"; return; }
+    local device_id="test-docker-relay-$(gen_uuid)"
+    local work_dir="$TEST_DIR/docker-relay-agent"
+    local http_port quic_port
+    http_port=$(get_free_port); quic_port=$(get_free_port)
+
+    local config_dir="$work_dir/.yaver-config"
+    mkdir -p "$config_dir/.yaver"
+    cat > "$config_dir/.yaver/config.json" << EOF
+{
+  "auth_token": "${token}",
+  "device_id": "${device_id}",
+  "convex_site_url": "${CONVEX_SITE_URL}",
+  "relay_password": "${relay_password}",
+  "relay_servers": [{"id":"docker-test","quic_addr":"${REMOTE_SERVER_IP}:14433","http_url":"${relay_http}","region":"hetzner","priority":1}]
+}
+EOF
+
+    info "Starting local agent (connects to Docker relay at ${REMOTE_SERVER_IP}:14433)..."
+    HOME="$config_dir" CLAUDECODE= "$agent_bin" serve --debug \
+        --port "$http_port" --quic-port "$quic_port" \
+        --work-dir "$work_dir" --dummy \
+        --relay-password "$relay_password" \
+        > "$work_dir/agent.log" 2>&1 &
+    local agent_pid=$!
+    PIDS_TO_KILL+=("$agent_pid")
+
+    for i in $(seq 1 20); do
+        curl -sf "http://127.0.0.1:${http_port}/health" > /dev/null 2>&1 && break
+        sleep 0.5
+    done
+
+    # Wait for relay registration
+    sleep 5
+
+    info "Testing task flow via Docker relay proxy..."
+    local result
+    if result=$(verify_task_flow "${relay_http}/d/${device_id}" "$token" "X-Relay-Password: $relay_password"); then
+        pass "Docker relay task flow OK ($result)"
+    else
+        fail "Docker relay task flow"
+        tail -10 "$work_dir/agent.log"
+    fi
+
+    kill "$agent_pid" 2>/dev/null || true
+
+    # Teardown
+    info "Tearing down Docker relay..."
+    remote_ssh "docker stop yaver-relay-test 2>/dev/null; docker rm yaver-relay-test 2>/dev/null; rm -rf /tmp/yaver-relay-test*" || true
+    pass "Docker relay cleaned up"
+}
+
+# ── Remote Relay Test — Native Binary Deploy to Hetzner ───────────
+run_relay_binary_test() {
+    header "Relay Binary — Deploy to Hetzner as native binary, test, teardown"
+
+    if ! check_remote_server; then
+        skip "Relay binary test (REMOTE_SERVER_IP not set or SSH unreachable)"
+        return
+    fi
+
+    local relay_password="test-binary-relay-$$"
+
+    info "Building relay for remote arch ($(detect_remote_arch))..."
+    build_relay_for_remote > /dev/null 2>&1 || { fail "Cannot cross-compile relay"; return; }
+
+    info "Deploying relay binary to $REMOTE_SERVER_IP..."
+    remote_scp "$TEST_DIR/yaver-relay-remote" "/tmp/yaver-relay-test"
+
+    REMOTE_CLEANUP_CMDS+=("remote_ssh 'kill \$(cat /tmp/yaver-relay-test.pid 2>/dev/null) 2>/dev/null; rm -f /tmp/yaver-relay-test /tmp/yaver-relay-test.pid /tmp/yaver-relay-test.log'")
+
+    remote_ssh "chmod +x /tmp/yaver-relay-test && kill \$(cat /tmp/yaver-relay-test.pid 2>/dev/null) 2>/dev/null; RELAY_PASSWORD='${relay_password}' nohup /tmp/yaver-relay-test serve --quic-port=24433 --http-port=28443 > /tmp/yaver-relay-test.log 2>&1 & echo \$! > /tmp/yaver-relay-test.pid; sleep 1" \
+        || { fail "Binary deploy failed"; return; }
+
+    sleep 3
+
+    local relay_http="http://${REMOTE_SERVER_IP}:28443"
+    if curl -sf --connect-timeout 10 "${relay_http}/health" | python3 -c "import sys,json; assert json.load(sys.stdin)['ok']" 2>/dev/null; then
+        pass "Binary relay health OK (${relay_http})"
+    else
+        fail "Binary relay health check"
+        remote_ssh "cat /tmp/yaver-relay-test.log 2>&1 | tail -20"
+        return
+    fi
+
+    # Start local agent, register with remote binary relay
+    local agent_bin="$TEST_DIR/yaver"
+    [ -f "$agent_bin" ] || build_agent "$agent_bin" > /dev/null 2>&1 || { fail "Cannot build agent"; return; }
+
+    local token
+    token=$(create_test_account) || { fail "Cannot create test account"; return; }
+    local device_id="test-binary-relay-$(gen_uuid)"
+    local work_dir="$TEST_DIR/binary-relay-agent"
+    local http_port quic_port
+    http_port=$(get_free_port); quic_port=$(get_free_port)
+
+    local config_dir="$work_dir/.yaver-config"
+    mkdir -p "$config_dir/.yaver"
+    cat > "$config_dir/.yaver/config.json" << EOF
+{
+  "auth_token": "${token}",
+  "device_id": "${device_id}",
+  "convex_site_url": "${CONVEX_SITE_URL}",
+  "relay_password": "${relay_password}",
+  "relay_servers": [{"id":"binary-test","quic_addr":"${REMOTE_SERVER_IP}:24433","http_url":"${relay_http}","region":"hetzner","priority":1}]
+}
+EOF
+
+    info "Starting local agent (connects to binary relay at ${REMOTE_SERVER_IP}:24433)..."
+    HOME="$config_dir" CLAUDECODE= "$agent_bin" serve --debug \
+        --port "$http_port" --quic-port "$quic_port" \
+        --work-dir "$work_dir" --dummy \
+        --relay-password "$relay_password" \
+        > "$work_dir/agent.log" 2>&1 &
+    local agent_pid=$!
+    PIDS_TO_KILL+=("$agent_pid")
+
+    for i in $(seq 1 20); do
+        curl -sf "http://127.0.0.1:${http_port}/health" > /dev/null 2>&1 && break
+        sleep 0.5
+    done
+    sleep 5
+
+    info "Testing task flow via binary relay proxy..."
+    local result
+    if result=$(verify_task_flow "${relay_http}/d/${device_id}" "$token" "X-Relay-Password: $relay_password"); then
+        pass "Binary relay task flow OK ($result)"
+    else
+        fail "Binary relay task flow"
+        tail -10 "$work_dir/agent.log"
+    fi
+
+    kill "$agent_pid" 2>/dev/null || true
+
+    info "Tearing down binary relay..."
+    remote_ssh "kill \$(cat /tmp/yaver-relay-test.pid 2>/dev/null) 2>/dev/null; rm -f /tmp/yaver-relay-test /tmp/yaver-relay-test.pid /tmp/yaver-relay-test.log" || true
+    pass "Binary relay cleaned up"
+}
+
+# ── Tailscale Test — Cross-machine via Hetzner ────────────────────
+run_tailscale_test() {
+    header "Tailscale — Cross-machine CLI-to-CLI (local ↔ Hetzner)"
+
+    # Check local Tailscale
+    if ! command -v tailscale &>/dev/null; then
+        skip "Tailscale test (tailscale CLI not installed)"
+        return
+    fi
+
+    local ts_status
+    ts_status=$(tailscale status --json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('BackendState',''))" 2>/dev/null) || true
+    if [ "$ts_status" != "Running" ]; then
+        skip "Tailscale test (tailscale not running, state=${ts_status:-unknown})"
+        return
+    fi
+
+    local local_ts_ip
+    local_ts_ip=$(tailscale ip -4 2>/dev/null) || true
+    if [ -z "$local_ts_ip" ]; then
+        skip "Tailscale test (cannot get local Tailscale IPv4)"
+        return
+    fi
+    pass "Local Tailscale running (IP=$local_ts_ip)"
+
+    # Check if we have a remote server to deploy an agent to
+    if ! check_remote_server; then
+        # Fallback: just test local agent reachable via TS IP
+        info "No remote server — testing local agent via Tailscale IP..."
+        local agent_bin="$TEST_DIR/yaver"
+        [ -f "$agent_bin" ] || build_agent "$agent_bin" > /dev/null 2>&1 || { fail "Cannot build agent"; return; }
+
+        local http_port quic_port
+        http_port=$(get_free_port); quic_port=$(get_free_port)
+        local token
+        token=$(create_test_account) || { fail "Cannot create test account"; return; }
+        local device_id="test-ts-local-$(gen_uuid)"
+        local work_dir="$TEST_DIR/ts-local-agent"
+
+        local agent_pid
+        agent_pid=$(start_agent "$agent_bin" "$http_port" "$quic_port" "$token" "$device_id" "$work_dir" --no-relay) || {
+            fail "Agent failed to start"; return
+        }
+
+        local ts_url="http://${local_ts_ip}:${http_port}"
+        if curl -sf --connect-timeout 5 "$ts_url/health" > /dev/null 2>&1; then
+            pass "Agent reachable via Tailscale IP ($ts_url)"
+        else
+            fail "Agent not reachable via Tailscale IP"
+        fi
+
+        local result
+        if result=$(verify_task_flow "$ts_url" "$token"); then
+            pass "Tailscale local task flow OK ($result)"
+        else
+            fail "Tailscale local task flow"
+        fi
+
+        kill "$agent_pid" 2>/dev/null || true
+        return
+    fi
+
+    # Full cross-machine test: deploy agent to Hetzner, connect via Tailscale
+    info "Checking Tailscale on remote server ($REMOTE_SERVER_IP)..."
+
+    local remote_ts_ip
+    remote_ts_ip=$(remote_ssh "tailscale ip -4 2>/dev/null" 2>/dev/null) || true
+    if [ -z "$remote_ts_ip" ]; then
+        skip "Tailscale test (tailscale not available on remote server)"
+        return
+    fi
+    pass "Remote Tailscale running (IP=$remote_ts_ip)"
+
+    # Verify TS connectivity between machines
+    if ! tailscale ping --timeout=5s "$remote_ts_ip" > /dev/null 2>&1; then
+        fail "Cannot ping remote via Tailscale ($remote_ts_ip)"
+        return
+    fi
+    pass "Tailscale ping to remote OK"
+
+    # Deploy agent binary to Hetzner
+    info "Building agent for remote arch ($(detect_remote_arch))..."
+    build_agent_for_remote > /dev/null 2>&1 || { fail "Cannot cross-compile agent"; return; }
+
+    info "Deploying agent to Hetzner..."
+    remote_scp "$TEST_DIR/yaver-agent-remote" "/tmp/yaver-agent-test"
+
+    local token
+    token=$(create_test_account) || { fail "Cannot create test account"; return; }
+    local device_id="test-ts-remote-$(gen_uuid)"
+    local remote_http_port=19080
+    local remote_quic_port=19433
+
+    REMOTE_CLEANUP_CMDS+=("remote_ssh 'kill \$(cat /tmp/yaver-agent-test.pid 2>/dev/null) 2>/dev/null; rm -f /tmp/yaver-agent-test /tmp/yaver-agent-test.pid /tmp/yaver-agent-test.log; rm -rf /tmp/yaver-ts-test'")
+
+    # Write config locally and scp it
+    local remote_config="$TEST_DIR/remote-agent-config.json"
+    cat > "$remote_config" << EOF
+{"auth_token":"${token}","device_id":"${device_id}","convex_site_url":"${CONVEX_SITE_URL}"}
+EOF
+    remote_ssh "mkdir -p /tmp/yaver-ts-test/.yaver"
+    remote_scp "$remote_config" "/tmp/yaver-ts-test/.yaver/config.json"
+
+    remote_ssh "chmod +x /tmp/yaver-agent-test && kill \$(cat /tmp/yaver-agent-test.pid 2>/dev/null) 2>/dev/null; HOME=/tmp/yaver-ts-test CLAUDECODE= nohup /tmp/yaver-agent-test serve --debug --port=${remote_http_port} --quic-port=${remote_quic_port} --work-dir=/tmp/yaver-ts-test --dummy --no-relay > /tmp/yaver-agent-test.log 2>&1 & echo \$! > /tmp/yaver-agent-test.pid; sleep 1" \
+        || { fail "Remote agent deploy failed"; return; }
+
+    sleep 3
+
+    # Test: connect to remote agent via Tailscale IP
+    local ts_url="http://${remote_ts_ip}:${remote_http_port}"
+    info "Testing connection via Tailscale ($ts_url)..."
+
+    if curl -sf --connect-timeout 10 "$ts_url/health" > /dev/null 2>&1; then
+        pass "Remote agent reachable via Tailscale"
+    else
+        fail "Remote agent not reachable via Tailscale ($ts_url)"
+        remote_ssh "cat /tmp/yaver-agent-test.log 2>&1 | tail -20"
+        return
+    fi
+
+    local result
+    if result=$(verify_task_flow "$ts_url" "$token"); then
+        pass "Tailscale cross-machine task flow OK ($result)"
+    else
+        fail "Tailscale cross-machine task flow"
+    fi
+
+    # Teardown remote agent
+    info "Tearing down remote agent..."
+    remote_ssh "kill \$(cat /tmp/yaver-agent-test.pid 2>/dev/null) 2>/dev/null; rm -f /tmp/yaver-agent-test /tmp/yaver-agent-test.pid /tmp/yaver-agent-test.log; rm -rf /tmp/yaver-ts-test" || true
+    pass "Remote agent cleaned up"
+}
+
+# ── Cloudflare Tunnel Test ─────────────────────────────────────────
+run_cloudflare_test() {
+    header "Cloudflare Tunnel — CLI-to-CLI via CF Access"
+
+    if [ -z "${CF_TUNNEL_URL:-}" ] && ! command -v cloudflared &>/dev/null; then
+        skip "Cloudflare tunnel test (CF_TUNNEL_URL not set and cloudflared not installed)"
+        return
+    fi
+
+    local agent_bin="$TEST_DIR/yaver"
+    [ -f "$agent_bin" ] || build_agent "$agent_bin" > /dev/null 2>&1 || { fail "Cannot build agent"; return; }
+
+    local http_port quic_port
+    http_port=$(get_free_port); quic_port=$(get_free_port)
+
+    local token
+    token=$(create_test_account) || { fail "Cannot create test account"; return; }
+    local device_id="test-cf-$(gen_uuid)"
+    local work_dir="$TEST_DIR/cf-agent"
+
+    local agent_pid
+    agent_pid=$(start_agent "$agent_bin" "$http_port" "$quic_port" "$token" "$device_id" "$work_dir" --no-relay) || {
+        fail "Agent failed to start"; return
+    }
+
+    # Quick tunnel (no CF Access needed)
+    if command -v cloudflared &>/dev/null; then
+        info "Starting cloudflared quick tunnel to localhost:$http_port..."
+        cloudflared tunnel --url "http://127.0.0.1:${http_port}" \
+            > "$TEST_DIR/cloudflared.log" 2>&1 &
+        local cfd_pid=$!
+        PIDS_TO_KILL+=("$cfd_pid")
+
+        # Wait for cloudflared to output the tunnel URL (up to 15s)
+        local auto_url=""
+        for i in $(seq 1 15); do
+            auto_url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$TEST_DIR/cloudflared.log" 2>/dev/null | head -1 || true)
+            [ -n "$auto_url" ] && break
+            sleep 1
+        done
+
+        if [ -n "$auto_url" ]; then
+            pass "Cloudflared quick tunnel: $auto_url"
+
+            # Wait for tunnel to be fully routable (CF edge can take 10-30s)
+            # CF quick tunnels need 10-15s for DNS propagation after URL appears.
+            # DNS negative caching can cause repeated failures if we poll too early,
+            # so wait a fixed period first then check.
+            info "Waiting for CF DNS propagation (15s)..."
+            sleep 15
+            local tunnel_ready=false
+            local attempt=0
+            while [ $attempt -lt 10 ]; do
+                attempt=$((attempt + 1))
+                if curl -sf --connect-timeout 5 --max-time 10 "$auto_url/health" > /dev/null 2>&1; then
+                    tunnel_ready=true
+                    break
+                fi
+                sleep 3
+            done
+
+            if $tunnel_ready; then
+                pass "Cloudflare tunnel health OK (attempt $attempt)"
+                local result
+                if result=$(verify_task_flow "$auto_url" "$token"); then
+                    pass "Cloudflare quick tunnel task flow OK ($result)"
+                else
+                    fail "Cloudflare quick tunnel task flow"
+                fi
+            else
+                fail "Cloudflare tunnel not routable after 40s"
+            fi
+        else
+            skip "Could not extract cloudflared tunnel URL"
+        fi
+    fi
+
+    # Named tunnel with CF Access service token
+    if [ -n "${CF_ACCESS_CLIENT_ID:-}" ] && [ -n "${CF_ACCESS_CLIENT_SECRET:-}" ]; then
+        info "Testing via configured CF tunnel ($CF_TUNNEL_URL)..."
+        local cf_health
+        cf_health=$(curl -sf --connect-timeout 10 \
+            -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+            -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
+            "${CF_TUNNEL_URL}/health" 2>/dev/null) || true
+
+        if echo "$cf_health" | python3 -c "import sys,json; assert json.load(sys.stdin)['ok']" 2>/dev/null; then
+            pass "CF tunnel health OK"
+            local result
+            if result=$(verify_task_flow "$CF_TUNNEL_URL" "$token" \
+                "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET"); then
+                pass "CF tunnel task flow OK ($result)"
+            else
+                fail "CF tunnel task flow"
+            fi
+        else
+            skip "CF tunnel not reachable (agent may not be running behind it)"
+        fi
+    else
+        skip "CF Access service token (CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET not set)"
+    fi
+
+    kill "$agent_pid" 2>/dev/null || true
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════════
+main() {
+    echo -e "${BOLD}${BLUE}"
+    echo "╔═══════════════════════════════════════════════════╗"
+    echo "║         Yaver Integration Test Suite              ║"
+    echo "╚═══════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    mkdir -p "$TEST_DIR"
+    load_credentials
+
+    info "Test dir: $TEST_DIR"
+    info "Convex: $CONVEX_SITE_URL"
+    [ -n "${REMOTE_SERVER_IP:-}" ] && info "Remote: $REMOTE_SERVER_IP"
+    echo ""
+
+    # Parse flags
+    local run_all=true
+    local run_builds=false run_lan=false run_relay=false run_relay_docker=false
+    local run_relay_binary=false run_tailscale=false run_cloudflare=false run_unit=false
+
+    for arg in "$@"; do
+        case "$arg" in
+            --unit)           run_unit=true; run_all=false ;;
+            --builds)         run_builds=true; run_all=false ;;
+            --lan)            run_lan=true; run_all=false ;;
+            --relay)          run_relay=true; run_all=false ;;
+            --relay-docker)   run_relay_docker=true; run_all=false ;;
+            --relay-binary)   run_relay_binary=true; run_all=false ;;
+            --tailscale)      run_tailscale=true; run_all=false ;;
+            --cloudflare)     run_cloudflare=true; run_all=false ;;
+            --help|-h)
+                cat << 'HELP'
+Usage: ./scripts/test-suite.sh [FLAGS]
+
+No flags = run all tests.
+
+Flags:
+  --unit            Go unit tests (agent + relay)
+  --builds          Build verification (CLI, relay, web, mobile, iOS, Android)
+  --lan             LAN direct connection test (localhost, no infra needed)
+  --relay           Local relay server test (no remote infra)
+  --relay-docker    Deploy relay to Hetzner via Docker, test, teardown
+  --relay-binary    Deploy relay to Hetzner as native binary, test, teardown
+  --tailscale       Tailscale cross-machine test (local ↔ Hetzner)
+  --cloudflare      Cloudflare tunnel test
+
+Environment:
+  Credentials loaded from: env vars > .env.test > ../talos/.env.test
+  See .env.test.example for all available variables.
+
+  --unit, --lan, --relay work without any credentials (use Convex dev backend).
+  --relay-docker, --relay-binary, --tailscale need REMOTE_SERVER_IP + SSH key.
+  --cloudflare needs CF_TUNNEL_URL + CF_ACCESS_CLIENT_ID + CF_ACCESS_CLIENT_SECRET.
+HELP
+                exit 0
+                ;;
+            *) echo "Unknown flag: $arg (use --help)"; exit 1 ;;
+        esac
+    done
+
+    if $run_all || $run_unit; then
+        run_unit_tests
+    fi
+
+    if $run_all || $run_builds; then
+        run_build_tests
+    fi
+
+    if $run_all || $run_lan; then
+        run_lan_test
+    fi
+
+    if $run_all || $run_relay; then
+        run_relay_test
+    fi
+
+    if $run_all || $run_relay_docker; then
+        run_relay_docker_test
+    fi
+
+    if $run_all || $run_relay_binary; then
+        run_relay_binary_test
+    fi
+
+    if $run_all || $run_tailscale; then
+        run_tailscale_test
+    fi
+
+    if $run_all || $run_cloudflare; then
+        run_cloudflare_test
+    fi
+
+    # Summary
+    echo ""
+    echo -e "${BOLD}═══════════════════════════════════════════════════${NC}"
+    echo -e "  ${GREEN}Passed: $PASS_COUNT${NC}  ${RED}Failed: $FAIL_COUNT${NC}  ${YELLOW}Skipped: $SKIP_COUNT${NC}"
+    echo -e "${BOLD}═══════════════════════════════════════════════════${NC}"
+
+    if [ $FAIL_COUNT -gt 0 ]; then
+        echo -e "\n${RED}Failures:${NC}"
+        for f in "${FAILURES[@]+"${FAILURES[@]}"}"; do
+            echo -e "  ${RED}✗ $f${NC}"
+        done
+        echo ""
+        exit 1
+    fi
+
+    echo -e "\n${GREEN}All tests passed!${NC}\n"
+}
+
+main "$@"
