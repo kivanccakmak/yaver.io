@@ -892,7 +892,7 @@ export default function TasksScreen() {
               <View style={s.emptyList}>
                 <Text style={[s.emptyIcon, { color: c.textMuted }]}>{"\u2630"}</Text>
                 <Text style={[s.emptyTitle, { color: c.textPrimary }]}>
-                  {devices.length} Devices Available
+                  {devices.length} {devices.length === 1 ? "Device" : "Devices"} Available
                 </Text>
                 <Text style={[s.emptySubtitle, { color: c.textSecondary, marginBottom: 16 }]}>
                   Which device do you want to connect to?
