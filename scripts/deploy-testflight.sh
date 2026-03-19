@@ -3,10 +3,10 @@ set -e
 
 cd "$(dirname "$0")/../mobile/ios"
 
-# App Store Connect API key (simkab team, shared with Talos)
-AUTH_KEY="$HOME/Workspace/talos/mobile/ios/AuthKey_77Z6B543D5.p8"
-AUTH_KEY_ID="77Z6B543D5"
-AUTH_KEY_ISSUER="7bd9329e-49b0-440a-97ed-873c74244c12"
+# App Store Connect API key — set these env vars or edit for your team
+AUTH_KEY="${APP_STORE_KEY_PATH:?Set APP_STORE_KEY_PATH to your AuthKey_*.p8 file}"
+AUTH_KEY_ID="${APP_STORE_KEY_ID:?Set APP_STORE_KEY_ID}"
+AUTH_KEY_ISSUER="${APP_STORE_KEY_ISSUER:?Set APP_STORE_KEY_ISSUER}"
 
 # Bump build number
 PLIST="Yaver/Info.plist"
@@ -19,7 +19,7 @@ echo "Build $CURRENT_BUILD → $NEW_BUILD"
 echo "Archiving..."
 xcodebuild -workspace Yaver.xcworkspace -scheme Yaver -configuration Release \
   -archivePath /tmp/Yaver.xcarchive archive \
-  DEVELOPMENT_TEAM=5SJZ4KA39A CODE_SIGN_STYLE=Automatic \
+  DEVELOPMENT_TEAM="${APPLE_TEAM_ID:?Set APPLE_TEAM_ID}" CODE_SIGN_STYLE=Automatic \
   ENABLE_USER_SCRIPT_SANDBOXING=NO -allowProvisioningUpdates \
   -authenticationKeyPath "$AUTH_KEY" \
   -authenticationKeyID "$AUTH_KEY_ID" \
@@ -33,7 +33,7 @@ cat > /tmp/ExportOptions.plist <<'EOF'
 <plist version="1.0">
 <dict>
     <key>method</key><string>app-store</string>
-    <key>teamID</key><string>5SJZ4KA39A</string>
+    <key>teamID</key><string>${APPLE_TEAM_ID}</string>
     <key>signingStyle</key><string>automatic</string>
     <key>destination</key><string>upload</string>
 </dict>

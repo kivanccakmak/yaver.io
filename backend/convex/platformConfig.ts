@@ -8,8 +8,8 @@ import { query, mutation } from "./_generated/server";
  * Key configs:
  *   "relay_servers" — JSON array of relay servers:
  *     [
- *       {"id":"hel1","quicAddr":"37.27.184.85:4433","httpUrl":"http://37.27.184.85:8443","region":"eu-hel","priority":1},
- *       {"id":"fsn1","quicAddr":"xx.xx.xx.xx:4433","httpUrl":"http://xx.xx.xx.xx:8443","region":"eu-fsn","priority":2}
+ *       {"id":"relay1","quicAddr":"<your-ip>:4433","httpUrl":"http://<your-ip>:8443","region":"eu","priority":1},
+ *       {"id":"relay2","quicAddr":"<your-ip>:4433","httpUrl":"http://<your-ip>:8443","region":"us","priority":2}
  *     ]
  *   Clients connect to all available relays for redundancy.
  *   If one goes down, traffic automatically routes through others.

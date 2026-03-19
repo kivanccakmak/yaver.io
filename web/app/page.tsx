@@ -180,7 +180,7 @@ export default function HomePage() {
             </p>
             <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <a
-                href="https://github.com/kivanccakmak/yaver"
+                href="https://github.com/kivanccakmak/yaver.io"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="btn-primary px-8 py-3.5 text-sm"
@@ -1244,7 +1244,7 @@ export default function HomePage() {
           </code>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <a
-              href="https://github.com/kivanccakmak/yaver"
+              href="https://github.com/kivanccakmak/yaver.io"
               target="_blank"
               rel="noopener noreferrer"
               className="btn-primary px-8 py-3.5 text-sm"
@@ -1257,7 +1257,7 @@ export default function HomePage() {
           </div>
           <div className="mt-8 flex items-center justify-center gap-6 text-xs text-surface-500">
             <a
-              href="https://github.com/kivanccakmak/yaver"
+              href="https://github.com/kivanccakmak/yaver.io"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-surface-300"

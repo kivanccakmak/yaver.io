@@ -20,9 +20,9 @@ import requests
 
 # --- Configuration ---
 
-API_KEY_ID = "77Z6B543D5"
-ISSUER_ID = "7bd9329e-49b0-440a-97ed-873c74244c12"
-API_KEY_PATH = Path.home() / "Workspace/talos/mobile/ios/AuthKey_77Z6B543D5.p8"
+API_KEY_ID = os.environ.get("APP_STORE_KEY_ID", "")
+ISSUER_ID = os.environ.get("APP_STORE_KEY_ISSUER", "")
+API_KEY_PATH = Path(os.environ.get("APP_STORE_KEY_PATH", str(Path.home() / ".appstore/AuthKey.p8")))
 BUNDLE_ID = "io.yaver.mobile"
 BASE_URL = "https://api.appstoreconnect.apple.com/v1"
 

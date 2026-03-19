@@ -116,7 +116,7 @@ type RegisterDeviceRequest struct {
 // RelayServerInfo describes a relay server from platform config.
 type RelayServerInfo struct {
 	ID       string `json:"id"`
-	QuicAddr string `json:"quicAddr"` // e.g. "37.27.184.85:4433"
+	QuicAddr string `json:"quicAddr"` // e.g. "relay.example.com:4433"
 	HttpURL  string `json:"httpUrl"`  // e.g. "https://connect.yaver.io"
 	Region   string `json:"region"`
 	Priority int    `json:"priority"`

@@ -2,14 +2,12 @@
 
 Application-layer P2P relay for Yaver. Enables mobile-to-desktop connectivity without Tailscale, VPN, or TUN/TAP — works through carrier-grade NAT, firewalls, and roaming.
 
-**This is Yaver's infrastructure — not customer-managed.** Relay servers are configured centrally in Convex `platformConfig` and auto-fetched by CLI and mobile clients.
-
 ## Architecture
 
 ```
 ┌─────────────┐     HTTP         ┌──────────────┐    QUIC tunnel    ┌──────────────┐
 │  Mobile App │─────────────────►│ Relay Server │◄──────────────────│ Desktop Agent│
-│  (roaming)  │  short-lived     │  (Hetzner)   │  persistent       │  (ethernet)  │
+│  (roaming)  │  short-lived     │  (your VPS)  │  persistent       │  (ethernet)  │
 │  Wi-Fi/5G   │  HTTP requests   │  public IP   │  outbound conn    │  behind NAT  │
 └─────────────┘                  └──────────────┘                   └──────────────┘
                                        │
@@ -56,8 +54,8 @@ Relay servers are stored as a JSON array in Convex `platformConfig` under the ke
 
 ```json
 [
-  {"id": "hel1", "quicAddr": "37.27.184.85:4433", "httpUrl": "https://connect.yaver.io", "region": "eu-hel", "priority": 1},
-  {"id": "fsn1", "quicAddr": "xx.xx.xx.xx:4433", "httpUrl": "http://xx.xx.xx.xx:8443", "region": "eu-fsn", "priority": 2}
+  {"id": "relay1", "quicAddr": "<your-ip>:4433", "httpUrl": "https://relay.yourdomain.com", "region": "eu", "priority": 1},
+  {"id": "relay2", "quicAddr": "<your-ip>:4433", "httpUrl": "http://<your-ip>:8443", "region": "us", "priority": 2}
 ]
 ```
 
@@ -73,19 +71,7 @@ Relay servers are stored as a JSON array in Convex `platformConfig` under the ke
 npx convex run platformConfig:get '{"key":"relay_servers"}'
 
 # Set relay servers (replaces entire list)
-npx convex run platformConfig:set '{"key":"relay_servers","value":"[{\"id\":\"hel1\",\"quicAddr\":\"37.27.184.85:4433\",\"httpUrl\":\"https://connect.yaver.io\",\"region\":\"eu-hel\",\"priority\":1}]"}'
-
-# Add a second relay (copy existing, append new entry)
-npx convex run platformConfig:set '{"key":"relay_servers","value":"[{\"id\":\"hel1\",\"quicAddr\":\"37.27.184.85:4433\",\"httpUrl\":\"https://connect.yaver.io\",\"region\":\"eu-hel\",\"priority\":1},{\"id\":\"fsn1\",\"quicAddr\":\"xx.xx.xx.xx:4433\",\"httpUrl\":\"http://xx.xx.xx.xx:8443\",\"region\":\"eu-fsn\",\"priority\":2}]"}'
-```
-
-The public endpoint `GET /config` returns:
-```json
-{
-  "relayServers": [
-    {"id": "hel1", "quicAddr": "37.27.184.85:4433", "httpUrl": "https://connect.yaver.io", "region": "eu-hel", "priority": 1}
-  ]
-}
+npx convex run platformConfig:set '{"key":"relay_servers","value":"[{\"id\":\"relay1\",\"quicAddr\":\"<your-ip>:4433\",\"httpUrl\":\"https://relay.yourdomain.com\",\"region\":\"eu\",\"priority\":1}]"}'
 ```
 
 ## Quick Start
@@ -117,33 +103,27 @@ curl http://127.0.0.1:8443/d/<deviceId>/health
 curl http://127.0.0.1:8443/tunnels
 ```
 
-## Deploy to Hetzner
+## Deploy to a VPS
 
-### Current deployment
-
-| Server | Domain | IP | Arch | Relay ID | Region |
-|---|---|---|---|---|---|
-| Hetzner CAX11 | `connect.yaver.io` | `37.27.184.85` | ARM64 (aarch64) | `hel1` | `eu-hel` (Helsinki) |
-
-### Docker deploy (current method)
+### Docker deploy
 
 ```bash
 # Build and deploy (sparse checkout — only clones relay/)
-./deploy/up.sh 37.27.184.85 --docker
+./deploy/up.sh <server-ip> --docker
 
 # Or manually:
-ssh root@37.27.184.85
+ssh root@<server-ip>
 cd /opt/yaver-relay/relay
 docker compose up -d --build
 ```
 
-### Binary deploy (alternative — smaller footprint)
+### Binary deploy (smaller footprint)
 
 ```bash
 # Build + deploy + start systemd service
-./deploy/up.sh 37.27.184.85
+./deploy/up.sh <server-ip>
 
-# Cross-compile for ARM64 (Hetzner CAX series is ARM):
+# Cross-compile for ARM64:
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o yaver-relay-linux-arm64 .
 ```
 
@@ -178,8 +158,8 @@ docker compose down
 ### Stop relay
 
 ```bash
-./deploy/down.sh 37.27.184.85             # Stop service
-./deploy/down.sh 37.27.184.85 --purge     # Stop + remove everything
+./deploy/down.sh <server-ip>             # Stop service
+./deploy/down.sh <server-ip> --purge     # Stop + remove everything
 ```
 
 ## Operations
@@ -188,21 +168,17 @@ docker compose down
 
 ```bash
 # Docker logs
-ssh root@37.27.184.85 docker logs -f yaver-relay
+ssh root@<server-ip> docker logs -f yaver-relay
 
 # Systemd logs (if binary deploy)
-ssh root@37.27.184.85 journalctl -u yaver-relay -f
-ssh root@37.27.184.85 journalctl -u yaver-relay --since today
-ssh root@37.27.184.85 journalctl -u yaver-relay -n 100
+ssh root@<server-ip> journalctl -u yaver-relay -f
+ssh root@<server-ip> journalctl -u yaver-relay --since today
 
 # Health check
-curl https://connect.yaver.io/health
+curl http://<server-ip>:8443/health
 
 # Active tunnels
-curl https://connect.yaver.io/tunnels
-
-# Server resources
-ssh root@37.27.184.85 'df -h / && free -h && docker ps'
+curl http://<server-ip>:8443/tunnels
 ```
 
 ### Systemd management (binary deploy)
@@ -288,4 +264,4 @@ The protocol includes `PeerInfo` messages for hole-punch coordination:
 3. If direct connection succeeds → bypass relay, lower latency
 4. If not (symmetric NAT) → relay continues proxying
 
-Not implemented yet — the relay alone handles 100% of cases, with ~20-50ms added latency via Hetzner.
+Not implemented yet — the relay alone handles 100% of cases.
