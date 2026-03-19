@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../src/context/AuthContext";
 import { useColors } from "../src/context/ThemeContext";
-import { submitSurvey, getAiRunners, saveUserSettings, type AiRunner } from "../src/lib/auth";
+import { submitSurvey, getAiRunners, saveUserSettings, getUserSettings, type AiRunner } from "../src/lib/auth";
 
 const IDENTITIES = [
   { id: "developer", label: "Developer" },
@@ -64,6 +64,7 @@ export default function SurveyScreen() {
   const [runners, setRunners] = useState<AiRunner[]>([]);
   const [selectedRunner, setSelectedRunner] = useState<string>("claude");
   const [customCommand, setCustomCommand] = useState("");
+  const [runnerPresetFromCli, setRunnerPresetFromCli] = useState(false);
 
   useEffect(() => {
     getAiRunners().then((r) => {
@@ -71,7 +72,17 @@ export default function SurveyScreen() {
       const defaultRunner = r.find((runner) => runner.isDefault);
       if (defaultRunner) setSelectedRunner(defaultRunner.runnerId);
     });
-  }, []);
+    // Check if runner was already set from CLI
+    if (token) {
+      getUserSettings(token).then((s) => {
+        if (s.runnerId) {
+          setSelectedRunner(s.runnerId);
+          setRunnerPresetFromCli(true);
+          if (s.customRunnerCommand) setCustomCommand(s.customRunnerCommand);
+        }
+      }).catch(() => {});
+    }
+  }, [token]);
 
   const isDev = identity === "developer";
   const totalPages = isDev ? 5 : 4;
@@ -211,7 +222,9 @@ export default function SurveyScreen() {
         Choose your AI agent
       </Text>
       <Text style={[styles.pageSubtitle, { color: c.textSecondary }]}>
-        Yaver runs any terminal AI tool on your machine
+        {runnerPresetFromCli
+          ? "Previously set from CLI. You can change it here."
+          : "Yaver runs any terminal AI tool on your machine"}
       </Text>
 
       <View style={styles.identityGrid}>
