@@ -1,7 +1,7 @@
 # Yaver.io — Claude Code Project Guide
 
 ## Important Rules
-- **Never push or commit without explicit user permission.** Vercel auto-deploy is disabled; use `./scripts/deploy-vercel.sh` for production deploys.
+- **Never push or commit without explicit user permission.** Vercel auto-deploys from GitHub on push to `main`.
 - **Vercel deploy size guard**: `web/` must stay under 10 MB. The deploy script enforces this. Do not add large assets to `web/`.
 - **NEVER commit credentials, IPs, API keys, or secrets to the repo.** The repo is open-source on GitHub. All credentials must go in `.env.test` (gitignored), env vars, or GitHub Actions secrets. This includes Hetzner server IPs, Apple Developer keys, SSH key paths, relay passwords, Tailscale IPs. If you see a hardcoded credential, replace it with an env var or placeholder immediately.
 
@@ -9,7 +9,7 @@
 - **Source of truth**: GitLab (`gitlab.com/kivanccakmak/yaver.io`) — development happens here
 - **Public mirror**: GitHub (`github.com/kivanccakmak/yaver.io`) — open-source, single squashed initial commit, no git history
 - **To update GitHub mirror**: Push to GitLab first, then sync to GitHub with a squashed commit (see below)
-- **Vercel**: deploys from local via `./scripts/deploy-vercel.sh` (NOT from Git)
+- **Vercel**: auto-deploys from GitHub on push to `main`. Manual deploy: `./scripts/deploy-vercel.sh`
 - **Landing page links**: point to `https://github.com/kivanccakmak/yaver.io`
 
 ### Syncing GitLab → GitHub
