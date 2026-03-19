@@ -29,6 +29,7 @@ BASE_URL = "https://api.appstoreconnect.apple.com/v1"
 # App info
 APP_NAME = "Yaver IO"
 SUBTITLE = "Code from your phone"
+COPYRIGHT = "2026 SIMKAB ELEKTRIK"
 PRIVACY_POLICY_URL = "https://yaver.io/privacy"
 SUPPORT_URL = "https://yaver.io"
 MARKETING_URL = "https://yaver.io"
@@ -355,6 +356,44 @@ def update_version_localization(localization_id, include_whats_new=True):
             print("  WARNING: Failed to update version localization.")
 
 
+def update_version_copyright(version_id):
+    """Set copyright on the App Store version."""
+    print(f"Setting copyright: {COPYRIGHT}")
+    payload = {
+        "data": {
+            "type": "appStoreVersions",
+            "id": version_id,
+            "attributes": {
+                "copyright": COPYRIGHT,
+            },
+        }
+    }
+    result = api_patch(f"/appStoreVersions/{version_id}", payload)
+    if result is not None:
+        print("  Copyright updated.")
+    else:
+        print("  WARNING: Failed to update copyright.")
+
+
+def set_content_rights(app_id):
+    """Declare content rights — no third-party content."""
+    print("Setting content rights (no third-party content)...")
+    payload = {
+        "data": {
+            "type": "apps",
+            "id": app_id,
+            "attributes": {
+                "contentRightsDeclaration": "DOES_NOT_USE_THIRD_PARTY_CONTENT",
+            },
+        }
+    }
+    result = api_patch(f"/apps/{app_id}", payload)
+    if result is not None:
+        print("  Content rights set.")
+    else:
+        print("  WARNING: Failed to set content rights.")
+
+
 def set_pricing_free(app_id):
     """Ensure the app is set to Free pricing."""
     print("Checking/setting pricing to FREE...")
@@ -472,14 +511,19 @@ def main():
     update_app_info_localization(info_loc_id)
     print()
 
-    # 4. Get app store version and update localization
+    # 4. Get app store version and update localization + copyright
     version_id, _ = get_app_store_version(app_id)
     if version_id:
         ver_loc_id = get_or_create_version_localization(version_id)
         update_version_localization(ver_loc_id)
+        update_version_copyright(version_id)
     print()
 
-    # 5. Set pricing to FREE
+    # 5. Set content rights (no third-party content)
+    set_content_rights(app_id)
+    print()
+
+    # 6. Set pricing to FREE
     set_pricing_free(app_id)
     print()
 

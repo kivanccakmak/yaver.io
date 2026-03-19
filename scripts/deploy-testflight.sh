@@ -26,13 +26,13 @@ xcodebuild -workspace Yaver.xcworkspace -scheme Yaver -configuration Release \
   -authenticationKeyIssuerID "$AUTH_KEY_ISSUER" \
   -derivedDataPath /tmp/YaverBuild 2>&1 | tail -1
 
-# ExportOptions
-cat > /tmp/ExportOptions.plist <<'EOF'
+# ExportOptions (no single-quote on EOF so APPLE_TEAM_ID expands)
+cat > /tmp/ExportOptions.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>method</key><string>app-store</string>
+    <key>method</key><string>app-store-connect</string>
     <key>teamID</key><string>${APPLE_TEAM_ID}</string>
     <key>signingStyle</key><string>automatic</string>
     <key>destination</key><string>upload</string>

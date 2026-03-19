@@ -5,7 +5,7 @@ cd "$(dirname "$0")/../mobile/android"
 
 # Bump versionCode
 GRADLE_FILE="app/build.gradle"
-CURRENT_VERSION_CODE=$(grep -oP 'versionCode \K\d+' "$GRADLE_FILE")
+CURRENT_VERSION_CODE=$(grep 'versionCode ' "$GRADLE_FILE" | head -1 | sed 's/[^0-9]//g')
 NEW_VERSION_CODE=$((CURRENT_VERSION_CODE + 1))
 sed -i '' "s/versionCode $CURRENT_VERSION_CODE/versionCode $NEW_VERSION_CODE/" "$GRADLE_FILE"
 echo "versionCode $CURRENT_VERSION_CODE -> $NEW_VERSION_CODE"
