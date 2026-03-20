@@ -1225,28 +1225,20 @@ func runStop() {
 	killOrphanRunners()
 }
 
-// killOrphanRunners finds and kills any leftover claude/codex/aider processes
-// that were forked by the agent but may have survived a crash or force-kill.
+// killOrphanRunners kills any leftover runner processes that were forked by
+// the agent (tracked in ~/.yaver/forked-pids.txt). Only kills yaver-forked
+// processes, never user's own claude/codex sessions.
 func killOrphanRunners() {
-	patterns := []string{
-		"claude.*--output-format.*stream-json",
-		"claude.*--dangerously-skip-permissions",
-	}
-	for _, pat := range patterns {
-		out, err := osexec.Command("pgrep", "-f", pat).Output()
-		if err != nil || len(out) == 0 {
-			continue
-		}
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			var orphanPID int
-			if _, err := fmt.Sscanf(line, "%d", &orphanPID); err == nil && orphanPID > 0 {
-				if proc, err := os.FindProcess(orphanPID); err == nil {
-					_ = proc.Kill()
-					fmt.Printf("  Killed orphan runner process (PID %d)\n", orphanPID)
-				}
+	pids := getForkedPIDs()
+	for _, pid := range pids {
+		if isProcessAlive(pid) {
+			if proc, err := os.FindProcess(pid); err == nil {
+				_ = proc.Kill()
+				fmt.Printf("  Killed orphan runner process (PID %d)\n", pid)
 			}
 		}
 	}
+	clearForkedPIDs()
 }
 
 // ---------------------------------------------------------------------------

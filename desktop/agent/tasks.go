@@ -524,6 +524,76 @@ func (tm *TaskManager) WarmUp() {
 	}()
 }
 
+// forkedPidsFile returns the path to the file tracking PIDs forked by the agent.
+func forkedPidsFile() string {
+	dir, err := ConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "forked-pids.txt")
+}
+
+// trackForkedPID adds a PID to the forked-pids file.
+func trackForkedPID(pid int) {
+	path := forkedPidsFile()
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%d\n", pid)
+}
+
+// untrackForkedPID removes a PID from the forked-pids file.
+func untrackForkedPID(pid int) {
+	path := forkedPidsFile()
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var remaining []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line != fmt.Sprintf("%d", pid) && line != "" {
+			remaining = append(remaining, line)
+		}
+	}
+	os.WriteFile(path, []byte(strings.Join(remaining, "\n")+"\n"), 0600)
+}
+
+// getForkedPIDs returns all tracked forked PIDs.
+func getForkedPIDs() []int {
+	path := forkedPidsFile()
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var pid int
+		if _, err := fmt.Sscanf(line, "%d", &pid); err == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// clearForkedPIDs removes the forked-pids file.
+func clearForkedPIDs() {
+	path := forkedPidsFile()
+	if path != "" {
+		os.Remove(path)
+	}
+}
+
 // Shutdown stops all running tasks and kills the warm session process.
 func (tm *TaskManager) Shutdown() {
 	stopped := tm.StopAllTasks()
@@ -541,6 +611,8 @@ func (tm *TaskManager) Shutdown() {
 			_ = proc.Kill()
 		}
 	}
+
+	clearForkedPIDs()
 }
 
 // GetWarmSessionID returns the warm session ID if available.
@@ -1004,6 +1076,8 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	task.StartedAt = &now
 	task.Status = TaskStatusRunning
 
+	trackForkedPID(cmd.Process.Pid)
+
 	go SendDevLog(tm.ConvexURL, tm.AuthToken, tm.OwnerEmail, "task-started",
 		fmt.Sprintf("Claude PID %d started for task %s", cmd.Process.Pid, task.ID), nil)
 
@@ -1042,6 +1116,9 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// Wait for process to exit; auto-restart on unexpected crash.
 	go func() {
 		err := cmd.Wait()
+		if cmd.Process != nil {
+			untrackForkedPID(cmd.Process.Pid)
+		}
 		tm.mu.Lock()
 		if task.Status == TaskStatusRunning {
 			if err != nil {
