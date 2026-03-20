@@ -1437,10 +1437,28 @@ func signalRunningAgent() bool {
 }
 
 func runRelayAdd(args []string) {
+	// Reorder args: move flags before positional URL arg so Go's flag package
+	// can parse them (Go stops parsing at first non-flag argument)
+	var reordered []string
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "-") {
+			reordered = append(reordered, args[i])
+			// Consume the next arg as the flag value (e.g. --password VALUE)
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && !strings.Contains(args[i], "=") {
+				reordered = append(reordered, args[i+1])
+				i++
+			}
+		} else {
+			positional = append(positional, args[i])
+		}
+	}
+	reordered = append(reordered, positional...)
+
 	fs := flag.NewFlagSet("relay add", flag.ExitOnError)
 	password := fs.String("password", "", "Relay server password")
 	label := fs.String("label", "", "Human-readable label (e.g. 'My VPS')")
-	fs.Parse(args)
+	fs.Parse(reordered)
 
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "Usage: yaver relay add <url> [--password <pass>] [--label <name>]")
