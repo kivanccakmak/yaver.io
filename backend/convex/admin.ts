@@ -70,29 +70,24 @@ export const deleteAllUserData = mutation({
   },
 });
 
-/** Delete a user and all their sessions and devices by user _id. */
+/** Delete a user and ALL their data by user _id. */
 export const deleteUserData = mutation({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
     if (!user) throw new Error("User not found");
 
-    // Delete all sessions
-    const sessions = await ctx.db
-      .query("sessions")
-      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
-      .collect();
-    for (const session of sessions) {
-      await ctx.db.delete(session._id);
-    }
+    const counts: Record<string, number> = {};
 
-    // Delete all devices
-    const devices = await ctx.db
-      .query("devices")
-      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
-      .collect();
-    for (const device of devices) {
-      await ctx.db.delete(device._id);
+    // Delete from all user-scoped tables
+    const tables = ["sessions", "devices", "userSettings", "developerSurveys", "runnerUsage", "dailyTaskCounts", "deviceMetrics", "deviceEvents"] as const;
+    for (const table of tables) {
+      const docs = await ctx.db.query(table).collect();
+      const userDocs = docs.filter((d: any) => d.userId === args.userId);
+      for (const doc of userDocs) {
+        await ctx.db.delete(doc._id);
+      }
+      counts[table] = userDocs.length;
     }
 
     // Delete the user
@@ -100,8 +95,7 @@ export const deleteUserData = mutation({
 
     return {
       email: user.email,
-      sessionsDeleted: sessions.length,
-      devicesDeleted: devices.length,
+      ...counts,
     };
   },
 });
