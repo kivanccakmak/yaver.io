@@ -197,7 +197,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         // Race connect against a 10s timeout
         const connectPromise = quicClient.connect(device.host, device.port, token, device.id);
         const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Could not connect in 10s")), 10000)
+          setTimeout(() => reject(new Error("Could not connect in 20s")), 20000)
         );
         await Promise.race([connectPromise, timeoutPromise]);
         sendTelemetry(token, "connect-success", `Connected via ${quicClient.connectionMode}`, JSON.stringify({

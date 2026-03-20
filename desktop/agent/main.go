@@ -1111,23 +1111,29 @@ func runServe(args []string) {
 	// Start LAN discovery beacon (UDP broadcast for same-network mobile discovery)
 	go startBeacon(ctx, cfg.DeviceID, *httpPort, hostname, ownerUserID)
 
-	// Start relay tunnels (connect to all relay servers for redundancy)
-	for _, rs := range relayServers {
-		rs := rs // capture loop variable
-		// Resolve password: per-relay password > global relay password
-		pw := relayPasswords[rs.QuicAddr]
-		if pw == "" {
-			pw = effectiveRelayPassword
-		}
-		log.Printf("Starting relay tunnel to %s (%s)...", rs.QuicAddr, rs.ID)
-		go runRelayTunnel(ctx, rs.QuicAddr, fmt.Sprintf("127.0.0.1:%d", *httpPort), cfg.DeviceID, cfg.AuthToken, pw)
+	// Start relay tunnels with hot-reload support
+	// Initial relay tunnels are started, and config is polled for changes every 30s
+	relayMgr := newRelayManager(ctx, cfg.DeviceID, cfg.AuthToken, fmt.Sprintf("127.0.0.1:%d", *httpPort), effectiveRelayPassword)
+	relayMgr.applyRelayServers(relayServers, relayPasswords)
+	if !*noRelay {
+		go relayMgr.watchConfig(ctx)
+		go relayMgr.healthCheckLoop(ctx)
 	}
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	sig := <-sigCh
-	log.Printf("Received signal %s, shutting down...", sig)
+	// SIGHUP triggers config reload (relay servers); SIGINT/SIGTERM shut down
+	for {
+		sig := <-sigCh
+		if sig == syscall.SIGHUP {
+			log.Println("[CONFIG] Received SIGHUP — reloading relay config...")
+			relayMgr.reloadNow()
+			continue
+		}
+		log.Printf("Received signal %s, shutting down...", sig)
+		break
+	}
 	taskMgr.Shutdown()
 	if err := MarkOffline(cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID); err != nil {
 		log.Printf("failed to mark offline: %v", err)
@@ -1404,6 +1410,31 @@ func runRelay(args []string) {
 	}
 }
 
+// signalRunningAgent sends SIGHUP to the running agent process to trigger config reload.
+// Returns true if the agent was signaled, false if not running.
+func signalRunningAgent() bool {
+	pidPath := pidFilePath()
+	if pidPath == "" {
+		return false
+	}
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		return false
+	}
+	var pid int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	if err := proc.Signal(syscall.SIGHUP); err != nil {
+		return false
+	}
+	return true
+}
+
 func runRelayAdd(args []string) {
 	fs := flag.NewFlagSet("relay add", flag.ExitOnError)
 	password := fs.String("password", "", "Relay server password")
@@ -1487,7 +1518,11 @@ func runRelayAdd(args []string) {
 	if relay.Password != "" {
 		fmt.Printf("  Password: ****\n")
 	}
-	fmt.Println("\nRestart 'yaver serve' to use the new relay server.")
+	if signalRunningAgent() {
+		fmt.Println("\nAgent notified — relay will connect within seconds.")
+	} else {
+		fmt.Println("\nAgent is not running. Start it with: yaver serve")
+	}
 }
 
 func runRelayList() {
@@ -1554,6 +1589,9 @@ func runRelayRemove(args []string) {
 		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
 		os.Exit(1)
 	}
+	if signalRunningAgent() {
+		fmt.Println("Agent notified — relay tunnel will be stopped.")
+	}
 }
 
 func runRelayTest(args []string) {
@@ -1617,7 +1655,9 @@ func runRelaySetPassword(args []string) {
 	}
 
 	fmt.Println("Relay password saved.")
-	fmt.Println("Restart 'yaver serve' for the change to take effect.")
+	if signalRunningAgent() {
+		fmt.Println("Agent notified — new password will be used for relay connections.")
+	}
 }
 
 func runRelayClearPassword() {
@@ -1639,7 +1679,9 @@ func runRelayClearPassword() {
 	}
 
 	fmt.Println("Relay password cleared.")
-	fmt.Println("Restart 'yaver serve' for the change to take effect.")
+	if signalRunningAgent() {
+		fmt.Println("Agent notified.")
+	}
 }
 
 func runTunnel(args []string) {
@@ -2395,33 +2437,67 @@ func runStatus() {
 	fmt.Println()
 	fmt.Println("Relay:")
 	if cfg.RelayPassword != "" {
-		fmt.Println("  Password: set")
-	} else {
-		fmt.Println("  Password: not set")
+		fmt.Println("  Password: set (global)")
 	}
 
 	if len(cfg.RelayServers) == 0 {
+		if cfg.RelayPassword == "" {
+			fmt.Println("  Password: not set")
+		}
 		fmt.Println("  Servers:  none configured (will fetch from Convex on serve)")
 	} else {
+		// Load cached health from agent's background health checks
+		cachedHealth := make(map[string]*RelayHealthStatus)
+		healthList := loadRelayHealth()
+		for i := range healthList {
+			cachedHealth[healthList[i].URL] = &healthList[i]
+		}
+
 		fmt.Println("  Servers:")
 		relayClient := &http.Client{Timeout: 5 * time.Second}
 		for _, rs := range cfg.RelayServers {
 			label := rs.ID
-			if label == "" {
-				label = rs.HttpURL
+			if rs.Label != "" {
+				label = rs.Label
 			}
+			pw := ""
+			if rs.Password != "" {
+				pw = " [password]"
+			} else if cfg.RelayPassword != "" {
+				pw = " [global pw]"
+			}
+
+			// Live probe
 			healthURL := rs.HttpURL + "/health"
 			start := time.Now()
 			resp, err := relayClient.Get(healthURL)
 			rtt := time.Since(start)
+
 			if err != nil {
-				fmt.Printf("    %-10s %-30s FAIL (timeout)\n", label, rs.HttpURL)
+				fmt.Printf("    %-10s %-30s FAIL (timeout)%s\n", label, rs.HttpURL, pw)
 			} else {
+				var body struct {
+					OK      bool   `json:"ok"`
+					Tunnels int    `json:"tunnels"`
+					Version string `json:"version"`
+				}
+				json.NewDecoder(resp.Body).Decode(&body)
 				resp.Body.Close()
 				if resp.StatusCode == 200 {
-					fmt.Printf("    %-10s %-30s OK (%dms)\n", label, rs.HttpURL, rtt.Milliseconds())
+					fmt.Printf("    %-10s %-30s OK (%dms, %d tunnel(s), v%s)%s\n",
+						label, rs.HttpURL, rtt.Milliseconds(), body.Tunnels, body.Version, pw)
 				} else {
-					fmt.Printf("    %-10s %-30s FAIL (status %d)\n", label, rs.HttpURL, resp.StatusCode)
+					fmt.Printf("    %-10s %-30s FAIL (status %d)%s\n", label, rs.HttpURL, resp.StatusCode, pw)
+				}
+			}
+
+			// Show last agent heartbeat info from cache
+			if cached, ok := cachedHealth[rs.HttpURL]; ok && !cached.LastChecked.IsZero() {
+				ago := time.Since(cached.LastChecked).Truncate(time.Second)
+				if cached.OK {
+					fmt.Printf("              Last heartbeat: %s ago (%dms, %d tunnels)\n", ago, cached.LatencyMs, cached.Tunnels)
+				} else {
+					fmt.Printf("              Last heartbeat: %s ago (FAIL: %s)\n", ago, cached.Error)
 				}
 			}
 		}
@@ -2848,6 +2924,248 @@ type relayTunnelResponse struct {
 	StatusCode int               `json:"statusCode"`
 	Headers    map[string]string `json:"headers"`
 	Body       []byte            `json:"body"`
+}
+
+// RelayHealthStatus holds the latest health check result for a relay server.
+type RelayHealthStatus struct {
+	URL          string    `json:"url"`
+	OK           bool      `json:"ok"`
+	LatencyMs    int64     `json:"latencyMs"`
+	Tunnels      int       `json:"tunnels"`
+	Version      string    `json:"version"`
+	LastChecked  time.Time `json:"lastChecked"`
+	Error        string    `json:"error,omitempty"`
+}
+
+// relayHealthFile returns the path to the relay health cache file.
+func relayHealthFile() string {
+	dir, err := ConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "relay-health.json")
+}
+
+// relayManager manages relay tunnel goroutines and hot-reloads config changes.
+type relayManager struct {
+	parentCtx       context.Context
+	deviceID        string
+	authToken       string
+	agentAddr       string
+	globalPassword  string
+	activeTunnels   map[string]context.CancelFunc // keyed by QuicAddr
+	healthStatus    map[string]*RelayHealthStatus  // keyed by httpUrl
+}
+
+func newRelayManager(ctx context.Context, deviceID, authToken, agentAddr, globalPassword string) *relayManager {
+	return &relayManager{
+		parentCtx:      ctx,
+		deviceID:       deviceID,
+		authToken:      authToken,
+		agentAddr:      agentAddr,
+		globalPassword: globalPassword,
+		activeTunnels:  make(map[string]context.CancelFunc),
+		healthStatus:   make(map[string]*RelayHealthStatus),
+	}
+}
+
+// applyRelayServers starts new tunnels and stops removed ones.
+func (rm *relayManager) applyRelayServers(servers []RelayServerInfo, passwords map[string]string) {
+	// Build desired set
+	desired := make(map[string]string) // QuicAddr -> password
+	for _, rs := range servers {
+		pw := passwords[rs.QuicAddr]
+		if pw == "" {
+			pw = rm.globalPassword
+		}
+		desired[rs.QuicAddr] = pw
+	}
+
+	// Stop tunnels that are no longer in config
+	for addr, cancelFn := range rm.activeTunnels {
+		if _, ok := desired[addr]; !ok {
+			log.Printf("[RELAY] Stopping tunnel to %s (removed from config)", addr)
+			cancelFn()
+			delete(rm.activeTunnels, addr)
+		}
+	}
+
+	// Start new tunnels
+	for addr, pw := range desired {
+		if _, ok := rm.activeTunnels[addr]; ok {
+			continue // already running
+		}
+		tunnelCtx, tunnelCancel := context.WithCancel(rm.parentCtx)
+		rm.activeTunnels[addr] = tunnelCancel
+		log.Printf("[RELAY] Starting tunnel to %s...", addr)
+		go runRelayTunnel(tunnelCtx, addr, rm.agentAddr, rm.deviceID, rm.authToken, pw)
+	}
+}
+
+// reloadNow triggers an immediate config reload (called on SIGHUP).
+func (rm *relayManager) reloadNow() {
+	cfg, err := LoadConfig()
+	if err != nil {
+		log.Printf("[RELAY] Config reload failed: %v", err)
+		return
+	}
+	var servers []RelayServerInfo
+	passwords := make(map[string]string)
+	for _, rs := range cfg.RelayServers {
+		servers = append(servers, RelayServerInfo{
+			ID:       rs.ID,
+			QuicAddr: rs.QuicAddr,
+			HttpURL:  rs.HttpURL,
+			Region:   rs.Region,
+			Priority: rs.Priority,
+		})
+		if rs.Password != "" {
+			passwords[rs.QuicAddr] = rs.Password
+		}
+	}
+	if cfg.RelayPassword != "" {
+		rm.globalPassword = cfg.RelayPassword
+	}
+	rm.applyRelayServers(servers, passwords)
+	log.Printf("[RELAY] Config reloaded: %d relay server(s)", len(servers))
+}
+
+// watchConfig polls config.json every 30s for relay server changes.
+func (rm *relayManager) watchConfig(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cfg, err := LoadConfig()
+			if err != nil {
+				continue
+			}
+			if len(cfg.RelayServers) == 0 {
+				continue
+			}
+			var servers []RelayServerInfo
+			passwords := make(map[string]string)
+			for _, rs := range cfg.RelayServers {
+				servers = append(servers, RelayServerInfo{
+					ID:       rs.ID,
+					QuicAddr: rs.QuicAddr,
+					HttpURL:  rs.HttpURL,
+					Region:   rs.Region,
+					Priority: rs.Priority,
+				})
+				if rs.Password != "" {
+					passwords[rs.QuicAddr] = rs.Password
+				}
+			}
+			// Update global password if changed
+			if cfg.RelayPassword != "" {
+				rm.globalPassword = cfg.RelayPassword
+			}
+			rm.applyRelayServers(servers, passwords)
+		}
+	}
+}
+
+// healthCheckLoop periodically pings each relay server's /health endpoint
+// and persists the results to ~/.yaver/relay-health.json for `yaver status`.
+func (rm *relayManager) healthCheckLoop(ctx context.Context) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	// Run immediately on startup
+	rm.checkRelayHealth(client)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			rm.checkRelayHealth(client)
+		}
+	}
+}
+
+func (rm *relayManager) checkRelayHealth(client *http.Client) {
+	cfg, err := LoadConfig()
+	if err != nil || len(cfg.RelayServers) == 0 {
+		return
+	}
+
+	for _, rs := range cfg.RelayServers {
+		status := &RelayHealthStatus{
+			URL:         rs.HttpURL,
+			LastChecked: time.Now(),
+		}
+
+		start := time.Now()
+		resp, err := client.Get(rs.HttpURL + "/health")
+		status.LatencyMs = time.Since(start).Milliseconds()
+
+		if err != nil {
+			status.OK = false
+			status.Error = err.Error()
+		} else {
+			defer resp.Body.Close()
+			if resp.StatusCode == 200 {
+				status.OK = true
+				var body struct {
+					OK      bool   `json:"ok"`
+					Tunnels int    `json:"tunnels"`
+					Version string `json:"version"`
+				}
+				if json.NewDecoder(resp.Body).Decode(&body) == nil {
+					status.Tunnels = body.Tunnels
+					status.Version = body.Version
+				}
+			} else {
+				status.OK = false
+				status.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+			}
+		}
+
+		rm.healthStatus[rs.HttpURL] = status
+	}
+
+	// Persist to file for `yaver status`
+	rm.saveHealth()
+}
+
+func (rm *relayManager) saveHealth() {
+	path := relayHealthFile()
+	if path == "" {
+		return
+	}
+	statuses := make([]RelayHealthStatus, 0, len(rm.healthStatus))
+	for _, s := range rm.healthStatus {
+		statuses = append(statuses, *s)
+	}
+	data, err := json.MarshalIndent(statuses, "", "  ")
+	if err != nil {
+		return
+	}
+	os.WriteFile(path, data, 0600)
+}
+
+// loadRelayHealth reads the cached relay health from disk (for `yaver status`).
+func loadRelayHealth() []RelayHealthStatus {
+	path := relayHealthFile()
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var statuses []RelayHealthStatus
+	if json.Unmarshal(data, &statuses) != nil {
+		return nil
+	}
+	return statuses
 }
 
 // runRelayTunnel connects to the relay and handles incoming proxied requests.

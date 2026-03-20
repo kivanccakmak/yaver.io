@@ -1,9 +1,10 @@
 import Constants from "expo-constants";
 import { router } from "expo-router";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -66,6 +67,8 @@ export default function SettingsScreen() {
   const [showMetrics, setShowMetrics] = useState(false);
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
 
+  const scrollViewRef = useRef<ScrollView>(null);
+
   // Relay servers
   const [customRelays, setCustomRelays] = useState<RelayServer[]>([]);
   const [showAddRelay, setShowAddRelay] = useState(false);
@@ -85,6 +88,21 @@ export default function SettingsScreen() {
   const [newTunnelLabel, setNewTunnelLabel] = useState("");
   const [testingTunnelId, setTestingTunnelId] = useState<string | null>(null);
   const [tunnelTestResults, setTunnelTestResults] = useState<Record<string, { ok: boolean; ms?: number; error?: string }>>({});
+
+  // Scroll down when add-relay / add-tunnel / keyboard opens so inputs stay visible
+  useEffect(() => {
+    if (showAddRelay || showAddTunnel) {
+      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 300);
+    }
+  }, [showAddRelay, showAddTunnel]);
+
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    const sub = Keyboard.addListener("keyboardDidShow", () => {
+      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+    });
+    return () => sub.remove();
+  }, []);
 
   // Load custom relay servers and sync preference from AsyncStorage
   useEffect(() => {
@@ -464,12 +482,14 @@ export default function SettingsScreen() {
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 120 : 0}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
       >
       <ScrollView
+        ref={scrollViewRef}
         style={styles.container}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
       >
         {/* Profile section */}
         <View style={styles.section}>
@@ -909,10 +929,6 @@ export default function SettingsScreen() {
                   setForceRelay(v);
                   quicClient.setForceRelay(v);
                   if (token) saveUserSettings(token, { forceRelay: v });
-                  if (activeDevice) {
-                    disconnect();
-                    Alert.alert("Relay Mode Changed", "Disconnect and reconnect to apply.");
-                  }
                 }}
                 trackColor={{ false: c.border, true: c.accent }}
                 thumbColor="#ffffff"
@@ -1509,7 +1525,7 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   container: { flex: 1 },
-  scrollContent: { padding: 16, paddingBottom: 40 },
+  scrollContent: { padding: 16, paddingBottom: 120 },
 
   section: { marginBottom: 32 },
   sectionLabel: {

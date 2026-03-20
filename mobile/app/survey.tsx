@@ -1,6 +1,8 @@
 import { router } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -440,6 +442,11 @@ export default function SurveyScreen() {
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]}>
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={Platform.OS === "ios" ? 50 : 0}
+    >
       {/* Progress dots */}
       <View style={styles.dotsContainer}>
         {Array.from({ length: dotCount }).map((_, i) => (
@@ -526,6 +533,7 @@ export default function SurveyScreen() {
           </Text>
         </Pressable>
       )}
+    </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

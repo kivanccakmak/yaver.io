@@ -33,7 +33,7 @@ import {
   Task,
   TaskStatus,
 } from "../../src/lib/quic";
-import { markTaskDeleted } from "../../src/lib/storage";
+import { markTaskDeleted, getDeletedTaskIds } from "../../src/lib/storage";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -443,11 +443,14 @@ export default function TasksScreen() {
   const fetchTasks = useCallback(async () => {
     try {
       const list = await quicClient.listTasks();
-      setTasks(list);
+      // Filter out locally-deleted tasks so they don't reappear
+      const deletedIds = await getDeletedTaskIds();
+      const filtered = deletedIds.size > 0 ? list.filter((t) => !deletedIds.has(t.id)) : list;
+      setTasks(filtered);
       // Keep selected task in sync with latest data
       setSelectedTask((prev) => {
         if (!prev) return null;
-        return list.find((t) => t.id === prev.id) || prev;
+        return filtered.find((t) => t.id === prev.id) || prev;
       });
     } catch {}
   }, []);
@@ -608,8 +611,8 @@ export default function TasksScreen() {
     try {
       await quicClient.deleteTask(taskId);
     } catch (e) {
-      console.warn("[Tasks] Delete failed:", e);
-      await fetchTasks();
+      // Ignore errors — task is already removed locally and marked as deleted
+      console.warn("[Tasks] Delete failed (kept local deletion):", e);
     }
   };
 

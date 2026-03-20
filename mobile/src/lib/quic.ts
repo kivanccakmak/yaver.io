@@ -128,6 +128,8 @@ export class QuicClient {
   private _forceRelay = false; // default to direct-first — try LAN/local before relay
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private _consecutiveHeartbeatFailures = 0;
 
   // Reconnection — max 15 retries, then give up (needs headroom for network transitions)
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -138,6 +140,10 @@ export class QuicClient {
   private _connectionMode: ConnectionMode = null;
   private _connectionPath: ConnectionPath = null;
   private _networkType: string | null = null; // "wifi" | "cellular" | etc.
+  private _connectingInProgress = false; // guard against concurrent attemptConnect calls
+
+  // Relay health tracking
+  private _relayHealth: Map<string, { ok: boolean; latencyMs: number; lastChecked: number }> = new Map();
 
   // Event listeners
   private listeners: { [K in EventName]: Array<EventMap[K]> } = {
@@ -196,6 +202,20 @@ export class QuicClient {
     return [...this.relayServers];
   }
 
+  /** Get health status for all relay servers. */
+  getRelayHealth(): Array<{ id: string; url: string; ok: boolean; latencyMs: number; lastChecked: number }> {
+    return this.relayServers.map(r => {
+      const h = this._relayHealth.get(r.httpUrl);
+      return {
+        id: r.id,
+        url: r.httpUrl,
+        ok: h?.ok ?? false,
+        latencyMs: h?.latencyMs ?? -1,
+        lastChecked: h?.lastChecked ?? 0,
+      };
+    });
+  }
+
   get forceRelay(): boolean {
     return this._forceRelay;
   }
@@ -203,10 +223,15 @@ export class QuicClient {
   setForceRelay(value: boolean): void {
     if (this._forceRelay === value) return;
     this._forceRelay = value;
-    // Seamlessly switch connection mode without dropping existing connection
-    if (this._connectionState === "connected" && this.host) {
+    if (!this.host) return;
+    if (this._connectionState === "connected") {
+      // Seamlessly switch connection mode without dropping existing connection
       console.log("[QUIC] Force relay changed to", value, "— switching mode...");
       this.switchConnectionMode(value);
+    } else {
+      // Not connected — trigger full reconnect with new strategy
+      console.log("[QUIC] Force relay changed to", value, "— triggering reconnect...");
+      this.fullReconnect();
     }
   }
 
@@ -696,6 +721,10 @@ export class QuicClient {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
     }
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -734,6 +763,20 @@ export class QuicClient {
   }
 
   private async attemptConnect(): Promise<void> {
+    // Prevent concurrent connection attempts (poll failure + NetInfo can race)
+    if (this._connectingInProgress) {
+      console.log("[QUIC] attemptConnect already in progress, skipping");
+      return;
+    }
+    this._connectingInProgress = true;
+    try {
+      await this._doAttemptConnect();
+    } finally {
+      this._connectingInProgress = false;
+    }
+  }
+
+  private async _doAttemptConnect(): Promise<void> {
     this.setConnectionState("connecting");
     this.activeRelayUrl = null;
     this.activeRelayPassword = null;
@@ -964,12 +1007,114 @@ export class QuicClient {
             cacheTaskOutput(t.id, lines);
           }
         }
-      } catch (e) {
-        console.warn("[QUIC] Polling failed, triggering full reconnect:", e);
+      } catch {
+        // Poll failure is handled by the heartbeat — don't reconnect from here
+        console.log("[QUIC] Poll /tasks failed — heartbeat will handle reconnection");
+      }
+    }, 3000);
+
+    // Start heartbeat: pings /health every 15s to detect data path failure
+    this.startHeartbeat();
+  }
+
+  /**
+   * Heartbeat: pings the agent's /health endpoint every 15s.
+   * On 2 consecutive failures:
+   * - If on direct connection and relay servers are available, try relay fallback
+   * - Otherwise trigger full reconnect
+   */
+  private startHeartbeat(): void {
+    if (this.heartbeatInterval) return;
+    this._consecutiveHeartbeatFailures = 0;
+
+    this.heartbeatInterval = setInterval(async () => {
+      try {
+        const res = await this.fetchWithTimeout(`${this.baseUrl}/health`, {
+          headers: this.authHeaders,
+        }, 10000);
+        if (res.ok) {
+          this._consecutiveHeartbeatFailures = 0;
+          return;
+        }
+        this._consecutiveHeartbeatFailures++;
+      } catch {
+        this._consecutiveHeartbeatFailures++;
+      }
+
+      console.log(`[QUIC] Heartbeat failed (${this._consecutiveHeartbeatFailures} consecutive)`);
+
+      if (this._consecutiveHeartbeatFailures >= 2) {
+        // Data path is broken — try relay fallback if on direct and relays exist
+        if (this._connectionMode === "direct" && this.relayServers.length > 0) {
+          console.log("[QUIC] Direct path down — attempting relay fallback...");
+          const switched = await this.tryRelayFallback();
+          if (switched) {
+            this._consecutiveHeartbeatFailures = 0;
+            return;
+          }
+        }
+        // No relay available or relay also failed — full reconnect
         this.setConnectionState("error");
         this.fullReconnect();
       }
-    }, 3000);
+    }, 15000);
+
+    // Also check relay health periodically (every 60s)
+    this.checkRelayHealth();
+  }
+
+  /**
+   * Try to switch from current (broken) path to a relay server.
+   * Returns true if successfully switched.
+   */
+  private async tryRelayFallback(): Promise<boolean> {
+    for (const relay of this.relayServers) {
+      try {
+        const relayDeviceUrl = `${relay.httpUrl}/d/${this.deviceId}`;
+        const probeHeaders: Record<string, string> = { Authorization: `Bearer ${this.token}` };
+        if (relay.password) {
+          probeHeaders['X-Relay-Password'] = relay.password;
+        }
+        const res = await this.fetchWithTimeout(`${relayDeviceUrl}/health`, {
+          headers: probeHeaders,
+        }, 8000);
+        if (res.ok) {
+          this.activeRelayUrl = relay.httpUrl;
+          this.activeRelayPassword = relay.password || null;
+          this.setConnectionMode("relay");
+          this._connectionPath = "relay";
+          this.setConnectionState("connected");
+          console.log("[QUIC] Relay fallback succeeded via", relay.id);
+          return true;
+        }
+      } catch (e) {
+        console.log("[QUIC] Relay fallback", relay.id, "failed:", e);
+      }
+    }
+    return false;
+  }
+
+  /** Ping each relay server's /health to track availability. */
+  private async checkRelayHealth(): Promise<void> {
+    const client = { timeout: 8000 };
+    for (const relay of this.relayServers) {
+      try {
+        const start = Date.now();
+        const res = await this.fetchWithTimeout(`${relay.httpUrl}/health`, {}, client.timeout);
+        const latencyMs = Date.now() - start;
+        this._relayHealth.set(relay.httpUrl, {
+          ok: res.ok,
+          latencyMs,
+          lastChecked: Date.now(),
+        });
+      } catch {
+        this._relayHealth.set(relay.httpUrl, {
+          ok: false,
+          latencyMs: -1,
+          lastChecked: Date.now(),
+        });
+      }
+    }
   }
 }
 
