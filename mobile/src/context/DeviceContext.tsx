@@ -283,15 +283,15 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       } else if (state === "connecting") {
         setConnectionStatus("connecting");
       } else if (state === "error") {
-        const gaveUp = quicClient.reconnectAttempt >= 15;
+        const attempt = quicClient.reconnectAttempt;
+        const gaveUp = attempt >= 5;
         if (gaveUp) {
           quicClient.disconnect();
           setConnectionStatus("disconnected");
-          setActiveDevice(null);
-          setLastError("Could not connect to device");
+          setLastError("Could not reach device after 5 attempts");
         } else {
           setConnectionStatus("error");
-          setLastError("Connection lost — reconnecting...");
+          setLastError(`Reconnecting (${attempt}/5)...`);
         }
       } else if (state === "disconnected") {
         // QUIC client fully disconnected (e.g., via disconnect() call)

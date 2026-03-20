@@ -641,22 +641,15 @@ export default function TasksScreen() {
     }
   };
 
-  // Auto-reconnect when disconnected but activeDevice exists
-  useEffect(() => {
-    if (connectionStatus === "disconnected" && activeDevice && !userDisconnected) {
-      console.log("[Tasks] Disconnected with active device — auto-reconnecting...");
-      selectDevice(activeDevice);
-    }
-  }, [connectionStatus, activeDevice, userDisconnected, selectDevice]);
-
   const effectiveState: ConnectionState =
     connectionStatus === "connected" ? quicState :
-    // Show yellow "Reconnecting" instead of grey "Disconnected" when we have a device and aren't user-disconnected
-    (connectionStatus === "disconnected" && activeDevice && !userDisconnected) ? "connecting" :
+    // Show yellow "Reconnecting" for error state (active retries)
+    connectionStatus === "error" ? "connecting" :
     connectionStatus;
   const banner = BANNER_CONFIG[effectiveState];
   const isEffectivelyConnected = effectiveState === "connected";
   const modeLabel = connMode === "relay" ? " via Relay" : connMode === "direct" ? " Direct" : "";
+  const showRetryButton = connectionStatus === "disconnected" && activeDevice && !userDisconnected;
 
   const chatMessages = selectedTask ? buildChatMessages(selectedTask) : [];
   const isRunning = selectedTask?.status === "running" || selectedTask?.status === "queued";
@@ -676,9 +669,18 @@ export default function TasksScreen() {
           <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap" }}>
             <View style={[s.dot, { backgroundColor: banner.dot }]} />
             <Text style={[s.bannerText, { color: banner.text, flexShrink: 1 }]} numberOfLines={1}>
-              {banner.label}{modeLabel}{activeDevice ? ` \u00b7 ${activeDevice.name}` : ""}
-              {!isEffectivelyConnected && activeDevice ? " — tap to retry" : ""}
+              {lastError && connectionStatus === "error" ? lastError : banner.label}
+              {isEffectivelyConnected ? modeLabel : ""}
+              {activeDevice ? ` \u00b7 ${activeDevice.name}` : ""}
             </Text>
+            {showRetryButton && (
+              <Pressable
+                style={{ marginLeft: 8, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 6, backgroundColor: "#6366f133" }}
+                onPress={() => activeDevice && selectDevice(activeDevice)}
+              >
+                <Text style={{ fontSize: 12, color: "#818cf8", fontWeight: "600" }}>Retry</Text>
+              </Pressable>
+            )}
           </View>
           {isEffectivelyConnected && (
             <View style={{ flexDirection: "row", alignItems: "center", marginTop: 4, marginLeft: 18 }}>
