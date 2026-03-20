@@ -1171,6 +1171,14 @@ export default function HomePage() {
               answer="Yes. MIT license, no paid tiers, no usage limits, no telemetry, no catch. If you find it useful, star the repo or contribute a patch."
             />
             <FAQItem
+              question="How does voice input work?"
+              answer="Yaver supports speech-to-text on both mobile and CLI. You can use the free on-device option (Whisper, runs entirely on your phone/machine) or bring your own API key for OpenAI, Deepgram, or AssemblyAI. On mobile, tap the mic button in the task modal. On CLI, type /voice in yaver connect. All transcription happens on your device or goes directly to the provider you choose — nothing passes through Yaver servers."
+            />
+            <FAQItem
+              question="Can I hear responses read aloud?"
+              answer="Yes — enable Text-to-Speech in Settings > Voice. It uses your device's built-in TTS engine (Apple TTS on iOS/macOS, espeak on Linux). You can also control response verbosity from 0 (just 'done') to 10 (full diffs and reasoning) so the AI adapts how much detail it gives."
+            />
+            <FAQItem
               question="How do I contribute?"
               answer="Fork the repo, hack on it, open a PR. Check the README for dev setup. Bug reports and feature ideas are welcome as GitHub issues."
             />
@@ -1385,6 +1393,40 @@ export default function HomePage() {
                   <a href="https://github.com/tmux/tmux" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">tmux</a>
                   <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
                   <span className="text-surface-500"> — terminal multiplexer</span>
+                </li>
+              </ul>
+            </div>
+
+            {/* Speech & Voice */}
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-surface-500">Speech &amp; Voice</p>
+              <ul className="space-y-2.5 text-sm">
+                <li>
+                  <a href="https://github.com/ggerganov/whisper.cpp" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">whisper.cpp</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — port of Whisper in C/C++ (Yaver&apos;s on-device STT engine)</span>
+                </li>
+                <li>
+                  <a href="https://github.com/mybigday/whisper.rn" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">whisper.rn</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — React Native bindings for whisper.cpp (Yaver mobile)</span>
+                </li>
+                <li>
+                  <a href="https://platform.openai.com/docs/guides/speech-to-text" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">OpenAI Audio API</a>
+                  <span className="text-surface-500"> — GPT-4o transcription ($0.003/min)</span>
+                </li>
+                <li>
+                  <a href="https://deepgram.com" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">Deepgram</a>
+                  <span className="text-surface-500"> — Nova-2 real-time STT ($0.004/min)</span>
+                </li>
+                <li>
+                  <a href="https://www.assemblyai.com" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">AssemblyAI</a>
+                  <span className="text-surface-500"> — Universal-2 STT ($0.002/min)</span>
+                </li>
+                <li>
+                  <a href="https://docs.expo.dev/versions/latest/sdk/speech/" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">expo-speech</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — device TTS for React Native (Yaver&apos;s TTS engine)</span>
                 </li>
               </ul>
             </div>
