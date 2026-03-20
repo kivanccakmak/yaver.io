@@ -118,6 +118,9 @@ export default function DevelopersPage() {
               ["backend-api", "Backend API Reference"],
               ["data-model", "What's Stored in Convex"],
               ["relay-protocol", "Relay Server Protocol"],
+              ["relay-hot-reload", "Relay Hot-Reload & Health"],
+              ["token-refresh", "Token Refresh & Re-Auth"],
+              ["doctor", "System Health Check (yaver doctor)"],
               ["running-tests", "Running Tests"],
               ["integration-test-suite", "Integration Test Suite"],
               ["pr-rules", "Pull Request Rules"],
@@ -1502,6 +1505,76 @@ CLI Agent ◄──QUIC──────────────── Relay (:
               </ul>
             </div>
           </div>
+        </section>
+
+        {/* ─── Relay Hot-Reload & Health ─── */}
+        <section className="mb-20">
+          <SectionHeading id="relay-hot-reload">Relay Hot-Reload &amp; Health Monitoring</SectionHeading>
+          <Prose>
+            Relay servers can be added, removed, or updated while the agent is running &mdash; no restart needed.
+            The CLI sends <InlineCode>SIGHUP</InlineCode> to the running agent, which reloads config instantly.
+            A background poll every 30s serves as a safety net.
+          </Prose>
+          <Terminal title="relay management">
+            <Cmd>yaver relay add https://relay.example.com --password secret --label &quot;My VPS&quot;</Cmd>
+            <Output>Agent notified — relay will connect within seconds.</Output>
+            <Cmd>yaver relay list</Cmd>
+            <Cmd>yaver relay test</Cmd>
+          </Terminal>
+          <SubHeading>Health Monitoring</SubHeading>
+          <Prose>
+            The agent pings each relay&apos;s <InlineCode>/health</InlineCode> endpoint every 60 seconds.
+            Results are cached in <InlineCode>~/.yaver/relay-health.json</InlineCode> and shown
+            instantly in <InlineCode>yaver status</InlineCode> (no HTTP probes at display time).
+            The mobile app also tracks relay health every 60s and uses it for automatic fallback.
+          </Prose>
+          <SubHeading>Mobile Auto-Fallback</SubHeading>
+          <Prose>
+            The mobile app runs a health heartbeat every 15 seconds. On 2 consecutive failures,
+            it automatically tries relay servers even if <InlineCode>forceRelay</InlineCode> is off.
+            This means: direct on WiFi, automatic relay failover when the path breaks &mdash; no user action needed.
+          </Prose>
+        </section>
+
+        {/* ─── Token Refresh & Re-Auth ─── */}
+        <section className="mb-20">
+          <SectionHeading id="token-refresh">Token Refresh &amp; Re-Auth</SectionHeading>
+          <Prose>
+            Sessions last 30 days and auto-refresh across all layers:
+          </Prose>
+          <ul className="mb-6 space-y-2 text-sm text-surface-400">
+            <li><strong className="text-surface-200">CLI agent:</strong> Refreshes token on startup + weekly. Detects 401 in heartbeat → attempts refresh → warns user if truly expired.</li>
+            <li><strong className="text-surface-200">Mobile app:</strong> Refreshes on launch + every foreground resume. Auto-logouts if token is expired (forces re-login).</li>
+            <li><strong className="text-surface-200">Backend:</strong> <InlineCode>POST /auth/refresh</InlineCode> extends session by 30 more days.</li>
+          </ul>
+          <Prose>
+            Settings (relay servers, tunnels, preferences) are preserved across sign-out/sign-in
+            on both CLI and mobile. Mobile settings are user-scoped &mdash; different accounts on the
+            same device get isolated settings.
+          </Prose>
+        </section>
+
+        {/* ─── System Health Check ─── */}
+        <section className="mb-20">
+          <SectionHeading id="doctor">System Health Check</SectionHeading>
+          <Prose>
+            <InlineCode>yaver doctor</InlineCode> performs a comprehensive system check similar
+            to <InlineCode>flutter doctor</InlineCode>. It verifies auth, AI runners, relay
+            servers, and network connectivity:
+          </Prose>
+          <Terminal title="yaver doctor">
+            <Cmd>yaver doctor</Cmd>
+            <Output>── Authentication ──</Output>
+            <Output>  Auth token                     ✓ Present</Output>
+            <Output>  Token validation               ✓ Valid</Output>
+            <Output>── AI Runners ──</Output>
+            <Output>  Claude Code (claude)           ✓ /usr/local/bin/claude (2.1.80)</Output>
+            <Output>  Ollama (ollama)                ✓ /usr/local/bin/ollama (0.18.2)</Output>
+            <Output>  Aider (aider)                  ! Not installed — pip install aider-chat</Output>
+            <Output>── Relay Servers ──</Output>
+            <Output>  Relay: My VPS                  ✓ OK (89ms, password set)</Output>
+            <Output>Doctor summary: 12 passed, 3 warnings, 0 failures</Output>
+          </Terminal>
         </section>
 
         {/* ─── Section 6: Running Tests ─── */}

@@ -190,11 +190,14 @@ yaver acl           Agent Communication Layer (add, list, remove, tools, health)
 yaver connect       Connect to a remote agent
 yaver attach        Interactive terminal
 yaver set-runner    Set default AI agent (claude/codex/aider/custom)
-yaver relay         Manage relay servers
+yaver relay         Manage relay servers (add/remove/test — hot-reload, no restart)
+yaver tunnel        Manage Cloudflare Tunnels
 yaver config        Get/set configuration
-yaver status        Show auth and connection status
+yaver status        Show auth, agent, relay, and connection status
+yaver doctor        System health check (auth, runners, relay, network)
 yaver devices       List registered devices
 yaver stop          Stop the agent
+yaver restart       Restart the agent
 yaver logs          View agent logs
 yaver version       Print version
 ```
@@ -209,6 +212,77 @@ brew install kivanccakmak/yaver/yaver
 scoop bucket add yaver https://github.com/kivanccakmak/scoop-yaver
 scoop install yaver
 ```
+
+## System Health Check
+
+```bash
+$ yaver doctor
+Yaver Doctor
+  Version: 1.36.0
+
+── Configuration ──
+  Config file                    ✓ ~/.yaver/config.json
+
+── Authentication ──
+  Auth token                     ✓ Present
+  Token validation               ✓ Valid
+  Device ID                      ✓ f5e857d3...
+
+── AI Runners ──
+  Claude Code (claude)           ✓ /usr/local/bin/claude (2.1.80)
+  OpenAI Codex (codex)           ! Not installed — npm install -g @openai/codex
+  Aider (aider)                  ! Not installed — pip install aider-chat
+  Ollama (ollama)                ✓ /usr/local/bin/ollama (0.18.2)
+
+── Relay Servers ──
+  Relay: My VPS                  ✓ OK (89ms, password set)
+
+── Network ──
+  Local IP                       ✓ 192.168.1.103
+  Internet connectivity          ✓ OK
+
+Doctor summary: 12 passed, 3 warnings, 0 failures
+```
+
+## Relay Server — Hot Reload
+
+Relay servers can be added, removed, or updated while the agent is running — no restart needed.
+
+```bash
+yaver relay add https://relay.example.com --password secret --label "My VPS"
+# → Agent notified — relay will connect within seconds.
+
+yaver relay remove a4ef61ac
+# → Agent notified — relay tunnel will be stopped.
+
+yaver relay set-password newsecret
+# → Agent notified — new password will be used.
+
+yaver relay list
+yaver relay test
+```
+
+The agent polls config every 30s as a safety net, and responds instantly to `SIGHUP` when relay commands run.
+
+### Relay Health Monitoring
+
+The agent pings each relay's `/health` endpoint every 60 seconds. Results are cached and shown in `yaver status`:
+
+```
+Relay:
+  Servers:
+    My VPS     https://relay.example.com     OK (89ms, 1 tunnel(s), v0.1.0) [password]
+              Last check: 22s ago
+```
+
+## Token Refresh & Re-Auth
+
+Sessions last 30 days and auto-refresh:
+- **CLI**: Refreshes token on startup + weekly. Detects 401 in heartbeat → warns to re-auth.
+- **Mobile**: Refreshes on launch + every foreground resume. Auto-logouts if expired.
+- **Backend**: `POST /auth/refresh` extends session by 30 more days.
+
+Settings (relay servers, tunnels, preferences) are preserved across sign-out/sign-in on both CLI and mobile.
 
 ## Networking
 
