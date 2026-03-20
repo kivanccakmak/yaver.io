@@ -1061,6 +1061,228 @@ main() {
     echo ""
 
     # Parse flags
+run_auth_tests() {
+    header "Auth — Signup, Login, Profile, Delete Account"
+
+    local base="${CONVEX_SITE_URL}"
+    local email="authtest-$(date +%s)-$RANDOM@test.yaver.io"
+    local password="TestPass123!"
+    local fullName="Auth Test User"
+
+    # ── Signup ────────────────────────────────────────────────────────
+    info "Testing email signup..."
+    local signup_resp
+    signup_resp=$(curl -sf -X POST "${base}/auth/signup" \
+        -H "Content-Type: application/json" \
+        -d "{\"email\":\"${email}\",\"fullName\":\"${fullName}\",\"password\":\"${password}\"}" 2>&1)
+    local token
+    token=$(echo "$signup_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+    if [ -n "$token" ] && [ "$token" != "" ]; then
+        pass "Email signup OK (${email})"
+        AUTH_TOKENS+=("$token")
+    else
+        fail "Email signup failed: $signup_resp"
+        return
+    fi
+
+    # ── Signup validation: missing fields ─────────────────────────────
+    info "Testing signup validation..."
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${base}/auth/signup" \
+        -H "Content-Type: application/json" \
+        -d '{"email":""}' 2>/dev/null)
+    if [ "$code" = "400" ]; then
+        pass "Signup rejects missing fields (400)"
+    else
+        fail "Expected 400 for missing fields, got $code"
+    fi
+
+    # ── Signup validation: short password ─────────────────────────────
+    code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${base}/auth/signup" \
+        -H "Content-Type: application/json" \
+        -d "{\"email\":\"short@test.yaver.io\",\"fullName\":\"Test\",\"password\":\"abc\"}" 2>/dev/null)
+    if [ "$code" = "400" ]; then
+        pass "Signup rejects short password (400)"
+    else
+        fail "Expected 400 for short password, got $code"
+    fi
+
+    # ── Signup validation: duplicate email ────────────────────────────
+    code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${base}/auth/signup" \
+        -H "Content-Type: application/json" \
+        -d "{\"email\":\"${email}\",\"fullName\":\"Dupe\",\"password\":\"${password}\"}" 2>/dev/null)
+    if [ "$code" = "409" ]; then
+        pass "Signup rejects duplicate email (409)"
+    else
+        fail "Expected 409 for duplicate email, got $code"
+    fi
+
+    # ── Login ─────────────────────────────────────────────────────────
+    info "Testing email login..."
+    local login_resp
+    login_resp=$(curl -sf -X POST "${base}/auth/login" \
+        -H "Content-Type: application/json" \
+        -d "{\"email\":\"${email}\",\"password\":\"${password}\"}" 2>&1)
+    local login_token
+    login_token=$(echo "$login_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+    if [ -n "$login_token" ] && [ "$login_token" != "" ]; then
+        pass "Email login OK"
+        AUTH_TOKENS+=("$login_token")
+    else
+        fail "Email login failed: $login_resp"
+    fi
+
+    # ── Login: wrong password ─────────────────────────────────────────
+    code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${base}/auth/login" \
+        -H "Content-Type: application/json" \
+        -d "{\"email\":\"${email}\",\"password\":\"wrongpass123\"}" 2>/dev/null)
+    if [ "$code" = "401" ]; then
+        pass "Login rejects wrong password (401)"
+    else
+        fail "Expected 401 for wrong password, got $code"
+    fi
+
+    # ── Login: nonexistent email ──────────────────────────────────────
+    code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${base}/auth/login" \
+        -H "Content-Type: application/json" \
+        -d '{"email":"nobody@test.yaver.io","password":"testpass123"}' 2>/dev/null)
+    if [ "$code" = "401" ]; then
+        pass "Login rejects nonexistent email (401)"
+    else
+        fail "Expected 401 for nonexistent email, got $code"
+    fi
+
+    # ── Validate token ────────────────────────────────────────────────
+    info "Testing token validation..."
+    local validate_resp
+    validate_resp=$(curl -sf "${base}/auth/validate" \
+        -H "Authorization: Bearer ${token}" 2>&1)
+    local user_email
+    user_email=$(echo "$validate_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('user',{}).get('email',''))" 2>/dev/null)
+    if [ "$user_email" = "$email" ]; then
+        pass "Token validation OK (email matches)"
+    else
+        fail "Token validation failed: $validate_resp"
+    fi
+
+    # ── Validate: invalid token ───────────────────────────────────────
+    code=$(curl -s -o /dev/null -w "%{http_code}" "${base}/auth/validate" \
+        -H "Authorization: Bearer invalidtoken123" 2>/dev/null)
+    if [ "$code" = "401" ]; then
+        pass "Validate rejects invalid token (401)"
+    else
+        fail "Expected 401 for invalid token, got $code"
+    fi
+
+    # ── Update profile ────────────────────────────────────────────────
+    info "Testing profile update..."
+    local update_code
+    update_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${base}/auth/update-profile" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d '{"fullName":"Updated Auth Test"}' 2>/dev/null)
+    if [ "$update_code" = "200" ]; then
+        pass "Profile update OK"
+    else
+        fail "Profile update failed ($update_code)"
+    fi
+
+    # ── Verify profile updated ────────────────────────────────────────
+    validate_resp=$(curl -sf "${base}/auth/validate" \
+        -H "Authorization: Bearer ${token}" 2>&1)
+    local updated_name
+    updated_name=$(echo "$validate_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('user',{}).get('fullName',''))" 2>/dev/null)
+    if [ "$updated_name" = "Updated Auth Test" ]; then
+        pass "Profile name updated correctly"
+    else
+        fail "Expected name 'Updated Auth Test', got '$updated_name'"
+    fi
+
+    # ── Settings CRUD ─────────────────────────────────────────────────
+    info "Testing user settings..."
+    local settings_code
+    settings_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${base}/settings" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d '{"runnerId":"codex","speechProvider":"openai","verbosity":5,"ttsEnabled":true}' 2>/dev/null)
+    if [ "$settings_code" = "200" ]; then
+        pass "Save settings OK"
+    else
+        fail "Save settings failed ($settings_code)"
+    fi
+
+    local get_settings
+    get_settings=$(curl -sf "${base}/settings" \
+        -H "Authorization: Bearer ${token}" 2>&1)
+    local runner_id
+    runner_id=$(echo "$get_settings" | python3 -c "import sys,json; print(json.load(sys.stdin).get('settings',{}).get('runnerId',''))" 2>/dev/null)
+    if [ "$runner_id" = "codex" ]; then
+        pass "Get settings OK (runnerId=codex)"
+    else
+        fail "Expected runnerId=codex, got '$runner_id'"
+    fi
+
+    # ── Logout (use login_token, keep signup token alive for deletion) ──
+    info "Testing logout..."
+    local logout_code
+    logout_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${base}/auth/logout" \
+        -H "Authorization: Bearer ${login_token}" 2>/dev/null)
+    if [ "$logout_code" = "200" ]; then
+        pass "Logout OK"
+    else
+        fail "Logout failed ($logout_code)"
+    fi
+
+    # ── Verify logout invalidated the login session ───────────────────
+    code=$(curl -s -o /dev/null -w "%{http_code}" "${base}/auth/validate" \
+        -H "Authorization: Bearer ${login_token}" 2>/dev/null)
+    if [ "$code" = "401" ]; then
+        pass "Logged-out token rejected (401)"
+    else
+        fail "Expected 401 after logout, got $code"
+    fi
+
+    # ── Re-login for the delete-account test ──────────────────────────
+    login_resp=$(curl -sf -X POST "${base}/auth/login" \
+        -H "Content-Type: application/json" \
+        -d "{\"email\":\"${email}\",\"password\":\"${password}\"}" 2>&1)
+    token=$(echo "$login_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+    if [ -n "$token" ] && [ "$token" != "" ]; then
+        AUTH_TOKENS+=("$token")
+    fi
+
+    # ── Delete account ────────────────────────────────────────────────
+    info "Testing account deletion..."
+    local delete_code
+    delete_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${base}/auth/delete-account" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" 2>/dev/null)
+    if [ "$delete_code" = "200" ]; then
+        pass "Account deletion OK"
+    else
+        fail "Account deletion failed ($delete_code)"
+    fi
+
+    # ── Verify account gone ───────────────────────────────────────────
+    code=$(curl -s -o /dev/null -w "%{http_code}" "${base}/auth/validate" \
+        -H "Authorization: Bearer ${token}" 2>/dev/null)
+    if [ "$code" = "401" ]; then
+        pass "Deleted account token rejected (401)"
+    else
+        fail "Expected 401 after account deletion, got $code"
+    fi
+
+    # ── Login with deleted account ────────────────────────────────────
+    code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${base}/auth/login" \
+        -H "Content-Type: application/json" \
+        -d "{\"email\":\"${email}\",\"password\":\"${password}\"}" 2>/dev/null)
+    if [ "$code" = "401" ]; then
+        pass "Login rejected for deleted account (401)"
+    else
+        fail "Expected 401 for deleted account login, got $code"
+    fi
+}
+
 run_sdk_tests() {
     header "SDK Tests"
 
@@ -1183,6 +1405,7 @@ run_sdk_tests() {
     local run_builds=false run_lan=false run_relay=false run_relay_docker=false
     local run_relay_binary=false run_tailscale=false run_cloudflare=false run_unit=false
     local run_sdk=false
+    local run_auth=false
 
     for arg in "$@"; do
         case "$arg" in
@@ -1195,6 +1418,7 @@ run_sdk_tests() {
             --tailscale)      run_tailscale=true; run_all=false ;;
             --cloudflare)     run_cloudflare=true; run_all=false ;;
             --sdk)            run_sdk=true; run_all=false ;;
+            --auth)           run_auth=true; run_all=false ;;
             --help|-h)
                 cat << 'HELP'
 Usage: ./scripts/test-suite.sh [FLAGS]
@@ -1211,6 +1435,7 @@ Flags:
   --tailscale       Tailscale cross-machine test (local ↔ Hetzner)
   --cloudflare      Cloudflare tunnel test
   --sdk             SDK tests (Go, Python, JS/TS, C shared library build)
+  --auth            Auth lifecycle (signup, login, validate, profile, settings, logout, delete)
 
 Environment:
   Credentials loaded from: env vars > .env.test > ../talos/.env.test
@@ -1256,6 +1481,10 @@ HELP
 
     if $run_all || $run_cloudflare; then
         run_cloudflare_test
+    fi
+
+    if $run_all || $run_auth; then
+        run_auth_tests
     fi
 
     if $run_all || $run_sdk; then
