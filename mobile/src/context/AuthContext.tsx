@@ -6,6 +6,7 @@ import React, {
   useMemo,
   useState,
 } from "react";
+import { AppState, AppStateStatus } from "react-native";
 import {
   User,
   getToken,
@@ -14,6 +15,7 @@ import {
   saveUser,
   clearToken,
   validateToken,
+  refreshToken,
   getSurveyStatus,
   clearKeychainIfFreshInstall,
   getConvexSiteUrl,
@@ -54,6 +56,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setToken(storedToken);
             setUser(validatedUser);
             await saveUser(validatedUser);
+            // Refresh token to extend expiry (best-effort, don't block)
+            refreshToken(storedToken).catch(() => {});
             // Use surveyCompleted from user record (set during validate)
             if (validatedUser.surveyCompleted) {
               setSurveyCompleted(true);
@@ -78,6 +82,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     })();
   }, []);
+
+  // Refresh token when app comes to foreground (extends expiry)
+  useEffect(() => {
+    const handleAppState = (nextState: AppStateStatus) => {
+      if (nextState === "active" && token) {
+        refreshToken(token).then((ok) => {
+          if (!ok) {
+            // Token expired while app was in background — force logout
+            console.log("[auth] Token expired — logging out");
+            clearToken().then(() => {
+              setToken(null);
+              setUser(null);
+              setSurveyCompleted(false);
+            });
+          }
+        }).catch(() => {});
+      }
+    };
+    const sub = AppState.addEventListener("change", handleAppState);
+    return () => sub.remove();
+  }, [token]);
 
   const login = useCallback(async (newToken: string) => {
     const validatedUser = await validateToken(newToken);

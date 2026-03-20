@@ -295,6 +295,28 @@ http.route({
   }),
 });
 
+// ── Token Refresh ────────────────────────────────────────────────────
+
+/** POST /auth/refresh — Extend session by 30 days. Returns new expiresAt. */
+http.route({
+  path: "/auth/refresh",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    const result = await ctx.runMutation(api.auth.refreshSession, { tokenHash });
+    if (!result) {
+      return errorResponse("Session expired or invalid", 401);
+    }
+    return jsonResponse({ ok: true, expiresAt: result.expiresAt });
+  }),
+});
+
 // ── Apple Sign-In ────────────────────────────────────────────────────
 
 /** POST /auth/apple-native — Native iOS Apple Sign-In (receives identityToken). */

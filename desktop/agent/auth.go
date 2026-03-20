@@ -9,6 +9,29 @@ import (
 	"time"
 )
 
+// RefreshToken extends the session expiry by 30 days.
+// Returns nil on success. Returns an error with status 401 if the session is expired.
+func RefreshToken(baseURL, token string) error {
+	req, err := newBearerRequest("POST", baseURL+"/auth/refresh", token, nil)
+	if err != nil {
+		return fmt.Errorf("create refresh request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("refresh token request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("session expired (401)")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("refresh token failed (status %d)", resp.StatusCode)
+	}
+	return nil
+}
+
 // RunnerInfo describes an active runner process for heartbeat reporting.
 type RunnerInfo struct {
 	TaskID   string `json:"taskId"`
@@ -197,8 +220,12 @@ func RegisterDevice(baseURL string, r RegisterDeviceRequest) error {
 	return nil
 }
 
+// ErrAuthExpired is returned when a 401 response indicates the token has expired.
+var ErrAuthExpired = fmt.Errorf("auth token expired (401)")
+
 // SendHeartbeat sends a heartbeat to the Convex backend so the device stays
 // marked as online. Includes active runner info if any.
+// Returns ErrAuthExpired if the server returns 401.
 func SendHeartbeat(baseURL, token, deviceID string, runners []RunnerInfo, quicHost string) error {
 	payload := map[string]interface{}{
 		"deviceId": deviceID,
@@ -223,6 +250,9 @@ func SendHeartbeat(baseURL, token, deviceID string, runners []RunnerInfo, quicHo
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return ErrAuthExpired
+	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("heartbeat failed (status %d): %s", resp.StatusCode, string(respBody))

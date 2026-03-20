@@ -175,6 +175,29 @@ export const validateSession = query({
 });
 
 /**
+ * Refresh a session — extends expiresAt by 30 days from now.
+ * Returns the new expiresAt, or null if session is invalid/expired.
+ */
+export const refreshSession = mutation({
+  args: {
+    tokenHash: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const session = await ctx.db
+      .query("sessions")
+      .withIndex("by_tokenHash", (q) => q.eq("tokenHash", args.tokenHash))
+      .unique();
+
+    if (!session) return null;
+    if (session.expiresAt < Date.now()) return null;
+
+    const newExpiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+    await ctx.db.patch(session._id, { expiresAt: newExpiresAt });
+    return { expiresAt: newExpiresAt };
+  },
+});
+
+/**
  * Delete a session (logout).
  */
 export const deleteSession = mutation({

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"crypto/tls"
 	"encoding/json"
 	"flag"
@@ -26,7 +27,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.33.0"
+const version = "1.34.0"
 
 // Default hosted Convex instance (public endpoint). Override with --convex-url flag or convex_site_url in config.json.
 const defaultConvexSiteURL = "https://shocking-echidna-394.eu-west-1.convex.site"
@@ -2823,12 +2824,29 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 
+	// Refresh token on startup (extends expiry by 30 days)
+	if err := RefreshToken(baseURL, token); err != nil {
+		log.Printf("[auth] Token refresh failed: %v", err)
+	} else {
+		log.Println("[auth] Token refreshed (extended 30 days).")
+	}
+
+	// Also refresh weekly
+	refreshTicker := time.NewTicker(7 * 24 * time.Hour)
+	defer refreshTicker.Stop()
+
 	lastIP := getLocalIP()
+	authExpiredLogged := false
 
 	// Send first heartbeat immediately (don't wait 2 min for ticker)
 	runners := taskMgr.GetRunnerInfos()
 	if err := SendHeartbeat(baseURL, token, deviceID, runners, lastIP); err != nil {
-		log.Printf("initial heartbeat failed: %v", err)
+		if errors.Is(err, ErrAuthExpired) {
+			log.Println("[auth] WARNING: Auth token expired! Run 'yaver auth' to re-authenticate.")
+			authExpiredLogged = true
+		} else {
+			log.Printf("initial heartbeat failed: %v", err)
+		}
 	} else {
 		log.Println("Initial heartbeat sent.")
 	}
@@ -2837,6 +2855,13 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 		select {
 		case <-ctx.Done():
 			return
+		case <-refreshTicker.C:
+			if err := RefreshToken(baseURL, token); err != nil {
+				log.Printf("[auth] Weekly token refresh failed: %v", err)
+			} else {
+				log.Println("[auth] Token refreshed (extended 30 days).")
+				authExpiredLogged = false
+			}
 		case <-ticker.C:
 			currentIP := getLocalIP()
 			runners := taskMgr.GetRunnerInfos()
@@ -2847,9 +2872,30 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 			}
 
 			if err := SendHeartbeat(baseURL, token, deviceID, runners, currentIP); err != nil {
-				log.Printf("heartbeat failed: %v", err)
+				if errors.Is(err, ErrAuthExpired) {
+					// Try to refresh token first
+					if refreshErr := RefreshToken(baseURL, token); refreshErr != nil {
+						if !authExpiredLogged {
+							log.Println("[auth] WARNING: Auth token expired! Run 'yaver auth' to re-authenticate.")
+							log.Println("[auth] The agent will continue running but the device will appear offline.")
+							authExpiredLogged = true
+						}
+					} else {
+						log.Println("[auth] Token refreshed after 401 — retrying heartbeat...")
+						authExpiredLogged = false
+						// Retry heartbeat
+						if retryErr := SendHeartbeat(baseURL, token, deviceID, runners, currentIP); retryErr != nil {
+							log.Printf("heartbeat retry failed: %v", retryErr)
+						}
+					}
+				} else {
+					log.Printf("heartbeat failed: %v", err)
+				}
 			} else {
-				log.Println("Heartbeat sent.")
+				if authExpiredLogged {
+					log.Println("[auth] Heartbeat succeeded — auth is working again.")
+					authExpiredLogged = false
+				}
 			}
 		}
 	}

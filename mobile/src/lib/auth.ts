@@ -91,6 +91,23 @@ export async function validateToken(token: string): Promise<User | null> {
   }
 }
 
+/**
+ * Refresh the session token — extends expiry by 30 days.
+ * Returns true if refreshed, false if expired/invalid (needs re-login).
+ */
+export async function refreshToken(token: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${getConvexSiteUrl()}/auth/refresh`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return response.ok;
+  } catch {
+    // Network error — assume token is still valid
+    return true;
+  }
+}
+
 export function getWebBaseUrl(): string {
   return "https://yaver.io";
 }
