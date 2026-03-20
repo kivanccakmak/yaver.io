@@ -581,6 +581,25 @@ export default function TasksScreen() {
 
   // ── Voice recording ─────────────────────────────────────────────────
 
+  // Pre-configure audio session on mount so it's ready when modals are open
+  const audioReadyRef = useRef(false);
+  useEffect(() => {
+    (async () => {
+      try {
+        const { Audio } = require("expo-av");
+        const perm = await Audio.getPermissionsAsync();
+        if (perm.status === "granted") {
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: true,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+          });
+          audioReadyRef.current = true;
+        }
+      } catch {}
+    })();
+  }, []);
+
   const startRecording = async () => {
     try {
       const { Audio } = require("expo-av");
@@ -593,11 +612,15 @@ export default function TasksScreen() {
         }
         return;
       }
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-      });
+      // Set audio mode if not already configured
+      if (!audioReadyRef.current) {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+        });
+        audioReadyRef.current = true;
+      }
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
@@ -606,6 +629,24 @@ export default function TasksScreen() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn("[speech] Failed to start recording:", msg);
+      // Retry once after resetting audio mode
+      if (msg.includes("background") || msg.includes("activated")) {
+        try {
+          const { Audio } = require("expo-av");
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: true,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+          });
+          const { recording } = await Audio.Recording.createAsync(
+            Audio.RecordingOptionsPresets.HIGH_QUALITY
+          );
+          audioRecordingRef.current = recording;
+          setIsRecording(true);
+          audioReadyRef.current = true;
+          return;
+        } catch {}
+      }
       Alert.alert("Recording Error", `Could not start recording: ${msg}`);
     }
   };
