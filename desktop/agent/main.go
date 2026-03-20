@@ -27,7 +27,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.36.0"
+const version = "1.37.0"
 
 // Default hosted Convex instance (public endpoint). Override with --convex-url flag or convex_site_url in config.json.
 const defaultConvexSiteURL = "https://shocking-echidna-394.eu-west-1.convex.site"
@@ -1220,6 +1220,33 @@ func runStop() {
 
 	os.Remove(pidFilePath())
 	fmt.Printf("Yaver agent stopped (was PID %d).\n", pid)
+
+	// Kill any orphan runner processes that may have survived
+	killOrphanRunners()
+}
+
+// killOrphanRunners finds and kills any leftover claude/codex/aider processes
+// that were forked by the agent but may have survived a crash or force-kill.
+func killOrphanRunners() {
+	patterns := []string{
+		"claude.*--output-format.*stream-json",
+		"claude.*--dangerously-skip-permissions",
+	}
+	for _, pat := range patterns {
+		out, err := osexec.Command("pgrep", "-f", pat).Output()
+		if err != nil || len(out) == 0 {
+			continue
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			var orphanPID int
+			if _, err := fmt.Sscanf(line, "%d", &orphanPID); err == nil && orphanPID > 0 {
+				if proc, err := os.FindProcess(orphanPID); err == nil {
+					_ = proc.Kill()
+					fmt.Printf("  Killed orphan runner process (PID %d)\n", orphanPID)
+				}
+			}
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
