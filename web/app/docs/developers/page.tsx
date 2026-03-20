@@ -124,6 +124,7 @@ export default function DevelopersPage() {
               ["running-tests", "Running Tests"],
               ["integration-test-suite", "Integration Test Suite"],
               ["pr-rules", "Pull Request Rules"],
+              ["sdk", "SDK — Embed Yaver"],
               ["contributing", "Contributing"],
             ].map(([id, label]) => (
               <a
@@ -1868,6 +1869,95 @@ CLI Agent ◄──QUIC──────────────── Relay (:
                   <InlineCode>./scripts/deploy-vercel.sh</InlineCode> (auto-deploy is disabled)
                 </li>
               </ul>
+            </div>
+          </div>
+        </section>
+
+        {/* ─── SDK ─── */}
+        <section className="mb-20">
+          <SectionHeading id="sdk">SDK — Embed Yaver in Your App</SectionHeading>
+          <Prose>
+            Yaver provides embeddable SDKs so you can integrate P2P AI agent
+            connectivity into your own applications. Available for Go, Python,
+            JavaScript/TypeScript, and C/C++ (via shared library).
+          </Prose>
+
+          <div className="space-y-4">
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">Go</h4>
+              <Terminal title="Go SDK">
+                <Comment># Import the SDK</Comment>
+                <div className="text-surface-300">{`import yaver "github.com/kivanccakmak/yaver.io/sdk/go/yaver"`}</div>
+                <div className="text-surface-300 mt-2">{`client := yaver.NewClient("http://localhost:18080", token)`}</div>
+                <div className="text-surface-300">{`task, _ := client.CreateTask("Fix the bug", nil)`}</div>
+                <div className="text-surface-300">{`for chunk := range client.StreamOutput(task.ID, 0) {`}</div>
+                <div className="text-surface-300">{`    fmt.Print(chunk)`}</div>
+                <div className="text-surface-300">{`}`}</div>
+              </Terminal>
+              <p className="mt-3 text-xs text-surface-500">
+                Also includes: AuthClient (token validation, device listing), Transcriber (STT), Config (load/save), Speak (TTS).
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">Python</h4>
+              <Terminal title="Python SDK">
+                <Comment># pip install yaver (or copy sdk/python/yaver.py)</Comment>
+                <div className="text-surface-300">{`from yaver import YaverClient`}</div>
+                <div className="text-surface-300 mt-2">{`client = YaverClient("http://localhost:18080", token)`}</div>
+                <div className="text-surface-300">{`task = client.create_task("Fix the bug")`}</div>
+                <div className="text-surface-300">{`for chunk in client.stream_output(task["id"]):`}</div>
+                <div className="text-surface-300">{`    print(chunk, end="")`}</div>
+              </Terminal>
+              <p className="mt-3 text-xs text-surface-500">
+                Zero dependencies (stdlib only). HTTP mode works everywhere. Native mode uses ctypes + the C shared library for direct bindings.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">JavaScript / TypeScript</h4>
+              <Terminal title="JS/TS SDK">
+                <Comment># npm install @yaver/sdk</Comment>
+                <div className="text-surface-300">{`import { YaverClient } from '@yaver/sdk';`}</div>
+                <div className="text-surface-300 mt-2">{`const client = new YaverClient('http://localhost:18080', token);`}</div>
+                <div className="text-surface-300">{`const task = await client.createTask('Fix the bug');`}</div>
+                <div className="text-surface-300">{`for await (const chunk of client.streamOutput(task.id)) {`}</div>
+                <div className="text-surface-300">{`  process.stdout.write(chunk);`}</div>
+                <div className="text-surface-300">{`}`}</div>
+              </Terminal>
+              <p className="mt-3 text-xs text-surface-500">
+                Works in React Native, Node.js, and browsers. Full TypeScript types. Includes auth client and speech transcription.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">C / C++ (shared library)</h4>
+              <Terminal title="Build & link">
+                <Cmd>cd sdk/go/clib</Cmd>
+                <Cmd>go build -buildmode=c-shared -o libyaver.so .</Cmd>
+                <Comment># Generates libyaver.so + libyaver.h</Comment>
+              </Terminal>
+              <pre className="mt-3 rounded-lg bg-surface-950 p-3 text-xs text-surface-300 overflow-x-auto">{`#include "libyaver.h"
+int client = YaverNewClient("http://localhost:18080", token);
+char* result = YaverCreateTask(client, "Fix the bug", NULL);
+// Parse result as JSON
+YaverFreeString(result);
+YaverFreeClient(client);`}</pre>
+              <p className="mt-3 text-xs text-surface-500">
+                Works with any language that supports C FFI: Rust (bindgen), Ruby (ffi gem), Java (JNI), C# (P/Invoke), etc.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">Testing SDKs</h4>
+              <Terminal title="Test suite">
+                <Cmd>./scripts/test-suite.sh --sdk</Cmd>
+                <Output>✓ Go SDK tests passed</Output>
+                <Output>✓ C shared library built</Output>
+                <Output>✓ Python SDK tests passed</Output>
+                <Output>✓ JS/TS SDK typecheck passed</Output>
+                <Output>✓ JS/TS SDK built</Output>
+              </Terminal>
             </div>
           </div>
         </section>

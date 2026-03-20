@@ -1012,6 +1012,64 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* SDK */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-4xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Embed Yaver in your app
+          </h2>
+          <p className="mx-auto mb-16 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
+            SDKs for Go, Python, JavaScript/TypeScript, and C/C++. Connect to Yaver agents, create tasks, stream output, and use speech-to-text from your own code.
+          </p>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="text-sm font-semibold text-surface-100">Go</span>
+                <span className="rounded-full bg-surface-800 px-2 py-0.5 text-[10px] text-surface-400">Native</span>
+              </div>
+              <pre className="rounded-lg bg-surface-950 p-3 text-xs text-surface-300 overflow-x-auto"><code>{`import "github.com/kivanccakmak/yaver.io/sdk/go/yaver"
+
+c := yaver.NewClient(url, token)
+task, _ := c.CreateTask("Fix bug", nil)
+for chunk := range c.StreamOutput(task.ID, 0) {
+    fmt.Print(chunk)
+}`}</code></pre>
+            </div>
+            <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="text-sm font-semibold text-surface-100">Python</span>
+                <span className="rounded-full bg-surface-800 px-2 py-0.5 text-[10px] text-surface-400">pip install</span>
+              </div>
+              <pre className="rounded-lg bg-surface-950 p-3 text-xs text-surface-300 overflow-x-auto"><code>{`from yaver import YaverClient
+
+client = YaverClient(url, token)
+task = client.create_task("Fix bug")
+for chunk in client.stream_output(task["id"]):
+    print(chunk, end="")`}</code></pre>
+            </div>
+            <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="text-sm font-semibold text-surface-100">JavaScript / TypeScript</span>
+                <span className="rounded-full bg-surface-800 px-2 py-0.5 text-[10px] text-surface-400">npm</span>
+              </div>
+              <pre className="rounded-lg bg-surface-950 p-3 text-xs text-surface-300 overflow-x-auto"><code>{`import { YaverClient } from '@yaver/sdk';
+
+const c = new YaverClient(url, token);
+const task = await c.createTask('Fix bug');
+for await (const chunk of c.streamOutput(task.id)) {
+  process.stdout.write(chunk);
+}`}</code></pre>
+            </div>
+          </div>
+
+          <p className="mt-6 text-center text-xs text-surface-500">
+            Also available as a C shared library (.so/.dylib/.dll) for C/C++ and any language with FFI support.
+            {" "}<a href="https://github.com/kivanccakmak/yaver.io/tree/main/sdk" target="_blank" rel="noopener noreferrer" className="text-surface-400 underline hover:text-surface-200">See SDK docs</a>
+          </p>
+        </div>
+      </section>
+
       {/* Voice Input */}
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-4xl">
@@ -1177,6 +1235,10 @@ export default function HomePage() {
             <FAQItem
               question="Can I hear responses read aloud?"
               answer="Yes — enable Text-to-Speech in Settings > Voice. It uses your device's built-in TTS engine (Apple TTS on iOS/macOS, espeak on Linux). You can also control response verbosity from 0 (just 'done') to 10 (full diffs and reasoning) so the AI adapts how much detail it gives."
+            />
+            <FAQItem
+              question="Can I embed Yaver in my own app?"
+              answer="Yes — Yaver provides SDKs for Go, Python, and JavaScript/TypeScript. Import the package, point it at a running Yaver agent, and create tasks, stream output, or use speech-to-text from your code. A C shared library (.so/.dylib/.dll) is also available for C/C++ and any language with FFI support (Ruby, Rust, etc)."
             />
             <FAQItem
               question="How do I contribute?"

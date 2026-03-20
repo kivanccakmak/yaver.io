@@ -256,6 +256,77 @@ Control how detailed AI responses are (0-10 scale):
 
 Set via mobile app (Settings > Voice > Response detail) or passed per-task.
 
+## SDK — Embed Yaver in Your App
+
+Yaver provides SDKs for Go, Python, and JavaScript/TypeScript. Connect to agents, create tasks, stream output, and use speech-to-text from your own code.
+
+### Go
+
+```go
+import yaver "github.com/kivanccakmak/yaver.io/sdk/go/yaver"
+
+client := yaver.NewClient("http://localhost:18080", token)
+task, _ := client.CreateTask("Fix the login bug", nil)
+for chunk := range client.StreamOutput(task.ID, 0) {
+    fmt.Print(chunk)
+}
+```
+
+### Python
+
+```python
+from yaver import YaverClient
+
+client = YaverClient("http://localhost:18080", token)
+task = client.create_task("Fix the login bug")
+for chunk in client.stream_output(task["id"]):
+    print(chunk, end="")
+```
+
+### JavaScript / TypeScript
+
+```typescript
+import { YaverClient } from '@yaver/sdk';
+
+const client = new YaverClient('http://localhost:18080', token);
+const task = await client.createTask('Fix the login bug');
+for await (const chunk of client.streamOutput(task.id)) {
+  process.stdout.write(chunk);
+}
+```
+
+### C/C++ (shared library)
+
+Build the shared library, then link against it:
+
+```bash
+cd sdk/go/clib && go build -buildmode=c-shared -o libyaver.so .
+```
+
+```c
+#include "libyaver.h"
+int client = YaverNewClient("http://localhost:18080", token);
+char* result = YaverCreateTask(client, "Fix the bug", NULL);
+```
+
+### Speech in SDK
+
+All SDKs support speech-to-text:
+
+```python
+# Python — transcribe audio
+result = client.transcribe("recording.wav", provider="openai", api_key="sk-...")
+print(result["text"])
+```
+
+```go
+// Go — record and transcribe
+audioPath, _ := yaver.RecordAudio()
+tr := yaver.NewTranscriber(&yaver.SpeechConfig{Provider: "openai", APIKey: "sk-..."})
+result, _ := tr.Transcribe(audioPath)
+fmt.Println(result.Text)
+```
+
 ## System Health Check
 
 ```bash
