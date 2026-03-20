@@ -6,16 +6,6 @@ import { CONVEX_URL } from "@/lib/constants";
 
 type Platform = "macos" | "windows" | "linux" | "ios" | "android" | "unknown";
 
-interface Download {
-  platform: string;
-  arch: string;
-  format: string;
-  version: string;
-  filename: string;
-  size: number;
-  url: string | null;
-}
-
 function detectPlatform(): Platform {
   if (typeof window === "undefined") return "unknown";
   const ua = navigator.userAgent.toLowerCase();
@@ -31,88 +21,37 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
 }
 
-const GITHUB_RELEASE = "https://github.com/kivanccakmak/yaver-cli/releases/latest";
+const GITHUB_CLI = "https://github.com/kivanccakmak/yaver-cli/releases/latest";
+const GITHUB_RELEASE = "https://github.com/kivanccakmak/yaver.io/releases/latest";
+
+function ghCliUrl(filename: string): string {
+  return `${GITHUB_CLI}/download/${filename}`;
+}
 
 export default function DownloadPage() {
   const [platform, setPlatform] = useState<Platform>("unknown");
-  const [downloads, setDownloads] = useState<Download[]>([]);
   const [cliVersion, setCliVersion] = useState<string>("");
   const [mobileVersion, setMobileVersion] = useState<string>("");
-  const [relayVersion, setRelayVersion] = useState<string>("");
-  const [webVersion, setWebVersion] = useState<string>("");
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setPlatform(detectPlatform());
 
-    // Fetch downloads list
-    fetch(
-      `${CONVEX_URL}/downloads/list`
-    )
-      .then((res) => res.json())
-      .then((data) => setDownloads(data.downloads || []))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-
-    // Fetch CLI version from config
-    fetch(
-      `${CONVEX_URL}/config`
-    )
+    // Fetch versions from config (no downloads list needed — all from GitHub)
+    fetch(`${CONVEX_URL}/config`)
       .then((res) => res.json())
       .then((data) => {
         if (data.cliVersion) setCliVersion(data.cliVersion);
         if (data.mobileVersion) setMobileVersion(data.mobileVersion);
-        if (data.relayVersion) setRelayVersion(data.relayVersion);
-        if (data.webVersion) setWebVersion(data.webVersion);
       })
       .catch(() => {});
   }, []);
 
-  function findDownload(plat: string, arch: string, format: string) {
-    // Prefer latest version
-    const matches = downloads
-      .filter((d) => d.platform === plat && d.arch === arch && d.format === format)
-      .sort((a, b) => b.version.localeCompare(a.version));
-    return matches[0];
-  }
-
-  function downloadButton(
-    label: string,
-    plat: string,
-    arch: string,
-    format: string,
-    primary = false
-  ) {
-    const d = findDownload(plat, arch, format);
-    const available = d?.url;
-    const sizeLabel = d ? ` (${formatSize(d.size)})` : "";
-    if (available) {
-      return (
-        <a
-          key={label}
-          href={d.url!}
-          className={
-            primary
-              ? "btn-primary py-2 px-4 text-xs"
-              : "btn-secondary py-2 px-4 text-xs"
-          }
-        >
-          {label}
-          {sizeLabel}
-        </a>
-      );
-    }
-
-    // Fallback to GitHub release
+  function ghButton(label: string, filename: string, primary = false) {
     return (
       <a
         key={label}
-        href={GITHUB_RELEASE}
-        className={
-          primary
-            ? "btn-primary py-2 px-4 text-xs"
-            : "btn-secondary py-2 px-4 text-xs"
-        }
+        href={ghCliUrl(filename)}
+        className={primary ? "btn-primary py-2 px-4 text-xs" : "btn-secondary py-2 px-4 text-xs"}
       >
         {label}
       </a>
@@ -124,9 +63,6 @@ export default function DownloadPage() {
       v{cliVersion}
     </span>
   ) : null;
-
-  const androidApk = findDownload("android", "arm64", "apk");
-  const iosIpa = findDownload("ios", "arm64", "ipa");
 
   return (
     <div className="px-6 py-20">
@@ -141,12 +77,6 @@ export default function DownloadPage() {
           </p>
         </div>
 
-        {loading && (
-          <div className="mb-8 text-center text-sm text-surface-500">
-            Loading downloads...
-          </div>
-        )}
-
         {/* Desktop CLI */}
         <div className="mb-12">
           <h2 className="mb-6 text-xs font-semibold uppercase tracking-wider text-surface-500">
@@ -159,17 +89,16 @@ export default function DownloadPage() {
                 desc: "macOS 13+ (Apple Silicon & Intel)",
                 highlighted: platform === "macos",
                 buttons: [
-                  { label: "Apple Silicon", plat: "macos", arch: "arm64", format: "bin", primary: true },
-                  { label: "Intel", plat: "macos", arch: "amd64", format: "bin" },
-                  { label: ".pkg (ARM)", plat: "macos", arch: "arm64", format: "pkg" },
+                  { label: "Apple Silicon", file: "yaver-darwin-arm64", primary: true },
+                  { label: "Intel", file: "yaver-darwin-amd64" },
                 ],
               },
               {
                 name: "Windows",
-                desc: "Windows 10+ (64-bit, signed)",
+                desc: "Windows 10+ (64-bit, code-signed)",
                 highlighted: platform === "windows",
                 buttons: [
-                  { label: "Download .exe", plat: "windows", arch: "amd64", format: "exe", primary: true },
+                  { label: "Download .exe", file: "yaver-windows-amd64.exe", primary: true },
                 ],
               },
               {
@@ -177,8 +106,8 @@ export default function DownloadPage() {
                 desc: "x86_64 & ARM64",
                 highlighted: platform === "linux",
                 buttons: [
-                  { label: "x86_64", plat: "linux", arch: "amd64", format: "bin", primary: true },
-                  { label: "ARM64", plat: "linux", arch: "arm64", format: "bin" },
+                  { label: "x86_64", file: "yaver-linux-amd64", primary: true },
+                  { label: "ARM64", file: "yaver-linux-arm64" },
                 ],
               },
             ].map((p) => (
@@ -197,7 +126,7 @@ export default function DownloadPage() {
                 <p className="mb-5 text-xs text-surface-500">{p.desc}</p>
                 <div className="flex flex-wrap gap-2">
                   {p.buttons.map((btn) =>
-                    downloadButton(btn.label, btn.plat, btn.arch, btn.format, btn.primary)
+                    ghButton(btn.label, btn.file, btn.primary)
                   )}
                 </div>
               </div>
@@ -345,18 +274,18 @@ export default function DownloadPage() {
                 iOS 16+. iPhone and iPad.
               </p>
               <div className="flex flex-wrap gap-2">
-                {iosIpa?.url ? (
-                  <a href={iosIpa.url} className="btn-primary py-2 px-4 text-xs">
-                    Download IPA ({formatSize(iosIpa.size)})
-                  </a>
-                ) : (
-                  <a
-                    href="https://testflight.apple.com/join/yaver"
-                    className="btn-primary py-2 px-4 text-xs"
-                  >
-                    TestFlight Beta
-                  </a>
-                )}
+                <a
+                  href="https://testflight.apple.com/join/yaver"
+                  className="btn-primary py-2 px-4 text-xs"
+                >
+                  TestFlight Beta
+                </a>
+                <a
+                  href="https://apps.apple.com/app/yaver/id6746057981"
+                  className="btn-secondary py-2 px-4 text-xs"
+                >
+                  App Store
+                </a>
               </div>
             </div>
             <div
@@ -372,18 +301,18 @@ export default function DownloadPage() {
               </h3>
               <p className="mb-5 text-xs text-surface-500">Android 12+.</p>
               <div className="flex flex-wrap gap-2">
-                {androidApk?.url ? (
-                  <a href={androidApk.url} className="btn-primary py-2 px-4 text-xs">
-                    Download APK ({formatSize(androidApk.size)})
-                  </a>
-                ) : (
-                  <a
-                    href={`https://github.com/kivanccakmak/yaver.io/releases/latest/download/Yaver-${mobileVersion || "1.9.0"}.apk`}
-                    className="btn-primary py-2 px-4 text-xs"
-                  >
-                    Download APK
-                  </a>
-                )}
+                <a
+                  href={`https://github.com/kivanccakmak/yaver.io/releases/latest/download/Yaver-${mobileVersion || "1.9.0"}.apk`}
+                  className="btn-primary py-2 px-4 text-xs"
+                >
+                  Download APK
+                </a>
+                <a
+                  href="https://play.google.com/store/apps/details?id=io.yaver.mobile"
+                  className="btn-secondary py-2 px-4 text-xs"
+                >
+                  Google Play
+                </a>
               </div>
             </div>
           </div>
@@ -392,7 +321,7 @@ export default function DownloadPage() {
         {/* GitHub link */}
         <div className="text-center space-y-3">
           <a
-            href={GITHUB_RELEASE}
+            href={GITHUB_CLI}
             className="text-xs text-surface-400 hover:text-surface-50 underline underline-offset-2"
           >
             All releases on GitHub
