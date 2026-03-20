@@ -4,9 +4,9 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Keyboard,
   KeyboardAvoidingView,
   Linking,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -88,21 +88,6 @@ export default function SettingsScreen() {
   const [newTunnelLabel, setNewTunnelLabel] = useState("");
   const [testingTunnelId, setTestingTunnelId] = useState<string | null>(null);
   const [tunnelTestResults, setTunnelTestResults] = useState<Record<string, { ok: boolean; ms?: number; error?: string }>>({});
-
-  // Scroll down when add-relay / add-tunnel / keyboard opens so inputs stay visible
-  useEffect(() => {
-    if (showAddRelay || showAddTunnel) {
-      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 300);
-    }
-  }, [showAddRelay, showAddTunnel]);
-
-  useEffect(() => {
-    if (Platform.OS !== "ios") return;
-    const sub = Keyboard.addListener("keyboardDidShow", () => {
-      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
-    });
-    return () => sub.remove();
-  }, []);
 
   // Load custom relay servers and sync preference from AsyncStorage
   useEffect(() => {
@@ -965,55 +950,60 @@ export default function SettingsScreen() {
                   { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 6, backgroundColor: c.accent },
                   pressed && { opacity: 0.7 },
                 ]}
-                onPress={() => setShowAddRelay(!showAddRelay)}
+                onPress={() => setShowAddRelay(true)}
               >
-                <Text style={{ fontSize: 13, color: "#fff", fontWeight: "600" }}>
-                  {showAddRelay ? "Cancel" : "+ Add"}
-                </Text>
+                <Text style={{ fontSize: 13, color: "#fff", fontWeight: "600" }}>+ Add</Text>
               </Pressable>
             </View>
 
-            {showAddRelay && (
-              <View style={{ marginTop: 12, gap: 8 }}>
-                <TextInput
-                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
-                  placeholder="https://relay.example.com"
-                  placeholderTextColor={c.textMuted}
-                  value={newRelayUrl}
-                  onChangeText={setNewRelayUrl}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="url"
-                />
-                <TextInput
-                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
-                  placeholder="Password (optional)"
-                  placeholderTextColor={c.textMuted}
-                  value={newRelayPassword}
-                  onChangeText={setNewRelayPassword}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  secureTextEntry
-                />
-                <TextInput
-                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
-                  placeholder="Label (optional) e.g. My VPS"
-                  placeholderTextColor={c.textMuted}
-                  value={newRelayLabel}
-                  onChangeText={setNewRelayLabel}
-                  autoCapitalize="none"
-                />
-                <Pressable
-                  style={({ pressed }) => [
-                    { paddingVertical: 10, borderRadius: 8, backgroundColor: c.accent, alignItems: "center" as const },
-                    pressed && { opacity: 0.7 },
-                  ]}
-                  onPress={handleAddRelay}
-                >
-                  <Text style={{ color: "#fff", fontWeight: "600", fontSize: 14 }}>Add Relay Server</Text>
-                </Pressable>
-              </View>
-            )}
+            {/* Add Relay Modal */}
+            <Modal visible={showAddRelay} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowAddRelay(false)}>
+              <KeyboardAvoidingView style={{ flex: 1, backgroundColor: c.bg }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 16, paddingTop: Platform.OS === "ios" ? 56 : 16 }}>
+                  <Pressable onPress={() => setShowAddRelay(false)}>
+                    <Text style={{ fontSize: 16, color: c.accent }}>Cancel</Text>
+                  </Pressable>
+                  <Text style={{ fontSize: 17, fontWeight: "600", color: c.textPrimary }}>Add Relay Server</Text>
+                  <Pressable onPress={() => { handleAddRelay(); }}>
+                    <Text style={{ fontSize: 16, color: c.accent, fontWeight: "600" }}>Add</Text>
+                  </Pressable>
+                </View>
+                <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, gap: 12 }} keyboardShouldPersistTaps="handled">
+                  <Text style={{ fontSize: 13, color: c.textMuted, marginBottom: 4 }}>
+                    Connect to your self-hosted relay server for NAT traversal and roaming.
+                  </Text>
+                  <TextInput
+                    style={[styles.relayInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+                    placeholder="https://relay.example.com"
+                    placeholderTextColor={c.textMuted}
+                    value={newRelayUrl}
+                    onChangeText={setNewRelayUrl}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="url"
+                    autoFocus
+                  />
+                  <TextInput
+                    style={[styles.relayInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+                    placeholder="Password (optional)"
+                    placeholderTextColor={c.textMuted}
+                    value={newRelayPassword}
+                    onChangeText={setNewRelayPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    secureTextEntry
+                  />
+                  <TextInput
+                    style={[styles.relayInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+                    placeholder="Label (optional) e.g. My VPS"
+                    placeholderTextColor={c.textMuted}
+                    value={newRelayLabel}
+                    onChangeText={setNewRelayLabel}
+                    autoCapitalize="none"
+                  />
+                </ScrollView>
+              </KeyboardAvoidingView>
+            </Modal>
 
             {customRelays.length === 0 && !showAddRelay && (
               <View style={{ marginTop: 8 }}>
@@ -1110,64 +1100,69 @@ export default function SettingsScreen() {
                   { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 6, backgroundColor: c.accent },
                   pressed && { opacity: 0.7 },
                 ]}
-                onPress={() => setShowAddTunnel(!showAddTunnel)}
+                onPress={() => setShowAddTunnel(true)}
               >
-                <Text style={{ fontSize: 13, color: "#fff", fontWeight: "600" }}>
-                  {showAddTunnel ? "Cancel" : "+ Add"}
-                </Text>
+                <Text style={{ fontSize: 13, color: "#fff", fontWeight: "600" }}>+ Add</Text>
               </Pressable>
             </View>
 
-            {showAddTunnel && (
-              <View style={{ marginTop: 12, gap: 8 }}>
-                <TextInput
-                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
-                  placeholder="https://tunnel.yourdomain.com"
-                  placeholderTextColor={c.textMuted}
-                  value={newTunnelUrl}
-                  onChangeText={setNewTunnelUrl}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="url"
-                />
-                <TextInput
-                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
-                  placeholder="CF Access Client ID (optional)"
-                  placeholderTextColor={c.textMuted}
-                  value={newTunnelCfClientId}
-                  onChangeText={setNewTunnelCfClientId}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                <TextInput
-                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
-                  placeholder="CF Access Client Secret (optional)"
-                  placeholderTextColor={c.textMuted}
-                  value={newTunnelCfClientSecret}
-                  onChangeText={setNewTunnelCfClientSecret}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  secureTextEntry
-                />
-                <TextInput
-                  style={[styles.relayInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
-                  placeholder="Label (optional) e.g. My Tunnel"
-                  placeholderTextColor={c.textMuted}
-                  value={newTunnelLabel}
-                  onChangeText={setNewTunnelLabel}
-                  autoCapitalize="none"
-                />
-                <Pressable
-                  style={({ pressed }) => [
-                    { paddingVertical: 10, borderRadius: 8, backgroundColor: c.accent, alignItems: "center" as const },
-                    pressed && { opacity: 0.7 },
-                  ]}
-                  onPress={handleAddTunnel}
-                >
-                  <Text style={{ color: "#fff", fontWeight: "600", fontSize: 14 }}>Add Tunnel</Text>
-                </Pressable>
-              </View>
-            )}
+            {/* Add Tunnel Modal */}
+            <Modal visible={showAddTunnel} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowAddTunnel(false)}>
+              <KeyboardAvoidingView style={{ flex: 1, backgroundColor: c.bg }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 16, paddingTop: Platform.OS === "ios" ? 56 : 16 }}>
+                  <Pressable onPress={() => setShowAddTunnel(false)}>
+                    <Text style={{ fontSize: 16, color: c.accent }}>Cancel</Text>
+                  </Pressable>
+                  <Text style={{ fontSize: 17, fontWeight: "600", color: c.textPrimary }}>Add Cloudflare Tunnel</Text>
+                  <Pressable onPress={() => { handleAddTunnel(); }}>
+                    <Text style={{ fontSize: 16, color: c.accent, fontWeight: "600" }}>Add</Text>
+                  </Pressable>
+                </View>
+                <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, gap: 12 }} keyboardShouldPersistTaps="handled">
+                  <Text style={{ fontSize: 13, color: c.textMuted, marginBottom: 4 }}>
+                    Connect through Cloudflare Tunnel for HTTPS access through firewalls.
+                  </Text>
+                  <TextInput
+                    style={[styles.relayInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+                    placeholder="https://tunnel.yourdomain.com"
+                    placeholderTextColor={c.textMuted}
+                    value={newTunnelUrl}
+                    onChangeText={setNewTunnelUrl}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="url"
+                    autoFocus
+                  />
+                  <TextInput
+                    style={[styles.relayInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+                    placeholder="CF Access Client ID (optional)"
+                    placeholderTextColor={c.textMuted}
+                    value={newTunnelCfClientId}
+                    onChangeText={setNewTunnelCfClientId}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <TextInput
+                    style={[styles.relayInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+                    placeholder="CF Access Client Secret (optional)"
+                    placeholderTextColor={c.textMuted}
+                    value={newTunnelCfClientSecret}
+                    onChangeText={setNewTunnelCfClientSecret}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    secureTextEntry
+                  />
+                  <TextInput
+                    style={[styles.relayInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+                    placeholder="Label (optional) e.g. My Tunnel"
+                    placeholderTextColor={c.textMuted}
+                    value={newTunnelLabel}
+                    onChangeText={setNewTunnelLabel}
+                    autoCapitalize="none"
+                  />
+                </ScrollView>
+              </KeyboardAvoidingView>
+            </Modal>
 
             {customTunnels.length === 0 && !showAddTunnel && (
               <View style={{ marginTop: 8 }}>
