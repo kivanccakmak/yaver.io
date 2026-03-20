@@ -2539,6 +2539,34 @@ func runStatus() {
 			}
 		}
 	}
+
+	// Voice / Speech status
+	fmt.Println()
+	fmt.Println("Voice:")
+	if cfg.Speech != nil && cfg.Speech.Provider != "" {
+		fmt.Printf("  STT:      %s\n", cfg.Speech.Provider)
+		if cfg.Speech.APIKey != "" {
+			fmt.Printf("  API Key:  set\n")
+		} else if cfg.Speech.Provider == "whisper" || cfg.Speech.Provider == "on-device" {
+			// Check if whisper-cpp is installed
+			if _, err := osexec.LookPath("whisper-cpp"); err == nil {
+				fmt.Printf("  Whisper:  installed\n")
+			} else if _, err := osexec.LookPath("whisper"); err == nil {
+				fmt.Printf("  Whisper:  installed\n")
+			} else {
+				fmt.Printf("  Whisper:  not found (install: brew install whisper-cpp)\n")
+			}
+		} else {
+			fmt.Printf("  API Key:  not set\n")
+		}
+		if cfg.Speech.TTSEnabled {
+			fmt.Printf("  TTS:      enabled\n")
+		} else {
+			fmt.Printf("  TTS:      disabled\n")
+		}
+	} else {
+		fmt.Printf("  Not configured. Run: yaver config set speech.provider <whisper|openai|deepgram|assemblyai>\n")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -3080,6 +3108,69 @@ func runDoctor() {
 		failed("Cannot reach yaver.io")
 	} else {
 		pass("OK")
+	}
+
+	// 7. Voice / Speech
+	fmt.Println("\n── Voice ──")
+	if cfg != nil && cfg.Speech != nil && cfg.Speech.Provider != "" {
+		check("Speech provider")
+		pass(cfg.Speech.Provider)
+
+		if cfg.Speech.Provider == "whisper" || cfg.Speech.Provider == "on-device" {
+			check("Whisper binary")
+			if p, err := osexec.LookPath("whisper-cpp"); err == nil {
+				pass(p)
+			} else if p, err := osexec.LookPath("whisper"); err == nil {
+				pass(p)
+			} else {
+				warning("Not found — install: brew install whisper-cpp")
+			}
+		} else {
+			check("API key")
+			if cfg.Speech.APIKey != "" {
+				pass("Set")
+			} else {
+				failed(fmt.Sprintf("Not set — run: yaver config set speech.api_key <key>"))
+			}
+		}
+
+		check("TTS")
+		if cfg.Speech.TTSEnabled {
+			switch runtime.GOOS {
+			case "darwin":
+				if _, err := osexec.LookPath("say"); err == nil {
+					pass("Enabled (macOS say)")
+				} else {
+					warning("Enabled but 'say' not found")
+				}
+			case "linux":
+				if _, err := osexec.LookPath("espeak"); err == nil {
+					pass("Enabled (espeak)")
+				} else if _, err := osexec.LookPath("spd-say"); err == nil {
+					pass("Enabled (spd-say)")
+				} else {
+					warning("Enabled but no TTS engine found (install espeak)")
+				}
+			default:
+				warning("Enabled (no TTS engine available on this OS)")
+			}
+		} else {
+			pass("Disabled")
+		}
+
+		check("Audio recording")
+		if _, err := osexec.LookPath("rec"); err == nil {
+			pass("sox/rec available")
+		} else if _, err := osexec.LookPath("sox"); err == nil {
+			pass("sox available")
+		} else if _, err := osexec.LookPath("ffmpeg"); err == nil {
+			pass("ffmpeg available")
+		} else {
+			warning("No recording tool — install sox (brew install sox)")
+		}
+	} else {
+		check("Speech provider")
+		warning("Not configured — run: yaver config set speech.provider <whisper|openai|deepgram|assemblyai>")
 	}
 
 	// Summary

@@ -1012,6 +1012,66 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* Voice Input */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-4xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Voice Input &amp; Text-to-Speech
+          </h2>
+          <p className="mx-auto mb-16 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
+            Speak your tasks from mobile or CLI. Choose a free on-device model or bring your own cloud API key.
+          </p>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              {
+                name: "On-Device",
+                tag: "Free",
+                desc: "Whisper tiny model runs locally on your phone or machine. No internet, no API key, no cost.",
+              },
+              {
+                name: "OpenAI",
+                tag: "$0.003/min",
+                desc: "GPT-4o Mini Transcribe. Excellent accuracy, lowest error rate for technical speech.",
+              },
+              {
+                name: "Deepgram",
+                tag: "$0.004/min",
+                desc: "Nova-2 with real-time WebSocket streaming. Top-tier accuracy for English.",
+              },
+              {
+                name: "AssemblyAI",
+                tag: "$0.002/min",
+                desc: "Universal-2. Cheapest cloud option for async transcription.",
+              },
+            ].map((p) => (
+              <div key={p.name} className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-sm font-semibold text-surface-100">{p.name}</span>
+                  <span className="rounded-full bg-surface-800 px-2 py-0.5 text-xs text-surface-400">{p.tag}</span>
+                </div>
+                <p className="text-xs leading-relaxed text-surface-500">{p.desc}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
+              <h3 className="mb-1 text-sm font-semibold text-surface-100">Text-to-Speech</h3>
+              <p className="text-xs leading-relaxed text-surface-500">Have AI responses read aloud using your device&apos;s built-in TTS. Great for hands-free workflows.</p>
+            </div>
+            <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
+              <h3 className="mb-1 text-sm font-semibold text-surface-100">Verbosity Control</h3>
+              <p className="text-xs leading-relaxed text-surface-500">Set response detail from 0 (just &quot;done&quot;) to 10 (full diffs + reasoning). The AI adapts its output accordingly.</p>
+            </div>
+            <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
+              <h3 className="mb-1 text-sm font-semibold text-surface-100">CLI Voice</h3>
+              <p className="text-xs leading-relaxed text-surface-500">Type <code className="rounded bg-surface-800 px-1">/voice</code> in <code className="rounded bg-surface-800 px-1">yaver connect</code> to record and submit tasks by voice from any terminal.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* Privacy */}
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-6xl">

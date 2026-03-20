@@ -24,6 +24,14 @@ type Config struct {
 	Sandbox       *SandboxConfig      `json:"sandbox,omitempty"`
 	Email         *EmailConfig        `json:"email,omitempty"`
 	ACLPeers      []ACLPeerConfig     `json:"acl_peers,omitempty"`
+	Speech        *SpeechConfig       `json:"speech,omitempty"`
+}
+
+// SpeechConfig holds speech-to-text and text-to-speech settings for CLI voice input.
+type SpeechConfig struct {
+	Provider  string `json:"provider,omitempty"`   // "whisper" (local), "openai", "deepgram", "assemblyai"
+	APIKey    string `json:"api_key,omitempty"`    // API key for cloud providers
+	TTSEnabled bool  `json:"tts_enabled,omitempty"` // read responses aloud (macOS `say`, linux `espeak`)
 }
 
 // EmailConfig holds email provider credentials.

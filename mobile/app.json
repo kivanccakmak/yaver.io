@@ -2,7 +2,7 @@
   "expo": {
     "name": "Yaver",
     "slug": "yaver",
-    "version": "1.9.0",
+    "version": "1.8.0",
     "orientation": "portrait",
     "scheme": "yaver",
     "icon": "./assets/icon.png",
@@ -21,7 +21,9 @@
               "yaver"
             ]
           }
-        ]
+        ],
+        "NSMicrophoneUsageDescription": "Yaver uses your microphone for voice input — send tasks by speaking instead of typing.",
+        "NSSpeechRecognitionUsageDescription": "Yaver uses speech recognition to transcribe your voice into task descriptions."
       }
     },
     "android": {
@@ -29,6 +31,9 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
+      "permissions": [
+        "RECORD_AUDIO"
+      ],
       "package": "io.yaver.mobile",
       "intentFilters": [
         {

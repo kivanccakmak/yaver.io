@@ -288,7 +288,13 @@ export interface UserSettings {
   relayUrl?: string;
   relayPassword?: string;
   tunnelUrl?: string;
+  speechProvider?: SpeechProvider;
+  speechApiKey?: string;
+  ttsEnabled?: boolean;
+  verbosity?: number; // 0-10: response detail level
 }
+
+export type SpeechProvider = "on-device" | "openai" | "deepgram" | "assemblyai";
 
 export interface AiRunner {
   runnerId: string;

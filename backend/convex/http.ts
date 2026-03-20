@@ -804,6 +804,10 @@ http.route({
       relayUrl: body.relayUrl,
       relayPassword: body.relayPassword,
       tunnelUrl: body.tunnelUrl,
+      speechProvider: body.speechProvider,
+      speechApiKey: body.speechApiKey,
+      ttsEnabled: body.ttsEnabled,
+      verbosity: body.verbosity,
     });
     return jsonResponse({ ok: true });
   }),

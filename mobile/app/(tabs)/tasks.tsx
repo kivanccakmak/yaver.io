@@ -35,6 +35,9 @@ import {
   TmuxSession,
 } from "../../src/lib/quic";
 import { markTaskDeleted, getDeletedTaskIds } from "../../src/lib/storage";
+import { useAuth } from "../../src/context/AuthContext";
+import { getUserSettings, type SpeechProvider } from "../../src/lib/auth";
+import { transcribe, initWhisper, isWhisperReady, SPEECH_PROVIDERS } from "../../src/lib/speech";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -340,6 +343,32 @@ export default function TasksScreen() {
   const chatScrollRef = useRef<ScrollView>(null);
   const pendingOpenTaskRef = useRef<Task | null>(null);
 
+  // Speech state
+  const { token } = useAuth();
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [speechProvider, setSpeechProvider] = useState<SpeechProvider | null>(null);
+  const [speechApiKey, setSpeechApiKey] = useState<string | undefined>();
+  const [ttsEnabled, setTtsEnabled] = useState(false);
+  const [verbosity, setVerbosity] = useState(10);
+  const [inputFromSpeech, setInputFromSpeech] = useState(false);
+  const audioRecordingRef = useRef<any>(null);
+
+  // Load speech settings from Convex
+  useEffect(() => {
+    if (!token) return;
+    getUserSettings(token).then((s) => {
+      if (s.speechProvider) setSpeechProvider(s.speechProvider);
+      if (s.speechApiKey) setSpeechApiKey(s.speechApiKey);
+      if (s.ttsEnabled) setTtsEnabled(s.ttsEnabled);
+      if (s.verbosity !== undefined) setVerbosity(s.verbosity);
+      // Pre-init whisper if on-device selected
+      if (s.speechProvider === "on-device") {
+        initWhisper().catch(() => {});
+      }
+    }).catch(() => {});
+  }, [token]);
+
   // Track QUIC connection state and mode
   useEffect(() => {
     const unsub1 = quicClient.on("connectionState", setQuicState);
@@ -524,6 +553,15 @@ export default function TasksScreen() {
     }
   }, [selectedTask?.output.length, selectedTask?.resultText, selectedTask?.status]);
 
+  // TTS: speak the final result when task completes
+  const lastSpokenTaskRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (ttsEnabled && selectedTask?.status === "completed" && selectedTask?.resultText && lastSpokenTaskRef.current !== selectedTask.id) {
+      lastSpokenTaskRef.current = selectedTask.id;
+      speakText(selectedTask.resultText);
+    }
+  }, [selectedTask?.status, selectedTask?.resultText, ttsEnabled]);
+
   // Auto-scroll to bottom when keyboard appears (prevents last message from being hidden)
   useEffect(() => {
     const sub = Keyboard.addListener("keyboardDidShow", () => {
@@ -540,18 +578,85 @@ export default function TasksScreen() {
     setRefreshing(false);
   }, [fetchTasks]);
 
+  // ── Voice recording ─────────────────────────────────────────────────
+
+  const startRecording = async () => {
+    try {
+      const { Audio } = require("expo-av");
+      const { status } = await Audio.requestPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission required", "Microphone access is needed for voice input.");
+        return;
+      }
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      audioRecordingRef.current = recording;
+      setIsRecording(true);
+    } catch (err) {
+      console.warn("[speech] Failed to start recording:", err);
+      Alert.alert("Error", "Could not start recording.");
+    }
+  };
+
+  const stopRecordingAndTranscribe = async () => {
+    if (!audioRecordingRef.current) return;
+    setIsRecording(false);
+    setIsTranscribing(true);
+    try {
+      await audioRecordingRef.current.stopAndUnloadAsync();
+      const uri = audioRecordingRef.current.getURI();
+      audioRecordingRef.current = null;
+      if (!uri) throw new Error("No recording URI");
+      if (!speechProvider) throw new Error("No speech provider configured. Go to Settings > Voice Input.");
+
+      const result = await transcribe(uri, { provider: speechProvider, apiKey: speechApiKey });
+      if (result.text) {
+        setNewTaskText((prev) => (prev ? prev + " " + result.text : result.text));
+        setInputFromSpeech(true);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      Alert.alert("Transcription failed", msg);
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  // ── TTS ────────────────────────────────────────────────────────────
+
+  const speakText = (text: string) => {
+    if (!ttsEnabled) return;
+    try {
+      const Speech = require("expo-speech");
+      // Strip markdown for cleaner speech
+      const plain = text.replace(/[#*`_~\[\]()>|\\-]/g, "").replace(/\n+/g, ". ");
+      Speech.speak(plain, { language: "en" });
+    } catch {}
+  };
+
   const handleCreateTask = async () => {
     if (!newTaskText.trim()) return;
     Keyboard.dismiss();
     setIsSubmitting(true);
     try {
+      const speechCtx = (speechProvider || verbosity < 10) ? {
+        inputFromSpeech,
+        sttProvider: speechProvider ?? undefined,
+        ttsEnabled,
+        ttsProvider: "device",
+        verbosity,
+      } : undefined;
       const task = await quicClient.sendTask(
         newTaskText.trim(), "",
         selectedRunner === "custom" ? undefined : (selectedModel || undefined),
         selectedRunner === "custom" ? "custom" : (selectedRunner || undefined),
         selectedRunner === "custom" ? customCommand.trim() || undefined : undefined,
+        speechCtx,
       );
       setNewTaskText("");
+      setInputFromSpeech(false);
       // Add task to list immediately
       setTasks((prev) => [task, ...prev]);
       // Store task to open after modal closes (onDismiss will pick it up)
@@ -1049,20 +1154,47 @@ export default function TasksScreen() {
                 placeholder={`What would you like ${selectedRunner === "codex" ? "Codex" : selectedRunner === "aider" ? "Aider" : "Claude"} to do?`}
                 placeholderTextColor={c.textMuted}
                 value={newTaskText}
-                onChangeText={setNewTaskText}
+                onChangeText={(t) => { setNewTaskText(t); setInputFromSpeech(false); }}
                 multiline numberOfLines={4} textAlignVertical="top" autoFocus
               />
+              {isTranscribing && (
+                <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 6 }}>
+                  <ActivityIndicator size="small" color={c.accent} />
+                  <Text style={{ color: c.textMuted, fontSize: 12, marginLeft: 8 }}>Transcribing...</Text>
+                </View>
+              )}
               <View style={s.modalButtons}>
-                <Pressable style={[s.cancelButton, { backgroundColor: c.bgCardElevated }]} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); }}>
+                <Pressable style={[s.cancelButton, { backgroundColor: c.bgCardElevated }]} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); setInputFromSpeech(false); }}>
                   <Text style={[s.cancelButtonText, { color: c.textSecondary }]}>Cancel</Text>
                 </Pressable>
-                <Pressable
-                  style={[s.submitButton, { backgroundColor: c.accent }, (!newTaskText.trim() || isSubmitting) && s.submitButtonDisabled]}
-                  onPress={handleCreateTask}
-                  disabled={!newTaskText.trim() || isSubmitting}
-                >
-                  <Text style={s.submitButtonText}>{isSubmitting ? "Sending..." : "Send"}</Text>
-                </Pressable>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  {speechProvider && (
+                    <Pressable
+                      style={({ pressed }) => [
+                        {
+                          width: 44, height: 44, borderRadius: 22,
+                          backgroundColor: isRecording ? "#ef4444" : c.bgCardElevated,
+                          alignItems: "center", justifyContent: "center",
+                          borderWidth: 1, borderColor: isRecording ? "#ef4444" : c.border,
+                        },
+                        pressed && { opacity: 0.7 },
+                      ]}
+                      onPress={isRecording ? stopRecordingAndTranscribe : startRecording}
+                      disabled={isTranscribing}
+                    >
+                      <Text style={{ fontSize: 20, color: isRecording ? "#fff" : c.textSecondary }}>
+                        {isRecording ? "\u25A0" : "\uD83C\uDFA4"}
+                      </Text>
+                    </Pressable>
+                  )}
+                  <Pressable
+                    style={[s.submitButton, { backgroundColor: c.accent }, (!newTaskText.trim() || isSubmitting || isTranscribing) && s.submitButtonDisabled]}
+                    onPress={handleCreateTask}
+                    disabled={!newTaskText.trim() || isSubmitting || isTranscribing}
+                  >
+                    <Text style={s.submitButtonText}>{isSubmitting ? "Sending..." : "Send"}</Text>
+                  </Pressable>
+                </View>
               </View>
             </View>
           </KeyboardAvoidingView>

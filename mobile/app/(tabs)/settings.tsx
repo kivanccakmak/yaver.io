@@ -22,7 +22,8 @@ import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import { customRelaysKey, customTunnelsKey } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
-import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent, getUsageSummary, type UsageSummary } from "../../src/lib/auth";
+import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent, getUsageSummary, type UsageSummary, type SpeechProvider } from "../../src/lib/auth";
+import { SPEECH_PROVIDERS } from "../../src/lib/speech";
 import { clearCache } from "../../src/lib/storage";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, clearLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
@@ -66,6 +67,14 @@ export default function SettingsScreen() {
   const [events, setEvents] = useState<DeviceEvent[]>([]);
   const [showMetrics, setShowMetrics] = useState(false);
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
+
+  // Speech settings
+  const [speechProvider, setSpeechProvider] = useState<SpeechProvider | null>(null);
+  const [speechApiKey, setSpeechApiKey] = useState("");
+  const [ttsEnabled, setTtsEnabled] = useState(false);
+  const [verbosity, setVerbosity] = useState(10);
+  const [showSpeechConfig, setShowSpeechConfig] = useState(false);
+  const [isSavingSpeech, setIsSavingSpeech] = useState(false);
 
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -305,6 +314,10 @@ export default function SettingsScreen() {
       }
       if (s.runnerId) setSelectedRunner(s.runnerId);
       if (s.customRunnerCommand) setCustomRunnerCommand(s.customRunnerCommand);
+      if (s.speechProvider) setSpeechProvider(s.speechProvider);
+      if (s.speechApiKey) setSpeechApiKey(s.speechApiKey);
+      if (s.ttsEnabled !== undefined) setTtsEnabled(s.ttsEnabled);
+      if (s.verbosity !== undefined) setVerbosity(s.verbosity);
     });
     getAiRunners().then(setRunners);
     getUsageSummary(token).then(setUsageSummary);
@@ -1428,6 +1441,185 @@ export default function SettingsScreen() {
               </ScrollView>
             </View>
           )}
+        </View>
+
+        {/* Voice Input & TTS */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Voice</Text>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            {/* Provider selection */}
+            <Pressable
+              style={styles.aboutRow}
+              onPress={() => setShowSpeechConfig(!showSpeechConfig)}
+            >
+              <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Speech-to-Text</Text>
+              <Text style={[styles.aboutValue, { color: c.accent }]}>
+                {speechProvider ? SPEECH_PROVIDERS.find(p => p.id === speechProvider)?.name ?? speechProvider : "Not configured"}
+                {" \u25BE"}
+              </Text>
+            </Pressable>
+
+            {showSpeechConfig && (
+              <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
+                {SPEECH_PROVIDERS.map((provider) => {
+                  const selected = speechProvider === provider.id;
+                  return (
+                    <Pressable
+                      key={provider.id}
+                      style={({ pressed }) => [
+                        {
+                          paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8,
+                          marginTop: 6, borderWidth: 1,
+                          backgroundColor: selected ? c.accent : c.bg,
+                          borderColor: selected ? c.accent : c.border,
+                        },
+                        pressed && { opacity: 0.7 },
+                      ]}
+                      onPress={() => setSpeechProvider(provider.id)}
+                    >
+                      <Text style={{ color: selected ? "#fff" : c.textPrimary, fontWeight: "500", fontSize: 14 }}>
+                        {provider.name}
+                      </Text>
+                      <Text style={{ color: selected ? "rgba(255,255,255,0.7)" : c.textMuted, fontSize: 11, marginTop: 2 }}>
+                        {provider.description}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+
+                {/* No provider option */}
+                <Pressable
+                  style={({ pressed }) => [
+                    {
+                      paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8,
+                      marginTop: 6, borderWidth: 1,
+                      backgroundColor: !speechProvider ? c.accent : c.bg,
+                      borderColor: !speechProvider ? c.accent : c.border,
+                    },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                  onPress={() => setSpeechProvider(null)}
+                >
+                  <Text style={{ color: !speechProvider ? "#fff" : c.textPrimary, fontWeight: "500", fontSize: 14 }}>
+                    Disabled
+                  </Text>
+                  <Text style={{ color: !speechProvider ? "rgba(255,255,255,0.7)" : c.textMuted, fontSize: 11, marginTop: 2 }}>
+                    No voice input — type only
+                  </Text>
+                </Pressable>
+
+                {/* API Key input for cloud providers */}
+                {speechProvider && SPEECH_PROVIDERS.find(p => p.id === speechProvider)?.requiresKey && (
+                  <TextInput
+                    style={[{
+                      borderWidth: 1, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12,
+                      fontSize: 14, marginTop: 10,
+                      backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary,
+                    }]}
+                    placeholder={SPEECH_PROVIDERS.find(p => p.id === speechProvider)?.keyPlaceholder ?? "API Key"}
+                    placeholderTextColor={c.textMuted}
+                    value={speechApiKey}
+                    onChangeText={setSpeechApiKey}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    secureTextEntry
+                  />
+                )}
+
+                {/* Save button */}
+                <Pressable
+                  style={({ pressed }) => [
+                    {
+                      marginTop: 12, paddingVertical: 10, borderRadius: 8,
+                      backgroundColor: c.accent, alignItems: "center",
+                    },
+                    pressed && { opacity: 0.7 },
+                    isSavingSpeech && { opacity: 0.5 },
+                  ]}
+                  onPress={async () => {
+                    if (!token) return;
+                    setIsSavingSpeech(true);
+                    try {
+                      await saveUserSettings(token, {
+                        speechProvider: speechProvider ?? undefined,
+                        speechApiKey: speechApiKey || undefined,
+                        ttsEnabled,
+                        verbosity,
+                      });
+                      setShowSpeechConfig(false);
+                    } catch {}
+                    setIsSavingSpeech(false);
+                  }}
+                  disabled={isSavingSpeech}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "600", fontSize: 14 }}>
+                    {isSavingSpeech ? "Saving..." : "Save"}
+                  </Text>
+                </Pressable>
+              </View>
+            )}
+
+            <View style={[styles.separator, { backgroundColor: c.borderSubtle }]} />
+
+            {/* TTS toggle */}
+            <View style={[styles.aboutRow, { justifyContent: "space-between" }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Read responses aloud</Text>
+                <Text style={{ color: c.textMuted, fontSize: 11 }}>Uses device text-to-speech</Text>
+              </View>
+              <Switch
+                value={ttsEnabled}
+                onValueChange={async (val) => {
+                  setTtsEnabled(val);
+                  if (token) {
+                    saveUserSettings(token, { ttsEnabled: val }).catch(() => {});
+                  }
+                }}
+                trackColor={{ false: c.border, true: c.accent }}
+              />
+            </View>
+
+            <View style={[styles.separator, { backgroundColor: c.borderSubtle }]} />
+
+            {/* Verbosity slider */}
+            <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Response detail</Text>
+                <Text style={{ color: c.accent, fontWeight: "600", fontSize: 14 }}>{verbosity}/10</Text>
+              </View>
+              <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2, marginBottom: 10 }}>
+                {verbosity <= 2 ? "Minimal — just confirm what was done"
+                  : verbosity <= 4 ? "Brief — summarize in a few sentences"
+                  : verbosity <= 6 ? "Moderate — key changes and reasoning"
+                  : verbosity <= 8 ? "Detailed — code changes and explanations"
+                  : "Full — everything: diffs, reasoning, alternatives"}
+              </Text>
+              <View style={{ flexDirection: "row", gap: 3 }}>
+                {Array.from({ length: 11 }).map((_, i) => (
+                  <Pressable
+                    key={i}
+                    onPress={async () => {
+                      setVerbosity(i);
+                      if (token) {
+                        saveUserSettings(token, { verbosity: i }).catch(() => {});
+                      }
+                    }}
+                    style={{
+                      flex: 1, height: 24, borderRadius: 4,
+                      backgroundColor: i <= verbosity ? c.accent : c.bg,
+                      borderWidth: 1,
+                      borderColor: i <= verbosity ? c.accent : c.border,
+                      alignItems: "center", justifyContent: "center",
+                    }}
+                  >
+                    {i === verbosity && (
+                      <Text style={{ color: "#fff", fontSize: 8, fontWeight: "700" }}>{i}</Text>
+                    )}
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          </View>
         </View>
 
         {/* About */}

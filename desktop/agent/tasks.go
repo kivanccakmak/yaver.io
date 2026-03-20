@@ -359,6 +359,15 @@ func (tm *TaskManager) GetAgentStatus() AgentStatus {
 }
 
 // Task represents a single Claude CLI task running as a subprocess.
+// SpeechContext carries speech-to-text/text-to-speech preferences from the mobile app.
+type SpeechContext struct {
+	InputFromSpeech bool   `json:"inputFromSpeech"` // true if user dictated this task
+	STTProvider     string `json:"sttProvider"`      // "on-device", "openai", "deepgram", "assemblyai"
+	TTSEnabled      bool   `json:"ttsEnabled"`       // user wants response read aloud
+	TTSProvider     string `json:"ttsProvider"`      // "device" (OS TTS)
+	Verbosity       *int   `json:"verbosity"`        // 0-10: response detail level (nil = default 10)
+}
+
 type Task struct {
 	ID          string     `json:"id"`
 	Title       string     `json:"title"`
@@ -378,6 +387,9 @@ type Task struct {
 
 	TmuxSession  string `json:"tmuxSession,omitempty"` // tmux session name (for adopted sessions)
 	IsAdopted    bool   `json:"isAdopted,omitempty"`   // true if adopted from an existing tmux session
+
+	// Speech context from mobile — passed through to the AI runner prompt
+	SpeechContext *SpeechContext `json:"-"`
 
 	runner       RunnerConfig // the runner config used for this task (not persisted)
 	cmd          *exec.Cmd
@@ -683,7 +695,7 @@ func (tm *TaskManager) CheckRunner() error {
 // model overrides the default model (e.g. "opus", "sonnet", "haiku") — empty uses runner default.
 // source indicates where the task originated: "mobile", "mcp", or "cli" — defaults to "mobile".
 // customCommand, if non-empty, runs an arbitrary command via sh -c (ignores runnerID).
-func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, customCommand string) (*Task, error) {
+func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, customCommand string, speechCtx ...*SpeechContext) (*Task, error) {
 	var taskRunner RunnerConfig
 
 	if customCommand != "" {
@@ -741,6 +753,9 @@ func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, c
 		Turns: []ConversationTurn{
 			{Role: "user", Content: title, Timestamp: now},
 		},
+	}
+	if len(speechCtx) > 0 && speechCtx[0] != nil {
+		task.SpeechContext = speechCtx[0]
 	}
 
 	tm.mu.Lock()
@@ -1007,6 +1022,52 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		prompt += "\n\nYou are running tasks from a remote CLI terminal. Show what you are doing step by step. Use only terminal commands. Be concise. Format output in markdown."
 	default:
 		prompt += "\n\nYou are running tasks from a remote mobile device. Show what you are doing step by step. Use only terminal commands. Be concise. Format output in markdown."
+	}
+
+	// Append speech context if the user sent this task via voice
+	if sc := task.SpeechContext; sc != nil {
+		speechInfo := "\n\n[Speech context] "
+		if sc.InputFromSpeech {
+			sttQuality := "high"
+			switch sc.STTProvider {
+			case "on-device":
+				speechInfo += "User dictated this task using on-device speech recognition (Whisper tiny model — good accuracy for commands, may have minor transcription errors in technical terms). "
+				sttQuality = "good"
+			case "openai":
+				speechInfo += "User dictated this task using OpenAI GPT-4o transcription (excellent accuracy, very low error rate). "
+			case "deepgram":
+				speechInfo += "User dictated this task using Deepgram Nova-2 (excellent real-time accuracy, strong with technical vocabulary). "
+			case "assemblyai":
+				speechInfo += "User dictated this task using AssemblyAI (good accuracy, may have minor errors). "
+				sttQuality = "good"
+			default:
+				speechInfo += fmt.Sprintf("User dictated this task using %s speech-to-text. ", sc.STTProvider)
+			}
+			if sttQuality == "good" {
+				speechInfo += "If the task text seems slightly off, interpret the likely intent — minor transcription errors are possible. "
+			}
+		}
+		if sc.TTSEnabled {
+			speechInfo += "The user will hear your response read aloud via device text-to-speech (basic quality, no code rendering). "
+			speechInfo += "Structure your response for listening: use short sentences, spell out abbreviations, avoid complex markdown tables or code blocks in explanations. "
+			speechInfo += "Put code changes in files rather than inline when possible, and summarize what you did in plain language."
+		}
+		// Verbosity level (0-10)
+		if sc.Verbosity != nil {
+			v := *sc.Verbosity
+			if v <= 2 {
+				speechInfo += fmt.Sprintf("\n[Verbosity: %d/10] The user prefers very brief responses. Just confirm what was done, report any errors, skip all implementation details. Example: 'Done. Created the file and added the function. No issues.'", v)
+			} else if v <= 4 {
+				speechInfo += fmt.Sprintf("\n[Verbosity: %d/10] The user prefers concise responses. Summarize what you did in 2-3 sentences. Only show code snippets if there's something the user needs to review or decide on.", v)
+			} else if v <= 6 {
+				speechInfo += fmt.Sprintf("\n[Verbosity: %d/10] The user prefers moderate detail. Show key changes, explain your reasoning briefly, include important code snippets.", v)
+			} else if v <= 8 {
+				speechInfo += fmt.Sprintf("\n[Verbosity: %d/10] The user wants detailed responses. Show what you're doing, include code changes, explain your approach.", v)
+			} else {
+				speechInfo += fmt.Sprintf("\n[Verbosity: %d/10] The user wants full detail. Stream everything: all code changes, file diffs, reasoning, alternatives considered, potential issues.", v)
+			}
+		}
+		prompt += speechInfo
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

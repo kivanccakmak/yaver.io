@@ -213,6 +213,49 @@ scoop bucket add yaver https://github.com/kivanccakmak/scoop-yaver
 scoop install yaver
 ```
 
+## Voice Input & Text-to-Speech
+
+Yaver supports voice input for both mobile and CLI — speak your tasks instead of typing.
+
+### Providers
+
+| Provider | Type | Cost | Quality |
+|----------|------|------|---------|
+| **On-device (Whisper)** | Free, offline | $0 | Good (English) |
+| **OpenAI** | Cloud, API key | $0.003/min | Excellent |
+| **Deepgram** | Cloud, API key | $0.004/min | Excellent |
+| **AssemblyAI** | Cloud, API key | $0.002/min | Good |
+
+### Mobile
+
+Configure in Settings > Voice or during onboarding. Tap the mic button in the task creation modal (WhatsApp-style). Supports TTS — have responses read aloud.
+
+### CLI
+
+```bash
+# Configure speech provider
+yaver config set speech.provider whisper     # Free, local (requires whisper-cpp)
+yaver config set speech.provider openai      # Cloud (bring your own key)
+yaver config set speech.api_key sk-...       # Set API key
+
+# Use voice in interactive mode
+yaver connect
+yaver> voice                                  # Records, transcribes, sends as task
+```
+
+For local/free STT, install whisper.cpp: `brew install whisper-cpp`
+
+### Response Verbosity
+
+Control how detailed AI responses are (0-10 scale):
+- **0-2**: Minimal — "Done, no issues"
+- **3-4**: Brief — 2-3 sentence summary
+- **5-6**: Moderate — key changes + reasoning
+- **7-8**: Detailed — full code changes
+- **9-10**: Everything — diffs, alternatives, reasoning
+
+Set via mobile app (Settings > Voice > Response detail) or passed per-task.
+
 ## System Health Check
 
 ```bash

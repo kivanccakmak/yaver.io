@@ -44,6 +44,13 @@ func RunClient(ctx context.Context, host string, port int, token string) error {
 	}
 	fmt.Printf("Connected to %s\n\n", deviceName)
 
+	// Load speech config for voice commands
+	clientCfg, _ := LoadConfig()
+	var speechCfg *SpeechConfig
+	if clientCfg != nil {
+		speechCfg = clientCfg.Speech
+	}
+
 	// Interactive loop
 	reader := bufio.NewReader(os.Stdin)
 
@@ -75,6 +82,34 @@ func RunClient(ctx context.Context, host string, port int, token string) error {
 				fmt.Printf("error: %v\n", err)
 			}
 			continue
+		case line == "voice" || line == "/voice":
+			// Record and transcribe voice input
+			if speechCfg == nil || speechCfg.Provider == "" {
+				fmt.Println("Speech not configured. Run: yaver config set speech.provider <whisper|openai|deepgram|assemblyai>")
+				continue
+			}
+			audioPath, err := RecordAudio("")
+			if err != nil {
+				fmt.Printf("Recording error: %v\n", err)
+				continue
+			}
+			defer os.Remove(audioPath)
+			fmt.Print("Transcribing... ")
+			text, err := TranscribeAudio(audioPath, speechCfg)
+			if err != nil {
+				fmt.Printf("\nTranscription error: %v\n", err)
+				continue
+			}
+			fmt.Printf("\n> %s\n", text)
+			os.Remove(audioPath)
+			if text == "" {
+				fmt.Println("(empty transcription, skipping)")
+				continue
+			}
+			if err := clientCreateTask(ctx, conn, text); err != nil {
+				fmt.Printf("error: %v\n", err)
+			}
+			continue
 		case strings.HasPrefix(line, "stop "):
 			taskID := strings.TrimPrefix(line, "stop ")
 			if err := clientStopTask(ctx, conn, strings.TrimSpace(taskID)); err != nil {
@@ -103,6 +138,7 @@ func RunClient(ctx context.Context, host string, port int, token string) error {
 func printHelp() {
 	fmt.Println(`Commands:
   <prompt>                Submit a task to Claude
+  voice / /voice          Record voice and submit as task
   tasks / list            List all tasks
   stop <taskId>           Stop a running task
   continue <id> <msg>     Continue a task with a follow-up

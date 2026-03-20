@@ -14,7 +14,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../src/context/AuthContext";
 import { useColors } from "../src/context/ThemeContext";
-import { submitSurvey, getAiRunners, saveUserSettings, getUserSettings, type AiRunner } from "../src/lib/auth";
+import { submitSurvey, getAiRunners, saveUserSettings, getUserSettings, type AiRunner, type SpeechProvider } from "../src/lib/auth";
+import { SPEECH_PROVIDERS } from "../src/lib/speech";
 
 const IDENTITIES = [
   { id: "developer", label: "Developer" },
@@ -67,6 +68,10 @@ export default function SurveyScreen() {
   const [selectedRunner, setSelectedRunner] = useState<string>("claude");
   const [customCommand, setCustomCommand] = useState("");
   const [runnerPresetFromCli, setRunnerPresetFromCli] = useState(false);
+  const [speechProvider, setSpeechProvider] = useState<SpeechProvider | null>(null);
+  const [speechApiKey, setSpeechApiKey] = useState("");
+  const [ttsEnabled, setTtsEnabled] = useState(false);
+  const [verbosity, setVerbosity] = useState(10);
 
   useEffect(() => {
     getAiRunners().then((r) => {
@@ -87,7 +92,7 @@ export default function SurveyScreen() {
   }, [token]);
 
   const isDev = identity === "developer";
-  const totalPages = isDev ? 5 : 4;
+  const totalPages = isDev ? 6 : 5;
 
   const toggleLanguage = (lang: string) => {
     setLanguages((prev) =>
@@ -108,12 +113,21 @@ export default function SurveyScreen() {
         companySize: companySize ?? undefined,
         useCase: useCase ?? undefined,
       });
-      // Save runner preference to user settings
-      const runnerSettings: { runnerId: string; customRunnerCommand?: string } = { runnerId: selectedRunner };
+      // Save runner + speech preferences to user settings
+      const settings: Record<string, any> = { runnerId: selectedRunner };
       if (selectedRunner === "custom" && customCommand.trim()) {
-        runnerSettings.customRunnerCommand = customCommand.trim();
+        settings.customRunnerCommand = customCommand.trim();
       }
-      await saveUserSettings(token, runnerSettings);
+      if (speechProvider) {
+        settings.speechProvider = speechProvider;
+        const providerInfo = SPEECH_PROVIDERS.find((p) => p.id === speechProvider);
+        if (providerInfo?.requiresKey && speechApiKey.trim()) {
+          settings.speechApiKey = speechApiKey.trim();
+        }
+        settings.ttsEnabled = ttsEnabled;
+      }
+      settings.verbosity = verbosity;
+      await saveUserSettings(token, settings);
       markSurveyCompleted();
       await refreshUser();
       router.replace("/(tabs)/tasks");
@@ -277,6 +291,143 @@ export default function SurveyScreen() {
           autoCorrect={false}
         />
       )}
+
+      <Text style={[styles.runnerHint, { color: c.textMuted }]}>
+        You can change this anytime in Settings
+      </Text>
+    </ScrollView>
+  );
+
+  const selectedSpeechProvider = SPEECH_PROVIDERS.find((p) => p.id === speechProvider);
+
+  const renderSpeechPage = () => (
+    <ScrollView
+      contentContainerStyle={styles.pageContent}
+      showsVerticalScrollIndicator={false}
+    >
+      <Text style={[styles.pageTitle, { color: c.textPrimary }]}>
+        Voice input
+      </Text>
+      <Text style={[styles.pageSubtitle, { color: c.textSecondary }]}>
+        Send tasks by speaking instead of typing
+      </Text>
+
+      <View style={styles.identityGrid}>
+        {SPEECH_PROVIDERS.map((provider) => {
+          const selected = speechProvider === provider.id;
+          return (
+            <Pressable
+              key={provider.id}
+              style={({ pressed }) => [
+                styles.identityButton,
+                {
+                  backgroundColor: selected ? c.accent : c.bgCard,
+                  borderColor: selected ? c.accent : c.border,
+                },
+                pressed && { opacity: 0.7 },
+              ]}
+              onPress={() => setSpeechProvider(provider.id)}
+            >
+              <Text
+                style={[
+                  styles.identityButtonText,
+                  { color: selected ? "#fff" : c.textPrimary },
+                ]}
+              >
+                {provider.name}
+              </Text>
+              <Text
+                style={[
+                  styles.runnerDescText,
+                  { color: selected ? "rgba(255,255,255,0.7)" : c.textMuted },
+                ]}
+              >
+                {provider.description}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {selectedSpeechProvider?.requiresKey && (
+        <>
+          <TextInput
+            style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary, marginTop: 16 }]}
+            placeholder={selectedSpeechProvider.keyPlaceholder ?? "API Key"}
+            placeholderTextColor={c.textMuted}
+            value={speechApiKey}
+            onChangeText={setSpeechApiKey}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+          />
+          <Text style={[{ fontSize: 11, color: c.textMuted, marginTop: -12, marginBottom: 12, paddingHorizontal: 4 }]}>
+            {selectedSpeechProvider.keyHint}
+          </Text>
+        </>
+      )}
+
+      <Pressable
+        style={[styles.optionButton, {
+          backgroundColor: ttsEnabled ? c.accent : c.bgCard,
+          borderColor: ttsEnabled ? c.accent : c.border,
+          marginTop: 16,
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }]}
+        onPress={() => setTtsEnabled(!ttsEnabled)}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.optionText, { color: ttsEnabled ? "#fff" : c.textPrimary }]}>
+            Read responses aloud
+          </Text>
+          <Text style={[{ fontSize: 11, color: ttsEnabled ? "rgba(255,255,255,0.7)" : c.textMuted, marginTop: 2 }]}>
+            Uses device text-to-speech
+          </Text>
+        </View>
+      </Pressable>
+
+      {/* Verbosity slider */}
+      <View style={{
+        marginTop: 20, paddingVertical: 14, paddingHorizontal: 16,
+        borderRadius: 12, borderWidth: 1,
+        backgroundColor: c.bgCard, borderColor: c.border,
+      }}>
+        <Text style={{ color: c.textPrimary, fontWeight: "500", fontSize: 14, marginBottom: 4 }}>
+          Response detail level
+        </Text>
+        <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 12 }}>
+          {verbosity <= 2 ? "Minimal — just confirm what was done"
+            : verbosity <= 4 ? "Brief — summarize in a few sentences"
+            : verbosity <= 6 ? "Moderate — key changes and reasoning"
+            : verbosity <= 8 ? "Detailed — code changes and explanations"
+            : "Full — everything: diffs, reasoning, alternatives"}
+        </Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+          <Text style={{ color: c.textMuted, fontSize: 12 }}>0</Text>
+          <View style={{ flex: 1, flexDirection: "row", gap: 4, alignItems: "center" }}>
+            {Array.from({ length: 11 }).map((_, i) => (
+              <Pressable
+                key={i}
+                onPress={() => setVerbosity(i)}
+                style={{
+                  flex: 1, height: 28, borderRadius: 6,
+                  backgroundColor: i <= verbosity ? c.accent : c.bg,
+                  borderWidth: 1,
+                  borderColor: i <= verbosity ? c.accent : c.border,
+                  alignItems: "center", justifyContent: "center",
+                }}
+              >
+                {i === verbosity && (
+                  <Text style={{ color: "#fff", fontSize: 9, fontWeight: "700" }}>{i}</Text>
+                )}
+              </Pressable>
+            ))}
+          </View>
+          <Text style={{ color: c.textMuted, fontSize: 12 }}>10</Text>
+        </View>
+      </View>
 
       <Text style={[styles.runnerHint, { color: c.textMuted }]}>
         You can change this anytime in Settings
@@ -473,8 +624,9 @@ export default function SurveyScreen() {
         {page === 0 && renderNamePage()}
         {page === 1 && renderRolePage()}
         {page === 2 && renderRunnerPage()}
-        {page === 3 && isDev && renderPage1Dev()}
-        {((page === 3 && !isDev) || (page === 4 && isDev)) &&
+        {page === 3 && renderSpeechPage()}
+        {page === 4 && isDev && renderPage1Dev()}
+        {((page === 4 && !isDev) || (page === 5 && isDev)) &&
           renderUseCasePage()}
       </View>
 
@@ -515,8 +667,8 @@ export default function SurveyScreen() {
         </Pressable>
       </View>}
 
-      {/* Only show skip after runner page (page 2) has been passed */}
-      {page >= 3 && (
+      {/* Only show skip after speech page (page 3) has been passed */}
+      {page >= 4 && (
         <Pressable
           style={({ pressed }) => [pressed && { opacity: 0.7 }]}
           onPress={finishSurvey}

@@ -34,6 +34,10 @@ export const set = mutation({
     relayUrl: v.optional(v.string()),
     relayPassword: v.optional(v.string()),
     tunnelUrl: v.optional(v.string()),
+    speechProvider: v.optional(v.string()),
+    speechApiKey: v.optional(v.string()),
+    ttsEnabled: v.optional(v.boolean()),
+    verbosity: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -47,6 +51,10 @@ export const set = mutation({
       relayUrl: args.relayUrl,
       relayPassword: args.relayPassword,
       tunnelUrl: args.tunnelUrl,
+      speechProvider: args.speechProvider,
+      speechApiKey: args.speechApiKey,
+      ttsEnabled: args.ttsEnabled,
+      verbosity: args.verbosity,
     };
     if (existing) {
       await ctx.db.patch(existing._id, patch);
@@ -69,6 +77,10 @@ export const setByToken = mutation({
     relayUrl: v.optional(v.string()),
     relayPassword: v.optional(v.string()),
     tunnelUrl: v.optional(v.string()),
+    speechProvider: v.optional(v.string()),
+    speechApiKey: v.optional(v.string()),
+    ttsEnabled: v.optional(v.boolean()),
+    verbosity: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.tokenHash);
@@ -85,6 +97,10 @@ export const setByToken = mutation({
       relayUrl: args.relayUrl,
       relayPassword: args.relayPassword,
       tunnelUrl: args.tunnelUrl,
+      speechProvider: args.speechProvider,
+      speechApiKey: args.speechApiKey,
+      ttsEnabled: args.ttsEnabled,
+      verbosity: args.verbosity,
     };
     if (existing) {
       await ctx.db.patch(existing._id, patch);

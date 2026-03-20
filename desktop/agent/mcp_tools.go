@@ -15,6 +15,12 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 						"type":        "string",
 						"description": "The task prompt describing what the AI should do",
 					},
+					"verbosity": map[string]interface{}{
+						"type":        "integer",
+						"description": "Response detail level 0-10. 0=minimal ('done, no issues'), 5=moderate (key changes + reasoning), 10=full (all diffs, reasoning, alternatives). Default: 10.",
+						"minimum":     0,
+						"maximum":     10,
+					},
 				},
 			},
 		},

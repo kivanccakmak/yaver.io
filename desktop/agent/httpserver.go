@@ -459,11 +459,12 @@ func (s *HTTPServer) listTasks(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title         string `json:"title"`
-		Description   string `json:"description"`
-		Model         string `json:"model"`
-		Runner        string `json:"runner"`        // runner ID: "claude", "codex", "aider" — empty uses default
-		CustomCommand string `json:"customCommand"` // arbitrary command — runs via sh -c
+		Title         string         `json:"title"`
+		Description   string         `json:"description"`
+		Model         string         `json:"model"`
+		Runner        string         `json:"runner"`        // runner ID: "claude", "codex", "aider" — empty uses default
+		CustomCommand string         `json:"customCommand"` // arbitrary command — runs via sh -c
+		SpeechContext *SpeechContext  `json:"speechContext"` // voice input/output preferences
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -474,7 +475,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "mobile", body.Runner, body.CustomCommand)
+	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "mobile", body.Runner, body.CustomCommand, body.SpeechContext)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create task: %v", err))
 		return
@@ -875,13 +876,18 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 	switch call.Name {
 	case "create_task":
 		var args struct {
-			Prompt string `json:"prompt"`
+			Prompt    string `json:"prompt"`
+			Verbosity *int   `json:"verbosity"`
 		}
 		json.Unmarshal(call.Arguments, &args)
 		if args.Prompt == "" {
 			return mcpToolError("prompt is required")
 		}
-		task, err := s.taskMgr.CreateTask(args.Prompt, "", "", "mcp", "", "")
+		var sc *SpeechContext
+		if args.Verbosity != nil {
+			sc = &SpeechContext{Verbosity: args.Verbosity}
+		}
+		task, err := s.taskMgr.CreateTask(args.Prompt, "", "", "mcp", "", "", sc)
 		if err != nil {
 			return mcpToolError(fmt.Sprintf("failed to create task: %v", err))
 		}
