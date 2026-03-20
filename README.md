@@ -421,6 +421,48 @@ yaver serve --no-relay  # Connect directly via Tailscale IP
 
 Tailscale client is open source (BSD 3-Clause). For a fully self-hosted alternative to the Tailscale coordination server, use [Headscale](https://github.com/juanfont/headscale).
 
+## Related Work
+
+Projects and tools in the same problem space. Yaver is compatible with most of these and can be used alongside them. Items marked `[OSS]` are open-source software.
+
+### AI Coding Agents
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Anthropic's agentic coding tool
+- [OpenAI Codex CLI](https://github.com/openai/codex) `[OSS]` — OpenAI's terminal coding agent
+- [Aider](https://aider.chat) `[OSS]` — AI pair programming in your terminal
+- [Goose](https://github.com/block/goose) `[OSS]` — autonomous coding agent by Block
+- [Amp](https://github.com/nichochar/amp) `[OSS]` — terminal-native AI coding agent
+- [OpenCode](https://github.com/opencode-ai/opencode) `[OSS]` — AI coding in the terminal
+- [Continue](https://continue.dev) `[OSS]` — AI code assistant for IDEs
+
+### Local LLMs & Inference
+- [Ollama](https://ollama.com) `[OSS]` — run LLMs locally with one command
+- [Qwen](https://github.com/QwenLM/Qwen) — open-weight LLMs by Alibaba Cloud
+- [GLM-4](https://github.com/THUDM/GLM-4) — open-weight multilingual LLM
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) `[OSS]` — LLM inference in C/C++
+- [vLLM](https://github.com/vllm-project/vllm) `[OSS]` — high-throughput LLM serving engine
+
+### Remote Development
+- [code-server](https://github.com/coder/code-server) `[OSS]` — VS Code in the browser
+- [Coder](https://github.com/coder/coder) `[OSS]` — self-hosted remote dev environments
+- [tmate](https://github.com/tmate-io/tmate) `[OSS]` — instant terminal sharing
+- [sshx](https://github.com/nichochar/sshx) `[OSS]` — collaborative terminal sharing over the web
+- [ttyd](https://github.com/nicm/ttyd) `[OSS]` — share your terminal over the web
+
+### Networking & NAT Traversal
+- [Tailscale](https://tailscale.com) — mesh VPN built on WireGuard (client is open-source)
+- [NetBird](https://github.com/netbirdio/netbird) `[OSS]` — network connectivity platform
+- [frp](https://github.com/fatedier/frp) `[OSS]` — fast reverse proxy for NAT traversal
+- [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) — expose local services securely
+- [Headscale](https://github.com/juanfont/headscale) `[OSS]` — self-hosted Tailscale control server
+
+### Infrastructure & Protocols
+- [Convex](https://www.convex.dev) — reactive backend-as-a-service (runtime is open-source)
+- [quic-go](https://github.com/quic-go/quic-go) `[OSS]` — QUIC protocol implementation in Go
+- [tmux](https://github.com/tmux/tmux) `[OSS]` — terminal multiplexer
+- [MCP](https://modelcontextprotocol.io) `[Open Spec]` — Model Context Protocol
+- [QUIC (RFC 9000)](https://www.rfc-editor.org/rfc/rfc9000.html) `[Open Standard]` — UDP-based transport protocol
+- [WireGuard](https://www.wireguard.com) `[OSS]` — modern VPN protocol
+
 ## Legal
 
 - [Privacy Policy](https://yaver.io/privacy)

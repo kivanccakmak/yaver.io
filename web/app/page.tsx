@@ -172,7 +172,7 @@ export default function HomePage() {
                 href="https://github.com/kivanccakmak/yaver.io"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-full border border-surface-700 bg-surface-900 px-4 py-1.5 text-xs text-surface-400 hover:text-surface-200 transition-colors"
+                className="inline-flex items-center gap-1.5 rounded-full border border-surface-400 bg-white px-4 py-1.5 text-xs font-semibold text-surface-950 hover:bg-surface-100 transition-colors"
               >
                 <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
                 Source Code
@@ -1157,78 +1157,193 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Footer CTA */}
-      <section className="border-t border-surface-800/60 px-6 py-24">
-        <div className="mx-auto max-w-2xl text-center">
-          <h2 className="mb-4 text-2xl font-bold text-surface-50 md:text-3xl">
-            Code from anywhere
-          </h2>
-          <p className="mb-8 text-sm leading-relaxed text-surface-400">
-            Install the CLI, start the agent, open the app. That&apos;s it.
-          </p>
-          <code className="mb-4 inline-block rounded-lg bg-surface-900 px-5 py-2.5 text-sm text-surface-300">
-            brew install kivanccakmak/yaver/yaver
-          </code>
-          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <a
-              href="https://github.com/kivanccakmak/yaver.io"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn-primary px-8 py-3.5 text-sm inline-flex items-center gap-2"
-            >
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-              Source Code
-            </a>
-            <Link href="/download" className="btn-secondary px-8 py-3.5 text-sm">
-              Install
-            </Link>
-          </div>
-          <div className="mt-8 flex items-center justify-center gap-6 text-xs text-surface-500">
-            <a
-              href="https://github.com/kivanccakmak/yaver.io"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-surface-300 inline-flex items-center gap-1"
-            >
-              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-              GitHub
-            </a>
-            <Link href="/docs" className="hover:text-surface-300">
-              Docs
-            </Link>
-            <Link href="/docs/developers" className="hover:text-surface-300">
-              Developers
-            </Link>
-            <Link href="/docs/contributing" className="hover:text-surface-300">
-              Contributing
-            </Link>
-            <Link href="/download" className="hover:text-surface-300">
-              Download
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* SEO Links — related projects and tools */}
-      <section className="border-t border-surface-800/60 px-6 py-12">
+      {/* Related Work */}
+      <section className="border-t border-surface-800/60 px-6 py-20">
         <div className="mx-auto max-w-6xl">
-          <p className="mb-4 text-xs font-medium uppercase tracking-wider text-surface-600">Related Projects</p>
-          <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-surface-600">
-            <a href="https://docs.anthropic.com/en/docs/claude-code" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Claude Code</a>
-            <a href="https://code.claude.com/docs/en/remote-control" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Claude Code Remote</a>
-            <a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">OpenAI Codex CLI</a>
-            <a href="https://chatgpt.com/codex" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">OpenAI Codex Cloud</a>
-            <a href="https://github.com/opencode-ai/opencode" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">OpenCode</a>
-            <a href="https://github.com/block/goose" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Goose</a>
-            <a href="https://github.com/nichochar/amp" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Amp</a>
-            <a href="https://aider.chat" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Aider</a>
-            <a href="https://ollama.com" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Ollama</a>
-            <a href="https://github.com/QwenLM/Qwen" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Qwen</a>
-            <a href="https://continue.dev" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Continue</a>
-            <a href="https://tailscale.com" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Tailscale</a>
-            <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Cloudflare Tunnel</a>
-            <a href="https://www.convex.dev" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">Convex</a>
-            <a href="https://github.com/tmux/tmux" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">tmux</a>
+          <h2 className="mb-2 text-xl font-bold text-surface-50 md:text-2xl">Related Work</h2>
+          <p className="mb-3 text-sm text-surface-400">
+            Projects and tools in the same problem space. Yaver is compatible with most of these and can be used alongside them.
+          </p>
+          <p className="mb-10 text-xs text-surface-500">
+            <span className="inline-flex items-center gap-1"><span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span> = open-source software</span>
+          </p>
+
+          <div className="grid gap-10 md:grid-cols-2 lg:grid-cols-3">
+            {/* AI Coding Agents */}
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-surface-500">AI Coding Agents</p>
+              <ul className="space-y-2.5 text-sm">
+                <li>
+                  <a href="https://docs.anthropic.com/en/docs/claude-code" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">Claude Code</a>
+                  <span className="text-surface-500"> — Anthropic&apos;s agentic coding tool</span>
+                </li>
+                <li>
+                  <a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">OpenAI Codex CLI</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — OpenAI&apos;s terminal coding agent</span>
+                </li>
+                <li>
+                  <a href="https://aider.chat" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">Aider</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — AI pair programming in your terminal</span>
+                </li>
+                <li>
+                  <a href="https://github.com/block/goose" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">Goose</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — autonomous coding agent by Block</span>
+                </li>
+                <li>
+                  <a href="https://github.com/nichochar/amp" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">Amp</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — terminal-native AI coding agent</span>
+                </li>
+                <li>
+                  <a href="https://github.com/opencode-ai/opencode" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">OpenCode</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — AI coding in the terminal</span>
+                </li>
+                <li>
+                  <a href="https://continue.dev" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">Continue</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — AI code assistant for IDEs</span>
+                </li>
+              </ul>
+            </div>
+
+            {/* Local LLMs & Inference */}
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-surface-500">Local LLMs &amp; Inference</p>
+              <ul className="space-y-2.5 text-sm">
+                <li>
+                  <a href="https://ollama.com" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">Ollama</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — run LLMs locally with one command</span>
+                </li>
+                <li>
+                  <a href="https://github.com/QwenLM/Qwen" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">Qwen</a>
+                  <span className="text-surface-500"> — open-weight LLMs by Alibaba Cloud</span>
+                </li>
+                <li>
+                  <a href="https://github.com/THUDM/GLM-4" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">GLM-4</a>
+                  <span className="text-surface-500"> — open-weight multilingual LLM</span>
+                </li>
+                <li>
+                  <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">llama.cpp</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — LLM inference in C/C++</span>
+                </li>
+                <li>
+                  <a href="https://github.com/vllm-project/vllm" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">vLLM</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — high-throughput LLM serving engine</span>
+                </li>
+              </ul>
+            </div>
+
+            {/* Remote Development */}
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-surface-500">Remote Development</p>
+              <ul className="space-y-2.5 text-sm">
+                <li>
+                  <a href="https://github.com/coder/code-server" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">code-server</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — VS Code in the browser</span>
+                </li>
+                <li>
+                  <a href="https://github.com/coder/coder" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">Coder</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — self-hosted remote dev environments</span>
+                </li>
+                <li>
+                  <a href="https://github.com/tmate-io/tmate" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">tmate</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — instant terminal sharing</span>
+                </li>
+                <li>
+                  <a href="https://github.com/nichochar/sshx" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">sshx</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — collaborative terminal sharing over the web</span>
+                </li>
+                <li>
+                  <a href="https://github.com/nicm/ttyd" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">ttyd</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — share your terminal over the web</span>
+                </li>
+              </ul>
+            </div>
+
+            {/* Networking & NAT Traversal */}
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-surface-500">Networking &amp; NAT Traversal</p>
+              <ul className="space-y-2.5 text-sm">
+                <li>
+                  <a href="https://tailscale.com" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">Tailscale</a>
+                  <span className="text-surface-500"> — mesh VPN built on WireGuard (client is open-source)</span>
+                </li>
+                <li>
+                  <a href="https://github.com/netbirdio/netbird" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">NetBird</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — network connectivity platform</span>
+                </li>
+                <li>
+                  <a href="https://github.com/fatedier/frp" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">frp</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — fast reverse proxy for NAT traversal</span>
+                </li>
+                <li>
+                  <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">Cloudflare Tunnel</a>
+                  <span className="text-surface-500"> — expose local services securely</span>
+                </li>
+                <li>
+                  <a href="https://github.com/juanfont/headscale" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">Headscale</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — self-hosted Tailscale control server</span>
+                </li>
+              </ul>
+            </div>
+
+            {/* Infrastructure */}
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-surface-500">Infrastructure</p>
+              <ul className="space-y-2.5 text-sm">
+                <li>
+                  <a href="https://www.convex.dev" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">Convex</a>
+                  <span className="text-surface-500"> — reactive backend-as-a-service (runtime is open-source)</span>
+                </li>
+                <li>
+                  <a href="https://github.com/quic-go/quic-go" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">quic-go</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — QUIC protocol implementation in Go</span>
+                </li>
+                <li>
+                  <a href="https://github.com/tmux/tmux" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">tmux</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — terminal multiplexer</span>
+                </li>
+              </ul>
+            </div>
+
+            {/* Protocols & Standards */}
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-surface-500">Protocols &amp; Standards</p>
+              <ul className="space-y-2.5 text-sm">
+                <li>
+                  <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">MCP</a>
+                  <span className="ml-1.5 rounded bg-surface-700/60 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-surface-400">Open Spec</span>
+                  <span className="text-surface-500"> — Model Context Protocol</span>
+                </li>
+                <li>
+                  <a href="https://www.rfc-editor.org/rfc/rfc9000.html" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">QUIC (RFC 9000)</a>
+                  <span className="ml-1.5 rounded bg-surface-700/60 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-surface-400">Open Standard</span>
+                  <span className="text-surface-500"> — UDP-based transport protocol</span>
+                </li>
+                <li>
+                  <a href="https://www.wireguard.com" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">WireGuard</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — modern VPN protocol</span>
+                </li>
+              </ul>
+            </div>
           </div>
         </div>
       </section>
