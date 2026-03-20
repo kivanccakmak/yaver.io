@@ -69,7 +69,7 @@ export default function SettingsScreen() {
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
 
   // Speech settings
-  const [speechProvider, setSpeechProvider] = useState<SpeechProvider | null>(null);
+  const [speechProvider, setSpeechProvider] = useState<SpeechProvider | null>("on-device");
   const [speechApiKey, setSpeechApiKey] = useState("");
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [verbosity, setVerbosity] = useState(10);

@@ -347,25 +347,23 @@ export default function TasksScreen() {
   const { token } = useAuth();
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const [speechProvider, setSpeechProvider] = useState<SpeechProvider | null>(null);
+  const [speechProvider, setSpeechProvider] = useState<SpeechProvider | null>("on-device");
   const [speechApiKey, setSpeechApiKey] = useState<string | undefined>();
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [verbosity, setVerbosity] = useState(10);
   const [inputFromSpeech, setInputFromSpeech] = useState(false);
   const audioRecordingRef = useRef<any>(null);
 
-  // Load speech settings from Convex
+  // Load speech settings from Convex (default: on-device whisper)
   useEffect(() => {
+    // Pre-init whisper for default on-device provider
+    initWhisper().catch(() => {});
     if (!token) return;
     getUserSettings(token).then((s) => {
       if (s.speechProvider) setSpeechProvider(s.speechProvider);
       if (s.speechApiKey) setSpeechApiKey(s.speechApiKey);
       if (s.ttsEnabled) setTtsEnabled(s.ttsEnabled);
       if (s.verbosity !== undefined) setVerbosity(s.verbosity);
-      // Pre-init whisper if on-device selected
-      if (s.speechProvider === "on-device") {
-        initWhisper().catch(() => {});
-      }
     }).catch(() => {});
   }, [token]);
 
@@ -1175,7 +1173,7 @@ export default function TasksScreen() {
                         backgroundColor: isRecording ? "#ef4444" : c.bgCardElevated,
                         alignItems: "center", justifyContent: "center",
                         borderWidth: 1, borderColor: isRecording ? "#ef4444" : c.border,
-                        opacity: !speechProvider && !isRecording ? 0.4 : 1,
+                        opacity: 1,
                       },
                       pressed && { opacity: 0.7 },
                     ]}
