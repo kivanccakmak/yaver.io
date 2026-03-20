@@ -2771,6 +2771,17 @@ func runDoctor() {
 	fmt.Println("Yaver Doctor")
 	fmt.Printf("  Version: %s\n\n", version)
 
+	// Check for updates early (non-blocking, 3s timeout)
+	latestCLI := fetchLatestCLIVersion()
+	if latestCLI != "" && latestCLI != version && isNewerVersion(latestCLI, version) {
+		fmt.Printf("  ⚠ Update available: %s → %s\n", version, latestCLI)
+		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
+			fmt.Printf("    brew upgrade yaver\n\n")
+		} else {
+			fmt.Printf("    scoop update yaver\n\n")
+		}
+	}
+
 	ok := 0
 	warn := 0
 	fail := 0
@@ -2801,6 +2812,15 @@ func runDoctor() {
 		check("Config file")
 		p, _ := ConfigPath()
 		pass(p)
+	}
+
+	check("Version")
+	if latestCLI != "" && latestCLI != version && isNewerVersion(latestCLI, version) {
+		warning(fmt.Sprintf("%s (latest: %s)", version, latestCLI))
+	} else if latestCLI != "" {
+		pass(fmt.Sprintf("%s (up to date)", version))
+	} else {
+		pass(fmt.Sprintf("%s (could not check for updates)", version))
 	}
 
 	// 2. Auth
@@ -4527,7 +4547,7 @@ func checkLatestVersion() {
 		return
 	}
 
-	if result.CliVersion != "" && result.CliVersion != version {
+	if result.CliVersion != "" && result.CliVersion != version && isNewerVersion(result.CliVersion, version) {
 		fmt.Printf("\nUpdate available: %s → %s\n", version, result.CliVersion)
 		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
 			fmt.Println("  brew upgrade yaver")
@@ -4535,4 +4555,43 @@ func checkLatestVersion() {
 			fmt.Println("  scoop update yaver")
 		}
 	}
+}
+
+// fetchLatestCLIVersion returns the latest CLI version from Convex platformConfig.
+func fetchLatestCLIVersion() string {
+	convexURL := defaultConvexSiteURL
+	if cfg, err := LoadConfig(); err == nil && cfg.ConvexSiteURL != "" {
+		convexURL = cfg.ConvexSiteURL
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	req, err := http.NewRequest("GET", convexURL+"/config", nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		return ""
+	}
+	defer resp.Body.Close()
+	var result struct{ CliVersion string `json:"cliVersion"` }
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result.CliVersion
+}
+
+// isNewerVersion returns true if a is a higher semver than b (e.g. "1.40.0" > "1.39.0").
+func isNewerVersion(a, b string) bool {
+	parse := func(v string) (int, int, int) {
+		v = strings.TrimPrefix(v, "v")
+		parts := strings.Split(v, ".")
+		major, minor, patch := 0, 0, 0
+		if len(parts) >= 1 { fmt.Sscanf(parts[0], "%d", &major) }
+		if len(parts) >= 2 { fmt.Sscanf(parts[1], "%d", &minor) }
+		if len(parts) >= 3 { fmt.Sscanf(parts[2], "%d", &patch) }
+		return major, minor, patch
+	}
+	a1, a2, a3 := parse(a)
+	b1, b2, b3 := parse(b)
+	if a1 != b1 { return a1 > b1 }
+	if a2 != b2 { return a2 > b2 }
+	return a3 > b3
 }
