@@ -372,11 +372,48 @@ cd mobile/android
 JAVA_HOME=$(/usr/libexec/java_home -v 17) ./gradlew bundleRelease
 ```
 
+### SDK Publishing
+
+#### npm (`@yaver/sdk`)
+Requires npm org `@yaver` and a granular access token with publish permission.
+Token stored as `NPM_TOKEN` GitHub Actions secret. **Never commit tokens to repo.**
+```bash
+# Local publish (token in .npmrc, gitignored)
+echo "//registry.npmjs.org/:_authToken=YOUR_TOKEN" > sdk/js/.npmrc
+cd sdk/js && npm publish --access public
+```
+
+#### PyPI (`yaver`)
+Requires a PyPI API token. Token stored as `PYPI_TOKEN` GitHub Actions secret.
+```bash
+cd sdk/python
+python3 -m build
+python3 -m twine upload dist/* --username __token__ --password YOUR_PYPI_TOKEN
+```
+
+#### Go (`github.com/kivanccakmak/yaver.io/sdk/go/yaver`)
+No publishing needed — Go modules import directly from GitHub via `go get`.
+
+#### C shared library
+Built locally per-platform. Not published to a registry.
+```bash
+cd sdk/go/clib
+go build -buildmode=c-shared -o libyaver.so .   # Linux
+go build -buildmode=c-shared -o libyaver.dylib . # macOS
+```
+
+### SDK Testing
+```bash
+./scripts/test-suite.sh --sdk   # Unit + integration (starts agent, tests all SDKs)
+```
+
 ### Version Bumping (before releases)
 Update version in **four** places — all must match:
 1. `mobile/app.json` → `expo.version` (e.g. "1.0.1")
 2. `mobile/ios/Yaver/Info.plist` → `CFBundleShortVersionString` (e.g. "1.0.1")
 3. `mobile/ios/Yaver.xcodeproj/project.pbxproj` → `MARKETING_VERSION` (e.g. 1.0.1) — appears twice (Debug + Release)
 4. `mobile/android/app/build.gradle` → `versionName` (e.g. "1.0.1")
+5. `desktop/agent/main.go` → `const version` (e.g. "1.40.0")
+6. `web/app/page.tsx` → version badges (grep for old version number)
 
 Build numbers (CFBundleVersion / versionCode) are auto-incremented by deploy scripts.

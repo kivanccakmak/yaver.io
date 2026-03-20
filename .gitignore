@@ -58,3 +58,4 @@ sdk/go/clib/libyaver.*
 sdk/python/__pycache__/
 sdk/js/dist/
 sdk/js/node_modules/
+sdk/js/.npmrc
