@@ -88,6 +88,8 @@ func main() {
 		runPurge()
 	case "uninstall":
 		runUninstall()
+	case "doctor":
+		runDoctor()
 	case "help", "--help", "-h":
 		printUsage()
 	case "version", "--version", "-v":
@@ -2506,6 +2508,209 @@ func runStatus() {
 // ---------------------------------------------------------------------------
 // devices — list registered devices
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// doctor — system health check (like flutter doctor)
+// ---------------------------------------------------------------------------
+
+func runDoctor() {
+	fmt.Println("Yaver Doctor")
+	fmt.Printf("  Version: %s\n\n", version)
+
+	ok := 0
+	warn := 0
+	fail := 0
+
+	check := func(name string) {
+		fmt.Printf("  %-30s ", name)
+	}
+	pass := func(detail string) {
+		fmt.Printf("✓ %s\n", detail)
+		ok++
+	}
+	warning := func(detail string) {
+		fmt.Printf("! %s\n", detail)
+		warn++
+	}
+	failed := func(detail string) {
+		fmt.Printf("✗ %s\n", detail)
+		fail++
+	}
+
+	// 1. Config
+	fmt.Println("── Configuration ──")
+	cfg, err := LoadConfig()
+	if err != nil {
+		check("Config file")
+		failed(fmt.Sprintf("Error: %v", err))
+	} else {
+		check("Config file")
+		p, _ := ConfigPath()
+		pass(p)
+	}
+
+	// 2. Auth
+	fmt.Println("\n── Authentication ──")
+	if cfg == nil || cfg.AuthToken == "" {
+		check("Auth token")
+		failed("Not signed in — run 'yaver auth'")
+	} else {
+		check("Auth token")
+		pass("Present")
+
+		check("Token validation")
+		client := &http.Client{Timeout: 5 * time.Second}
+		req, _ := newBearerRequest("GET", cfg.ConvexSiteURL+"/auth/validate", cfg.AuthToken, nil)
+		if req != nil {
+			resp, err := client.Do(req)
+			if err != nil {
+				failed(fmt.Sprintf("Network error: %v", err))
+			} else {
+				resp.Body.Close()
+				if resp.StatusCode == 200 {
+					pass("Valid")
+				} else if resp.StatusCode == 401 {
+					failed("Expired — run 'yaver auth'")
+				} else {
+					warning(fmt.Sprintf("HTTP %d", resp.StatusCode))
+				}
+			}
+		}
+
+		check("Device ID")
+		if cfg.DeviceID != "" {
+			pass(cfg.DeviceID[:8] + "...")
+		} else {
+			failed("Not set — run 'yaver serve' to register")
+		}
+
+		check("Backend")
+		if cfg.ConvexSiteURL != "" {
+			pass(cfg.ConvexSiteURL)
+		} else {
+			failed("Not configured")
+		}
+	}
+
+	// 3. Agent process
+	fmt.Println("\n── Agent ──")
+	check("Agent process")
+	if pid, running := isAgentRunning(); running {
+		pass(fmt.Sprintf("Running (PID %d)", pid))
+	} else {
+		warning("Not running — start with 'yaver serve'")
+	}
+
+	check("HTTP server")
+	resp, err := http.Get("http://127.0.0.1:18080/health")
+	if err != nil {
+		warning("Not reachable on port 18080")
+	} else {
+		resp.Body.Close()
+		pass("Listening on :18080")
+	}
+
+	// 4. AI Runners
+	fmt.Println("\n── AI Runners ──")
+	runners := []struct {
+		id      string
+		name    string
+		cmd     string
+		install string
+	}{
+		{"claude", "Claude Code", "claude", "npm install -g @anthropic-ai/claude-code"},
+		{"codex", "OpenAI Codex", "codex", "npm install -g @openai/codex"},
+		{"aider", "Aider", "aider", "pip install aider-chat"},
+		{"ollama", "Ollama", "ollama", "brew install ollama (or https://ollama.com)"},
+		{"goose", "Goose", "goose", "pip install goose-ai"},
+		{"amp", "Amp", "amp", "npm install -g @anthropic/amp"},
+		{"opencode", "OpenCode", "opencode", "go install github.com/mbreithecker/opencode@latest"},
+	}
+
+	for _, r := range runners {
+		check(r.name + " (" + r.cmd + ")")
+		path, err := osexec.LookPath(r.cmd)
+		if err != nil {
+			warning(fmt.Sprintf("Not installed — %s", r.install))
+		} else {
+			// Try to get version
+			out, verr := osexec.Command(r.cmd, "--version").CombinedOutput()
+			if verr == nil {
+				ver := strings.TrimSpace(strings.Split(string(out), "\n")[0])
+				if len(ver) > 60 {
+					ver = ver[:60]
+				}
+				pass(fmt.Sprintf("%s (%s)", path, ver))
+			} else {
+				pass(path)
+			}
+		}
+	}
+
+	// 5. Relay servers
+	fmt.Println("\n── Relay Servers ──")
+	if cfg != nil && len(cfg.RelayServers) > 0 {
+		relayClient := &http.Client{Timeout: 5 * time.Second}
+		for _, rs := range cfg.RelayServers {
+			label := rs.Label
+			if label == "" {
+				label = rs.ID
+			}
+			check("Relay: " + label)
+			start := time.Now()
+			resp, err := relayClient.Get(rs.HttpURL + "/health")
+			rtt := time.Since(start)
+			if err != nil {
+				failed("Unreachable")
+			} else {
+				resp.Body.Close()
+				if resp.StatusCode == 200 {
+					pw := ""
+					if rs.Password != "" {
+						pw = ", password set"
+					}
+					pass(fmt.Sprintf("OK (%dms%s)", rtt.Milliseconds(), pw))
+				} else {
+					failed(fmt.Sprintf("HTTP %d", resp.StatusCode))
+				}
+			}
+		}
+	} else {
+		check("Relay servers")
+		warning("None configured — add with 'yaver relay add <url>'")
+	}
+
+	// 6. Network
+	fmt.Println("\n── Network ──")
+	check("Local IP")
+	ip := getLocalIP()
+	if ip != "" {
+		pass(ip)
+	} else {
+		warning("Could not determine")
+	}
+
+	check("Internet connectivity")
+	_, err = http.Get("https://yaver.io")
+	if err != nil {
+		failed("Cannot reach yaver.io")
+	} else {
+		pass("OK")
+	}
+
+	// Summary
+	fmt.Println()
+	fmt.Printf("Doctor summary: %d passed, %d warnings, %d failures\n", ok, warn, fail)
+	if fail > 0 {
+		fmt.Println("Run 'yaver auth' to fix authentication issues.")
+	}
+	if warn > 0 {
+		fmt.Println("Install missing runners with their respective install commands above.")
+	}
+	if fail == 0 && warn == 0 {
+		fmt.Println("Everything looks good!")
+	}
+}
 
 func runDevices() {
 	cfg := mustLoadAuthConfig()
