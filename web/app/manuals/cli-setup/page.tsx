@@ -171,6 +171,11 @@ export default function CLISetupManual() {
               example={`$ yaver set-runner claude      # Claude Code (default)\n$ yaver set-runner codex       # OpenAI Codex\n$ yaver set-runner aider       # Aider\n$ yaver set-runner custom "my-tool --auto {prompt}"`}
             />
             <CommandBlock
+              name="yaver tmux"
+              description="Discover and manage tmux sessions. Adopt existing sessions to control them from the mobile app — start Claude Code on your laptop, walk away, pick it up on your phone."
+              example={`$ yaver tmux list                 # List all sessions with agent detection\n  my-claude       claude        unrelated     1 window(s)\n  dev-aider       aider         unrelated     2 window(s)\n\n$ yaver tmux adopt my-claude      # Adopt as a Yaver task\n  Adopted tmux session "my-claude" as task a1b2c3d4\n\n$ yaver tmux detach a1b2c3d4      # Stop monitoring (session keeps running)`}
+            />
+            <CommandBlock
               name="yaver devices"
               description="List all your registered devices. Useful when you have multiple dev machines."
               example={`$ yaver devices\n  1. MacBook Pro (this device)  — online\n  2. Linux Server               — online\n  3. Windows Desktop            — offline`}

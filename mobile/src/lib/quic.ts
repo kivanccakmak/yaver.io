@@ -40,6 +40,22 @@ export interface Task {
   updatedAt: number;
   /** Name of the device this task is executing on. */
   deviceName?: string;
+  /** Tmux session name (only set for adopted sessions). */
+  tmuxSession?: string;
+  /** True if this task was adopted from an existing tmux session. */
+  isAdopted?: boolean;
+}
+
+export interface TmuxSession {
+  name: string;
+  windows: number;
+  created: string;
+  attached: boolean;
+  relationship: "adopted" | "forked-by-yaver" | "unrelated";
+  agentType?: string;
+  mainPid?: number;
+  panePreview?: string;
+  taskId?: string;
 }
 
 export interface ModelInfo {
@@ -388,6 +404,8 @@ export class QuicClient {
         resultText: t.resultText || undefined,
         costUsd: t.costUsd || undefined,
         turns: t.turns || undefined,
+        tmuxSession: t.tmuxSession || undefined,
+        isAdopted: t.isAdopted || false,
       }));
       // Filter out tasks the user previously deleted
       const deletedIds = await getDeletedTaskIds();
@@ -428,6 +446,8 @@ export class QuicClient {
       resultText: t.resultText || undefined,
       costUsd: t.costUsd || undefined,
       turns: t.turns || undefined,
+      tmuxSession: t.tmuxSession || undefined,
+      isAdopted: t.isAdopted || false,
     };
   }
 
@@ -618,6 +638,66 @@ export class QuicClient {
     if (!res.ok) throw new Error(`Failed to delete all: ${res.status}`);
     const data = await res.json();
     return data.deleted || 0;
+  }
+
+  // ── Tmux Session Management ─────────────────────────────────────────
+
+  /** List all tmux sessions on the connected machine. */
+  async listTmuxSessions(): Promise<TmuxSession[]> {
+    if (!this.isConnected && !this.hasConnectionInfo) return [];
+    try {
+      const res = await fetch(`${this.baseUrl}/tmux/sessions`, {
+        headers: this.authHeaders,
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.sessions || [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Adopt a tmux session as a Yaver task. Returns the created task. */
+  async adoptTmuxSession(sessionName: string): Promise<{ taskId: string; session: string }> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/tmux/adopt`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ session: sessionName }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Failed to adopt session: ${res.status}`);
+    }
+    return res.json();
+  }
+
+  /** Detach an adopted tmux session (stop monitoring, session keeps running). */
+  async detachTmuxSession(taskId: string): Promise<void> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/tmux/detach`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ taskId }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Failed to detach: ${res.status}`);
+    }
+  }
+
+  /** Send keyboard input to an adopted tmux session. */
+  async sendTmuxInput(taskId: string, input: string): Promise<void> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/tmux/input`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ taskId, input }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Failed to send input: ${res.status}`);
+    }
   }
 
   // ── EventEmitter ───────────────────────────────────────────────────

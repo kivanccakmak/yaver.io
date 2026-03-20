@@ -138,7 +138,7 @@ export default function McpPage() {
               ["installation", "Installation"],
               ["local-mcp", "Local MCP (stdio) \u2014 Claude Desktop"],
               ["network-mcp", "Network MCP (HTTP) \u2014 Remote Access"],
-              ["available-tools", "Available Tools (30+)"],
+              ["available-tools", "Available Tools (48)"],
               ["email-setup", "Email Setup"],
               ["acl", "ACL \u2014 Connecting to Other MCP Servers"],
               ["security", "Security"],
@@ -369,11 +369,14 @@ export default function McpPage() {
         {/* ─── Section 5: Available Tools ─── */}
         <section className="mb-20">
           <SectionHeading id="available-tools">
-            Available Tools (30+)
+            Available Tools (48)
           </SectionHeading>
           <Prose>
-            Yaver exposes over 30 tools through MCP, organized by category. AI
-            agents can discover and use these tools automatically.
+            Yaver exposes 48 tools through MCP, organized by category. AI
+            agents can discover and use these tools automatically. This means
+            Claude Code, Aider, Codex, or any MCP-compatible agent can manage
+            tasks, adopt tmux sessions, configure relay servers, and more &mdash;
+            programmatically.
           </Prose>
 
           <div className="space-y-4">
@@ -389,11 +392,36 @@ export default function McpPage() {
             />
 
             <ToolCategory
-              title="System"
+              title="Tmux Session Adoption"
+              tools={[
+                { name: "tmux_list_sessions", description: "List all tmux sessions with agent detection (claude, codex, aider, etc.) and relationship to Yaver" },
+                { name: "tmux_adopt_session", description: "Adopt an existing tmux session as a Yaver task \u2014 output streams to mobile, input routes via send-keys" },
+                { name: "tmux_detach_session", description: "Stop monitoring an adopted session (tmux session keeps running)" },
+                { name: "tmux_send_input", description: "Send keyboard input to an adopted tmux session" },
+              ]}
+            />
+
+            <ToolCategory
+              title="Diagnostics & Status"
+              tools={[
+                { name: "yaver_doctor", description: "Full system health check \u2014 auth, agent, runners, relays, tunnels, network" },
+                { name: "yaver_status", description: "Auth status, agent info, runner, relay/tunnel summary" },
+                { name: "yaver_devices", description: "List all registered devices with online/offline status" },
+                { name: "yaver_logs", description: "View last N lines of agent log" },
+                { name: "yaver_clear_logs", description: "Clear the agent log file" },
+                { name: "yaver_help", description: "Get help about Yaver features (tmux, relay, tunnel, mobile, mcp, runners, etc.)" },
+                { name: "yaver_ping", description: "Verify agent is alive and measure RTT" },
+                { name: "agent_shutdown", description: "Gracefully shut down the agent" },
+              ]}
+            />
+
+            <ToolCategory
+              title="System & Config"
               tools={[
                 { name: "get_info", description: "Get agent info and version" },
                 { name: "get_system_info", description: "Get OS, CPU, memory, and disk info" },
                 { name: "get_config", description: "Get current agent configuration" },
+                { name: "config_set", description: "Set config values (auto-start, auto-update)" },
                 { name: "set_work_dir", description: "Set the working directory for tasks" },
                 { name: "list_projects", description: "List available projects and directories" },
               ]}
@@ -408,11 +436,24 @@ export default function McpPage() {
             />
 
             <ToolCategory
-              title="Relay"
+              title="Relay Servers"
               tools={[
                 { name: "get_relay_config", description: "Get current relay server configuration" },
                 { name: "add_relay_server", description: "Add a relay server" },
                 { name: "remove_relay_server", description: "Remove a relay server" },
+                { name: "relay_test", description: "Test relay server connectivity and latency" },
+                { name: "relay_set_password", description: "Set the default relay password" },
+                { name: "relay_clear_password", description: "Remove the default relay password" },
+              ]}
+            />
+
+            <ToolCategory
+              title="Cloudflare Tunnels"
+              tools={[
+                { name: "tunnel_list", description: "List configured Cloudflare Tunnels" },
+                { name: "tunnel_add", description: "Add a Cloudflare Tunnel endpoint" },
+                { name: "tunnel_remove", description: "Remove a tunnel by ID or URL" },
+                { name: "tunnel_test", description: "Test tunnel connectivity and latency" },
               ]}
             />
 

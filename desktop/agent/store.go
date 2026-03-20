@@ -15,7 +15,10 @@ type persistedTask struct {
 	Title       string             `json:"title"`
 	Description string             `json:"description"`
 	Status      TaskStatus         `json:"status"`
+	Source      string             `json:"source,omitempty"`
 	SessionID   string             `json:"session_id,omitempty"`
+	TmuxSession string             `json:"tmux_session,omitempty"`
+	IsAdopted   bool               `json:"is_adopted,omitempty"`
 	Output      string             `json:"output,omitempty"`
 	ResultText  string             `json:"result_text,omitempty"`
 	CostUSD     float64            `json:"cost_usd,omitempty"`
@@ -55,7 +58,10 @@ func (s *TaskStore) Save(tasks map[string]*Task) {
 			Title:       t.Title,
 			Description: t.Description,
 			Status:      t.Status,
+			Source:      t.Source,
 			SessionID:   t.SessionID,
+			TmuxSession: t.TmuxSession,
+			IsAdopted:   t.IsAdopted,
 			Output:      output,
 			ResultText:  t.ResultText,
 			CostUSD:     t.CostUSD,
@@ -101,7 +107,9 @@ func (s *TaskStore) Load() map[string]*Task {
 		finishedAt := r.FinishedAt
 		// Tasks that were running or queued when we last exited can never be
 		// resumed — mark them as stopped so they appear as historical records.
-		if status == TaskStatusRunning || status == TaskStatusQueued {
+		// Exception: adopted tmux tasks are left as-is; TmuxManager.ReAdoptOnStartup()
+		// will check if the session still exists and either re-adopt or mark stopped.
+		if (status == TaskStatusRunning || status == TaskStatusQueued) && !r.IsAdopted {
 			status = TaskStatusStopped
 			if finishedAt == nil {
 				now := time.Now()
@@ -113,7 +121,10 @@ func (s *TaskStore) Load() map[string]*Task {
 			Title:       r.Title,
 			Description: r.Description,
 			Status:      status,
+			Source:      r.Source,
 			SessionID:   r.SessionID,
+			TmuxSession: r.TmuxSession,
+			IsAdopted:   r.IsAdopted,
 			Output:      r.Output,
 			ResultText:  r.ResultText,
 			CostUSD:     r.CostUSD,

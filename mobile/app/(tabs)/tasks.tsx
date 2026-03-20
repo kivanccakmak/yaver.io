@@ -32,6 +32,7 @@ import {
   RunnerInfo,
   Task,
   TaskStatus,
+  TmuxSession,
 } from "../../src/lib/quic";
 import { markTaskDeleted, getDeletedTaskIds } from "../../src/lib/storage";
 
@@ -232,7 +233,12 @@ function TaskCard({
         <View style={[s.statusBadge, { backgroundColor: STATUS_COLORS[item.status] + "22" }]}>
           <Text style={[s.statusText, { color: STATUS_COLORS[item.status] }]}>{item.status}</Text>
         </View>
-        {item.runnerId && item.runnerId !== "claude" && (
+        {item.isAdopted && (
+          <View style={[s.statusBadge, { backgroundColor: "#8b5cf622" }]}>
+            <Text style={[s.statusText, { color: "#8b5cf6" }]}>tmux</Text>
+          </View>
+        )}
+        {item.runnerId && item.runnerId !== "claude" && item.runnerId !== "unknown" && (
           <View style={[s.statusBadge, { backgroundColor: "#f59e0b22" }]}>
             <Text style={[s.statusText, { color: "#f59e0b" }]}>{item.runnerId}</Text>
           </View>
@@ -327,6 +333,10 @@ export default function TasksScreen() {
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [customCommand, setCustomCommand] = useState("");
   const [showAgentPicker, setShowAgentPicker] = useState(false);
+  const [showTmuxSessions, setShowTmuxSessions] = useState(false);
+  const [tmuxSessions, setTmuxSessions] = useState<TmuxSession[]>([]);
+  const [isLoadingTmux, setIsLoadingTmux] = useState(false);
+  const [isAdopting, setIsAdopting] = useState<string | null>(null); // session name being adopted
   const chatScrollRef = useRef<ScrollView>(null);
   const pendingOpenTaskRef = useRef<Task | null>(null);
 
@@ -586,14 +596,19 @@ export default function TasksScreen() {
     Keyboard.dismiss();
     setIsSendingFollowUp(true);
     try {
-      // If task is running, stop it first then resume with new input
-      const isTaskRunning = selectedTask.status === "running" || selectedTask.status === "queued";
-      if (isTaskRunning) {
-        await quicClient.stopTask(selectedTask.id);
-        // Wait briefly for task to fully stop
-        await new Promise((r) => setTimeout(r, 500));
+      if (selectedTask.isAdopted) {
+        // For adopted tmux sessions, send input directly via tmux send-keys
+        await quicClient.sendTmuxInput(selectedTask.id, followUpText.trim());
+      } else {
+        // For regular tasks, stop then resume with new input
+        const isTaskRunning = selectedTask.status === "running" || selectedTask.status === "queued";
+        if (isTaskRunning) {
+          await quicClient.stopTask(selectedTask.id);
+          // Wait briefly for task to fully stop
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        await quicClient.continueTask(selectedTask.id, followUpText.trim());
       }
-      await quicClient.continueTask(selectedTask.id, followUpText.trim());
       setFollowUpText("");
       await fetchTasks();
     } catch {
@@ -622,6 +637,52 @@ export default function TasksScreen() {
 
   const handleDeleteAll = async () => {
     try { await quicClient.deleteAllTasks(); setTasks([]); await fetchTasks(); } catch {}
+  };
+
+  // Tmux session management
+  const handleOpenTmuxSessions = async () => {
+    setShowTmuxSessions(true);
+    setIsLoadingTmux(true);
+    try {
+      const sessions = await quicClient.listTmuxSessions();
+      setTmuxSessions(sessions);
+    } catch {
+      setTmuxSessions([]);
+    } finally {
+      setIsLoadingTmux(false);
+    }
+  };
+
+  const handleAdoptTmuxSession = async (sessionName: string) => {
+    setIsAdopting(sessionName);
+    try {
+      const result = await quicClient.adoptTmuxSession(sessionName);
+      // Refresh both lists
+      const [sessions] = await Promise.all([quicClient.listTmuxSessions(), fetchTasks()]);
+      setTmuxSessions(sessions);
+      // Close modal and open the new task
+      setShowTmuxSessions(false);
+      const updatedTasks = await quicClient.listTasks();
+      const newTask = updatedTasks.find(t => t.id === result.taskId);
+      if (newTask) setSelectedTask(newTask);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      Alert.alert("Adopt Failed", msg);
+    } finally {
+      setIsAdopting(null);
+    }
+  };
+
+  const handleDetachTmuxSession = async (taskId: string) => {
+    try {
+      await quicClient.detachTmuxSession(taskId);
+      await fetchTasks();
+      // If we're viewing this task, close the detail modal
+      if (selectedTask?.id === taskId) setSelectedTask(null);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      Alert.alert("Detach Failed", msg);
+    }
   };
 
   const handleReconnect = async (device: typeof devices[0]) => {
@@ -756,7 +817,7 @@ export default function TasksScreen() {
         )}
 
         {/* Action bar */}
-        {tasks.length > 0 && isEffectivelyConnected && (
+        {isEffectivelyConnected && (
           <View style={[s.actionBar, { borderBottomColor: c.border }]}>
             {tasks.some(t => t.status === "running") && (
               <Pressable style={[s.actionButton, { backgroundColor: "#ef444418" }]} onPress={handleStopAll}>
@@ -768,6 +829,9 @@ export default function TasksScreen() {
                 <Text style={[s.actionButtonText, { color: c.textMuted }]}>Clear History</Text>
               </Pressable>
             )}
+            <Pressable style={[s.actionButton, { backgroundColor: "#8b5cf618" }]} onPress={handleOpenTmuxSessions}>
+              <Text style={[s.actionButtonText, { color: "#8b5cf6" }]}>Tmux</Text>
+            </Pressable>
           </View>
         )}
 
@@ -1136,32 +1200,45 @@ export default function TasksScreen() {
                   {isRunning ? (
                     <Pressable
                       style={({ pressed }) => [
-                        { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, backgroundColor: "#ef4444" + "18" },
+                        { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, backgroundColor: selectedTask.isAdopted ? "#8b5cf618" : "#ef444418" },
                         pressed && { opacity: 0.6 },
                       ]}
                       onPress={() => {
-                        Alert.alert(
-                          "Stop Task",
-                          "The AI agent will be stopped and this session will be terminated. You can send a follow-up to resume later.",
-                          [
-                            { text: "Cancel", style: "cancel" },
-                            { text: "Stop", style: "destructive", onPress: () => handleExitTask(selectedTask.id) },
-                          ]
-                        );
+                        if (selectedTask.isAdopted) {
+                          Alert.alert(
+                            "Detach Session",
+                            `Stop monitoring "${selectedTask.tmuxSession || "tmux session"}"? The session will keep running.`,
+                            [
+                              { text: "Cancel", style: "cancel" },
+                              { text: "Detach", onPress: () => handleDetachTmuxSession(selectedTask.id) },
+                            ]
+                          );
+                        } else {
+                          Alert.alert(
+                            "Stop Task",
+                            "The AI agent will be stopped and this session will be terminated. You can send a follow-up to resume later.",
+                            [
+                              { text: "Cancel", style: "cancel" },
+                              { text: "Stop", style: "destructive", onPress: () => handleExitTask(selectedTask.id) },
+                            ]
+                          );
+                        }
                       }}
                       onLongPress={() => {
-                        Alert.alert(
-                          "Force Kill",
-                          "The process will be killed immediately. Any unsaved progress will be lost.",
-                          [
-                            { text: "Cancel", style: "cancel" },
-                            { text: "Kill", style: "destructive", onPress: () => handleStopTask(selectedTask.id) },
-                          ]
-                        );
+                        if (!selectedTask.isAdopted) {
+                          Alert.alert(
+                            "Force Kill",
+                            "The process will be killed immediately. Any unsaved progress will be lost.",
+                            [
+                              { text: "Cancel", style: "cancel" },
+                              { text: "Kill", style: "destructive", onPress: () => handleStopTask(selectedTask.id) },
+                            ]
+                          );
+                        }
                       }}
                     >
-                      <Text style={{ fontSize: 14, color: "#ef4444" }}>{"\u25A0"}</Text>
-                      <Text style={{ fontSize: 13, color: "#ef4444", fontWeight: "600" }}>Stop</Text>
+                      <Text style={{ fontSize: 14, color: selectedTask.isAdopted ? "#8b5cf6" : "#ef4444" }}>{selectedTask.isAdopted ? "\u23CF" : "\u25A0"}</Text>
+                      <Text style={{ fontSize: 13, color: selectedTask.isAdopted ? "#8b5cf6" : "#ef4444", fontWeight: "600" }}>{selectedTask.isAdopted ? "Detach" : "Stop"}</Text>
                     </Pressable>
                   ) : (
                     <View style={{ width: 60 }} />
@@ -1258,6 +1335,138 @@ export default function TasksScreen() {
                       {new Date(entry.timestamp).toLocaleTimeString()} {entry.message}
                     </Text>
                   ))
+                )}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+        {/* ── Tmux Sessions Modal ────────────────────────────────── */}
+        <Modal visible={showTmuxSessions} animationType="slide" transparent onRequestClose={() => setShowTmuxSessions(false)}>
+          <View style={s.logsModalOverlay}>
+            <Pressable style={{ height: 80 }} onPress={() => setShowTmuxSessions(false)} />
+            <View style={[s.logsModal, { backgroundColor: c.bg }]}>
+              <View style={[s.logsHeader, { borderBottomColor: c.border }]}>
+                <Text style={[s.logsTitle, { color: c.textPrimary }]}>Tmux Sessions</Text>
+                <View style={s.logsHeaderActions}>
+                  <Pressable onPress={handleOpenTmuxSessions}>
+                    <Text style={[s.logsActionText, { color: c.accent }]}>Refresh</Text>
+                  </Pressable>
+                  <Pressable onPress={() => setShowTmuxSessions(false)} style={{ marginLeft: 16 }}>
+                    <Text style={[s.logsActionText, { color: c.textMuted }]}>Close</Text>
+                  </Pressable>
+                </View>
+              </View>
+              <ScrollView style={s.logsScroll} contentContainerStyle={{ padding: 12 }}>
+                {isLoadingTmux ? (
+                  <View style={{ alignItems: "center", paddingTop: 40 }}>
+                    <ActivityIndicator size="large" color={c.accent} />
+                    <Text style={{ color: c.textMuted, marginTop: 12, fontSize: 14 }}>Scanning sessions...</Text>
+                  </View>
+                ) : tmuxSessions.length === 0 ? (
+                  <View style={{ alignItems: "center", paddingTop: 40 }}>
+                    <Text style={{ color: c.textMuted, fontSize: 16, marginBottom: 8 }}>No tmux sessions</Text>
+                    <Text style={{ color: c.textMuted, fontSize: 13, textAlign: "center", lineHeight: 20, paddingHorizontal: 20 }}>
+                      Start a tmux session on your dev machine to see it here.{"\n"}
+                      e.g. tmux new -s claude
+                    </Text>
+                  </View>
+                ) : (
+                  tmuxSessions.map((session) => {
+                    const isBeingAdopted = isAdopting === session.name;
+                    const alreadyAdopted = session.relationship === "adopted";
+                    const agent = session.agentType || "shell";
+
+                    return (
+                      <View
+                        key={session.name}
+                        style={[s.tmuxCard, { backgroundColor: c.bgCard, borderColor: c.border }]}
+                      >
+                        <View style={s.tmuxCardHeader}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[s.tmuxName, { color: c.textPrimary }]}>{session.name}</Text>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 }}>
+                              <View style={[s.statusBadge, { backgroundColor: agent !== "shell" ? "#22c55e22" : "#a1a1aa22" }]}>
+                                <Text style={[s.statusText, { color: agent !== "shell" ? "#22c55e" : "#a1a1aa" }]}>{agent}</Text>
+                              </View>
+                              <Text style={{ color: c.textMuted, fontSize: 11 }}>
+                                {session.windows} window{session.windows !== 1 ? "s" : ""}
+                                {session.attached ? " · attached" : ""}
+                              </Text>
+                            </View>
+                          </View>
+                          {alreadyAdopted ? (
+                            <View style={[s.statusBadge, { backgroundColor: "#8b5cf622" }]}>
+                              <Text style={[s.statusText, { color: "#8b5cf6" }]}>adopted</Text>
+                            </View>
+                          ) : session.relationship === "forked-by-yaver" ? (
+                            <View style={[s.statusBadge, { backgroundColor: "#6366f122" }]}>
+                              <Text style={[s.statusText, { color: "#6366f1" }]}>yaver</Text>
+                            </View>
+                          ) : null}
+                        </View>
+
+                        {/* Pane preview */}
+                        {session.panePreview ? (
+                          <View style={[s.tmuxPreview, { backgroundColor: c.bg, borderColor: c.border }]}>
+                            <Text style={[s.tmuxPreviewText, { color: c.textSecondary }]} numberOfLines={5}>
+                              {session.panePreview}
+                            </Text>
+                          </View>
+                        ) : null}
+
+                        {/* Action button */}
+                        {alreadyAdopted ? (
+                          <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
+                            <Pressable
+                              style={[s.tmuxActionBtn, { backgroundColor: c.accent + "18", flex: 1 }]}
+                              onPress={() => {
+                                // Open the task detail
+                                setShowTmuxSessions(false);
+                                const task = tasks.find(t => t.id === session.taskId);
+                                if (task) setSelectedTask(task);
+                              }}
+                            >
+                              <Text style={[s.tmuxActionText, { color: c.accent }]}>View Task</Text>
+                            </Pressable>
+                            <Pressable
+                              style={[s.tmuxActionBtn, { backgroundColor: "#ef444418" }]}
+                              onPress={() => {
+                                Alert.alert(
+                                  "Detach Session",
+                                  `Stop monitoring "${session.name}"? The tmux session will keep running.`,
+                                  [
+                                    { text: "Cancel", style: "cancel" },
+                                    { text: "Detach", style: "destructive", onPress: () => {
+                                      if (session.taskId) handleDetachTmuxSession(session.taskId);
+                                      // Refresh list
+                                      handleOpenTmuxSessions();
+                                    }},
+                                  ]
+                                );
+                              }}
+                            >
+                              <Text style={[s.tmuxActionText, { color: "#ef4444" }]}>Detach</Text>
+                            </Pressable>
+                          </View>
+                        ) : session.relationship !== "forked-by-yaver" ? (
+                          <Pressable
+                            style={[s.tmuxActionBtn, { backgroundColor: "#8b5cf618", marginTop: 10 }, isBeingAdopted && s.submitButtonDisabled]}
+                            onPress={() => handleAdoptTmuxSession(session.name)}
+                            disabled={isBeingAdopted}
+                          >
+                            {isBeingAdopted ? (
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                                <ActivityIndicator size="small" color="#8b5cf6" />
+                                <Text style={[s.tmuxActionText, { color: "#8b5cf6" }]}>Adopting...</Text>
+                              </View>
+                            ) : (
+                              <Text style={[s.tmuxActionText, { color: "#8b5cf6" }]}>Adopt Session</Text>
+                            )}
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    );
+                  })
                 )}
               </ScrollView>
             </View>
@@ -1448,6 +1657,15 @@ const s = StyleSheet.create({
   debugToggleText: { fontSize: 12, fontWeight: "600" },
   debugContent: { marginTop: 6, padding: 12, borderRadius: 8, borderWidth: 1 },
   debugLine: { fontSize: 11, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", lineHeight: 18 },
+
+  // Tmux sessions
+  tmuxCard: { borderRadius: 12, padding: 14, borderWidth: 1, marginBottom: 10 },
+  tmuxCardHeader: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between" },
+  tmuxName: { fontSize: 15, fontWeight: "600", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
+  tmuxPreview: { marginTop: 10, padding: 10, borderRadius: 8, borderWidth: 1 },
+  tmuxPreviewText: { fontSize: 11, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", lineHeight: 16 },
+  tmuxActionBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, alignItems: "center" },
+  tmuxActionText: { fontSize: 13, fontWeight: "600" },
 });
 
 // Markdown styles

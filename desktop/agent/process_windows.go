@@ -117,6 +117,73 @@ func findRunnerProcesses(binaryName string) []RunnerProcess {
 	return procs
 }
 
+// findAllRunnerSessions scans for all running processes of known agent binaries
+// and returns them with their PPID for ancestry checks.
+func findAllRunnerSessions(binaryNames []string) []sessionProcess {
+	var all []sessionProcess
+	for _, name := range binaryNames {
+		exeName := name + ".exe"
+		out, err := osexec.Command("wmic", "process", "where",
+			fmt.Sprintf("Name='%s'", exeName),
+			"get", "ProcessId,ParentProcessId,CommandLine", "/FORMAT:CSV").CombinedOutput()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "Node") {
+				continue
+			}
+			// CSV: Node,CommandLine,ParentProcessId,ProcessId
+			fields := strings.Split(line, ",")
+			if len(fields) < 4 {
+				continue
+			}
+			var pid, ppid int
+			fmt.Sscanf(strings.TrimSpace(fields[len(fields)-1]), "%d", &pid)
+			fmt.Sscanf(strings.TrimSpace(fields[len(fields)-2]), "%d", &ppid)
+			cmd := strings.TrimSpace(fields[1])
+			if cmd == "" {
+				cmd = exeName
+			}
+			all = append(all, sessionProcess{
+				PID:        pid,
+				PPID:       ppid,
+				Command:    cmd,
+				BinaryName: name,
+			})
+		}
+	}
+	return all
+}
+
+// isDescendantOf checks if a process (by PID) is a descendant of the given ancestor PID.
+func isDescendantOf(pid, ancestorPID int) bool {
+	current := pid
+	for i := 0; i < 20; i++ {
+		out, err := osexec.Command("wmic", "process", "where",
+			fmt.Sprintf("ProcessId=%d", current),
+			"get", "ParentProcessId", "/VALUE").CombinedOutput()
+		if err != nil {
+			return false
+		}
+		var ppid int
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "ParentProcessId=") {
+				fmt.Sscanf(strings.TrimPrefix(strings.TrimSpace(line), "ParentProcessId="), "%d", &ppid)
+			}
+		}
+		if ppid == ancestorPID {
+			return true
+		}
+		if ppid <= 1 || ppid == 0 {
+			return false
+		}
+		current = ppid
+	}
+	return false
+}
+
 // getMemoryUsedMB returns currently used system memory in MB on Windows.
 func getMemoryUsedMB() (int64, error) {
 	out, err := osexec.Command("wmic", "OS", "get", "FreePhysicalMemory,TotalVisibleMemorySize", "/Value").CombinedOutput()

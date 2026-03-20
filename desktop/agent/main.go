@@ -27,7 +27,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.37.0"
+const version = "1.38.0"
 
 // Default hosted Convex instance (public endpoint). Override with --convex-url flag or convex_site_url in config.json.
 const defaultConvexSiteURL = "https://shocking-echidna-394.eu-west-1.convex.site"
@@ -88,6 +88,8 @@ func main() {
 		runPurge()
 	case "uninstall":
 		runUninstall()
+	case "tmux":
+		runTmux(os.Args[2:])
 	case "doctor":
 		runDoctor()
 	case "help", "--help", "-h":
@@ -130,6 +132,9 @@ Usage:
   yaver tunnel test [url]  Test tunnel connectivity
   yaver tunnel setup  Show Cloudflare Tunnel setup guide
   yaver set-runner  Set default AI agent (also settable from mobile app, per task)
+  yaver tmux list   List all tmux sessions (with agent detection)
+  yaver tmux adopt <session>  Adopt an existing tmux session as a Yaver task
+  yaver tmux detach <task-id>  Stop monitoring an adopted session (session keeps running)
   yaver mcp         Start MCP server (local stdio or network HTTP)
   yaver email       Email connector setup and management (Office 365 / Gmail)
   yaver acl         Agent Communication Layer — connect to other MCP servers
@@ -1053,6 +1058,15 @@ func runServe(args []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Initialize tmux manager if tmux is available
+	taskMgr.TmuxMgr = NewTmuxManager(taskMgr)
+	if taskMgr.TmuxMgr != nil {
+		log.Println("Tmux: available — session adoption enabled")
+		taskMgr.TmuxMgr.ReAdoptOnStartup()
+	} else {
+		log.Println("Tmux: not available — session adoption disabled")
+	}
+
 	go heartbeatLoop(ctx, cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID, taskMgr)
 	go metricsLoop(ctx, cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID)
 
@@ -1136,6 +1150,9 @@ func runServe(args []string) {
 		}
 		log.Printf("Received signal %s, shutting down...", sig)
 		break
+	}
+	if taskMgr.TmuxMgr != nil {
+		taskMgr.TmuxMgr.Shutdown()
 	}
 	taskMgr.Shutdown()
 	if err := MarkOffline(cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID); err != nil {
@@ -2529,6 +2546,196 @@ func runStatus() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// tmux — manage tmux session adoption
+// ---------------------------------------------------------------------------
+
+func runTmux(args []string) {
+	if len(args) == 0 {
+		fmt.Print(`Usage:
+  yaver tmux list                 List all tmux sessions (with agent detection)
+  yaver tmux adopt <session>      Adopt a tmux session as a Yaver task
+  yaver tmux detach <task-id>     Stop monitoring an adopted session (keeps running)
+`)
+		return
+	}
+
+	sub := args[0]
+	switch sub {
+	case "list":
+		runTmuxList()
+	case "adopt":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: yaver tmux adopt <session-name>")
+			os.Exit(1)
+		}
+		runTmuxAdopt(args[1])
+	case "detach":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: yaver tmux detach <task-id>")
+			os.Exit(1)
+		}
+		runTmuxDetach(args[1])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown tmux subcommand: %s\n", sub)
+		os.Exit(1)
+	}
+}
+
+func runTmuxList() {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.AuthToken == "" {
+		// Fall back to local listing without adoption info
+		if !tmuxAvailable() {
+			fmt.Println("tmux is not installed.")
+			return
+		}
+		mgr := &TmuxManager{
+			adopted:  make(map[string]string),
+			pollStop: make(map[string]context.CancelFunc),
+		}
+		sessions, err := mgr.ListTmuxSessions()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		printTmuxSessions(sessions)
+		return
+	}
+
+	// Try to get from running agent (has adoption info)
+	client := &http.Client{Timeout: 3 * time.Second}
+	req, _ := newBearerRequest("GET", "http://127.0.0.1:18080/tmux/sessions", cfg.AuthToken, nil)
+	if req != nil {
+		resp, err := client.Do(req)
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode == 200 {
+				var body struct {
+					Sessions []TmuxSession `json:"sessions"`
+				}
+				if json.NewDecoder(resp.Body).Decode(&body) == nil {
+					printTmuxSessions(body.Sessions)
+					return
+				}
+			}
+		}
+	}
+
+	// Fallback to local
+	if !tmuxAvailable() {
+		fmt.Println("tmux is not installed.")
+		return
+	}
+	mgr := &TmuxManager{
+		adopted:  make(map[string]string),
+		pollStop: make(map[string]context.CancelFunc),
+	}
+	sessions, _ := mgr.ListTmuxSessions()
+	printTmuxSessions(sessions)
+}
+
+func printTmuxSessions(sessions []TmuxSession) {
+	if len(sessions) == 0 {
+		fmt.Println("No tmux sessions found.")
+		return
+	}
+	for _, s := range sessions {
+		agent := s.AgentType
+		if agent == "" {
+			agent = "shell"
+		}
+		relation := s.Relationship
+		if relation == "" {
+			relation = "unrelated"
+		}
+
+		fmt.Printf("  %-20s  %-12s  %-18s  %d window(s)", s.Name, agent, relation, s.Windows)
+		if s.TaskID != "" {
+			fmt.Printf("  task=%s", s.TaskID)
+		}
+		if s.Attached {
+			fmt.Printf("  (attached)")
+		}
+		fmt.Println()
+	}
+}
+
+func runTmuxAdopt(sessionName string) {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.AuthToken == "" {
+		fmt.Fprintln(os.Stderr, "Not signed in. Run 'yaver auth' first.")
+		os.Exit(1)
+	}
+
+	body := fmt.Sprintf(`{"session":%q}`, sessionName)
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, _ := newBearerRequest("POST", "http://127.0.0.1:18080/tmux/adopt", cfg.AuthToken, strings.NewReader(body))
+	if req == nil {
+		fmt.Fprintln(os.Stderr, "Failed to create request")
+		os.Exit(1)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Agent not reachable: %v\nMake sure 'yaver serve' is running.\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if resp.StatusCode != 200 {
+		errMsg := "unknown error"
+		if e, ok := result["error"].(string); ok {
+			errMsg = e
+		}
+		fmt.Fprintf(os.Stderr, "Error: %s\n", errMsg)
+		os.Exit(1)
+	}
+
+	taskID, _ := result["taskId"].(string)
+	fmt.Printf("Adopted tmux session %q as task %s\n", sessionName, taskID)
+}
+
+func runTmuxDetach(taskID string) {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.AuthToken == "" {
+		fmt.Fprintln(os.Stderr, "Not signed in. Run 'yaver auth' first.")
+		os.Exit(1)
+	}
+
+	body := fmt.Sprintf(`{"taskId":%q}`, taskID)
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, _ := newBearerRequest("POST", "http://127.0.0.1:18080/tmux/detach", cfg.AuthToken, strings.NewReader(body))
+	if req == nil {
+		fmt.Fprintln(os.Stderr, "Failed to create request")
+		os.Exit(1)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Agent not reachable: %v\nMake sure 'yaver serve' is running.\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if resp.StatusCode != 200 {
+		errMsg := "unknown error"
+		if e, ok := result["error"].(string); ok {
+			errMsg = e
+		}
+		fmt.Fprintf(os.Stderr, "Error: %s\n", errMsg)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Detached task %s — tmux session continues running.\n", taskID)
+}
+
+// ---------------------------------------------------------------------------
 // doctor — system health check (like flutter doctor)
 // ---------------------------------------------------------------------------
 
@@ -2613,11 +2820,31 @@ func runDoctor() {
 
 	// 3. Agent process
 	fmt.Println("\n── Agent ──")
+	agentPID, agentRunning := isAgentRunning()
 	check("Agent process")
-	if pid, running := isAgentRunning(); running {
-		pass(fmt.Sprintf("Running (PID %d)", pid))
+	if agentRunning {
+		pass(fmt.Sprintf("Running (PID %d)", agentPID))
 	} else {
 		warning("Not running — start with 'yaver serve'")
+	}
+
+	check("Tmux")
+	if tmuxAvailable() {
+		insideTmux := os.Getenv("TMUX") != ""
+		if insideTmux {
+			tmuxSession := os.Getenv("TMUX")
+			// Extract session info
+			parts := strings.Split(tmuxSession, ",")
+			if len(parts) >= 1 {
+				pass(fmt.Sprintf("available, running inside tmux (%s)", parts[0]))
+			} else {
+				pass("available, running inside tmux")
+			}
+		} else {
+			pass("available, not inside tmux")
+		}
+	} else {
+		warning("not installed — session adoption requires tmux")
 	}
 
 	check("HTTP server")
@@ -2630,13 +2857,13 @@ func runDoctor() {
 		pass("Listening on :18080")
 	}
 
-	// Query agent for forked processes
+	// Query agent for forked processes (used to classify sessions below)
+	yaverPIDs := map[int]string{} // PID -> description of forked processes
+	var runningTasks, totalTasks int
 	if cfg != nil && cfg.AuthToken != "" {
-		check("Forked sessions")
 		req, _ := newBearerRequest("GET", "http://127.0.0.1:18080/agent/status", cfg.AuthToken, nil)
 		if req != nil {
 			if sResp, sErr := statusClient.Do(req); sErr == nil {
-				defer sResp.Body.Close()
 				var statusBody struct {
 					Status struct {
 						RunnerProcesses []struct {
@@ -2648,20 +2875,121 @@ func runDoctor() {
 					} `json:"status"`
 				}
 				if json.NewDecoder(sResp.Body).Decode(&statusBody) == nil {
-					procs := statusBody.Status.RunnerProcesses
-					if len(procs) > 0 {
-						pass(fmt.Sprintf("%d process(es), %d running task(s), %d total", len(procs), statusBody.Status.RunningTasks, statusBody.Status.TotalTasks))
-						for _, p := range procs {
-							cmd := p.Command
-							if len(cmd) > 50 {
-								cmd = cmd[:50] + "..."
-							}
-							fmt.Printf("    PID %-8d %s\n", p.PID, cmd)
-						}
-					} else {
-						pass(fmt.Sprintf("idle (%d total tasks)", statusBody.Status.TotalTasks))
+					for _, p := range statusBody.Status.RunnerProcesses {
+						yaverPIDs[p.PID] = p.Command
 					}
+					runningTasks = statusBody.Status.RunningTasks
+					totalTasks = statusBody.Status.TotalTasks
 				}
+				sResp.Body.Close()
+			}
+		}
+	}
+
+	check("Tasks")
+	if len(yaverPIDs) > 0 {
+		pass(fmt.Sprintf("%d running, %d total", runningTasks, totalTasks))
+	} else {
+		pass(fmt.Sprintf("idle (%d total)", totalTasks))
+	}
+
+	// 3b. Sessions — scan all agent processes and tmux sessions
+	fmt.Println("\n── Sessions ──")
+	agentBinaries := []string{"claude", "codex", "aider", "ollama", "goose", "amp", "opencode"}
+	allSessions := findAllRunnerSessions(agentBinaries)
+
+	// Also list tmux sessions if tmux is available
+	var tmuxSessions []TmuxSession
+	if tmuxAvailable() {
+		// Try to get sessions from running agent (includes adoption info)
+		if cfg != nil && cfg.AuthToken != "" {
+			req, _ := newBearerRequest("GET", "http://127.0.0.1:18080/tmux/sessions", cfg.AuthToken, nil)
+			if req != nil {
+				if tResp, tErr := statusClient.Do(req); tErr == nil {
+					var tmuxBody struct {
+						Sessions []TmuxSession `json:"sessions"`
+					}
+					if json.NewDecoder(tResp.Body).Decode(&tmuxBody) == nil {
+						tmuxSessions = tmuxBody.Sessions
+					}
+					tResp.Body.Close()
+				}
+			}
+		}
+		// Fallback: list locally (won't have adoption info)
+		if tmuxSessions == nil {
+			tmpTmuxMgr := &TmuxManager{
+				adopted:  make(map[string]string),
+				pollStop: make(map[string]context.CancelFunc),
+			}
+			tmuxSessions, _ = tmpTmuxMgr.ListTmuxSessions()
+		}
+	}
+
+	hasAnySessions := len(allSessions) > 0 || len(tmuxSessions) > 0
+	if !hasAnySessions {
+		check("Agent sessions")
+		pass("No agent sessions running")
+	}
+
+	// Show direct processes grouped by binary
+	if len(allSessions) > 0 {
+		grouped := map[string][]sessionProcess{}
+		for _, s := range allSessions {
+			grouped[s.BinaryName] = append(grouped[s.BinaryName], s)
+		}
+		for _, binaryName := range agentBinaries {
+			sessions, exists := grouped[binaryName]
+			if !exists {
+				continue
+			}
+			for _, s := range sessions {
+				relation := "independent"
+				if _, forked := yaverPIDs[s.PID]; forked {
+					relation = "forked"
+				} else if agentRunning && isDescendantOf(s.PID, agentPID) {
+					relation = "forked"
+				}
+				cmd := s.Command
+				if len(cmd) > 50 {
+					cmd = cmd[:50] + "..."
+				}
+				label := fmt.Sprintf("%s (PID %d)", binaryName, s.PID)
+				check(label)
+				switch relation {
+				case "forked":
+					if desc, ok := yaverPIDs[s.PID]; ok {
+						pass(fmt.Sprintf("yaver — %s", desc))
+					} else {
+						pass("yaver (child process)")
+					}
+				default:
+					warning(fmt.Sprintf("independent — %s", cmd))
+				}
+			}
+		}
+	}
+
+	// Show tmux sessions
+	if len(tmuxSessions) > 0 {
+		for _, ts := range tmuxSessions {
+			agent := ts.AgentType
+			if agent == "" {
+				agent = "shell"
+			}
+			label := fmt.Sprintf("tmux:%s", ts.Name)
+			check(label)
+			detail := fmt.Sprintf("%s, %d window(s)", agent, ts.Windows)
+			if ts.Attached {
+				detail += ", attached"
+			}
+			switch ts.Relationship {
+			case "forked-by-yaver":
+				pass(fmt.Sprintf("yaver — %s", detail))
+			case "adopted":
+				pass(fmt.Sprintf("adopted (task %s) — %s", ts.TaskID, detail))
+			default:
+				warning(fmt.Sprintf("independent — %s", detail))
 			}
 		}
 	}

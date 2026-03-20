@@ -273,8 +273,8 @@ export default function HomePage() {
           </h2>
           <p className="mx-auto mb-16 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
             Yaver turns your phone into a remote for AI coding agents on
-            your dev machine. Send tasks, read output, manage sessions &mdash; from
-            the couch, the bus, or anywhere with a signal.
+            your dev machine. Send tasks, read output, adopt existing tmux sessions,
+            manage everything &mdash; from the couch, the bus, or anywhere with a signal.
           </p>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -395,7 +395,7 @@ export default function HomePage() {
               <h3 className="mb-2 text-sm font-semibold text-surface-50">CLI Agent</h3>
               <p className="text-xs text-surface-500">Go</p>
               <p className="mt-2 text-sm leading-relaxed text-surface-400">
-                Runs on your dev machine. Manages AI sessions in tmux. All connections are outbound &mdash; no port forwarding, no firewall holes.
+                Runs on your dev machine. Manages AI sessions in tmux. Discovers and adopts existing tmux sessions so you can control them from mobile. 48 MCP tools. All connections outbound.
               </p>
             </div>
 
@@ -406,7 +406,7 @@ export default function HomePage() {
               <h3 className="mb-2 text-sm font-semibold text-surface-50">Mobile App</h3>
               <p className="text-xs text-surface-500">React Native &mdash; iOS &amp; Android</p>
               <p className="mt-2 text-sm leading-relaxed text-surface-400">
-                Send tasks, read output, manage sessions. Works on WiFi and cellular. Discovers machines on your local network automatically.
+                Send tasks, read output, browse and adopt tmux sessions, send input to running agents. Works on WiFi and cellular. Auto-discovers machines on your LAN.
               </p>
             </div>
 
@@ -607,7 +607,7 @@ export default function HomePage() {
               {
                 name: "Claude Code",
                 by: "Anthropic",
-                desc: "Terminal-based AI coding agent. Yaver launches it in a tmux session and streams output to your phone.",
+                desc: "Terminal-based AI coding agent. Yaver launches it in tmux or adopts an existing Claude Code session \u2014 start on your laptop, continue from your phone.",
                 url: "https://docs.anthropic.com/en/docs/claude-code",
                 oss: false,
                 local: false,
@@ -671,7 +671,7 @@ export default function HomePage() {
               {
                 name: "Any CLI agent",
                 by: "custom command",
-                desc: "Yaver can launch any command in a tmux session. If it runs in a terminal, Yaver can remote-control it.",
+                desc: "Launch any command in tmux, or adopt an existing tmux session. If it runs in a terminal, Yaver can discover, adopt, and remote-control it from mobile.",
                 url: null,
                 oss: null,
                 local: null,
@@ -744,7 +744,7 @@ export default function HomePage() {
                 },
                 {
                   name: "tmux",
-                  desc: "Terminal multiplexer. Yaver runs each agent session in a tmux window \u2014 sessions persist even if your SSH drops.",
+                  desc: "Terminal multiplexer. Yaver runs each agent in tmux and can adopt existing sessions. Start Claude Code in tmux on your laptop, walk away, and pick it up from your phone.",
                   url: "https://github.com/tmux/tmux",
                   oss: "MIT",
                 },
@@ -816,7 +816,13 @@ export default function HomePage() {
             <div className="card">
               <h3 className="mb-2 text-sm font-semibold text-surface-100">MCP Integration</h3>
               <p className="text-sm leading-relaxed text-surface-400">
-                Connect Yaver as an MCP server from Claude Desktop, Claude Web UI, or any MCP-compatible client. 30+ built-in tools for tasks, files, email, and agent-to-agent communication.
+                48 MCP tools &mdash; tasks, files, tmux sessions, relay/tunnel management, email, diagnostics, and agent-to-agent communication. Connect from Claude Desktop, any MCP client, or other AI agents.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Tmux Session Adoption</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Start Claude Code, Aider, or any agent in tmux on your laptop. Yaver discovers it, detects the running agent, and lets you adopt the session &mdash; control it from your phone seamlessly. Walk away from your desk without losing context.
               </p>
             </div>
             <div className="card">

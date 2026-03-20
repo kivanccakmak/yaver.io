@@ -220,6 +220,14 @@ type RunnerProcess struct {
 	Command string `json:"command"`
 }
 
+// sessionProcess describes a running agent process with parent info for doctor.
+type sessionProcess struct {
+	PID        int
+	PPID       int
+	Command    string
+	BinaryName string
+}
+
 // AgentStatus is returned by the /agent/status endpoint.
 type AgentStatus struct {
 	Runner          RunnerStatusInfo  `json:"runner"`
@@ -368,6 +376,9 @@ type Task struct {
 	StartedAt   *time.Time `json:"started_at,omitempty"`
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 
+	TmuxSession  string `json:"tmuxSession,omitempty"` // tmux session name (for adopted sessions)
+	IsAdopted    bool   `json:"isAdopted,omitempty"`   // true if adopted from an existing tmux session
+
 	runner       RunnerConfig // the runner config used for this task (not persisted)
 	cmd          *exec.Cmd
 	cancel       context.CancelFunc
@@ -389,6 +400,9 @@ type TaskInfo struct {
 	ResultText  string             `json:"resultText,omitempty"`
 	CostUSD     float64            `json:"costUsd,omitempty"`
 	Turns       []ConversationTurn `json:"turns,omitempty"`
+	Source      string             `json:"source,omitempty"`
+	TmuxSession string            `json:"tmuxSession,omitempty"`
+	IsAdopted   bool               `json:"isAdopted,omitempty"`
 	CreatedAt   time.Time          `json:"createdAt"`
 	StartedAt   *time.Time         `json:"startedAt,omitempty"`
 	FinishedAt  *time.Time         `json:"finishedAt,omitempty"`
@@ -401,6 +415,7 @@ type TaskManager struct {
 	workDir      string
 	store        *TaskStore
 	runner       RunnerConfig
+	TmuxMgr      *TmuxManager // manages tmux session adoption (nil if tmux unavailable)
 	Sandbox      SandboxConfig // Command sandbox configuration
 	WaitForSlot  bool // If true, wait for other Claude Code sessions to finish before starting
 	DummyMode    bool // If true, use fake responses instead of launching a real runner
@@ -1801,6 +1816,9 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			ResultText:  t.ResultText,
 			CostUSD:     t.CostUSD,
 			Turns:       t.Turns,
+			Source:      t.Source,
+			TmuxSession: t.TmuxSession,
+			IsAdopted:   t.IsAdopted,
 			CreatedAt:   t.CreatedAt,
 			StartedAt:   t.StartedAt,
 			FinishedAt:  t.FinishedAt,

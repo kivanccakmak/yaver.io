@@ -84,6 +84,73 @@ func findRunnerProcesses(binaryName string) []RunnerProcess {
 	return procs
 }
 
+// findAllRunnerSessions scans for all running processes of known agent binaries
+// and returns them with their PPID for ancestry checks.
+func findAllRunnerSessions(binaryNames []string) []sessionProcess {
+	var all []sessionProcess
+	for _, name := range binaryNames {
+		out, err := osexec.Command("pgrep", "-x", name).CombinedOutput()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if line == "" {
+				continue
+			}
+			var pid int
+			if _, err := fmt.Sscanf(line, "%d", &pid); err != nil {
+				continue
+			}
+			// Get command line and PPID in one ps call
+			psOut, psErr := osexec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "ppid=,command=").CombinedOutput()
+			cmd := name
+			ppid := 0
+			if psErr == nil {
+				psLine := strings.TrimSpace(string(psOut))
+				// Format: "  1234 /usr/local/bin/claude ..."
+				if _, err := fmt.Sscanf(psLine, "%d", &ppid); err == nil {
+					// Everything after the first space-separated number is the command
+					idx := strings.IndexFunc(psLine, func(r rune) bool { return r != ' ' && (r < '0' || r > '9') })
+					if idx > 0 {
+						cmd = strings.TrimSpace(psLine[idx:])
+					}
+				}
+			}
+			all = append(all, sessionProcess{
+				PID:        pid,
+				PPID:       ppid,
+				Command:    cmd,
+				BinaryName: name,
+			})
+		}
+	}
+	return all
+}
+
+// isDescendantOf checks if a process (by PID) is a descendant of the given ancestor PID.
+// Walks the PPID chain up to 20 levels to avoid infinite loops.
+func isDescendantOf(pid, ancestorPID int) bool {
+	current := pid
+	for i := 0; i < 20; i++ {
+		out, err := osexec.Command("ps", "-p", fmt.Sprintf("%d", current), "-o", "ppid=").CombinedOutput()
+		if err != nil {
+			return false
+		}
+		var ppid int
+		if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &ppid); err != nil {
+			return false
+		}
+		if ppid == ancestorPID {
+			return true
+		}
+		if ppid <= 1 {
+			return false
+		}
+		current = ppid
+	}
+	return false
+}
+
 // getMemoryUsedMB returns currently used system memory in MB.
 func getMemoryUsedMB() (int64, error) {
 	// macOS: vm_stat

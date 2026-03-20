@@ -347,6 +347,244 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 	}
 
+	// --- Tmux Session Management ---
+	tmuxTools := []map[string]interface{}{
+		{
+			"name":        "tmux_list_sessions",
+			"description": "List all tmux sessions on this machine with agent detection (claude, codex, aider, etc.) and their relationship to Yaver (adopted, forked-by-yaver, unrelated).",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "tmux_adopt_session",
+			"description": "Adopt an existing tmux session as a Yaver task. The session continues running and its output is streamed as task output. Useful for bringing pre-existing agent sessions under Yaver management.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_name"},
+				"properties": map[string]interface{}{
+					"session_name": map[string]interface{}{
+						"type":        "string",
+						"description": "Name of the tmux session to adopt",
+					},
+				},
+			},
+		},
+		{
+			"name":        "tmux_detach_session",
+			"description": "Detach (stop monitoring) an adopted tmux session. The tmux session keeps running but Yaver stops tracking it. The task is marked as stopped.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"task_id"},
+				"properties": map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The Yaver task ID of the adopted session",
+					},
+				},
+			},
+		},
+		{
+			"name":        "tmux_send_input",
+			"description": "Send keyboard input to an adopted tmux session. The input is sent via tmux send-keys followed by Enter.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"task_id", "input"},
+				"properties": map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The Yaver task ID of the adopted session",
+					},
+					"input": map[string]interface{}{
+						"type":        "string",
+						"description": "The text to send to the tmux session",
+					},
+				},
+			},
+		},
+	}
+	tools = append(tools, tmuxTools...)
+
+	// --- Diagnostics & Status ---
+	diagnosticTools := []map[string]interface{}{
+		{
+			"name":        "yaver_doctor",
+			"description": "Run a comprehensive system health check — auth, agent, runners, relay servers, tunnels, network, tmux sessions. Like 'yaver doctor' on the CLI.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "yaver_status",
+			"description": "Show auth status, agent info, current runner, relay servers, and connection details. Like 'yaver status' on the CLI.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "yaver_devices",
+			"description": "List all registered devices across your account (dev machines, laptops, servers) with online/offline status.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "yaver_logs",
+			"description": "View the last N lines of the agent log file.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"lines": map[string]interface{}{
+						"type":        "integer",
+						"description": "Number of log lines to return (default 50, max 500)",
+					},
+				},
+			},
+		},
+		{
+			"name":        "yaver_clear_logs",
+			"description": "Clear the agent log file.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "yaver_help",
+			"description": "Get help about Yaver features and capabilities. Use this when a user asks what Yaver can do, how to set up, or how features work (tmux adoption, relay servers, tunnels, MCP tools, mobile app, etc.).",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"topic": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional topic: overview, tmux, relay, tunnel, mobile, mcp, runners, tasks, auth",
+					},
+				},
+			},
+		},
+		{
+			"name":        "yaver_ping",
+			"description": "Ping the agent to verify it's alive and measure round-trip time.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "agent_shutdown",
+			"description": "Gracefully shut down the Yaver agent. All running tasks will be stopped.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"confirm": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Must be true to confirm shutdown",
+					},
+				},
+				"required": []string{"confirm"},
+			},
+		},
+	}
+	tools = append(tools, diagnosticTools...)
+
+	// --- Config Management ---
+	configTools := []map[string]interface{}{
+		{
+			"name":        "config_set",
+			"description": "Set a Yaver configuration value. Keys: auto-start (true/false), auto-update (true/false).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"key", "value"},
+				"properties": map[string]interface{}{
+					"key":   map[string]interface{}{"type": "string", "description": "Config key (auto-start, auto-update)"},
+					"value": map[string]interface{}{"type": "string", "description": "Config value"},
+				},
+			},
+		},
+		{
+			"name":        "relay_test",
+			"description": "Test connectivity and latency to configured relay servers (or a specific URL).",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"url": map[string]interface{}{"type": "string", "description": "Optional: specific relay URL to test. If omitted, tests all configured relays."},
+				},
+			},
+		},
+		{
+			"name":        "relay_set_password",
+			"description": "Set the default relay server password used for all relay connections.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"password"},
+				"properties": map[string]interface{}{
+					"password": map[string]interface{}{"type": "string", "description": "The relay password"},
+				},
+			},
+		},
+		{
+			"name":        "relay_clear_password",
+			"description": "Remove the default relay server password.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+	}
+	tools = append(tools, configTools...)
+
+	// --- Tunnel Management ---
+	tunnelTools := []map[string]interface{}{
+		{
+			"name":        "tunnel_list",
+			"description": "List configured Cloudflare Tunnels.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "tunnel_add",
+			"description": "Add a Cloudflare Tunnel endpoint for NAT traversal.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"url"},
+				"properties": map[string]interface{}{
+					"url":              map[string]interface{}{"type": "string", "description": "Tunnel URL (e.g. https://my-tunnel.example.com)"},
+					"cf_client_id":     map[string]interface{}{"type": "string", "description": "CF Access Service Token Client ID (optional)"},
+					"cf_client_secret": map[string]interface{}{"type": "string", "description": "CF Access Service Token Client Secret (optional)"},
+					"label":            map[string]interface{}{"type": "string", "description": "Human-readable label (optional)"},
+				},
+			},
+		},
+		{
+			"name":        "tunnel_remove",
+			"description": "Remove a Cloudflare Tunnel by ID or URL.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"tunnel_id"},
+				"properties": map[string]interface{}{
+					"tunnel_id": map[string]interface{}{"type": "string", "description": "Tunnel ID or URL to remove"},
+				},
+			},
+		},
+		{
+			"name":        "tunnel_test",
+			"description": "Test connectivity to configured Cloudflare Tunnels (or a specific URL).",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"url": map[string]interface{}{"type": "string", "description": "Optional: specific tunnel URL to test. If omitted, tests all configured tunnels."},
+				},
+			},
+		},
+	}
+	tools = append(tools, tunnelTools...)
+
 	return map[string]interface{}{
 		"tools": tools,
 	}

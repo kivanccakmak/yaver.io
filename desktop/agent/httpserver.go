@@ -60,6 +60,10 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/agent/runner/restart", s.auth(s.handleRunnerRestart))
 	mux.HandleFunc("/agent/runner/switch", s.auth(s.handleRunnerSwitch))
 	mux.HandleFunc("/agent/shutdown", s.auth(s.handleShutdown))
+	mux.HandleFunc("/tmux/sessions", s.auth(s.handleTmuxSessions))
+	mux.HandleFunc("/tmux/adopt", s.auth(s.handleTmuxAdopt))
+	mux.HandleFunc("/tmux/detach", s.auth(s.handleTmuxDetach))
+	mux.HandleFunc("/tmux/input", s.auth(s.handleTmuxInput))
 
 	// MCP (Model Context Protocol) endpoint — JSON-RPC 2.0 over HTTP
 	mux.HandleFunc("/mcp", s.handleMCP)
@@ -558,6 +562,9 @@ func (s *HTTPServer) getTask(w http.ResponseWriter, r *http.Request, id string) 
 		ResultText:  task.ResultText,
 		CostUSD:     task.CostUSD,
 		Turns:       task.Turns,
+		Source:      task.Source,
+		TmuxSession: task.TmuxSession,
+		IsAdopted:   task.IsAdopted,
 		CreatedAt:   task.CreatedAt,
 		StartedAt:   task.StartedAt,
 		FinishedAt:  task.FinishedAt,
@@ -1486,8 +1493,870 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		}
 		return mcpToolResult(sb.String())
 
+	// --- Tmux Session Management ---
+	case "tmux_list_sessions":
+		tmuxMgr := s.taskMgr.TmuxMgr
+		if tmuxMgr == nil {
+			return mcpToolResult("Tmux is not available on this machine. Install tmux to use session adoption.")
+		}
+		sessions, err := tmuxMgr.ListTmuxSessions()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("list sessions: %v", err))
+		}
+		if len(sessions) == 0 {
+			return mcpToolResult("No tmux sessions found.")
+		}
+		var sb strings.Builder
+		sb.WriteString("Tmux sessions:\n")
+		for _, s := range sessions {
+			agent := s.AgentType
+			if agent == "" {
+				agent = "shell"
+			}
+			sb.WriteString(fmt.Sprintf("- %s [%s] %s, %d window(s)", s.Name, s.Relationship, agent, s.Windows))
+			if s.TaskID != "" {
+				sb.WriteString(fmt.Sprintf(", task=%s", s.TaskID))
+			}
+			if s.Attached {
+				sb.WriteString(" (attached)")
+			}
+			sb.WriteString("\n")
+		}
+		return mcpToolResult(sb.String())
+
+	case "tmux_adopt_session":
+		var args struct {
+			SessionName string `json:"session_name"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.SessionName == "" {
+			return mcpToolError("session_name is required")
+		}
+		tmuxMgr := s.taskMgr.TmuxMgr
+		if tmuxMgr == nil {
+			return mcpToolError("tmux is not available on this machine")
+		}
+		task, err := tmuxMgr.AdoptSession(args.SessionName)
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("adopt failed: %v", err))
+		}
+		log.Printf("[MCP] Adopted tmux session %q as task %s", args.SessionName, task.ID)
+		return mcpToolResult(fmt.Sprintf("Adopted tmux session %q as task %s.\nStatus: %s\nRunner: %s", args.SessionName, task.ID, task.Status, task.RunnerID))
+
+	case "tmux_detach_session":
+		var args struct {
+			TaskID string `json:"task_id"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.TaskID == "" {
+			return mcpToolError("task_id is required")
+		}
+		tmuxMgr := s.taskMgr.TmuxMgr
+		if tmuxMgr == nil {
+			return mcpToolError("tmux is not available on this machine")
+		}
+		if err := tmuxMgr.DetachSession(args.TaskID); err != nil {
+			return mcpToolError(fmt.Sprintf("detach failed: %v", err))
+		}
+		log.Printf("[MCP] Detached tmux session (task %s)", args.TaskID)
+		return mcpToolResult(fmt.Sprintf("Detached task %s. The tmux session continues running.", args.TaskID))
+
+	case "tmux_send_input":
+		var args struct {
+			TaskID string `json:"task_id"`
+			Input  string `json:"input"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.TaskID == "" {
+			return mcpToolError("task_id is required")
+		}
+		tmuxMgr := s.taskMgr.TmuxMgr
+		if tmuxMgr == nil {
+			return mcpToolError("tmux is not available on this machine")
+		}
+		if err := tmuxMgr.SendTmuxInput(args.TaskID, args.Input); err != nil {
+			return mcpToolError(fmt.Sprintf("send input failed: %v", err))
+		}
+		return mcpToolResult("Input sent to tmux session.")
+
+	// --- Diagnostics & Status ---
+	case "yaver_doctor":
+		return s.mcpDoctor()
+
+	case "yaver_status":
+		return s.mcpStatus()
+
+	case "yaver_devices":
+		cfg, err := LoadConfig()
+		if err != nil || cfg.AuthToken == "" || cfg.ConvexSiteURL == "" {
+			return mcpToolError("Not signed in. Run 'yaver auth' first.")
+		}
+		devices, err := listDevices(cfg.ConvexSiteURL, cfg.AuthToken)
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("list devices: %v", err))
+		}
+		if len(devices) == 0 {
+			return mcpToolResult("No devices registered. Run 'yaver serve' on your dev machine to register it.")
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("%-10s  %-20s  %-8s  %-8s  %s\n", "ID", "NAME", "PLATFORM", "STATUS", "ADDRESS"))
+		for _, d := range devices {
+			status := "offline"
+			if d.IsOnline {
+				status = "online"
+			}
+			id := d.DeviceID
+			if len(id) > 8 {
+				id = id[:8] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("%-10s  %-20s  %-8s  %-8s  %s:%d\n",
+				id, d.Name, d.Platform, status, d.QuicHost, d.QuicPort))
+		}
+		return mcpToolResult(sb.String())
+
+	case "yaver_logs":
+		var args struct {
+			Lines int `json:"lines"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Lines <= 0 {
+			args.Lines = 50
+		}
+		if args.Lines > 500 {
+			args.Lines = 500
+		}
+		lp := logFilePath()
+		if lp == "" {
+			return mcpToolError("Could not determine log file path")
+		}
+		out, err := osexec.Command("tail", "-n", fmt.Sprintf("%d", args.Lines), lp).CombinedOutput()
+		if err != nil {
+			if strings.Contains(string(out), "No such file") {
+				return mcpToolResult("No logs found. Start the agent with 'yaver serve'.")
+			}
+			return mcpToolError(fmt.Sprintf("read logs: %v: %s", err, string(out)))
+		}
+		return mcpToolResult(string(out))
+
+	case "yaver_clear_logs":
+		lp := logFilePath()
+		if lp == "" {
+			return mcpToolError("Could not determine log file path")
+		}
+		if err := os.Truncate(lp, 0); err != nil {
+			if os.IsNotExist(err) {
+				return mcpToolResult("No log file to clear.")
+			}
+			return mcpToolError(fmt.Sprintf("clear logs: %v", err))
+		}
+		log.Printf("[MCP] Logs cleared")
+		return mcpToolResult("Agent logs cleared.")
+
+	case "yaver_help":
+		var args struct {
+			Topic string `json:"topic"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolResult(yaverHelpText(args.Topic))
+
+	case "yaver_ping":
+		hostname, _ := os.Hostname()
+		return mcpToolResult(fmt.Sprintf("Pong! Agent is alive.\nHostname: %s\nVersion: %s\nWork Dir: %s", hostname, version, s.taskMgr.workDir))
+
+	case "agent_shutdown":
+		var args struct {
+			Confirm bool `json:"confirm"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if !args.Confirm {
+			return mcpToolError("You must pass confirm: true to shut down the agent.")
+		}
+		log.Printf("[MCP] Shutdown requested")
+		// Trigger shutdown after returning the response
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			if s.onShutdown != nil {
+				s.onShutdown()
+			}
+		}()
+		return mcpToolResult("Agent shutdown initiated. All running tasks will be stopped.")
+
+	// --- Config Management ---
+	case "config_set":
+		var args struct {
+			Key   string `json:"key"`
+			Value string `json:"value"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Key == "" || args.Value == "" {
+			return mcpToolError("key and value are required")
+		}
+		cfg, err := LoadConfig()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("load config: %v", err))
+		}
+		switch args.Key {
+		case "auto-start":
+			cfg.AutoStart = args.Value == "true" || args.Value == "1" || args.Value == "yes"
+			if err := SaveConfig(cfg); err != nil {
+				return mcpToolError(fmt.Sprintf("save config: %v", err))
+			}
+			return mcpToolResult(fmt.Sprintf("auto-start set to %v", cfg.AutoStart))
+		case "auto-update":
+			cfg.AutoUpdate = args.Value == "true" || args.Value == "1" || args.Value == "yes"
+			if err := SaveConfig(cfg); err != nil {
+				return mcpToolError(fmt.Sprintf("save config: %v", err))
+			}
+			return mcpToolResult(fmt.Sprintf("auto-update set to %v", cfg.AutoUpdate))
+		default:
+			return mcpToolError(fmt.Sprintf("Unknown config key: %s. Supported: auto-start, auto-update", args.Key))
+		}
+
+	case "relay_test":
+		var args struct {
+			URL string `json:"url"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		var urls []string
+		if args.URL != "" {
+			urls = []string{strings.TrimRight(args.URL, "/")}
+		} else {
+			cfg, err := LoadConfig()
+			if err != nil {
+				return mcpToolError(fmt.Sprintf("load config: %v", err))
+			}
+			for _, rs := range cfg.RelayServers {
+				urls = append(urls, rs.HttpURL)
+			}
+			if len(urls) == 0 {
+				return mcpToolResult("No relay servers configured. Use add_relay_server or pass a URL.")
+			}
+		}
+		client := &http.Client{Timeout: 10 * time.Second}
+		var sb strings.Builder
+		for _, u := range urls {
+			start := time.Now()
+			resp, err := client.Get(u + "/health")
+			rtt := time.Since(start)
+			if err != nil {
+				sb.WriteString(fmt.Sprintf("FAIL  %s  error: %v\n", u, err))
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				sb.WriteString(fmt.Sprintf("OK    %s  %dms\n", u, rtt.Milliseconds()))
+			} else {
+				sb.WriteString(fmt.Sprintf("FAIL  %s  status: %d\n", u, resp.StatusCode))
+			}
+		}
+		return mcpToolResult(sb.String())
+
+	case "relay_set_password":
+		var args struct {
+			Password string `json:"password"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Password == "" {
+			return mcpToolError("password is required")
+		}
+		cfg, err := LoadConfig()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("load config: %v", err))
+		}
+		cfg.RelayPassword = args.Password
+		if err := SaveConfig(cfg); err != nil {
+			return mcpToolError(fmt.Sprintf("save config: %v", err))
+		}
+		signalRunningAgent()
+		log.Printf("[MCP] Relay password set")
+		return mcpToolResult("Relay password saved. Agent notified.")
+
+	case "relay_clear_password":
+		cfg, err := LoadConfig()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("load config: %v", err))
+		}
+		if cfg.RelayPassword == "" {
+			return mcpToolResult("No relay password was set.")
+		}
+		cfg.RelayPassword = ""
+		if err := SaveConfig(cfg); err != nil {
+			return mcpToolError(fmt.Sprintf("save config: %v", err))
+		}
+		signalRunningAgent()
+		log.Printf("[MCP] Relay password cleared")
+		return mcpToolResult("Relay password cleared. Agent notified.")
+
+	// --- Tunnel Management ---
+	case "tunnel_list":
+		cfg, err := LoadConfig()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("load config: %v", err))
+		}
+		if len(cfg.CloudflareTunnels) == 0 {
+			return mcpToolResult("No Cloudflare Tunnels configured.\nAdd one with: yaver tunnel add <url>")
+		}
+		var sb strings.Builder
+		sb.WriteString("Cloudflare Tunnels:\n")
+		for _, t := range cfg.CloudflareTunnels {
+			cfAccess := "no"
+			if t.CFAccessClientId != "" {
+				cfAccess = "yes"
+			}
+			label := t.Label
+			if label == "" {
+				label = "-"
+			}
+			sb.WriteString(fmt.Sprintf("- %s  %s  (CF Access: %s, label: %s)\n", t.ID, t.URL, cfAccess, label))
+		}
+		return mcpToolResult(sb.String())
+
+	case "tunnel_add":
+		var args struct {
+			URL            string `json:"url"`
+			CFClientId     string `json:"cf_client_id"`
+			CFClientSecret string `json:"cf_client_secret"`
+			Label          string `json:"label"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.URL == "" {
+			return mcpToolError("url is required")
+		}
+		rawURL := strings.TrimRight(args.URL, "/")
+		id := fmt.Sprintf("%x", func() uint32 {
+			var h uint32
+			for _, c := range rawURL {
+				h = h*31 + uint32(c)
+			}
+			return h
+		}())
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		cfg, err := LoadConfig()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("load config: %v", err))
+		}
+		for _, t := range cfg.CloudflareTunnels {
+			if t.URL == rawURL {
+				return mcpToolError(fmt.Sprintf("Tunnel already configured: %s (id: %s)", rawURL, t.ID))
+			}
+		}
+		tunnel := CloudflareTunnelConfig{
+			ID:                   id,
+			URL:                  rawURL,
+			CFAccessClientId:     args.CFClientId,
+			CFAccessClientSecret: args.CFClientSecret,
+			Label:                args.Label,
+			Priority:             len(cfg.CloudflareTunnels) + 1,
+		}
+		cfg.CloudflareTunnels = append(cfg.CloudflareTunnels, tunnel)
+		if err := SaveConfig(cfg); err != nil {
+			return mcpToolError(fmt.Sprintf("save config: %v", err))
+		}
+		log.Printf("[MCP] Added Cloudflare Tunnel: %s", rawURL)
+		return mcpToolResult(fmt.Sprintf("Added Cloudflare Tunnel:\n  ID: %s\n  URL: %s\n  CF Access: %v", id, rawURL, args.CFClientId != ""))
+
+	case "tunnel_remove":
+		var args struct {
+			TunnelID string `json:"tunnel_id"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.TunnelID == "" {
+			return mcpToolError("tunnel_id is required")
+		}
+		cfg, err := LoadConfig()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("load config: %v", err))
+		}
+		found := false
+		var remaining []CloudflareTunnelConfig
+		for _, t := range cfg.CloudflareTunnels {
+			if t.ID == args.TunnelID || t.URL == args.TunnelID {
+				found = true
+				log.Printf("[MCP] Removed Cloudflare Tunnel: %s (%s)", t.URL, t.ID)
+			} else {
+				remaining = append(remaining, t)
+			}
+		}
+		if !found {
+			return mcpToolError(fmt.Sprintf("Tunnel not found: %s", args.TunnelID))
+		}
+		cfg.CloudflareTunnels = remaining
+		if err := SaveConfig(cfg); err != nil {
+			return mcpToolError(fmt.Sprintf("save config: %v", err))
+		}
+		return mcpToolResult(fmt.Sprintf("Removed tunnel: %s", args.TunnelID))
+
+	case "tunnel_test":
+		var args struct {
+			URL string `json:"url"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		var tunnels []CloudflareTunnelConfig
+		if args.URL != "" {
+			tunnels = []CloudflareTunnelConfig{{URL: strings.TrimRight(args.URL, "/")}}
+		} else {
+			cfg, err := LoadConfig()
+			if err != nil {
+				return mcpToolError(fmt.Sprintf("load config: %v", err))
+			}
+			tunnels = cfg.CloudflareTunnels
+			if len(tunnels) == 0 {
+				return mcpToolResult("No tunnels configured. Pass a URL or add with tunnel_add.")
+			}
+		}
+		client := &http.Client{Timeout: 10 * time.Second}
+		var sb strings.Builder
+		for _, t := range tunnels {
+			req, _ := http.NewRequest("GET", t.URL+"/health", nil)
+			if t.CFAccessClientId != "" {
+				req.Header.Set("CF-Access-Client-Id", t.CFAccessClientId)
+				req.Header.Set("CF-Access-Client-Secret", t.CFAccessClientSecret)
+			}
+			start := time.Now()
+			resp, err := client.Do(req)
+			rtt := time.Since(start)
+			if err != nil {
+				sb.WriteString(fmt.Sprintf("FAIL  %s  error: %v\n", t.URL, err))
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				sb.WriteString(fmt.Sprintf("OK    %s  %dms\n", t.URL, rtt.Milliseconds()))
+			} else {
+				sb.WriteString(fmt.Sprintf("FAIL  %s  status: %d\n", t.URL, resp.StatusCode))
+			}
+		}
+		return mcpToolResult(sb.String())
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
+	}
+}
+
+// mcpDoctor runs a doctor-like health check and returns results as text.
+func (s *HTTPServer) mcpDoctor() interface{} {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Yaver Doctor (v%s)\n\n", version))
+
+	ok, warn, fail := 0, 0, 0
+	check := func(name, status, detail string) {
+		icon := "✓"
+		switch status {
+		case "warn":
+			icon = "!"
+			warn++
+		case "fail":
+			icon = "✗"
+			fail++
+		default:
+			ok++
+		}
+		sb.WriteString(fmt.Sprintf("  %-30s %s %s\n", name, icon, detail))
+	}
+
+	// Config
+	sb.WriteString("── Configuration ──\n")
+	cfg, err := LoadConfig()
+	if err != nil {
+		check("Config file", "fail", fmt.Sprintf("Error: %v", err))
+	} else {
+		p, _ := ConfigPath()
+		check("Config file", "ok", p)
+	}
+
+	// Auth
+	sb.WriteString("\n── Authentication ──\n")
+	if cfg == nil || cfg.AuthToken == "" {
+		check("Auth token", "fail", "Not signed in — run 'yaver auth'")
+	} else {
+		check("Auth token", "ok", "Present")
+		if cfg.DeviceID != "" {
+			check("Device ID", "ok", cfg.DeviceID[:8]+"...")
+		} else {
+			check("Device ID", "fail", "Not set — run 'yaver serve'")
+		}
+		if cfg.ConvexSiteURL != "" {
+			check("Backend", "ok", cfg.ConvexSiteURL)
+		} else {
+			check("Backend", "fail", "Not configured")
+		}
+	}
+
+	// Agent
+	sb.WriteString("\n── Agent ──\n")
+	agentPID, agentRunning := isAgentRunning()
+	if agentRunning {
+		check("Agent process", "ok", fmt.Sprintf("Running (PID %d)", agentPID))
+	} else {
+		check("Agent process", "warn", "Not running — start with 'yaver serve'")
+	}
+
+	if tmuxAvailable() {
+		check("Tmux", "ok", "available")
+	} else {
+		check("Tmux", "warn", "not installed — session adoption requires tmux")
+	}
+
+	// Tasks
+	status := s.taskMgr.GetAgentStatus()
+	check("Tasks", "ok", fmt.Sprintf("%d running, %d total", status.RunningTasks, status.TotalTasks))
+
+	// Runners
+	sb.WriteString("\n── AI Runners ──\n")
+	runners := []struct{ id, name, cmd string }{
+		{"claude", "Claude Code", "claude"},
+		{"codex", "OpenAI Codex", "codex"},
+		{"aider", "Aider", "aider"},
+		{"ollama", "Ollama", "ollama"},
+		{"goose", "Goose", "goose"},
+		{"amp", "Amp", "amp"},
+		{"opencode", "OpenCode", "opencode"},
+	}
+	for _, r := range runners {
+		path, err := osexec.LookPath(r.cmd)
+		if err != nil {
+			check(r.name, "warn", "Not installed")
+		} else {
+			check(r.name, "ok", path)
+		}
+	}
+
+	// Relay
+	sb.WriteString("\n── Relay Servers ──\n")
+	if cfg != nil && len(cfg.RelayServers) > 0 {
+		client := &http.Client{Timeout: 5 * time.Second}
+		for _, rs := range cfg.RelayServers {
+			label := rs.Label
+			if label == "" {
+				label = rs.ID
+			}
+			start := time.Now()
+			resp, err := client.Get(rs.HttpURL + "/health")
+			rtt := time.Since(start)
+			if err != nil {
+				check("Relay: "+label, "fail", "Unreachable")
+			} else {
+				resp.Body.Close()
+				if resp.StatusCode == 200 {
+					check("Relay: "+label, "ok", fmt.Sprintf("OK (%dms)", rtt.Milliseconds()))
+				} else {
+					check("Relay: "+label, "fail", fmt.Sprintf("HTTP %d", resp.StatusCode))
+				}
+			}
+		}
+	} else {
+		check("Relay servers", "warn", "None configured")
+	}
+
+	// Tunnels
+	if cfg != nil && len(cfg.CloudflareTunnels) > 0 {
+		sb.WriteString("\n── Cloudflare Tunnels ──\n")
+		for _, t := range cfg.CloudflareTunnels {
+			label := t.Label
+			if label == "" {
+				label = t.ID
+			}
+			cf := ""
+			if t.CFAccessClientId != "" {
+				cf = " (CF Access)"
+			}
+			check("Tunnel: "+label, "ok", t.URL+cf)
+		}
+	}
+
+	// Network
+	sb.WriteString("\n── Network ──\n")
+	ip := getLocalIP()
+	if ip != "" && ip != "0.0.0.0" {
+		check("Local IP", "ok", ip)
+	} else {
+		check("Local IP", "warn", "Could not determine")
+	}
+
+	sb.WriteString(fmt.Sprintf("\nSummary: %d passed, %d warnings, %d failures\n", ok, warn, fail))
+	return mcpToolResult(sb.String())
+}
+
+// mcpStatus returns auth/agent/relay status information.
+func (s *HTTPServer) mcpStatus() interface{} {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Yaver v%s\n\n", version))
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		return mcpToolError(fmt.Sprintf("load config: %v", err))
+	}
+
+	// Agent
+	agentPID, running := isAgentRunning()
+	if running {
+		sb.WriteString(fmt.Sprintf("Agent: running (PID %d)\n", agentPID))
+	} else {
+		sb.WriteString("Agent: stopped\n")
+	}
+
+	// Auth
+	if cfg.AuthToken != "" {
+		sb.WriteString("Auth: signed in\n")
+		if cfg.DeviceID != "" {
+			sb.WriteString(fmt.Sprintf("Device: %s\n", cfg.DeviceID[:8]+"..."))
+		}
+	} else {
+		sb.WriteString("Auth: not signed in\n")
+	}
+
+	// Runner
+	s.taskMgr.mu.RLock()
+	runner := s.taskMgr.runner
+	s.taskMgr.mu.RUnlock()
+	sb.WriteString(fmt.Sprintf("Runner: %s (%s)\n", runner.Name, runner.RunnerID))
+
+	// Work dir
+	sb.WriteString(fmt.Sprintf("Work dir: %s\n", s.taskMgr.workDir))
+
+	// Relay
+	if len(cfg.RelayServers) > 0 {
+		sb.WriteString(fmt.Sprintf("\nRelay servers: %d configured\n", len(cfg.RelayServers)))
+		for _, rs := range cfg.RelayServers {
+			label := rs.Label
+			if label == "" {
+				label = rs.ID
+			}
+			pw := "no password"
+			if rs.Password != "" || cfg.RelayPassword != "" {
+				pw = "password set"
+			}
+			sb.WriteString(fmt.Sprintf("  - %s: %s (%s)\n", label, rs.HttpURL, pw))
+		}
+	} else {
+		sb.WriteString("\nRelay servers: none configured\n")
+	}
+
+	// Tunnels
+	if len(cfg.CloudflareTunnels) > 0 {
+		sb.WriteString(fmt.Sprintf("\nCloudflare Tunnels: %d configured\n", len(cfg.CloudflareTunnels)))
+		for _, t := range cfg.CloudflareTunnels {
+			label := t.Label
+			if label == "" {
+				label = t.ID
+			}
+			sb.WriteString(fmt.Sprintf("  - %s: %s\n", label, t.URL))
+		}
+	}
+
+	// Tasks
+	status := s.taskMgr.GetAgentStatus()
+	sb.WriteString(fmt.Sprintf("\nTasks: %d running, %d total\n", status.RunningTasks, status.TotalTasks))
+
+	return mcpToolResult(sb.String())
+}
+
+// yaverHelpText returns help documentation for the given topic.
+func yaverHelpText(topic string) string {
+	switch strings.ToLower(topic) {
+	case "tmux":
+		return `Tmux Session Adoption
+═══════════════════
+
+Yaver can discover and adopt existing tmux sessions, making them visible and
+controllable from the mobile app. This is useful when you start an AI agent
+(Claude Code, Aider, Codex, etc.) in tmux and want to monitor/interact with
+it from your phone.
+
+How it works:
+1. Start a tmux session: tmux new -s my-agent
+2. Run an AI agent inside it (e.g., claude, aider, codex)
+3. Yaver detects it: yaver tmux list (or tmux_list_sessions MCP tool)
+4. Adopt it: yaver tmux adopt my-agent (or tmux_adopt_session MCP tool)
+5. The session now appears as a task in the mobile app
+6. You can send input from mobile — it goes to tmux via send-keys
+7. Output is polled every 500ms and streamed to mobile
+
+MCP Tools:
+- tmux_list_sessions: List all sessions with agent detection
+- tmux_adopt_session: Adopt a session as a Yaver task
+- tmux_detach_session: Stop monitoring (session keeps running)
+- tmux_send_input: Send keyboard input to an adopted session
+
+Agent detection: Yaver inspects the process tree in each pane to identify
+running agents (claude, codex, aider, ollama, goose, amp, opencode).`
+
+	case "relay":
+		return `Relay Servers
+═════════════
+
+Relay servers enable NAT traversal — your mobile can reach your dev machine
+even when it's behind a firewall or on a different network.
+
+How it works:
+- Desktop agent connects outbound to relay via QUIC tunnel on startup
+- Mobile makes short-lived HTTP requests to relay
+- Relay is pass-through — no data stored
+- Password-protected for security
+
+Setup:
+  yaver relay add https://relay.example.com --password secret --label "My Relay"
+  yaver relay test   # Test connectivity
+  yaver relay list   # View configured relays
+
+MCP Tools: get_relay_config, add_relay_server, remove_relay_server, relay_test,
+relay_set_password, relay_clear_password
+
+Self-hosting: cd relay && RELAY_PASSWORD=secret docker compose up -d`
+
+	case "tunnel":
+		return `Cloudflare Tunnels
+══════════════════
+
+Cloudflare Tunnel creates a secure HTTPS path from Cloudflare's edge to your
+machine. No port forwarding, works through any firewall.
+
+Setup:
+  1. Install cloudflared: brew install cloudflared
+  2. Create a tunnel: cloudflared tunnel create yaver
+  3. Route traffic: cloudflared tunnel route dns yaver yaver.example.com
+  4. Run tunnel: cloudflared tunnel --url http://localhost:18080 run yaver
+  5. Add to Yaver: yaver tunnel add https://yaver.example.com
+
+MCP Tools: tunnel_list, tunnel_add, tunnel_remove, tunnel_test
+
+For CF Access (zero-trust):
+  yaver tunnel add https://yaver.example.com --cf-client-id ID --cf-client-secret SECRET`
+
+	case "mobile":
+		return `Mobile App
+══════════
+
+The Yaver mobile app (iOS/Android) lets you control AI coding agents from your phone.
+
+Features:
+- Create tasks: send prompts to Claude Code, Codex, Aider, etc.
+- Live streaming: see agent output in real-time
+- Follow-up: send additional instructions to running tasks
+- Tmux adoption: discover and control pre-existing tmux sessions
+- Multi-device: connect to any registered machine
+- Connection modes: LAN (direct), relay (NAT traversal), Cloudflare tunnel
+
+Connection priority:
+  1. LAN beacon (UDP broadcast, ~5ms) — same WiFi
+  2. Convex IP (direct HTTP, ~5ms) — known IP
+  3. QUIC relay (proxied, ~50ms) — roaming/NAT
+  4. Cloudflare tunnel — zero-trust
+
+Network changes (WiFi ↔ cellular) are handled silently.`
+
+	case "mcp":
+		return `MCP (Model Context Protocol)
+════════════════════════════
+
+Yaver exposes an MCP server so AI agents can interact with it programmatically.
+
+Start MCP server:
+  yaver mcp              # stdio mode (for Claude Code, etc.)
+  yaver mcp --http 8080  # HTTP mode (for remote tools)
+
+Available tool categories:
+- Tasks: create_task, list_tasks, get_task, stop_task, continue_task
+- Runners: list_runners, switch_runner
+- System: get_info, get_system_info, get_config, set_work_dir, list_projects
+- Files: read_file, write_file, list_directory, search_files
+- Relay: get_relay_config, add_relay_server, remove_relay_server, relay_test
+- Tunnels: tunnel_list, tunnel_add, tunnel_remove, tunnel_test
+- Tmux: tmux_list_sessions, tmux_adopt_session, tmux_detach_session, tmux_send_input
+- Email: email_list_inbox, email_get, email_send, email_sync, email_search
+- ACL: acl_list_peers, acl_add_peer, acl_remove_peer, acl_call_peer_tool
+- Diagnostics: yaver_doctor, yaver_status, yaver_devices, yaver_logs, yaver_ping
+- Config: config_set, relay_set_password, relay_clear_password
+
+Use yaver_help with a topic for details on any category.`
+
+	case "runners":
+		return `AI Runners
+══════════
+
+Yaver supports multiple AI coding agents. You can switch between them per-task
+or set a default.
+
+Built-in runners:
+- claude: Claude Code (default) — npm i -g @anthropic-ai/claude-code
+- codex: OpenAI Codex — npm i -g @openai/codex
+- aider: Aider — pip install aider-chat
+- ollama: Ollama — brew install ollama
+- goose: Goose — pip install goose-ai
+- amp: Amp — npm i -g @anthropic/amp
+- opencode: OpenCode — go install github.com/mbreithecker/opencode@latest
+
+Custom runners:
+  yaver set-runner custom "my-tool --auto {prompt}"
+
+MCP Tools: list_runners, switch_runner
+
+The runner is also selectable per-task from the mobile app.`
+
+	case "tasks":
+		return `Task Management
+═══════════════
+
+Tasks are the core abstraction — each task is an AI agent session.
+
+Lifecycle: queued → running → completed/failed/stopped
+
+From mobile: tap + to create, tap task to view, input bar for follow-ups
+From MCP: create_task, list_tasks, get_task, stop_task, continue_task
+From CLI: yaver attach (interactive REPL)
+
+Adopted tmux sessions also appear as tasks with source="tmux-adopted".
+They support input via tmux send-keys and output via pane polling.
+
+Tasks are persisted to ~/.yaver/tasks.json and survive agent restarts.
+Adopted tasks are automatically re-adopted if the tmux session still exists.`
+
+	case "auth":
+		return `Authentication
+══════════════
+
+Yaver uses OAuth via the web app for authentication.
+
+  yaver auth          # Opens browser for sign-in (Apple/Google/Microsoft)
+  yaver auth --headless  # Device code flow for SSH/headless servers
+  yaver signout       # Clear credentials
+  yaver status        # Check auth status
+
+The auth flow:
+1. CLI opens https://yaver.io/auth?client=desktop
+2. User signs in via Apple/Google/Microsoft
+3. Web redirects to http://127.0.0.1:19836/callback?token=<token>
+4. CLI saves token to ~/.config/yaver/config.json
+
+The token is used for all API calls and is refreshed automatically.`
+
+	default:
+		return `Yaver — AI Coding Agent on Your Phone
+═════════════════════════════════════
+
+Yaver is an open-source P2P tool that lets you control any AI coding agent
+(Claude Code, Codex, Aider, Ollama, etc.) from your mobile device.
+
+Key features:
+- Tasks: Create and manage AI agent sessions from mobile
+- Tmux adoption: Discover and control existing tmux sessions
+- Multi-runner: Switch between Claude, Codex, Aider, and custom agents
+- P2P: Task data flows directly between devices (no server storage)
+- Multiple transports: LAN direct, QUIC relay, Cloudflare tunnel
+- MCP: Full programmatic access for AI-to-AI workflows
+
+Use yaver_help with a topic for details:
+  tmux, relay, tunnel, mobile, mcp, runners, tasks, auth
+
+Quick start:
+  1. Install: brew install kivanccakmak/yaver/yaver
+  2. Sign in: yaver auth
+  3. That's it — the mobile app discovers your machine automatically
+
+CLI commands: auth, serve, status, devices, tmux, relay, tunnel, config,
+set-runner, mcp, email, acl, doctor, logs, ping, attach, connect`
 	}
 }
 
@@ -1514,4 +2383,116 @@ func mcpToolError(text string) interface{} {
 		},
 		"isError": true,
 	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+// ---------------------------------------------------------------------------
+// tmux session management endpoints
+// ---------------------------------------------------------------------------
+
+// GET /tmux/sessions — list all tmux sessions with relationship info
+func (s *HTTPServer) handleTmuxSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tmuxMgr := s.taskMgr.TmuxMgr
+	if tmuxMgr == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"sessions": []TmuxSession{}})
+		return
+	}
+	sessions, err := tmuxMgr.ListTmuxSessions()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if sessions == nil {
+		sessions = []TmuxSession{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"sessions": sessions})
+}
+
+// POST /tmux/adopt — adopt an existing tmux session as a yaver task
+func (s *HTTPServer) handleTmuxAdopt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tmuxMgr := s.taskMgr.TmuxMgr
+	if tmuxMgr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tmux not available"})
+		return
+	}
+	var body struct {
+		Session string `json:"session"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Session == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing session name"})
+		return
+	}
+	task, err := tmuxMgr.AdoptSession(body.Session)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"taskId":  task.ID,
+		"session": body.Session,
+	})
+}
+
+// POST /tmux/detach — detach an adopted tmux session (stop monitoring, keep session alive)
+func (s *HTTPServer) handleTmuxDetach(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tmuxMgr := s.taskMgr.TmuxMgr
+	if tmuxMgr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tmux not available"})
+		return
+	}
+	var body struct {
+		TaskID string `json:"taskId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.TaskID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing taskId"})
+		return
+	}
+	if err := tmuxMgr.DetachSession(body.TaskID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "detached"})
+}
+
+// POST /tmux/input — send keyboard input to an adopted tmux session
+func (s *HTTPServer) handleTmuxInput(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tmuxMgr := s.taskMgr.TmuxMgr
+	if tmuxMgr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tmux not available"})
+		return
+	}
+	var body struct {
+		TaskID string `json:"taskId"`
+		Input  string `json:"input"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.TaskID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing taskId or input"})
+		return
+	}
+	if err := tmuxMgr.SendTmuxInput(body.TaskID, body.Input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 }
