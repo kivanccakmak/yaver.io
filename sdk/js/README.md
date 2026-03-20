@@ -1,17 +1,17 @@
-# @yaver/sdk
+# yaver-sdk
 
 Embed Yaver's P2P AI agent connectivity into your JavaScript/TypeScript applications. Works in React Native, Node.js, and browsers.
 
 ## Install
 
 ```bash
-npm install @yaver/sdk
+npm install yaver-sdk
 ```
 
 ## Quick Start
 
 ```typescript
-import { YaverClient } from '@yaver/sdk';
+import { YaverClient } from 'yaver-sdk';
 
 const client = new YaverClient('http://localhost:18080', 'your-auth-token');
 
@@ -41,7 +41,7 @@ const tasks = await client.listTasks();
 ## Auth Client
 
 ```typescript
-import { YaverAuthClient } from '@yaver/sdk';
+import { YaverAuthClient } from 'yaver-sdk';
 
 const auth = new YaverAuthClient('your-token');
 const user = await auth.validateToken();
@@ -51,7 +51,7 @@ const devices = await auth.listDevices();
 ## Speech
 
 ```typescript
-import { transcribe } from '@yaver/sdk';
+import { transcribe } from 'yaver-sdk';
 
 const result = await transcribe(audioUri, 'openai', 'sk-...');
 console.log(result.text);

@@ -1917,8 +1917,8 @@ CLI Agent ◄──QUIC──────────────── Relay (:
             <div className="card">
               <h4 className="mb-3 text-sm font-medium text-surface-200">JavaScript / TypeScript</h4>
               <Terminal title="JS/TS SDK">
-                <Comment># npm install @yaver/sdk</Comment>
-                <div className="text-surface-300">{`import { YaverClient } from '@yaver/sdk';`}</div>
+                <Comment># npm install yaver-sdk</Comment>
+                <div className="text-surface-300">{`import { YaverClient } from 'yaver-sdk';`}</div>
                 <div className="text-surface-300 mt-2">{`const client = new YaverClient('http://localhost:18080', token);`}</div>
                 <div className="text-surface-300">{`const task = await client.createTask('Fix the bug');`}</div>
                 <div className="text-surface-300">{`for await (const chunk of client.streamOutput(task.id)) {`}</div>

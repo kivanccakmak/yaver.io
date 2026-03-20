@@ -289,7 +289,7 @@ for chunk in client.stream_output(task["id"]):
 ### JavaScript / TypeScript
 
 ```typescript
-import { YaverClient } from '@yaver/sdk';
+import { YaverClient } from 'yaver-sdk';
 
 const client = new YaverClient('http://localhost:18080', token);
 const task = await client.createTask('Fix the login bug');

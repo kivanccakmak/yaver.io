@@ -1,11 +1,11 @@
 /**
- * @yaver/sdk — Embed Yaver's P2P AI agent connectivity into your apps.
+ * yaver-sdk — Embed Yaver's P2P AI agent connectivity into your apps.
  *
  * Works in React Native, Node.js, and browsers.
  *
  * @example
  * ```ts
- * import { YaverClient } from '@yaver/sdk';
+ * import { YaverClient } from 'yaver-sdk';
  *
  * const client = new YaverClient('http://localhost:18080', 'your-token');
  * const task = await client.createTask('Fix the login bug');

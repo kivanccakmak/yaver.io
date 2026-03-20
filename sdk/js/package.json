@@ -1,5 +1,5 @@
 {
-  "name": "@yaver/sdk",
+  "name": "yaver-sdk",
   "version": "0.1.0",
   "description": "Yaver SDK — embed P2P AI agent connectivity into your apps (React Native, Node.js, Browser)",
   "main": "dist/index.js",

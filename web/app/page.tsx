@@ -1053,7 +1053,7 @@ for chunk in client.stream_output(task["id"]):
                 <span className="text-sm font-semibold text-surface-100">JavaScript / TypeScript</span>
                 <span className="rounded-full bg-surface-800 px-2 py-0.5 text-[10px] text-surface-400">npm</span>
               </div>
-              <pre className="rounded-lg bg-surface-950 p-3 text-xs text-surface-300 overflow-x-auto"><code>{`import { YaverClient } from '@yaver/sdk';
+              <pre className="rounded-lg bg-surface-950 p-3 text-xs text-surface-300 overflow-x-auto"><code>{`import { YaverClient } from 'yaver-sdk';
 
 const c = new YaverClient(url, token);
 const task = await c.createTask('Fix bug');
