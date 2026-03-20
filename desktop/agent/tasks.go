@@ -940,7 +940,8 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	}
 
 	// Give each Claude task its own session ID to avoid blocking other sessions
-	if runner.RunnerID == "claude" {
+	// Only add --session-id when resuming (Claude Code requires --resume or --continue with --session-id)
+	if runner.RunnerID == "claude" && warmSID != "" && runner.ResumeSupported {
 		args = append(args, "--session-id", uuid.New().String())
 	}
 
@@ -1066,13 +1067,16 @@ func (tm *TaskManager) startProcess(task *Task) error {
 						}
 					}()
 
-					// Emit status to mobile user
+					// Emit status to mobile user (channel may be closed)
 					restartMsg := fmt.Sprintf("\n⚠️ Agent process crashed — restarting (attempt %d/%d)...\n", retries+1, maxProcessRetries)
 					task.Output += restartMsg
-					select {
-					case task.outputCh <- restartMsg:
-					default:
-					}
+					func() {
+						defer func() { recover() }() // guard against send on closed channel
+						select {
+						case task.outputCh <- restartMsg:
+						default:
+						}
+					}()
 
 					tm.persist()
 					tm.mu.Unlock()
