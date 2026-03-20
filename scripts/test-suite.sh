@@ -1061,9 +1061,61 @@ main() {
     echo ""
 
     # Parse flags
+run_sdk_tests() {
+    header "SDK Tests"
+
+    info "Running Go SDK tests..."
+    if (cd "$ROOT_DIR/sdk/go/yaver" && go test -v -count=1 ./... > "$TEST_DIR/sdk-go-test.log" 2>&1); then
+        pass "Go SDK tests passed"
+    else
+        fail "Go SDK tests failed"
+        tail -20 "$TEST_DIR/sdk-go-test.log"
+    fi
+
+    info "Building C shared library (libyaver)..."
+    if (cd "$ROOT_DIR/sdk/go/clib" && go build -buildmode=c-shared -o libyaver.so . > "$TEST_DIR/sdk-clib-build.log" 2>&1); then
+        pass "C shared library built"
+        rm -f "$ROOT_DIR/sdk/go/clib/libyaver.so" "$ROOT_DIR/sdk/go/clib/libyaver.h"
+    else
+        # macOS uses .dylib
+        if (cd "$ROOT_DIR/sdk/go/clib" && go build -buildmode=c-shared -o libyaver.dylib . > "$TEST_DIR/sdk-clib-build.log" 2>&1); then
+            pass "C shared library built (dylib)"
+            rm -f "$ROOT_DIR/sdk/go/clib/libyaver.dylib" "$ROOT_DIR/sdk/go/clib/libyaver.h"
+        else
+            fail "C shared library build failed"
+            tail -20 "$TEST_DIR/sdk-clib-build.log"
+        fi
+    fi
+
+    info "Running Python SDK tests..."
+    if (cd "$ROOT_DIR/sdk/python" && python3 test_yaver.py > "$TEST_DIR/sdk-python-test.log" 2>&1); then
+        pass "Python SDK tests passed"
+    else
+        fail "Python SDK tests failed"
+        tail -20 "$TEST_DIR/sdk-python-test.log"
+    fi
+
+    info "Typechecking JS/TS SDK..."
+    if (cd "$ROOT_DIR/sdk/js" && npm install --silent > /dev/null 2>&1 && npx tsc --noEmit > "$TEST_DIR/sdk-js-typecheck.log" 2>&1); then
+        pass "JS/TS SDK typecheck passed"
+    else
+        fail "JS/TS SDK typecheck failed"
+        tail -20 "$TEST_DIR/sdk-js-typecheck.log"
+    fi
+
+    info "Building JS/TS SDK..."
+    if (cd "$ROOT_DIR/sdk/js" && npx tsc > "$TEST_DIR/sdk-js-build.log" 2>&1); then
+        pass "JS/TS SDK built"
+    else
+        fail "JS/TS SDK build failed"
+        tail -20 "$TEST_DIR/sdk-js-build.log"
+    fi
+}
+
     local run_all=true
     local run_builds=false run_lan=false run_relay=false run_relay_docker=false
     local run_relay_binary=false run_tailscale=false run_cloudflare=false run_unit=false
+    local run_sdk=false
 
     for arg in "$@"; do
         case "$arg" in
@@ -1075,6 +1127,7 @@ main() {
             --relay-binary)   run_relay_binary=true; run_all=false ;;
             --tailscale)      run_tailscale=true; run_all=false ;;
             --cloudflare)     run_cloudflare=true; run_all=false ;;
+            --sdk)            run_sdk=true; run_all=false ;;
             --help|-h)
                 cat << 'HELP'
 Usage: ./scripts/test-suite.sh [FLAGS]
@@ -1090,6 +1143,7 @@ Flags:
   --relay-binary    Deploy relay to Hetzner as native binary, test, teardown
   --tailscale       Tailscale cross-machine test (local ↔ Hetzner)
   --cloudflare      Cloudflare tunnel test
+  --sdk             SDK tests (Go, Python, JS/TS, C shared library build)
 
 Environment:
   Credentials loaded from: env vars > .env.test > ../talos/.env.test
@@ -1135,6 +1189,10 @@ HELP
 
     if $run_all || $run_cloudflare; then
         run_cloudflare_test
+    fi
+
+    if $run_all || $run_sdk; then
+        run_sdk_tests
     fi
 
     # Summary
