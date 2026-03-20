@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+yaver.py
+yaver.egg-info/PKG-INFO
+yaver.egg-info/SOURCES.txt
+yaver.egg-info/dependency_links.txt
+yaver.egg-info/top_level.txt

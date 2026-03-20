@@ -1136,6 +1136,24 @@ run_sdk_tests() {
 
     local base_url="http://127.0.0.1:${http_port}"
 
+    # Go examples compile check
+    info "Checking Go examples compile..."
+    local examples_ok=true
+    for ex in "$ROOT_DIR"/sdk/examples/go/*/; do
+        if [ -f "$ex/main.go" ]; then
+            exname=$(basename "$ex")
+            if (cd "$ex" && go build -o /dev/null . > /dev/null 2>&1); then
+                true
+            else
+                examples_ok=false
+                fail "Go example $exname failed to compile"
+            fi
+        fi
+    done
+    if $examples_ok; then
+        pass "Go examples compile OK"
+    fi
+
     # Go SDK integration
     info "Running Go SDK integration tests..."
     if (cd "$ROOT_DIR/sdk/go/yaver" && \
