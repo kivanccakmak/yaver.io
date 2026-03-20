@@ -584,20 +584,29 @@ export default function TasksScreen() {
   const startRecording = async () => {
     try {
       const { Audio } = require("expo-av");
-      const { status } = await Audio.requestPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert("Permission required", "Microphone access is needed for voice input.");
+      const perm = await Audio.requestPermissionsAsync();
+      if (perm.status !== "granted") {
+        if (perm.canAskAgain === false) {
+          Alert.alert("Microphone Blocked", "Microphone access was denied. Please enable it in your device Settings > Yaver > Microphone.");
+        } else {
+          Alert.alert("Permission Required", "Microphone access is needed for voice input.");
+        }
         return;
       }
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+      });
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
       audioRecordingRef.current = recording;
       setIsRecording(true);
     } catch (err) {
-      console.warn("[speech] Failed to start recording:", err);
-      Alert.alert("Error", "Could not start recording.");
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("[speech] Failed to start recording:", msg);
+      Alert.alert("Recording Error", `Could not start recording: ${msg}`);
     }
   };
 

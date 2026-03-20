@@ -78,6 +78,7 @@ export default function SurveyScreen() {
   // Relay server
   const [relayUrl, setRelayUrl] = useState("");
   const [relayPassword, setRelayPassword] = useState("");
+  const [relayLabel, setRelayLabel] = useState("");
 
   useEffect(() => {
     getAiRunners().then((r) => {
@@ -146,7 +147,7 @@ export default function SurveyScreen() {
           id: Date.now().toString(36),
           quicAddr: host + ":4433",
           httpUrl: url,
-          region: "custom",
+          region: relayLabel.trim() || "custom",
           priority: 1,
           password: relayPassword.trim() || undefined,
         };
@@ -512,30 +513,18 @@ export default function SurveyScreen() {
     <ScrollView
       contentContainerStyle={styles.pageContent}
       showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
     >
       <Text style={[styles.pageTitle, { color: c.textPrimary }]}>
         Relay server
       </Text>
       <Text style={[styles.pageSubtitle, { color: c.textSecondary }]}>
-        Connect to your desktop when you're away from home Wi-Fi
+        Optional — for connecting outside your home Wi-Fi
       </Text>
 
-      <View style={{
-        marginTop: 16, paddingVertical: 16, paddingHorizontal: 16,
-        borderRadius: 12, borderWidth: 1,
-        backgroundColor: c.bgCard, borderColor: c.border,
-      }}>
-        <Text style={{ color: c.textPrimary, fontWeight: "500", fontSize: 14, marginBottom: 4 }}>
-          How it works
-        </Text>
-        <Text style={{ color: c.textMuted, fontSize: 12, lineHeight: 18 }}>
-          On the same Wi-Fi, Yaver connects directly to your desktop. When you're on cellular or a different network, traffic routes through a relay server. No data is stored — it's a pass-through proxy.
-        </Text>
-      </View>
-
       <TextInput
-        style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary, marginTop: 20 }]}
-        placeholder="Relay URL, e.g. https://relay.example.com"
+        style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary, marginTop: 16 }]}
+        placeholder="URL, e.g. https://relay.example.com"
         placeholderTextColor={c.textMuted}
         value={relayUrl}
         onChangeText={setRelayUrl}
@@ -555,8 +544,18 @@ export default function SurveyScreen() {
         secureTextEntry
       />
 
-      <Text style={[styles.runnerHint, { color: c.textMuted }]}>
-        Skip this if you only use Yaver on the same Wi-Fi, or if you use Tailscale. You can add relay servers later in Settings.
+      <TextInput
+        style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+        placeholder="Label, e.g. home, office (optional)"
+        placeholderTextColor={c.textMuted}
+        value={relayLabel}
+        onChangeText={setRelayLabel}
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+
+      <Text style={[{ fontSize: 11, color: c.textMuted, marginTop: -8, paddingHorizontal: 4 }]}>
+        Skip if you're always on the same Wi-Fi or use Tailscale.
       </Text>
     </ScrollView>
   );
