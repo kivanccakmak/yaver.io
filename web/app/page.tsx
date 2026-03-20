@@ -1022,7 +1022,7 @@ export default function HomePage() {
             SDKs for Go, Python, JavaScript/TypeScript, and C/C++. Connect to Yaver agents, create tasks, stream output, and use speech-to-text from your own code.
           </p>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="space-y-4">
             <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
               <div className="mb-3 flex items-center gap-2">
                 <span className="text-sm font-semibold text-surface-100">Go</span>
