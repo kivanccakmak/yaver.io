@@ -641,8 +641,19 @@ export default function TasksScreen() {
     }
   };
 
+  // Auto-reconnect when disconnected but activeDevice exists
+  useEffect(() => {
+    if (connectionStatus === "disconnected" && activeDevice && !userDisconnected) {
+      console.log("[Tasks] Disconnected with active device — auto-reconnecting...");
+      selectDevice(activeDevice);
+    }
+  }, [connectionStatus, activeDevice, userDisconnected, selectDevice]);
+
   const effectiveState: ConnectionState =
-    connectionStatus === "connected" ? quicState : connectionStatus;
+    connectionStatus === "connected" ? quicState :
+    // Show yellow "Reconnecting" instead of grey "Disconnected" when we have a device and aren't user-disconnected
+    (connectionStatus === "disconnected" && activeDevice && !userDisconnected) ? "connecting" :
+    connectionStatus;
   const banner = BANNER_CONFIG[effectiveState];
   const isEffectivelyConnected = effectiveState === "connected";
   const modeLabel = connMode === "relay" ? " via Relay" : connMode === "direct" ? " Direct" : "";
@@ -654,11 +665,19 @@ export default function TasksScreen() {
     <SafeAreaView style={[s.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
       <View style={s.container}>
         {/* Connection banner */}
-        <View style={[s.banner, { backgroundColor: banner.bg, borderBottomColor: banner.border, flexDirection: "column", alignItems: "flex-start", paddingVertical: 12 }]}>
+        <Pressable
+          style={[s.banner, { backgroundColor: banner.bg, borderBottomColor: banner.border, flexDirection: "column", alignItems: "flex-start", paddingVertical: 12 }]}
+          onPress={() => {
+            if (!isEffectivelyConnected && activeDevice) {
+              selectDevice(activeDevice);
+            }
+          }}
+        >
           <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap" }}>
             <View style={[s.dot, { backgroundColor: banner.dot }]} />
             <Text style={[s.bannerText, { color: banner.text, flexShrink: 1 }]} numberOfLines={1}>
               {banner.label}{modeLabel}{activeDevice ? ` \u00b7 ${activeDevice.name}` : ""}
+              {!isEffectivelyConnected && activeDevice ? " — tap to retry" : ""}
             </Text>
           </View>
           {isEffectivelyConnected && (
@@ -701,7 +720,7 @@ export default function TasksScreen() {
               )}
             </View>
           )}
-        </View>
+        </Pressable>
 
         {/* Ping result overlay */}
         {showPingResult && pingResult && (

@@ -36,7 +36,7 @@ const BUILD_NUMBER =
 
 export default function SettingsScreen() {
   const { user, token, logout, surveyCompleted, refreshUser } = useAuth();
-  const { activeDevice, connectionStatus, disconnect } = useDevice();
+  const { activeDevice, connectionStatus, disconnect, selectDevice } = useDevice();
   const { isDark, toggleTheme } = useTheme();
   const c = useColors();
   // Name is "empty" if it equals the email or is blank
@@ -914,6 +914,10 @@ export default function SettingsScreen() {
                   setForceRelay(v);
                   quicClient.setForceRelay(v);
                   if (token) saveUserSettings(token, { forceRelay: v });
+                  // If disconnected but have a device, reconnect with new strategy
+                  if (activeDevice && !quicClient.isConnected) {
+                    selectDevice(activeDevice);
+                  }
                 }}
                 trackColor={{ false: c.border, true: c.accent }}
                 thumbColor="#ffffff"

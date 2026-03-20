@@ -85,11 +85,22 @@ export async function getDeletedTaskIds(): Promise<Set<string>> {
   }
 }
 
-/** Remove all Yaver-related cache entries from AsyncStorage. */
+/** Keys to preserve across sign-out (device/connection settings). */
+const PRESERVE_ON_LOGOUT = new Set([
+  "@yaver/custom_relays",
+  "@yaver/custom_tunnels",
+  "@yaver/relay_sync_enabled",
+  "@yaver/debug_logs_enabled",
+  "@yaver/relay_onboarding_done",
+]);
+
+/** Remove task cache and session data but preserve connection settings. */
 export async function clearCache(): Promise<void> {
   try {
     const allKeys = await AsyncStorage.getAllKeys();
-    const yaverKeys = allKeys.filter((k) => k.startsWith("@yaver/"));
+    const yaverKeys = allKeys.filter(
+      (k) => k.startsWith("@yaver/") && !PRESERVE_ON_LOGOUT.has(k)
+    );
     if (yaverKeys.length > 0) {
       await AsyncStorage.multiRemove(yaverKeys);
     }
