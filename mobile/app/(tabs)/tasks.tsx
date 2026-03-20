@@ -1167,26 +1167,35 @@ export default function TasksScreen() {
                 <Pressable style={[s.cancelButton, { backgroundColor: c.bgCardElevated }]} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); setInputFromSpeech(false); }}>
                   <Text style={[s.cancelButtonText, { color: c.textSecondary }]}>Cancel</Text>
                 </Pressable>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                  {speechProvider && (
-                    <Pressable
-                      style={({ pressed }) => [
-                        {
-                          width: 44, height: 44, borderRadius: 22,
-                          backgroundColor: isRecording ? "#ef4444" : c.bgCardElevated,
-                          alignItems: "center", justifyContent: "center",
-                          borderWidth: 1, borderColor: isRecording ? "#ef4444" : c.border,
-                        },
-                        pressed && { opacity: 0.7 },
-                      ]}
-                      onPress={isRecording ? stopRecordingAndTranscribe : startRecording}
-                      disabled={isTranscribing}
-                    >
-                      <Text style={{ fontSize: 20, color: isRecording ? "#fff" : c.textSecondary }}>
-                        {isRecording ? "\u25A0" : "\uD83C\uDFA4"}
-                      </Text>
-                    </Pressable>
-                  )}
+                <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Pressable
+                    style={({ pressed }) => [
+                      {
+                        width: 44, height: 44, borderRadius: 22,
+                        backgroundColor: isRecording ? "#ef4444" : c.bgCardElevated,
+                        alignItems: "center", justifyContent: "center",
+                        borderWidth: 1, borderColor: isRecording ? "#ef4444" : c.border,
+                        opacity: !speechProvider && !isRecording ? 0.4 : 1,
+                      },
+                      pressed && { opacity: 0.7 },
+                    ]}
+                    onPress={() => {
+                      if (!speechProvider) {
+                        Alert.alert("Voice Not Configured", "Set up a speech-to-text provider in Settings → Voice to use voice input.");
+                        return;
+                      }
+                      if (isRecording) {
+                        stopRecordingAndTranscribe();
+                      } else {
+                        startRecording();
+                      }
+                    }}
+                    disabled={isTranscribing}
+                  >
+                    <Text style={{ fontSize: 20, color: isRecording ? "#fff" : c.textSecondary }}>
+                      {isRecording ? "\u25A0" : "\uD83C\uDFA4"}
+                    </Text>
+                  </Pressable>
                   <Pressable
                     style={[s.submitButton, { backgroundColor: c.accent }, (!newTaskText.trim() || isSubmitting || isTranscribing) && s.submitButtonDisabled]}
                     onPress={handleCreateTask}
