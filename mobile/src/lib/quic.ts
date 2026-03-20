@@ -135,7 +135,7 @@ export class QuicClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   reconnectAttempt = 0;
   private readonly baseBackoffMs = 1000;
-  private readonly maxReconnectAttempts = 5;
+  private readonly maxReconnectAttempts = 15;
 
   private _connectionMode: ConnectionMode = null;
   private _connectionPath: ConnectionPath = null;
