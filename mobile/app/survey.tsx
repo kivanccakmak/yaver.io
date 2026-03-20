@@ -68,7 +68,7 @@ export default function SurveyScreen() {
   const [selectedRunner, setSelectedRunner] = useState<string>("claude");
   const [customCommand, setCustomCommand] = useState("");
   const [runnerPresetFromCli, setRunnerPresetFromCli] = useState(false);
-  const [speechProvider, setSpeechProvider] = useState<SpeechProvider | null>(null);
+  const [speechProvider, setSpeechProvider] = useState<SpeechProvider | null>("on-device");
   const [speechApiKey, setSpeechApiKey] = useState("");
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [verbosity, setVerbosity] = useState(10);
@@ -118,14 +118,12 @@ export default function SurveyScreen() {
       if (selectedRunner === "custom" && customCommand.trim()) {
         settings.customRunnerCommand = customCommand.trim();
       }
-      if (speechProvider) {
-        settings.speechProvider = speechProvider;
-        const providerInfo = SPEECH_PROVIDERS.find((p) => p.id === speechProvider);
-        if (providerInfo?.requiresKey && speechApiKey.trim()) {
-          settings.speechApiKey = speechApiKey.trim();
-        }
-        settings.ttsEnabled = ttsEnabled;
+      settings.speechProvider = speechProvider ?? "on-device";
+      const providerInfo = SPEECH_PROVIDERS.find((p) => p.id === speechProvider);
+      if (providerInfo?.requiresKey && speechApiKey.trim()) {
+        settings.speechApiKey = speechApiKey.trim();
       }
+      settings.ttsEnabled = ttsEnabled;
       settings.verbosity = verbosity;
       await saveUserSettings(token, settings);
       markSurveyCompleted();
