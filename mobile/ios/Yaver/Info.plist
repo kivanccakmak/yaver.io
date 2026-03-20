@@ -21,7 +21,7 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.8.0</string>
+	<string>1.9.0</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleURLTypes</key>
@@ -34,7 +34,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>30</string>
+	<string>31</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>12.0</string>
 	<key>LSRequiresIPhoneOS</key>
@@ -48,12 +48,12 @@
 	</dict>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Allow $(PRODUCT_NAME) to access your Face ID biometric data.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Yaver uses your local network to connect directly to your computer for the fastest experience.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Yaver uses your microphone for voice input — send tasks by speaking instead of typing.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Yaver uses speech recognition to transcribe your voice into task descriptions.</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Yaver uses your local network to connect directly to your computer for the fastest experience.</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER).expo.index_route</string>
