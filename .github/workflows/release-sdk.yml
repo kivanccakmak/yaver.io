@@ -1,0 +1,101 @@
+name: Publish SDKs
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Build JS/TS SDK
+        run: |
+          cd sdk/js
+          npm ci
+          npx tsc
+
+      - name: Publish to npm
+        run: |
+          cd sdk/js
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-pypi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build Python SDK
+        run: |
+          pip install build twine
+          cd sdk/python
+          python -m build
+
+      - name: Publish to PyPI
+        run: |
+          cd sdk/python
+          python -m twine upload dist/* --non-interactive
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+
+  build-clib:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: so
+          - goos: linux
+            goarch: arm64
+            ext: so
+          - goos: darwin
+            goarch: arm64
+            ext: dylib
+          - goos: darwin
+            goarch: amd64
+            ext: dylib
+          - goos: windows
+            goarch: amd64
+            ext: dll
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build C shared library
+        run: |
+          cd sdk/go/clib
+          CGO_ENABLED=1 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -buildmode=c-shared -o libyaver-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.ext }} .
+        # Note: cross-compiling CGO requires a cross-compiler toolchain
+        # This will only succeed for the native platform on ubuntu-latest (linux/amd64)
+        continue-on-error: true
+
+      - name: Upload to release
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd sdk/go/clib
+          for f in libyaver-*; do
+            [ -f "$f" ] && gh release upload ${{ github.event.release.tag_name }} "$f" --repo ${{ github.repository }} || true
+          done

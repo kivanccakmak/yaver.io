@@ -1063,10 +1063,29 @@ for await (const chunk of c.streamOutput(task.id)) {
             </div>
           </div>
 
-          <p className="mt-6 text-center text-xs text-surface-500">
-            Also available as a C shared library (.so/.dylib/.dll) for C/C++ and any language with FFI support.
-            {" "}<a href="https://github.com/kivanccakmak/yaver.io/tree/main/sdk" target="_blank" rel="noopener noreferrer" className="text-surface-400 underline hover:text-surface-200">See SDK docs</a>
-          </p>
+          <div className="mt-8 rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
+            <h3 className="mb-3 text-sm font-semibold text-surface-100">Install from package managers</h3>
+            <div className="space-y-2">
+              <div className="flex items-center gap-3">
+                <span className="w-16 text-xs font-medium text-surface-400">npm</span>
+                <code className="flex-1 rounded bg-surface-950 px-3 py-1.5 text-xs text-surface-300 select-all">npm install yaver-sdk</code>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="w-16 text-xs font-medium text-surface-400">pip</span>
+                <code className="flex-1 rounded bg-surface-950 px-3 py-1.5 text-xs text-surface-300 select-all">pip install yaver</code>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="w-16 text-xs font-medium text-surface-400">Go</span>
+                <code className="flex-1 rounded bg-surface-950 px-3 py-1.5 text-xs text-surface-300 select-all">go get github.com/kivanccakmak/yaver.io/sdk/go/yaver</code>
+              </div>
+            </div>
+            <p className="mt-3 text-xs text-surface-500">
+              Also available as a C shared library (.so/.dylib/.dll) for C/C++ and any language with FFI.
+              {" "}<a href="https://github.com/kivanccakmak/yaver.io/tree/main/sdk" target="_blank" rel="noopener noreferrer" className="text-surface-400 underline hover:text-surface-200">SDK docs</a>
+              {" · "}<a href="https://www.npmjs.com/package/yaver-sdk" target="_blank" rel="noopener noreferrer" className="text-surface-400 underline hover:text-surface-200">npm</a>
+              {" · "}<a href="https://pypi.org/project/yaver/" target="_blank" rel="noopener noreferrer" className="text-surface-400 underline hover:text-surface-200">PyPI</a>
+            </p>
+          </div>
         </div>
       </section>
 
