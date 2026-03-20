@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tests:
-        description: "Tests to run (all, builds, lan, relay, tailscale, cloudflare, unit, sdk)"
+        description: "Tests to run (all, builds, lan, relay, tailscale, cloudflare, unit, sdk, auth)"
         required: false
         default: "all"
   push:
@@ -13,6 +13,7 @@ on:
       - 'desktop/agent/**'
       - 'relay/**'
       - 'sdk/**'
+      - 'backend/convex/**'
       - 'scripts/test-suite.sh'
 
 permissions:
