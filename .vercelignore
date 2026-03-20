@@ -3,6 +3,10 @@ desktop/
 mobile/
 backend/
 scripts/
+sdk/
+relay/
+keys/
+.github/
 
 # Dependencies and build output — Vercel runs npm install and build
 node_modules/
