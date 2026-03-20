@@ -84,7 +84,7 @@ func main() {
 		discoverProjects()
 		fp, _ := projectsFilePath()
 		fmt.Printf("Project discovery complete: %s\n", fp)
-	case "purge":
+	case "purge", "reset", "factory-reset":
 		runPurge()
 	case "uninstall":
 		runUninstall()
@@ -140,7 +140,8 @@ Usage:
   yaver acl         Agent Communication Layer — connect to other MCP servers
   yaver status      Show auth, relay, and connection status
   yaver devices     List your registered devices
-  yaver purge       Remove all local data (auth, sessions, tasks, logs)
+  yaver purge       Factory reset — remove all local data (auth, sessions, tasks, logs)
+  yaver reset       Alias for purge
   yaver uninstall   Remove config, certs, and stop the agent
   yaver help        Show this help message
   yaver version     Print version

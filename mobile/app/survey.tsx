@@ -14,7 +14,9 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../src/context/AuthContext";
 import { useColors } from "../src/context/ThemeContext";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { submitSurvey, getAiRunners, saveUserSettings, getUserSettings, type AiRunner, type SpeechProvider, type KeyStorage, saveLocalSecret, LOCAL_KEYS, saveKeyStoragePreference } from "../src/lib/auth";
+import { customRelaysKey } from "../src/context/DeviceContext";
 import { SPEECH_PROVIDERS } from "../src/lib/speech";
 
 const IDENTITIES = [
@@ -73,6 +75,9 @@ export default function SurveyScreen() {
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [verbosity, setVerbosity] = useState(10);
   const [keyStorage, setKeyStorage] = useState<KeyStorage>("local");
+  // Relay server
+  const [relayUrl, setRelayUrl] = useState("");
+  const [relayPassword, setRelayPassword] = useState("");
 
   useEffect(() => {
     getAiRunners().then((r) => {
@@ -93,7 +98,7 @@ export default function SurveyScreen() {
   }, [token]);
 
   const isDev = identity === "developer";
-  const totalPages = isDev ? 6 : 5;
+  const totalPages = isDev ? 8 : 7;
 
   const toggleLanguage = (lang: string) => {
     setLanguages((prev) =>
@@ -133,6 +138,21 @@ export default function SurveyScreen() {
         }
       }
       await saveUserSettings(token, settings);
+      // Save relay server if configured
+      if (relayUrl.trim()) {
+        const url = relayUrl.trim().replace(/\/+$/, "");
+        const host = url.replace(/^https?:\/\//, "").replace(/:\d+$/, "").replace(/\/.*$/, "");
+        const relay = {
+          id: Date.now().toString(36),
+          quicAddr: host + ":4433",
+          httpUrl: url,
+          region: "custom",
+          priority: 1,
+          password: relayPassword.trim() || undefined,
+        };
+        const relaysKey = customRelaysKey(user?.id);
+        await AsyncStorage.setItem(relaysKey, JSON.stringify([relay]));
+      }
       markSurveyCompleted();
       await refreshUser();
       router.replace("/(tabs)/tasks");
@@ -434,50 +454,109 @@ export default function SurveyScreen() {
           </Text>
         </View>
       </Pressable>
+    </ScrollView>
+  );
 
-      {/* Verbosity slider */}
+  const renderVerbosityPage = () => (
+    <View style={styles.pageContent}>
+      <Text style={[styles.pageTitle, { color: c.textPrimary }]}>
+        Response detail
+      </Text>
+      <Text style={[styles.pageSubtitle, { color: c.textSecondary }]}>
+        How verbose should AI responses be?
+      </Text>
+
       <View style={{
-        marginTop: 20, paddingVertical: 14, paddingHorizontal: 16,
-        borderRadius: 12, borderWidth: 1,
+        marginTop: 20, paddingVertical: 20, paddingHorizontal: 20,
+        borderRadius: 16, borderWidth: 1,
         backgroundColor: c.bgCard, borderColor: c.border,
       }}>
-        <Text style={{ color: c.textPrimary, fontWeight: "500", fontSize: 14, marginBottom: 4 }}>
-          Response detail level
+        <Text style={{ color: c.accent, fontWeight: "700", fontSize: 48, textAlign: "center", marginBottom: 4 }}>
+          {verbosity}
         </Text>
-        <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 12 }}>
+        <Text style={{ color: c.textMuted, fontSize: 13, textAlign: "center", marginBottom: 20 }}>
           {verbosity <= 2 ? "Minimal — just confirm what was done"
             : verbosity <= 4 ? "Brief — summarize in a few sentences"
             : verbosity <= 6 ? "Moderate — key changes and reasoning"
             : verbosity <= 8 ? "Detailed — code changes and explanations"
             : "Full — everything: diffs, reasoning, alternatives"}
         </Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-          <Text style={{ color: c.textMuted, fontSize: 12 }}>0</Text>
-          <View style={{ flex: 1, flexDirection: "row", gap: 4, alignItems: "center" }}>
-            {Array.from({ length: 11 }).map((_, i) => (
-              <Pressable
-                key={i}
-                onPress={() => setVerbosity(i)}
-                style={{
-                  flex: 1, height: 28, borderRadius: 6,
-                  backgroundColor: i <= verbosity ? c.accent : c.bg,
-                  borderWidth: 1,
-                  borderColor: i <= verbosity ? c.accent : c.border,
-                  alignItems: "center", justifyContent: "center",
-                }}
-              >
-                {i === verbosity && (
-                  <Text style={{ color: "#fff", fontSize: 9, fontWeight: "700" }}>{i}</Text>
-                )}
-              </Pressable>
-            ))}
-          </View>
-          <Text style={{ color: c.textMuted, fontSize: 12 }}>10</Text>
+        <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
+          {Array.from({ length: 11 }).map((_, i) => (
+            <Pressable
+              key={i}
+              onPress={() => setVerbosity(i)}
+              style={{
+                flex: 1, height: 36, borderRadius: 8,
+                backgroundColor: i <= verbosity ? c.accent : c.bg,
+                borderWidth: 1,
+                borderColor: i <= verbosity ? c.accent : c.border,
+                alignItems: "center", justifyContent: "center",
+              }}
+            >
+              {i === verbosity && (
+                <Text style={{ color: "#fff", fontSize: 10, fontWeight: "700" }}>{i}</Text>
+              )}
+            </Pressable>
+          ))}
+        </View>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 6 }}>
+          <Text style={{ color: c.textMuted, fontSize: 11 }}>Minimal</Text>
+          <Text style={{ color: c.textMuted, fontSize: 11 }}>Full</Text>
         </View>
       </View>
+    </View>
+  );
+
+  const renderRelayPage = () => (
+    <ScrollView
+      contentContainerStyle={styles.pageContent}
+      showsVerticalScrollIndicator={false}
+    >
+      <Text style={[styles.pageTitle, { color: c.textPrimary }]}>
+        Relay server
+      </Text>
+      <Text style={[styles.pageSubtitle, { color: c.textSecondary }]}>
+        Connect to your desktop when you're away from home Wi-Fi
+      </Text>
+
+      <View style={{
+        marginTop: 16, paddingVertical: 16, paddingHorizontal: 16,
+        borderRadius: 12, borderWidth: 1,
+        backgroundColor: c.bgCard, borderColor: c.border,
+      }}>
+        <Text style={{ color: c.textPrimary, fontWeight: "500", fontSize: 14, marginBottom: 4 }}>
+          How it works
+        </Text>
+        <Text style={{ color: c.textMuted, fontSize: 12, lineHeight: 18 }}>
+          On the same Wi-Fi, Yaver connects directly to your desktop. When you're on cellular or a different network, traffic routes through a relay server. No data is stored — it's a pass-through proxy.
+        </Text>
+      </View>
+
+      <TextInput
+        style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary, marginTop: 20 }]}
+        placeholder="Relay URL, e.g. https://relay.example.com"
+        placeholderTextColor={c.textMuted}
+        value={relayUrl}
+        onChangeText={setRelayUrl}
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+      />
+
+      <TextInput
+        style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+        placeholder="Password (optional)"
+        placeholderTextColor={c.textMuted}
+        value={relayPassword}
+        onChangeText={setRelayPassword}
+        autoCapitalize="none"
+        autoCorrect={false}
+        secureTextEntry
+      />
 
       <Text style={[styles.runnerHint, { color: c.textMuted }]}>
-        You can change this anytime in Settings
+        Skip this if you only use Yaver on the same Wi-Fi, or if you use Tailscale. You can add relay servers later in Settings.
       </Text>
     </ScrollView>
   );
@@ -672,8 +751,10 @@ export default function SurveyScreen() {
         {page === 1 && renderRolePage()}
         {page === 2 && renderRunnerPage()}
         {page === 3 && renderSpeechPage()}
-        {page === 4 && isDev && renderPage1Dev()}
-        {((page === 4 && !isDev) || (page === 5 && isDev)) &&
+        {page === 4 && renderVerbosityPage()}
+        {page === 5 && renderRelayPage()}
+        {page === 6 && isDev && renderPage1Dev()}
+        {((page === 6 && !isDev) || (page === 7 && isDev)) &&
           renderUseCasePage()}
       </View>
 
@@ -714,8 +795,8 @@ export default function SurveyScreen() {
         </Pressable>
       </View>}
 
-      {/* Only show skip after speech page (page 3) has been passed */}
-      {page >= 4 && (
+      {/* Only show skip after relay page (page 5) has been passed */}
+      {page >= 6 && (
         <Pressable
           style={({ pressed }) => [pressed && { opacity: 0.7 }]}
           onPress={finishSurvey}

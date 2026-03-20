@@ -1431,6 +1431,54 @@ export default function TasksScreen() {
                     <ActivityIndicator size="small" color={c.accent} style={{ marginRight: 4 }} />
                   )}
                   <Pressable
+                    style={({ pressed }) => [
+                      {
+                        width: 36, height: 36, borderRadius: 18,
+                        backgroundColor: isRecording ? "#ef4444" : c.bg,
+                        alignItems: "center", justifyContent: "center",
+                        borderWidth: 1, borderColor: isRecording ? "#ef4444" : c.border,
+                        marginRight: 4,
+                      },
+                      pressed && { opacity: 0.7 },
+                    ]}
+                    onPress={() => {
+                      if (!speechProvider) {
+                        Alert.alert("Voice Not Configured", "Set up a speech-to-text provider in Settings → Voice to use voice input.");
+                        return;
+                      }
+                      if (isRecording) {
+                        // Stop recording and transcribe into follow-up input
+                        setIsTranscribing(true);
+                        const rec = audioRecordingRef.current;
+                        if (rec) {
+                          rec.stopAndUnloadAsync().then(() =>
+                            rec.getURI()
+                          ).then((uri: string | null) => {
+                            if (!uri) throw new Error("No recording URI");
+                            const { transcribe } = require("../../src/lib/speech");
+                            return transcribe(uri, { provider: speechProvider!, apiKey: speechApiKey });
+                          }).then((result: { text: string }) => {
+                            setFollowUpText((prev: string) => prev ? prev + " " + result.text : result.text);
+                            setInputFromSpeech(true);
+                          }).catch(() => {
+                            Alert.alert("Transcription Failed", "Could not transcribe audio.");
+                          }).finally(() => {
+                            setIsRecording(false);
+                            setIsTranscribing(false);
+                            audioRecordingRef.current = null;
+                          });
+                        }
+                      } else {
+                        startRecording();
+                      }
+                    }}
+                    disabled={isTranscribing}
+                  >
+                    <Text style={{ fontSize: 16, color: isRecording ? "#fff" : c.textSecondary }}>
+                      {isRecording ? "\u25A0" : "\uD83C\uDFA4"}
+                    </Text>
+                  </Pressable>
+                  <Pressable
                     style={[
                       s.chatSendBtn,
                       { backgroundColor: c.accent },

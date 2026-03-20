@@ -1754,6 +1754,62 @@ export default function SettingsScreen() {
           </Pressable>
         </View>
 
+        {/* Factory Reset */}
+        <View style={styles.section}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.signOutButton,
+              { backgroundColor: c.bgCard, borderWidth: 1, borderColor: c.border },
+              pressed && { opacity: 0.7 },
+            ]}
+            onPress={() => {
+              Alert.alert(
+                "Factory Reset",
+                "This will remove all local settings, saved API keys, relay servers, cached data, and speech preferences. Your account will NOT be deleted.\n\nYou will need to sign in again and go through setup.",
+                [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Reset Everything",
+                    style: "destructive",
+                    onPress: async () => {
+                      try {
+                        // Clear local secrets
+                        for (const key of Object.values(LOCAL_KEYS)) {
+                          await deleteLocalSecret(key);
+                        }
+                        // Clear key storage preference
+                        await deleteLocalSecret("yaver_key_storage_pref");
+                        // Clear cached data
+                        await clearCache();
+                        // Clear AsyncStorage (relays, tunnels, etc.)
+                        await AsyncStorage.clear();
+                        // Clear cloud settings
+                        if (token) {
+                          await saveUserSettings(token, {
+                            speechProvider: undefined,
+                            speechApiKey: undefined,
+                            ttsEnabled: undefined,
+                            verbosity: undefined,
+                            runnerId: undefined,
+                            customRunnerCommand: undefined,
+                            forceRelay: undefined,
+                          });
+                        }
+                        // Sign out
+                        handleSignOut();
+                      } catch {
+                        Alert.alert("Error", "Failed to reset. Please try again.");
+                      }
+                    },
+                  },
+                ]
+              );
+            }}
+          >
+            <Text style={[styles.signOutText, { color: c.textSecondary }]}>Factory Reset</Text>
+          </Pressable>
+        </View>
+
         {/* Delete account */}
         <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: c.error }]}>Danger Zone</Text>
