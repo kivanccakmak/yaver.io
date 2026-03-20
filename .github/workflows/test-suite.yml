@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tests:
-        description: "Tests to run (all, builds, lan, relay, tailscale, cloudflare, unit)"
+        description: "Tests to run (all, builds, lan, relay, tailscale, cloudflare, unit, sdk)"
         required: false
         default: "all"
   push:
@@ -12,6 +12,7 @@ on:
     paths:
       - 'desktop/agent/**'
       - 'relay/**'
+      - 'sdk/**'
       - 'scripts/test-suite.sh'
 
 permissions:
@@ -32,6 +33,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Run test suite
         env:

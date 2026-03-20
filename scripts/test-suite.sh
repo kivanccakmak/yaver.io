@@ -1064,34 +1064,34 @@ main() {
 run_sdk_tests() {
     header "SDK Tests"
 
-    info "Running Go SDK tests..."
+    # ── Unit tests (no agent needed) ──────────────────────────────────
+
+    info "Running Go SDK unit tests..."
     if (cd "$ROOT_DIR/sdk/go/yaver" && go test -v -count=1 ./... > "$TEST_DIR/sdk-go-test.log" 2>&1); then
-        pass "Go SDK tests passed"
+        pass "Go SDK unit tests passed"
     else
-        fail "Go SDK tests failed"
+        fail "Go SDK unit tests failed"
         tail -20 "$TEST_DIR/sdk-go-test.log"
     fi
 
     info "Building C shared library (libyaver)..."
-    if (cd "$ROOT_DIR/sdk/go/clib" && go build -buildmode=c-shared -o libyaver.so . > "$TEST_DIR/sdk-clib-build.log" 2>&1); then
-        pass "C shared library built"
-        rm -f "$ROOT_DIR/sdk/go/clib/libyaver.so" "$ROOT_DIR/sdk/go/clib/libyaver.h"
+    local lib_ext="so"
+    [ "$(uname)" = "Darwin" ] && lib_ext="dylib"
+    if (cd "$ROOT_DIR/sdk/go/clib" && go build -buildmode=c-shared -o "libyaver.${lib_ext}" . > "$TEST_DIR/sdk-clib-build.log" 2>&1); then
+        local lib_size
+        lib_size=$(du -h "$ROOT_DIR/sdk/go/clib/libyaver.${lib_ext}" | cut -f1)
+        pass "C shared library built (${lib_ext}, ${lib_size})"
+        rm -f "$ROOT_DIR/sdk/go/clib/libyaver.${lib_ext}" "$ROOT_DIR/sdk/go/clib/libyaver.h"
     else
-        # macOS uses .dylib
-        if (cd "$ROOT_DIR/sdk/go/clib" && go build -buildmode=c-shared -o libyaver.dylib . > "$TEST_DIR/sdk-clib-build.log" 2>&1); then
-            pass "C shared library built (dylib)"
-            rm -f "$ROOT_DIR/sdk/go/clib/libyaver.dylib" "$ROOT_DIR/sdk/go/clib/libyaver.h"
-        else
-            fail "C shared library build failed"
-            tail -20 "$TEST_DIR/sdk-clib-build.log"
-        fi
+        fail "C shared library build failed"
+        tail -20 "$TEST_DIR/sdk-clib-build.log"
     fi
 
-    info "Running Python SDK tests..."
+    info "Running Python SDK unit tests..."
     if (cd "$ROOT_DIR/sdk/python" && python3 test_yaver.py > "$TEST_DIR/sdk-python-test.log" 2>&1); then
-        pass "Python SDK tests passed"
+        pass "Python SDK unit tests passed"
     else
-        fail "Python SDK tests failed"
+        fail "Python SDK unit tests failed"
         tail -20 "$TEST_DIR/sdk-python-test.log"
     fi
 
@@ -1110,6 +1110,55 @@ run_sdk_tests() {
         fail "JS/TS SDK build failed"
         tail -20 "$TEST_DIR/sdk-js-build.log"
     fi
+
+    # ── Integration tests (start agent, test each SDK against it) ─────
+
+    local agent_bin="$TEST_DIR/yaver"
+    [ -f "$agent_bin" ] || build_agent "$agent_bin" > /dev/null 2>&1 || { fail "Cannot build agent for SDK integration"; return; }
+
+    local http_port
+    http_port=$(get_free_port)
+    local quic_port
+    quic_port=$(get_free_port)
+
+    info "Creating test account for SDK integration..."
+    local token
+    token=$(create_test_account) || { fail "Cannot create test account for SDK integration"; return; }
+
+    local device_id="test-sdk-$(gen_uuid)"
+    local work_dir="$TEST_DIR/sdk-agent"
+
+    info "Starting agent for SDK integration (HTTP=$http_port)..."
+    local agent_pid
+    agent_pid=$(start_agent "$agent_bin" "$http_port" "$quic_port" "$token" "$device_id" "$work_dir" --no-relay) || {
+        fail "Agent failed to start for SDK integration"; return
+    }
+
+    local base_url="http://127.0.0.1:${http_port}"
+
+    # Go SDK integration
+    info "Running Go SDK integration tests..."
+    if (cd "$ROOT_DIR/sdk/go/yaver" && \
+        YAVER_TEST_URL="$base_url" YAVER_TEST_TOKEN="$token" \
+        go test -tags integration -v -count=1 -timeout 120s ./... > "$TEST_DIR/sdk-go-integration.log" 2>&1); then
+        pass "Go SDK integration tests passed"
+    else
+        fail "Go SDK integration tests failed"
+        tail -20 "$TEST_DIR/sdk-go-integration.log"
+    fi
+
+    # Python SDK integration
+    info "Running Python SDK integration tests..."
+    if (cd "$ROOT_DIR/sdk/python" && \
+        YAVER_TEST_URL="$base_url" YAVER_TEST_TOKEN="$token" \
+        python3 test_integration.py > "$TEST_DIR/sdk-python-integration.log" 2>&1); then
+        pass "Python SDK integration tests passed"
+    else
+        fail "Python SDK integration tests failed"
+        tail -20 "$TEST_DIR/sdk-python-integration.log"
+    fi
+
+    kill "$agent_pid" 2>/dev/null || true
 }
 
     local run_all=true

@@ -83,11 +83,13 @@ type SpeechContext struct {
 
 // AgentInfo contains status information about the remote agent.
 type AgentInfo struct {
+	OK           bool   `json:"ok"`
 	Hostname     string `json:"hostname"`
-	Platform     string `json:"platform"`
-	AgentVersion string `json:"agentVersion"`
-	RunningTasks int    `json:"runningTasks"`
-	TotalTasks   int    `json:"totalTasks"`
+	Version      string `json:"version"`
+	WorkDir      string `json:"workDir,omitempty"`
+	Platform     string `json:"platform,omitempty"`
+	RunningTasks int    `json:"runningTasks,omitempty"`
+	TotalTasks   int    `json:"totalTasks,omitempty"`
 }
 
 // CreateTask creates a new task on the remote agent.
@@ -232,15 +234,15 @@ func (c *Client) Health() error {
 
 // Info returns agent status information.
 func (c *Client) Info() (*AgentInfo, error) {
-	var result struct {
-		OK   bool      `json:"ok"`
-		Info AgentInfo `json:"info"`
-	}
+	var result AgentInfo
 	if err := c.get("/info", &result); err != nil {
 		return nil, err
 	}
-	return &result.Info, nil
+	return &result, nil
 }
+
+// AgentInfoRaw is the raw response from /info for advanced use.
+type AgentInfoRaw = map[string]interface{}
 
 // Ping measures round-trip time to the agent.
 func (c *Client) Ping() (time.Duration, error) {
