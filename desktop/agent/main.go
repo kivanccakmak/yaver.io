@@ -2602,12 +2602,49 @@ func runDoctor() {
 	}
 
 	check("HTTP server")
-	resp, err := http.Get("http://127.0.0.1:18080/health")
+	statusClient := &http.Client{Timeout: 3 * time.Second}
+	resp, err := statusClient.Get("http://127.0.0.1:18080/health")
 	if err != nil {
 		warning("Not reachable on port 18080")
 	} else {
 		resp.Body.Close()
 		pass("Listening on :18080")
+	}
+
+	// Query agent for forked processes
+	if cfg != nil && cfg.AuthToken != "" {
+		check("Forked sessions")
+		req, _ := newBearerRequest("GET", "http://127.0.0.1:18080/agent/status", cfg.AuthToken, nil)
+		if req != nil {
+			if sResp, sErr := statusClient.Do(req); sErr == nil {
+				defer sResp.Body.Close()
+				var statusBody struct {
+					Status struct {
+						RunnerProcesses []struct {
+							PID     int    `json:"pid"`
+							Command string `json:"command"`
+						} `json:"runnerProcesses"`
+						RunningTasks int `json:"runningTasks"`
+						TotalTasks   int `json:"totalTasks"`
+					} `json:"status"`
+				}
+				if json.NewDecoder(sResp.Body).Decode(&statusBody) == nil {
+					procs := statusBody.Status.RunnerProcesses
+					if len(procs) > 0 {
+						pass(fmt.Sprintf("%d process(es), %d running task(s), %d total", len(procs), statusBody.Status.RunningTasks, statusBody.Status.TotalTasks))
+						for _, p := range procs {
+							cmd := p.Command
+							if len(cmd) > 50 {
+								cmd = cmd[:50] + "..."
+							}
+							fmt.Printf("    PID %-8d %s\n", p.PID, cmd)
+						}
+					} else {
+						pass(fmt.Sprintf("idle (%d total tasks)", statusBody.Status.TotalTasks))
+					}
+				}
+			}
+		}
 	}
 
 	// 4. AI Runners

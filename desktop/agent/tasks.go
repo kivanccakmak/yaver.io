@@ -936,13 +936,11 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		for _, ra := range runner.ResumeArgs {
 			args = append(args, strings.ReplaceAll(ra, "{sessionId}", warmSID))
 		}
+		// Claude Code 2.1.80+ requires --fork-session with --session-id when resuming
+		if runner.RunnerID == "claude" {
+			args = append(args, "--fork-session", "--session-id", uuid.New().String())
+		}
 		log.Printf("[task %s] Resuming warm session %s", task.ID, warmSID)
-	}
-
-	// Give each Claude task its own session ID to avoid blocking other sessions
-	// Only add --session-id when resuming (Claude Code requires --resume or --continue with --session-id)
-	if runner.RunnerID == "claude" && warmSID != "" && runner.ResumeSupported {
-		args = append(args, "--session-id", uuid.New().String())
 	}
 
 	// Override model if specified on the task (e.g. "opus", "sonnet", "haiku").
