@@ -2473,7 +2473,6 @@ func runStatus() {
 		}
 
 		fmt.Println("  Servers:")
-		relayClient := &http.Client{Timeout: 5 * time.Second}
 		for _, rs := range cfg.RelayServers {
 			label := rs.ID
 			if rs.Label != "" {
@@ -2486,38 +2485,19 @@ func runStatus() {
 				pw = " [global pw]"
 			}
 
-			// Live probe
-			healthURL := rs.HttpURL + "/health"
-			start := time.Now()
-			resp, err := relayClient.Get(healthURL)
-			rtt := time.Since(start)
-
-			if err != nil {
-				fmt.Printf("    %-10s %-30s FAIL (timeout)%s\n", label, rs.HttpURL, pw)
-			} else {
-				var body struct {
-					OK      bool   `json:"ok"`
-					Tunnels int    `json:"tunnels"`
-					Version string `json:"version"`
-				}
-				json.NewDecoder(resp.Body).Decode(&body)
-				resp.Body.Close()
-				if resp.StatusCode == 200 {
-					fmt.Printf("    %-10s %-30s OK (%dms, %d tunnel(s), v%s)%s\n",
-						label, rs.HttpURL, rtt.Milliseconds(), body.Tunnels, body.Version, pw)
-				} else {
-					fmt.Printf("    %-10s %-30s FAIL (status %d)%s\n", label, rs.HttpURL, resp.StatusCode, pw)
-				}
-			}
-
-			// Show last agent heartbeat info from cache
+			// Use cached health from agent's background checks (instant, no HTTP)
 			if cached, ok := cachedHealth[rs.HttpURL]; ok && !cached.LastChecked.IsZero() {
 				ago := time.Since(cached.LastChecked).Truncate(time.Second)
 				if cached.OK {
-					fmt.Printf("              Last heartbeat: %s ago (%dms, %d tunnels)\n", ago, cached.LatencyMs, cached.Tunnels)
+					fmt.Printf("    %-10s %-30s OK (%dms, %d tunnel(s), v%s)%s\n",
+						label, rs.HttpURL, cached.LatencyMs, cached.Tunnels, cached.Version, pw)
+					fmt.Printf("              Last check: %s ago\n", ago)
 				} else {
-					fmt.Printf("              Last heartbeat: %s ago (FAIL: %s)\n", ago, cached.Error)
+					fmt.Printf("    %-10s %-30s FAIL (%s)%s\n", label, rs.HttpURL, cached.Error, pw)
+					fmt.Printf("              Last check: %s ago\n", ago)
 				}
+			} else {
+				fmt.Printf("    %-10s %-30s (no health data yet)%s\n", label, rs.HttpURL, pw)
 			}
 		}
 	}
