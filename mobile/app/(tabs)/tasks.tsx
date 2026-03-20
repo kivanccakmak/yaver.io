@@ -36,7 +36,7 @@ import {
 } from "../../src/lib/quic";
 import { markTaskDeleted, getDeletedTaskIds } from "../../src/lib/storage";
 import { useAuth } from "../../src/context/AuthContext";
-import { getUserSettings, type SpeechProvider } from "../../src/lib/auth";
+import { getUserSettings, getLocalSecret, LOCAL_KEYS, type SpeechProvider } from "../../src/lib/auth";
 import { transcribe, initWhisper, isWhisperReady, SPEECH_PROVIDERS } from "../../src/lib/speech";
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -359,11 +359,14 @@ export default function TasksScreen() {
     // Pre-init whisper for default on-device provider
     initWhisper().catch(() => {});
     if (!token) return;
-    getUserSettings(token).then((s) => {
+    getUserSettings(token).then(async (s) => {
       if (s.speechProvider) setSpeechProvider(s.speechProvider);
-      if (s.speechApiKey) setSpeechApiKey(s.speechApiKey);
       if (s.ttsEnabled) setTtsEnabled(s.ttsEnabled);
       if (s.verbosity !== undefined) setVerbosity(s.verbosity);
+      // Load speech API key — prefer local Keychain, fall back to cloud
+      const localKey = await getLocalSecret(LOCAL_KEYS.speechApiKey);
+      if (localKey) setSpeechApiKey(localKey);
+      else if (s.speechApiKey) setSpeechApiKey(s.speechApiKey);
     }).catch(() => {});
   }, [token]);
 

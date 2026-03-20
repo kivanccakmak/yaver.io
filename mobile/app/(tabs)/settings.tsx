@@ -22,7 +22,7 @@ import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import { customRelaysKey, customTunnelsKey } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
-import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent, getUsageSummary, type UsageSummary, type SpeechProvider } from "../../src/lib/auth";
+import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent, getUsageSummary, type UsageSummary, type SpeechProvider, type KeyStorage, LOCAL_KEYS, getLocalSecret, saveLocalSecret, deleteLocalSecret, getKeyStoragePreference, saveKeyStoragePreference } from "../../src/lib/auth";
 import { SPEECH_PROVIDERS } from "../../src/lib/speech";
 import { clearCache } from "../../src/lib/storage";
 import * as ExpoClipboard from "expo-clipboard";
@@ -75,6 +75,9 @@ export default function SettingsScreen() {
   const [verbosity, setVerbosity] = useState(10);
   const [showSpeechConfig, setShowSpeechConfig] = useState(false);
   const [isSavingSpeech, setIsSavingSpeech] = useState(false);
+
+  // Key storage preference: "local" = device Keychain only, "cloud" = sync to Convex
+  const [keyStorage, setKeyStorage] = useState<KeyStorage>("local");
 
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -304,10 +307,12 @@ export default function SettingsScreen() {
     }
   };
 
-  // Load user settings, runners, and usage from Convex
+  // Load user settings, runners, and usage from Convex + local secrets
   useEffect(() => {
     if (!token) return;
-    getUserSettings(token).then((s) => {
+    // Load key storage preference
+    getKeyStoragePreference().then(setKeyStorage);
+    getUserSettings(token).then(async (s) => {
       if (s.forceRelay !== undefined) {
         setForceRelay(s.forceRelay);
         quicClient.setForceRelay(s.forceRelay);
@@ -315,9 +320,15 @@ export default function SettingsScreen() {
       if (s.runnerId) setSelectedRunner(s.runnerId);
       if (s.customRunnerCommand) setCustomRunnerCommand(s.customRunnerCommand);
       if (s.speechProvider) setSpeechProvider(s.speechProvider);
-      if (s.speechApiKey) setSpeechApiKey(s.speechApiKey);
       if (s.ttsEnabled !== undefined) setTtsEnabled(s.ttsEnabled);
       if (s.verbosity !== undefined) setVerbosity(s.verbosity);
+      // Load speech API key — prefer local, fall back to cloud
+      const localSpeechKey = await getLocalSecret(LOCAL_KEYS.speechApiKey);
+      if (localSpeechKey) {
+        setSpeechApiKey(localSpeechKey);
+      } else if (s.speechApiKey) {
+        setSpeechApiKey(s.speechApiKey);
+      }
     });
     getAiRunners().then(setRunners);
     getUsageSummary(token).then(setUsageSummary);
@@ -1540,12 +1551,21 @@ export default function SettingsScreen() {
                     if (!token) return;
                     setIsSavingSpeech(true);
                     try {
-                      await saveUserSettings(token, {
+                      const cloudSettings: Record<string, any> = {
                         speechProvider: speechProvider ?? undefined,
-                        speechApiKey: speechApiKey || undefined,
                         ttsEnabled,
                         verbosity,
-                      });
+                      };
+                      if (keyStorage === "cloud" && speechApiKey) {
+                        cloudSettings.speechApiKey = speechApiKey;
+                        await deleteLocalSecret(LOCAL_KEYS.speechApiKey);
+                      } else {
+                        // Store key locally, clear from cloud
+                        if (speechApiKey) await saveLocalSecret(LOCAL_KEYS.speechApiKey, speechApiKey);
+                        else await deleteLocalSecret(LOCAL_KEYS.speechApiKey);
+                        cloudSettings.speechApiKey = ""; // clear from Convex
+                      }
+                      await saveUserSettings(token, cloudSettings);
                       setShowSpeechConfig(false);
                     } catch {}
                     setIsSavingSpeech(false);
@@ -1617,6 +1637,65 @@ export default function SettingsScreen() {
                     )}
                   </Pressable>
                 ))}
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* Key Storage */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Security</Text>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
+              <Text style={[styles.aboutLabel, { color: c.textPrimary, marginBottom: 4 }]}>Secret storage</Text>
+              <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 12 }}>
+                Where to store API keys, relay passwords, and other secrets
+              </Text>
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <Pressable
+                  style={({ pressed }) => [
+                    {
+                      flex: 1, paddingVertical: 10, paddingHorizontal: 12,
+                      borderRadius: 8, borderWidth: 1, alignItems: "center",
+                      backgroundColor: keyStorage === "local" ? c.accent : c.bg,
+                      borderColor: keyStorage === "local" ? c.accent : c.border,
+                    },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                  onPress={async () => {
+                    setKeyStorage("local");
+                    await saveKeyStoragePreference("local");
+                  }}
+                >
+                  <Text style={{ color: keyStorage === "local" ? "#fff" : c.textPrimary, fontWeight: "600", fontSize: 13 }}>
+                    Device only
+                  </Text>
+                  <Text style={{ color: keyStorage === "local" ? "rgba(255,255,255,0.7)" : c.textMuted, fontSize: 10, marginTop: 2, textAlign: "center" }}>
+                    Keychain / SecureStore
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [
+                    {
+                      flex: 1, paddingVertical: 10, paddingHorizontal: 12,
+                      borderRadius: 8, borderWidth: 1, alignItems: "center",
+                      backgroundColor: keyStorage === "cloud" ? c.accent : c.bg,
+                      borderColor: keyStorage === "cloud" ? c.accent : c.border,
+                    },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                  onPress={async () => {
+                    setKeyStorage("cloud");
+                    await saveKeyStoragePreference("cloud");
+                  }}
+                >
+                  <Text style={{ color: keyStorage === "cloud" ? "#fff" : c.textPrimary, fontWeight: "600", fontSize: 13 }}>
+                    Sync to cloud
+                  </Text>
+                  <Text style={{ color: keyStorage === "cloud" ? "rgba(255,255,255,0.7)" : c.textMuted, fontSize: 10, marginTop: 2, textAlign: "center" }}>
+                    Accessible from all devices
+                  </Text>
+                </Pressable>
               </View>
             </View>
           </View>

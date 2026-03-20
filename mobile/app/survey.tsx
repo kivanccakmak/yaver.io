@@ -14,7 +14,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../src/context/AuthContext";
 import { useColors } from "../src/context/ThemeContext";
-import { submitSurvey, getAiRunners, saveUserSettings, getUserSettings, type AiRunner, type SpeechProvider } from "../src/lib/auth";
+import { submitSurvey, getAiRunners, saveUserSettings, getUserSettings, type AiRunner, type SpeechProvider, type KeyStorage, saveLocalSecret, LOCAL_KEYS, saveKeyStoragePreference } from "../src/lib/auth";
 import { SPEECH_PROVIDERS } from "../src/lib/speech";
 
 const IDENTITIES = [
@@ -72,6 +72,7 @@ export default function SurveyScreen() {
   const [speechApiKey, setSpeechApiKey] = useState("");
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [verbosity, setVerbosity] = useState(10);
+  const [keyStorage, setKeyStorage] = useState<KeyStorage>("local");
 
   useEffect(() => {
     getAiRunners().then((r) => {
@@ -119,12 +120,18 @@ export default function SurveyScreen() {
         settings.customRunnerCommand = customCommand.trim();
       }
       settings.speechProvider = speechProvider ?? "on-device";
-      const providerInfo = SPEECH_PROVIDERS.find((p) => p.id === speechProvider);
-      if (providerInfo?.requiresKey && speechApiKey.trim()) {
-        settings.speechApiKey = speechApiKey.trim();
-      }
       settings.ttsEnabled = ttsEnabled;
       settings.verbosity = verbosity;
+      // Handle API key storage based on preference
+      await saveKeyStoragePreference(keyStorage);
+      const providerInfo = SPEECH_PROVIDERS.find((p) => p.id === speechProvider);
+      if (providerInfo?.requiresKey && speechApiKey.trim()) {
+        if (keyStorage === "local") {
+          await saveLocalSecret(LOCAL_KEYS.speechApiKey, speechApiKey.trim());
+        } else {
+          settings.speechApiKey = speechApiKey.trim();
+        }
+      }
       await saveUserSettings(token, settings);
       markSurveyCompleted();
       await refreshUser();
@@ -362,6 +369,48 @@ export default function SurveyScreen() {
           <Text style={[{ fontSize: 11, color: c.textMuted, marginTop: -12, marginBottom: 12, paddingHorizontal: 4 }]}>
             {selectedSpeechProvider.keyHint}
           </Text>
+
+          {/* Key storage preference */}
+          <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+            <Pressable
+              style={({ pressed }) => [
+                {
+                  flex: 1, paddingVertical: 8, paddingHorizontal: 10,
+                  borderRadius: 8, borderWidth: 1, alignItems: "center",
+                  backgroundColor: keyStorage === "local" ? c.accent : c.bgCard,
+                  borderColor: keyStorage === "local" ? c.accent : c.border,
+                },
+                pressed && { opacity: 0.7 },
+              ]}
+              onPress={() => setKeyStorage("local")}
+            >
+              <Text style={{ color: keyStorage === "local" ? "#fff" : c.textPrimary, fontWeight: "600", fontSize: 12 }}>
+                Device only
+              </Text>
+              <Text style={{ color: keyStorage === "local" ? "rgba(255,255,255,0.7)" : c.textMuted, fontSize: 10, marginTop: 1 }}>
+                Stored in Keychain
+              </Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [
+                {
+                  flex: 1, paddingVertical: 8, paddingHorizontal: 10,
+                  borderRadius: 8, borderWidth: 1, alignItems: "center",
+                  backgroundColor: keyStorage === "cloud" ? c.accent : c.bgCard,
+                  borderColor: keyStorage === "cloud" ? c.accent : c.border,
+                },
+                pressed && { opacity: 0.7 },
+              ]}
+              onPress={() => setKeyStorage("cloud")}
+            >
+              <Text style={{ color: keyStorage === "cloud" ? "#fff" : c.textPrimary, fontWeight: "600", fontSize: 12 }}>
+                Sync to cloud
+              </Text>
+              <Text style={{ color: keyStorage === "cloud" ? "rgba(255,255,255,0.7)" : c.textMuted, fontSize: 10, marginTop: 1 }}>
+                All your devices
+              </Text>
+            </Pressable>
+          </View>
         </>
       )}
 

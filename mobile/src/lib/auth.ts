@@ -281,6 +281,8 @@ export async function getSurveyStatus(
   return response.json();
 }
 
+export type KeyStorage = "local" | "cloud";
+
 export interface UserSettings {
   forceRelay?: boolean;
   runnerId?: string;
@@ -292,6 +294,50 @@ export interface UserSettings {
   speechApiKey?: string;
   ttsEnabled?: boolean;
   verbosity?: number; // 0-10: response detail level
+  keyStorage?: KeyStorage; // "local" = device Keychain only, "cloud" = sync to Convex
+}
+
+// ── Local secret storage (iOS Keychain / Android SecureStore) ───────
+// All sensitive keys can be stored locally instead of syncing to Convex.
+
+const LOCAL_KEY_PREFIX = "yaver_key_";
+
+/** Known local key names */
+export const LOCAL_KEYS = {
+  speechApiKey: `${LOCAL_KEY_PREFIX}speech`,
+  relayPassword: `${LOCAL_KEY_PREFIX}relay_password`,
+  relayUrl: `${LOCAL_KEY_PREFIX}relay_url`,
+  tunnelUrl: `${LOCAL_KEY_PREFIX}tunnel_url`,
+} as const;
+
+export async function getLocalSecret(key: string): Promise<string | null> {
+  try {
+    return await SecureStore.getItemAsync(key);
+  } catch {
+    return null;
+  }
+}
+
+export async function saveLocalSecret(key: string, value: string): Promise<void> {
+  await SecureStore.setItemAsync(key, value);
+}
+
+export async function deleteLocalSecret(key: string): Promise<void> {
+  await SecureStore.deleteItemAsync(key).catch(() => {});
+}
+
+/** Get the effective key storage preference (defaults to "local"). */
+export async function getKeyStoragePreference(): Promise<KeyStorage> {
+  try {
+    const val = await SecureStore.getItemAsync(`${LOCAL_KEY_PREFIX}storage_pref`);
+    return val === "cloud" ? "cloud" : "local";
+  } catch {
+    return "local";
+  }
+}
+
+export async function saveKeyStoragePreference(pref: KeyStorage): Promise<void> {
+  await SecureStore.setItemAsync(`${LOCAL_KEY_PREFIX}storage_pref`, pref);
 }
 
 export type SpeechProvider = "on-device" | "openai" | "deepgram" | "assemblyai";
