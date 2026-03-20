@@ -3,6 +3,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useMemo,
   useState,
 } from "react";
@@ -83,13 +84,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  // Refresh token when app comes to foreground (extends expiry)
+  // Refresh token when app returns from background (extends expiry)
+  const appStateRef = useRef(AppState.currentState);
   useEffect(() => {
     const handleAppState = (nextState: AppStateStatus) => {
-      if (nextState === "active" && token) {
+      const prevState = appStateRef.current;
+      appStateRef.current = nextState;
+      // Only refresh when coming back from background/inactive, not on initial launch
+      if (nextState === "active" && prevState.match(/inactive|background/) && token) {
         refreshToken(token).then((ok) => {
           if (!ok) {
-            // Token expired while app was in background — force logout
             console.log("[auth] Token expired — logging out");
             clearToken().then(() => {
               setToken(null);
