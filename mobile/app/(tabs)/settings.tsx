@@ -20,7 +20,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
-import { CUSTOM_RELAYS_KEY, CUSTOM_TUNNELS_KEY } from "../../src/context/DeviceContext";
+import { customRelaysKey, customTunnelsKey } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent, getUsageSummary, type UsageSummary } from "../../src/lib/auth";
 import { clearCache } from "../../src/lib/storage";
@@ -89,22 +89,27 @@ export default function SettingsScreen() {
   const [testingTunnelId, setTestingTunnelId] = useState<string | null>(null);
   const [tunnelTestResults, setTunnelTestResults] = useState<Record<string, { ok: boolean; ms?: number; error?: string }>>({});
 
+  // User-scoped storage keys
+  const RELAYS_KEY = customRelaysKey(user?.id);
+  const TUNNELS_KEY = customTunnelsKey(user?.id);
+  const SYNC_KEY = user?.id ? `@yaver/u/${user.id}/relay_sync_enabled` : "@yaver/relay_sync_enabled";
+
   // Load custom relay servers and sync preference from AsyncStorage
   useEffect(() => {
-    AsyncStorage.getItem(CUSTOM_RELAYS_KEY).then((raw) => {
+    AsyncStorage.getItem(RELAYS_KEY).then((raw) => {
       if (raw) {
         try {
           setCustomRelays(JSON.parse(raw));
         } catch {}
       }
     });
-    AsyncStorage.getItem("@yaver/relay_sync_enabled").then((val) => {
+    AsyncStorage.getItem(SYNC_KEY).then((val) => {
       setRelaySyncEnabled(val === "true");
     });
     AsyncStorage.getItem("@yaver/debug_logs_enabled").then((val) => {
       setDebugLogsEnabled(val === "true");
     });
-    AsyncStorage.getItem(CUSTOM_TUNNELS_KEY).then((raw) => {
+    AsyncStorage.getItem(TUNNELS_KEY).then((raw) => {
       if (raw) {
         try {
           const tunnels = JSON.parse(raw);
@@ -119,12 +124,12 @@ export default function SettingsScreen() {
 
   const saveCustomRelays = async (relays: RelayServer[]) => {
     setCustomRelays(relays);
-    await AsyncStorage.setItem(CUSTOM_RELAYS_KEY, JSON.stringify(relays));
+    await AsyncStorage.setItem(RELAYS_KEY, JSON.stringify(relays));
     if (relays.length > 0) {
       quicClient.setRelayServers(relays);
     }
     // Sync primary relay to Convex user settings only if cloud sync is enabled
-    const syncEnabled = await AsyncStorage.getItem("@yaver/relay_sync_enabled");
+    const syncEnabled = await AsyncStorage.getItem(SYNC_KEY);
     if (token && syncEnabled === "true") {
       const primary = relays.length > 0 ? relays[0] : null;
       saveUserSettings(token, {
@@ -135,7 +140,7 @@ export default function SettingsScreen() {
 
   const handleToggleRelaySync = async (enabled: boolean) => {
     setRelaySyncEnabled(enabled);
-    await AsyncStorage.setItem("@yaver/relay_sync_enabled", enabled ? "true" : "false");
+    await AsyncStorage.setItem(SYNC_KEY, enabled ? "true" : "false");
     if (enabled && token) {
       const primary = customRelays.length > 0 ? customRelays[0] : null;
       const primaryTunnel = customTunnels.length > 0 ? customTunnels[0] : null;
@@ -219,7 +224,7 @@ export default function SettingsScreen() {
 
   const saveCustomTunnels = async (tunnels: TunnelServer[]) => {
     setCustomTunnels(tunnels);
-    await AsyncStorage.setItem(CUSTOM_TUNNELS_KEY, JSON.stringify(tunnels));
+    await AsyncStorage.setItem(TUNNELS_KEY, JSON.stringify(tunnels));
     if (tunnels.length > 0) {
       quicClient.setTunnelServers(tunnels);
     }

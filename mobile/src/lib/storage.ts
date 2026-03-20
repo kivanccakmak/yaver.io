@@ -85,24 +85,20 @@ export async function getDeletedTaskIds(): Promise<Set<string>> {
   }
 }
 
-/** Keys to preserve across sign-out (device/connection settings). */
-const PRESERVE_ON_LOGOUT = new Set([
-  "@yaver/custom_relays",
-  "@yaver/custom_tunnels",
-  "@yaver/relay_sync_enabled",
-  "@yaver/debug_logs_enabled",
-  "@yaver/relay_onboarding_done",
-]);
-
-/** Remove task cache and session data but preserve connection settings. */
+/** Remove task cache but preserve user-scoped settings (relays, tunnels, etc). */
 export async function clearCache(): Promise<void> {
   try {
     const allKeys = await AsyncStorage.getAllKeys();
-    const yaverKeys = allKeys.filter(
-      (k) => k.startsWith("@yaver/") && !PRESERVE_ON_LOGOUT.has(k)
-    );
-    if (yaverKeys.length > 0) {
-      await AsyncStorage.multiRemove(yaverKeys);
+    // Only remove task cache keys and legacy global keys
+    // Preserve: @yaver/u/{userId}/* (user-scoped settings), debug_logs (global)
+    const toRemove = allKeys.filter((k) => {
+      if (!k.startsWith("@yaver/")) return false;
+      if (k.startsWith("@yaver/u/")) return false;         // user-scoped settings
+      if (k === "@yaver/debug_logs_enabled") return false;  // global pref
+      return true;
+    });
+    if (toRemove.length > 0) {
+      await AsyncStorage.multiRemove(toRemove);
     }
   } catch {
     // Non-fatal.

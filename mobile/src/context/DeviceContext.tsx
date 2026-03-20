@@ -19,6 +19,19 @@ import { appLog } from "../lib/logger";
 import { beaconListener } from "../lib/beacon";
 import { CONVEX_SITE_URL } from "../lib/constants";
 
+/** User-scoped storage key. Falls back to global key if no userId. */
+function userKey(userId: string | undefined, key: string): string {
+  return userId ? `@yaver/u/${userId}/${key}` : `@yaver/${key}`;
+}
+
+// Exported so settings screen can read/write with user scope
+export function customRelaysKey(userId?: string): string { return userKey(userId, "custom_relays"); }
+export function customTunnelsKey(userId?: string): string { return userKey(userId, "custom_tunnels"); }
+function relayOnboardingKey(userId?: string): string { return userKey(userId, "relay_onboarding_done"); }
+function relaySyncKey(userId?: string): string { return userKey(userId, "relay_sync_enabled"); }
+function debugLogsKey(): string { return "@yaver/debug_logs_enabled"; } // global, not per-user
+
+// Legacy keys for migration
 export const CUSTOM_RELAYS_KEY = "@yaver/custom_relays";
 export const CUSTOM_TUNNELS_KEY = "@yaver/custom_tunnels";
 const RELAY_ONBOARDING_KEY = "@yaver/relay_onboarding_done";
@@ -98,6 +111,35 @@ function sendTelemetry(token: string | null, step: string, message: string, deta
 
 export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const { token, user } = useAuth();
+  const uid = user?.id;
+
+  // User-scoped storage keys (different user = different settings)
+  const RELAYS_KEY = customRelaysKey(uid);
+  const TUNNELS_KEY = customTunnelsKey(uid);
+  const ONBOARDING_KEY = relayOnboardingKey(uid);
+  const SYNC_KEY = relaySyncKey(uid);
+
+  // Migrate legacy global keys to user-scoped on first load
+  const migrated = useRef(false);
+  useEffect(() => {
+    if (!uid || migrated.current) return;
+    migrated.current = true;
+    (async () => {
+      // Migrate relays
+      const scopedRelays = await AsyncStorage.getItem(RELAYS_KEY);
+      if (!scopedRelays) {
+        const legacy = await AsyncStorage.getItem(CUSTOM_RELAYS_KEY);
+        if (legacy) await AsyncStorage.setItem(RELAYS_KEY, legacy);
+      }
+      // Migrate tunnels
+      const scopedTunnels = await AsyncStorage.getItem(TUNNELS_KEY);
+      if (!scopedTunnels) {
+        const legacy = await AsyncStorage.getItem(CUSTOM_TUNNELS_KEY);
+        if (legacy) await AsyncStorage.setItem(TUNNELS_KEY, legacy);
+      }
+    })().catch(() => {});
+  }, [uid, RELAYS_KEY, TUNNELS_KEY]);
+
   const [devices, setDevices] = useState<Device[]>([]);
   const [activeDevice, setActiveDevice] = useState<Device | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
@@ -267,7 +309,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       try {
         // 1. Check for user-configured custom relays in local storage first
-        const customRaw = await AsyncStorage.getItem(CUSTOM_RELAYS_KEY);
+        const customRaw = await AsyncStorage.getItem(RELAYS_KEY);
         if (customRaw) {
           const customRelays: RelayServer[] = JSON.parse(customRaw);
           if (customRelays.length > 0) {
@@ -293,9 +335,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
               };
               quicClient.setRelayServers([accountRelay]);
               // Persist to AsyncStorage so it works offline and on next launch
-              await AsyncStorage.setItem(CUSTOM_RELAYS_KEY, JSON.stringify([accountRelay]));
+              await AsyncStorage.setItem(RELAYS_KEY, JSON.stringify([accountRelay]));
               // Also enable relay sync so future changes propagate
-              await AsyncStorage.setItem("@yaver/relay_sync_enabled", "true");
+              await AsyncStorage.setItem(SYNC_KEY, "true");
               console.log("[DeviceContext] Loaded relay from Convex user settings:", settings.relayUrl);
               sendTelemetry(token, "relays-loaded", "Loaded relay from account settings", settings.relayUrl);
               return;
@@ -330,7 +372,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       try {
         // 1. Check local storage first
-        const customRaw = await AsyncStorage.getItem(CUSTOM_TUNNELS_KEY);
+        const customRaw = await AsyncStorage.getItem(TUNNELS_KEY);
         if (customRaw) {
           const customTunnels: TunnelServer[] = JSON.parse(customRaw);
           if (customTunnels.length > 0) {
@@ -351,7 +393,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
                 priority: 1,
               };
               quicClient.setTunnelServers([accountTunnel]);
-              await AsyncStorage.setItem(CUSTOM_TUNNELS_KEY, JSON.stringify([accountTunnel]));
+              await AsyncStorage.setItem(TUNNELS_KEY, JSON.stringify([accountTunnel]));
               console.log("[DeviceContext] Loaded tunnel from Convex user settings:", settings.tunnelUrl);
             }
           } catch {
@@ -384,14 +426,14 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     onboardingChecked.current = true;
     (async () => {
       try {
-        const done = await AsyncStorage.getItem(RELAY_ONBOARDING_KEY);
+        const done = await AsyncStorage.getItem(ONBOARDING_KEY);
         if (done) return;
-        const customRaw = await AsyncStorage.getItem(CUSTOM_RELAYS_KEY);
+        const customRaw = await AsyncStorage.getItem(RELAYS_KEY);
         if (customRaw) {
           const parsed = JSON.parse(customRaw);
           if (Array.isArray(parsed) && parsed.length > 0) {
             // Already has custom relays, skip onboarding
-            await AsyncStorage.setItem(RELAY_ONBOARDING_KEY, "1");
+            await AsyncStorage.setItem(ONBOARDING_KEY, "1");
             return;
           }
         }
@@ -403,7 +445,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
             {
               text: "Set Up Relay",
               onPress: () => {
-                AsyncStorage.setItem(RELAY_ONBOARDING_KEY, "1");
+                AsyncStorage.setItem(ONBOARDING_KEY, "1");
                 router.push("/(tabs)/settings");
               },
             },
@@ -417,7 +459,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
               text: "Skip",
               style: "cancel",
               onPress: () => {
-                AsyncStorage.setItem(RELAY_ONBOARDING_KEY, "1");
+                AsyncStorage.setItem(ONBOARDING_KEY, "1");
               },
             },
           ]
