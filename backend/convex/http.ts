@@ -447,6 +447,9 @@ http.route({
       quicHost: body.quicHost || undefined,
     });
 
+    // Auto-extend session on heartbeat (keeps CLI sessions alive indefinitely)
+    await ctx.runMutation(api.auth.refreshSession, { tokenHash }).catch(() => {});
+
     return jsonResponse({ ok: true });
   }),
 });
