@@ -29,7 +29,7 @@ let whisperContext: any = null;
 let isModelReady = false;
 let isInitializing = false;
 
-const MODEL_FILENAME = "ggml-tiny.en-q5_1.bin";
+const MODEL_FILENAME = "ggml-whisper-tiny.bin";
 
 /** Model is bundled in app — always available. */
 export async function isWhisperModelDownloaded(): Promise<boolean> {
@@ -60,8 +60,9 @@ export async function initWhisper(
     });
     isModelReady = true;
   } catch (err) {
-    console.warn("[speech] Failed to init whisper.rn:", err);
-    throw new Error("Failed to initialize on-device speech recognition");
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[speech] Failed to init whisper.rn:", msg);
+    throw new Error(`Failed to initialize on-device speech recognition: ${msg}`);
   } finally {
     isInitializing = false;
   }
@@ -71,19 +72,60 @@ export function isWhisperReady(): boolean {
   return isModelReady && whisperContext !== null;
 }
 
+/**
+ * Start realtime streaming transcription using whisper.rn's built-in mic.
+ * Returns a controller to stop recording and subscribe to partial results.
+ * This handles mic recording internally — no expo-av needed.
+ */
+export async function startRealtimeTranscribe(
+  onPartialResult: (text: string) => void,
+): Promise<{ stop: () => Promise<string> }> {
+  if (!whisperContext) {
+    await initWhisper();
+    if (!whisperContext) {
+      throw new Error("Whisper model not available.");
+    }
+  }
+
+  let finalText = "";
+
+  const { stop, subscribe } = await whisperContext.transcribeRealtime({
+    language: "en",
+    realtimeAudioSec: 60,
+    realtimeAudioSliceSec: 5,
+    realtimeAudioMinSec: 1,
+  });
+
+  subscribe((event: any) => {
+    if (event.isCapturing) {
+      const text = event.data?.result?.trim() ?? "";
+      if (text) {
+        finalText = text;
+        onPartialResult(text);
+      }
+    }
+  });
+
+  return {
+    stop: async () => {
+      await stop();
+      return finalText;
+    },
+  };
+}
+
 async function transcribeWithWhisper(audioUri: string): Promise<string> {
   if (!whisperContext) {
-    // Try to init on-the-fly
     await initWhisper();
     if (!whisperContext) {
       throw new Error("Whisper model not available. Check your internet connection and try again.");
     }
   }
 
-  const { transcribe } = whisperContext;
-  const result = await transcribe(audioUri, {
+  const { transcribe: whisperTranscribe } = whisperContext;
+  const result = await whisperTranscribe(audioUri, {
     language: "en",
-    maxLen: 0, // no max length
+    maxLen: 0,
     translate: false,
   });
 

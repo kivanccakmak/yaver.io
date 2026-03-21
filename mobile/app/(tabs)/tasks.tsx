@@ -37,7 +37,7 @@ import {
 import { markTaskDeleted, getDeletedTaskIds } from "../../src/lib/storage";
 import { useAuth } from "../../src/context/AuthContext";
 import { getUserSettings, getLocalSecret, LOCAL_KEYS, type SpeechProvider } from "../../src/lib/auth";
-import { transcribe, initWhisper, isWhisperReady, SPEECH_PROVIDERS } from "../../src/lib/speech";
+import { transcribe, initWhisper, isWhisperReady, startRealtimeTranscribe, SPEECH_PROVIDERS } from "../../src/lib/speech";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -353,6 +353,8 @@ export default function TasksScreen() {
   const [verbosity, setVerbosity] = useState(10);
   const [inputFromSpeech, setInputFromSpeech] = useState(false);
   const audioRecordingRef = useRef<any>(null);
+  const realtimeRef = useRef<{ stop: () => Promise<string> } | null>(null);
+  const [preRecordText, setPreRecordText] = useState(""); // text before recording started
 
   // Load speech settings from Convex (default: on-device whisper)
   useEffect(() => {
@@ -581,63 +583,80 @@ export default function TasksScreen() {
 
   // ── Voice recording ─────────────────────────────────────────────────
 
-  // Request mic permission and configure audio session on mount — BEFORE any Modal opens.
-  // iOS blocks Audio.setAudioModeAsync when called from inside a <Modal>.
-  const audioConfiguredRef = useRef(false);
+  // Pre-init whisper on mount
   useEffect(() => {
-    (async () => {
-      try {
-        const { Audio } = require("expo-av");
-        // Request permission eagerly so it's granted before modal opens
-        await Audio.requestPermissionsAsync();
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: true,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: false,
-        });
-        audioConfiguredRef.current = true;
-      } catch (e) {
-        console.warn("[audio] Failed to pre-configure audio session:", e);
-      }
-    })();
+    initWhisper().catch((e) => console.warn("[speech] Pre-init failed:", e));
   }, []);
 
   const startRecording = async () => {
     try {
-      const { Audio } = require("expo-av");
-      // Check permission (already requested on mount, but verify)
-      const perm = await Audio.getPermissionsAsync();
-      if (perm.status !== "granted") {
-        // Can't request inside Modal on iOS — tell user to grant in Settings
-        Alert.alert(
-          "Microphone Access",
-          "Please grant microphone access in Settings > Yaver > Microphone, then try again."
-        );
+      if (!speechProvider) {
+        Alert.alert("Voice Not Configured", "Set up a speech-to-text provider in Settings → Voice.");
         return;
       }
-      // Audio mode was set on mount — just create recording directly
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      audioRecordingRef.current = recording;
-      setIsRecording(true);
+
+      if (speechProvider === "on-device") {
+        // Use whisper.rn's built-in realtime transcription (streams text as you speak)
+        setPreRecordText(newTaskText);
+        const controller = await startRealtimeTranscribe((partialText) => {
+          // Update text input with streaming partial results
+          setNewTaskText((prev) => {
+            const base = preRecordText || "";
+            return base ? base + " " + partialText : partialText;
+          });
+        });
+        realtimeRef.current = controller;
+        setIsRecording(true);
+        setInputFromSpeech(true);
+      } else {
+        // Cloud providers: record with expo-av, then send file
+        const { Audio } = require("expo-av");
+        const perm = await Audio.requestPermissionsAsync();
+        if (perm.status !== "granted") {
+          Alert.alert("Microphone Access", "Please grant microphone access in Settings > Yaver > Microphone.");
+          return;
+        }
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+        const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+        audioRecordingRef.current = recording;
+        setIsRecording(true);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn("[speech] Failed to start recording:", msg);
-      Alert.alert("Recording Error", `Could not start recording: ${msg}`);
+      Alert.alert("Recording Error", msg);
     }
   };
 
   const stopRecordingAndTranscribe = async () => {
-    if (!audioRecordingRef.current) return;
     setIsRecording(false);
+
+    if (speechProvider === "on-device" && realtimeRef.current) {
+      // Realtime: stop and get final text (already streamed into input)
+      try {
+        const finalText = await realtimeRef.current.stop();
+        realtimeRef.current = null;
+        if (finalText) {
+          const base = preRecordText;
+          setNewTaskText(base ? base + " " + finalText : finalText);
+          setInputFromSpeech(true);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        Alert.alert("Transcription failed", msg);
+      }
+      return;
+    }
+
+    // Cloud providers: stop recording, upload file
+    if (!audioRecordingRef.current) return;
     setIsTranscribing(true);
     try {
       await audioRecordingRef.current.stopAndUnloadAsync();
       const uri = audioRecordingRef.current.getURI();
       audioRecordingRef.current = null;
       if (!uri) throw new Error("No recording URI");
-      if (!speechProvider) throw new Error("No speech provider configured. Go to Settings > Voice Input.");
+      if (!speechProvider) throw new Error("No speech provider configured.");
 
       const result = await transcribe(uri, { provider: speechProvider, apiKey: speechApiKey });
       if (result.text) {
