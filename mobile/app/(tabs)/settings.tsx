@@ -46,6 +46,7 @@ export default function SettingsScreen() {
   const [editName, setEditName] = useState(user?.name ?? "");
   const [isSavingName, setIsSavingName] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [isCleaning, setIsCleaning] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
@@ -471,6 +472,31 @@ export default function SettingsScreen() {
               Alert.alert("Error", "Failed to clear cache.");
             } finally {
               setIsClearing(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleCleanAgent = () => {
+    Alert.alert(
+      "Clean Up Agent",
+      "Remove completed tasks older than 30 days, their images, and old logs from your dev machine.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clean Up",
+          style: "destructive",
+          onPress: async () => {
+            setIsCleaning(true);
+            try {
+              const result = await quicClient.cleanAgent(30);
+              Alert.alert("Done", `Removed ${result.tasksRemoved} tasks, freed ${(result.bytesFreed / 1024 / 1024).toFixed(1)} MB.`);
+            } catch {
+              Alert.alert("Error", "Failed to clean up agent. Make sure you're connected.");
+            } finally {
+              setIsCleaning(false);
             }
           },
         },
@@ -909,6 +935,20 @@ export default function SettingsScreen() {
           >
             <Text style={[styles.actionRowLabel, { color: c.textPrimary }]}>
               {isClearing ? "Clearing..." : "Clear Task Cache"}
+            </Text>
+            <Text style={[styles.actionRowChevron, { color: c.textMuted }]}>&rsaquo;</Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.actionRow,
+              { backgroundColor: c.bgCard, borderColor: c.border },
+              pressed && styles.actionRowPressed,
+            ]}
+            onPress={handleCleanAgent}
+            disabled={isCleaning}
+          >
+            <Text style={[styles.actionRowLabel, { color: c.textPrimary }]}>
+              {isCleaning ? "Cleaning..." : "Clean Up Agent"}
             </Text>
             <Text style={[styles.actionRowChevron, { color: c.textMuted }]}>&rsaquo;</Text>
           </Pressable>

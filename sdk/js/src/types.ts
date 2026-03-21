@@ -23,11 +23,18 @@ export interface Turn {
   timestamp?: string;
 }
 
+export interface ImageAttachment {
+  base64: string;
+  mimeType: string;
+  filename: string;
+}
+
 export interface CreateTaskOptions {
   model?: string;
   runner?: string;
   customCommand?: string;
   speechContext?: SpeechContext;
+  images?: ImageAttachment[];
 }
 
 export interface SpeechContext {

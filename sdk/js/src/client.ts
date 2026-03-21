@@ -1,4 +1,4 @@
-import type { Task, CreateTaskOptions, AgentInfo } from './types';
+import type { Task, CreateTaskOptions, AgentInfo, ImageAttachment } from './types';
 
 /**
  * Yaver client — connects to a Yaver agent's HTTP API.
@@ -40,6 +40,7 @@ export class YaverClient {
     if (opts?.runner) body.runner = opts.runner;
     if (opts?.customCommand) body.customCommand = opts.customCommand;
     if (opts?.speechContext) body.speechContext = opts.speechContext;
+    if (opts?.images?.length) body.images = opts.images;
 
     const result = await this.post<{
       ok: boolean; taskId: string; status: string; runnerId: string; error?: string;
@@ -80,11 +81,21 @@ export class YaverClient {
   }
 
   /** Send a follow-up message to a running task. */
-  async continueTask(taskId: string, message: string): Promise<void> {
+  async continueTask(taskId: string, message: string, images?: ImageAttachment[]): Promise<void> {
+    const body: Record<string, unknown> = { input: message };
+    if (images?.length) body.images = images;
     const result = await this.post<{ ok: boolean; error?: string }>(
-      `/tasks/${taskId}/continue`, { message }
+      `/tasks/${taskId}/continue`, body
     );
     if (!result.ok) throw new Error(result.error || 'Failed to continue task');
+  }
+
+  /** Clean up old tasks, images, and logs on the agent. */
+  async clean(days = 30): Promise<{ tasksRemoved: number; imagesRemoved: number; bytesFreed: number }> {
+    const result = await this.post<{ ok: boolean; result: { tasksRemoved: number; imagesRemoved: number; bytesFreed: number } }>(
+      '/agent/clean', { days }
+    );
+    return result.result;
   }
 
   /**

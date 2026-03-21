@@ -72,8 +72,13 @@ class YaverClient:
         runner: Optional[str] = None,
         custom_command: Optional[str] = None,
         verbosity: Optional[int] = None,
+        images: Optional[list] = None,
     ) -> dict:
-        """Create a new task on the remote agent."""
+        """Create a new task on the remote agent.
+
+        Args:
+            images: List of dicts with keys: base64, mimeType, filename
+        """
         body: dict = {"title": prompt}
         if model:
             body["model"] = model
@@ -83,6 +88,8 @@ class YaverClient:
             body["customCommand"] = custom_command
         if verbosity is not None:
             body["speechContext"] = {"verbosity": verbosity}
+        if images:
+            body["images"] = images
         result = self._request("POST", "/tasks", body)
         if not result.get("ok"):
             raise RuntimeError(result.get("error", "Unknown error"))
@@ -112,11 +119,19 @@ class YaverClient:
         """Delete a task."""
         self._request("DELETE", f"/tasks/{task_id}")
 
-    def continue_task(self, task_id: str, message: str) -> None:
+    def continue_task(self, task_id: str, message: str, images: Optional[list] = None) -> None:
         """Send a follow-up message to a running task."""
-        result = self._request("POST", f"/tasks/{task_id}/continue", {"message": message})
+        body: dict = {"input": message}
+        if images:
+            body["images"] = images
+        result = self._request("POST", f"/tasks/{task_id}/continue", body)
         if not result.get("ok"):
             raise RuntimeError(result.get("error", "Failed to continue task"))
+
+    def clean(self, days: int = 30) -> dict:
+        """Clean up old tasks, images, and logs on the agent."""
+        result = self._request("POST", "/agent/clean", {"days": days})
+        return result.get("result", {})
 
     def stream_output(self, task_id: str, poll_interval: float = 0.5) -> Iterator[str]:
         """Stream task output. Yields new output as it arrives."""

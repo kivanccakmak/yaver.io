@@ -27,7 +27,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const version = "1.40.0"
+const version = "1.41.0"
 
 // Default hosted Convex instance (public endpoint). Override with --convex-url flag or convex_site_url in config.json.
 const defaultConvexSiteURL = "https://shocking-echidna-394.eu-west-1.convex.site"
@@ -90,6 +90,8 @@ func main() {
 		runUninstall()
 	case "tmux":
 		runTmux(os.Args[2:])
+	case "clean":
+		runClean(os.Args[2:])
 	case "doctor":
 		runDoctor()
 	case "help", "--help", "-h":
@@ -140,6 +142,7 @@ Usage:
   yaver acl         Agent Communication Layer — connect to other MCP servers
   yaver status      Show auth, relay, and connection status
   yaver devices     List your registered devices
+  yaver clean       Remove old tasks, images, and logs (default: older than 30 days)
   yaver purge       Factory reset — remove all local data (auth, sessions, tasks, logs)
   yaver reset       Alias for purge
   yaver uninstall   Remove config, certs, and stop the agent
@@ -393,6 +396,27 @@ func runSignout() {
 }
 
 // ---------------------------------------------------------------------------
+// clean — remove old tasks, images, and logs
+// ---------------------------------------------------------------------------
+
+func runClean(args []string) {
+	fs := flag.NewFlagSet("clean", flag.ExitOnError)
+	days := fs.Int("days", 30, "Remove tasks older than N days")
+	all := fs.Bool("all", false, "Remove all completed/stopped/failed tasks regardless of age")
+	dryRun := fs.Bool("dry-run", false, "Show what would be removed without deleting")
+	fs.Parse(args)
+
+	result := performClean(*days, *all, *dryRun)
+
+	if *dryRun {
+		fmt.Println("Dry run — no changes made:")
+	}
+	fmt.Printf("  Tasks removed:  %d\n", result.TasksRemoved)
+	fmt.Printf("  Image dirs:     %d\n", result.ImagesRemoved)
+	fmt.Printf("  Logs cleared:   %v\n", result.LogsCleared)
+	fmt.Printf("  Space freed:    %s\n", formatBytes(result.BytesFreed))
+}
+
 // purge — wipe all local data (auth, sessions, tasks, projects, certs, logs)
 // ---------------------------------------------------------------------------
 

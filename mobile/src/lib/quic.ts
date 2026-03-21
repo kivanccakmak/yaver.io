@@ -20,6 +20,12 @@ import NetInfo from "@react-native-community/netinfo";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "stopped";
 
+export interface ImageAttachment {
+  base64: string;       // base64 encoded image data (no data URI prefix)
+  mimeType: string;     // "image/jpeg" or "image/png"
+  filename: string;     // e.g. "photo_001.jpg"
+}
+
 export interface ConversationTurn {
   role: "user" | "assistant";
   content: string;
@@ -336,7 +342,7 @@ export class QuicClient {
   // ── Task API ───────────────────────────────────────────────────────
 
   /** Send a new task to the desktop agent. */
-  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: { inputFromSpeech?: boolean; sttProvider?: string; ttsEnabled?: boolean; ttsProvider?: string; verbosity?: number }): Promise<Task> {
+  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: { inputFromSpeech?: boolean; sttProvider?: string; ttsEnabled?: boolean; ttsProvider?: string; verbosity?: number }, images?: ImageAttachment[]): Promise<Task> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tasks`, {
       method: "POST",
@@ -348,6 +354,7 @@ export class QuicClient {
         ...(runner ? { runner } : {}),
         ...(customCommand ? { customCommand } : {}),
         ...(speechContext ? { speechContext } : {}),
+        ...(images?.length ? { images } : {}),
       }),
     });
     if (!res.ok) {
@@ -473,12 +480,12 @@ export class QuicClient {
   }
 
   /** Resume a task with a follow-up prompt. */
-  async continueTask(taskId: string, input: string): Promise<void> {
+  async continueTask(taskId: string, input: string, images?: ImageAttachment[]): Promise<void> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tasks/${taskId}/continue`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ input }),
+      body: JSON.stringify({ input, ...(images?.length ? { images } : {}) }),
     });
     if (!res.ok) throw new Error(`Failed to continue task: ${res.status}`);
   }
@@ -596,6 +603,19 @@ export class QuicClient {
     } catch {
       return false;
     }
+  }
+
+  /** Clean up old tasks, images, and logs on the desktop agent. */
+  async cleanAgent(days: number = 30): Promise<{ tasksRemoved: number; imagesRemoved: number; bytesFreed: number }> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/agent/clean`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ days }),
+    });
+    if (!res.ok) throw new Error(`Failed to clean agent: ${res.status}`);
+    const data = await res.json();
+    return data.result;
   }
 
   /** Restart the runner on the desktop agent (e.g. after all crash retries exhausted). */

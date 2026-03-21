@@ -65,12 +65,20 @@ type Turn struct {
 	Timestamp time.Time `json:"timestamp,omitempty"`
 }
 
+// ImageAttachment represents a base64-encoded image to attach to a task.
+type ImageAttachment struct {
+	Base64   string `json:"base64"`
+	MimeType string `json:"mimeType"`
+	Filename string `json:"filename"`
+}
+
 // CreateTaskOptions configures task creation.
 type CreateTaskOptions struct {
-	Model         string         `json:"model,omitempty"`
-	Runner        string         `json:"runner,omitempty"`
-	CustomCommand string         `json:"customCommand,omitempty"`
-	SpeechContext *SpeechContext `json:"speechContext,omitempty"`
+	Model         string            `json:"model,omitempty"`
+	Runner        string            `json:"runner,omitempty"`
+	CustomCommand string            `json:"customCommand,omitempty"`
+	SpeechContext *SpeechContext     `json:"speechContext,omitempty"`
+	Images        []ImageAttachment `json:"images,omitempty"`
 }
 
 // SpeechContext carries voice input/output preferences.
@@ -109,6 +117,9 @@ func (c *Client) CreateTask(prompt string, opts *CreateTaskOptions) (*Task, erro
 		}
 		if opts.SpeechContext != nil {
 			body["speechContext"] = opts.SpeechContext
+		}
+		if len(opts.Images) > 0 {
+			body["images"] = opts.Images
 		}
 	}
 
@@ -180,12 +191,15 @@ func (c *Client) DeleteTask(taskID string) error {
 }
 
 // ContinueTask sends a follow-up message to a running task.
-func (c *Client) ContinueTask(taskID, message string) error {
+func (c *Client) ContinueTask(taskID, message string, images []ImageAttachment) error {
 	var result struct {
 		OK    bool   `json:"ok"`
 		Error string `json:"error"`
 	}
-	body := map[string]interface{}{"message": message}
+	body := map[string]interface{}{"input": message}
+	if len(images) > 0 {
+		body["images"] = images
+	}
 	if err := c.post("/tasks/"+taskID+"/continue", body, &result); err != nil {
 		return err
 	}
@@ -193,6 +207,25 @@ func (c *Client) ContinueTask(taskID, message string) error {
 		return fmt.Errorf("continue task failed: %s", result.Error)
 	}
 	return nil
+}
+
+// CleanResult contains the outcome of a cleanup operation.
+type CleanResult struct {
+	TasksRemoved  int   `json:"tasksRemoved"`
+	ImagesRemoved int   `json:"imagesRemoved"`
+	BytesFreed    int64 `json:"bytesFreed"`
+}
+
+// Clean removes old tasks, images, and logs from the agent.
+func (c *Client) Clean(days int) (*CleanResult, error) {
+	var result struct {
+		OK     bool        `json:"ok"`
+		Result CleanResult `json:"result"`
+	}
+	if err := c.post("/agent/clean", map[string]interface{}{"days": days}, &result); err != nil {
+		return nil, err
+	}
+	return &result.Result, nil
 }
 
 // StreamOutput polls a task's output and sends lines to the returned channel.

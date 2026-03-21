@@ -4,8 +4,10 @@ import {
   Alert,
   Animated,
   FlatList,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -17,6 +19,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Markdown from "react-native-markdown-display";
 import { useDevice } from "../../src/context/DeviceContext";
@@ -27,6 +31,7 @@ import {
   AgentStatus,
   ConnectionMode,
   ConnectionState,
+  ImageAttachment,
   ModelInfo,
   quicClient,
   RunnerInfo,
@@ -38,6 +43,7 @@ import { markTaskDeleted, getDeletedTaskIds } from "../../src/lib/storage";
 import { useAuth } from "../../src/context/AuthContext";
 import { getUserSettings, getLocalSecret, LOCAL_KEYS, type SpeechProvider } from "../../src/lib/auth";
 import { transcribe, initWhisper, isWhisperReady, startRealtimeTranscribe, SPEECH_PROVIDERS } from "../../src/lib/speech";
+import { shareIntentEmitter } from "../../src/lib/shareIntent";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -321,6 +327,9 @@ export default function TasksScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [followUpText, setFollowUpText] = useState("");
   const [isSendingFollowUp, setIsSendingFollowUp] = useState(false);
+  const [followUpExpanded, setFollowUpExpanded] = useState(false);
+  const [attachedImages, setAttachedImages] = useState<ImageAttachment[]>([]);
+  const [followUpImages, setFollowUpImages] = useState<ImageAttachment[]>([]);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [reconnectError, setReconnectError] = useState<string | null>(null);
   const [quicState, setQuicState] = useState<ConnectionState>(quicClient.connectionState);
@@ -354,6 +363,7 @@ export default function TasksScreen() {
   const [inputFromSpeech, setInputFromSpeech] = useState(false);
   const audioRecordingRef = useRef<any>(null);
   const realtimeRef = useRef<{ stop: () => Promise<string> } | null>(null);
+  const recordingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [preRecordText, setPreRecordText] = useState(""); // text before recording started
 
   // Load speech settings from Convex (default: on-device whisper)
@@ -583,10 +593,21 @@ export default function TasksScreen() {
 
   // ── Voice recording ─────────────────────────────────────────────────
 
-  // Pre-init whisper AND configure iOS audio session on mount — BEFORE any Modal opens.
-  // iOS blocks audio session activation from inside a <Modal> context.
+  // Pre-init: request mic permission, configure iOS audio session, init whisper — all on mount
+  // BEFORE any Modal opens (iOS blocks audio session activation from inside a <Modal> context).
   useEffect(() => {
     (async () => {
+      try {
+        // Request mic permission early so the OS prompt appears at app launch
+        const { Audio } = require("expo-av");
+        const perm = await Audio.requestPermissionsAsync();
+        // Give OS time to finalize permission grant before configuring audio session
+        if (perm.status === "granted") {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      } catch (e) {
+        console.warn("[audio] Failed to request mic permission:", e);
+      }
       try {
         if (Platform.OS === "ios") {
           const { AudioSessionIos } = require("whisper.rn");
@@ -600,39 +621,74 @@ export default function TasksScreen() {
     })();
   }, []);
 
-  const startRecording = async () => {
+  // Listen for shared images from iOS Share Extension
+  useEffect(() => {
+    return shareIntentEmitter.on((images) => {
+      setAttachedImages(images.slice(0, 5));
+      setShowNewTask(true);
+    });
+  }, []);
+
+  // target: which text field to write into ("task" = new task, "followup" = follow-up input)
+  const recordingTargetRef = useRef<"task" | "followup">("task");
+
+  const startRecording = async (target: "task" | "followup" = "task") => {
     try {
       if (!speechProvider) {
         Alert.alert("Voice Not Configured", "Set up a speech-to-text provider in Settings → Voice.");
         return;
       }
 
+      // Check mic permission — re-prompt or direct to Settings if denied
+      const { Audio } = require("expo-av");
+      const perm = await Audio.getPermissionsAsync();
+      if (perm.status !== "granted") {
+        if (perm.canAskAgain) {
+          const requested = await Audio.requestPermissionsAsync();
+          if (requested.status !== "granted") {
+            Alert.alert("Microphone Access", "Microphone permission is required for voice input.");
+            return;
+          }
+        } else {
+          Alert.alert(
+            "Microphone Access",
+            "Microphone permission was denied. Please enable it in Settings > Yaver > Microphone.",
+            [
+              { text: "Cancel", style: "cancel" },
+              { text: "Open Settings", onPress: () => Linking.openSettings() },
+            ]
+          );
+          return;
+        }
+      }
+
+      recordingTargetRef.current = target;
+      const setText = target === "followup" ? setFollowUpText : setNewTaskText;
+      const baseText = target === "followup" ? followUpText : newTaskText;
+
       if (speechProvider === "on-device") {
         // Use whisper.rn's built-in realtime transcription (streams text as you speak)
-        setPreRecordText(newTaskText);
+        setPreRecordText(baseText);
+        const savedBase = baseText;
         const controller = await startRealtimeTranscribe((partialText) => {
           // Update text input with streaming partial results
-          setNewTaskText((prev) => {
-            const base = preRecordText || "";
-            return base ? base + " " + partialText : partialText;
-          });
+          setText(savedBase ? savedBase + " " + partialText : partialText);
         });
         realtimeRef.current = controller;
         setIsRecording(true);
         setInputFromSpeech(true);
       } else {
         // Cloud providers: record with expo-av, then send file
-        const { Audio } = require("expo-av");
-        const perm = await Audio.requestPermissionsAsync();
-        if (perm.status !== "granted") {
-          Alert.alert("Microphone Access", "Please grant microphone access in Settings > Yaver > Microphone.");
-          return;
-        }
         await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
         const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
         audioRecordingRef.current = recording;
         setIsRecording(true);
       }
+      // Auto-stop recording after 5 minutes for privacy
+      if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current);
+      recordingTimeoutRef.current = setTimeout(() => {
+        stopRecordingAndTranscribe();
+      }, 5 * 60 * 1000);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn("[speech] Failed to start recording:", msg);
@@ -642,6 +698,11 @@ export default function TasksScreen() {
 
   const stopRecordingAndTranscribe = async () => {
     setIsRecording(false);
+    if (recordingTimeoutRef.current) {
+      clearTimeout(recordingTimeoutRef.current);
+      recordingTimeoutRef.current = null;
+    }
+    const setText = recordingTargetRef.current === "followup" ? setFollowUpText : setNewTaskText;
 
     if (speechProvider === "on-device" && realtimeRef.current) {
       // Realtime: stop and get final text (already streamed into input)
@@ -650,7 +711,7 @@ export default function TasksScreen() {
         realtimeRef.current = null;
         if (finalText) {
           const base = preRecordText;
-          setNewTaskText(base ? base + " " + finalText : finalText);
+          setText(base ? base + " " + finalText : finalText);
           setInputFromSpeech(true);
         }
       } catch (err) {
@@ -672,7 +733,7 @@ export default function TasksScreen() {
 
       const result = await transcribe(uri, { provider: speechProvider, apiKey: speechApiKey });
       if (result.text) {
-        setNewTaskText((prev) => (prev ? prev + " " + result.text : result.text));
+        setText((prev) => (prev ? prev + " " + result.text : result.text));
         setInputFromSpeech(true);
       }
     } catch (err) {
@@ -681,6 +742,36 @@ export default function TasksScreen() {
     } finally {
       setIsTranscribing(false);
     }
+  };
+
+  // ── Image picker ─────────────────────────────────────────────────
+
+  const handlePickImage = async (target: "task" | "followup" = "task") => {
+    const setImages = target === "followup" ? setFollowUpImages : setAttachedImages;
+    const currentImages = target === "followup" ? followUpImages : attachedImages;
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsMultipleSelection: true,
+      selectionLimit: 5 - currentImages.length,
+      quality: 0.7,
+    });
+    if (result.canceled) return;
+
+    const newImages: ImageAttachment[] = [];
+    for (const asset of result.assets) {
+      try {
+        const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        newImages.push({
+          base64,
+          mimeType: asset.mimeType ?? "image/jpeg",
+          filename: asset.fileName ?? `image_${Date.now()}.jpg`,
+        });
+      } catch {}
+    }
+    setImages((prev) => [...prev, ...newImages].slice(0, 5));
   };
 
   // ── TTS ────────────────────────────────────────────────────────────
@@ -696,7 +787,11 @@ export default function TasksScreen() {
   };
 
   const handleCreateTask = async () => {
-    if (!newTaskText.trim()) return;
+    if (!newTaskText.trim() && attachedImages.length === 0) return;
+    // Stop any active recording before sending
+    if (isRecording) {
+      try { await stopRecordingAndTranscribe(); } catch {}
+    }
     Keyboard.dismiss();
     setIsSubmitting(true);
     try {
@@ -713,8 +808,10 @@ export default function TasksScreen() {
         selectedRunner === "custom" ? "custom" : (selectedRunner || undefined),
         selectedRunner === "custom" ? customCommand.trim() || undefined : undefined,
         speechCtx,
+        attachedImages.length > 0 ? attachedImages : undefined,
       );
       setNewTaskText("");
+      setAttachedImages([]);
       setInputFromSpeech(false);
       // Add task to list immediately
       setTasks((prev) => [task, ...prev]);
@@ -756,7 +853,11 @@ export default function TasksScreen() {
   };
 
   const handleFollowUp = async () => {
-    if (!selectedTask || !followUpText.trim()) return;
+    if (!selectedTask || (!followUpText.trim() && followUpImages.length === 0)) return;
+    // Stop any active recording before sending
+    if (isRecording) {
+      try { await stopRecordingAndTranscribe(); } catch {}
+    }
     Keyboard.dismiss();
     setIsSendingFollowUp(true);
     try {
@@ -771,9 +872,10 @@ export default function TasksScreen() {
           // Wait briefly for task to fully stop
           await new Promise((r) => setTimeout(r, 500));
         }
-        await quicClient.continueTask(selectedTask.id, followUpText.trim());
+        await quicClient.continueTask(selectedTask.id, followUpText.trim(), followUpImages.length > 0 ? followUpImages : undefined);
       }
       setFollowUpText("");
+      setFollowUpImages([]);
       await fetchTasks();
     } catch {
     } finally {
@@ -1222,11 +1324,33 @@ export default function TasksScreen() {
                   <Text style={{ color: c.textMuted, fontSize: 12, marginLeft: 8 }}>Transcribing...</Text>
                 </View>
               )}
+              {attachedImages.length > 0 && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
+                  {attachedImages.map((img, i) => (
+                    <View key={i} style={{ marginRight: 8, position: "relative" }}>
+                      <Image source={{ uri: `data:${img.mimeType};base64,${img.base64}` }} style={{ width: 60, height: 60, borderRadius: 8 }} />
+                      <Pressable onPress={() => setAttachedImages((prev) => prev.filter((_, idx) => idx !== i))} style={{ position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: 10, backgroundColor: "#ef4444", alignItems: "center", justifyContent: "center" }}>
+                        <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>×</Text>
+                      </Pressable>
+                    </View>
+                  ))}
+                </ScrollView>
+              )}
               <View style={s.modalButtons}>
-                <Pressable style={[s.cancelButton, { backgroundColor: c.bgCardElevated }]} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); setInputFromSpeech(false); }}>
+                <Pressable style={[s.cancelButton, { backgroundColor: c.bgCardElevated }]} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); setAttachedImages([]); setInputFromSpeech(false); }}>
                   <Text style={[s.cancelButtonText, { color: c.textSecondary }]}>Cancel</Text>
                 </Pressable>
                 <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Pressable
+                    style={({ pressed }) => [
+                      { width: 44, height: 44, borderRadius: 22, backgroundColor: c.bgCardElevated, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: c.border },
+                      pressed && { opacity: 0.7 },
+                    ]}
+                    onPress={() => handlePickImage("task")}
+                    disabled={attachedImages.length >= 5}
+                  >
+                    <Text style={{ fontSize: 20, color: c.textSecondary }}>📷</Text>
+                  </Pressable>
                   <Pressable
                     style={({ pressed }) => [
                       {
@@ -1256,9 +1380,9 @@ export default function TasksScreen() {
                     </Text>
                   </Pressable>
                   <Pressable
-                    style={[s.submitButton, { backgroundColor: c.accent }, (!newTaskText.trim() || isSubmitting || isTranscribing) && s.submitButtonDisabled]}
+                    style={[s.submitButton, { backgroundColor: c.accent }, ((!newTaskText.trim() && attachedImages.length === 0) || isSubmitting || isTranscribing) && s.submitButtonDisabled]}
                     onPress={handleCreateTask}
-                    disabled={!newTaskText.trim() || isSubmitting || isTranscribing}
+                    disabled={(!newTaskText.trim() && attachedImages.length === 0) || isSubmitting || isTranscribing}
                   >
                     <Text style={s.submitButtonText}>{isSubmitting ? "Sending..." : "Send"}</Text>
                   </Pressable>
@@ -1474,80 +1598,101 @@ export default function TasksScreen() {
                   <DebugSection task={selectedTask} connMode={connMode} c={c} />
                 </ScrollView>
 
-                {/* Input bar */}
-                <View style={[s.chatInputBar, { borderTopColor: c.border, backgroundColor: c.bgCard }]}>
-                  <TextInput
-                    style={[s.chatInput, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
-                    placeholder={isRunning ? "Send a command..." : "Follow up..."}
-                    placeholderTextColor={c.textMuted}
-                    value={followUpText}
-                    onChangeText={setFollowUpText}
-                    multiline
-                    maxLength={2000}
-                  />
-                  {isRunning && (
-                    <ActivityIndicator size="small" color={c.accent} style={{ marginRight: 4 }} />
-                  )}
+                {/* Follow-up input: compact bar, expands to full card on tap */}
+                {followUpExpanded ? (
+                  <View style={[s.modalContent, { backgroundColor: c.bgCard, borderTopWidth: 1, borderTopColor: c.border }]}>
+                    <View style={s.modalHeader}>
+                      <Text style={[s.modalTitle, { color: c.textPrimary }]}>Follow Up</Text>
+                      {isRunning && <ActivityIndicator size="small" color={c.accent} />}
+                    </View>
+                    <TextInput
+                      style={[s.input, s.inputMultiline, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
+                      placeholder={isRunning ? "Send a command..." : "Follow up..."}
+                      placeholderTextColor={c.textMuted}
+                      value={followUpText}
+                      onChangeText={(t) => { setFollowUpText(t); setInputFromSpeech(false); }}
+                      multiline numberOfLines={4} textAlignVertical="top" autoFocus
+                    />
+                    {isTranscribing && (
+                      <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 6 }}>
+                        <ActivityIndicator size="small" color={c.accent} />
+                        <Text style={{ color: c.textMuted, fontSize: 12, marginLeft: 8 }}>Transcribing...</Text>
+                      </View>
+                    )}
+                    {followUpImages.length > 0 && (
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
+                        {followUpImages.map((img, i) => (
+                          <View key={i} style={{ marginRight: 8, position: "relative" }}>
+                            <Image source={{ uri: `data:${img.mimeType};base64,${img.base64}` }} style={{ width: 60, height: 60, borderRadius: 8 }} />
+                            <Pressable onPress={() => setFollowUpImages((prev) => prev.filter((_, idx) => idx !== i))} style={{ position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: 10, backgroundColor: "#ef4444", alignItems: "center", justifyContent: "center" }}>
+                              <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>×</Text>
+                            </Pressable>
+                          </View>
+                        ))}
+                      </ScrollView>
+                    )}
+                    <View style={s.modalButtons}>
+                      <Pressable style={[s.cancelButton, { backgroundColor: c.bgCardElevated }]} onPress={() => { Keyboard.dismiss(); setFollowUpExpanded(false); }}>
+                        <Text style={[s.cancelButtonText, { color: c.textSecondary }]}>Cancel</Text>
+                      </Pressable>
+                      <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <Pressable
+                          style={({ pressed }) => [
+                            { width: 44, height: 44, borderRadius: 22, backgroundColor: c.bgCardElevated, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: c.border },
+                            pressed && { opacity: 0.7 },
+                          ]}
+                          onPress={() => handlePickImage("followup")}
+                          disabled={followUpImages.length >= 5}
+                        >
+                          <Text style={{ fontSize: 20, color: c.textSecondary }}>📷</Text>
+                        </Pressable>
+                        <Pressable
+                          style={({ pressed }) => [
+                            {
+                              width: 44, height: 44, borderRadius: 22,
+                              backgroundColor: isRecording ? "#ef4444" : c.bgCardElevated,
+                              alignItems: "center", justifyContent: "center",
+                              borderWidth: 1, borderColor: isRecording ? "#ef4444" : c.border,
+                            },
+                            pressed && { opacity: 0.7 },
+                          ]}
+                          onPress={() => {
+                            if (!speechProvider) {
+                              Alert.alert("Voice Not Configured", "Set up a speech-to-text provider in Settings → Voice to use voice input.");
+                              return;
+                            }
+                            if (isRecording) {
+                              stopRecordingAndTranscribe();
+                            } else {
+                              startRecording("followup");
+                            }
+                          }}
+                          disabled={isTranscribing}
+                        >
+                          <Text style={{ fontSize: 20, color: isRecording ? "#fff" : c.textSecondary }}>
+                            {isRecording ? "\u25A0" : "\uD83C\uDFA4"}
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          style={[s.submitButton, { backgroundColor: c.accent }, ((!followUpText.trim() && followUpImages.length === 0) || isSendingFollowUp || isTranscribing) && s.submitButtonDisabled]}
+                          onPress={() => { handleFollowUp(); setFollowUpExpanded(false); }}
+                          disabled={(!followUpText.trim() && followUpImages.length === 0) || isSendingFollowUp || isTranscribing}
+                        >
+                          <Text style={s.submitButtonText}>{isSendingFollowUp ? "Sending..." : "Send"}</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
+                ) : (
                   <Pressable
-                    style={({ pressed }) => [
-                      {
-                        width: 36, height: 36, borderRadius: 18,
-                        backgroundColor: isRecording ? "#ef4444" : c.bg,
-                        alignItems: "center", justifyContent: "center",
-                        borderWidth: 1, borderColor: isRecording ? "#ef4444" : c.border,
-                        marginRight: 4,
-                      },
-                      pressed && { opacity: 0.7 },
-                    ]}
-                    onPress={() => {
-                      if (!speechProvider) {
-                        Alert.alert("Voice Not Configured", "Set up a speech-to-text provider in Settings → Voice to use voice input.");
-                        return;
-                      }
-                      if (isRecording) {
-                        // Stop recording and transcribe into follow-up input
-                        setIsTranscribing(true);
-                        const rec = audioRecordingRef.current;
-                        if (rec) {
-                          rec.stopAndUnloadAsync().then(() =>
-                            rec.getURI()
-                          ).then((uri: string | null) => {
-                            if (!uri) throw new Error("No recording URI");
-                            const { transcribe } = require("../../src/lib/speech");
-                            return transcribe(uri, { provider: speechProvider!, apiKey: speechApiKey });
-                          }).then((result: { text: string }) => {
-                            setFollowUpText((prev: string) => prev ? prev + " " + result.text : result.text);
-                            setInputFromSpeech(true);
-                          }).catch(() => {
-                            Alert.alert("Transcription Failed", "Could not transcribe audio.");
-                          }).finally(() => {
-                            setIsRecording(false);
-                            setIsTranscribing(false);
-                            audioRecordingRef.current = null;
-                          });
-                        }
-                      } else {
-                        startRecording();
-                      }
-                    }}
-                    disabled={isTranscribing}
+                    style={[s.chatInputBar, { borderTopColor: c.border, backgroundColor: c.bgCard }]}
+                    onPress={() => setFollowUpExpanded(true)}
                   >
-                    <Text style={{ fontSize: 16, color: isRecording ? "#fff" : c.textSecondary }}>
-                      {isRecording ? "\u25A0" : "\uD83C\uDFA4"}
-                    </Text>
+                    <View style={[s.chatInput, { backgroundColor: c.bg, borderColor: c.border, justifyContent: "center", minHeight: 44, maxHeight: 44 }]}>
+                      <Text style={{ color: c.textMuted, fontSize: 15 }}>{isRunning ? "Send a command..." : "Follow up..."}</Text>
+                    </View>
                   </Pressable>
-                  <Pressable
-                    style={[
-                      s.chatSendBtn,
-                      { backgroundColor: c.accent },
-                      (!followUpText.trim() || isSendingFollowUp) && s.submitButtonDisabled,
-                    ]}
-                    onPress={handleFollowUp}
-                    disabled={!followUpText.trim() || isSendingFollowUp}
-                  >
-                    <Text style={s.chatSendText}>{isSendingFollowUp ? "..." : "\u2191"}</Text>
-                  </Pressable>
-                </View>
+                )}
               </View>
             )}
           </KeyboardAvoidingView>

@@ -60,6 +60,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/agent/runner/restart", s.auth(s.handleRunnerRestart))
 	mux.HandleFunc("/agent/runner/switch", s.auth(s.handleRunnerSwitch))
 	mux.HandleFunc("/agent/shutdown", s.auth(s.handleShutdown))
+	mux.HandleFunc("/agent/clean", s.auth(s.handleClean))
 	mux.HandleFunc("/tmux/sessions", s.auth(s.handleTmuxSessions))
 	mux.HandleFunc("/tmux/adopt", s.auth(s.handleTmuxAdopt))
 	mux.HandleFunc("/tmux/detach", s.auth(s.handleTmuxDetach))
@@ -434,6 +435,29 @@ func (s *HTTPServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleClean removes old tasks, images, and logs. Called from mobile settings.
+func (s *HTTPServer) handleClean(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	var body struct {
+		Days int  `json:"days"`
+		All  bool `json:"all"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.Days == 0 {
+		body.Days = 30
+	}
+
+	result := performClean(body.Days, body.All, false)
+	log.Printf("[HTTP] Clean: removed %d tasks, %d image dirs, freed %s", result.TasksRemoved, result.ImagesRemoved, formatBytes(result.BytesFreed))
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":     true,
+		"result": result,
+	})
+}
+
 // handleTasks handles GET /tasks (list) and POST /tasks (create).
 func (s *HTTPServer) handleTasks(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -459,12 +483,13 @@ func (s *HTTPServer) listTasks(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title         string         `json:"title"`
-		Description   string         `json:"description"`
-		Model         string         `json:"model"`
-		Runner        string         `json:"runner"`        // runner ID: "claude", "codex", "aider" — empty uses default
-		CustomCommand string         `json:"customCommand"` // arbitrary command — runs via sh -c
-		SpeechContext *SpeechContext  `json:"speechContext"` // voice input/output preferences
+		Title         string            `json:"title"`
+		Description   string            `json:"description"`
+		Model         string            `json:"model"`
+		Runner        string            `json:"runner"`        // runner ID: "claude", "codex", "aider" — empty uses default
+		CustomCommand string            `json:"customCommand"` // arbitrary command — runs via sh -c
+		SpeechContext *SpeechContext     `json:"speechContext"` // voice input/output preferences
+		Images        []ImageAttachment `json:"images,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -475,7 +500,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "mobile", body.Runner, body.CustomCommand, body.SpeechContext)
+	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "mobile", body.Runner, body.CustomCommand, body.Images, body.SpeechContext)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create task: %v", err))
 		return
@@ -734,7 +759,8 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	var body struct {
-		Input string `json:"input"`
+		Input  string            `json:"input"`
+		Images []ImageAttachment `json:"images,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -745,7 +771,7 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 
-	task, err := s.taskMgr.ResumeTask(id, body.Input)
+	task, err := s.taskMgr.ResumeTask(id, body.Input, body.Images)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("resume failed: %v", err))
 		return
@@ -887,7 +913,7 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		if args.Verbosity != nil {
 			sc = &SpeechContext{Verbosity: args.Verbosity}
 		}
-		task, err := s.taskMgr.CreateTask(args.Prompt, "", "", "mcp", "", "", sc)
+		task, err := s.taskMgr.CreateTask(args.Prompt, "", "", "mcp", "", "", nil, sc)
 		if err != nil {
 			return mcpToolError(fmt.Sprintf("failed to create task: %v", err))
 		}
@@ -942,7 +968,7 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 			Input  string `json:"input"`
 		}
 		json.Unmarshal(call.Arguments, &args)
-		task, err := s.taskMgr.ResumeTask(args.TaskID, args.Input)
+		task, err := s.taskMgr.ResumeTask(args.TaskID, args.Input, nil)
 		if err != nil {
 			return mcpToolError(fmt.Sprintf("resume failed: %v", err))
 		}

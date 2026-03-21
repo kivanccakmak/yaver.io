@@ -23,7 +23,9 @@
           }
         ],
         "NSMicrophoneUsageDescription": "Yaver uses your microphone for voice input — send tasks by speaking instead of typing.",
-        "NSSpeechRecognitionUsageDescription": "Yaver uses speech recognition to transcribe your voice into task descriptions."
+        "NSSpeechRecognitionUsageDescription": "Yaver uses speech recognition to transcribe your voice into task descriptions.",
+        "NSCameraUsageDescription": "Yaver uses your camera to take photos and attach them to coding tasks.",
+        "NSPhotoLibraryUsageDescription": "Yaver uses your photo library to attach screenshots and images to coding tasks."
       }
     },
     "android": {
@@ -54,7 +56,14 @@
       "expo-router",
       "expo-secure-store",
       "expo-apple-authentication",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Yaver needs photo access to attach images to tasks.",
+          "cameraPermission": "Yaver needs camera access to take photos for tasks."
+        }
+      ]
     ]
   }
 }

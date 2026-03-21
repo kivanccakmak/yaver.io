@@ -166,7 +166,7 @@ func YaverContinueTask(id C.int, taskID, message *C.char) *C.char {
 	if c == nil {
 		return C.CString(`{"error":"invalid client"}`)
 	}
-	if err := c.ContinueTask(C.GoString(taskID), C.GoString(message)); err != nil {
+	if err := c.ContinueTask(C.GoString(taskID), C.GoString(message), nil); err != nil {
 		return C.CString(`{"error":"` + err.Error() + `"}`)
 	}
 	return C.CString(`{"ok":true}`)

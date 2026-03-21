@@ -737,7 +737,7 @@ func TestTaskStoreRoundtrip(t *testing.T) {
 	tm := NewTaskManager(dir, store, defaultTestRunner())
 	tm.DummyMode = true
 
-	task, err := tm.CreateTask("Persist test", "", "", "test", "", "")
+	task, err := tm.CreateTask("Persist test", "", "", "test", "", "", nil)
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,46 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// saveImages decodes base64 images and writes them to ~/.yaver/images/{taskID}/.
+// Returns the absolute file paths of saved images.
+func saveImages(taskID string, images []ImageAttachment) []string {
+	if len(images) == 0 {
+		return nil
+	}
+	dir, err := ConfigDir()
+	if err != nil {
+		log.Printf("[images] config dir error: %v", err)
+		return nil
+	}
+	imgDir := filepath.Join(dir, "images", taskID)
+	if err := os.MkdirAll(imgDir, 0755); err != nil {
+		log.Printf("[images] mkdir error: %v", err)
+		return nil
+	}
+
+	var paths []string
+	for i, img := range images {
+		data, err := base64.StdEncoding.DecodeString(img.Base64)
+		if err != nil {
+			log.Printf("[images] base64 decode error for image %d: %v", i+1, err)
+			continue
+		}
+		ext := ".jpg"
+		if img.MimeType == "image/png" {
+			ext = ".png"
+		}
+		fname := fmt.Sprintf("img_%03d%s", i+1, ext)
+		fpath := filepath.Join(imgDir, fname)
+		if err := os.WriteFile(fpath, data, 0644); err != nil {
+			log.Printf("[images] write error for %s: %v", fname, err)
+			continue
+		}
+		paths = append(paths, fpath)
+		log.Printf("[images] Saved %s (%d bytes)", fpath, len(data))
+	}
+	return paths
+}
 
 // TaskStatus represents the lifecycle state of a task.
 type TaskStatus string
@@ -368,6 +409,13 @@ type SpeechContext struct {
 	Verbosity       *int   `json:"verbosity"`        // 0-10: response detail level (nil = default 10)
 }
 
+// ImageAttachment represents a base64-encoded image sent from mobile.
+type ImageAttachment struct {
+	Base64   string `json:"base64"`
+	MimeType string `json:"mimeType"`
+	Filename string `json:"filename"`
+}
+
 type Task struct {
 	ID          string     `json:"id"`
 	Title       string     `json:"title"`
@@ -390,6 +438,9 @@ type Task struct {
 
 	// Speech context from mobile — passed through to the AI runner prompt
 	SpeechContext *SpeechContext `json:"-"`
+
+	// Image paths saved to disk for this task (not persisted in tasks.json)
+	ImagePaths []string `json:"-"`
 
 	runner       RunnerConfig // the runner config used for this task (not persisted)
 	cmd          *exec.Cmd
@@ -695,7 +746,7 @@ func (tm *TaskManager) CheckRunner() error {
 // model overrides the default model (e.g. "opus", "sonnet", "haiku") — empty uses runner default.
 // source indicates where the task originated: "mobile", "mcp", or "cli" — defaults to "mobile".
 // customCommand, if non-empty, runs an arbitrary command via sh -c (ignores runnerID).
-func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, customCommand string, speechCtx ...*SpeechContext) (*Task, error) {
+func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, customCommand string, images []ImageAttachment, speechCtx ...*SpeechContext) (*Task, error) {
 	var taskRunner RunnerConfig
 
 	if customCommand != "" {
@@ -756,6 +807,9 @@ func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, c
 	}
 	if len(speechCtx) > 0 && speechCtx[0] != nil {
 		task.SpeechContext = speechCtx[0]
+	}
+	if len(images) > 0 {
+		task.ImagePaths = saveImages(id, images)
 	}
 
 	tm.mu.Lock()
@@ -1068,6 +1122,14 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			}
 		}
 		prompt += speechInfo
+	}
+
+	// Append image file paths so the AI agent can read them
+	if len(task.ImagePaths) > 0 {
+		prompt += "\n\n[Attached images — use the Read tool to examine these files]\n"
+		for i, p := range task.ImagePaths {
+			prompt += fmt.Sprintf("Image %d: %s\n", i+1, p)
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1698,7 +1760,7 @@ func (tm *TaskManager) DeleteAllTasks() int {
 
 // ResumeTask resumes an existing task in-place with a follow-up prompt.
 // Output is concatenated, same task ID is kept, and Claude session is resumed.
-func (tm *TaskManager) ResumeTask(id, input string) (*Task, error) {
+func (tm *TaskManager) ResumeTask(id, input string, images []ImageAttachment) (*Task, error) {
 	tm.mu.Lock()
 	task, ok := tm.tasks[id]
 	if !ok {
@@ -1717,6 +1779,12 @@ func (tm *TaskManager) ResumeTask(id, input string) (*Task, error) {
 		Timestamp: time.Now(),
 	}
 	task.Turns = append(task.Turns, turn)
+
+	// Save new images if any
+	if len(images) > 0 {
+		newPaths := saveImages(id, images)
+		task.ImagePaths = append(task.ImagePaths, newPaths...)
+	}
 
 	// Clear output for the new run — turns track conversation history
 	task.Output = ""
@@ -1746,6 +1814,14 @@ func (tm *TaskManager) ResumeTask(id, input string) (*Task, error) {
 
 // startResume spawns the runner resuming the task's existing session (if supported).
 func (tm *TaskManager) startResume(task *Task, prompt string) error {
+	// Append image file paths so the AI agent can read them
+	if len(task.ImagePaths) > 0 {
+		prompt += "\n\n[Attached images — use the Read tool to examine these files]\n"
+		for i, p := range task.ImagePaths {
+			prompt += fmt.Sprintf("Image %d: %s\n", i+1, p)
+		}
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
 
