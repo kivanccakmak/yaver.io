@@ -23,7 +23,8 @@ import { useDevice } from "../../src/context/DeviceContext";
 import { customRelaysKey, customTunnelsKey } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent, getUsageSummary, type UsageSummary, type SpeechProvider, type KeyStorage, LOCAL_KEYS, getLocalSecret, saveLocalSecret, deleteLocalSecret, getKeyStoragePreference, saveKeyStoragePreference } from "../../src/lib/auth";
-import { SPEECH_PROVIDERS } from "../../src/lib/speech";
+import { SPEECH_PROVIDERS, initWhisper, isWhisperModelDownloaded, getWhisperDownloadState } from "../../src/lib/speech";
+import * as FileSystem from "expo-file-system";
 import { clearCache } from "../../src/lib/storage";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, clearLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
@@ -78,6 +79,10 @@ export default function SettingsScreen() {
 
   // Key storage preference: "local" = device Keychain only, "cloud" = sync to Convex
   const [keyStorage, setKeyStorage] = useState<KeyStorage>("local");
+
+  // Whisper model state
+  const [whisperModelStatus, setWhisperModelStatus] = useState<"unknown" | "not_downloaded" | "downloading" | "ready">("unknown");
+  const [whisperProgress, setWhisperProgress] = useState(0);
 
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -333,6 +338,13 @@ export default function SettingsScreen() {
     getAiRunners().then(setRunners);
     getUsageSummary(token).then(setUsageSummary);
   }, [token]);
+
+  // Check whisper model status
+  useEffect(() => {
+    isWhisperModelDownloaded().then((downloaded) => {
+      setWhisperModelStatus(downloaded ? "ready" : "not_downloaded");
+    });
+  }, []);
 
   // Subscribe to live log updates
   useEffect(() => {
@@ -1577,6 +1589,68 @@ export default function SettingsScreen() {
                   </Text>
                 </Pressable>
               </View>
+            )}
+
+            {/* Whisper model status (only for on-device provider) */}
+            {speechProvider === "on-device" && (
+              <>
+                <View style={[styles.separator, { backgroundColor: c.borderSubtle }]} />
+                <View style={[styles.aboutRow, { justifyContent: "space-between" }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Speech model</Text>
+                    <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 1 }}>
+                      {whisperModelStatus === "ready" ? "Downloaded (~75MB)"
+                        : whisperModelStatus === "downloading" ? `Downloading... ${Math.round(whisperProgress * 100)}%`
+                        : "Not downloaded (~75MB)"}
+                    </Text>
+                  </View>
+                  {whisperModelStatus === "ready" ? (
+                    <Pressable
+                      style={({ pressed }) => [
+                        { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: c.error + "40" },
+                        pressed && { opacity: 0.7 },
+                      ]}
+                      onPress={() => {
+                        Alert.alert("Remove Model", "Delete the speech model? You'll need to re-download it to use voice input.", [
+                          { text: "Cancel", style: "cancel" },
+                          {
+                            text: "Remove", style: "destructive",
+                            onPress: async () => {
+                              try {
+                                await FileSystem.deleteAsync(`${FileSystem.documentDirectory}whisper/`, { idempotent: true });
+                                setWhisperModelStatus("not_downloaded");
+                              } catch {}
+                            },
+                          },
+                        ]);
+                      }}
+                    >
+                      <Text style={{ color: c.error, fontSize: 12, fontWeight: "500" }}>Remove</Text>
+                    </Pressable>
+                  ) : whisperModelStatus === "downloading" ? (
+                    <ActivityIndicator size="small" color={c.accent} />
+                  ) : (
+                    <Pressable
+                      style={({ pressed }) => [
+                        { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6, backgroundColor: c.accent },
+                        pressed && { opacity: 0.7 },
+                      ]}
+                      onPress={() => {
+                        setWhisperModelStatus("downloading");
+                        setWhisperProgress(0);
+                        initWhisper((p) => setWhisperProgress(p))
+                          .then(() => setWhisperModelStatus("ready"))
+                          .catch(() => {
+                            setWhisperModelStatus("not_downloaded");
+                            Alert.alert("Download Failed", "Check your internet connection and try again.");
+                          });
+                      }}
+                    >
+                      <Text style={{ color: "#fff", fontSize: 12, fontWeight: "500" }}>Download</Text>
+                    </Pressable>
+                  )}
+                </View>
+              </>
             )}
 
             <View style={[styles.separator, { backgroundColor: c.borderSubtle }]} />

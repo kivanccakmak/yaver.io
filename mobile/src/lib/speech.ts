@@ -29,9 +29,31 @@ export interface SpeechConfig {
 let whisperContext: any = null;
 let isModelReady = false;
 let isInitializing = false;
+let isDownloading = false;
+let downloadProgress = 0;
 
 const MODEL_FILENAME = "ggml-tiny.en.bin";
 const MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
+const MODEL_SIZE_MB = 75;
+
+function getModelPath(): string {
+  return `${FileSystem.documentDirectory}whisper/${MODEL_FILENAME}`;
+}
+
+/** Check if the whisper model is already downloaded. */
+export async function isWhisperModelDownloaded(): Promise<boolean> {
+  try {
+    const info = await FileSystem.getInfoAsync(getModelPath());
+    return info.exists;
+  } catch {
+    return false;
+  }
+}
+
+/** Get current download state. */
+export function getWhisperDownloadState(): { isDownloading: boolean; progress: number } {
+  return { isDownloading, progress: downloadProgress };
+}
 
 /**
  * Initialize whisper.rn with the tiny model.
@@ -47,9 +69,8 @@ export async function initWhisper(
   try {
     const { initWhisper: rnInitWhisper } = require("whisper.rn");
 
-    // Check if model exists locally, download if not
+    const modelPath = getModelPath();
     const modelDir = `${FileSystem.documentDirectory}whisper/`;
-    const modelPath = `${modelDir}${MODEL_FILENAME}`;
 
     const dirInfo = await FileSystem.getInfoAsync(modelDir);
     if (!dirInfo.exists) {
@@ -59,17 +80,22 @@ export async function initWhisper(
     const fileInfo = await FileSystem.getInfoAsync(modelPath);
     if (!fileInfo.exists) {
       console.log("[speech] Downloading whisper model...");
+      isDownloading = true;
+      downloadProgress = 0;
       const download = FileSystem.createDownloadResumable(
         MODEL_URL,
         modelPath,
         {},
         (progress) => {
-          if (onProgress && progress.totalBytesExpectedToWrite > 0) {
-            onProgress(progress.totalBytesWritten / progress.totalBytesExpectedToWrite);
+          if (progress.totalBytesExpectedToWrite > 0) {
+            downloadProgress = progress.totalBytesWritten / progress.totalBytesExpectedToWrite;
           }
+          if (onProgress) onProgress(downloadProgress);
         }
       );
       const result = await download.downloadAsync();
+      isDownloading = false;
+      downloadProgress = 1;
       if (!result || result.status !== 200) {
         throw new Error("Failed to download whisper model");
       }
