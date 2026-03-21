@@ -9,6 +9,7 @@
  */
 
 import { Platform } from "react-native";
+import * as FileSystem from "expo-file-system";
 import type { SpeechProvider } from "./auth";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -27,6 +28,10 @@ export interface SpeechConfig {
 
 let whisperContext: any = null;
 let isModelReady = false;
+let isInitializing = false;
+
+const MODEL_FILENAME = "ggml-tiny.en.bin";
+const MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
 
 /**
  * Initialize whisper.rn with the tiny model.
@@ -36,19 +41,50 @@ export async function initWhisper(
   onProgress?: (progress: number) => void
 ): Promise<void> {
   if (isModelReady && whisperContext) return;
+  if (isInitializing) return; // Prevent concurrent init
+  isInitializing = true;
 
   try {
     const { initWhisper: rnInitWhisper } = require("whisper.rn");
 
-    // Use the bundled tiny model or download it
+    // Check if model exists locally, download if not
+    const modelDir = `${FileSystem.documentDirectory}whisper/`;
+    const modelPath = `${modelDir}${MODEL_FILENAME}`;
+
+    const dirInfo = await FileSystem.getInfoAsync(modelDir);
+    if (!dirInfo.exists) {
+      await FileSystem.makeDirectoryAsync(modelDir, { intermediates: true });
+    }
+
+    const fileInfo = await FileSystem.getInfoAsync(modelPath);
+    if (!fileInfo.exists) {
+      console.log("[speech] Downloading whisper model...");
+      const download = FileSystem.createDownloadResumable(
+        MODEL_URL,
+        modelPath,
+        {},
+        (progress) => {
+          if (onProgress && progress.totalBytesExpectedToWrite > 0) {
+            onProgress(progress.totalBytesWritten / progress.totalBytesExpectedToWrite);
+          }
+        }
+      );
+      const result = await download.downloadAsync();
+      if (!result || result.status !== 200) {
+        throw new Error("Failed to download whisper model");
+      }
+      console.log("[speech] Whisper model downloaded");
+    }
+
     whisperContext = await rnInitWhisper({
-      filePath: "ggml-tiny.en.bin",
-      isBundledAsset: true,
+      filePath: modelPath,
     });
     isModelReady = true;
   } catch (err) {
     console.warn("[speech] Failed to init whisper.rn:", err);
     throw new Error("Failed to initialize on-device speech recognition");
+  } finally {
+    isInitializing = false;
   }
 }
 
@@ -58,7 +94,11 @@ export function isWhisperReady(): boolean {
 
 async function transcribeWithWhisper(audioUri: string): Promise<string> {
   if (!whisperContext) {
-    throw new Error("Whisper not initialized. Call initWhisper() first.");
+    // Try to init on-the-fly
+    await initWhisper();
+    if (!whisperContext) {
+      throw new Error("Whisper model not available. Check your internet connection and try again.");
+    }
   }
 
   const { transcribe } = whisperContext;
