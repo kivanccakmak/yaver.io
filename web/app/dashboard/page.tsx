@@ -3,6 +3,7 @@
 import { useAuth } from "@/lib/use-auth";
 import { useDevices } from "@/lib/use-devices";
 import DevicesView from "@/components/dashboard/DevicesView";
+import PreferencesView from "@/components/dashboard/PreferencesView";
 import RelayServerView from "@/components/dashboard/RelayServerView";
 import SettingsView from "@/components/dashboard/SettingsView";
 import TwoFactorView from "@/components/dashboard/TwoFactorView";
@@ -62,6 +63,9 @@ export default function DashboardPage() {
 
         {/* Devices */}
         <DevicesView devices={devices} onRefresh={refreshDevices} />
+
+        {/* Preferences (Speech, TTS, Verbosity, Key Storage) */}
+        <PreferencesView token={token} />
 
         {/* Relay Server */}
         <RelayServerView token={token} />

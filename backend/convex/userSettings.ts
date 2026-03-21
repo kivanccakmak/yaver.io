@@ -38,6 +38,7 @@ export const set = mutation({
     speechApiKey: v.optional(v.string()),
     ttsEnabled: v.optional(v.boolean()),
     verbosity: v.optional(v.number()),
+    keyStorage: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -55,6 +56,7 @@ export const set = mutation({
       speechApiKey: args.speechApiKey,
       ttsEnabled: args.ttsEnabled,
       verbosity: args.verbosity,
+      keyStorage: args.keyStorage,
     };
     if (existing) {
       await ctx.db.patch(existing._id, patch);
@@ -81,6 +83,7 @@ export const setByToken = mutation({
     speechApiKey: v.optional(v.string()),
     ttsEnabled: v.optional(v.boolean()),
     verbosity: v.optional(v.number()),
+    keyStorage: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.tokenHash);
@@ -101,6 +104,7 @@ export const setByToken = mutation({
       speechApiKey: args.speechApiKey,
       ttsEnabled: args.ttsEnabled,
       verbosity: args.verbosity,
+      keyStorage: args.keyStorage,
     };
     if (existing) {
       await ctx.db.patch(existing._id, patch);
@@ -110,6 +114,42 @@ export const setByToken = mutation({
         ...patch,
       });
     }
+  },
+});
+
+/** Admin: set settings by email (for manual user configuration). */
+export const setByEmail = mutation({
+  args: {
+    email: v.string(),
+    speechProvider: v.optional(v.string()),
+    speechApiKey: v.optional(v.string()),
+    ttsEnabled: v.optional(v.boolean()),
+    verbosity: v.optional(v.number()),
+    keyStorage: v.optional(v.string()),
+    forceRelay: v.optional(v.boolean()),
+    runnerId: v.optional(v.string()),
+    customRunnerCommand: v.optional(v.string()),
+    relayUrl: v.optional(v.string()),
+    relayPassword: v.optional(v.string()),
+    tunnelUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("email"), args.email))
+      .first();
+    if (!user) throw new Error(`User not found: ${args.email}`);
+    const existing = await ctx.db
+      .query("userSettings")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .first();
+    const { email: _, ...fields } = args;
+    if (existing) {
+      await ctx.db.patch(existing._id, fields);
+    } else {
+      await ctx.db.insert("userSettings", { userId: user._id, ...fields });
+    }
+    return { ok: true, userId: user._id };
   },
 });
 

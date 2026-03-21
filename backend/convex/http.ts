@@ -811,6 +811,7 @@ http.route({
       speechApiKey: body.speechApiKey,
       ttsEnabled: body.ttsEnabled,
       verbosity: body.verbosity,
+      keyStorage: body.keyStorage,
     });
     return jsonResponse({ ok: true });
   }),

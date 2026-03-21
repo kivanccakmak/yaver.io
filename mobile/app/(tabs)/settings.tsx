@@ -312,9 +312,15 @@ export default function SettingsScreen() {
   // Load user settings, runners, and usage from Convex + local secrets
   useEffect(() => {
     if (!token) return;
-    // Load key storage preference
-    getKeyStoragePreference().then(setKeyStorage);
+    // Load key storage preference (cloud setting wins over local)
     getUserSettings(token).then(async (s) => {
+      if (s.keyStorage === "cloud" || s.keyStorage === "local") {
+        setKeyStorage(s.keyStorage);
+        await saveKeyStoragePreference(s.keyStorage);
+      } else {
+        const localPref = await getKeyStoragePreference();
+        setKeyStorage(localPref);
+      }
       if (s.forceRelay !== undefined) {
         setForceRelay(s.forceRelay);
         quicClient.setForceRelay(s.forceRelay);
