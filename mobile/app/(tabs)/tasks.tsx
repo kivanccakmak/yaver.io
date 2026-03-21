@@ -583,9 +583,21 @@ export default function TasksScreen() {
 
   // ── Voice recording ─────────────────────────────────────────────────
 
-  // Pre-init whisper on mount
+  // Pre-init whisper AND configure iOS audio session on mount — BEFORE any Modal opens.
+  // iOS blocks audio session activation from inside a <Modal> context.
   useEffect(() => {
-    initWhisper().catch((e) => console.warn("[speech] Pre-init failed:", e));
+    (async () => {
+      try {
+        if (Platform.OS === "ios") {
+          const { AudioSessionIos } = require("whisper.rn");
+          await AudioSessionIos.setCategory("PlayAndRecord", ["DefaultToSpeaker", "AllowBluetooth"]);
+          await AudioSessionIos.setActive(true);
+        }
+      } catch (e) {
+        console.warn("[audio] Failed to pre-configure audio session:", e);
+      }
+      initWhisper().catch((e) => console.warn("[speech] Pre-init failed:", e));
+    })();
   }, []);
 
   const startRecording = async () => {

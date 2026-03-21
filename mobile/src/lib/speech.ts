@@ -94,6 +94,9 @@ export async function startRealtimeTranscribe(
     realtimeAudioSec: 60,
     realtimeAudioSliceSec: 5,
     realtimeAudioMinSec: 1,
+    // Audio session is pre-configured on Tasks mount — don't let whisper.rn touch it
+    audioSessionOnStartIos: undefined,
+    audioSessionOnStopIos: undefined,
   });
 
   subscribe((event: any) => {
