@@ -9,7 +9,6 @@
  */
 
 import { Platform } from "react-native";
-import * as FileSystem from "expo-file-system";
 import type { SpeechProvider } from "./auth";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -29,81 +28,35 @@ export interface SpeechConfig {
 let whisperContext: any = null;
 let isModelReady = false;
 let isInitializing = false;
-let isDownloading = false;
-let downloadProgress = 0;
 
-const MODEL_FILENAME = "ggml-tiny.en.bin";
-const MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
-const MODEL_SIZE_MB = 75;
+const MODEL_FILENAME = "ggml-tiny.en-q5_1.bin";
 
-function getModelPath(): string {
-  return `${FileSystem.documentDirectory}whisper/${MODEL_FILENAME}`;
-}
-
-/** Check if the whisper model is already downloaded. */
+/** Model is bundled in app — always available. */
 export async function isWhisperModelDownloaded(): Promise<boolean> {
-  try {
-    const info = await FileSystem.getInfoAsync(getModelPath());
-    return info.exists;
-  } catch {
-    return false;
-  }
+  return true;
 }
 
-/** Get current download state. */
+/** No download needed — model is bundled. */
 export function getWhisperDownloadState(): { isDownloading: boolean; progress: number } {
-  return { isDownloading, progress: downloadProgress };
+  return { isDownloading: false, progress: 1 };
 }
 
 /**
- * Initialize whisper.rn with the tiny model.
- * Downloads the model on first use (~75MB).
+ * Initialize whisper.rn with the bundled quantized tiny model (~31MB).
  */
 export async function initWhisper(
-  onProgress?: (progress: number) => void
+  _onProgress?: (progress: number) => void
 ): Promise<void> {
   if (isModelReady && whisperContext) return;
-  if (isInitializing) return; // Prevent concurrent init
+  if (isInitializing) return;
   isInitializing = true;
 
   try {
     const { initWhisper: rnInitWhisper } = require("whisper.rn");
 
-    const modelPath = getModelPath();
-    const modelDir = `${FileSystem.documentDirectory}whisper/`;
-
-    const dirInfo = await FileSystem.getInfoAsync(modelDir);
-    if (!dirInfo.exists) {
-      await FileSystem.makeDirectoryAsync(modelDir, { intermediates: true });
-    }
-
-    const fileInfo = await FileSystem.getInfoAsync(modelPath);
-    if (!fileInfo.exists) {
-      console.log("[speech] Downloading whisper model...");
-      isDownloading = true;
-      downloadProgress = 0;
-      const download = FileSystem.createDownloadResumable(
-        MODEL_URL,
-        modelPath,
-        {},
-        (progress) => {
-          if (progress.totalBytesExpectedToWrite > 0) {
-            downloadProgress = progress.totalBytesWritten / progress.totalBytesExpectedToWrite;
-          }
-          if (onProgress) onProgress(downloadProgress);
-        }
-      );
-      const result = await download.downloadAsync();
-      isDownloading = false;
-      downloadProgress = 1;
-      if (!result || result.status !== 200) {
-        throw new Error("Failed to download whisper model");
-      }
-      console.log("[speech] Whisper model downloaded");
-    }
-
     whisperContext = await rnInitWhisper({
-      filePath: modelPath,
+      filePath: MODEL_FILENAME,
+      isBundledAsset: true,
     });
     isModelReady = true;
   } catch (err) {

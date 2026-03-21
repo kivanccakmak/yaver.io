@@ -37,7 +37,7 @@ import {
 import { markTaskDeleted, getDeletedTaskIds } from "../../src/lib/storage";
 import { useAuth } from "../../src/context/AuthContext";
 import { getUserSettings, getLocalSecret, LOCAL_KEYS, type SpeechProvider } from "../../src/lib/auth";
-import { transcribe, initWhisper, isWhisperReady, isWhisperModelDownloaded, getWhisperDownloadState, SPEECH_PROVIDERS } from "../../src/lib/speech";
+import { transcribe, initWhisper, isWhisperReady, SPEECH_PROVIDERS } from "../../src/lib/speech";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -347,8 +347,6 @@ export default function TasksScreen() {
   const { token } = useAuth();
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const [isDownloadingModel, setIsDownloadingModel] = useState(false);
-  const [modelDownloadProgress, setModelDownloadProgress] = useState(0);
   const [speechProvider, setSpeechProvider] = useState<SpeechProvider | null>("on-device");
   const [speechApiKey, setSpeechApiKey] = useState<string | undefined>();
   const [ttsEnabled, setTtsEnabled] = useState(false);
@@ -1232,60 +1230,22 @@ export default function TasksScreen() {
                       },
                       pressed && { opacity: 0.7 },
                     ]}
-                    onPress={async () => {
+                    onPress={() => {
                       if (!speechProvider) {
                         Alert.alert("Voice Not Configured", "Set up a speech-to-text provider in Settings → Voice to use voice input.");
                         return;
                       }
                       if (isRecording) {
                         stopRecordingAndTranscribe();
-                        return;
+                      } else {
+                        startRecording();
                       }
-                      // Check if on-device model needs downloading
-                      if (speechProvider === "on-device" && !isWhisperReady()) {
-                        const downloaded = await isWhisperModelDownloaded();
-                        if (!downloaded && !isDownloadingModel) {
-                          Alert.alert(
-                            "Download Speech Model",
-                            `The on-device speech model (~${75}MB) needs to be downloaded once. This happens in the background.`,
-                            [
-                              { text: "Cancel", style: "cancel" },
-                              {
-                                text: "Download",
-                                onPress: () => {
-                                  setIsDownloadingModel(true);
-                                  setModelDownloadProgress(0);
-                                  initWhisper((p) => setModelDownloadProgress(p))
-                                    .then(() => {
-                                      setIsDownloadingModel(false);
-                                      Alert.alert("Ready", "Speech model downloaded. You can now use voice input.");
-                                    })
-                                    .catch(() => {
-                                      setIsDownloadingModel(false);
-                                      Alert.alert("Download Failed", "Could not download speech model. Check your internet connection.");
-                                    });
-                                },
-                              },
-                            ]
-                          );
-                          return;
-                        }
-                        if (isDownloadingModel) {
-                          Alert.alert("Downloading...", `Speech model is downloading (${Math.round(modelDownloadProgress * 100)}%). Please wait.`);
-                          return;
-                        }
-                      }
-                      startRecording();
                     }}
-                    disabled={isTranscribing || isDownloadingModel}
+                    disabled={isTranscribing}
                   >
-                    {isDownloadingModel ? (
-                      <ActivityIndicator size="small" color={c.accent} />
-                    ) : (
-                      <Text style={{ fontSize: 20, color: isRecording ? "#fff" : c.textSecondary }}>
-                        {isRecording ? "\u25A0" : "\uD83C\uDFA4"}
-                      </Text>
-                    )}
+                    <Text style={{ fontSize: 20, color: isRecording ? "#fff" : c.textSecondary }}>
+                      {isRecording ? "\u25A0" : "\uD83C\uDFA4"}
+                    </Text>
                   </Pressable>
                   <Pressable
                     style={[s.submitButton, { backgroundColor: c.accent }, (!newTaskText.trim() || isSubmitting || isTranscribing) && s.submitButtonDisabled]}

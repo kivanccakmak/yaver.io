@@ -17,7 +17,7 @@ import { useColors } from "../src/context/ThemeContext";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { submitSurvey, getAiRunners, saveUserSettings, getUserSettings, type AiRunner, type SpeechProvider, type KeyStorage, saveLocalSecret, LOCAL_KEYS, saveKeyStoragePreference } from "../src/lib/auth";
 import { customRelaysKey } from "../src/context/DeviceContext";
-import { SPEECH_PROVIDERS, initWhisper, isWhisperModelDownloaded } from "../src/lib/speech";
+import { SPEECH_PROVIDERS } from "../src/lib/speech";
 
 const IDENTITIES = [
   { id: "developer", label: "Developer" },
@@ -97,17 +97,6 @@ export default function SurveyScreen() {
       }).catch(() => {});
     }
   }, [token]);
-
-  // Silently start downloading whisper model when user reaches speech page
-  useEffect(() => {
-    if (page === 3 && speechProvider === "on-device") {
-      isWhisperModelDownloaded().then((downloaded) => {
-        if (!downloaded) {
-          initWhisper().catch(() => {}); // silent background download
-        }
-      });
-    }
-  }, [page, speechProvider]);
 
   const isDev = identity === "developer";
   const totalPages = isDev ? 8 : 7;
