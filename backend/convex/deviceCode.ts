@@ -143,7 +143,7 @@ export const authorizeDeviceCode = mutation({
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
     const tokenHash = await sha256Hex(token);
-    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000; // 30 days
+    const expiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000; // 1 year
 
     // Create session
     await ctx.db.insert("sessions", {

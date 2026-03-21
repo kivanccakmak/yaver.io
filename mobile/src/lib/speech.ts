@@ -56,7 +56,7 @@ export async function initWhisper(
 
     whisperContext = await rnInitWhisper({
       filePath: MODEL_FILENAME,
-      isBundledAsset: true,
+      isBundleAsset: true,
     });
     isModelReady = true;
   } catch (err) {

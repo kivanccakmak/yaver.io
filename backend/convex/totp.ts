@@ -300,7 +300,7 @@ export const verifyTotpForLogin = mutation({
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
     const tokenHash = await sha256Hex(token);
-    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+    const expiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000; // 1 year
 
     await ctx.db.insert("sessions", {
       tokenHash,

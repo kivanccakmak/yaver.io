@@ -55,6 +55,13 @@ export async function validateSessionInternal(
   const user = await ctx.db.get(session.userId);
   if (!user) return null;
 
+  // Auto-extend session if within 7 days of expiry (keeps CLI sessions alive)
+  const sevenDays = 7 * 24 * 60 * 60 * 1000;
+  if (session.expiresAt - Date.now() < sevenDays) {
+    const newExpiry = Date.now() + 365 * 24 * 60 * 60 * 1000; // extend 1 year
+    await ctx.db.patch(session._id, { expiresAt: newExpiry });
+  }
+
   return { user, sessionId: session._id };
 }
 
@@ -191,7 +198,7 @@ export const refreshSession = mutation({
     if (!session) return null;
     if (session.expiresAt < Date.now()) return null;
 
-    const newExpiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+    const newExpiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000; // 1 year
     await ctx.db.patch(session._id, { expiresAt: newExpiresAt });
     return { expiresAt: newExpiresAt };
   },

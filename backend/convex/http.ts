@@ -88,7 +88,7 @@ async function createSessionToken(ctx: { runMutation: (m: any, args: any) => Pro
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
   const tokenHash = await sha256Hex(token);
-  const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+  const expiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000;
   await ctx.runMutation(api.auth.createSession, { tokenHash, userId, expiresAt });
   return token;
 }
@@ -375,7 +375,7 @@ http.route({
       .join("");
 
     const tokenHash = await sha256Hex(token);
-    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000; // 30 days
+    const expiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000; // 30 days
 
     await ctx.runMutation(api.auth.createSession, {
       tokenHash,
