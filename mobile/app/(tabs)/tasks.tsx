@@ -581,46 +581,41 @@ export default function TasksScreen() {
 
   // ── Voice recording ─────────────────────────────────────────────────
 
-  // Pre-configure audio session on mount so it's ready when modals are open
-  const audioReadyRef = useRef(false);
+  // Request mic permission and configure audio session on mount — BEFORE any Modal opens.
+  // iOS blocks Audio.setAudioModeAsync when called from inside a <Modal>.
+  const audioConfiguredRef = useRef(false);
   useEffect(() => {
     (async () => {
       try {
         const { Audio } = require("expo-av");
-        const perm = await Audio.getPermissionsAsync();
-        if (perm.status === "granted") {
-          await Audio.setAudioModeAsync({
-            allowsRecordingIOS: true,
-            playsInSilentModeIOS: true,
-            staysActiveInBackground: false,
-          });
-          audioReadyRef.current = true;
-        }
-      } catch {}
+        // Request permission eagerly so it's granted before modal opens
+        await Audio.requestPermissionsAsync();
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+        });
+        audioConfiguredRef.current = true;
+      } catch (e) {
+        console.warn("[audio] Failed to pre-configure audio session:", e);
+      }
     })();
   }, []);
 
   const startRecording = async () => {
     try {
       const { Audio } = require("expo-av");
-      const perm = await Audio.requestPermissionsAsync();
+      // Check permission (already requested on mount, but verify)
+      const perm = await Audio.getPermissionsAsync();
       if (perm.status !== "granted") {
-        if (perm.canAskAgain === false) {
-          Alert.alert("Microphone Blocked", "Microphone access was denied. Please enable it in your device Settings > Yaver > Microphone.");
-        } else {
-          Alert.alert("Permission Required", "Microphone access is needed for voice input.");
-        }
+        // Can't request inside Modal on iOS — tell user to grant in Settings
+        Alert.alert(
+          "Microphone Access",
+          "Please grant microphone access in Settings > Yaver > Microphone, then try again."
+        );
         return;
       }
-      // Set audio mode if not already configured
-      if (!audioReadyRef.current) {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: true,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: false,
-        });
-        audioReadyRef.current = true;
-      }
+      // Audio mode was set on mount — just create recording directly
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
@@ -629,24 +624,6 @@ export default function TasksScreen() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn("[speech] Failed to start recording:", msg);
-      // Retry once after resetting audio mode
-      if (msg.includes("background") || msg.includes("activated")) {
-        try {
-          const { Audio } = require("expo-av");
-          await Audio.setAudioModeAsync({
-            allowsRecordingIOS: true,
-            playsInSilentModeIOS: true,
-            staysActiveInBackground: false,
-          });
-          const { recording } = await Audio.Recording.createAsync(
-            Audio.RecordingOptionsPresets.HIGH_QUALITY
-          );
-          audioRecordingRef.current = recording;
-          setIsRecording(true);
-          audioReadyRef.current = true;
-          return;
-        } catch {}
-      }
       Alert.alert("Recording Error", `Could not start recording: ${msg}`);
     }
   };
