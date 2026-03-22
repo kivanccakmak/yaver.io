@@ -141,6 +141,8 @@ export default function McpPage() {
               ["available-tools", "Available Tools (48)"],
               ["email-setup", "Email Setup"],
               ["acl", "ACL \u2014 Connecting to Other MCP Servers"],
+              ["standalone-mcp", "Standalone MCP Server"],
+              ["plugins", "Creating Plugins"],
               ["security", "Security"],
             ].map(([id, label]) => (
               <a
@@ -633,6 +635,122 @@ export default function McpPage() {
               </ul>
             </div>
           </div>
+        </section>
+
+        {/* ─── Standalone MCP Server ─── */}
+        <section className="mb-20">
+          <SectionHeading id="standalone-mcp">Standalone MCP Server</SectionHeading>
+          <p className="mb-4 text-sm leading-relaxed text-surface-400">
+            Yaver includes a standalone, open-source MCP server (<code className="text-surface-200">yaver-mcp</code>) that you can
+            deploy locally, on a VPS, or use our managed hosting. It provides built-in tools and supports
+            user-deployed plugins for custom functionality.
+          </p>
+
+          <h4 className="mb-2 mt-6 text-sm font-semibold text-surface-200">Quick start</h4>
+          <Terminal title="terminal">
+            <Comment># Run locally</Comment>
+            <Cmd>cd mcp &amp;&amp; go build -o yaver-mcp . &amp;&amp; ./yaver-mcp serve --password secret</Cmd>
+            <Output>MCP server listening on 0.0.0.0:18100</Output>
+          </Terminal>
+
+          <h4 className="mb-2 mt-6 text-sm font-semibold text-surface-200">Deploy to VPS</h4>
+          <Terminal title="terminal">
+            <Comment># Binary deploy (builds + copies + starts systemd service)</Comment>
+            <Cmd>cd mcp &amp;&amp; ./deploy/up.sh your-server-ip</Cmd>
+            <Output>MCP server running on your-server-ip:18100</Output>
+          </Terminal>
+
+          <Terminal title="terminal">
+            <Comment># Docker deploy</Comment>
+            <Cmd>cd mcp &amp;&amp; ./deploy/up.sh your-server-ip --docker</Cmd>
+          </Terminal>
+
+          <h4 className="mb-2 mt-6 text-sm font-semibold text-surface-200">Connect from your agent</h4>
+          <Terminal title="terminal">
+            <Comment># Add as ACL peer</Comment>
+            <Cmd>yaver acl add mcp http://your-server:18100/mcp --auth secret</Cmd>
+          </Terminal>
+
+          <h4 className="mb-2 mt-6 text-sm font-semibold text-surface-200">Built-in tools</h4>
+          <p className="mb-2 text-sm text-surface-400">
+            The standalone server ships with 10 tools: <code className="text-surface-300">read_file</code>, <code className="text-surface-300">write_file</code>,{" "}
+            <code className="text-surface-300">list_directory</code>, <code className="text-surface-300">search_files</code>, <code className="text-surface-300">search_content</code>,{" "}
+            <code className="text-surface-300">exec_command</code>, <code className="text-surface-300">git_status</code>, <code className="text-surface-300">git_diff</code>,{" "}
+            <code className="text-surface-300">system_info</code>, <code className="text-surface-300">web_fetch</code>.
+          </p>
+
+          <h4 className="mb-2 mt-6 text-sm font-semibold text-surface-200">Managed hosting</h4>
+          <p className="text-sm text-surface-400">
+            Don&apos;t want to manage a server? Use our managed MCP hosting &mdash; zero setup, auto-updates,
+            multi-region.{" "}
+            <Link href="/pricing" className="text-surface-200 underline underline-offset-2 hover:text-surface-50">
+              See pricing
+            </Link>.
+          </p>
+        </section>
+
+        {/* ─── Creating Plugins ─── */}
+        <section className="mb-20">
+          <SectionHeading id="plugins">Creating Plugins</SectionHeading>
+          <p className="mb-4 text-sm leading-relaxed text-surface-400">
+            Plugins are standalone MCP servers that communicate via stdio JSON-RPC. Write them in
+            any language: Python, Go, Node.js, Rust, etc.
+          </p>
+
+          <h4 className="mb-2 mt-6 text-sm font-semibold text-surface-200">Plugin structure</h4>
+          <Terminal title="my-plugin/">
+            <div className="text-surface-200">
+              <pre className="whitespace-pre-wrap">{`manifest.json    # Plugin metadata, tool definitions
+main.py          # Your MCP server (any language)
+requirements.txt # Optional dependencies`}</pre>
+            </div>
+          </Terminal>
+
+          <h4 className="mb-2 mt-6 text-sm font-semibold text-surface-200">manifest.json</h4>
+          <Terminal title="manifest.json">
+            <div className="text-surface-200">
+              <pre className="whitespace-pre-wrap text-[12px]">{`{
+  "name": "my-plugin",
+  "version": "1.0.0",
+  "description": "My custom tools",
+  "runtime": "python",
+  "command": "main.py",
+  "env": ["MY_API_KEY"],
+  "tools": [
+    {
+      "name": "my_tool",
+      "description": "Does something useful",
+      "inputSchema": {
+        "type": "object",
+        "required": ["input"],
+        "properties": {
+          "input": { "type": "string" }
+        }
+      }
+    }
+  ]
+}`}</pre>
+            </div>
+          </Terminal>
+
+          <h4 className="mb-2 mt-6 text-sm font-semibold text-surface-200">Deploy</h4>
+          <Terminal title="terminal">
+            <Comment># Deploy to local MCP server</Comment>
+            <Cmd>yaver mcp deploy ./my-plugin</Cmd>
+            <Output>Deployed my-plugin (1 tools registered)</Output>
+            <Cmd>yaver mcp list</Cmd>
+            <Output>{`NAME                 VERSION    TOOLS    STATUS
+my-plugin            1.0.0      1        healthy`}</Output>
+          </Terminal>
+
+          <Terminal title="terminal">
+            <Comment># Deploy to remote server</Comment>
+            <Cmd>yaver mcp deploy ./my-plugin --server https://mcp.example.com --password secret</Cmd>
+          </Terminal>
+
+          <p className="mt-4 text-sm text-surface-400">
+            See <code className="text-surface-300">mcp/plugins/example-hello/</code> in the repo for a complete Python example.
+          </p>
         </section>
 
         {/* ─── Section 8: Security ─── */}
