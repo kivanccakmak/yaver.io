@@ -21,15 +21,48 @@ import (
 // EV Charging — OpenChargeMap (FREE API, no key needed)
 // ---------------------------------------------------------------------------
 
-func mcpEVCharging(lat, lon float64, radius int, connectorType string) interface{} {
+func mcpEVCharging(lat, lon float64, radius int, connectorType, network, country string, minPowerKW int) interface{} {
 	if radius <= 0 {
-		radius = 10 // km
+		radius = 10
 	}
-	// OpenChargeMap is free and open
-	u := fmt.Sprintf("https://api.openchargemap.io/v3/poi/?output=json&latitude=%f&longitude=%f&distance=%d&distanceunit=KM&maxresults=10&compact=true&verbose=false",
+	u := fmt.Sprintf("https://api.openchargemap.io/v3/poi/?output=json&latitude=%f&longitude=%f&distance=%d&distanceunit=KM&maxresults=20&compact=true&verbose=false",
 		lat, lon, radius)
 	if connectorType != "" {
 		u += "&connectiontypeid=" + connectorType
+	}
+	if country != "" {
+		// Country code mapping
+		countryCodes := map[string]string{
+			"turkey": "TR", "tr": "TR", "us": "US", "usa": "US", "uk": "GB", "gb": "GB",
+			"germany": "DE", "de": "DE", "france": "FR", "fr": "FR", "nl": "NL",
+			"netherlands": "NL", "spain": "ES", "es": "ES", "italy": "IT", "it": "IT",
+			"norway": "NO", "no": "NO", "sweden": "SE", "se": "SE",
+		}
+		if code, ok := countryCodes[strings.ToLower(country)]; ok {
+			u += "&countrycode=" + code
+		} else {
+			u += "&countrycode=" + strings.ToUpper(country)
+		}
+	}
+	if minPowerKW > 0 {
+		u += fmt.Sprintf("&minpowerkw=%d", minPowerKW)
+	}
+	// Network/operator filtering via OpenChargeMap operator IDs
+	networkIDs := map[string]string{
+		"tesla":        "23",
+		"supercharger": "23",
+		"ionity":       "3534",
+		"chargepoint":  "5",
+		"evgo":         "26",
+		"electrify":    "3534",
+		"shell":        "3299",
+		"bp":           "3392",
+		"gridserve":    "3420",
+	}
+	if network != "" {
+		if id, ok := networkIDs[strings.ToLower(network)]; ok {
+			u += "&operatorid=" + id
+		}
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -43,7 +76,6 @@ func mcpEVCharging(lat, lon float64, radius int, connectorType string) interface
 	var stations []interface{}
 	json.Unmarshal(body, &stations)
 
-	// Simplify output
 	var results []map[string]interface{}
 	for _, s := range stations {
 		if m, ok := s.(map[string]interface{}); ok {
@@ -52,29 +84,108 @@ func mcpEVCharging(lat, lon float64, radius int, connectorType string) interface
 				info["title"] = ai["Title"]
 				info["address"] = ai["AddressLine1"]
 				info["town"] = ai["Town"]
+				info["country"] = ai["Country"]
 				info["distance_km"] = ai["Distance"]
 				info["latitude"] = ai["Latitude"]
 				info["longitude"] = ai["Longitude"]
 			}
+			if op, ok := m["OperatorInfo"].(map[string]interface{}); ok && op != nil {
+				info["operator"] = op["Title"]
+				info["operator_website"] = op["WebsiteURL"]
+			}
 			if conns, ok := m["Connections"].([]interface{}); ok && len(conns) > 0 {
-				var connTypes []string
+				var connDetails []map[string]interface{}
 				for _, c := range conns {
 					if cm, ok := c.(map[string]interface{}); ok {
+						detail := map[string]interface{}{}
 						if ct, ok := cm["ConnectionType"].(map[string]interface{}); ok {
-							connTypes = append(connTypes, fmt.Sprintf("%v", ct["Title"]))
+							detail["type"] = ct["Title"]
 						}
+						if kw, ok := cm["PowerKW"]; ok {
+							detail["power_kw"] = kw
+						}
+						if qty, ok := cm["Quantity"]; ok {
+							detail["quantity"] = qty
+						}
+						if st, ok := cm["StatusType"].(map[string]interface{}); ok {
+							detail["status"] = st["Title"]
+						}
+						connDetails = append(connDetails, detail)
 					}
 				}
-				info["connectors"] = connTypes
+				info["connectors"] = connDetails
 			}
 			if usage, ok := m["UsageCost"]; ok && usage != nil {
 				info["cost"] = usage
 			}
-			info["status"] = m["StatusType"]
+			if st, ok := m["StatusType"].(map[string]interface{}); ok {
+				info["status"] = st["Title"]
+			}
 			results = append(results, info)
 		}
 	}
 	return map[string]interface{}{"stations": results, "count": len(results), "radius_km": radius}
+}
+
+// mcpEVNetworks returns info about major EV charging networks
+func mcpEVNetworks(country string) interface{} {
+	networks := map[string][]map[string]interface{}{
+		"TR": {
+			{"name": "Trugo (Togg)", "type": "DC Fast + AC", "connector": "CCS2, Type 2", "power": "up to 400kW", "website": "https://trugo.com.tr", "app": "Trugo", "note": "Togg's own charging network, rapidly expanding across Turkey"},
+			{"name": "Eşarj", "type": "DC Fast + AC", "connector": "CCS2, CHAdeMO, Type 2", "power": "up to 180kW", "website": "https://esarj.com", "app": "Eşarj"},
+			{"name": "ZES (Zorlu)", "type": "DC Fast + AC", "connector": "CCS2, CHAdeMO, Type 2", "power": "up to 150kW", "website": "https://zes.net", "app": "ZES"},
+			{"name": "Sharz.net", "type": "DC Fast + AC", "connector": "CCS2, Type 2", "power": "up to 120kW", "website": "https://sharz.net", "app": "Sharz.net"},
+			{"name": "Voltrun", "type": "DC Fast + AC", "connector": "CCS2, Type 2", "power": "up to 300kW", "website": "https://voltrun.com", "app": "Voltrun"},
+			{"name": "Aksaenergy", "type": "DC Fast + AC", "connector": "CCS2, Type 2", "power": "up to 180kW", "website": "https://aksaenergy.com"},
+		},
+		"US": {
+			{"name": "Tesla Supercharger", "type": "DC Fast", "connector": "NACS (Tesla), CCS1", "power": "up to 250kW", "website": "https://tesla.com/supercharger"},
+			{"name": "Electrify America", "type": "DC Fast", "connector": "CCS1, CHAdeMO", "power": "up to 350kW", "website": "https://electrifyamerica.com"},
+			{"name": "ChargePoint", "type": "DC Fast + AC", "connector": "CCS1, J1772", "power": "up to 350kW", "website": "https://chargepoint.com"},
+			{"name": "EVgo", "type": "DC Fast", "connector": "CCS1, CHAdeMO", "power": "up to 350kW", "website": "https://evgo.com"},
+			{"name": "Blink", "type": "DC Fast + AC", "connector": "CCS1, J1772", "power": "up to 150kW", "website": "https://blinkcharging.com"},
+		},
+		"EU": {
+			{"name": "IONITY", "type": "DC Fast", "connector": "CCS2", "power": "up to 350kW", "website": "https://ionity.eu"},
+			{"name": "Fastned", "type": "DC Fast", "connector": "CCS2, CHAdeMO", "power": "up to 300kW", "website": "https://fastnedcharging.com"},
+			{"name": "Shell Recharge", "type": "DC Fast + AC", "connector": "CCS2, Type 2", "power": "up to 360kW", "website": "https://shell.com/recharge"},
+			{"name": "BP Pulse", "type": "DC Fast + AC", "connector": "CCS2, Type 2", "power": "up to 300kW", "website": "https://bppulse.co.uk"},
+			{"name": "Allego", "type": "DC Fast + AC", "connector": "CCS2, Type 2", "power": "up to 300kW", "website": "https://allego.eu"},
+			{"name": "EnBW", "type": "DC Fast + AC", "connector": "CCS2, Type 2", "power": "up to 300kW", "website": "https://enbw.com/elektromobilitaet"},
+		},
+	}
+
+	if country == "" {
+		return map[string]interface{}{"networks": networks, "countries": []string{"TR", "US", "EU"}}
+	}
+	upper := strings.ToUpper(country)
+	countryMap := map[string]string{"turkey": "TR", "usa": "US", "europe": "EU"}
+	if mapped, ok := countryMap[strings.ToLower(country)]; ok {
+		upper = mapped
+	}
+	if n, ok := networks[upper]; ok {
+		return map[string]interface{}{"country": upper, "networks": n, "count": len(n)}
+	}
+	return map[string]interface{}{"error": "country not found. Available: TR, US, EU", "available": []string{"TR", "US", "EU"}}
+}
+
+// mcpEVConnectorTypes returns connector type reference
+func mcpEVConnectorTypes() interface{} {
+	return map[string]interface{}{
+		"connectors": []map[string]interface{}{
+			{"id": "1", "name": "Type 1 (J1772)", "region": "North America, Japan", "type": "AC", "max_power": "19.2kW"},
+			{"id": "2", "name": "Type 2 (Mennekes)", "region": "Europe, Turkey", "type": "AC", "max_power": "43kW"},
+			{"id": "25", "name": "Type 2 (Tesla Modified)", "region": "Europe (older Tesla)", "type": "AC/DC"},
+			{"id": "32", "name": "CCS1 (Combo 1)", "region": "North America", "type": "DC", "max_power": "350kW"},
+			{"id": "33", "name": "CCS2 (Combo 2)", "region": "Europe, Turkey, Australia", "type": "DC", "max_power": "350kW", "note": "Togg T10X uses CCS2"},
+			{"id": "2", "name": "CHAdeMO", "region": "Japan (legacy)", "type": "DC", "max_power": "100kW"},
+			{"id": "27", "name": "Tesla Supercharger (NACS)", "region": "North America", "type": "DC", "max_power": "250kW"},
+			{"id": "30", "name": "Tesla (Type 2)", "region": "Europe (older)", "type": "DC"},
+			{"id": "36", "name": "GB/T DC", "region": "China", "type": "DC", "max_power": "250kW"},
+			{"id": "29", "name": "GB/T AC", "region": "China", "type": "AC"},
+		},
+		"note": "Use connector ID with ev_charging tool's connector_type parameter",
+	}
 }
 
 // ---------------------------------------------------------------------------

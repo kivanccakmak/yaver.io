@@ -3789,9 +3789,18 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 			Lon           float64 `json:"lon"`
 			Radius        int     `json:"radius"`
 			ConnectorType string  `json:"connector_type"`
+			Network       string  `json:"network"`
+			Country       string  `json:"country"`
+			MinPowerKW    int     `json:"min_power_kw"`
 		}
 		json.Unmarshal(call.Arguments, &args)
-		return mcpToolJSON(mcpEVCharging(args.Lat, args.Lon, args.Radius, args.ConnectorType))
+		return mcpToolJSON(mcpEVCharging(args.Lat, args.Lon, args.Radius, args.ConnectorType, args.Network, args.Country, args.MinPowerKW))
+	case "ev_networks":
+		var args struct { Country string `json:"country"` }
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpEVNetworks(args.Country))
+	case "ev_connector_types":
+		return mcpToolJSON(mcpEVConnectorTypes())
 	case "places_search":
 		var args struct {
 			Query string  `json:"query"`
