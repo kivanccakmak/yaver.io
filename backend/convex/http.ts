@@ -1374,4 +1374,103 @@ http.route({
   }),
 });
 
+// --- Chat assistant (landing page help bot) ---
+
+http.route({
+  path: "/chat",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+    if (!OPENROUTER_API_KEY) {
+      return jsonResponse({ error: "Chat not configured" }, 503);
+    }
+
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return jsonResponse({ error: "Invalid JSON" }, 400);
+    }
+
+    const userMessage = body.message?.trim();
+    if (!userMessage || userMessage.length > 500) {
+      return jsonResponse({ error: "Message required (max 500 chars)" }, 400);
+    }
+
+    const systemPrompt = `You are Yaver's help assistant on the yaver.io website. Yaver is a free, open-source P2P tool that lets developers control AI coding agents (Claude Code, Codex, Aider, Ollama, etc.) from their phone, desktop, or any terminal.
+
+Your ONLY purpose is to help users with Yaver-related questions:
+- How to install and set up Yaver (CLI, mobile app, desktop GUI)
+- How to connect devices, set up relay servers, use Tailscale
+- How to use features: tasks, exec/RPC, session transfer, scheduling, notifications
+- How to integrate: Telegram bot, Discord, Slack, CI/CD webhooks, MCP tools
+- How to use SDKs (Go, Python, JS/TS, Flutter/Dart)
+- How to self-host a relay server
+- Pricing: free relay included, optional dedicated relay ($10/mo)
+
+Rules:
+- Keep answers short (2-4 sentences). Link to docs when relevant.
+- If the question is NOT about Yaver, politely say: "I can only help with Yaver-related questions. Check out yaver.io/docs for guides, or yaver.io/faq for common questions."
+- Never make up features that don't exist.
+- Key links: yaver.io/docs, yaver.io/manuals, yaver.io/download, yaver.io/pricing, yaver.io/manuals/integrations
+- Yaver is free and open-source. The managed relay is the only paid option.
+- Privacy-first: code never leaves the developer's machines. Relay is pass-through, encrypted.`;
+
+    try {
+      const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://yaver.io",
+          "X-Title": "Yaver Help",
+        },
+        body: JSON.stringify({
+          model: "meta-llama/llama-4-scout",
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...(body.history || []).slice(-4),
+            { role: "user", content: userMessage },
+          ],
+          max_tokens: 300,
+          temperature: 0.3,
+        }),
+      });
+
+      if (!resp.ok) {
+        return jsonResponse({ error: "AI service unavailable" }, 502);
+      }
+
+      const data = await resp.json() as any;
+      const reply = data.choices?.[0]?.message?.content || "Sorry, I couldn't generate a response.";
+
+      return new Response(JSON.stringify({ ok: true, reply }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    } catch {
+      return jsonResponse({ error: "Chat error" }, 500);
+    }
+  }),
+});
+
+// CORS preflight for /chat
+http.route({
+  path: "/chat",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
 export default http;
