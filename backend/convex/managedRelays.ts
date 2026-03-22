@@ -1,8 +1,19 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 
-// Get user's managed relay
+// Get user's managed relay (public query for UI)
 export const getByUser = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, { userId }) => {
+    return await ctx.db
+      .query("managedRelays")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+  },
+});
+
+// Get user's managed relay (internal — for webhook/action use)
+export const getByUserInternal = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
     return await ctx.db

@@ -1281,13 +1281,21 @@ http.route({
         // If new subscription, create managed relay
         if (eventName === "subscription_created") {
           const password = generateRelayPassword();
-          await ctx.runMutation(internal.managedRelays.create, {
+          const relayId = await ctx.runMutation(internal.managedRelays.create, {
             userId: user._id,
             subscriptionId: subId,
             region: payload.meta?.custom_data?.region || "eu",
             password,
           });
-          // TODO: Trigger Hetzner provisioning via action
+
+          // Trigger automated provisioning (Hetzner + Cloudflare + SSL)
+          await ctx.scheduler.runAfter(0, internal.provisionRelay.provision, {
+            userId: user._id,
+            subscriptionId: subId,
+            relayId,
+            region: payload.meta?.custom_data?.region || "eu",
+            password,
+          });
         }
         break;
       }
@@ -1295,6 +1303,18 @@ http.route({
       case "subscription_cancelled":
       case "subscription_expired": {
         await ctx.runMutation(internal.subscriptions.cancel, { lemonSqueezyId });
+
+        // If expired (past grace period), deprovision the relay
+        if (eventName === "subscription_expired") {
+          const relay = await ctx.runQuery(internal.managedRelays.getByUserInternal, { userId: user._id });
+          if (relay && relay.hetznerServerId && relay.domain) {
+            await ctx.scheduler.runAfter(0, internal.provisionRelay.deprovision, {
+              relayId: relay._id,
+              hetznerServerId: relay.hetznerServerId,
+              domain: relay.domain,
+            });
+          }
+        }
         break;
       }
 

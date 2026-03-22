@@ -23,6 +23,7 @@ import type * as http from "../http.js";
 import type * as managedRelays from "../managedRelays.js";
 import type * as mobileStreamLogs from "../mobileStreamLogs.js";
 import type * as platformConfig from "../platformConfig.js";
+import type * as provisionRelay from "../provisionRelay.js";
 import type * as runnerUsage from "../runnerUsage.js";
 import type * as seed from "../seed.js";
 import type * as subscriptions from "../subscriptions.js";
@@ -52,6 +53,7 @@ declare const fullApi: ApiFromModules<{
   managedRelays: typeof managedRelays;
   mobileStreamLogs: typeof mobileStreamLogs;
   platformConfig: typeof platformConfig;
+  provisionRelay: typeof provisionRelay;
   runnerUsage: typeof runnerUsage;
   seed: typeof seed;
   subscriptions: typeof subscriptions;
