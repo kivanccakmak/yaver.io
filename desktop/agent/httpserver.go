@@ -3782,6 +3782,78 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		json.Unmarshal(call.Arguments, &args)
 		return mcpToolJSON(mcpGitStats(args.Directory, args.Days))
 
+	// --- Location & Lifestyle ---
+	case "ev_charging":
+		var args struct {
+			Lat           float64 `json:"lat"`
+			Lon           float64 `json:"lon"`
+			Radius        int     `json:"radius"`
+			ConnectorType string  `json:"connector_type"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpEVCharging(args.Lat, args.Lon, args.Radius, args.ConnectorType))
+	case "places_search":
+		var args struct {
+			Query string  `json:"query"`
+			Lat   float64 `json:"lat"`
+			Lon   float64 `json:"lon"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpPlacesSearch(args.Query, args.Lat, args.Lon))
+	case "restaurants":
+		var args struct {
+			Lat     float64 `json:"lat"`
+			Lon     float64 `json:"lon"`
+			Radius  int     `json:"radius"`
+			Cuisine string  `json:"cuisine"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpRestaurants(args.Lat, args.Lon, args.Radius, args.Cuisine))
+	case "hotels":
+		var args struct {
+			Lat    float64 `json:"lat"`
+			Lon    float64 `json:"lon"`
+			Radius int     `json:"radius"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpHotels(args.Lat, args.Lon, args.Radius))
+	case "geocode":
+		var args struct {
+			Address string `json:"address"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpGeocode(args.Address))
+	case "directions":
+		var args struct {
+			FromLat float64 `json:"from_lat"`
+			FromLon float64 `json:"from_lon"`
+			ToLat   float64 `json:"to_lat"`
+			ToLon   float64 `json:"to_lon"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDirections(args.FromLat, args.FromLon, args.ToLat, args.ToLon))
+	case "news":
+		var args struct {
+			Source string `json:"source"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpNews(args.Source))
+	case "stock_price":
+		var args struct {
+			Symbol string `json:"symbol"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpStockPrice(args.Symbol))
+	case "translate":
+		var args struct {
+			Text   string `json:"text"`
+			From   string `json:"from"`
+			To     string `json:"to"`
+			APIURL string `json:"api_url"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpTranslate(args.Text, args.From, args.To, args.APIURL))
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}
