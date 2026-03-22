@@ -1168,6 +1168,8 @@ func runServe(args []string) {
 	httpServer.emailMgr = emailMgr
 	httpServer.analytics = NewAnalytics()
 	httpServer.notifyMgr = NewNotificationManager(cfg.Notifications)
+	chatBot := NewChatBot(taskMgr, httpServer.execMgr, httpServer.notifyMgr, cfg.Notifications)
+	chatBot.Start(ctx)
 	httpServer.onShutdown = func() {
 		log.Println("Shutdown requested via API — stopping agent")
 		cancel() // cancel the main context, triggers graceful shutdown
