@@ -1,8 +1,10 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"crypto/tls"
@@ -4177,6 +4179,24 @@ func relayHandleProxiedRequest(stream quic.Stream, agentAddr string, client *htt
 // ---------------------------------------------------------------------------
 
 func runMCP(args []string) {
+	// Check for subcommands first
+	if len(args) > 0 {
+		switch args[0] {
+		case "deploy":
+			mcpRemoteCmd("deploy", args[1:])
+			return
+		case "list":
+			mcpRemoteCmd("list", args[1:])
+			return
+		case "remove":
+			mcpRemoteCmd("remove", args[1:])
+			return
+		case "status":
+			mcpRemoteCmd("status", args[1:])
+			return
+		}
+	}
+
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
 	mode := fs.String("mode", "stdio", "MCP transport: stdio (for Claude Desktop) or http (network)")
 	httpPort := fs.Int("port", 18090, "HTTP port for network MCP mode")
@@ -4434,6 +4454,165 @@ func runEmailStatus() {
 	}
 	fmt.Printf("Email Provider: %s\n", cfg.Email.Provider)
 	fmt.Printf("Sender: %s\n", cfg.Email.SenderEmail)
+}
+
+// ---------------------------------------------------------------------------
+// mcp subcommands — interact with a remote yaver-mcp server
+// ---------------------------------------------------------------------------
+
+func mcpRemoteCmd(subcmd string, args []string) {
+	fs := flag.NewFlagSet("mcp "+subcmd, flag.ExitOnError)
+	serverURL := fs.String("server", "http://localhost:18100", "MCP server URL")
+	password := fs.String("password", "", "MCP server password (env: MCP_PASSWORD)")
+	fs.Parse(args)
+
+	pw := *password
+	if pw == "" {
+		pw = os.Getenv("MCP_PASSWORD")
+	}
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	authHeader := ""
+	if pw != "" {
+		authHeader = "Bearer " + pw
+	}
+
+	switch subcmd {
+	case "deploy":
+		remaining := fs.Args()
+		if len(remaining) < 1 {
+			fmt.Fprintln(os.Stderr, "Usage: yaver mcp deploy <plugin-dir> [--server URL] [--password PW]")
+			os.Exit(1)
+		}
+		dir := remaining[0]
+
+		// Read manifest
+		manifestData, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: manifest.json not found in %s\n", dir)
+			os.Exit(1)
+		}
+		var manifest struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+			Tools   []interface{} `json:"tools"`
+		}
+		json.Unmarshal(manifestData, &manifest)
+		fmt.Printf("Deploying %s v%s (%d tools) to %s...\n", manifest.Name, manifest.Version, len(manifest.Tools), *serverURL)
+
+		// Create tar.gz
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gw)
+		filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil { return err }
+			rel, _ := filepath.Rel(dir, path)
+			if rel == "." { return nil }
+			if info.IsDir() && (info.Name() == ".git" || info.Name() == "node_modules") {
+				return filepath.SkipDir
+			}
+			hdr, _ := tar.FileInfoHeader(info, "")
+			hdr.Name = rel
+			tw.WriteHeader(hdr)
+			if !info.IsDir() {
+				f, _ := os.Open(path)
+				io.Copy(tw, f)
+				f.Close()
+			}
+			return nil
+		})
+		tw.Close()
+		gw.Close()
+
+		req, _ := http.NewRequest("POST", *serverURL+"/plugins/deploy", &buf)
+		req.Header.Set("Content-Type", "application/gzip")
+		if authHeader != "" {
+			req.Header.Set("Authorization", authHeader)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		defer resp.Body.Close()
+		var result map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&result)
+		if resp.StatusCode == 201 {
+			fmt.Printf("Deployed %s (%v tools registered)\n", manifest.Name, result["tools"])
+		} else {
+			fmt.Fprintf(os.Stderr, "Deploy failed: %v\n", result["error"])
+			os.Exit(1)
+		}
+
+	case "list":
+		req, _ := http.NewRequest("GET", *serverURL+"/plugins", nil)
+		if authHeader != "" {
+			req.Header.Set("Authorization", authHeader)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		defer resp.Body.Close()
+		var data struct {
+			Plugins []struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+				Tools   int    `json:"tools"`
+				Healthy bool   `json:"healthy"`
+			} `json:"plugins"`
+		}
+		json.NewDecoder(resp.Body).Decode(&data)
+		if len(data.Plugins) == 0 {
+			fmt.Println("No plugins deployed.")
+			return
+		}
+		fmt.Printf("Deployed plugins (%d):\n\n", len(data.Plugins))
+		fmt.Printf("  %-20s %-10s %-8s %s\n", "NAME", "VERSION", "TOOLS", "STATUS")
+		for _, p := range data.Plugins {
+			status := "healthy"
+			if !p.Healthy { status = "unhealthy" }
+			fmt.Printf("  %-20s %-10s %-8d %s\n", p.Name, p.Version, p.Tools, status)
+		}
+
+	case "remove":
+		remaining := fs.Args()
+		if len(remaining) < 1 {
+			fmt.Fprintln(os.Stderr, "Usage: yaver mcp remove <plugin-name>")
+			os.Exit(1)
+		}
+		req, _ := http.NewRequest("DELETE", *serverURL+"/plugins?name="+remaining[0], nil)
+		if authHeader != "" {
+			req.Header.Set("Authorization", authHeader)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == 200 {
+			fmt.Printf("Plugin '%s' removed.\n", remaining[0])
+		} else {
+			fmt.Fprintf(os.Stderr, "Remove failed (HTTP %d)\n", resp.StatusCode)
+		}
+
+	case "status":
+		req, _ := http.NewRequest("GET", *serverURL+"/health", nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			fmt.Println("MCP server is DOWN")
+			os.Exit(1)
+		}
+		defer resp.Body.Close()
+		var data map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&data)
+		fmt.Println("MCP server is UP")
+		if v, ok := data["version"]; ok { fmt.Printf("  Version:  %v\n", v) }
+		if u, ok := data["uptime"]; ok { fmt.Printf("  Uptime:   %v\n", u) }
+		if p, ok := data["plugins"]; ok { fmt.Printf("  Plugins:  %v\n", p) }
+	}
 }
 
 // ---------------------------------------------------------------------------
