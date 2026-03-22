@@ -82,6 +82,9 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/notifications/config", s.auth(s.handleNotificationsConfig))
 	mux.HandleFunc("/notifications/test", s.auth(s.handleNotificationsTest))
 
+	// Webhooks (public — uses webhook secret instead of auth)
+	mux.HandleFunc("/webhooks/trigger", s.handleWebhookTrigger)
+
 	// Exec (remote command execution)
 	mux.HandleFunc("/exec", s.auth(s.handleExec))
 	mux.HandleFunc("/exec/", s.auth(s.handleExecByID))
@@ -1255,6 +1258,57 @@ func (s *HTTPServer) handleNotificationsTest(w http.ResponseWriter, r *http.Requ
 }
 
 // ---------------------------------------------------------------------------
+// Webhook trigger (public — uses webhook secret)
+// ---------------------------------------------------------------------------
+
+func (s *HTTPServer) handleWebhookTrigger(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+
+	// Validate webhook secret
+	secret := r.Header.Get("X-Webhook-Secret")
+	cfg, _ := LoadConfig()
+	if cfg == nil || cfg.WebhookSecret == "" {
+		jsonError(w, http.StatusServiceUnavailable, "webhook secret not configured — set via: yaver config set webhook-secret <secret>")
+		return
+	}
+	if secret != cfg.WebhookSecret {
+		jsonError(w, http.StatusUnauthorized, "invalid webhook secret")
+		return
+	}
+
+	var body struct {
+		Title       string `json:"title"`
+		Description string `json:"description,omitempty"`
+		Runner      string `json:"runner,omitempty"`
+		Model       string `json:"model,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if body.Title == "" {
+		jsonError(w, http.StatusBadRequest, "title is required")
+		return
+	}
+
+	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "webhook", body.Runner, "", nil, nil)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	log.Printf("[HTTP] Webhook task created: %s — %s", task.ID, body.Title)
+	jsonReply(w, http.StatusCreated, map[string]interface{}{
+		"ok":     true,
+		"taskId": task.ID,
+		"status": task.Status,
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Exec handlers (remote command execution)
 // ---------------------------------------------------------------------------
 
@@ -1874,53 +1928,65 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 
 	case "search_files":
 		var args struct {
-			Pattern string `json:"pattern"`
-			Content string `json:"content"`
-			Path    string `json:"path"`
+			Pattern    string `json:"pattern"`
+			Directory  string `json:"directory"`
+			MaxResults int    `json:"max_results"`
 		}
 		json.Unmarshal(call.Arguments, &args)
-		searchDir := s.taskMgr.workDir
-		if args.Path != "" {
-			searchDir = s.resolveFilePath(args.Path)
+		if args.Pattern == "" {
+			return mcpToolError("pattern is required")
+		}
+		dir := args.Directory
+		if dir == "" {
+			dir = s.taskMgr.workDir
+		}
+		return mcpToolResult(searchFiles(dir, args.Pattern, args.MaxResults))
+
+	case "search_content":
+		var args struct {
+			Query      string `json:"query"`
+			Directory  string `json:"directory"`
+			MaxResults int    `json:"max_results"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Query == "" {
+			return mcpToolError("query is required")
+		}
+		dir := args.Directory
+		if dir == "" {
+			dir = s.taskMgr.workDir
+		}
+		return mcpToolResult(searchFileContent(dir, args.Query, args.MaxResults))
+
+	case "screenshot":
+		img, err := captureScreen()
+		if err != nil {
+			return mcpToolError(err.Error())
+		}
+		// Return as text with base64 — MCP clients can render images
+		return map[string]interface{}{
+			"content": []map[string]interface{}{
+				{"type": "image", "data": img, "mimeType": "image/png"},
+			},
 		}
 
-		if args.Content != "" {
-			// Grep-style search using OS grep
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			cmd := osexec.CommandContext(ctx, "grep", "-rl", "--include="+args.Pattern, args.Content, searchDir)
-			out, _ := cmd.Output()
-			result := strings.TrimSpace(string(out))
-			if result == "" {
-				return mcpToolResult("No matches found.")
-			}
-			lines := strings.Split(result, "\n")
-			if len(lines) > 50 {
-				lines = lines[:50]
-				result = strings.Join(lines, "\n") + "\n... (50+ matches, truncated)"
-			}
-			return mcpToolResult(result)
-		}
+	case "system_info":
+		return mcpToolResult(getSystemInfo())
 
-		if args.Pattern != "" {
-			// Glob-style file search
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			cmd := osexec.CommandContext(ctx, "find", searchDir, "-name", args.Pattern, "-type", "f")
-			out, _ := cmd.Output()
-			result := strings.TrimSpace(string(out))
-			if result == "" {
-				return mcpToolResult("No files found matching pattern.")
-			}
-			lines := strings.Split(result, "\n")
-			if len(lines) > 50 {
-				lines = lines[:50]
-				result = strings.Join(lines, "\n") + "\n... (50+ files, truncated)"
-			}
-			return mcpToolResult(result)
+	case "git_info":
+		var args struct {
+			Operation string `json:"operation"`
+			Directory string `json:"directory"`
 		}
-
-		return mcpToolError("provide either 'pattern' (glob) or 'content' (grep) to search")
+		json.Unmarshal(call.Arguments, &args)
+		if args.Operation == "" {
+			return mcpToolError("operation is required (status, diff, log, branch, remote)")
+		}
+		dir := args.Directory
+		if dir == "" {
+			dir = s.taskMgr.workDir
+		}
+		return mcpToolResult(gitInfo(dir, args.Operation))
 
 	// --- Email ---
 	case "email_list_inbox":

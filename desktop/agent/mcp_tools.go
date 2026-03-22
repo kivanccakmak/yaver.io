@@ -216,18 +216,6 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 				},
 			},
 		},
-		{
-			"name":        "search_files",
-			"description": "Search for files by name pattern (glob) or content (grep).",
-			"inputSchema": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"pattern": map[string]interface{}{"type": "string", "description": "File name glob pattern (e.g. '*.go')"},
-					"content": map[string]interface{}{"type": "string", "description": "Search within file contents"},
-					"path":    map[string]interface{}{"type": "string", "description": "Search root (default: work dir)"},
-				},
-			},
-		},
 		// --- Email ---
 		{
 			"name":        "email_list_inbox",
@@ -718,6 +706,65 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 	}
 	tools = append(tools, scheduleTools...)
+
+	// --- Utility Tools ---
+	utilTools := []map[string]interface{}{
+		{
+			"name":        "search_files",
+			"description": "Search for files by name pattern in a directory. Uses glob patterns (e.g. '*.go', 'test_*.py'). Skips node_modules, .git, vendor, etc.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"pattern"},
+				"properties": map[string]interface{}{
+					"pattern":     map[string]interface{}{"type": "string", "description": "Glob pattern to match filenames (e.g. '*.go', 'README*', '*.test.ts')"},
+					"directory":   map[string]interface{}{"type": "string", "description": "Directory to search in (default: agent work dir)"},
+					"max_results": map[string]interface{}{"type": "integer", "description": "Max results (default: 50)"},
+				},
+			},
+		},
+		{
+			"name":        "search_content",
+			"description": "Search for text content inside files (like grep/ripgrep). Returns matching lines with file paths and line numbers.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"query"},
+				"properties": map[string]interface{}{
+					"query":       map[string]interface{}{"type": "string", "description": "Text or regex to search for"},
+					"directory":   map[string]interface{}{"type": "string", "description": "Directory to search in (default: agent work dir)"},
+					"max_results": map[string]interface{}{"type": "integer", "description": "Max results (default: 30)"},
+				},
+			},
+		},
+		{
+			"name":        "screenshot",
+			"description": "Take a screenshot of the current screen. Returns base64-encoded PNG. Works on macOS, Linux (with gnome-screenshot/scrot), and Windows.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "system_info",
+			"description": "Get system information: hostname, OS, CPU count, disk usage, memory, load average. Useful for monitoring headless machines.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "git_info",
+			"description": "Get git repository information. Operations: status (changed files), diff (diff stats), log (last 20 commits), branch (all branches), remote (remote URLs).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"operation"},
+				"properties": map[string]interface{}{
+					"operation": map[string]interface{}{"type": "string", "description": "Git operation: status, diff, log, branch, remote"},
+					"directory": map[string]interface{}{"type": "string", "description": "Git repo directory (default: agent work dir)"},
+				},
+			},
+		},
+	}
+	tools = append(tools, utilTools...)
 
 	return map[string]interface{}{
 		"tools": tools,

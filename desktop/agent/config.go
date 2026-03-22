@@ -27,6 +27,7 @@ type Config struct {
 	ACLPeers      []ACLPeerConfig     `json:"acl_peers,omitempty"`
 	Speech        *SpeechConfig       `json:"speech,omitempty"`
 	Notifications *NotificationConfig `json:"notifications,omitempty"`
+	WebhookSecret string              `json:"webhook_secret,omitempty"`
 }
 
 // ExecConfig controls remote command execution settings.
