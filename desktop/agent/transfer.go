@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -130,17 +131,97 @@ func ListTransferableSessions(tm *TaskManager) []TransferableSession {
 
 		sessions = append(sessions, ts)
 	}
+
+	// Also scan for native Claude Code sessions not tracked by Yaver
+	seenSessionIDs := make(map[string]bool)
+	for _, s := range sessions {
+		if s.SessionID != "" {
+			seenSessionIDs[s.SessionID] = true
+		}
+	}
+
+	claudeSessions := listClaudeSessions(tm.workDir)
+	for _, cs := range claudeSessions {
+		if seenSessionIDs[cs.SessionID] {
+			continue // already listed via Yaver task
+		}
+		title := cs.Summary
+		if title == "" {
+			title = "Claude Code session"
+		}
+		sessions = append(sessions, TransferableSession{
+			TaskID:     cs.SessionID, // use session ID as task ID for native sessions
+			AgentType:  "claude",
+			SessionID:  cs.SessionID,
+			Title:      title,
+			WorkDir:    tm.workDir,
+			Status:     "completed",
+			BundleSize: cs.FileSize,
+			LastActive: cs.ModTime.Format(time.RFC3339),
+			Resumable:  true,
+		})
+	}
+
 	return sessions
 }
 
 // ExportSession packages a task into a TransferBundle.
+// taskID can be a Yaver task ID or a native Claude Code session UUID.
 func ExportSession(tm *TaskManager, taskID string, opts ExportOptions) (*TransferBundle, error) {
+	hostname, _ := os.Hostname()
+
 	task, ok := tm.GetTask(taskID)
 	if !ok {
-		return nil, fmt.Errorf("task not found: %s", taskID)
+		// Try as a native Claude Code session UUID
+		claudeSessions := listClaudeSessions(tm.workDir)
+		for _, cs := range claudeSessions {
+			if cs.SessionID == taskID {
+				// Build bundle directly from Claude session file
+				bundle := &TransferBundle{
+					Version:      1,
+					ExportedAt:   time.Now().UTC().Format(time.RFC3339),
+					SourceDevice: hostname,
+					SourceOS:     runtime.GOOS + "/" + runtime.GOARCH,
+					AgentType:    "claude",
+					SessionID:    cs.SessionID,
+					Task: TransferTask{
+						Title:    cs.Summary,
+						RunnerID: "claude",
+						WorkDir:  tm.workDir,
+					},
+					AgentFiles: make(map[string]string),
+				}
+				if bundle.Task.Title == "" {
+					bundle.Task.Title = "Claude Code session " + cs.SessionID[:8]
+				}
+				// Read the session file
+				if data, err := os.ReadFile(cs.FilePath); err == nil {
+					bundle.AgentFiles["claude/session.jsonl"] = base64.StdEncoding.EncodeToString(data)
+				}
+				// Also collect subagents directory if present
+				subagentsDir := filepath.Join(filepath.Dir(cs.FilePath), cs.SessionID, "subagents")
+				if entries, err := os.ReadDir(subagentsDir); err == nil {
+					for _, e := range entries {
+						if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+							data, _ := os.ReadFile(filepath.Join(subagentsDir, e.Name()))
+							if data != nil {
+								bundle.AgentFiles["claude/subagents/"+e.Name()] = base64.StdEncoding.EncodeToString(data)
+							}
+						}
+					}
+				}
+				// Get agent version
+				if out, err := exec.Command("claude", "--version").CombinedOutput(); err == nil {
+					bundle.AgentVersion = strings.TrimSpace(strings.Split(string(out), "\n")[0])
+				}
+				// Workspace
+				collectWorkspaceForBundle(bundle, tm.workDir, opts)
+				return bundle, nil
+			}
+		}
+		return nil, fmt.Errorf("task or session not found: %s", taskID)
 	}
 
-	hostname, _ := os.Hostname()
 	bundle := &TransferBundle{
 		Version:      1,
 		ExportedAt:   time.Now().UTC().Format(time.RFC3339),
@@ -149,12 +230,12 @@ func ExportSession(tm *TaskManager, taskID string, opts ExportOptions) (*Transfe
 		AgentType:    task.RunnerID,
 		SessionID:    task.SessionID,
 		Task: TransferTask{
-			Title:      task.Title,
+			Title:       task.Title,
 			Description: task.Description,
-			ResultText: task.ResultText,
-			CostUSD:    task.CostUSD,
-			RunnerID:   task.RunnerID,
-			WorkDir:    tm.workDir,
+			ResultText:  task.ResultText,
+			CostUSD:     task.CostUSD,
+			RunnerID:    task.RunnerID,
+			WorkDir:     tm.workDir,
 		},
 	}
 
@@ -175,46 +256,49 @@ func ExportSession(tm *TaskManager, taskID string, opts ExportOptions) (*Transfe
 	bundle.AgentFiles = collectAgentFiles(task.RunnerID, task.SessionID, tm.workDir)
 
 	// Workspace
-	if opts.IncludeWorkspace || opts.WorkspaceMode == "git" || opts.WorkspaceMode == "tar" {
-		ws := &TransferWorkspace{
-			ConfigFiles: collectConfigFiles(tm.workDir),
-		}
-
-		remote, branch, commit := getGitInfo(tm.workDir)
-		if remote != "" {
-			ws.GitRemote = remote
-			ws.GitBranch = branch
-			ws.GitCommit = commit
-		}
-
-		mode := opts.WorkspaceMode
-		if mode == "" && remote != "" {
-			mode = "git"
-		} else if mode == "" {
-			mode = "none"
-		}
-
-		if mode == "git" && remote != "" {
-			// Include git patch of uncommitted changes
-			patch, _ := exec.Command("git", "-C", tm.workDir, "diff", "HEAD").CombinedOutput()
-			if len(patch) > 0 {
-				ws.GitPatch = base64.StdEncoding.EncodeToString(patch)
-			}
-		} else if mode == "tar" {
-			tarData, err := tarWorkspace(tm.workDir)
-			if err != nil {
-				log.Printf("[transfer] Warning: tar workspace failed: %v", err)
-			} else if len(tarData) > 50*1024*1024 {
-				return nil, fmt.Errorf("workspace too large for tar transfer (%d MB, max 50 MB)", len(tarData)/1024/1024)
-			} else {
-				ws.TarGz = base64.StdEncoding.EncodeToString(tarData)
-			}
-		}
-
-		bundle.Workspace = ws
-	}
+	collectWorkspaceForBundle(bundle, tm.workDir, opts)
 
 	return bundle, nil
+}
+
+// collectWorkspaceForBundle adds workspace info to a transfer bundle.
+func collectWorkspaceForBundle(bundle *TransferBundle, workDir string, opts ExportOptions) {
+	if !opts.IncludeWorkspace && opts.WorkspaceMode != "git" && opts.WorkspaceMode != "tar" {
+		return
+	}
+	ws := &TransferWorkspace{
+		ConfigFiles: collectConfigFiles(workDir),
+	}
+
+	remote, branch, commit := getGitInfo(workDir)
+	if remote != "" {
+		ws.GitRemote = remote
+		ws.GitBranch = branch
+		ws.GitCommit = commit
+	}
+
+	mode := opts.WorkspaceMode
+	if mode == "" && remote != "" {
+		mode = "git"
+	} else if mode == "" {
+		mode = "none"
+	}
+
+	if mode == "git" && remote != "" {
+		patch, _ := exec.Command("git", "-C", workDir, "diff", "HEAD").CombinedOutput()
+		if len(patch) > 0 {
+			ws.GitPatch = base64.StdEncoding.EncodeToString(patch)
+		}
+	} else if mode == "tar" {
+		tarData, err := tarWorkspace(workDir)
+		if err != nil {
+			log.Printf("[transfer] Warning: tar workspace failed: %v", err)
+		} else if len(tarData) <= 50*1024*1024 {
+			ws.TarGz = base64.StdEncoding.EncodeToString(tarData)
+		}
+	}
+
+	bundle.Workspace = ws
 }
 
 // ImportSession unpacks a TransferBundle and creates a task.
@@ -363,7 +447,7 @@ func collectClaudeFiles(sessionID, workDir string, files map[string]string) {
 
 	// Claude Code stores sessions in ~/.claude/projects/{project-hash}/
 	// The project hash is derived from the canonical path
-	projectHash := claudeProjectHash(workDir)
+	projectHash := claudeProjectDir(workDir)
 	sessionDir := filepath.Join(home, ".claude", "projects", projectHash)
 
 	if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
@@ -387,6 +471,18 @@ func collectClaudeFiles(sessionID, workDir string, files map[string]string) {
 	sessionFile := filepath.Join(sessionDir, sessionID+".jsonl")
 	if data, err := os.ReadFile(sessionFile); err == nil {
 		files["claude/session.jsonl"] = base64.StdEncoding.EncodeToString(data)
+	}
+
+	// Collect subagent files if present
+	subagentsDir := filepath.Join(sessionDir, sessionID, "subagents")
+	if entries, err := os.ReadDir(subagentsDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+				if data, err := os.ReadFile(filepath.Join(subagentsDir, e.Name())); err == nil {
+					files["claude/subagents/"+e.Name()] = base64.StdEncoding.EncodeToString(data)
+				}
+			}
+		}
 	}
 
 	// Also collect CLAUDE.md if present
@@ -505,7 +601,7 @@ func writeAgentFiles(agentType, sessionID string, files map[string]string, workD
 			if sessionID == "" {
 				continue
 			}
-			projectHash := claudeProjectHash(workDir)
+			projectHash := claudeProjectDir(workDir)
 			targetDir := filepath.Join(home, ".claude", "projects", projectHash)
 			os.MkdirAll(targetDir, 0700)
 			data, err := base64.StdEncoding.DecodeString(content)
@@ -518,6 +614,19 @@ func writeAgentFiles(agentType, sessionID string, files map[string]string, workD
 				*warnings = append(*warnings, fmt.Sprintf("Failed to write Claude session: %v", err))
 			} else {
 				log.Printf("[transfer] Wrote Claude session to %s", targetFile)
+			}
+
+		case agentType == "claude" && strings.HasPrefix(key, "claude/subagents/"):
+			if sessionID == "" {
+				continue
+			}
+			projectDir := claudeProjectDir(workDir)
+			subagentName := strings.TrimPrefix(key, "claude/subagents/")
+			targetDir := filepath.Join(home, ".claude", "projects", projectDir, sessionID, "subagents")
+			os.MkdirAll(targetDir, 0700)
+			data, _ := base64.StdEncoding.DecodeString(content)
+			if data != nil {
+				os.WriteFile(filepath.Join(targetDir, subagentName), data, 0600)
 			}
 
 		case key == "CLAUDE.md":
@@ -570,14 +679,112 @@ func writeAgentFiles(agentType, sessionID string, files map[string]string, workD
 	}
 }
 
-// claudeProjectHash computes the project hash Claude Code uses for session storage.
-func claudeProjectHash(dir string) string {
+// claudeProjectDir returns the directory name Claude Code uses for session storage.
+// Claude Code stores sessions in ~/.claude/projects/{path-with-slashes-replaced-by-dashes}/
+// e.g., /Users/alice/project → -Users-alice-project
+func claudeProjectDir(dir string) string {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		absDir = dir
 	}
-	h := sha256.Sum256([]byte(absDir))
-	return hex.EncodeToString(h[:])[:40]
+	return strings.ReplaceAll(absDir, "/", "-")
+}
+
+// listClaudeSessions scans ~/.claude/projects/{projectDir}/ for session JSONL files.
+// Returns session UUIDs sorted by modification time (newest first).
+func listClaudeSessions(workDir string) []ClaudeSessionInfo {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	projectDir := claudeProjectDir(workDir)
+	sessionPath := filepath.Join(home, ".claude", "projects", projectDir)
+
+	entries, err := os.ReadDir(sessionPath)
+	if err != nil {
+		return nil
+	}
+
+	var sessions []ClaudeSessionInfo
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		sessionID := strings.TrimSuffix(e.Name(), ".jsonl")
+		info, _ := e.Info()
+		size := int64(0)
+		modTime := time.Time{}
+		if info != nil {
+			size = info.Size()
+			modTime = info.ModTime()
+		}
+
+		// Read first and last lines to get summary
+		fpath := filepath.Join(sessionPath, e.Name())
+		summary := readClaudeSessionSummary(fpath)
+
+		sessions = append(sessions, ClaudeSessionInfo{
+			SessionID: sessionID,
+			FilePath:  fpath,
+			FileSize:  size,
+			ModTime:   modTime,
+			Summary:   summary,
+		})
+	}
+
+	// Sort by mod time, newest first
+	for i := 0; i < len(sessions); i++ {
+		for j := i + 1; j < len(sessions); j++ {
+			if sessions[j].ModTime.After(sessions[i].ModTime) {
+				sessions[i], sessions[j] = sessions[j], sessions[i]
+			}
+		}
+	}
+
+	return sessions
+}
+
+// ClaudeSessionInfo describes a Claude Code session file.
+type ClaudeSessionInfo struct {
+	SessionID string    `json:"sessionId"`
+	FilePath  string    `json:"-"`
+	FileSize  int64     `json:"fileSize"`
+	ModTime   time.Time `json:"modTime"`
+	Summary   string    `json:"summary,omitempty"`
+}
+
+// readClaudeSessionSummary reads first user message from a Claude session JSONL.
+func readClaudeSessionSummary(fpath string) string {
+	f, err := os.Open(fpath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 256*1024), 256*1024) // 256KB line buffer
+	for scanner.Scan() {
+		var entry struct {
+			Type    string `json:"type"`
+			Message struct {
+				Role    string `json:"role"`
+				Content interface{} `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &entry) == nil {
+			if entry.Type == "user" && entry.Message.Role == "user" {
+				switch c := entry.Message.Content.(type) {
+				case string:
+					if len(c) > 100 {
+						return c[:100] + "..."
+					}
+					return c
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // getGitInfo returns remote URL, branch, and commit hash for a git directory.
