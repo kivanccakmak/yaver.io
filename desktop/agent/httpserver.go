@@ -3034,6 +3034,164 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		result := s.notifyMgr.TestNotification(args.Channel)
 		return mcpToolResult(result)
 
+	// --- Docker ---
+	case "docker_ps":
+		return mcpToolJSON(mcpDockerPS())
+	case "docker_logs":
+		var args struct {
+			Container string `json:"container"`
+			Tail      int    `json:"tail"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDockerLogs(args.Container, args.Tail))
+	case "docker_exec":
+		var args struct {
+			Container string `json:"container"`
+			Command   string `json:"command"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDockerExec(args.Container, args.Command))
+	case "docker_images":
+		return mcpToolJSON(mcpDockerImages())
+	case "docker_compose":
+		var args struct {
+			Action    string `json:"action"`
+			Directory string `json:"directory"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDockerCompose(args.Action, args.Directory))
+
+	// --- Test Runner ---
+	case "run_tests":
+		var args struct {
+			Command   string `json:"command"`
+			Directory string `json:"directory"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpRunTests(args.Command, args.Directory))
+
+	// --- HTTP Client ---
+	case "http_request":
+		var args struct {
+			URL     string            `json:"url"`
+			Method  string            `json:"method"`
+			Headers map[string]string `json:"headers"`
+			Body    string            `json:"body"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Method == "" {
+			args.Method = "GET"
+		}
+		return mcpToolJSON(mcpHTTPRequest(args.Method, args.URL, args.Headers, args.Body))
+
+	// --- Log Tail ---
+	case "tail_logs":
+		var args struct {
+			Path  string `json:"path"`
+			Lines int    `json:"lines"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpTailLogs(args.Path, args.Lines))
+
+	// --- Clipboard ---
+	case "clipboard_read":
+		return mcpToolJSON(mcpClipboardRead())
+	case "clipboard_write":
+		var args struct {
+			Content string `json:"content"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpClipboardWrite(args.Content))
+
+	// --- Process Management ---
+	case "process_list":
+		var args struct {
+			Filter string `json:"filter"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpProcessList(args.Filter))
+	case "process_kill":
+		var args struct {
+			PID    int    `json:"pid"`
+			Signal string `json:"signal"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpProcessKill(args.PID, args.Signal))
+	case "port_check":
+		var args struct {
+			Port int `json:"port"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpPortCheck(args.Port))
+
+	// --- Code Quality ---
+	case "lint":
+		var args struct {
+			Directory string `json:"directory"`
+			Tool      string `json:"tool"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpLint(args.Directory, args.Tool))
+	case "format_code":
+		var args struct {
+			Directory string `json:"directory"`
+			Tool      string `json:"tool"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpFormat(args.Directory, args.Tool))
+	case "type_check":
+		var args struct {
+			Directory string `json:"directory"`
+			Tool      string `json:"tool"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpTypeCheck(args.Directory, args.Tool))
+
+	// --- Package Dependencies ---
+	case "deps_outdated":
+		var args struct {
+			Directory string `json:"directory"`
+			Manager   string `json:"manager"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDepsOutdated(args.Directory, args.Manager))
+	case "deps_audit":
+		var args struct {
+			Directory string `json:"directory"`
+			Manager   string `json:"manager"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDepsAudit(args.Directory, args.Manager))
+	case "deps_list":
+		var args struct {
+			Directory string `json:"directory"`
+			Manager   string `json:"manager"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDepsList(args.Directory, args.Manager))
+
+	// --- GitHub ---
+	case "github_prs":
+		var args struct {
+			Directory string `json:"directory"`
+			State     string `json:"state"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpGitHubPRs(args.Directory, args.State))
+	case "github_issues":
+		var args struct {
+			Directory string `json:"directory"`
+			State     string `json:"state"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpGitHubIssues(args.Directory, args.State))
+	case "github_ci_status":
+		var args struct {
+			Directory string `json:"directory"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpGitHubCIStatus(args.Directory))
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}
@@ -3477,6 +3635,14 @@ func boolStr(b bool) string {
 		return "enabled"
 	}
 	return "disabled"
+}
+
+func mcpToolJSON(data interface{}) interface{} {
+	out, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return mcpToolError("json marshal error: " + err.Error())
+	}
+	return mcpToolResult(string(out))
 }
 
 func mcpToolResult(text string) interface{} {
