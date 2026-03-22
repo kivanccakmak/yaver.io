@@ -420,7 +420,7 @@ export default function HomePage() {
               <h3 className="mb-2 text-sm font-semibold text-surface-50">CLI Agent</h3>
               <p className="text-xs text-surface-500">Go</p>
               <p className="mt-2 text-sm leading-relaxed text-surface-400">
-                Runs on your dev machine. Manages AI sessions in tmux. Discovers and adopts existing tmux sessions so you can control them from mobile. 450+ MCP tools. All connections outbound.
+                Runs on your dev machine. Manages AI sessions in tmux. Discovers and adopts existing tmux sessions so you can control them from mobile. 473 MCP tools. All connections outbound.
               </p>
             </div>
 
@@ -839,7 +839,7 @@ export default function HomePage() {
               </p>
             </div>
             <div className="card">
-              <h3 className="mb-2 text-sm font-semibold text-surface-100">MCP Integration &mdash; 450+ Tools</h3>
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">MCP Integration &mdash; 473 Tools</h3>
               <p className="text-sm leading-relaxed text-surface-400">
                 The most comprehensive MCP server for developers. Docker, Kubernetes, Terraform, Git, testing, linting, databases, package registries, CI/CD, smart home, and more. One command to connect: <code className="rounded bg-surface-800 px-1.5 py-0.5 text-xs text-surface-300">yaver mcp setup claude</code>
               </p>
