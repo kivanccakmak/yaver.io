@@ -26,6 +26,7 @@ type Config struct {
 	Email         *EmailConfig        `json:"email,omitempty"`
 	ACLPeers      []ACLPeerConfig     `json:"acl_peers,omitempty"`
 	Speech        *SpeechConfig       `json:"speech,omitempty"`
+	Notifications *NotificationConfig `json:"notifications,omitempty"`
 }
 
 // ExecConfig controls remote command execution settings.

@@ -61,6 +61,11 @@ contextBridge.exposeInMainWorld('yaver', {
   submitSurvey: (data) => ipcRenderer.invoke('submit-survey', data),
   getUserInfo: () => ipcRenderer.invoke('get-user-info'),
 
+  // Notifications
+  getNotificationsConfig: () => ipcRenderer.invoke('agent-request', 'GET', '/notifications/config'),
+  saveNotificationsConfig: (config) => ipcRenderer.invoke('agent-request', 'POST', '/notifications/config', config),
+  testNotification: (channel) => ipcRenderer.invoke('agent-request', 'POST', '/notifications/test', { channel }),
+
   // File picker for image attachments
   pickFile: (options) => ipcRenderer.invoke('pick-file', options),
 

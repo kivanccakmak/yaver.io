@@ -662,6 +662,23 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, execTools...)
 
+	// --- Notifications ---
+	notifTools := []map[string]interface{}{
+		{
+			"name":        "notify",
+			"description": "Send a notification message to configured channels (Telegram, Discord, Slack). Useful for alerting yourself about task completions, deployments, or any important events.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"message"},
+				"properties": map[string]interface{}{
+					"message": map[string]interface{}{"type": "string", "description": "Message to send"},
+					"channel": map[string]interface{}{"type": "string", "description": "Specific channel: 'telegram', 'discord', 'slack'. Omit to send to all."},
+				},
+			},
+		},
+	}
+	tools = append(tools, notifTools...)
+
 	// --- Task Scheduling ---
 	scheduleTools := []map[string]interface{}{
 		{

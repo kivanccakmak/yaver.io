@@ -28,6 +28,7 @@ type HTTPServer struct {
 	analytics   *Analytics
 	aclMgr      *ACLManager
 	emailMgr    *EmailManager
+	notifyMgr   *NotificationManager
 	server      *http.Server
 	onShutdown  func() // called when mobile requests agent shutdown
 
@@ -76,6 +77,10 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/tmux/adopt", s.auth(s.handleTmuxAdopt))
 	mux.HandleFunc("/tmux/detach", s.auth(s.handleTmuxDetach))
 	mux.HandleFunc("/tmux/input", s.auth(s.handleTmuxInput))
+
+	// Notifications
+	mux.HandleFunc("/notifications/config", s.auth(s.handleNotificationsConfig))
+	mux.HandleFunc("/notifications/test", s.auth(s.handleNotificationsTest))
 
 	// Exec (remote command execution)
 	mux.HandleFunc("/exec", s.auth(s.handleExec))
@@ -1193,6 +1198,60 @@ func (s *HTTPServer) handleSessionImport(w http.ResponseWriter, r *http.Request)
 		"taskId":   taskID,
 		"warnings": warnings,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Notifications handlers
+// ---------------------------------------------------------------------------
+
+func (s *HTTPServer) handleNotificationsConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		cfg, _ := LoadConfig()
+		if cfg != nil && cfg.Notifications != nil {
+			jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "config": cfg.Notifications})
+		} else {
+			jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "config": NotificationConfig{}})
+		}
+	case http.MethodPost:
+		var notifConfig NotificationConfig
+		if err := json.NewDecoder(r.Body).Decode(&notifConfig); err != nil {
+			jsonError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		cfg, _ := LoadConfig()
+		if cfg == nil {
+			cfg = &Config{}
+		}
+		cfg.Notifications = &notifConfig
+		if err := SaveConfig(cfg); err != nil {
+			jsonError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if s.notifyMgr != nil {
+			s.notifyMgr.UpdateConfig(&notifConfig)
+		}
+		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true})
+	default:
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *HTTPServer) handleNotificationsTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	var body struct {
+		Channel string `json:"channel"` // "telegram", "discord", "slack", or "" for all
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if s.notifyMgr == nil {
+		jsonError(w, http.StatusServiceUnavailable, "notifications not available")
+		return
+	}
+	result := s.notifyMgr.TestNotification(body.Channel)
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "result": result})
 }
 
 // ---------------------------------------------------------------------------
@@ -2750,6 +2809,34 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 			return mcpToolError(err.Error())
 		}
 		return mcpToolResult("Schedule cancelled: " + args.ScheduleID)
+
+	case "notify":
+		var args struct {
+			Message string `json:"message"`
+			Channel string `json:"channel"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Message == "" {
+			return mcpToolError("message is required")
+		}
+		if s.notifyMgr == nil {
+			return mcpToolError("notifications not configured")
+		}
+		result := s.notifyMgr.TestNotification(args.Channel)
+		// Actually send the custom message
+		if args.Channel == "" {
+			s.notifyMgr.sendAll(args.Message)
+		} else {
+			switch strings.ToLower(args.Channel) {
+			case "telegram":
+				s.notifyMgr.sendTelegram(args.Message)
+			case "discord":
+				s.notifyMgr.sendDiscord(args.Message)
+			case "slack":
+				s.notifyMgr.sendSlack(args.Message)
+			}
+		}
+		return mcpToolResult("Notification sent: " + result)
 
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
