@@ -882,11 +882,11 @@ export default function HomePage() {
             Works with everything you use
           </h2>
           <p className="mx-auto mb-16 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
-            Built-in support for 7 AI agents, 4 chat platforms, 5 SDKs, and every major transport layer.
+            7 AI agents, 4 chat platforms, 5 SDKs, issue trackers, alerting, and every major transport layer.
             All data flows peer-to-peer &mdash; nothing stored on our servers.
           </p>
 
-          <div className="grid grid-cols-1 gap-8 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {/* AI Agents */}
             <div className="rounded-xl border border-surface-800 bg-surface-900/40 p-5">
               <div className="mb-4 flex items-center gap-2">
@@ -920,10 +920,10 @@ export default function HomePage() {
                 <h3 className="text-sm font-semibold text-surface-100">Chat & Notifications</h3>
               </div>
               <ul className="space-y-2 text-sm text-surface-400">
-                <li>Telegram <span className="text-emerald-400/70 text-xs">(bidirectional)</span></li>
+                <li>Telegram <span className="text-emerald-400/70 text-xs">(2-way)</span></li>
                 <li>Discord</li>
                 <li>Slack</li>
-                <li>Microsoft Teams</li>
+                <li>Teams</li>
               </ul>
             </div>
 
@@ -958,9 +958,28 @@ export default function HomePage() {
               </div>
               <ul className="space-y-2 text-sm text-surface-400">
                 <li>Direct LAN <span className="text-surface-600 text-xs">(~5ms)</span></li>
-                <li>QUIC Relay <span className="text-surface-600 text-xs">(self-hostable)</span></li>
+                <li>QUIC Relay <span className="text-surface-600 text-xs">(self-host)</span></li>
                 <li>Cloudflare Tunnel</li>
                 <li>Tailscale</li>
+              </ul>
+            </div>
+
+            {/* Developer Integrations */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/40 p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-500/10 text-red-400">
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+                  </svg>
+                </div>
+                <h3 className="text-sm font-semibold text-surface-100">Dev Tools</h3>
+              </div>
+              <ul className="space-y-2 text-sm text-surface-400">
+                <li>Linear</li>
+                <li>Jira</li>
+                <li>PagerDuty</li>
+                <li>Opsgenie</li>
+                <li>Email</li>
               </ul>
             </div>
           </div>
@@ -983,12 +1002,36 @@ export default function HomePage() {
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-4xl">
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
-            Run your own relay
+            Relay options
           </h2>
           <p className="mx-auto mb-12 max-w-2xl text-center text-sm text-surface-400">
-            Deploy a relay server on any VPS for NAT traversal. It&apos;s a pass-through
-            proxy &mdash; stores nothing. Or skip the relay entirely with Tailscale.
+            Use our managed relay for zero setup, self-host on any VPS, or skip the relay
+            entirely with Tailscale. The relay is a pass-through proxy &mdash; it stores nothing.
           </p>
+
+          {/* Managed relay callout */}
+          <div className="mb-8 rounded-xl border border-[#6366f1]/30 bg-[#6366f1]/5 p-6">
+            <div className="flex flex-col items-center gap-4 sm:flex-row">
+              <div className="flex-1">
+                <div className="mb-1 flex items-center gap-2">
+                  <span className="rounded-full bg-[#6366f1]/20 px-2 py-0.5 text-[10px] font-medium text-[#818cf8]">
+                    easiest
+                  </span>
+                  <h3 className="text-sm font-semibold text-surface-100">Managed Relay</h3>
+                </div>
+                <p className="text-sm text-surface-400">
+                  No VPS, no Docker, no DNS records. Sign up and your agent connects
+                  automatically. Multi-region, auto-failover, always up to date.
+                </p>
+              </div>
+              <Link
+                href="/pricing"
+                className="btn-primary shrink-0 px-5 py-2 text-sm"
+              >
+                $10/mo &rarr;
+              </Link>
+            </div>
+          </div>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {/* Option 1: Automated */}

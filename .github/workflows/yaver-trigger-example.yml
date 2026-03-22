@@ -1,0 +1,54 @@
+# Example: Trigger a Yaver task from GitHub Actions
+#
+# This workflow shows how to use the Yaver webhook endpoint to create
+# AI agent tasks from your CI/CD pipeline.
+#
+# Prerequisites:
+#   1. Run `yaver config set webhook-secret <secret>` on your agent
+#   2. Your agent must be reachable (via relay, Cloudflare tunnel, or direct IP)
+#   3. Add these GitHub Actions secrets:
+#      - YAVER_AGENT_URL: e.g. https://relay.example.com/proxy/<device-id>
+#      - YAVER_WEBHOOK_SECRET: the secret you set in step 1
+#
+# Usage:
+#   - Copy this file to your repo's .github/workflows/
+#   - Customize the trigger events and task titles
+#   - The workflow creates a task on your Yaver agent, which runs the
+#     configured AI runner (Claude Code, Codex, Aider, etc.)
+
+name: Yaver Task Trigger (Example)
+
+on:
+  # Trigger on push to main
+  push:
+    branches: [main]
+
+  # Or trigger manually from the Actions tab
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Task prompt for the AI agent"
+        required: true
+        default: "Review the latest changes and suggest improvements"
+      runner:
+        description: "AI runner to use (claude, codex, aider, goose, etc.)"
+        required: false
+        default: "claude"
+
+jobs:
+  trigger-yaver-task:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Yaver task
+        run: |
+          PROMPT="${{ github.event.inputs.prompt || 'Review the latest push to main and check for issues' }}"
+          RUNNER="${{ github.event.inputs.runner || 'claude' }}"
+
+          curl -sf -X POST "${{ secrets.YAVER_AGENT_URL }}/webhooks/trigger" \
+            -H "Content-Type: application/json" \
+            -H "X-Webhook-Secret: ${{ secrets.YAVER_WEBHOOK_SECRET }}" \
+            -d "{
+              \"title\": \"$PROMPT\",
+              \"description\": \"Triggered by GitHub Actions — ${{ github.repository }}@${{ github.sha }}\",
+              \"runner\": \"$RUNNER\"
+            }"

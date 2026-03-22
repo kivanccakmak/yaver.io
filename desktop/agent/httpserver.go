@@ -2900,9 +2900,129 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 				s.notifyMgr.sendDiscord(args.Message)
 			case "slack":
 				s.notifyMgr.sendSlack(args.Message)
+			case "teams":
+				s.notifyMgr.sendTeams(args.Message)
 			}
 		}
 		return mcpToolResult("Notification sent: " + result)
+
+	case "integrations_list":
+		cfg, _ := LoadConfig()
+		if cfg == nil || cfg.Notifications == nil {
+			return mcpToolResult("No integrations configured.\n\nAvailable channels: telegram, discord, slack, teams, linear, jira, pagerduty, opsgenie, email\n\nUse 'integrations_set' to configure.")
+		}
+		nc := cfg.Notifications
+		var sb strings.Builder
+		sb.WriteString("Configured integrations:\n\n")
+		if nc.Telegram != nil {
+			sb.WriteString(fmt.Sprintf("- Telegram: %s (chatId: %s)\n", boolStr(nc.Telegram.Enabled), nc.Telegram.ChatID))
+		}
+		if nc.Discord != nil {
+			sb.WriteString(fmt.Sprintf("- Discord: %s\n", boolStr(nc.Discord.Enabled)))
+		}
+		if nc.Slack != nil {
+			sb.WriteString(fmt.Sprintf("- Slack: %s\n", boolStr(nc.Slack.Enabled)))
+		}
+		if nc.Teams != nil {
+			sb.WriteString(fmt.Sprintf("- Teams: %s\n", boolStr(nc.Teams.Enabled)))
+		}
+		if nc.Linear != nil {
+			sb.WriteString(fmt.Sprintf("- Linear: %s (team: %s)\n", boolStr(nc.Linear.Enabled), nc.Linear.TeamID))
+		}
+		if nc.Jira != nil {
+			sb.WriteString(fmt.Sprintf("- Jira: %s (project: %s)\n", boolStr(nc.Jira.Enabled), nc.Jira.ProjectKey))
+		}
+		if nc.PagerDuty != nil {
+			sb.WriteString(fmt.Sprintf("- PagerDuty: %s (failOnly: %v)\n", boolStr(nc.PagerDuty.Enabled), nc.PagerDuty.OnFailOnly))
+		}
+		if nc.Opsgenie != nil {
+			sb.WriteString(fmt.Sprintf("- Opsgenie: %s (failOnly: %v)\n", boolStr(nc.Opsgenie.Enabled), nc.Opsgenie.OnFailOnly))
+		}
+		if nc.Email != nil {
+			sb.WriteString(fmt.Sprintf("- Email: %s (to: %s)\n", boolStr(nc.Email.Enabled), nc.Email.To))
+		}
+		if sb.Len() == len("Configured integrations:\n\n") {
+			sb.WriteString("(none configured)\n")
+		}
+		sb.WriteString("\nAvailable: telegram, discord, slack, teams, linear, jira, pagerduty, opsgenie, email")
+		return mcpToolResult(sb.String())
+
+	case "integrations_set":
+		var args struct {
+			Channel string          `json:"channel"`
+			Config  json.RawMessage `json:"config"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Channel == "" {
+			return mcpToolError("channel is required (telegram, discord, slack, teams, linear, jira, pagerduty, opsgenie, email)")
+		}
+		cfg, _ := LoadConfig()
+		if cfg == nil {
+			cfg = &Config{}
+		}
+		if cfg.Notifications == nil {
+			cfg.Notifications = &NotificationConfig{}
+		}
+		nc := cfg.Notifications
+		ch := strings.ToLower(args.Channel)
+		switch ch {
+		case "telegram":
+			var c TelegramConfig
+			json.Unmarshal(args.Config, &c)
+			nc.Telegram = &c
+		case "discord":
+			var c DiscordConfig
+			json.Unmarshal(args.Config, &c)
+			nc.Discord = &c
+		case "slack":
+			var c SlackConfig
+			json.Unmarshal(args.Config, &c)
+			nc.Slack = &c
+		case "teams":
+			var c TeamsConfig
+			json.Unmarshal(args.Config, &c)
+			nc.Teams = &c
+		case "linear":
+			var c LinearConfig
+			json.Unmarshal(args.Config, &c)
+			nc.Linear = &c
+		case "jira":
+			var c JiraConfig
+			json.Unmarshal(args.Config, &c)
+			nc.Jira = &c
+		case "pagerduty":
+			var c PagerDutyConfig
+			json.Unmarshal(args.Config, &c)
+			nc.PagerDuty = &c
+		case "opsgenie":
+			var c OpsgenieConfig
+			json.Unmarshal(args.Config, &c)
+			nc.Opsgenie = &c
+		case "email":
+			var c EmailNotifyConfig
+			json.Unmarshal(args.Config, &c)
+			nc.Email = &c
+		default:
+			return mcpToolError("unknown channel: " + ch)
+		}
+		if err := SaveConfig(cfg); err != nil {
+			return mcpToolError("failed to save config: " + err.Error())
+		}
+		if s.notifyMgr != nil {
+			s.notifyMgr.UpdateConfig(nc)
+		}
+		return mcpToolResult(fmt.Sprintf("Integration '%s' configured and saved.", ch))
+
+	case "integrations_test":
+		var args struct {
+			Channel string `json:"channel"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if s.notifyMgr == nil {
+			return mcpToolError("notifications not configured")
+		}
+		result := s.notifyMgr.TestNotification(args.Channel)
+		return mcpToolResult(result)
 
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
@@ -3340,6 +3460,13 @@ func (s *HTTPServer) resolveFilePath(path string) string {
 		return filepath.Clean(path)
 	}
 	return filepath.Join(s.taskMgr.workDir, path)
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "enabled"
+	}
+	return "disabled"
 }
 
 func mcpToolResult(text string) interface{} {

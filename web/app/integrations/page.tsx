@@ -176,6 +176,47 @@ const CATEGORIES: Category[] = [
     ],
   },
   {
+    title: "Issue Tracking & Alerting",
+    subtitle: "Create issues and trigger alerts on task completion",
+    icon: (
+      <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+      </svg>
+    ),
+    integrations: [
+      {
+        name: "Linear",
+        description: "Auto-create issues in Linear when tasks complete or fail",
+        status: "Configure in settings",
+        docsLink: "/manuals/integrations#notifications",
+      },
+      {
+        name: "Jira",
+        description: "Create Jira tickets from task completion events",
+        status: "Configure in settings",
+        docsLink: "/manuals/integrations#notifications",
+      },
+      {
+        name: "PagerDuty",
+        description: "Trigger PagerDuty incidents on task failures",
+        status: "Configure in settings",
+        docsLink: "/manuals/integrations#notifications",
+      },
+      {
+        name: "Opsgenie",
+        description: "Send alerts to Opsgenie when tasks fail",
+        status: "Configure in settings",
+        docsLink: "/manuals/integrations#notifications",
+      },
+      {
+        name: "Email",
+        description: "Email notifications via Office 365 or Gmail",
+        status: "Configure in settings",
+        docsLink: "/manuals/integrations#notifications",
+      },
+    ],
+  },
+  {
     title: "SDKs",
     subtitle: "Embed Yaver in your own apps",
     icon: (

@@ -1168,6 +1168,24 @@ func runServe(args []string) {
 	httpServer.emailMgr = emailMgr
 	httpServer.analytics = NewAnalytics()
 	httpServer.notifyMgr = NewNotificationManager(cfg.Notifications)
+	globalEmailMgr = emailMgr // enable email notifications
+
+	// Wire notification callbacks
+	taskMgr.OnTaskDone = func(task *Task) {
+		dur := 0
+		if task.StartedAt != nil && task.FinishedAt != nil {
+			dur = int(task.FinishedAt.Sub(*task.StartedAt).Seconds())
+		}
+		httpServer.notifyMgr.NotifyTaskCompleted(task.ID, task.Title, string(task.Status), task.CostUSD, dur)
+	}
+	httpServer.execMgr.OnExecDone = func(command string, exitCode int) {
+		status := "completed"
+		if exitCode != 0 {
+			status = "failed"
+		}
+		httpServer.notifyMgr.NotifyExecCompleted(command, status, exitCode)
+	}
+
 	chatBot := NewChatBot(taskMgr, httpServer.execMgr, httpServer.notifyMgr, cfg.Notifications)
 	chatBot.Start(ctx)
 	httpServer.onShutdown = func() {

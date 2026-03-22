@@ -13,10 +13,15 @@ import (
 
 // NotificationConfig holds notification channel settings.
 type NotificationConfig struct {
-	Telegram *TelegramConfig `json:"telegram,omitempty"`
-	Discord  *DiscordConfig  `json:"discord,omitempty"`
-	Slack    *SlackConfig    `json:"slack,omitempty"`
-	Teams    *TeamsConfig    `json:"teams,omitempty"`
+	Telegram  *TelegramConfig  `json:"telegram,omitempty"`
+	Discord   *DiscordConfig   `json:"discord,omitempty"`
+	Slack     *SlackConfig     `json:"slack,omitempty"`
+	Teams     *TeamsConfig     `json:"teams,omitempty"`
+	Linear    *LinearConfig    `json:"linear,omitempty"`
+	Jira      *JiraConfig      `json:"jira,omitempty"`
+	PagerDuty *PagerDutyConfig `json:"pagerduty,omitempty"`
+	Opsgenie  *OpsgenieConfig  `json:"opsgenie,omitempty"`
+	Email     *EmailNotifyConfig `json:"email_notify,omitempty"`
 }
 
 type TelegramConfig struct {
@@ -38,6 +43,37 @@ type SlackConfig struct {
 type TeamsConfig struct {
 	WebhookURL string `json:"webhookUrl"` // Microsoft Teams incoming webhook URL
 	Enabled    bool   `json:"enabled"`
+}
+
+type LinearConfig struct {
+	APIKey  string `json:"apiKey"`  // Linear API key
+	TeamID  string `json:"teamId"`  // Linear team ID for issue creation
+	Enabled bool   `json:"enabled"`
+}
+
+type JiraConfig struct {
+	BaseURL    string `json:"baseUrl"`    // e.g. "https://mycompany.atlassian.net"
+	Email      string `json:"email"`      // Jira account email
+	APIToken   string `json:"apiToken"`   // Jira API token
+	ProjectKey string `json:"projectKey"` // e.g. "DEV"
+	Enabled    bool   `json:"enabled"`
+}
+
+type PagerDutyConfig struct {
+	RoutingKey string `json:"routingKey"` // PagerDuty Events API v2 routing key
+	Enabled    bool   `json:"enabled"`
+	OnFailOnly bool   `json:"onFailOnly"` // only alert on task failure
+}
+
+type OpsgenieConfig struct {
+	APIKey  string `json:"apiKey"`  // Opsgenie API key
+	Enabled bool   `json:"enabled"`
+	OnFailOnly bool `json:"onFailOnly"` // only alert on task failure
+}
+
+type EmailNotifyConfig struct {
+	To      string `json:"to"`      // recipient email address
+	Enabled bool   `json:"enabled"`
 }
 
 // NotificationManager handles sending notifications across channels.
@@ -82,6 +118,21 @@ func (nm *NotificationManager) NotifyTaskCompleted(taskID, title, status string,
 	}
 
 	nm.sendAll(msg)
+
+	// Developer integrations: issue trackers create on completion, alerting on failure
+	if nm.config.Linear != nil && nm.config.Linear.Enabled {
+		go nm.sendLinear(title, status, msg)
+	}
+	if nm.config.Jira != nil && nm.config.Jira.Enabled {
+		go nm.sendJira(title, status, msg)
+	}
+	isFailed := status == "failed"
+	if nm.config.PagerDuty != nil && nm.config.PagerDuty.Enabled && (isFailed || !nm.config.PagerDuty.OnFailOnly) {
+		go nm.sendPagerDuty(title, msg)
+	}
+	if nm.config.Opsgenie != nil && nm.config.Opsgenie.Enabled && (isFailed || !nm.config.Opsgenie.OnFailOnly) {
+		go nm.sendOpsgenie(title, msg)
+	}
 }
 
 // NotifyExecCompleted sends a notification when an exec command finishes.
@@ -125,6 +176,9 @@ func (nm *NotificationManager) sendAll(message string) {
 	}
 	if nm.config.Teams != nil && nm.config.Teams.Enabled {
 		go nm.sendTeams(message)
+	}
+	if nm.config.Email != nil && nm.config.Email.Enabled {
+		go nm.sendEmailNotify(message)
 	}
 }
 
@@ -212,6 +266,157 @@ func (nm *NotificationManager) sendTeams(message string) {
 	}
 }
 
+// --- Linear ---
+
+func (nm *NotificationManager) sendLinear(title, status, detail string) {
+	if nm.config.Linear == nil || nm.config.Linear.APIKey == "" || nm.config.Linear.TeamID == "" {
+		return
+	}
+
+	query := `mutation($title: String!, $teamId: String!, $description: String!) {
+		issueCreate(input: { title: $title, teamId: $teamId, description: $description }) {
+			success issue { id identifier url }
+		}
+	}`
+	variables := map[string]string{
+		"title":       fmt.Sprintf("[Yaver] %s — %s", title, status),
+		"teamId":      nm.config.Linear.TeamID,
+		"description": detail,
+	}
+	body, _ := json.Marshal(map[string]interface{}{"query": query, "variables": variables})
+
+	req, _ := http.NewRequest("POST", "https://api.linear.app/graphql", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", nm.config.Linear.APIKey)
+
+	resp, err := nm.client.Do(req)
+	if err != nil {
+		log.Printf("[notify:linear] send failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		log.Printf("[notify:linear] API error %d", resp.StatusCode)
+	}
+}
+
+// --- Jira ---
+
+func (nm *NotificationManager) sendJira(title, status, detail string) {
+	if nm.config.Jira == nil || nm.config.Jira.BaseURL == "" || nm.config.Jira.APIToken == "" {
+		return
+	}
+
+	issueData := map[string]interface{}{
+		"fields": map[string]interface{}{
+			"project":     map[string]string{"key": nm.config.Jira.ProjectKey},
+			"summary":     fmt.Sprintf("[Yaver] %s — %s", title, status),
+			"description": detail,
+			"issuetype":   map[string]string{"name": "Task"},
+		},
+	}
+	body, _ := json.Marshal(issueData)
+
+	url := strings.TrimRight(nm.config.Jira.BaseURL, "/") + "/rest/api/2/issue"
+	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(nm.config.Jira.Email, nm.config.Jira.APIToken)
+
+	resp, err := nm.client.Do(req)
+	if err != nil {
+		log.Printf("[notify:jira] send failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		log.Printf("[notify:jira] API error %d: %s", resp.StatusCode, string(respBody))
+	}
+}
+
+// --- PagerDuty ---
+
+func (nm *NotificationManager) sendPagerDuty(title, detail string) {
+	if nm.config.PagerDuty == nil || nm.config.PagerDuty.RoutingKey == "" {
+		return
+	}
+
+	event := map[string]interface{}{
+		"routing_key":  nm.config.PagerDuty.RoutingKey,
+		"event_action": "trigger",
+		"payload": map[string]interface{}{
+			"summary":  fmt.Sprintf("[Yaver] %s", title),
+			"severity": "error",
+			"source":   "yaver-agent",
+			"custom_details": map[string]string{
+				"detail": detail,
+			},
+		},
+	}
+	body, _ := json.Marshal(event)
+
+	resp, err := nm.client.Post("https://events.pagerduty.com/v2/enqueue", "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("[notify:pagerduty] send failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		log.Printf("[notify:pagerduty] API error %d", resp.StatusCode)
+	}
+}
+
+// --- Opsgenie ---
+
+func (nm *NotificationManager) sendOpsgenie(title, detail string) {
+	if nm.config.Opsgenie == nil || nm.config.Opsgenie.APIKey == "" {
+		return
+	}
+
+	alert := map[string]interface{}{
+		"message":     fmt.Sprintf("[Yaver] %s", title),
+		"description": detail,
+		"priority":    "P2",
+		"source":      "yaver-agent",
+	}
+	body, _ := json.Marshal(alert)
+
+	req, _ := http.NewRequest("POST", "https://api.opsgenie.com/v2/alerts", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "GenieKey "+nm.config.Opsgenie.APIKey)
+
+	resp, err := nm.client.Do(req)
+	if err != nil {
+		log.Printf("[notify:opsgenie] send failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		log.Printf("[notify:opsgenie] API error %d", resp.StatusCode)
+	}
+}
+
+// --- Email Notification ---
+
+func (nm *NotificationManager) sendEmailNotify(message string) {
+	if nm.config.Email == nil || nm.config.Email.To == "" {
+		return
+	}
+
+	// Use the global email manager if available
+	if globalEmailMgr != nil {
+		err := globalEmailMgr.SendEmail(nm.config.Email.To, "Yaver Notification", message, "")
+		if err != nil {
+			log.Printf("[notify:email] send failed: %v", err)
+		}
+	} else {
+		log.Printf("[notify:email] email manager not configured — skipping")
+	}
+}
+
+// globalEmailMgr is set by main.go to enable email notifications.
+var globalEmailMgr *EmailManager
+
 // TestNotification sends a test message to verify configuration.
 func (nm *NotificationManager) TestNotification(channel string) string {
 	msg := "🧪 Yaver test notification — your integration is working!"
@@ -241,6 +446,36 @@ func (nm *NotificationManager) TestNotification(channel string) string {
 		}
 		nm.sendTeams(msg)
 		return "Test sent to Teams"
+	case "linear":
+		if nm.config.Linear == nil || !nm.config.Linear.Enabled {
+			return "Linear not configured"
+		}
+		nm.sendLinear("Test", "completed", msg)
+		return "Test issue created in Linear"
+	case "jira":
+		if nm.config.Jira == nil || !nm.config.Jira.Enabled {
+			return "Jira not configured"
+		}
+		nm.sendJira("Test", "completed", msg)
+		return "Test issue created in Jira"
+	case "pagerduty":
+		if nm.config.PagerDuty == nil || !nm.config.PagerDuty.Enabled {
+			return "PagerDuty not configured"
+		}
+		nm.sendPagerDuty("Test", msg)
+		return "Test alert sent to PagerDuty"
+	case "opsgenie":
+		if nm.config.Opsgenie == nil || !nm.config.Opsgenie.Enabled {
+			return "Opsgenie not configured"
+		}
+		nm.sendOpsgenie("Test", msg)
+		return "Test alert sent to Opsgenie"
+	case "email":
+		if nm.config.Email == nil || !nm.config.Email.Enabled {
+			return "Email notifications not configured"
+		}
+		nm.sendEmailNotify(msg)
+		return "Test email sent"
 	default:
 		nm.sendAll(msg)
 		return "Test sent to all configured channels"

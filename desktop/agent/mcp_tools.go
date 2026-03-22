@@ -654,13 +654,43 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	notifTools := []map[string]interface{}{
 		{
 			"name":        "notify",
-			"description": "Send a notification message to configured channels (Telegram, Discord, Slack). Useful for alerting yourself about task completions, deployments, or any important events.",
+			"description": "Send a notification message to configured channels (Telegram, Discord, Slack, Teams). Useful for alerting yourself about task completions, deployments, or any important events.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"message"},
 				"properties": map[string]interface{}{
 					"message": map[string]interface{}{"type": "string", "description": "Message to send"},
-					"channel": map[string]interface{}{"type": "string", "description": "Specific channel: 'telegram', 'discord', 'slack'. Omit to send to all."},
+					"channel": map[string]interface{}{"type": "string", "description": "Specific channel: 'telegram', 'discord', 'slack', 'teams'. Omit to send to all."},
+				},
+			},
+		},
+		{
+			"name":        "integrations_list",
+			"description": "List all configured notification and developer integrations (Telegram, Discord, Slack, Teams, Linear, Jira, PagerDuty, Opsgenie, Email). Shows which are enabled and their settings.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "integrations_set",
+			"description": "Configure a notification or developer integration. Saves to config and activates immediately. Channels: telegram, discord, slack, teams, linear, jira, pagerduty, opsgenie, email.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"channel", "config"},
+				"properties": map[string]interface{}{
+					"channel": map[string]interface{}{"type": "string", "description": "Integration channel name (telegram, discord, slack, teams, linear, jira, pagerduty, opsgenie, email)"},
+					"config":  map[string]interface{}{"type": "object", "description": "Channel-specific config. Examples: {\"webhookUrl\":\"...\",\"enabled\":true} for Discord/Slack/Teams, {\"apiKey\":\"...\",\"teamId\":\"...\",\"enabled\":true} for Linear, {\"routingKey\":\"...\",\"enabled\":true,\"onFailOnly\":true} for PagerDuty"},
+				},
+			},
+		},
+		{
+			"name":        "integrations_test",
+			"description": "Send a test notification to verify an integration is working. Specify a channel or omit to test all.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"channel": map[string]interface{}{"type": "string", "description": "Channel to test (telegram, discord, slack, teams, linear, jira, pagerduty, opsgenie, email). Omit to test all."},
 				},
 			},
 		},

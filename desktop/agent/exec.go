@@ -68,10 +68,11 @@ type ExecOutputEvent struct {
 
 // ExecManager manages concurrent command execution sessions.
 type ExecManager struct {
-	mu       sync.RWMutex
-	sessions map[string]*ExecSession
-	workDir  string
-	sandbox  SandboxConfig
+	mu         sync.RWMutex
+	sessions   map[string]*ExecSession
+	workDir    string
+	sandbox    SandboxConfig
+	OnExecDone func(command string, exitCode int) // called when exec finishes
 }
 
 // NewExecManager creates a new exec manager.
@@ -268,6 +269,14 @@ func (em *ExecManager) StartExec(command, workDir, shell string, env map[string]
 
 		session.broadcast(ExecOutputEvent{Type: "exit", Code: session.ExitCode})
 		session.closeListeners()
+
+		if em.OnExecDone != nil {
+			code := 0
+			if session.ExitCode != nil {
+				code = *session.ExitCode
+			}
+			go em.OnExecDone(session.Command, code)
+		}
 	}()
 
 	em.mu.Lock()

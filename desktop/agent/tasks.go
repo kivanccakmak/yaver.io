@@ -528,6 +528,9 @@ type TaskManager struct {
 	WaitForSlot  bool // If true, wait for other Claude Code sessions to finish before starting
 	DummyMode    bool // If true, use fake responses instead of launching a real runner
 
+	// Callbacks (set after construction)
+	OnTaskDone func(task *Task) // called when a task finishes (completed/failed/stopped)
+
 	// Convex reporting (set after construction)
 	ConvexURL  string
 	AuthToken  string
@@ -564,6 +567,15 @@ func NewTaskManager(workDir string, store *TaskStore, runner RunnerConfig) *Task
 	}
 	tm.persist()
 	return tm
+}
+
+// fireTaskDone calls the OnTaskDone callback if set (non-blocking).
+func (tm *TaskManager) fireTaskDone(task *Task) {
+	if tm.OnTaskDone != nil {
+		// Copy fields under lock to avoid races
+		t := *task
+		go tm.OnTaskDone(&t)
+	}
 }
 
 // WarmUp forks the runner at startup to establish a session.
@@ -1013,6 +1025,7 @@ func (tm *TaskManager) runDummyTask(task *Task) {
 		Timestamp: finishNow,
 	})
 	tm.persist()
+	tm.fireTaskDone(task)
 	tm.mu.Unlock()
 	close(task.outputCh)
 	close(task.doneCh)
@@ -1410,6 +1423,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			}()
 		}
 		tm.persist()
+		tm.fireTaskDone(task)
 		// Save session file for recent history (non-blocking)
 		go saveSessionFile(task, task.runner.Name, tm.workDir)
 		tm.mu.Unlock()
@@ -1673,6 +1687,7 @@ func (tm *TaskManager) StopTask(id string) error {
 	now := time.Now()
 	task.FinishedAt = &now
 	tm.persist()
+	tm.fireTaskDone(task)
 	tm.mu.Unlock()
 
 	return nil
@@ -1967,6 +1982,7 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 			}
 		}
 		tm.persist()
+		tm.fireTaskDone(task)
 		go saveSessionFile(task, task.runner.Name, tm.workDir)
 		tm.mu.Unlock()
 		close(task.doneCh)
