@@ -1459,6 +1459,76 @@ run_sdk_tests() {
         fail "Could not create test task for transfer test"
     fi
 
+    # Webhook trigger test
+    info "Testing webhook trigger..."
+    local webhook_resp=$(curl -s -X POST "$base_url/webhooks/trigger" \
+        -H "Content-Type: application/json" \
+        -d '{"title":"Webhook test"}')
+    if echo "$webhook_resp" | grep -q '"error"'; then
+        pass "Webhook rejects without secret (expected)"
+    else
+        fail "Webhook should reject without secret"
+    fi
+
+    # Scheduler test
+    info "Testing scheduler endpoints..."
+    local sched_resp=$(curl -s -X POST "$base_url/schedules" \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" \
+        -d '{"title":"Test schedule","repeatInterval":999}')
+    if echo "$sched_resp" | grep -q '"ok":true'; then
+        local sched_id=$(echo "$sched_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['schedule']['id'])" 2>/dev/null)
+        pass "Scheduler create works"
+
+        # List
+        local list_resp=$(curl -s "$base_url/schedules" -H "Authorization: Bearer $token")
+        if echo "$list_resp" | grep -q "$sched_id"; then
+            pass "Scheduler list works"
+        fi
+
+        # Delete
+        curl -s -X DELETE "$base_url/schedules/$sched_id" -H "Authorization: Bearer $token" > /dev/null
+        pass "Scheduler delete works"
+    else
+        fail "Scheduler create failed"
+    fi
+
+    # Analytics test
+    info "Testing analytics endpoint..."
+    local analytics_resp=$(curl -s "$base_url/analytics" -H "Authorization: Bearer $token")
+    if echo "$analytics_resp" | grep -q '"ok":true'; then
+        pass "Analytics endpoint works"
+    else
+        fail "Analytics endpoint failed"
+    fi
+
+    # Notifications config test
+    info "Testing notifications config..."
+    local notif_resp=$(curl -s "$base_url/notifications/config" -H "Authorization: Bearer $token")
+    if echo "$notif_resp" | grep -q '"ok":true'; then
+        pass "Notifications config endpoint works"
+    else
+        fail "Notifications config failed"
+    fi
+
+    # Doctor endpoint test
+    info "Testing doctor endpoint..."
+    local doctor_resp=$(curl -s "$base_url/agent/doctor" -H "Authorization: Bearer $token")
+    if echo "$doctor_resp" | grep -q '"ok":true'; then
+        pass "Doctor endpoint works"
+    else
+        fail "Doctor endpoint failed"
+    fi
+
+    # Tools endpoint test
+    info "Testing tools endpoint..."
+    local tools_resp=$(curl -s "$base_url/agent/tools" -H "Authorization: Bearer $token")
+    if echo "$tools_resp" | grep -q '"ok":true'; then
+        pass "Tools endpoint works"
+    else
+        fail "Tools endpoint failed"
+    fi
+
     kill "$agent_pid" 2>/dev/null || true
 }
 

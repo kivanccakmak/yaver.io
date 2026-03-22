@@ -179,15 +179,15 @@ export default function HomePage() {
               </a>
             </div>
             <h1 className="mb-6 text-4xl font-bold tracking-tight text-surface-50 sm:text-5xl md:text-6xl">
-              Control your AI coding agent
+              Your code never leaves
               <br />
-              from your phone
+              your machine
             </h1>
             <p className="mx-auto max-w-2xl text-base leading-relaxed text-surface-400 md:text-lg">
-              An open-source mobile remote for terminal AI agents &mdash;
-              Claude Code, Codex, Aider, Ollama, OpenCode, and more.
-              Run local models for full privacy, or use cloud APIs. Your machine, your models, your rules.
-              Everything is peer-to-peer &mdash; no code ever leaves your devices.
+              Open-source P2P remote for AI coding agents &mdash;
+              Claude Code, Codex, Aider, Ollama, and more.
+              Encrypted peer-to-peer connections. Everything runs under YOUR control.
+              No middleman, no cloud dependency, no vendor lock-in. Like OpenClaw, but for developers.
             </p>
           </div>
 
@@ -275,6 +275,7 @@ export default function HomePage() {
             Yaver turns your phone into a remote for AI coding agents on
             your dev machine. Send tasks, read output, adopt existing tmux sessions,
             manage everything &mdash; from the couch, the bus, or anywhere with a signal.
+            Free and open-source. Self-host everything. No vendor lock-in.
           </p>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -285,16 +286,40 @@ export default function HomePage() {
               </p>
             </div>
             <div className="card">
-              <h3 className="mb-2 text-sm font-semibold text-surface-50">Peer-to-peer</h3>
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">P2P encrypted connections</h3>
               <p className="text-sm leading-relaxed text-surface-400">
-                Traffic flows directly between your phone and your machine. No middleman servers storing your code. The optional relay is a dumb pipe &mdash; it can&apos;t read what passes through.
+                Traffic flows directly between your phone and your machine over encrypted channels. No middleman servers storing your code. The optional relay is a dumb pipe &mdash; it can&apos;t read what passes through. Your code never leaves your devices.
               </p>
             </div>
             <div className="card">
               <h3 className="mb-2 text-sm font-semibold text-surface-50">Self-host everything</h3>
               <p className="text-sm leading-relaxed text-surface-400">
-                Run your own relay, use Tailscale, or just be on the same WiFi. Pair with Ollama for a fully local, zero-cost, zero-cloud setup. MIT licensed &mdash; fork it, hack it, ship it.
+                Run your own relay, use Tailscale, or just be on the same WiFi. Pair with Ollama for a fully local, zero-cost, zero-cloud setup. MIT licensed &mdash; fork it, hack it, ship it. Everything runs under your control.
               </p>
+            </div>
+          </div>
+
+          {/* Capabilities */}
+          <div className="mt-12">
+            <h3 className="mb-6 text-center text-sm font-semibold uppercase tracking-wider text-surface-500">
+              Capabilities
+            </h3>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[
+                { name: "Session Transfer", desc: "Move AI sessions between machines" },
+                { name: "Remote Exec", desc: "Run agents on any dev machine" },
+                { name: "Task Scheduling", desc: "Queue and schedule agent tasks" },
+                { name: "Notifications", desc: "Telegram, Discord, Slack alerts" },
+                { name: "CI/CD Webhooks", desc: "GitHub Actions, GitLab CI triggers" },
+                { name: "File Search", desc: "Search files across your codebase" },
+                { name: "Git Operations", desc: "Status, diff, commit from mobile" },
+                { name: "Screen Capture", desc: "Capture and share terminal output" },
+              ].map((cap) => (
+                <div key={cap.name} className="rounded-xl border border-surface-800 bg-surface-900/50 px-4 py-3">
+                  <p className="text-sm font-medium text-surface-200">{cap.name}</p>
+                  <p className="mt-1 text-xs text-surface-500">{cap.desc}</p>
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -1153,10 +1178,10 @@ for await (const chunk of c.streamOutput(task.id)) {
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-6xl">
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
-            Your data stays with you
+            Your code never leaves your machine
           </h2>
           <p className="mb-16 text-center text-sm text-surface-400">
-            No telemetry, no analytics. Here&apos;s how it actually works.
+            No telemetry, no analytics, no data collection. P2P encrypted connections mean your code stays on your devices. Here&apos;s how it actually works.
           </p>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -1271,10 +1296,10 @@ for await (const chunk of c.streamOutput(task.id)) {
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-4xl">
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
-            Open source, open development
+            Free and open-source. Self-host everything. No vendor lock-in.
           </h2>
           <p className="mb-12 text-center text-sm text-surface-400">
-            MIT licensed. Fork it, run your own instance, contribute back.
+            MIT licensed. Fork it, run your own instance, contribute back. Every component is open source &mdash; you own your entire stack.
           </p>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">

@@ -228,6 +228,52 @@ Session transfer is also available as MCP tools — use it directly from within 
 # Claude Code will use the session_transfer MCP tool automatically
 ```
 
+## Webhook Triggers & Notifications
+
+### Webhook Triggers
+
+Trigger Yaver tasks from CI/CD pipelines or any external system by sending a POST request to your agent's webhook endpoint:
+
+```bash
+curl -X POST https://your-agent:18080/webhooks/trigger \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $YAVER_TOKEN" \
+  -H "X-Webhook-Secret: $YAVER_WEBHOOK_SECRET" \
+  -d '{
+    "prompt": "Review the latest changes",
+    "runner": "claude",
+    "model": "sonnet",
+    "metadata": { "source": "github-actions" }
+  }'
+```
+
+Configure the webhook secret:
+```bash
+yaver webhook setup --secret <your-secret>
+```
+
+### Notifications
+
+Get notified when tasks complete, fail, or need input. Supports Telegram, Discord, and Slack:
+
+```bash
+# Telegram
+yaver notify add telegram --bot-token "123456:ABC-DEF..." --chat-id "987654321"
+
+# Discord
+yaver notify add discord --webhook-url "https://discord.com/api/webhooks/..."
+
+# Slack
+yaver notify add slack --webhook-url "https://hooks.slack.com/services/T.../B.../xxx"
+
+# Manage
+yaver notify list
+yaver notify test telegram
+yaver notify remove discord
+```
+
+See the [Integrations Guide](https://yaver.io/manuals/integrations) for detailed setup instructions.
+
 ## Testing
 
 ```bash

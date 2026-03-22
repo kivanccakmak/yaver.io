@@ -31,6 +31,13 @@ const manuals = [
     tags: ["Ollama", "Free", "Local"],
   },
   {
+    title: "Integrations guide",
+    description:
+      "Set up notifications (Telegram, Discord, Slack), CI/CD webhooks (GitHub Actions, GitLab CI), MCP tools, and session transfer between machines.",
+    href: "/manuals/integrations",
+    tags: ["Notifications", "Webhooks", "MCP", "Session Transfer"],
+  },
+  {
     title: "Auto-boot on power restore",
     description:
       "Configure your macOS, Linux, or desktop PC to automatically boot when power is restored after an outage — so Yaver CLI starts without manual intervention.",
