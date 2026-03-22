@@ -974,6 +974,24 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, locationTools...)
 
+	// --- Daily Dev Tools ---
+	dailyTools := []map[string]interface{}{
+		{"name": "crypto_price", "description": "Get cryptocurrency prices (CoinGecko, free).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"coins": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Coin IDs (default: bitcoin, ethereum). Use: bitcoin, ethereum, solana, cardano, dogecoin, etc."}}}},
+		{"name": "currency_exchange", "description": "Convert currency (ECB rates, free).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"amount"}, "properties": map[string]interface{}{"amount": map[string]interface{}{"type": "number"}, "from": map[string]interface{}{"type": "string", "description": "Source currency (default: USD)"}, "to": map[string]interface{}{"type": "string", "description": "Target currency (default: EUR)"}}}},
+		{"name": "npm_info", "description": "Get npm package info — version, downloads, description.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string", "description": "npm package name"}}}},
+		{"name": "github_trending", "description": "Show trending GitHub repositories this week.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"language": map[string]interface{}{"type": "string", "description": "Filter by language (e.g. go, rust, python)"}, "since": map[string]interface{}{"type": "string", "description": "daily, weekly, monthly"}}}},
+		{"name": "jwt_decode", "description": "Decode a JWT token — shows header, payload, expiry.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"token"}, "properties": map[string]interface{}{"token": map[string]interface{}{"type": "string", "description": "JWT token string"}}}},
+		{"name": "epoch", "description": "Convert between Unix timestamps and human-readable dates.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"input": map[string]interface{}{"type": "string", "description": "Unix timestamp, date string, or 'now'"}}}},
+		{"name": "cron_explain", "description": "Explain a cron expression in plain English.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"expression"}, "properties": map[string]interface{}{"expression": map[string]interface{}{"type": "string", "description": "Cron expression (5 fields: min hour dom month dow)"}}}},
+		{"name": "http_status", "description": "Look up what an HTTP status code means.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"code"}, "properties": map[string]interface{}{"code": map[string]interface{}{"type": "integer", "description": "HTTP status code (e.g. 418)"}}}},
+		{"name": "whois", "description": "Look up domain registration info.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"domain"}, "properties": map[string]interface{}{"domain": map[string]interface{}{"type": "string"}}}},
+		{"name": "ip_geo", "description": "Geolocate an IP address — city, country, ISP, coordinates.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string", "description": "IP address (default: your public IP)"}}}},
+		{"name": "subnet_calc", "description": "Calculate subnet details from CIDR notation.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"cidr"}, "properties": map[string]interface{}{"cidr": map[string]interface{}{"type": "string", "description": "CIDR (e.g. 192.168.1.0/24)"}}}},
+		{"name": "fake_data", "description": "Generate fake test data — users, emails, addresses, credit cards.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"type": map[string]interface{}{"type": "string", "description": "user, email, address, uuid, credit_card (default: user)"}, "count": map[string]interface{}{"type": "integer", "description": "Number of records (max: 20)"}}}},
+		{"name": "domain_check", "description": "Check if a domain is available or registered.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"domain"}, "properties": map[string]interface{}{"domain": map[string]interface{}{"type": "string", "description": "Domain to check (e.g. myapp.dev)"}}}},
+	}
+	tools = append(tools, dailyTools...)
+
 	return map[string]interface{}{
 		"tools": tools,
 	}

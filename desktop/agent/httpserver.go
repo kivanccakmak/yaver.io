@@ -3854,6 +3854,90 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		json.Unmarshal(call.Arguments, &args)
 		return mcpToolJSON(mcpTranslate(args.Text, args.From, args.To, args.APIURL))
 
+	// --- Daily Dev Tools ---
+	case "crypto_price":
+		var args struct {
+			Coins []string `json:"coins"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpCryptoPrice(args.Coins))
+	case "currency_exchange":
+		var args struct {
+			Amount float64 `json:"amount"`
+			From   string  `json:"from"`
+			To     string  `json:"to"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpCurrencyExchange(args.Amount, args.From, args.To))
+	case "npm_info":
+		var args struct {
+			Package string `json:"package"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpNPMInfo(args.Package))
+	case "github_trending":
+		var args struct {
+			Language string `json:"language"`
+			Since    string `json:"since"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpGitHubTrending(args.Language, args.Since))
+	case "jwt_decode":
+		var args struct {
+			Token string `json:"token"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpJWTDecode(args.Token))
+	case "epoch":
+		var args struct {
+			Input string `json:"input"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpEpoch(args.Input))
+	case "cron_explain":
+		var args struct {
+			Expression string `json:"expression"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpCronExplain(args.Expression))
+	case "http_status":
+		var args struct {
+			Code int `json:"code"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpHTTPStatusLookup(args.Code))
+	case "whois":
+		var args struct {
+			Domain string `json:"domain"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpWhois(args.Domain))
+	case "ip_geo":
+		var args struct {
+			IP string `json:"ip"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpIPGeo(args.IP))
+	case "subnet_calc":
+		var args struct {
+			CIDR string `json:"cidr"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpSubnet(args.CIDR))
+	case "fake_data":
+		var args struct {
+			Type  string `json:"type"`
+			Count int    `json:"count"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpFakeData(args.Type, args.Count))
+	case "domain_check":
+		var args struct {
+			Domain string `json:"domain"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDomainCheck(args.Domain))
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}
