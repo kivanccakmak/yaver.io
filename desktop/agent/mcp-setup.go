@@ -114,7 +114,7 @@ func setupMCPEditor(name string, configPath string, yaverPath string) {
 	dir := filepath.Dir(configPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Cannot create config directory: %v\n", err)
-		os.Exit(1)
+		return
 	}
 
 	config := make(map[string]interface{})
@@ -141,16 +141,15 @@ func setupMCPEditor(name string, configPath string, yaverPath string) {
 	out, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "JSON error: %v\n", err)
-		os.Exit(1)
+		return
 	}
 
 	if err := os.WriteFile(configPath, out, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Cannot write config: %v\n", err)
-		os.Exit(1)
+		return
 	}
 
-	fmt.Printf("Added Yaver MCP server to %s.\n", name)
-	fmt.Printf("Config: %s\n", configPath)
+	fmt.Printf("  MCP: Added Yaver to %s\n", name)
 	fmt.Printf("\nRestart %s to activate.\n", name)
 }
 
@@ -204,6 +203,69 @@ func setupZed(yaverPath string) {
 	fmt.Println("Added Yaver MCP server to Zed.")
 	fmt.Printf("Config: %s\n", configPath)
 	fmt.Println("\nRestart Zed to activate.")
+}
+
+// autoSetupMCP detects installed editors and configures MCP for any that
+// aren't already configured. Runs silently during `yaver serve`.
+func autoSetupMCP() {
+	yaverPath := findYaverBinary()
+
+	type editor struct {
+		name       string
+		configPath string
+		isZed      bool
+	}
+
+	editors := []editor{
+		{"Claude Desktop", claudeDesktopConfigPath(), false},
+		{"Cursor", cursorConfigPath(), false},
+		{"Windsurf", windsurfConfigPath(), false},
+	}
+	if runtime.GOOS == "darwin" {
+		editors = append(editors, editor{"Zed", filepath.Join(os.Getenv("HOME"), ".config", "zed", "settings.json"), true})
+	}
+
+	configured := 0
+	for _, e := range editors {
+		// Check if config dir exists (editor is installed)
+		dir := filepath.Dir(e.configPath)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+
+		// Check if already configured
+		data, err := os.ReadFile(e.configPath)
+		if err == nil {
+			var config map[string]interface{}
+			json.Unmarshal(data, &config)
+			if servers, ok := config["mcpServers"].(map[string]interface{}); ok {
+				if _, exists := servers["yaver"]; exists {
+					continue // Already configured
+				}
+			}
+			if e.isZed {
+				if lm, ok := config["language_models"].(map[string]interface{}); ok {
+					if servers, ok := lm["mcp_servers"].(map[string]interface{}); ok {
+						if _, exists := servers["yaver"]; exists {
+							continue
+						}
+					}
+				}
+			}
+		}
+
+		// Configure silently
+		if e.isZed {
+			setupZed(yaverPath)
+		} else {
+			setupMCPEditor(e.name, e.configPath, yaverPath)
+		}
+		configured++
+	}
+
+	if configured > 0 {
+		fmt.Printf("  MCP configured for %d editor(s). Restart them to activate.\n", configured)
+	}
 }
 
 func showMCPConfig(yaverPath string) {

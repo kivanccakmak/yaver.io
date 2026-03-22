@@ -840,6 +840,10 @@ func runServe(args []string) {
 
 		fmt.Printf("Yaver agent started (PID %d).\n", cmd.Process.Pid)
 		fmt.Println()
+
+		// Auto-configure MCP for detected editors
+		autoSetupMCP()
+
 		fmt.Println("  yaver logs      View agent logs")
 		fmt.Println("  yaver stop      Stop the agent")
 		fmt.Println("  yaver status    Check agent status")
