@@ -1150,6 +1150,9 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, platformTools...)
 
+	// --- Bulk tools (data-driven CLI wrappers) ---
+	tools = append(tools, getBulkToolDefinitions()...)
+
 	return map[string]interface{}{
 		"tools": tools,
 	}

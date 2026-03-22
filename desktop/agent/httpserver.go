@@ -4353,6 +4353,10 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpRailwayDeploy(a.Dir))
 
 	default:
+		// Try bulk tools (data-driven CLI wrappers)
+		if result, ok := handleBulkTool(call.Name, call.Arguments); ok {
+			return mcpToolJSON(result)
+		}
 		return mcpToolError("unknown tool: " + call.Name)
 	}
 }
