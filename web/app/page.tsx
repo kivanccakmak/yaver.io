@@ -875,6 +875,110 @@ export default function HomePage() {
       {/* MCP Integration */}
       <MCPIntegrationSection />
 
+      {/* Integrations */}
+      <section className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-5xl">
+          <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Works with everything you use
+          </h2>
+          <p className="mx-auto mb-16 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
+            Built-in support for 7 AI agents, 4 chat platforms, 5 SDKs, and every major transport layer.
+            All data flows peer-to-peer &mdash; nothing stored on our servers.
+          </p>
+
+          <div className="grid grid-cols-1 gap-8 md:grid-cols-2 lg:grid-cols-4">
+            {/* AI Agents */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/40 p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/10 text-violet-400">
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                  </svg>
+                </div>
+                <h3 className="text-sm font-semibold text-surface-100">AI Agents</h3>
+              </div>
+              <ul className="space-y-2 text-sm text-surface-400">
+                <li>Claude Code</li>
+                <li>OpenAI Codex</li>
+                <li>Aider</li>
+                <li>Goose</li>
+                <li>Ollama</li>
+                <li>Amp</li>
+                <li>OpenCode</li>
+                <li className="text-surface-600">+ any custom CLI</li>
+              </ul>
+            </div>
+
+            {/* Chat & Notifications */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/40 p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10 text-blue-400">
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" />
+                  </svg>
+                </div>
+                <h3 className="text-sm font-semibold text-surface-100">Chat & Notifications</h3>
+              </div>
+              <ul className="space-y-2 text-sm text-surface-400">
+                <li>Telegram <span className="text-emerald-400/70 text-xs">(bidirectional)</span></li>
+                <li>Discord</li>
+                <li>Slack</li>
+                <li>Microsoft Teams</li>
+              </ul>
+            </div>
+
+            {/* SDKs */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/40 p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400">
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
+                  </svg>
+                </div>
+                <h3 className="text-sm font-semibold text-surface-100">SDKs</h3>
+              </div>
+              <ul className="space-y-2 text-sm text-surface-400">
+                <li>Go</li>
+                <li>Python</li>
+                <li>JavaScript / TypeScript</li>
+                <li>Flutter / Dart</li>
+                <li>C / C++</li>
+              </ul>
+            </div>
+
+            {/* Connectivity */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/40 p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-green-500/10 text-green-400">
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12.53 18.22l-.53.53-.53-.53a.75.75 0 011.06 0z" />
+                  </svg>
+                </div>
+                <h3 className="text-sm font-semibold text-surface-100">Connectivity</h3>
+              </div>
+              <ul className="space-y-2 text-sm text-surface-400">
+                <li>Direct LAN <span className="text-surface-600 text-xs">(~5ms)</span></li>
+                <li>QUIC Relay <span className="text-surface-600 text-xs">(self-hostable)</span></li>
+                <li>Cloudflare Tunnel</li>
+                <li>Tailscale</li>
+              </ul>
+            </div>
+          </div>
+
+          <div className="mt-10 text-center">
+            <Link
+              href="/integrations"
+              className="inline-flex items-center gap-1.5 text-sm text-surface-400 transition-colors hover:text-[#6366f1]"
+            >
+              View all integrations
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+              </svg>
+            </Link>
+          </div>
+        </div>
+      </section>
+
       {/* Self-Hosting */}
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-4xl">

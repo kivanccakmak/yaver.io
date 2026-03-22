@@ -273,7 +273,7 @@ func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
 		addRunner(r)
 	}
 	// Then rest in stable order
-	for _, id := range []string{"claude", "codex", "aider"} {
+	for _, id := range []string{"claude", "codex", "aider", "goose", "ollama", "amp", "opencode"} {
 		if r, ok := builtinRunners[id]; ok {
 			addRunner(r)
 		}

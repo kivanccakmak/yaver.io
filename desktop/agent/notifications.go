@@ -16,6 +16,7 @@ type NotificationConfig struct {
 	Telegram *TelegramConfig `json:"telegram,omitempty"`
 	Discord  *DiscordConfig  `json:"discord,omitempty"`
 	Slack    *SlackConfig    `json:"slack,omitempty"`
+	Teams    *TeamsConfig    `json:"teams,omitempty"`
 }
 
 type TelegramConfig struct {
@@ -31,6 +32,11 @@ type DiscordConfig struct {
 
 type SlackConfig struct {
 	WebhookURL string `json:"webhookUrl"` // Slack incoming webhook URL
+	Enabled    bool   `json:"enabled"`
+}
+
+type TeamsConfig struct {
+	WebhookURL string `json:"webhookUrl"` // Microsoft Teams incoming webhook URL
 	Enabled    bool   `json:"enabled"`
 }
 
@@ -117,6 +123,9 @@ func (nm *NotificationManager) sendAll(message string) {
 	if nm.config.Slack != nil && nm.config.Slack.Enabled {
 		go nm.sendSlack(message)
 	}
+	if nm.config.Teams != nil && nm.config.Teams.Enabled {
+		go nm.sendTeams(message)
+	}
 }
 
 // --- Telegram ---
@@ -183,6 +192,26 @@ func (nm *NotificationManager) sendSlack(message string) {
 	}
 }
 
+// --- Microsoft Teams ---
+
+func (nm *NotificationManager) sendTeams(message string) {
+	if nm.config.Teams == nil || nm.config.Teams.WebhookURL == "" {
+		return
+	}
+
+	// Teams Incoming Webhook expects an Adaptive Card or simple text payload
+	body, _ := json.Marshal(map[string]string{"text": message})
+	resp, err := nm.client.Post(nm.config.Teams.WebhookURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("[notify:teams] send failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		log.Printf("[notify:teams] API error %d", resp.StatusCode)
+	}
+}
+
 // TestNotification sends a test message to verify configuration.
 func (nm *NotificationManager) TestNotification(channel string) string {
 	msg := "🧪 Yaver test notification — your integration is working!"
@@ -206,6 +235,12 @@ func (nm *NotificationManager) TestNotification(channel string) string {
 		}
 		nm.sendSlack(msg)
 		return "Test sent to Slack"
+	case "teams":
+		if nm.config.Teams == nil || !nm.config.Teams.Enabled {
+			return "Teams not configured"
+		}
+		nm.sendTeams(msg)
+		return "Test sent to Teams"
 	default:
 		nm.sendAll(msg)
 		return "Test sent to all configured channels"

@@ -44,6 +44,12 @@ const CATEGORIES: Category[] = [
         status: "Configure in settings",
         docsLink: "/manuals/integrations#notifications",
       },
+      {
+        name: "Microsoft Teams",
+        description: "Incoming webhook notifications for task and agent events",
+        status: "Configure in settings",
+        docsLink: "/manuals/integrations#notifications",
+      },
     ],
   },
   {
