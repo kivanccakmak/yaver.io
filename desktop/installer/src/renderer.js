@@ -273,9 +273,49 @@ async function selectTask(taskId) {
   refreshTaskList(); // update active highlight
 }
 
+function buildChatMessages(task) {
+  const messages = [];
+
+  if (task.turns && task.turns.length > 0) {
+    for (const turn of task.turns) {
+      messages.push({ role: turn.role, content: turn.content });
+    }
+  } else {
+    messages.push({ role: 'user', content: task.title });
+    if (task.resultText) {
+      messages.push({ role: 'assistant', content: task.resultText });
+    }
+  }
+
+  // If running and we have streaming output, replace/add last assistant message
+  if (task.status === 'running' && task.output && task.output.trim()) {
+    const lastIdx = messages.length - 1;
+    if (lastIdx >= 0 && messages[lastIdx].role === 'assistant') {
+      messages[lastIdx].content = task.output;
+    } else {
+      messages.push({ role: 'assistant', content: task.output });
+    }
+  }
+
+  return messages;
+}
+
 function renderTaskDetail(task) {
   const container = document.getElementById('task-detail-content');
   const isActive = task.status === 'running' || task.status === 'queued';
+
+  const messages = buildChatMessages(task);
+  let bubblesHtml = messages.map((msg) => {
+    if (msg.role === 'user') {
+      return `<div class="chat-bubble user">${escapeHtml(msg.content)}</div>`;
+    }
+    return `<div class="chat-bubble assistant">${renderMarkdown(msg.content)}</div>`;
+  }).join('');
+
+  // Typing indicator for running tasks with no assistant output yet
+  if (isActive && (messages.length === 0 || messages[messages.length - 1].role === 'user')) {
+    bubblesHtml += `<div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>`;
+  }
 
   container.innerHTML = `
     <div class="task-detail-header">
@@ -290,16 +330,15 @@ function renderTaskDetail(task) {
         <span class="task-status-badge ${task.status}">${task.status}</span>
         ${task.runnerId ? `<span>Runner: ${task.runnerId}</span>` : ''}
         ${task.costUSD ? `<span>Cost: $${task.costUSD.toFixed(4)}</span>` : ''}
-        ${task.turns ? `<span>Turns: ${task.turns}</span>` : ''}
+        ${task.turns && task.turns.length ? `<span>Turns: ${task.turns.length}</span>` : ''}
         <span>${formatTime(task.createdAt)}</span>
       </div>
     </div>
-    <div class="task-output-area" id="task-output-area">${renderMarkdown(task.output || task.resultText || 'No output yet...')}</div>
-    ${task.status === 'completed' || task.status === 'stopped' ? `
+    <div class="chat-messages" id="chat-messages">${bubblesHtml}</div>
     <div class="task-continue-bar">
-      <input type="text" id="task-continue-input" placeholder="Continue with follow-up..." onkeydown="if(event.key==='Enter')continueCurrentTask()">
-      <button class="btn btn-primary btn-sm" onclick="continueCurrentTask()">Send</button>
-    </div>` : ''}
+      <input type="text" id="task-continue-input" placeholder="${isActive ? 'Waiting for response...' : 'Send a follow-up...'}" ${isActive ? 'disabled' : ''} onkeydown="if(event.key==='Enter')continueCurrentTask()">
+      <button class="btn btn-primary btn-sm" onclick="continueCurrentTask()" ${isActive ? 'disabled' : ''}>Send</button>
+    </div>
   `;
 }
 
@@ -311,8 +350,8 @@ function startTaskPolling(taskId) {
     if (resp && resp.ok && resp.task) {
       renderTaskDetail(resp.task);
       // Auto-scroll output
-      const outputArea = document.getElementById('task-output-area');
-      if (outputArea) outputArea.scrollTop = outputArea.scrollHeight;
+      const chatArea = document.getElementById('chat-messages');
+      if (chatArea) chatArea.scrollTop = chatArea.scrollHeight;
 
       // Stop polling if task is done
       if (resp.task.status !== 'running' && resp.task.status !== 'queued') {
