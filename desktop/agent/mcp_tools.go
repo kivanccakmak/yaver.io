@@ -1073,6 +1073,83 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, appDevTools...)
 
+	// --- Package Registries ---
+	registryTools := []map[string]interface{}{
+		{"name": "dockerhub_search", "description": "Search Docker Hub for images.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "integer"}}}},
+		{"name": "dockerhub_tags", "description": "List tags for a Docker Hub image.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"image"}, "properties": map[string]interface{}{"image": map[string]interface{}{"type": "string", "description": "e.g. nginx, library/node, kivanccakmak/yaver-cli"}, "limit": map[string]interface{}{"type": "integer"}}}},
+		{"name": "pypi_info", "description": "Get Python package info from PyPI.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}}}},
+		{"name": "pypi_versions", "description": "List available versions of a PyPI package.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}}}},
+		{"name": "npm_search", "description": "Search npm registry.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "integer"}}}},
+		{"name": "npm_versions", "description": "List versions of an npm package.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}}}},
+		{"name": "crates_info", "description": "Get Rust crate info from crates.io.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"crate"}, "properties": map[string]interface{}{"crate": map[string]interface{}{"type": "string"}}}},
+		{"name": "crates_search", "description": "Search crates.io (Rust packages).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "integer"}}}},
+		{"name": "go_module_info", "description": "Get Go module info from proxy.golang.org.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"module"}, "properties": map[string]interface{}{"module": map[string]interface{}{"type": "string", "description": "e.g. github.com/gin-gonic/gin"}}}},
+		{"name": "go_module_versions", "description": "List Go module versions.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"module"}, "properties": map[string]interface{}{"module": map[string]interface{}{"type": "string"}}}},
+		{"name": "pubdev_info", "description": "Get Dart/Flutter package info from pub.dev.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}}}},
+		{"name": "pubdev_search", "description": "Search pub.dev (Dart/Flutter packages).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "brew_info", "description": "Get Homebrew formula info.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"formula"}, "properties": map[string]interface{}{"formula": map[string]interface{}{"type": "string"}}}},
+		{"name": "brew_search", "description": "Search Homebrew formulae.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "gem_info", "description": "Get Ruby gem info from rubygems.org.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"gem"}, "properties": map[string]interface{}{"gem": map[string]interface{}{"type": "string"}}}},
+		{"name": "gem_search", "description": "Search rubygems.org.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "maven_search", "description": "Search Maven Central (Java/Kotlin).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "nuget_search", "description": "Search NuGet (.NET packages).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "apt_search", "description": "Search apt packages (Debian/Ubuntu).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "apt_show", "description": "Show apt package details.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}}}},
+		{"name": "pip_show", "description": "Show installed pip package details.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}}}},
+		{"name": "pip_list", "description": "List installed pip packages.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "cargo_search", "description": "Search crates via cargo CLI.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "pkg_install", "description": "Install a package via any package manager (npm, pip, cargo, go, brew, gem, apt, dart).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"manager", "package"}, "properties": map[string]interface{}{"manager": map[string]interface{}{"type": "string", "description": "npm, pip, cargo, go, brew, gem, apt, dart"}, "package": map[string]interface{}{"type": "string"}, "global": map[string]interface{}{"type": "boolean", "description": "Install globally (npm -g)"}}}},
+	}
+	tools = append(tools, registryTools...)
+
+	// --- Platforms & BaaS ---
+	platformTools := []map[string]interface{}{
+		// Supabase
+		{"name": "supabase_status", "description": "Show Supabase project status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "supabase_db", "description": "Execute SQL on Supabase database.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "query": map[string]interface{}{"type": "string"}}}},
+		{"name": "supabase_migrations", "description": "List Supabase migrations.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "supabase_functions", "description": "List Supabase Edge Functions.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "supabase_deploy", "description": "Deploy Supabase (db push or function deploy).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "function": map[string]interface{}{"type": "string", "description": "Function name (deploys DB if empty)"}}}},
+		// Convex
+		{"name": "convex_deploy", "description": "Deploy Convex functions.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "convex_logs", "description": "Show Convex function logs.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "convex_run", "description": "Run a Convex function.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"function"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "function": map[string]interface{}{"type": "string", "description": "Function path (e.g. tasks:list)"}, "args": map[string]interface{}{"type": "string", "description": "JSON args"}}}},
+		// Cloudflare
+		{"name": "cf_workers", "description": "List Cloudflare Worker deployments.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "cf_deploy", "description": "Deploy Cloudflare Worker.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "cf_pages", "description": "List Cloudflare Pages deployments.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "cf_r2", "description": "Manage Cloudflare R2 storage (list buckets/objects).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "buckets or list"}, "bucket": map[string]interface{}{"type": "string"}, "key": map[string]interface{}{"type": "string"}}}},
+		{"name": "cf_d1", "description": "Query Cloudflare D1 database.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "list or query"}, "database": map[string]interface{}{"type": "string"}, "query": map[string]interface{}{"type": "string"}}}},
+		{"name": "cf_kv", "description": "Manage Cloudflare KV store.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "list, keys, get, put"}, "namespace": map[string]interface{}{"type": "string"}, "key": map[string]interface{}{"type": "string"}, "value": map[string]interface{}{"type": "string"}}}},
+		// GitLab
+		{"name": "gitlab_mrs", "description": "List GitLab merge requests.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "state": map[string]interface{}{"type": "string", "description": "opened, merged, closed"}}}},
+		{"name": "gitlab_issues", "description": "List GitLab issues.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "state": map[string]interface{}{"type": "string"}}}},
+		{"name": "gitlab_pipelines", "description": "List GitLab CI/CD pipelines.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "gitlab_ci", "description": "Show current GitLab CI status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// GitHub extras
+		{"name": "github_repo_info", "description": "Get current repo info (stars, forks, language, license).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "github_releases", "description": "List GitHub releases.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "github_stars", "description": "Get star count for any repo.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"repo"}, "properties": map[string]interface{}{"repo": map[string]interface{}{"type": "string", "description": "owner/repo"}}}},
+		// PlanetScale
+		{"name": "pscale_branches", "description": "List PlanetScale database branches.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"database"}, "properties": map[string]interface{}{"database": map[string]interface{}{"type": "string"}}}},
+		{"name": "pscale_deploy", "description": "Create PlanetScale deploy request.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"database", "branch"}, "properties": map[string]interface{}{"database": map[string]interface{}{"type": "string"}, "branch": map[string]interface{}{"type": "string"}}}},
+		// Prisma
+		{"name": "prisma_status", "description": "Show Prisma migration status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "prisma_generate", "description": "Run prisma generate.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "prisma_push", "description": "Run prisma db push.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Drizzle
+		{"name": "drizzle_push", "description": "Run drizzle-kit push.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "drizzle_generate", "description": "Run drizzle-kit generate.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Fly.io
+		{"name": "fly_status", "description": "Show Fly.io app status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "fly_deploy", "description": "Deploy to Fly.io.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "fly_logs", "description": "Get Fly.io app logs.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"app"}, "properties": map[string]interface{}{"app": map[string]interface{}{"type": "string"}}}},
+		// Railway
+		{"name": "railway_status", "description": "Show Railway project status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "railway_deploy", "description": "Deploy to Railway.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+	}
+	tools = append(tools, platformTools...)
+
 	return map[string]interface{}{
 		"tools": tools,
 	}
