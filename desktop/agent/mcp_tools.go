@@ -1230,6 +1230,49 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, netTools...)
 
+	// --- Linux System ---
+	linuxTools := []map[string]interface{}{
+		// Kernel & modules
+		{"name": "dmesg", "description": "Show kernel messages. Filter by level (emerg, alert, crit, err, warn, info, debug).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"level": map[string]interface{}{"type": "string", "description": "Log level filter: emerg, alert, crit, err, warn, info, debug"}, "lines": map[string]interface{}{"type": "integer", "description": "Number of lines (default: 100)"}}}},
+		{"name": "lsmod", "description": "List loaded kernel modules.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "modinfo", "description": "Show kernel module info.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"module"}, "properties": map[string]interface{}{"module": map[string]interface{}{"type": "string"}}}},
+		{"name": "insmod", "description": "Load a kernel module (modprobe).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"module"}, "properties": map[string]interface{}{"module": map[string]interface{}{"type": "string"}}}},
+		{"name": "rmmod", "description": "Unload a kernel module.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"module"}, "properties": map[string]interface{}{"module": map[string]interface{}{"type": "string"}}}},
+		{"name": "uname", "description": "Show kernel, architecture, hostname info.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "sysctl", "description": "Read kernel parameters. Pass a key or leave empty for all.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"key": map[string]interface{}{"type": "string", "description": "Sysctl key (e.g. net.ipv4.ip_forward)"}}}},
+		// Processes
+		{"name": "top_snapshot", "description": "Top processes snapshot sorted by CPU.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "ps_aux", "description": "List processes. Sort by cpu/mem, or filter by name.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"sort": map[string]interface{}{"type": "string", "description": "cpu or mem"}, "filter": map[string]interface{}{"type": "string", "description": "Filter by process name"}}}},
+		{"name": "ps_tree", "description": "Show process tree.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "load_average", "description": "Show system load average and CPU count.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Memory
+		{"name": "vmstat", "description": "Virtual memory statistics.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"count": map[string]interface{}{"type": "integer", "description": "Samples (default: 5)"}}}},
+		{"name": "swap_info", "description": "Show swap usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Disk
+		{"name": "df", "description": "Show disk space usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string"}}}},
+		{"name": "du", "description": "Show directory disk usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string"}, "depth": map[string]interface{}{"type": "integer", "description": "Max depth (default: 1)"}}}},
+		{"name": "lsblk", "description": "List block devices (disks, partitions).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "fdisk_list", "description": "List disk partitions.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "mounts", "description": "Show mounted filesystems.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "iostat", "description": "Show I/O statistics per device.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Tree
+		{"name": "tree", "description": "Show directory tree (auto-excludes node_modules, .git, etc.).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string"}, "depth": map[string]interface{}{"type": "integer", "description": "Max depth (default: 3)"}, "all": map[string]interface{}{"type": "boolean", "description": "Show hidden files"}, "dirs_only": map[string]interface{}{"type": "boolean"}}}},
+		// Hardware
+		{"name": "cpu_info", "description": "Show CPU info (brand, cores, architecture).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "lspci", "description": "List PCI devices (GPUs, NICs, etc.).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "lsusb", "description": "List USB devices.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "sensors", "description": "Show hardware sensors (CPU temp, fan speed).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Firewall
+		{"name": "ufw", "description": "Manage UFW firewall (status, allow, deny, delete).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "status, allow, deny, delete"}, "rule": map[string]interface{}{"type": "string", "description": "Port/service (e.g. 80, 443/tcp, ssh)"}}}},
+		{"name": "iptables_list", "description": "List iptables rules with line numbers.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Users & sessions
+		{"name": "who_is_logged_in", "description": "Show who is logged in and what they're doing.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "last_logins", "description": "Show recent login history.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"count": map[string]interface{}{"type": "integer"}}}},
+		{"name": "timedate_info", "description": "Show system time, timezone, NTP status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "hostname_info", "description": "Show hostname and OS info.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+	}
+	tools = append(tools, linuxTools...)
+
 	return map[string]interface{}{
 		"tools": tools,
 	}

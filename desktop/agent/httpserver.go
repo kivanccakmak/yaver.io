@@ -4472,6 +4472,68 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 	case "curl_timings":
 		var a struct { URL string `json:"url"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCurlTimings(a.URL))
 
+	// --- Linux System ---
+	case "dmesg":
+		var a struct { Level string `json:"level"`; Lines int `json:"lines"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDmesg(a.Level, a.Lines))
+	case "lsmod":
+		return mcpToolJSON(mcpLsmod())
+	case "modinfo":
+		var a struct { Module string `json:"module"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpModinfo(a.Module))
+	case "insmod":
+		var a struct { Module string `json:"module"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpInsmod(a.Module))
+	case "rmmod":
+		var a struct { Module string `json:"module"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpRmmod(a.Module))
+	case "uname":
+		return mcpToolJSON(mcpUname())
+	case "sysctl":
+		var a struct { Key string `json:"key"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpSysctl(a.Key))
+	case "top_snapshot":
+		return mcpToolJSON(mcpTopSnapshot())
+	case "ps_aux":
+		var a struct { Sort string `json:"sort"`; Filter string `json:"filter"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpPsAux(a.Sort, a.Filter))
+	case "ps_tree":
+		return mcpToolJSON(mcpPsTree())
+	case "load_average":
+		return mcpToolJSON(mcpLoadAverage())
+	case "vmstat":
+		var a struct { Count int `json:"count"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpVmstat(a.Count))
+	case "swap_info":
+		return mcpToolJSON(mcpSwap())
+	case "df":
+		var a struct { Path string `json:"path"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDf(a.Path))
+	case "du":
+		var a struct { Path string `json:"path"`; Depth int `json:"depth"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDu(a.Path, a.Depth))
+	case "lsblk":
+		return mcpToolJSON(mcpLsblk())
+	case "fdisk_list":
+		return mcpToolJSON(mcpFdisk())
+	case "mounts":
+		return mcpToolJSON(mcpMounts())
+	case "iostat":
+		return mcpToolJSON(mcpIostat())
+	case "tree":
+		var a struct { Path string `json:"path"`; Depth int `json:"depth"`; All bool `json:"all"`; DirsOnly bool `json:"dirs_only"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpTree(a.Path, a.Depth, a.All, a.DirsOnly))
+	case "cpu_info":
+		return mcpToolJSON(mcpCpuInfo())
+	case "lspci":
+		return mcpToolJSON(mcpLspci())
+	case "lsusb":
+		return mcpToolJSON(mcpLsusb())
+	case "sensors":
+		return mcpToolJSON(mcpSensors())
+	case "ufw":
+		var a struct { Action string `json:"action"`; Rule string `json:"rule"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpUfw(a.Action, a.Rule))
+	case "iptables_list":
+		return mcpToolJSON(mcpIptables())
+	case "who_is_logged_in":
+		return mcpToolJSON(mcpWho())
+	case "last_logins":
+		var a struct { Count int `json:"count"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpLastLogins(a.Count))
+	case "timedate_info":
+		return mcpToolJSON(mcpTimeDateInfo())
+	case "hostname_info":
+		return mcpToolJSON(mcpHostnameInfo())
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}
