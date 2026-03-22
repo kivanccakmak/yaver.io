@@ -133,6 +133,57 @@ class YaverClient:
         result = self._request("POST", "/agent/clean", {"days": days})
         return result.get("result", {})
 
+    def start_exec(self, command, work_dir=None, timeout=None, env=None):
+        """Start a command on the remote agent."""
+        body = {"command": command}
+        if work_dir: body["workDir"] = work_dir
+        if timeout: body["timeout"] = timeout
+        if env: body["env"] = env
+        result = self._request("POST", "/exec", body)
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error", "Failed to start exec"))
+        return {"execId": result["execId"], "pid": result.get("pid")}
+
+    def get_exec(self, exec_id):
+        """Get exec session details."""
+        result = self._request("GET", f"/exec/{exec_id}")
+        return result.get("exec", result)
+
+    def list_execs(self):
+        """List all exec sessions."""
+        result = self._request("GET", "/exec")
+        return result.get("execs", [])
+
+    def send_exec_input(self, exec_id, input_text):
+        """Send stdin input to a running exec session."""
+        self._request("POST", f"/exec/{exec_id}/input", {"input": input_text})
+
+    def signal_exec(self, exec_id, signal):
+        """Send a signal to a running exec session."""
+        self._request("POST", f"/exec/{exec_id}/signal", {"signal": signal})
+
+    def kill_exec(self, exec_id):
+        """Kill and remove an exec session."""
+        self._request("DELETE", f"/exec/{exec_id}")
+
+    def stream_exec_output(self, exec_id, poll_interval=0.3):
+        """Stream exec output. Yields stdout/stderr chunks as they arrive."""
+        last_stdout_len = 0
+        last_stderr_len = 0
+        while True:
+            ex = self.get_exec(exec_id)
+            stdout = ex.get("stdout", "")
+            stderr = ex.get("stderr", "")
+            if len(stdout) > last_stdout_len:
+                yield {"type": "stdout", "text": stdout[last_stdout_len:]}
+                last_stdout_len = len(stdout)
+            if len(stderr) > last_stderr_len:
+                yield {"type": "stderr", "text": stderr[last_stderr_len:]}
+                last_stderr_len = len(stderr)
+            if ex.get("status") in ("completed", "failed", "killed"):
+                return
+            time.sleep(poll_interval)
+
     def stream_output(self, task_id: str, poll_interval: float = 0.5) -> Iterator[str]:
         """Stream task output. Yields new output as it arrives."""
         last_len = 0

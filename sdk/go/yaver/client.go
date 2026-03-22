@@ -286,6 +286,142 @@ func (c *Client) Ping() (time.Duration, error) {
 	return time.Since(start), nil
 }
 
+// ExecSession represents a remote command execution session.
+type ExecSession struct {
+	ID         string  `json:"id"`
+	Command    string  `json:"command"`
+	Status     string  `json:"status"` // "running", "completed", "failed", "killed"
+	ExitCode   *int    `json:"exitCode,omitempty"`
+	Stdout     string  `json:"stdout"`
+	Stderr     string  `json:"stderr"`
+	PID        *int    `json:"pid,omitempty"`
+	StartedAt  string  `json:"startedAt"`
+	FinishedAt *string `json:"finishedAt,omitempty"`
+}
+
+// ExecOptions configures remote command execution.
+type ExecOptions struct {
+	WorkDir string            `json:"workDir,omitempty"`
+	Timeout int               `json:"timeout,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+}
+
+// StartExec starts a command on the remote agent.
+func (c *Client) StartExec(command string, opts *ExecOptions) (execID string, pid int, err error) {
+	body := map[string]interface{}{
+		"command": command,
+	}
+	if opts != nil {
+		if opts.WorkDir != "" {
+			body["workDir"] = opts.WorkDir
+		}
+		if opts.Timeout > 0 {
+			body["timeout"] = opts.Timeout
+		}
+		if len(opts.Env) > 0 {
+			body["env"] = opts.Env
+		}
+	}
+
+	var result struct {
+		OK     bool   `json:"ok"`
+		ExecID string `json:"execId"`
+		PID    int    `json:"pid"`
+		Error  string `json:"error"`
+	}
+	if err := c.post("/exec", body, &result); err != nil {
+		return "", 0, err
+	}
+	if !result.OK {
+		return "", 0, fmt.Errorf("start exec failed: %s", result.Error)
+	}
+	return result.ExecID, result.PID, nil
+}
+
+// GetExec retrieves an exec session by ID.
+func (c *Client) GetExec(execID string) (*ExecSession, error) {
+	var result struct {
+		OK   bool        `json:"ok"`
+		Exec ExecSession `json:"exec"`
+	}
+	if err := c.get("/exec/"+execID, &result); err != nil {
+		return nil, err
+	}
+	return &result.Exec, nil
+}
+
+// ListExecs returns all exec sessions.
+func (c *Client) ListExecs() ([]ExecSession, error) {
+	var result struct {
+		OK    bool          `json:"ok"`
+		Execs []ExecSession `json:"execs"`
+	}
+	if err := c.get("/exec", &result); err != nil {
+		return nil, err
+	}
+	return result.Execs, nil
+}
+
+// SendExecInput sends stdin input to a running exec session.
+func (c *Client) SendExecInput(execID, input string) error {
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	return c.post("/exec/"+execID+"/input", map[string]interface{}{"input": input}, &result)
+}
+
+// SignalExec sends a signal to a running exec session.
+func (c *Client) SignalExec(execID, signal string) error {
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	return c.post("/exec/"+execID+"/signal", map[string]interface{}{"signal": signal}, &result)
+}
+
+// KillExec kills and removes an exec session.
+func (c *Client) KillExec(execID string) error {
+	return c.delete("/exec/" + execID)
+}
+
+// ExecOutputChunk represents a chunk of exec output.
+type ExecOutputChunk struct {
+	Type string // "stdout" or "stderr"
+	Text string
+}
+
+// StreamExecOutput polls an exec session's output and sends chunks to the returned channel.
+// The channel is closed when the exec session completes.
+func (c *Client) StreamExecOutput(execID string, pollInterval time.Duration) <-chan ExecOutputChunk {
+	if pollInterval == 0 {
+		pollInterval = 300 * time.Millisecond
+	}
+	ch := make(chan ExecOutputChunk, 64)
+	go func() {
+		defer close(ch)
+		lastStdoutLen := 0
+		lastStderrLen := 0
+		for {
+			exec, err := c.GetExec(execID)
+			if err != nil {
+				return
+			}
+			if len(exec.Stdout) > lastStdoutLen {
+				ch <- ExecOutputChunk{Type: "stdout", Text: exec.Stdout[lastStdoutLen:]}
+				lastStdoutLen = len(exec.Stdout)
+			}
+			if len(exec.Stderr) > lastStderrLen {
+				ch <- ExecOutputChunk{Type: "stderr", Text: exec.Stderr[lastStderrLen:]}
+				lastStderrLen = len(exec.Stderr)
+			}
+			if exec.Status == "completed" || exec.Status == "failed" || exec.Status == "killed" {
+				return
+			}
+			time.Sleep(pollInterval)
+		}
+	}()
+	return ch
+}
+
 // ── HTTP helpers ─────────────────────────────────────────────────────
 
 func (c *Client) get(path string, result interface{}) error {

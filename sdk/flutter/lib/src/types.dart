@@ -327,3 +327,60 @@ class CleanResult {
         bytesFreed: json['bytesFreed'] as int,
       );
 }
+
+/// Status of an exec session.
+enum ExecStatus { running, completed, failed, killed }
+
+/// A remote command execution session.
+class ExecSession {
+  final String id;
+  final String command;
+  final ExecStatus status;
+  final int? exitCode;
+  final String stdout;
+  final String stderr;
+  final int? pid;
+  final String startedAt;
+  final String? finishedAt;
+
+  ExecSession({
+    required this.id,
+    required this.command,
+    required this.status,
+    this.exitCode,
+    required this.stdout,
+    required this.stderr,
+    this.pid,
+    required this.startedAt,
+    this.finishedAt,
+  });
+
+  factory ExecSession.fromJson(Map<String, dynamic> json) => ExecSession(
+        id: json['id'] as String,
+        command: json['command'] as String,
+        status: _parseExecStatus(json['status'] as String),
+        exitCode: json['exitCode'] as int?,
+        stdout: json['stdout'] as String? ?? '',
+        stderr: json['stderr'] as String? ?? '',
+        pid: json['pid'] as int?,
+        startedAt: json['startedAt'] as String,
+        finishedAt: json['finishedAt'] as String?,
+      );
+
+  static ExecStatus _parseExecStatus(String s) => switch (s) {
+        'running' => ExecStatus.running,
+        'completed' => ExecStatus.completed,
+        'failed' => ExecStatus.failed,
+        'killed' => ExecStatus.killed,
+        _ => ExecStatus.running,
+      };
+}
+
+/// Options for starting a remote command.
+class ExecOptions {
+  final String? workDir;
+  final int? timeout;
+  final Map<String, String>? env;
+
+  ExecOptions({this.workDir, this.timeout, this.env});
+}

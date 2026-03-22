@@ -1,4 +1,4 @@
-import type { Task, CreateTaskOptions, AgentInfo, ImageAttachment } from './types';
+import type { Task, CreateTaskOptions, AgentInfo, ImageAttachment, ExecSession, ExecOptions } from './types';
 
 /**
  * Yaver client — connects to a Yaver agent's HTTP API.
@@ -113,6 +113,65 @@ export class YaverClient {
         lastLen = output.length;
       }
       if (task.status === 'completed' || task.status === 'failed' || task.status === 'stopped') {
+        return;
+      }
+      await sleep(pollIntervalMs);
+    }
+  }
+
+  /** Start a command on the remote agent. */
+  async startExec(command: string, opts?: ExecOptions): Promise<{ execId: string; pid: number }> {
+    const body: Record<string, unknown> = { command };
+    if (opts?.workDir) body.workDir = opts.workDir;
+    if (opts?.timeout) body.timeout = opts.timeout;
+    if (opts?.env) body.env = opts.env;
+    const result = await this.post<{ ok: boolean; execId: string; pid: number; error?: string }>('/exec', body);
+    if (!result.ok) throw new Error(result.error || 'Failed to start exec');
+    return { execId: result.execId, pid: result.pid };
+  }
+
+  /** Get exec session details. */
+  async getExec(execId: string): Promise<ExecSession> {
+    const result = await this.get<{ ok: boolean; exec: ExecSession }>(`/exec/${execId}`);
+    return result.exec;
+  }
+
+  /** List all exec sessions. */
+  async listExecs(): Promise<ExecSession[]> {
+    const result = await this.get<{ ok: boolean; execs: ExecSession[] }>('/exec');
+    return result.execs;
+  }
+
+  /** Send stdin input to a running exec session. */
+  async sendExecInput(execId: string, input: string): Promise<void> {
+    await this.post(`/exec/${execId}/input`, { input });
+  }
+
+  /** Send a signal to a running exec session. */
+  async signalExec(execId: string, signal: string): Promise<void> {
+    await this.post(`/exec/${execId}/signal`, { signal });
+  }
+
+  /** Kill and remove an exec session. */
+  async killExec(execId: string): Promise<void> {
+    await this.del(`/exec/${execId}`);
+  }
+
+  /** Stream exec output. Yields new stdout/stderr chunks as they arrive. */
+  async *streamExecOutput(execId: string, pollIntervalMs = 300): AsyncGenerator<{ type: 'stdout' | 'stderr'; text: string }> {
+    let lastStdoutLen = 0;
+    let lastStderrLen = 0;
+    while (true) {
+      const exec = await this.getExec(execId);
+      if (exec.stdout.length > lastStdoutLen) {
+        yield { type: 'stdout', text: exec.stdout.substring(lastStdoutLen) };
+        lastStdoutLen = exec.stdout.length;
+      }
+      if (exec.stderr.length > lastStderrLen) {
+        yield { type: 'stderr', text: exec.stderr.substring(lastStderrLen) };
+        lastStderrLen = exec.stderr.length;
+      }
+      if (exec.status === 'completed' || exec.status === 'failed' || exec.status === 'killed') {
         return;
       }
       await sleep(pollIntervalMs);

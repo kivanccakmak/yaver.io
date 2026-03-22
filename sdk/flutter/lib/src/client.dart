@@ -147,6 +147,73 @@ class YaverClient {
     }
   }
 
+  /// Start a command on the remote agent.
+  Future<({String execId, int pid})> startExec(
+    String command, [
+    ExecOptions? opts,
+  ]) async {
+    final body = <String, dynamic>{'command': command};
+    if (opts?.workDir != null) body['workDir'] = opts!.workDir;
+    if (opts?.timeout != null) body['timeout'] = opts!.timeout;
+    if (opts?.env != null) body['env'] = opts!.env;
+    final result = await _post('/exec', body);
+    if (result['ok'] != true) {
+      throw YaverException(result['error'] as String? ?? 'Failed to start exec');
+    }
+    return (execId: result['execId'] as String, pid: (result['pid'] as num).toInt());
+  }
+
+  /// Get exec session details.
+  Future<ExecSession> getExec(String execId) async {
+    final result = await _get('/exec/$execId');
+    return ExecSession.fromJson(result['exec'] as Map<String, dynamic>);
+  }
+
+  /// List all exec sessions.
+  Future<List<ExecSession>> listExecs() async {
+    final result = await _get('/exec');
+    return (result['execs'] as List)
+        .map((e) => ExecSession.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Send stdin input to a running exec session.
+  Future<void> sendExecInput(String execId, String input) =>
+      _post('/exec/$execId/input', {'input': input});
+
+  /// Send a signal to a running exec session.
+  Future<void> signalExec(String execId, String signal) =>
+      _post('/exec/$execId/signal', {'signal': signal});
+
+  /// Kill and remove an exec session.
+  Future<void> killExec(String execId) => _delete('/exec/$execId');
+
+  /// Stream exec output. Yields stdout/stderr chunks as they arrive.
+  Stream<({String type, String text})> streamExecOutput(
+    String execId, {
+    Duration pollInterval = const Duration(milliseconds: 300),
+  }) async* {
+    var lastStdoutLen = 0;
+    var lastStderrLen = 0;
+    while (true) {
+      final exec = await getExec(execId);
+      if (exec.stdout.length > lastStdoutLen) {
+        yield (type: 'stdout', text: exec.stdout.substring(lastStdoutLen));
+        lastStdoutLen = exec.stdout.length;
+      }
+      if (exec.stderr.length > lastStderrLen) {
+        yield (type: 'stderr', text: exec.stderr.substring(lastStderrLen));
+        lastStderrLen = exec.stderr.length;
+      }
+      if (exec.status == ExecStatus.completed ||
+          exec.status == ExecStatus.failed ||
+          exec.status == ExecStatus.killed) {
+        return;
+      }
+      await Future.delayed(pollInterval);
+    }
+  }
+
   /// Close the underlying HTTP client.
   void close() => _httpClient.close();
 

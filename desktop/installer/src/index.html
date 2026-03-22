@@ -3,49 +3,153 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;">
   <title>Yaver</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
+    :root {
+      --bg: #0f1117;
+      --bg-card: #1a1d27;
+      --bg-input: #141722;
+      --bg-hover: #22253a;
+      --border: #2a2d3a;
+      --text: #e1e4e8;
+      --text-secondary: #9ca3af;
+      --text-dim: #6b7280;
+      --accent: #6366f1;
+      --accent-light: #818cf8;
+      --accent-glow: rgba(99, 102, 241, 0.3);
+      --success: #22c55e;
+      --error: #ef4444;
+      --warning: #eab308;
+    }
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: #0f1117;
-      color: #e1e4e8;
+      background: var(--bg);
+      color: var(--text);
       height: 100vh;
       overflow: hidden;
       user-select: none;
-      -webkit-app-region: drag;
     }
 
-    .container {
+    /* ---- Layout ---- */
+    .app-container {
       display: flex;
-      flex-direction: column;
       height: 100vh;
+      flex-direction: column;
     }
 
     .titlebar {
       height: 32px;
       -webkit-app-region: drag;
       flex-shrink: 0;
+      background: var(--bg);
     }
 
-    .content {
+    .main-layout {
+      display: flex;
       flex: 1;
+      overflow: hidden;
+    }
+
+    /* ---- Sidebar ---- */
+    .sidebar {
+      width: 200px;
+      background: #13151f;
+      border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 0 48px 32px;
+      flex-shrink: 0;
+      padding: 12px 0;
       -webkit-app-region: no-drag;
     }
 
-    /* Views — only one visible at a time */
-    .view { display: none; flex-direction: column; align-items: center; text-align: center; width: 100%; max-width: 400px; }
+    .sidebar-logo {
+      font-size: 22px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #6366f1, #a855f7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      padding: 4px 20px 16px;
+      letter-spacing: -0.5px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 20px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.15s;
+      border-left: 3px solid transparent;
+    }
+
+    .nav-item:hover {
+      color: var(--text);
+      background: var(--bg-hover);
+    }
+
+    .nav-item.active {
+      color: var(--accent-light);
+      background: rgba(99, 102, 241, 0.08);
+      border-left-color: var(--accent);
+    }
+
+    .nav-item .nav-icon {
+      font-size: 16px;
+      width: 20px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 12px 20px;
+      border-top: 1px solid var(--border);
+    }
+
+    .sidebar-footer .user-info {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+    }
+
+    .sidebar-footer .btn-signout {
+      font-size: 12px;
+      color: var(--error);
+      background: none;
+      border: 1px solid #3b1a1a;
+      border-radius: 6px;
+      padding: 5px 12px;
+      cursor: pointer;
+      width: 100%;
+      transition: border-color 0.15s;
+    }
+    .sidebar-footer .btn-signout:hover { border-color: var(--error); }
+
+    /* ---- Content area ---- */
+    .content-area {
+      flex: 1;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      -webkit-app-region: no-drag;
+    }
+
+    /* ---- Panels ---- */
+    .panel { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+    .panel.active { display: flex; }
+
+    /* ---- Views (for sign-in/setup flow, centered) ---- */
+    .view { display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; width: 100%; height: 100%; padding: 40px; }
     .view.active { display: flex; }
 
-    /* Logo */
-    .logo {
+    .logo-large {
       font-size: 36px;
       font-weight: 800;
       background: linear-gradient(135deg, #6366f1, #a855f7);
@@ -55,39 +159,24 @@
       letter-spacing: -1px;
     }
 
-    h2 {
-      font-size: 20px;
-      font-weight: 600;
-      margin-bottom: 6px;
-      color: #f0f0f0;
-    }
+    h2 { font-size: 20px; font-weight: 600; margin-bottom: 6px; color: #f0f0f0; }
+    h3 { font-size: 15px; font-weight: 600; margin-bottom: 8px; color: #f0f0f0; }
+    p { color: var(--text-secondary); font-size: 13px; line-height: 1.5; margin-bottom: 16px; }
 
-    p {
-      color: #9ca3af;
-      font-size: 13px;
-      line-height: 1.5;
-      margin-bottom: 20px;
-    }
-
-    .subtitle { font-size: 12px; color: #6b7280; margin-bottom: 24px; }
-
-    /* Buttons */
+    /* ---- Buttons ---- */
     .btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 8px;
-      padding: 10px 28px;
+      padding: 9px 20px;
       border: none;
-      border-radius: 10px;
-      font-size: 14px;
+      border-radius: 8px;
+      font-size: 13px;
       font-weight: 600;
       cursor: pointer;
-      transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
-      min-width: 180px;
-      width: 100%;
+      transition: transform 0.12s, box-shadow 0.12s, opacity 0.12s;
     }
-
     .btn:hover { transform: translateY(-1px); }
     .btn:active { transform: translateY(0); }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
@@ -95,238 +184,418 @@
     .btn-primary {
       background: linear-gradient(135deg, #6366f1, #8b5cf6);
       color: #fff;
-      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3);
+      box-shadow: 0 4px 14px var(--accent-glow);
     }
 
     .btn-outline {
       background: transparent;
-      color: #e1e4e8;
-      border: 1px solid #333;
+      color: var(--text);
+      border: 1px solid var(--border);
     }
-    .btn-outline:hover { border-color: #6366f1; color: #fff; }
+    .btn-outline:hover { border-color: var(--accent); color: #fff; }
 
     .btn-danger {
       background: transparent;
-      color: #ef4444;
+      color: var(--error);
       border: 1px solid #3b1a1a;
-      font-size: 13px;
     }
-    .btn-danger:hover { border-color: #ef4444; }
+    .btn-danger:hover { border-color: var(--error); }
 
-    .btn-apple {
-      background: #fff;
-      color: #000;
+    .btn-sm { padding: 6px 14px; font-size: 12px; }
+
+    .btn-apple { background: #fff; color: #000; }
+    .btn-google { background: #2f2f2f; color: #fff; border: 1px solid #444; }
+    .btn-microsoft { background: #2f2f2f; color: #fff; border: 1px solid #444; }
+
+    .btn-group { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 300px; }
+    .btn-group .btn { width: 100%; }
+
+    .btn-icon {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0;
+      transition: all 0.12s;
     }
+    .btn-icon:hover { border-color: var(--accent); color: var(--text); }
 
-    .btn-google {
-      background: #2f2f2f;
-      color: #fff;
-      border: 1px solid #444;
-    }
+    .btn-row { display: flex; gap: 8px; align-items: center; }
 
-    .btn-microsoft {
-      background: #2f2f2f;
-      color: #fff;
-      border: 1px solid #444;
-    }
-
-    .btn-group {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      width: 100%;
-      max-width: 300px;
-    }
-
-    .btn-sm {
-      padding: 8px 20px;
-      font-size: 13px;
-      min-width: auto;
-    }
-
-    /* Status card */
-    .status-card {
-      width: 100%;
-      background: #1a1d27;
-      border-radius: 12px;
-      padding: 20px;
-      margin-bottom: 20px;
+    /* ---- Cards ---- */
+    .card {
+      background: var(--bg-card);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 12px;
     }
 
     .status-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 8px 0;
+      padding: 7px 0;
     }
-
-    .status-row + .status-row {
-      border-top: 1px solid #2a2d35;
-    }
-
-    .status-label {
-      font-size: 13px;
-      color: #9ca3af;
-    }
-
-    .status-value {
-      font-size: 13px;
-      font-weight: 500;
-    }
+    .status-row + .status-row { border-top: 1px solid var(--border); }
+    .status-label { font-size: 13px; color: var(--text-secondary); }
+    .status-value { font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
 
     .status-dot {
       display: inline-block;
-      width: 8px;
-      height: 8px;
+      width: 8px; height: 8px;
       border-radius: 50%;
-      margin-right: 6px;
     }
+    .status-dot.green { background: var(--success); animation: pulse 2s infinite; }
+    .status-dot.red { background: var(--error); }
+    .status-dot.yellow { background: var(--warning); }
 
-    .status-dot.green { background: #22c55e; animation: pulse 2s infinite; }
-    .status-dot.red { background: #ef4444; }
-    .status-dot.yellow { background: #eab308; }
+    .text-green { color: var(--success); }
+    .text-red { color: var(--error); }
+    .text-yellow { color: var(--warning); }
+    .text-dim { color: var(--text-dim); }
 
-    .text-green { color: #22c55e; }
-    .text-red { color: #ef4444; }
-    .text-yellow { color: #eab308; }
-
-    /* Warning banner */
-    .warning-banner {
-      width: 100%;
-      background: #332a0e;
-      border: 1px solid #eab30833;
-      border-radius: 10px;
-      padding: 14px 16px;
-      margin-bottom: 16px;
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      text-align: left;
-    }
-
-    .warning-banner .icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
-    .warning-banner .text { font-size: 13px; color: #fbbf24; line-height: 1.4; }
-
-    /* Error banner */
-    .error-banner {
-      width: 100%;
-      background: #2d1215;
-      border: 1px solid #ef444433;
-      border-radius: 10px;
-      padding: 14px 16px;
-      margin-bottom: 16px;
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      text-align: left;
-    }
-
-    .error-banner .icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
-    .error-banner .text { font-size: 13px; color: #f87171; line-height: 1.4; }
-
-    /* Check list */
-    .checklist {
-      text-align: left;
-      width: 100%;
-      margin-bottom: 20px;
-    }
-
-    .check-item {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 14px;
-      background: #1a1d27;
+    /* ---- Banners ---- */
+    .banner {
       border-radius: 8px;
-      margin-bottom: 6px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      text-align: left;
       font-size: 13px;
+      line-height: 1.4;
+    }
+    .banner .icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+
+    .banner-warning { background: #332a0e; border: 1px solid #eab30833; color: #fbbf24; }
+    .banner-error { background: #2d1215; border: 1px solid #ef444433; color: #f87171; }
+    .banner-success { background: #0f2918; border: 1px solid #22c55e33; color: #4ade80; }
+    .banner-info { background: #131a2e; border: 1px solid #6366f133; color: var(--accent-light); }
+
+    /* ---- Forms/Inputs ---- */
+    .input-group { margin-bottom: 12px; text-align: left; }
+    .input-group label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; font-weight: 500; }
+
+    input[type="text"], input[type="password"], input[type="number"], textarea, select {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      color: var(--text);
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+    textarea { resize: vertical; min-height: 60px; }
+    select { cursor: pointer; }
+
+    /* ---- Checklist ---- */
+    .checklist { text-align: left; width: 100%; margin-bottom: 16px; }
+    .check-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 14px; background: var(--bg-card); border-radius: 8px; margin-bottom: 6px; font-size: 13px;
+    }
+    .check-icon {
+      width: 20px; height: 20px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; flex-shrink: 0;
+    }
+    .check-icon.pass { background: #16382a; color: var(--success); }
+    .check-icon.fail { background: #3b1a1a; color: var(--error); }
+    .check-icon.wait { background: #2a2d35; color: var(--text-secondary); }
+
+    /* ---- Progress ---- */
+    .progress-wrapper { width: 100%; margin-bottom: 12px; }
+    .progress-bar { width: 100%; height: 4px; background: #2a2d35; border-radius: 2px; overflow: hidden; }
+    .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #6366f1, #a855f7); border-radius: 2px; transition: width 0.5s ease; }
+    .progress-label { font-size: 12px; color: var(--text-secondary); margin-top: 6px; }
+
+    /* ---- Spinner ---- */
+    .spinner {
+      width: 24px; height: 24px;
+      border: 2px solid #2a2d35; border-top-color: var(--accent);
+      border-radius: 50%; animation: spin 0.6s linear infinite;
+      margin-bottom: 16px;
     }
 
-    .check-icon {
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    /* ---- Panel Headers ---- */
+    .panel-header {
       display: flex;
       align-items: center;
-      justify-content: center;
-      font-size: 12px;
+      justify-content: space-between;
+      padding: 16px 20px 12px;
+      border-bottom: 1px solid var(--border);
       flex-shrink: 0;
     }
+    .panel-header h2 { margin-bottom: 0; }
 
-    .check-icon.pass { background: #16382a; color: #22c55e; }
-    .check-icon.fail { background: #3b1a1a; color: #ef4444; }
-    .check-icon.wait { background: #2a2d35; color: #9ca3af; }
-
-    /* Progress bar */
-    .progress-wrapper {
-      width: 100%;
-      margin-bottom: 12px;
+    .panel-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
     }
 
-    .progress-bar {
-      width: 100%;
-      height: 4px;
-      background: #2a2d35;
-      border-radius: 2px;
+    /* ---- Dashboard ---- */
+    .dash-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .dash-stat {
+      background: var(--bg-card);
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .dash-stat .label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .dash-stat .value { font-size: 20px; font-weight: 700; }
+
+    .device-list { list-style: none; }
+    .device-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px; background: var(--bg-card); border-radius: 8px; margin-bottom: 6px;
+    }
+    .device-item .device-name { font-size: 13px; font-weight: 500; }
+    .device-item .device-meta { font-size: 11px; color: var(--text-dim); }
+
+    /* ---- Tasks panel ---- */
+    .tasks-layout { display: flex; flex: 1; overflow: hidden; }
+    .task-list-pane {
+      width: 280px;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
       overflow: hidden;
     }
+    .task-detail-pane { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
-    .progress-fill {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, #6366f1, #a855f7);
-      border-radius: 2px;
-      transition: width 0.5s ease;
+    .task-list-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0;
     }
+    .task-list-header h3 { margin-bottom: 0; }
 
-    .progress-label {
-      font-size: 12px;
-      color: #9ca3af;
-      margin-top: 6px;
+    .task-list-items { flex: 1; overflow-y: auto; padding: 8px; }
+
+    .task-item {
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-bottom: 4px;
+      transition: background 0.12s;
     }
+    .task-item:hover { background: var(--bg-hover); }
+    .task-item.active { background: rgba(99, 102, 241, 0.12); }
+    .task-item .task-title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .task-item .task-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; display: flex; gap: 8px; }
 
-    /* Loading spinner */
-    .spinner {
-      width: 24px;
-      height: 24px;
-      border: 2px solid #2a2d35;
-      border-top-color: #6366f1;
-      border-radius: 50%;
-      animation: spin 0.6s linear infinite;
-      margin-bottom: 16px;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
-    }
-
-    .footer {
-      padding: 12px 32px;
-      text-align: center;
+    .task-status-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
       font-size: 11px;
-      color: #444;
+      font-weight: 600;
+    }
+    .task-status-badge.running { background: #1a3a2a; color: var(--success); }
+    .task-status-badge.queued { background: #2a2510; color: var(--warning); }
+    .task-status-badge.completed { background: #131a2e; color: var(--accent-light); }
+    .task-status-badge.stopped { background: #2a2d35; color: var(--text-secondary); }
+    .task-status-badge.failed { background: #2d1215; color: var(--error); }
+
+    .task-detail-header {
+      padding: 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    }
+    .task-detail-header h3 { margin-bottom: 4px; }
+
+    .task-output-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+      font-size: 12.5px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      color: var(--text);
+    }
+
+    .task-output-area .md-h1 { font-size: 18px; font-weight: 700; color: #f0f0f0; margin: 16px 0 8px; font-family: inherit; }
+    .task-output-area .md-h2 { font-size: 15px; font-weight: 600; color: #f0f0f0; margin: 12px 0 6px; font-family: inherit; }
+    .task-output-area .md-h3 { font-size: 13px; font-weight: 600; color: #f0f0f0; margin: 10px 0 4px; font-family: inherit; }
+    .task-output-area .md-code {
+      background: #1e2130;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      display: block;
+      margin: 8px 0;
+      overflow-x: auto;
+      font-size: 12px;
+    }
+    .task-output-area .md-inline-code {
+      background: #1e2130;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .task-output-area .md-bold { font-weight: 700; color: #f0f0f0; }
+    .task-output-area .md-italic { font-style: italic; }
+    .task-output-area .md-hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+
+    .task-continue-bar {
+      display: flex; gap: 8px; padding: 12px 16px;
+      border-top: 1px solid var(--border); flex-shrink: 0;
+    }
+    .task-continue-bar input { flex: 1; }
+
+    /* Empty state */
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      flex: 1; color: var(--text-dim); font-size: 13px;
+    }
+    .empty-state .empty-icon { font-size: 32px; margin-bottom: 12px; opacity: 0.5; }
+
+    /* ---- Create task modal ---- */
+    .modal-overlay {
+      display: none;
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 100;
+      align-items: center; justify-content: center;
+    }
+    .modal-overlay.active { display: flex; }
+
+    .modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      width: 480px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    .modal h2 { margin-bottom: 16px; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+    /* ---- Terminal panel ---- */
+    .terminal-output {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+      font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+      font-size: 12.5px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      background: #0a0c12;
+    }
+    .terminal-output .stdout { color: var(--text); }
+    .terminal-output .stderr { color: var(--error); }
+    .terminal-output .system { color: var(--text-dim); font-style: italic; }
+
+    .terminal-input-bar {
+      display: flex; gap: 8px; padding: 10px 16px;
+      border-top: 1px solid var(--border); flex-shrink: 0;
+      align-items: center;
+    }
+    .terminal-input-bar input { flex: 1; font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace; }
+    .terminal-input-bar .workdir-label { font-size: 11px; color: var(--accent-light); margin-right: 4px; white-space: nowrap; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+
+    .terminal-toolbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    }
+
+    /* ---- Settings panel ---- */
+    .settings-section {
+      margin-bottom: 24px;
+    }
+    .settings-section h3 { margin-bottom: 12px; }
+
+    .relay-item, .tunnel-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px; background: var(--bg); border-radius: 6px; margin-bottom: 6px;
+    }
+    .relay-item .relay-info, .tunnel-item .tunnel-info { font-size: 13px; }
+    .relay-item .relay-meta, .tunnel-item .tunnel-meta { font-size: 11px; color: var(--text-dim); }
+
+    .toggle-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 0;
+    }
+    .toggle-row + .toggle-row { border-top: 1px solid var(--border); }
+    .toggle-row .toggle-label { font-size: 13px; }
+    .toggle-row .toggle-desc { font-size: 11px; color: var(--text-dim); }
+
+    .toggle-switch {
+      position: relative;
+      width: 40px; height: 22px;
+      background: #2a2d35;
+      border-radius: 11px;
+      cursor: pointer;
+      transition: background 0.2s;
       flex-shrink: 0;
     }
-
-    .link {
-      color: #818cf8;
-      cursor: pointer;
-      text-decoration: none;
-      font-size: 13px;
+    .toggle-switch.on { background: var(--accent); }
+    .toggle-switch::after {
+      content: '';
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 16px; height: 16px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.2s;
     }
-    .link:hover { color: #a5b4fc; text-decoration: underline; }
+    .toggle-switch.on::after { transform: translateX(18px); }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #2a2d35; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3a3d45; }
+
+    /* Image attachments */
+    .image-attachments {
+      display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;
+    }
+    .image-thumb {
+      position: relative;
+      width: 60px; height: 60px;
+      border-radius: 6px; overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .image-thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .image-thumb .remove-img {
+      position: absolute; top: 2px; right: 2px;
+      width: 16px; height: 16px;
+      background: rgba(0,0,0,0.7); color: var(--error);
+      border: none; border-radius: 50%; cursor: pointer;
+      font-size: 10px; display: flex; align-items: center; justify-content: center;
+    }
   </style>
 </head>
 <body>
-  <div class="container">
+  <div class="app-container">
     <div class="titlebar"></div>
 
-    <div class="content">
+    <!-- ===== Sign-in / Setup views (full-screen, centered) ===== -->
+    <div id="auth-flow" style="flex:1; display:flex; flex-direction:column;">
 
       <!-- Loading -->
       <div class="view active" id="view-loading">
@@ -334,9 +603,9 @@
         <p>Checking status...</p>
       </div>
 
-      <!-- Sign In (shown when no token or token expired) -->
+      <!-- Sign In -->
       <div class="view" id="view-signin">
-        <div class="logo">Yaver</div>
+        <div class="logo-large">Yaver</div>
         <h2>Sign in to Yaver</h2>
         <p>Connect your phone to your dev machine. Sign in to get started.</p>
         <div id="signin-error"></div>
@@ -356,13 +625,13 @@
         </div>
       </div>
 
-      <!-- Re-auth (shown when token is expired — Tailscale-style) -->
+      <!-- Re-auth -->
       <div class="view" id="view-reauth">
-        <div class="logo">Yaver</div>
+        <div class="logo-large">Yaver</div>
         <h2>Session Expired</h2>
-        <div class="warning-banner">
+        <div class="banner banner-warning">
           <span class="icon">&#9888;</span>
-          <span class="text">Your session has expired. Sign in again to reconnect your devices.</span>
+          <span>Your session has expired. Sign in again to reconnect your devices.</span>
         </div>
         <div class="btn-group">
           <button class="btn btn-primary" onclick="signInGoogle()">Re-authenticate</button>
@@ -391,7 +660,7 @@
       <div class="view" id="view-setup-install">
         <h2>Installing Agent</h2>
         <p>Downloading and configuring the Yaver agent.</p>
-        <div class="progress-wrapper">
+        <div class="progress-wrapper" style="max-width:400px">
           <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
           <div class="progress-label" id="progress-label">Preparing...</div>
         </div>
@@ -399,71 +668,312 @@
         <button class="btn btn-primary btn-sm" id="btn-install-retry" style="display:none" onclick="startInstall()">Retry</button>
         <button class="btn btn-outline btn-sm" id="btn-install-skip" style="display:none" onclick="finishSetup()">Skip & Continue</button>
       </div>
-
-      <!-- Dashboard (main view when everything is working) -->
-      <div class="view" id="view-dashboard">
-        <div class="logo" style="font-size:28px; margin-bottom:16px">Yaver</div>
-
-        <div class="status-card">
-          <div class="status-row">
-            <span class="status-label">Agent</span>
-            <span class="status-value" id="dash-agent-status">
-              <span class="status-dot green"></span>
-              <span class="text-green">Running</span>
-            </span>
-          </div>
-          <div class="status-row">
-            <span class="status-label">Auth</span>
-            <span class="status-value" id="dash-auth-status">
-              <span class="status-dot green"></span>
-              <span class="text-green">Connected</span>
-            </span>
-          </div>
-        </div>
-
-        <p style="margin-bottom:8px">The agent is running in the background. Use the Yaver app on your phone to send tasks.</p>
-
-        <div class="btn-group" style="gap:8px">
-          <button class="btn btn-outline btn-sm" onclick="restartAgent()">Restart Agent</button>
-          <button class="btn btn-danger btn-sm" onclick="doSignOut()">Sign Out</button>
-        </div>
-      </div>
-
-      <!-- Dashboard with agent stopped -->
-      <div class="view" id="view-dashboard-stopped">
-        <div class="logo" style="font-size:28px; margin-bottom:16px">Yaver</div>
-
-        <div class="error-banner">
-          <span class="icon">&#9888;</span>
-          <span class="text">The agent is not running. Restart it to reconnect.</span>
-        </div>
-
-        <div class="status-card">
-          <div class="status-row">
-            <span class="status-label">Agent</span>
-            <span class="status-value">
-              <span class="status-dot red"></span>
-              <span class="text-red">Stopped</span>
-            </span>
-          </div>
-          <div class="status-row">
-            <span class="status-label">Auth</span>
-            <span class="status-value" id="dash-stopped-auth">
-              <span class="status-dot green"></span>
-              <span class="text-green">Connected</span>
-            </span>
-          </div>
-        </div>
-
-        <div class="btn-group" style="gap:8px">
-          <button class="btn btn-primary btn-sm" onclick="restartAgent()">Start Agent</button>
-          <button class="btn btn-danger btn-sm" onclick="doSignOut()">Sign Out</button>
-        </div>
-      </div>
-
     </div>
 
-    <div class="footer">yaver.io</div>
+    <!-- ===== Main app layout (shown after auth) ===== -->
+    <div id="main-app" class="main-layout" style="display:none">
+      <div class="sidebar">
+        <div class="sidebar-logo">Yaver</div>
+        <div class="nav-item active" data-panel="panel-dashboard" onclick="switchPanel(this)">
+          <span class="nav-icon">&#9632;</span> Dashboard
+        </div>
+        <div class="nav-item" data-panel="panel-tasks" onclick="switchPanel(this)">
+          <span class="nav-icon">&#9998;</span> Tasks
+        </div>
+        <div class="nav-item" data-panel="panel-terminal" onclick="switchPanel(this)">
+          <span class="nav-icon">&gt;_</span> Terminal
+        </div>
+        <div class="nav-item" data-panel="panel-settings" onclick="switchPanel(this)">
+          <span class="nav-icon">&#9881;</span> Settings
+        </div>
+
+        <div class="sidebar-footer">
+          <div class="user-info" id="sidebar-user-info">Signed in</div>
+          <button class="btn-signout" onclick="doSignOut()">Sign Out</button>
+        </div>
+      </div>
+
+      <div class="content-area">
+
+        <!-- ===== Dashboard Panel ===== -->
+        <div class="panel active" id="panel-dashboard">
+          <div class="panel-header">
+            <h2>Dashboard</h2>
+            <div class="btn-row">
+              <button class="btn btn-outline btn-sm" onclick="restartAgent()">Restart Agent</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="dash-grid">
+              <div class="dash-stat">
+                <div class="label">Agent Status</div>
+                <div class="value" id="dash-agent-val">
+                  <span class="status-dot green"></span>
+                  <span class="text-green">Checking...</span>
+                </div>
+              </div>
+              <div class="dash-stat">
+                <div class="label">Connection</div>
+                <div class="value" id="dash-connection-val">--</div>
+              </div>
+              <div class="dash-stat">
+                <div class="label">Runner</div>
+                <div class="value" id="dash-runner-val">--</div>
+              </div>
+              <div class="dash-stat">
+                <div class="label">Active Tasks</div>
+                <div class="value" id="dash-tasks-val">--</div>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>Agent Info</h3>
+              <div class="status-row">
+                <span class="status-label">Hostname</span>
+                <span class="status-value" id="dash-hostname">--</span>
+              </div>
+              <div class="status-row">
+                <span class="status-label">Version</span>
+                <span class="status-value" id="dash-version">--</span>
+              </div>
+              <div class="status-row">
+                <span class="status-label">Work Directory</span>
+                <span class="status-value" id="dash-workdir">--</span>
+              </div>
+              <div class="status-row">
+                <span class="status-label">Platform</span>
+                <span class="status-value" id="dash-platform">--</span>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3 style="margin-bottom:12px">Devices</h3>
+              <div id="dash-devices-list">
+                <p class="text-dim" style="font-size:12px">Connect to agent to see device info.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== Tasks Panel ===== -->
+        <div class="panel" id="panel-tasks">
+          <div class="tasks-layout">
+            <div class="task-list-pane">
+              <div class="task-list-header">
+                <h3>Tasks</h3>
+                <button class="btn btn-primary btn-sm" onclick="showCreateTaskModal()">+ New</button>
+              </div>
+              <div class="task-list-items" id="task-list-items">
+                <div class="empty-state" id="task-list-empty">
+                  <div class="empty-icon">&#9998;</div>
+                  <div>No tasks yet</div>
+                </div>
+              </div>
+            </div>
+            <div class="task-detail-pane">
+              <div id="task-detail-content">
+                <div class="empty-state" style="height:100%">
+                  <div class="empty-icon">&#8592;</div>
+                  <div>Select a task to view details</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== Terminal Panel ===== -->
+        <div class="panel" id="panel-terminal">
+          <div class="terminal-toolbar">
+            <div class="btn-row">
+              <span style="font-size:13px; font-weight:600;">Terminal</span>
+              <span class="text-dim" style="font-size:11px; margin-left:8px;" id="terminal-exec-status">No session</span>
+            </div>
+            <div class="btn-row">
+              <button class="btn-icon" onclick="signalExec('SIGINT')" title="Send SIGINT (Ctrl+C)">^C</button>
+              <button class="btn-icon" onclick="signalExec('SIGTERM')" title="Send SIGTERM">&#9632;</button>
+              <button class="btn-icon" onclick="killCurrentExec()" title="Kill process">&#10005;</button>
+              <button class="btn-icon" onclick="clearTerminal()" title="Clear output">&#8709;</button>
+            </div>
+          </div>
+          <div class="terminal-output" id="terminal-output">
+            <span class="system">Ready. Type a command below and press Enter.</span>
+          </div>
+          <div class="terminal-input-bar">
+            <span class="workdir-label" id="terminal-workdir" title="Working directory">~/</span>
+            <input type="text" id="terminal-command-input" placeholder="Enter command..." onkeydown="handleTerminalKeydown(event)">
+            <button class="btn btn-primary btn-sm" onclick="runTerminalCommand()">Run</button>
+          </div>
+        </div>
+
+        <!-- ===== Settings Panel ===== -->
+        <div class="panel" id="panel-settings">
+          <div class="panel-header">
+            <h2>Settings</h2>
+            <button class="btn btn-primary btn-sm" onclick="saveAllSettings()">Save</button>
+          </div>
+          <div class="panel-body">
+
+            <div class="settings-section">
+              <h3>Agent Connection</h3>
+              <div class="input-group">
+                <label>Agent Base URL</label>
+                <input type="text" id="setting-agent-url" placeholder="http://localhost:18080" value="http://localhost:18080">
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Runner</h3>
+              <div class="input-group">
+                <label>Default Runner</label>
+                <select id="setting-runner">
+                  <option value="claude">Claude Code</option>
+                  <option value="codex">OpenAI Codex</option>
+                  <option value="aider">Aider</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Relay Servers</h3>
+              <div id="relay-list"></div>
+              <button class="btn btn-outline btn-sm" onclick="showAddRelayForm()" style="margin-top:8px">+ Add Relay Server</button>
+              <div id="relay-add-form" style="display:none; margin-top:12px;">
+                <div class="card">
+                  <div class="input-group">
+                    <label>QUIC Address</label>
+                    <input type="text" id="relay-quic-addr" placeholder="relay.example.com:4433">
+                  </div>
+                  <div class="input-group">
+                    <label>HTTP URL (optional)</label>
+                    <input type="text" id="relay-http-url" placeholder="https://relay.example.com">
+                  </div>
+                  <div class="input-group">
+                    <label>Password</label>
+                    <input type="password" id="relay-password" placeholder="Relay password">
+                  </div>
+                  <div class="input-group">
+                    <label>Label (optional)</label>
+                    <input type="text" id="relay-label" placeholder="e.g. US East">
+                  </div>
+                  <div class="btn-row" style="margin-top:8px">
+                    <button class="btn btn-primary btn-sm" onclick="addRelay()">Add</button>
+                    <button class="btn btn-outline btn-sm" onclick="hideAddRelayForm()">Cancel</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Cloudflare Tunnels</h3>
+              <div id="tunnel-list"></div>
+              <button class="btn btn-outline btn-sm" onclick="showAddTunnelForm()" style="margin-top:8px">+ Add Tunnel</button>
+              <div id="tunnel-add-form" style="display:none; margin-top:12px;">
+                <div class="card">
+                  <div class="input-group">
+                    <label>Tunnel URL</label>
+                    <input type="text" id="tunnel-url" placeholder="https://my-tunnel.example.com">
+                  </div>
+                  <div class="input-group">
+                    <label>CF Access Client ID (optional)</label>
+                    <input type="text" id="tunnel-client-id" placeholder="Client ID">
+                  </div>
+                  <div class="input-group">
+                    <label>CF Access Client Secret (optional)</label>
+                    <input type="password" id="tunnel-client-secret" placeholder="Client secret">
+                  </div>
+                  <div class="input-group">
+                    <label>Label (optional)</label>
+                    <input type="text" id="tunnel-label" placeholder="e.g. Work laptop">
+                  </div>
+                  <div class="btn-row" style="margin-top:8px">
+                    <button class="btn btn-primary btn-sm" onclick="addTunnel()">Add</button>
+                    <button class="btn btn-outline btn-sm" onclick="hideAddTunnelForm()">Cancel</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Speech</h3>
+              <div class="input-group">
+                <label>Provider</label>
+                <select id="setting-speech-provider">
+                  <option value="whisper">Whisper (local)</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="deepgram">Deepgram</option>
+                  <option value="assemblyai">AssemblyAI</option>
+                </select>
+              </div>
+              <div class="input-group">
+                <label>API Key (for cloud providers)</label>
+                <input type="password" id="setting-speech-api-key" placeholder="API key">
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>General</h3>
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Auto-start agent</div>
+                  <div class="toggle-desc">Launch the agent service when you sign in</div>
+                </div>
+                <div class="toggle-switch" id="toggle-autostart" onclick="toggleSwitch(this)"></div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Maintenance</h3>
+              <div class="btn-row" style="gap:12px">
+                <button class="btn btn-outline btn-sm" onclick="cleanAgent(30)">Clean (30 days)</button>
+                <button class="btn btn-danger btn-sm" onclick="cleanAgent(0)">Clean All</button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ===== Create Task Modal ===== -->
+    <div class="modal-overlay" id="create-task-modal">
+      <div class="modal">
+        <h2>New Task</h2>
+        <div class="input-group">
+          <label>Title / Prompt</label>
+          <textarea id="new-task-title" rows="3" placeholder="What do you want the agent to do?"></textarea>
+        </div>
+        <div class="input-group">
+          <label>Description (optional)</label>
+          <input type="text" id="new-task-description" placeholder="Additional context...">
+        </div>
+        <div style="display:flex; gap:12px">
+          <div class="input-group" style="flex:1">
+            <label>Runner</label>
+            <select id="new-task-runner">
+              <option value="">Default</option>
+              <option value="claude">Claude Code</option>
+              <option value="codex">OpenAI Codex</option>
+              <option value="aider">Aider</option>
+            </select>
+          </div>
+          <div class="input-group" style="flex:1">
+            <label>Model (optional)</label>
+            <input type="text" id="new-task-model" placeholder="e.g. claude-sonnet-4-20250514">
+          </div>
+        </div>
+        <div class="input-group">
+          <label>Image Attachments</label>
+          <button class="btn btn-outline btn-sm" onclick="attachImage()">+ Attach Image</button>
+          <div class="image-attachments" id="new-task-images"></div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-outline" onclick="hideCreateTaskModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="createNewTask()">Create Task</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <script src="renderer.js"></script>

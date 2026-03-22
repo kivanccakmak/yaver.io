@@ -23,6 +23,7 @@ type HTTPServer struct {
 	convexURL   string
 	hostname    string
 	taskMgr     *TaskManager
+	execMgr     *ExecManager
 	aclMgr      *ACLManager
 	emailMgr    *EmailManager
 	server      *http.Server
@@ -65,6 +66,10 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/tmux/adopt", s.auth(s.handleTmuxAdopt))
 	mux.HandleFunc("/tmux/detach", s.auth(s.handleTmuxDetach))
 	mux.HandleFunc("/tmux/input", s.auth(s.handleTmuxInput))
+
+	// Exec (remote command execution)
+	mux.HandleFunc("/exec", s.auth(s.handleExec))
+	mux.HandleFunc("/exec/", s.auth(s.handleExecByID))
 
 	// MCP (Model Context Protocol) endpoint — JSON-RPC 2.0 over HTTP
 	mux.HandleFunc("/mcp", s.handleMCP)
@@ -783,6 +788,157 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 		"taskId": task.ID,
 		"status": task.Status,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Exec handlers (remote command execution)
+// ---------------------------------------------------------------------------
+
+func (s *HTTPServer) handleExec(w http.ResponseWriter, r *http.Request) {
+	if s.execMgr == nil {
+		jsonError(w, http.StatusServiceUnavailable, "exec is not enabled")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		sessions := s.execMgr.ListExecs()
+		execs := make([]map[string]interface{}, 0, len(sessions))
+		for _, sess := range sessions {
+			execs = append(execs, sess.Snapshot())
+		}
+		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "execs": execs})
+	case http.MethodPost:
+		var body struct {
+			Command string            `json:"command"`
+			WorkDir string            `json:"workDir,omitempty"`
+			Shell   string            `json:"shell,omitempty"`
+			Timeout int               `json:"timeout,omitempty"`
+			Env     map[string]string `json:"env,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if body.Command == "" {
+			jsonError(w, http.StatusBadRequest, "command is required")
+			return
+		}
+		sess, err := s.execMgr.StartExec(body.Command, body.WorkDir, body.Shell, body.Env, body.Timeout)
+		if err != nil {
+			code := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "blocked") {
+				code = http.StatusBadRequest
+			} else if strings.Contains(err.Error(), "too many") {
+				code = http.StatusTooManyRequests
+			}
+			jsonError(w, code, err.Error())
+			return
+		}
+		log.Printf("[HTTP] Exec started: %s — %s (pid=%d)", sess.ID, body.Command, sess.PID)
+		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "execId": sess.ID, "pid": sess.PID})
+	default:
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *HTTPServer) handleExecByID(w http.ResponseWriter, r *http.Request) {
+	if s.execMgr == nil {
+		jsonError(w, http.StatusServiceUnavailable, "exec is not enabled")
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/exec/")
+	parts := strings.SplitN(path, "/", 2)
+	execID := parts[0]
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+	if execID == "" {
+		jsonError(w, http.StatusBadRequest, "exec ID required")
+		return
+	}
+
+	switch action {
+	case "":
+		if r.Method == http.MethodDelete {
+			if err := s.execMgr.KillExec(execID); err != nil {
+				jsonError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true})
+		} else {
+			sess, ok := s.execMgr.GetExec(execID)
+			if !ok {
+				jsonError(w, http.StatusNotFound, "exec session not found")
+				return
+			}
+			jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "exec": sess.Snapshot()})
+		}
+	case "input":
+		if r.Method != http.MethodPost {
+			jsonError(w, http.StatusMethodNotAllowed, "use POST")
+			return
+		}
+		var body struct {
+			Input string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if err := s.execMgr.SendInput(execID, body.Input); err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true})
+	case "signal":
+		if r.Method != http.MethodPost {
+			jsonError(w, http.StatusMethodNotAllowed, "use POST")
+			return
+		}
+		var body struct {
+			Signal string `json:"signal"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if err := s.execMgr.SignalExec(execID, body.Signal); err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true})
+	case "stream":
+		s.streamExecOutput(w, r, execID)
+	default:
+		jsonError(w, http.StatusNotFound, "unknown action")
+	}
+}
+
+func (s *HTTPServer) streamExecOutput(w http.ResponseWriter, r *http.Request, execID string) {
+	ch, err := s.execMgr.Subscribe(execID)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		jsonError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	for evt := range ch {
+		data, _ := json.Marshal(evt)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
 }
 
 // ---------------------------------------------------------------------------

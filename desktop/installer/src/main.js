@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
@@ -17,6 +17,9 @@ const CONFIG_DIR = process.platform === 'win32'
 // Default hosted Convex instance (public endpoint). Override via CONVEX_SITE_URL env var.
 const CONVEX_SITE_URL = process.env.CONVEX_SITE_URL || 'https://shocking-echidna-394.eu-west-1.convex.site';
 
+// Default agent API base URL — configurable via settings
+const DEFAULT_AGENT_URL = 'http://localhost:18080';
+
 let mainWindow;
 let tray = null;
 
@@ -26,9 +29,11 @@ let tray = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 480,
-    height: 560,
-    resizable: false,
+    width: 1000,
+    height: 700,
+    minWidth: 800,
+    minHeight: 550,
+    resizable: true,
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0f1117',
     show: false,
@@ -180,6 +185,122 @@ function isAgentRunning() {
 
 function isAgentInstalled() {
   return fs.existsSync(path.join(INSTALL_DIR, AGENT_BINARY_NAME));
+}
+
+// ---------------------------------------------------------------------------
+// Config helpers (~/.yaver/config.json)
+// ---------------------------------------------------------------------------
+
+function getConfigPath() {
+  return path.join(CONFIG_DIR, 'config.json');
+}
+
+function readConfig() {
+  try {
+    const raw = fs.readFileSync(getConfigPath(), 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+function writeConfig(config) {
+  if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  fs.writeFileSync(getConfigPath(), JSON.stringify(config, null, 2), { mode: 0o600 });
+}
+
+// ---------------------------------------------------------------------------
+// Settings helpers (stored in ~/.yaver/desktop-settings.json)
+// ---------------------------------------------------------------------------
+
+function getSettingsPath() {
+  return path.join(CONFIG_DIR, 'desktop-settings.json');
+}
+
+function readSettings() {
+  try {
+    const raw = fs.readFileSync(getSettingsPath(), 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return {
+      agentBaseUrl: DEFAULT_AGENT_URL,
+      autoStart: false,
+      speechProvider: 'whisper',
+      speechApiKey: '',
+    };
+  }
+}
+
+function writeSettings(settings) {
+  if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  fs.writeFileSync(getSettingsPath(), JSON.stringify(settings, null, 2), { mode: 0o600 });
+}
+
+// ---------------------------------------------------------------------------
+// Agent HTTP API proxy
+// ---------------------------------------------------------------------------
+
+function getAgentBaseUrl() {
+  const settings = readSettings();
+  return settings.agentBaseUrl || DEFAULT_AGENT_URL;
+}
+
+function agentRequest(method, urlPath, body) {
+  return new Promise((resolve) => {
+    const baseUrl = getAgentBaseUrl();
+    const token = getToken();
+    const url = new URL(urlPath, baseUrl);
+
+    const options = {
+      method,
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname + url.search,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      timeout: 15000,
+    };
+
+    if (token) {
+      options.headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const bodyStr = body ? JSON.stringify(body) : null;
+    if (bodyStr) {
+      options.headers['Content-Length'] = Buffer.byteLength(bodyStr);
+    }
+
+    const req = http.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => (data += chunk));
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch {
+          resolve({ ok: false, error: `Invalid response: ${data.substring(0, 200)}` });
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      resolve({ ok: false, error: `Agent connection failed: ${err.message}` });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ ok: false, error: 'Agent request timed out' });
+    });
+
+    if (bodyStr) {
+      req.write(bodyStr);
+    }
+    req.end();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -361,6 +482,85 @@ ipcMain.handle('validate-token', async () => {
   } catch {
     return { valid: false };
   }
+});
+
+// ---------------------------------------------------------------------------
+// Agent API proxy handler
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('agent-request', async (_event, method, urlPath, body) => {
+  return agentRequest(method, urlPath, body);
+});
+
+// ---------------------------------------------------------------------------
+// Config handlers
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('get-config', async () => {
+  return readConfig();
+});
+
+ipcMain.handle('save-config', async (_event, config) => {
+  try {
+    writeConfig(config);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Settings handlers
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('get-settings', async () => {
+  return readSettings();
+});
+
+ipcMain.handle('save-settings', async (_event, settings) => {
+  try {
+    writeSettings(settings);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// ---------------------------------------------------------------------------
+// File picker handler
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('pick-file', async (_event, options) => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: options?.filters || [
+      { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  const filePath = result.filePaths[0];
+  const data = fs.readFileSync(filePath);
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeMap = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+  };
+
+  return {
+    path: filePath,
+    name: path.basename(filePath),
+    base64: data.toString('base64'),
+    mimeType: mimeMap[ext] || 'application/octet-stream',
+    size: data.length,
+  };
 });
 
 // ---------------------------------------------------------------------------

@@ -90,6 +90,8 @@ func main() {
 		runUninstall()
 	case "tmux":
 		runTmux(os.Args[2:])
+	case "exec":
+		runExec(os.Args[2:])
 	case "clean":
 		runClean(os.Args[2:])
 	case "doctor":
@@ -142,6 +144,7 @@ Usage:
   yaver acl         Agent Communication Layer — connect to other MCP servers
   yaver status      Show auth, relay, and connection status
   yaver devices     List your registered devices
+  yaver exec        Execute a command on a remote device (like SSH)
   yaver clean       Remove old tasks, images, and logs (default: older than 30 days)
   yaver purge       Factory reset — remove all local data (auth, sessions, tasks, logs)
   yaver reset       Alias for purge
@@ -179,6 +182,13 @@ Examples:
   (Agent is also selectable per task from the mobile app)
   yaver config set auto-start true  Start Yaver on login
   yaver config set auto-update true Check for updates on startup
+
+Flags for exec:
+  --device          Device ID or hostname prefix (auto-discovers if not set)
+  --work-dir        Working directory on remote machine
+  --timeout         Command timeout in seconds (default: 300)
+  --relay           Force relay connection
+  --direct          Force direct connection
 
 Run 'yaver <command> -h' for command-specific options.
 `)
@@ -1128,6 +1138,7 @@ func runServe(args []string) {
 
 	// Start HTTP server (V1 — primary, also serves MCP)
 	httpServer := NewHTTPServer(*httpPort, cfg.AuthToken, ownerUserID, cfg.ConvexSiteURL, hostname, taskMgr)
+	httpServer.execMgr = NewExecManager(taskMgr.workDir, cfg.Sandbox)
 	httpServer.aclMgr = aclMgr
 	httpServer.emailMgr = emailMgr
 	httpServer.onShutdown = func() {

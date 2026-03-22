@@ -99,6 +99,28 @@ export interface AgentStatus {
   };
 }
 
+// ── Exec types ─────────────────────────────────────────────────────
+
+export type ExecStatus = "running" | "completed" | "failed" | "killed";
+
+export interface ExecSession {
+  id: string;
+  command: string;
+  status: ExecStatus;
+  exitCode?: number;
+  stdout: string;
+  stderr: string;
+  pid?: number;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+export interface ExecOptions {
+  workDir?: string;
+  timeout?: number;
+  env?: Record<string, string>;
+}
+
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 export type ConnectionMode = "direct" | "relay" | "tunnel" | null;
 /** How the connection was established — tracked for diagnostics and faster reconnection. */
@@ -510,6 +532,80 @@ export class QuicClient {
     if (!res.ok) throw new Error(`Failed to stop all: ${res.status}`);
     const data = await res.json();
     return data.stopped || 0;
+  }
+
+  // ── Exec (remote command execution) ─────────────────────────────
+
+  /** Start a command on the remote agent. */
+  async startExec(command: string, opts?: ExecOptions): Promise<{ execId: string; pid: number }> {
+    this.assertConnected();
+    const body: Record<string, unknown> = { command };
+    if (opts?.workDir) body.workDir = opts.workDir;
+    if (opts?.timeout) body.timeout = opts.timeout;
+    if (opts?.env) body.env = opts.env;
+    const res = await fetch(`${this.baseUrl}/exec`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`Failed to start exec: ${res.status}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Failed to start exec");
+    return { execId: data.execId, pid: data.pid };
+  }
+
+  /** Get exec session details. */
+  async getExec(execId: string): Promise<ExecSession> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/exec/${execId}`, {
+      headers: this.authHeaders,
+    });
+    if (!res.ok) throw new Error(`Failed to get exec: ${res.status}`);
+    const data = await res.json();
+    return data.exec;
+  }
+
+  /** List all exec sessions. */
+  async listExecs(): Promise<ExecSession[]> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/exec`, {
+      headers: this.authHeaders,
+    });
+    if (!res.ok) throw new Error(`Failed to list execs: ${res.status}`);
+    const data = await res.json();
+    return data.execs || [];
+  }
+
+  /** Send stdin input to a running exec session. */
+  async sendExecInput(execId: string, input: string): Promise<void> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/exec/${execId}/input`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ input }),
+    });
+    if (!res.ok) throw new Error(`Failed to send exec input: ${res.status}`);
+  }
+
+  /** Send a signal to a running exec session. */
+  async signalExec(execId: string, signal: string): Promise<void> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/exec/${execId}/signal`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ signal }),
+    });
+    if (!res.ok) throw new Error(`Failed to signal exec: ${res.status}`);
+  }
+
+  /** Kill and remove an exec session. */
+  async killExec(execId: string): Promise<void> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/exec/${execId}`, {
+      method: "DELETE",
+      headers: this.authHeaders,
+    });
+    if (!res.ok) throw new Error(`Failed to kill exec: ${res.status}`);
   }
 
   /** Get agent info (hostname, version, workDir). */

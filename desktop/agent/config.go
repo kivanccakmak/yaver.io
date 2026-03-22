@@ -22,9 +22,18 @@ type Config struct {
 	RelayServers      []RelayServerConfig    `json:"relay_servers,omitempty"`
 	CloudflareTunnels []CloudflareTunnelConfig `json:"cloudflare_tunnels,omitempty"`
 	Sandbox       *SandboxConfig      `json:"sandbox,omitempty"`
+	Exec          *ExecConfig         `json:"exec,omitempty"`
 	Email         *EmailConfig        `json:"email,omitempty"`
 	ACLPeers      []ACLPeerConfig     `json:"acl_peers,omitempty"`
 	Speech        *SpeechConfig       `json:"speech,omitempty"`
+}
+
+// ExecConfig controls remote command execution settings.
+type ExecConfig struct {
+	Enabled        bool   `json:"enabled"`            // default: true
+	MaxConcurrent  int    `json:"max_concurrent,omitempty"`  // default: 10
+	DefaultTimeout int    `json:"default_timeout_s,omitempty"` // default: 300
+	Shell          string `json:"shell,omitempty"`    // default: "sh"
 }
 
 // SpeechConfig holds speech-to-text and text-to-speech settings for CLI voice input.

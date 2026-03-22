@@ -30,6 +30,7 @@ func startTestServer(t *testing.T, token string, taskMgr *TaskManager) (string, 
 	port := getFreePort(t)
 
 	srv := NewHTTPServer(port, token, "test-user-id", "", "test-host", taskMgr)
+	srv.execMgr = NewExecManager(taskMgr.workDir, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

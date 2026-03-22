@@ -30,4 +30,6 @@ export type {
   SpeechProvider,
   SpeechProviderInfo,
   TranscriptionResult,
+  ExecSession,
+  ExecOptions,
 } from './types';

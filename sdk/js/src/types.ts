@@ -98,3 +98,21 @@ export interface TranscriptionResult {
   durationMs: number;
   provider: string;
 }
+
+export interface ExecSession {
+  id: string;
+  command: string;
+  status: 'running' | 'completed' | 'failed' | 'killed';
+  exitCode?: number;
+  stdout: string;
+  stderr: string;
+  pid?: number;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+export interface ExecOptions {
+  workDir?: string;
+  timeout?: number;
+  env?: Record<string, string>;
+}
