@@ -66,6 +66,10 @@ contextBridge.exposeInMainWorld('yaver', {
   saveNotificationsConfig: (config) => ipcRenderer.invoke('agent-request', 'POST', '/notifications/config', config),
   testNotification: (channel) => ipcRenderer.invoke('agent-request', 'POST', '/notifications/test', { channel }),
 
+  // Managed relay subscription
+  getSubscription: () => ipcRenderer.invoke('get-subscription'),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+
   // File picker for image attachments
   pickFile: (options) => ipcRenderer.invoke('pick-file', options),
 

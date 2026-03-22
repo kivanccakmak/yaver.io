@@ -537,6 +537,9 @@ async function loadSettingsUI() {
   if (settings.autoStart) autoToggle.classList.add('on');
   else autoToggle.classList.remove('on');
 
+  // Load managed relay status
+  loadManagedRelayStatus();
+
   // Load runner list from agent
   const runners = await window.yaver.getRunners();
   if (runners && runners.ok && runners.runners) {
@@ -582,6 +585,95 @@ async function saveAllSettings() {
   }
 
   showToast('Settings saved');
+}
+
+// ---- Managed Relay ----
+
+const MANAGED_RELAY_STEPS = [
+  { label: 'Creating your dedicated server...', key: 'creating' },
+  { label: 'Setting up DNS (yourname.relay.yaver.io)...', key: 'dns' },
+  { label: 'Installing SSL certificate...', key: 'ssl' },
+  { label: 'Deploying relay service...', key: 'deploying' },
+  { label: 'Running health checks...', key: 'health' },
+  { label: 'Your relay is ready!', key: 'ready' },
+];
+
+let managedRelayPollTimer = null;
+
+async function loadManagedRelayStatus() {
+  const container = document.getElementById('managed-relay-status');
+  if (!container) return;
+
+  try {
+    const sub = await window.yaver.getSubscription();
+    if (!sub) {
+      container.innerHTML = `
+        <p style="color: var(--text-muted, #888); font-size: 13px; margin-bottom: 8px;">
+          Get a dedicated relay server with 20TB bandwidth and your own subdomain.
+        </p>
+        <button class="btn btn-primary btn-sm" onclick="openManagedRelayPurchase()">
+          Get a dedicated relay server &mdash; $10/mo
+        </button>
+      `;
+      return;
+    }
+
+    if (sub.status === 'active' && sub.provisioningStatus === 'ready') {
+      container.innerHTML = `
+        <div style="padding: 12px; background: rgba(34,197,94,0.08); border-radius: 8px; border: 1px solid rgba(34,197,94,0.2);">
+          <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">
+            <span style="color: #22c55e; font-size: 14px;">&#10003;</span>
+            <strong style="color: #e5e5e5; font-size: 13px;">Active</strong>
+          </div>
+          <div style="font-size: 12px; color: #aaa; margin-bottom: 4px;">Relay URL</div>
+          <div style="font-family: monospace; font-size: 13px; color: #6366f1;">${sub.relayUrl || 'N/A'}</div>
+          ${sub.region ? `<div style="font-size: 12px; color: #888; margin-top: 6px;">Region: ${sub.region}</div>` : ''}
+        </div>
+      `;
+      if (managedRelayPollTimer) { clearInterval(managedRelayPollTimer); managedRelayPollTimer = null; }
+      return;
+    }
+
+    // Provisioning in progress
+    const currentIndex = MANAGED_RELAY_STEPS.findIndex(s => s.key === sub.provisioningStatus);
+    let stepsHtml = MANAGED_RELAY_STEPS.map((step, i) => {
+      const isComplete = i < currentIndex || sub.provisioningStatus === 'ready';
+      const isCurrent = i === currentIndex && sub.provisioningStatus !== 'ready';
+      const icon = isComplete ? '<span style="color:#22c55e;">&#10003;</span>'
+        : isCurrent ? '<span class="spinner-sm"></span>'
+        : '<span style="color:#555;">&#9679;</span>';
+      const textColor = isComplete ? '#aaa' : isCurrent ? '#e5e5e5' : '#555';
+      return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <span style="width:18px;text-align:center;">${icon}</span>
+        <span style="font-size:13px;color:${textColor};">${step.label}</span>
+      </div>`;
+    }).join('');
+
+    container.innerHTML = `
+      <div style="padding: 12px; background: rgba(99,102,241,0.06); border-radius: 8px; border: 1px solid rgba(99,102,241,0.2);">
+        <strong style="color: #e5e5e5; font-size: 13px; display: block; margin-bottom: 10px;">Setting up your relay...</strong>
+        ${stepsHtml}
+      </div>
+    `;
+
+    // Poll every 3 seconds while provisioning
+    if (!managedRelayPollTimer) {
+      managedRelayPollTimer = setInterval(loadManagedRelayStatus, 3000);
+    }
+  } catch (e) {
+    container.innerHTML = `
+      <p style="color: var(--text-muted, #888); font-size: 13px; margin-bottom: 8px;">
+        Get a dedicated relay server with 20TB bandwidth and your own subdomain.
+      </p>
+      <button class="btn btn-primary btn-sm" onclick="openManagedRelayPurchase()">
+        Get a dedicated relay server &mdash; $10/mo
+      </button>
+    `;
+  }
+}
+
+function openManagedRelayPurchase() {
+  window.yaver.openExternal('https://yaver.io/pricing');
 }
 
 // ---- Relay servers ----

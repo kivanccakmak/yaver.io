@@ -592,6 +592,45 @@ ipcMain.handle('get-user-info', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Managed relay subscription handler
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('get-subscription', async () => {
+  const token = getToken();
+  if (!token) return null;
+  try {
+    const url = new URL('/subscription', CONVEX_SITE_URL);
+    return await new Promise((resolve) => {
+      const req = https.get(url.toString(), {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'User-Agent': 'YaverDesktop/1.0',
+        },
+      }, (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            try { resolve(JSON.parse(data)); } catch { resolve(null); }
+          } else {
+            resolve(null);
+          }
+        });
+      });
+      req.on('error', () => resolve(null));
+    });
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('open-external', async (_event, url) => {
+  if (typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'))) {
+    shell.openExternal(url);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // File picker handler
 // ---------------------------------------------------------------------------
 

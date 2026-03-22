@@ -1,12 +1,124 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { Suspense, useEffect, useState, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 
 const MONTHLY_CHECKOUT_URL =
   "https://yaver.lemonsqueezy.com/checkout/buy/MONTHLY_PRODUCT_ID";
 const YEARLY_CHECKOUT_URL =
   "https://yaver.lemonsqueezy.com/checkout/buy/YEARLY_PRODUCT_ID";
+
+const CONVEX_SITE_URL = process.env.NEXT_PUBLIC_CONVEX_SITE_URL || "https://shocking-echidna-394.eu-west-1.convex.site";
+
+const PROVISIONING_STEPS = [
+  { label: "Creating your dedicated server...", key: "creating" },
+  { label: "Setting up DNS (yourname.relay.yaver.io)...", key: "dns" },
+  { label: "Installing SSL certificate...", key: "ssl" },
+  { label: "Deploying relay service...", key: "deploying" },
+  { label: "Running health checks...", key: "health" },
+  { label: "Your relay is ready!", key: "ready" },
+];
+
+type ProvisioningStatus = "pending" | "creating" | "dns" | "ssl" | "deploying" | "health" | "ready" | "error";
+
+function ProvisioningProgress() {
+  const [status, setStatus] = useState<ProvisioningStatus>("creating");
+  const [relayUrl, setRelayUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const pollStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${CONVEX_SITE_URL}/subscription`, {
+        credentials: "include",
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.provisioningStatus) {
+        setStatus(data.provisioningStatus as ProvisioningStatus);
+      }
+      if (data.relayUrl) {
+        setRelayUrl(data.relayUrl);
+      }
+      if (data.provisioningStatus === "error") {
+        setError(data.error || "Provisioning failed. Please contact support.");
+      }
+    } catch {
+      // Silently retry on next poll
+    }
+  }, []);
+
+  useEffect(() => {
+    pollStatus();
+    const interval = setInterval(pollStatus, 3000);
+    return () => clearInterval(interval);
+  }, [pollStatus]);
+
+  const currentStepIndex = PROVISIONING_STEPS.findIndex((s) => s.key === status);
+
+  return (
+    <div className="mx-auto max-w-lg rounded-2xl border border-[#6366f1]/40 bg-[#1a1d27] p-8">
+      <h2 className="mb-6 text-center text-xl font-bold text-surface-50">
+        {status === "ready" ? "Your relay is live!" : "Setting up your relay..."}
+      </h2>
+
+      {error ? (
+        <div className="rounded-lg bg-red-500/10 p-4 text-center text-sm text-red-400">
+          {error}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {PROVISIONING_STEPS.map((step, i) => {
+            const isComplete = i < currentStepIndex || status === "ready";
+            const isCurrent = i === currentStepIndex && status !== "ready";
+            const isPending = i > currentStepIndex && status !== "ready";
+
+            return (
+              <div key={step.key} className="flex items-center gap-3">
+                <div className="flex h-6 w-6 shrink-0 items-center justify-center">
+                  {isComplete ? (
+                    <svg className="h-5 w-5 text-[#22c55e]" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                    </svg>
+                  ) : isCurrent ? (
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-[#6366f1] border-t-transparent" />
+                  ) : (
+                    <div className="h-3 w-3 rounded-full bg-surface-700" />
+                  )}
+                </div>
+                <span
+                  className={`text-sm ${
+                    isComplete
+                      ? "text-surface-300"
+                      : isCurrent
+                        ? "font-medium text-surface-100"
+                        : "text-surface-600"
+                  }`}
+                >
+                  {step.key === "ready" && status === "ready" ? (
+                    <span className="text-[#22c55e]">{step.label}</span>
+                  ) : (
+                    step.label
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {relayUrl && status === "ready" && (
+        <div className="mt-6 rounded-lg bg-[#0f1117] p-4 text-center">
+          <p className="mb-1 text-xs text-surface-500">Your relay URL</p>
+          <p className="font-mono text-sm font-medium text-[#6366f1]">{relayUrl}</p>
+          <p className="mt-3 text-xs text-surface-500">
+            This relay is now configured in your devices automatically.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function FAQItem({ question, answer }: { question: string; answer: string }) {
   const [open, setOpen] = useState(false);
@@ -26,8 +138,28 @@ function FAQItem({ question, answer }: { question: string; answer: string }) {
   );
 }
 
-export default function PricingPage() {
+function PricingContent() {
   const [billing, setBilling] = useState<"monthly" | "yearly">("monthly");
+  const searchParams = useSearchParams();
+  const showProvisioning = searchParams.get("success") === "true";
+
+  if (showProvisioning) {
+    return (
+      <div className="px-6 py-20">
+        <div className="mx-auto max-w-4xl">
+          <ProvisioningProgress />
+          <div className="mt-8 text-center">
+            <Link
+              href="/pricing"
+              className="text-xs text-surface-500 hover:text-surface-50"
+            >
+              Back to pricing
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="px-6 py-20">
@@ -35,10 +167,11 @@ export default function PricingPage() {
         {/* Header */}
         <div className="mb-16 text-center">
           <h1 className="mb-4 text-3xl font-bold text-surface-50 md:text-4xl">
-            Simple, transparent pricing
+            Free and open-source. Always.
           </h1>
-          <p className="text-sm text-surface-500">
-            Yaver is free and open-source. Pay only if you want a managed relay server.
+          <p className="mx-auto max-w-xl text-sm leading-relaxed text-surface-500">
+            Yaver is a P2P tool — your code stays on your machines, encrypted end-to-end.
+            Every user gets a free relay server included. Self-host everything or use our infrastructure — your choice.
           </p>
         </div>
 
@@ -71,24 +204,29 @@ export default function PricingPage() {
 
         {/* Pricing cards */}
         <div className="grid gap-6 md:grid-cols-2">
-          {/* Free tier */}
-          <div className="rounded-2xl border border-surface-800 bg-[#1a1d27] p-8">
+          {/* Free — everyone gets this */}
+          <div className="relative rounded-2xl border border-[#22c55e]/40 bg-[#1a1d27] p-8">
+            <div className="absolute -top-3 left-6">
+              <span className="rounded-full bg-[#22c55e] px-3 py-1 text-[11px] font-semibold text-white">
+                Included for everyone
+              </span>
+            </div>
             <div className="mb-6">
-              <h2 className="text-lg font-semibold text-surface-100">Free</h2>
-              <p className="mt-1 text-xs text-surface-500">Current plan</p>
+              <h2 className="text-lg font-semibold text-surface-100">Free Relay</h2>
+              <p className="mt-1 text-xs text-surface-500">public.yaver.io — ready to use</p>
             </div>
             <div className="mb-6">
               <span className="text-4xl font-bold text-surface-50">$0</span>
-              <span className="ml-1 text-sm text-surface-500">/month</span>
+              <span className="ml-1 text-sm text-surface-500">forever</span>
             </div>
             <ul className="mb-8 space-y-3">
               {[
-                "Shared relay server",
-                "500MB/day bandwidth (relaxed when idle)",
-                "All features included",
-                "Self-host your own relay",
+                "P2P encrypted connections — your code never leaves your machines",
+                "Free shared relay (public.yaver.io)",
+                "Bandwidth adapts dynamically — relaxed when server is idle",
+                "All features included — no paywall, no limits on functionality",
                 "Unlimited devices",
-                "P2P encrypted connections",
+                "Self-host your own relay anytime (Docker, any VPS)",
               ].map((feature) => (
                 <li key={feature} className="flex items-start gap-2.5 text-sm text-surface-300">
                   <span className="mt-0.5 text-[#22c55e]">
@@ -100,24 +238,19 @@ export default function PricingPage() {
                 </li>
               ))}
             </ul>
-            <button
-              disabled
-              className="w-full rounded-lg border border-surface-700 bg-surface-800/50 px-4 py-2.5 text-sm font-medium text-surface-500 cursor-not-allowed"
-            >
-              Already included
-            </button>
+            <div className="rounded-lg border border-surface-800 bg-[#0f1117] p-4 text-xs text-surface-500 leading-relaxed">
+              <strong className="text-surface-300">Is the free relay secure?</strong> Yes — the relay is a pass-through proxy.
+              It never stores, reads, or logs your data. All connections are encrypted via QUIC (TLS 1.3).
+              The relay only sees encrypted bytes passing through. Your auth tokens, code, and task data are
+              end-to-end encrypted between your devices.
+            </div>
           </div>
 
-          {/* Managed Relay tier */}
-          <div className="relative rounded-2xl border border-[#6366f1]/40 bg-[#1a1d27] p-8">
-            <div className="absolute -top-3 left-6">
-              <span className="rounded-full bg-[#6366f1] px-3 py-1 text-[11px] font-semibold text-white">
-                Recommended
-              </span>
-            </div>
+          {/* Dedicated relay — optional utility */}
+          <div className="rounded-2xl border border-surface-800 bg-[#1a1d27] p-8">
             <div className="mb-6">
-              <h2 className="text-lg font-semibold text-surface-100">Managed Relay</h2>
-              <p className="mt-1 text-xs text-surface-500">Dedicated infrastructure</p>
+              <h2 className="text-lg font-semibold text-surface-100">Dedicated Relay</h2>
+              <p className="mt-1 text-xs text-surface-500">Optional — your own server, if you want one</p>
             </div>
             <div className="mb-6">
               <span className="text-4xl font-bold text-surface-50">
@@ -129,15 +262,15 @@ export default function PricingPage() {
             </div>
             <ul className="mb-8 space-y-3">
               {[
-                "Dedicated server (Hetzner Cloud)",
-                "20TB/month bandwidth",
+                "Your own dedicated server (Hetzner Cloud ARM)",
+                "No bandwidth limits",
                 "Auto-provisioned in ~90 seconds",
                 "Your own subdomain (*.relay.yaver.io)",
-                "Auto-TLS (Let's Encrypt)",
-                "24/7 uptime monitoring",
+                "HTTPS with auto-renewing certificates",
+                "Auto-updates — always the latest relay version",
               ].map((feature) => (
                 <li key={feature} className="flex items-start gap-2.5 text-sm text-surface-300">
-                  <span className="mt-0.5 text-[#6366f1]">
+                  <span className="mt-0.5 text-surface-500">
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                     </svg>
@@ -150,10 +283,14 @@ export default function PricingPage() {
               href={billing === "monthly" ? MONTHLY_CHECKOUT_URL : YEARLY_CHECKOUT_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="block w-full rounded-lg bg-[#6366f1] px-4 py-2.5 text-center text-sm font-medium text-white transition-colors hover:bg-[#5558e6]"
+              className="block w-full rounded-lg border border-surface-700 bg-surface-800/50 px-4 py-2.5 text-center text-sm font-medium text-surface-300 transition-colors hover:bg-surface-800 hover:text-surface-100"
             >
-              Get Managed Relay
+              Get a dedicated relay
             </a>
+            <p className="mt-3 text-center text-[11px] text-surface-600">
+              Or self-host your own — same software, zero cost.
+              This just saves you the setup.
+            </p>
           </div>
         </div>
 
@@ -223,7 +360,13 @@ curl http://localhost:8080/health`}</code>
           </div>
         </section>
 
-        <div className="mt-12 text-center">
+        {/* Infrastructure note */}
+        <p className="mt-12 text-center text-xs leading-relaxed text-surface-600">
+          This is an infrastructure hosting service. Your relay server runs on dedicated
+          hardware provisioned specifically for your account.
+        </p>
+
+        <div className="mt-6 text-center">
           <Link
             href="/"
             className="text-xs text-surface-500 hover:text-surface-50"
@@ -233,5 +376,13 @@ curl http://localhost:8080/health`}</code>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function PricingPage() {
+  return (
+    <Suspense fallback={<div className="flex h-96 items-center justify-center"><div className="text-surface-500">Loading...</div></div>}>
+      <PricingContent />
+    </Suspense>
   );
 }

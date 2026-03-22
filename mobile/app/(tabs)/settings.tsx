@@ -1748,6 +1748,24 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* About Relay Servers */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>About Relay Servers</Text>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, padding: 16 }]}>
+            <Text style={{ fontSize: 13, color: c.textSecondary, lineHeight: 19 }}>
+              Yaver includes a free shared relay. For a dedicated relay server with more bandwidth, visit yaver.io/pricing from your computer.
+            </Text>
+            <Pressable
+              style={({ pressed }) => [{ marginTop: 12, opacity: pressed ? 0.7 : 1 }]}
+              onPress={() => Linking.openURL("https://yaver.io/pricing").catch(() => {})}
+            >
+              <Text style={{ fontSize: 13, color: c.accent }}>
+                Learn more {"\u203A"}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+
         {/* About */}
         <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: c.textMuted }]}>About</Text>
