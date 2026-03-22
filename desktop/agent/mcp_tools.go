@@ -1036,6 +1036,43 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, infraTools...)
 
+	// --- App Development (iOS/Android) ---
+	appDevTools := []map[string]interface{}{
+		// App Store Connect
+		{"name": "appstore_status", "description": "Check App Store Connect app status (review state, builds). Requires APP_STORE_API_KEY_ID and APP_STORE_API_ISSUER env vars.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"bundle_id": map[string]interface{}{"type": "string", "description": "Bundle ID (e.g. io.yaver.mobile)"}}}},
+		{"name": "testflight_builds", "description": "List TestFlight builds for an app.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"bundle_id"}, "properties": map[string]interface{}{"bundle_id": map[string]interface{}{"type": "string"}}}},
+		{"name": "xcode_build", "description": "Build an Xcode project.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "scheme": map[string]interface{}{"type": "string"}, "destination": map[string]interface{}{"type": "string", "description": "Build destination (default: generic/platform=iOS)"}}}},
+		{"name": "xcode_test", "description": "Run Xcode tests.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"scheme"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "scheme": map[string]interface{}{"type": "string"}, "destination": map[string]interface{}{"type": "string", "description": "Simulator destination"}}}},
+		{"name": "simulators", "description": "List iOS simulators.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "simulator_boot", "description": "Boot an iOS simulator.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"device"}, "properties": map[string]interface{}{"device": map[string]interface{}{"type": "string", "description": "Device name or UUID"}}}},
+		{"name": "simulator_screenshot", "description": "Take a screenshot from iOS simulator.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device": map[string]interface{}{"type": "string", "description": "Device ID (default: booted)"}}}},
+		// Google Play
+		{"name": "playstore_status", "description": "Check Google Play Console status for an app.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string", "description": "Package name (e.g. io.yaver.mobile)"}}}},
+		{"name": "playstore_track", "description": "Check Play Store track status (production, beta, alpha).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}, "track": map[string]interface{}{"type": "string", "description": "Track: production, beta, alpha, internal (default: production)"}}}},
+		{"name": "gradle_build", "description": "Run a Gradle build task.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "task": map[string]interface{}{"type": "string", "description": "Gradle task (default: assembleDebug)"}}}},
+		{"name": "gradle_test", "description": "Run Android unit tests.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "android_lint", "description": "Run Android lint checks.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "emulators", "description": "List Android emulators (AVDs).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Firebase
+		{"name": "firebase_projects", "description": "List Firebase projects.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "firebase_deploy", "description": "Deploy to Firebase (hosting, functions, etc.).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "only": map[string]interface{}{"type": "string", "description": "Deploy only: hosting, functions, firestore, etc."}}}},
+		{"name": "firebase_crashlytics", "description": "Get Crashlytics issues for a Firebase project.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"project_id"}, "properties": map[string]interface{}{"project_id": map[string]interface{}{"type": "string"}}}},
+		// React Native / Expo
+		{"name": "expo_status", "description": "Show Expo project config.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "eas_build", "description": "Start an EAS Build (Expo).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "platform": map[string]interface{}{"type": "string", "description": "ios or android"}}}},
+		{"name": "eas_submit", "description": "Submit to App Store / Play Store via EAS.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "platform": map[string]interface{}{"type": "string"}}}},
+		// Flutter
+		{"name": "flutter_doctor", "description": "Run flutter doctor to check environment.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "flutter_build", "description": "Build a Flutter app.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "platform": map[string]interface{}{"type": "string", "description": "apk, appbundle, ios, web, macos, linux, windows"}}}},
+		{"name": "flutter_test", "description": "Run Flutter tests.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// CocoaPods
+		{"name": "pod_install", "description": "Run pod install.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "pod_outdated", "description": "Check for outdated CocoaPods dependencies.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Review guidelines
+		{"name": "app_review_check", "description": "Get App Store / Play Store review guidelines, common rejection reasons, and pre-submission checklist.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"platform": map[string]interface{}{"type": "string", "description": "ios or android (both if empty)"}}}},
+	}
+	tools = append(tools, appDevTools...)
+
 	return map[string]interface{}{
 		"tools": tools,
 	}

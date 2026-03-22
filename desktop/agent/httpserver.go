@@ -4073,6 +4073,112 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		json.Unmarshal(call.Arguments, &a)
 		return mcpToolJSON(mcpRaycastTrigger(a.Command))
 
+	// --- App Store / iOS ---
+	case "appstore_status":
+		var a struct { BundleID string `json:"bundle_id"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpAppStoreStatus(a.BundleID))
+	case "testflight_builds":
+		var a struct { BundleID string `json:"bundle_id"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpAppStoreTestFlight(a.BundleID))
+	case "xcode_build":
+		var a struct { Dir string `json:"directory"`; Scheme string `json:"scheme"`; Dest string `json:"destination"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpXcodeBuild(a.Dir, a.Scheme, a.Dest))
+	case "xcode_test":
+		var a struct { Dir string `json:"directory"`; Scheme string `json:"scheme"`; Dest string `json:"destination"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpXcodeTest(a.Dir, a.Scheme, a.Dest))
+	case "simulators":
+		return mcpToolJSON(mcpSimulators())
+	case "simulator_boot":
+		var a struct { Device string `json:"device"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpSimulatorBoot(a.Device))
+	case "simulator_screenshot":
+		var a struct { Device string `json:"device"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpSimulatorScreenshot(a.Device))
+
+	// --- Google Play / Android ---
+	case "playstore_status":
+		var a struct { Package string `json:"package"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpPlayStoreStatus(a.Package))
+	case "playstore_track":
+		var a struct { Package string `json:"package"`; Track string `json:"track"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpPlayStoreTrack(a.Package, a.Track))
+	case "gradle_build":
+		var a struct { Dir string `json:"directory"`; Task string `json:"task"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpGradleBuild(a.Dir, a.Task))
+	case "gradle_test":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpGradleTest(a.Dir))
+	case "android_lint":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpAndroidLint(a.Dir))
+	case "emulators":
+		return mcpToolJSON(mcpEmulators())
+
+	// --- Firebase ---
+	case "firebase_projects":
+		return mcpToolJSON(mcpFirebaseProjects())
+	case "firebase_deploy":
+		var a struct { Dir string `json:"directory"`; Only string `json:"only"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpFirebaseDeploy(a.Dir, a.Only))
+	case "firebase_crashlytics":
+		var a struct { ProjectID string `json:"project_id"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpFirebaseCrashlytics(a.ProjectID))
+
+	// --- React Native / Expo ---
+	case "expo_status":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpExpoStatus(a.Dir))
+	case "eas_build":
+		var a struct { Dir string `json:"directory"`; Platform string `json:"platform"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpExpoBuild(a.Dir, a.Platform))
+	case "eas_submit":
+		var a struct { Dir string `json:"directory"`; Platform string `json:"platform"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpEASSubmit(a.Dir, a.Platform))
+
+	// --- Flutter ---
+	case "flutter_doctor":
+		return mcpToolJSON(mcpFlutterDoctor())
+	case "flutter_build":
+		var a struct { Dir string `json:"directory"`; Platform string `json:"platform"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpFlutterBuild(a.Dir, a.Platform))
+	case "flutter_test":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpFlutterTest(a.Dir))
+
+	// --- CocoaPods ---
+	case "pod_install":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpPodInstall(a.Dir))
+	case "pod_outdated":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpPodOutdated(a.Dir))
+
+	// --- App Review ---
+	case "app_review_check":
+		var a struct { Platform string `json:"platform"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpAppReviewCheck(a.Platform))
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}

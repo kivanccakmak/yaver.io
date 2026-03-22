@@ -420,7 +420,7 @@ export default function HomePage() {
               <h3 className="mb-2 text-sm font-semibold text-surface-50">CLI Agent</h3>
               <p className="text-xs text-surface-500">Go</p>
               <p className="mt-2 text-sm leading-relaxed text-surface-400">
-                Runs on your dev machine. Manages AI sessions in tmux. Discovers and adopts existing tmux sessions so you can control them from mobile. 221 MCP tools. All connections outbound.
+                Runs on your dev machine. Manages AI sessions in tmux. Discovers and adopts existing tmux sessions so you can control them from mobile. 246 MCP tools. All connections outbound.
               </p>
             </div>
 
@@ -841,7 +841,7 @@ export default function HomePage() {
             <div className="card">
               <h3 className="mb-2 text-sm font-semibold text-surface-100">MCP Integration</h3>
               <p className="text-sm leading-relaxed text-surface-400">
-                221 MCP tools &mdash; tasks, files, tmux sessions, relay/tunnel management, email, diagnostics, and agent-to-agent communication. Connect from Claude Desktop, any MCP client, or other AI agents.
+                246 MCP tools &mdash; tasks, files, tmux sessions, relay/tunnel management, email, diagnostics, and agent-to-agent communication. Connect from Claude Desktop, any MCP client, or other AI agents.
               </p>
             </div>
             <div className="card">

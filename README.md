@@ -13,7 +13,7 @@
 - **Session Transfer** — Move AI sessions between machines. Start on your laptop, continue on your server.
 - **Task Scheduling** — Cron-like scheduling for AI tasks. Run code reviews every morning.
 - **Notifications** — Telegram, Discord, Slack alerts when tasks complete.
-- **MCP Tools** — 221 tools: file search, git ops, exec, screenshots, session transfer — usable from Claude Desktop, Cursor, VS Code, Windsurf, Zed.
+- **MCP Tools** — 246 tools: file search, git ops, exec, screenshots, session transfer — usable from Claude Desktop, Cursor, VS Code, Windsurf, Zed.
 - **CI/CD Webhooks** — Trigger AI tasks from GitHub Actions, GitLab CI, or any webhook.
 - **Free Relay** — Every user gets a free relay server (public.yaver.io). Self-host your own anytime.
 - **SDKs** — Go, Python, JS/TS, Flutter/Dart, C — embed Yaver in your own apps.
@@ -87,7 +87,7 @@ Download the desktop app with full GUI from the [download page](https://yaver.io
 
 ## MCP Integration
 
-Yaver implements the Model Context Protocol (MCP) with 221 tools. Connect from Claude Desktop, Cursor, VS Code, Windsurf, Zed, or any MCP-compatible client.
+Yaver implements the Model Context Protocol (MCP) with 246 tools. Connect from Claude Desktop, Cursor, VS Code, Windsurf, Zed, or any MCP-compatible client.
 
 ### One-Command Setup
 

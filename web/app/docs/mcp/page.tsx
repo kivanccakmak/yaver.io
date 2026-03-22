@@ -394,7 +394,7 @@ export default function McpPage() {
             Available Tools (111)
           </SectionHeading>
           <Prose>
-            Yaver exposes 221 tools through MCP, organized by category. AI
+            Yaver exposes 246 tools through MCP, organized by category. AI
             agents can discover and use these tools automatically. This means
             Claude Code, Aider, Codex, or any MCP-compatible agent can manage
             tasks, adopt tmux sessions, configure relay servers, and more &mdash;
