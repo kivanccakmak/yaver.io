@@ -1347,12 +1347,29 @@
       <!-- Page 5: Relay Server -->
       <div class="survey-page" id="survey-page-5">
         <div class="survey-page-title">Relay server</div>
-        <div class="survey-page-subtitle">Optional -- for connecting outside your home Wi-Fi</div>
-        <input type="text" class="survey-input" id="survey-relay-url" placeholder="URL, e.g. https://relay.example.com" style="margin-top:16px;">
-        <input type="password" class="survey-input" id="survey-relay-password" placeholder="Password (optional)">
-        <input type="text" class="survey-input" id="survey-relay-label" placeholder="Label, e.g. home, office (optional)">
-        <div style="font-size:11px; color:var(--text-dim); margin-top:-8px; padding:0 4px;">
-          Skip if you're always on the same Wi-Fi or use Tailscale.
+        <div class="survey-page-subtitle">For connecting outside your home Wi-Fi</div>
+
+        <!-- Free relay included -->
+        <div id="survey-free-relay-box" style="padding:14px; border-radius:12px; border:1px solid var(--accent); background:rgba(99,102,241,0.08); margin:8px 0 16px 0;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+            <span style="font-size:15px; font-weight:600; color:var(--text);">Free relay server included</span>
+            <span id="survey-free-relay-badge" style="font-size:11px; font-weight:600; color:var(--accent);">ACTIVE</span>
+          </div>
+          <div style="font-size:13px; color:var(--text-dim);">public.yaver.io (EU) — no setup needed</div>
+        </div>
+
+        <!-- Opt-out toggle -->
+        <div id="survey-relay-optout" class="survey-option" style="margin-bottom:16px; cursor:pointer;" onclick="toggleRelayOptOut()">
+          <div style="font-size:14px; font-weight:500;">I don't need a relay (LAN/Tailscale only)</div>
+          <div style="font-size:11px; color:var(--text-dim); margin-top:2px;">Skip if you're always on the same Wi-Fi or use Tailscale</div>
+        </div>
+
+        <!-- Custom relay fields -->
+        <div id="survey-custom-relay-section">
+          <div style="font-size:11px; font-weight:600; letter-spacing:1px; color:var(--text-dim); margin-bottom:8px;">ADD CUSTOM RELAY INSTEAD</div>
+          <input type="text" class="survey-input" id="survey-relay-url" placeholder="URL, e.g. https://relay.example.com">
+          <input type="password" class="survey-input" id="survey-relay-password" placeholder="Password (optional)">
+          <input type="text" class="survey-input" id="survey-relay-label" placeholder="Label, e.g. home, office (optional)">
         </div>
       </div>
 

@@ -240,6 +240,7 @@ func runAuth(args []string) {
 			log.Fatalf("save config: %v", err)
 		}
 		fmt.Println("Signed in successfully.")
+		fmt.Println("  Free relay: public.yaver.io (included, no setup needed)")
 		fmt.Println()
 		fmt.Println("Run 'yaver serve' to start the agent.")
 		return
@@ -272,6 +273,7 @@ func runAuth(args []string) {
 			log.Fatalf("save config: %v", err)
 		}
 		fmt.Println("Signed in successfully.")
+		fmt.Println("  Free relay: public.yaver.io (included, no setup needed)")
 		fmt.Println()
 		fmt.Println("Run 'yaver serve' to start the agent.")
 		return
@@ -363,6 +365,7 @@ func runAuth(args []string) {
 		}
 		fmt.Println()
 		fmt.Println("Signed in successfully.")
+		fmt.Println("  Free relay: public.yaver.io (included, no setup needed)")
 		fmt.Println()
 		fmt.Println("Run 'yaver serve' to start the agent.")
 

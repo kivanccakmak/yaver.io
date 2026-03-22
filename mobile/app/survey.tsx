@@ -79,6 +79,7 @@ export default function SurveyScreen() {
   const [relayUrl, setRelayUrl] = useState("");
   const [relayPassword, setRelayPassword] = useState("");
   const [relayLabel, setRelayLabel] = useState("");
+  const [relayOptOut, setRelayOptOut] = useState(false);
 
   useEffect(() => {
     getAiRunners().then((r) => {
@@ -139,8 +140,8 @@ export default function SurveyScreen() {
         }
       }
       await saveUserSettings(token, settings);
-      // Save relay server if configured
-      if (relayUrl.trim()) {
+      // Save relay server if configured (skip if user opted out of relay)
+      if (!relayOptOut && relayUrl.trim()) {
         const url = relayUrl.trim().replace(/\/+$/, "");
         const host = url.replace(/^https?:\/\//, "").replace(/:\d+$/, "").replace(/\/.*$/, "");
         const relay = {
@@ -519,44 +520,91 @@ export default function SurveyScreen() {
         Relay server
       </Text>
       <Text style={[styles.pageSubtitle, { color: c.textSecondary }]}>
-        Optional — for connecting outside your home Wi-Fi
+        For connecting outside your home Wi-Fi
       </Text>
 
-      <TextInput
-        style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary, marginTop: 16 }]}
-        placeholder="URL, e.g. https://relay.example.com"
-        placeholderTextColor={c.textMuted}
-        value={relayUrl}
-        onChangeText={setRelayUrl}
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-      />
+      {/* Free relay included */}
+      <View style={{
+        padding: 14, borderRadius: 12, borderWidth: 1,
+        backgroundColor: relayOptOut ? c.bgCard : c.accent + "18",
+        borderColor: relayOptOut ? c.border : c.accent,
+        marginBottom: 16, marginTop: 8,
+      }}>
+        <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}>
+          <Text style={{ fontSize: 15, fontWeight: "600", color: relayOptOut ? c.textMuted : c.textPrimary, flex: 1 }}>
+            Free relay server included
+          </Text>
+          <Text style={{ fontSize: 11, fontWeight: "600", color: relayOptOut ? c.textMuted : c.accent }}>
+            {relayOptOut ? "DISABLED" : "ACTIVE"}
+          </Text>
+        </View>
+        <Text style={{ fontSize: 13, color: relayOptOut ? c.textMuted : c.textSecondary }}>
+          public.yaver.io (EU) — no setup needed
+        </Text>
+      </View>
 
-      <TextInput
-        style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
-        placeholder="Password (optional)"
-        placeholderTextColor={c.textMuted}
-        value={relayPassword}
-        onChangeText={setRelayPassword}
-        autoCapitalize="none"
-        autoCorrect={false}
-        secureTextEntry
-      />
+      {/* Opt-out toggle */}
+      <Pressable
+        style={[styles.optionButton, {
+          backgroundColor: relayOptOut ? c.accent : c.bgCard,
+          borderColor: relayOptOut ? c.accent : c.border,
+          marginBottom: 20,
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }]}
+        onPress={() => setRelayOptOut(!relayOptOut)}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.optionText, { color: relayOptOut ? "#fff" : c.textPrimary }]}>
+            I don't need a relay (LAN/Tailscale only)
+          </Text>
+          <Text style={[{ fontSize: 11, color: relayOptOut ? "rgba(255,255,255,0.7)" : c.textMuted, marginTop: 2 }]}>
+            Skip if you're always on the same Wi-Fi or use Tailscale
+          </Text>
+        </View>
+      </Pressable>
 
-      <TextInput
-        style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
-        placeholder="Label, e.g. home, office (optional)"
-        placeholderTextColor={c.textMuted}
-        value={relayLabel}
-        onChangeText={setRelayLabel}
-        autoCapitalize="none"
-        autoCorrect={false}
-      />
+      {/* Custom relay option */}
+      {!relayOptOut && (
+        <>
+          <Text style={[styles.sectionLabel, { color: c.textSecondary }]}>
+            ADD CUSTOM RELAY INSTEAD
+          </Text>
 
-      <Text style={[{ fontSize: 11, color: c.textMuted, marginTop: -8, paddingHorizontal: 4 }]}>
-        Skip if you're always on the same Wi-Fi or use Tailscale.
-      </Text>
+          <TextInput
+            style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+            placeholder="URL, e.g. https://relay.example.com"
+            placeholderTextColor={c.textMuted}
+            value={relayUrl}
+            onChangeText={setRelayUrl}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+
+          <TextInput
+            style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+            placeholder="Password (optional)"
+            placeholderTextColor={c.textMuted}
+            value={relayPassword}
+            onChangeText={setRelayPassword}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+          />
+
+          <TextInput
+            style={[styles.nameInput, { backgroundColor: c.bgCard, borderColor: c.border, color: c.textPrimary }]}
+            placeholder="Label, e.g. home, office (optional)"
+            placeholderTextColor={c.textMuted}
+            value={relayLabel}
+            onChangeText={setRelayLabel}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </>
+      )}
     </ScrollView>
   );
 

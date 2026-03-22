@@ -26,6 +26,7 @@ let surveyData = {
   relayUrl: '',
   relayPassword: '',
   relayLabel: '',
+  relayOptOut: false,
   languages: [],
   experience: null,
   useCase: null,
@@ -637,6 +638,35 @@ function removeRelay(idx) {
   if (!cachedConfig.relay_servers) return;
   cachedConfig.relay_servers.splice(idx, 1);
   renderRelayList();
+}
+
+// ---- Survey relay opt-out toggle ----
+
+function toggleRelayOptOut() {
+  surveyData.relayOptOut = !surveyData.relayOptOut;
+  const optOutBtn = document.getElementById('survey-relay-optout');
+  const freeRelayBox = document.getElementById('survey-free-relay-box');
+  const badge = document.getElementById('survey-free-relay-badge');
+  const customSection = document.getElementById('survey-custom-relay-section');
+  if (surveyData.relayOptOut) {
+    optOutBtn.style.background = 'var(--accent)';
+    optOutBtn.style.borderColor = 'var(--accent)';
+    optOutBtn.style.color = '#fff';
+    freeRelayBox.style.borderColor = 'var(--border)';
+    freeRelayBox.style.background = 'var(--bg)';
+    badge.textContent = 'DISABLED';
+    badge.style.color = 'var(--text-dim)';
+    customSection.style.display = 'none';
+  } else {
+    optOutBtn.style.background = '';
+    optOutBtn.style.borderColor = '';
+    optOutBtn.style.color = '';
+    freeRelayBox.style.borderColor = 'var(--accent)';
+    freeRelayBox.style.background = 'rgba(99,102,241,0.08)';
+    badge.textContent = 'ACTIVE';
+    badge.style.color = 'var(--accent)';
+    customSection.style.display = '';
+  }
 }
 
 // ---- Cloudflare tunnels ----
@@ -1373,8 +1403,8 @@ async function finishSurvey() {
     surveyData.relayPassword = document.getElementById('survey-relay-password').value || '';
     surveyData.relayLabel = document.getElementById('survey-relay-label').value || '';
 
-    // Save relay server if configured
-    if (surveyData.relayUrl.trim()) {
+    // Save relay server if configured (skip if user opted out of relay)
+    if (!surveyData.relayOptOut && surveyData.relayUrl.trim()) {
       const url = surveyData.relayUrl.trim().replace(/\/+$/, '');
       const host = url.replace(/^https?:\/\//, '').replace(/:\d+$/, '').replace(/\/.*$/, '');
       const relay = {
