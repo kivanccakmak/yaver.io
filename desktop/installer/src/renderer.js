@@ -11,6 +11,58 @@ let pendingImages = []; // for create-task modal
 let cachedConfig = {};
 
 // ---------------------------------------------------------------------------
+// Survey state
+// ---------------------------------------------------------------------------
+
+let surveyPage = 0;
+let surveyData = {
+  fullName: '',
+  identity: null,
+  selectedRunner: 'claude',
+  customCommand: '',
+  speechProvider: 'on-device',
+  speechApiKey: '',
+  verbosity: 10,
+  relayUrl: '',
+  relayPassword: '',
+  relayLabel: '',
+  languages: [],
+  experience: null,
+  useCase: null,
+  companySize: null,
+};
+let surveyRunners = [];
+let surveyIsSubmitting = false;
+
+const SURVEY_IDENTITIES = [
+  { id: 'developer', label: 'Developer' },
+  { id: 'business', label: 'Business Owner' },
+  { id: 'student', label: 'Student / Academic' },
+  { id: 'other', label: 'Other' },
+];
+
+const SURVEY_LANGUAGES = [
+  'JavaScript/TypeScript', 'Python', 'Go', 'Rust', 'Java',
+  'C/C++', 'Ruby', 'PHP', 'Swift', 'Kotlin', 'C#', 'Other',
+];
+
+const SURVEY_EXPERIENCE_LEVELS = ['Junior', 'Mid-Level', 'Senior', 'Staff/Lead'];
+
+const SURVEY_USE_CASES = [
+  'Work / Business', 'Hobby Projects', 'Academic / Research',
+  'Open Source', 'Freelance / Consulting', 'Other',
+];
+
+const SURVEY_COMPANY_SIZES = ['Solo', '2-10', '11-50', '51-200', '201-1000', '1000+'];
+
+const SURVEY_SPEECH_PROVIDERS = [
+  { id: 'on-device', name: 'On-Device (Free)', description: 'Runs locally using Whisper. No API key needed.', requiresKey: false },
+  { id: 'openai', name: 'OpenAI', description: 'GPT-4o Mini Transcribe. Fast, accurate. $0.003/min.', requiresKey: true, keyPlaceholder: 'sk-...', keyHint: 'Get your key at platform.openai.com/api-keys' },
+  { id: 'deepgram', name: 'Deepgram', description: 'Nova-2. Real-time capable, top accuracy. $0.0043/min.', requiresKey: true, keyPlaceholder: 'Your Deepgram API key', keyHint: 'Get your key at console.deepgram.com' },
+  { id: 'assemblyai', name: 'AssemblyAI', description: 'Universal-2. Cheapest async option. $0.002/min.', requiresKey: true, keyPlaceholder: 'Your AssemblyAI API key', keyHint: 'Get your key at assemblyai.com/dashboard' },
+];
+
+// ---------------------------------------------------------------------------
 // View management (auth flow views)
 // ---------------------------------------------------------------------------
 
@@ -77,6 +129,14 @@ async function init() {
   if (!state.agentInstalled) {
     showView('view-setup-prereqs');
     runPrerequisites();
+    return;
+  }
+
+  // Check if survey is needed
+  const userInfo = await window.yaver.getUserInfo();
+  if (userInfo && userInfo.signedIn && userInfo.user && !userInfo.user.surveyCompleted) {
+    if (userInfo.user.name) surveyData.fullName = userInfo.user.name;
+    showSurvey();
     return;
   }
 
@@ -656,19 +716,34 @@ async function cleanAgent(days) {
 // Sign in
 // ---------------------------------------------------------------------------
 
+async function handlePostAuth() {
+  const state = await window.yaver.getAppState();
+  if (!state.agentInstalled) {
+    showView('view-setup-prereqs');
+    runPrerequisites();
+    return;
+  }
+
+  // Check if survey needed
+  const userInfo = await window.yaver.getUserInfo();
+  if (userInfo && userInfo.signedIn && userInfo.user && !userInfo.user.surveyCompleted) {
+    if (userInfo.user.name) surveyData.fullName = userInfo.user.name;
+    showSurvey();
+    return;
+  }
+
+  showMainApp();
+  loadConfig();
+  loadSettingsUI();
+  updateDashboard();
+}
+
 async function signInGoogle() {
   disableAuthButtons();
   clearSigninError();
   const result = await window.yaver.authenticate();
   if (result.success) {
-    const state = await window.yaver.getAppState();
-    if (!state.agentInstalled) {
-      showView('view-setup-prereqs');
-      runPrerequisites();
-    } else {
-      showMainApp();
-      updateDashboard();
-    }
+    await handlePostAuth();
   } else {
     enableAuthButtons();
     showSigninError(result.error || 'Authentication failed. Please try again.');
@@ -680,14 +755,7 @@ async function signInMicrosoft() {
   clearSigninError();
   const result = await window.yaver.authenticateMicrosoft();
   if (result.success) {
-    const state = await window.yaver.getAppState();
-    if (!state.agentInstalled) {
-      showView('view-setup-prereqs');
-      runPrerequisites();
-    } else {
-      showMainApp();
-      updateDashboard();
-    }
+    await handlePostAuth();
   } else {
     enableAuthButtons();
     showSigninError(result.error || 'Authentication failed. Please try again.');
@@ -699,14 +767,7 @@ async function signInApple() {
   clearSigninError();
   const result = await window.yaver.authenticateApple();
   if (result.success) {
-    const state = await window.yaver.getAppState();
-    if (!state.agentInstalled) {
-      showView('view-setup-prereqs');
-      runPrerequisites();
-    } else {
-      showMainApp();
-      updateDashboard();
-    }
+    await handlePostAuth();
   } else {
     enableAuthButtons();
     showSigninError(result.error || 'Authentication failed. Please try again.');
@@ -831,7 +892,16 @@ async function startInstall() {
 }
 
 async function finishSetup() {
+  // Check if survey needed after install
+  const userInfo = await window.yaver.getUserInfo();
+  if (userInfo && userInfo.signedIn && userInfo.user && !userInfo.user.surveyCompleted) {
+    if (userInfo.user.name) surveyData.fullName = userInfo.user.name;
+    showSurvey();
+    return;
+  }
   showMainApp();
+  loadConfig();
+  loadSettingsUI();
   updateDashboard();
 }
 
@@ -939,6 +1009,400 @@ function showToast(message) {
     toast.style.opacity = '0';
     setTimeout(() => toast.remove(), 300);
   }, 2500);
+}
+
+// ---------------------------------------------------------------------------
+// Terms & Privacy views
+// ---------------------------------------------------------------------------
+
+function showTermsView() {
+  document.getElementById('terms-overlay').classList.add('active');
+}
+
+function hideTermsView() {
+  document.getElementById('terms-overlay').classList.remove('active');
+}
+
+function showPrivacyView() {
+  document.getElementById('privacy-overlay').classList.add('active');
+}
+
+function hidePrivacyView() {
+  document.getElementById('privacy-overlay').classList.remove('active');
+}
+
+// ---------------------------------------------------------------------------
+// Survey logic
+// ---------------------------------------------------------------------------
+
+function getSurveyTotalPages() {
+  return surveyData.identity === 'developer' ? 8 : 7;
+}
+
+function showSurvey() {
+  document.getElementById('auth-flow').style.display = 'none';
+  document.getElementById('main-app').style.display = 'none';
+  document.getElementById('survey-overlay').classList.add('active');
+
+  // Set name input value
+  document.getElementById('survey-name').value = surveyData.fullName;
+
+  // Build role grid
+  const roleGrid = document.getElementById('survey-role-grid');
+  roleGrid.innerHTML = '';
+  SURVEY_IDENTITIES.forEach((item) => {
+    const card = document.createElement('div');
+    card.className = 'survey-card' + (surveyData.identity === item.id ? ' selected' : '');
+    card.innerHTML = `<div class="survey-card-title">${item.label}</div>`;
+    card.onclick = () => {
+      surveyData.identity = item.id;
+      roleGrid.querySelectorAll('.survey-card').forEach((c) => c.classList.remove('selected'));
+      card.classList.add('selected');
+    };
+    roleGrid.appendChild(card);
+  });
+
+  // Build speech provider grid
+  const speechGrid = document.getElementById('survey-speech-grid');
+  speechGrid.innerHTML = '';
+  SURVEY_SPEECH_PROVIDERS.forEach((provider) => {
+    const card = document.createElement('div');
+    card.className = 'survey-card' + (surveyData.speechProvider === provider.id ? ' selected' : '');
+    card.innerHTML = `<div class="survey-card-title">${escapeHtml(provider.name)}</div><div class="survey-card-desc">${escapeHtml(provider.description)}</div>`;
+    card.onclick = () => {
+      surveyData.speechProvider = provider.id;
+      speechGrid.querySelectorAll('.survey-card').forEach((c) => c.classList.remove('selected'));
+      card.classList.add('selected');
+      updateSpeechKeySection();
+    };
+    speechGrid.appendChild(card);
+  });
+
+  // Build verbosity bar
+  buildVerbosityBar();
+
+  // Build languages grid
+  const langGrid = document.getElementById('survey-languages-grid');
+  langGrid.innerHTML = '';
+  SURVEY_LANGUAGES.forEach((lang) => {
+    const chip = document.createElement('div');
+    chip.className = 'survey-chip' + (surveyData.languages.includes(lang) ? ' selected' : '');
+    chip.textContent = lang;
+    chip.onclick = () => {
+      if (surveyData.languages.includes(lang)) {
+        surveyData.languages = surveyData.languages.filter((l) => l !== lang);
+        chip.classList.remove('selected');
+      } else {
+        surveyData.languages.push(lang);
+        chip.classList.add('selected');
+      }
+    };
+    langGrid.appendChild(chip);
+  });
+
+  // Build experience list
+  const expList = document.getElementById('survey-experience-list');
+  expList.innerHTML = '';
+  SURVEY_EXPERIENCE_LEVELS.forEach((level) => {
+    const opt = document.createElement('div');
+    opt.className = 'survey-option' + (surveyData.experience === level ? ' selected' : '');
+    opt.textContent = level;
+    opt.onclick = () => {
+      surveyData.experience = level;
+      expList.querySelectorAll('.survey-option').forEach((o) => o.classList.remove('selected'));
+      opt.classList.add('selected');
+    };
+    expList.appendChild(opt);
+  });
+
+  // Build use case list
+  const ucList = document.getElementById('survey-usecase-list');
+  ucList.innerHTML = '';
+  SURVEY_USE_CASES.forEach((uc) => {
+    const opt = document.createElement('div');
+    opt.className = 'survey-option' + (surveyData.useCase === uc ? ' selected' : '');
+    opt.textContent = uc;
+    opt.onclick = () => {
+      surveyData.useCase = uc;
+      ucList.querySelectorAll('.survey-option').forEach((o) => o.classList.remove('selected'));
+      opt.classList.add('selected');
+    };
+    ucList.appendChild(opt);
+  });
+
+  // Build company size grid
+  const compGrid = document.getElementById('survey-company-grid');
+  compGrid.innerHTML = '';
+  SURVEY_COMPANY_SIZES.forEach((size) => {
+    const btn = document.createElement('div');
+    btn.className = 'survey-company-btn' + (surveyData.companySize === size ? ' selected' : '');
+    btn.textContent = size;
+    btn.onclick = () => {
+      surveyData.companySize = size;
+      compGrid.querySelectorAll('.survey-company-btn').forEach((b) => b.classList.remove('selected'));
+      btn.classList.add('selected');
+    };
+    compGrid.appendChild(btn);
+  });
+
+  // Fetch runners from agent
+  loadSurveyRunners();
+
+  // Wire name input
+  const nameInput = document.getElementById('survey-name');
+  nameInput.oninput = () => {
+    surveyData.fullName = nameInput.value;
+    document.getElementById('survey-name-continue').disabled = !nameInput.value.trim();
+  };
+  document.getElementById('survey-name-continue').disabled = !surveyData.fullName.trim();
+
+  surveyPage = 0;
+  updateSurveyUI();
+}
+
+async function loadSurveyRunners() {
+  const runners = await window.yaver.getRunners();
+  if (runners && runners.ok && runners.runners) {
+    surveyRunners = runners.runners;
+  } else {
+    // Fallback defaults
+    surveyRunners = [
+      { id: 'claude', name: 'Claude Code', description: 'Anthropic CLI agent', isDefault: true },
+      { id: 'codex', name: 'OpenAI Codex', description: 'OpenAI CLI agent' },
+      { id: 'aider', name: 'Aider', description: 'Open-source AI pair programmer' },
+      { id: 'custom', name: 'Custom', description: 'Any terminal command' },
+    ];
+  }
+  buildRunnerGrid();
+}
+
+function buildRunnerGrid() {
+  const grid = document.getElementById('survey-runner-grid');
+  grid.innerHTML = '';
+  surveyRunners.forEach((runner) => {
+    const runnerId = runner.id || runner.runnerId;
+    const card = document.createElement('div');
+    card.className = 'survey-card' + (surveyData.selectedRunner === runnerId ? ' selected' : '');
+    card.innerHTML = `<div class="survey-card-title">${escapeHtml(runner.name)}</div><div class="survey-card-desc">${escapeHtml(runner.description || '')}</div>`;
+    card.onclick = () => {
+      surveyData.selectedRunner = runnerId;
+      grid.querySelectorAll('.survey-card').forEach((c) => c.classList.remove('selected'));
+      card.classList.add('selected');
+      document.getElementById('survey-custom-command').style.display = runnerId === 'custom' ? 'block' : 'none';
+      updateSurveyButtons();
+    };
+    grid.appendChild(card);
+  });
+
+  const customInput = document.getElementById('survey-custom-command');
+  customInput.value = surveyData.customCommand;
+  customInput.oninput = () => {
+    surveyData.customCommand = customInput.value;
+    updateSurveyButtons();
+  };
+  customInput.style.display = surveyData.selectedRunner === 'custom' ? 'block' : 'none';
+}
+
+function buildVerbosityBar() {
+  const bar = document.getElementById('survey-verbosity-bar');
+  bar.innerHTML = '';
+  for (let i = 0; i <= 10; i++) {
+    const btn = document.createElement('div');
+    btn.className = 'survey-verbosity-btn' + (i <= surveyData.verbosity ? ' filled' : '');
+    if (i === surveyData.verbosity) btn.textContent = String(i);
+    btn.onclick = () => {
+      surveyData.verbosity = i;
+      updateVerbosityUI();
+    };
+    bar.appendChild(btn);
+  }
+  updateVerbosityUI();
+}
+
+function updateVerbosityUI() {
+  document.getElementById('survey-verbosity-number').textContent = surveyData.verbosity;
+  const v = surveyData.verbosity;
+  let desc;
+  if (v <= 2) desc = 'Minimal -- just confirm what was done';
+  else if (v <= 4) desc = 'Brief -- summarize in a few sentences';
+  else if (v <= 6) desc = 'Moderate -- key changes and reasoning';
+  else if (v <= 8) desc = 'Detailed -- code changes and explanations';
+  else desc = 'Full -- everything: diffs, reasoning, alternatives';
+  document.getElementById('survey-verbosity-desc').textContent = desc;
+
+  const btns = document.getElementById('survey-verbosity-bar').children;
+  for (let i = 0; i < btns.length; i++) {
+    btns[i].className = 'survey-verbosity-btn' + (i <= surveyData.verbosity ? ' filled' : '');
+    btns[i].textContent = i === surveyData.verbosity ? String(i) : '';
+  }
+}
+
+function updateSpeechKeySection() {
+  const provider = SURVEY_SPEECH_PROVIDERS.find((p) => p.id === surveyData.speechProvider);
+  const section = document.getElementById('survey-speech-key-section');
+  if (provider && provider.requiresKey) {
+    section.style.display = 'block';
+    const keyInput = document.getElementById('survey-speech-api-key');
+    keyInput.placeholder = provider.keyPlaceholder || 'API Key';
+    keyInput.value = surveyData.speechApiKey;
+    keyInput.oninput = () => { surveyData.speechApiKey = keyInput.value; };
+    document.getElementById('survey-speech-key-hint').textContent = provider.keyHint || '';
+  } else {
+    section.style.display = 'none';
+  }
+}
+
+function getEffectiveSurveyPage(page) {
+  // If not developer, skip page 6 (tech stack)
+  if (surveyData.identity !== 'developer' && page >= 6) {
+    return page + 1; // map page 6 -> page 7 (use case)
+  }
+  return page;
+}
+
+function updateSurveyUI() {
+  const totalPages = getSurveyTotalPages();
+  const effectivePage = getEffectiveSurveyPage(surveyPage);
+
+  // Update dots
+  const dotsContainer = document.getElementById('survey-dots');
+  dotsContainer.innerHTML = '';
+  for (let i = 0; i < totalPages; i++) {
+    const dot = document.createElement('div');
+    dot.className = 'survey-dot';
+    const isCurrent = i === surveyPage;
+    const isPast = i < surveyPage;
+    dot.style.width = isCurrent ? '24px' : '16px';
+    dot.style.backgroundColor = isCurrent ? '#e1e4e8' : isPast ? '#9ca3af' : '#2a2d3a';
+    dotsContainer.appendChild(dot);
+  }
+
+  // Show correct page
+  for (let i = 0; i <= 7; i++) {
+    const el = document.getElementById('survey-page-' + i);
+    if (el) el.classList.toggle('active', i === effectivePage);
+  }
+
+  // Show/hide bottom bar (hidden on page 0 since it has inline continue)
+  const bottomBar = document.getElementById('survey-bottom-bar');
+  bottomBar.style.display = surveyPage > 0 ? 'flex' : 'none';
+
+  // Show skip after relay page (page 5 in actual pages, which is surveyPage 5)
+  const skipBar = document.getElementById('survey-skip-bar');
+  skipBar.style.display = surveyPage >= 6 ? 'block' : 'none';
+
+  // Update next button text
+  const nextBtn = document.getElementById('survey-btn-next');
+  const isLast = surveyPage === totalPages - 1;
+  nextBtn.textContent = surveyIsSubmitting ? '...' : isLast ? 'Finish' : 'Continue';
+
+  updateSurveyButtons();
+  updateSpeechKeySection();
+}
+
+function updateSurveyButtons() {
+  const nextBtn = document.getElementById('survey-btn-next');
+  let disabled = surveyIsSubmitting;
+
+  if (surveyPage === 0 && !surveyData.fullName.trim()) disabled = true;
+  if (surveyPage === 1 && !surveyData.identity) disabled = true;
+  if (surveyPage === 2 && surveyData.selectedRunner === 'custom' && !surveyData.customCommand.trim()) disabled = true;
+
+  nextBtn.disabled = disabled;
+}
+
+function surveyNext() {
+  const totalPages = getSurveyTotalPages();
+  if (surveyPage < totalPages - 1) {
+    surveyPage++;
+    updateSurveyUI();
+  } else {
+    finishSurvey();
+  }
+}
+
+function surveyBack() {
+  if (surveyPage > 0) {
+    surveyPage--;
+    updateSurveyUI();
+  }
+}
+
+async function finishSurvey() {
+  if (surveyIsSubmitting) return;
+  surveyIsSubmitting = true;
+  updateSurveyButtons();
+
+  const isDev = surveyData.identity === 'developer';
+
+  try {
+    // Submit survey to Convex
+    await window.yaver.submitSurvey({
+      isDeveloper: isDev,
+      fullName: surveyData.fullName.trim() || undefined,
+      languages: isDev && surveyData.languages.length > 0 ? surveyData.languages : undefined,
+      experienceLevel: isDev ? surveyData.experience || undefined : undefined,
+      role: surveyData.identity || undefined,
+      companySize: surveyData.companySize || undefined,
+      useCase: surveyData.useCase || undefined,
+    });
+
+    // Save runner + speech preferences via agent API
+    const agentSettings = { runnerId: surveyData.selectedRunner };
+    if (surveyData.selectedRunner === 'custom' && surveyData.customCommand.trim()) {
+      agentSettings.customRunnerCommand = surveyData.customCommand.trim();
+    }
+    agentSettings.speechProvider = surveyData.speechProvider || 'on-device';
+    agentSettings.verbosity = surveyData.verbosity;
+
+    if (surveyData.speechApiKey.trim()) {
+      agentSettings.speechApiKey = surveyData.speechApiKey.trim();
+    }
+
+    // Save settings to agent
+    const currentSettings = await window.yaver.getSettings();
+    await window.yaver.saveSettings(Object.assign({}, currentSettings, agentSettings));
+
+    // Switch runner if agent is running
+    if (surveyData.selectedRunner) {
+      await window.yaver.switchRunner(surveyData.selectedRunner);
+    }
+
+    // Read relay values from inputs
+    surveyData.relayUrl = document.getElementById('survey-relay-url').value || '';
+    surveyData.relayPassword = document.getElementById('survey-relay-password').value || '';
+    surveyData.relayLabel = document.getElementById('survey-relay-label').value || '';
+
+    // Save relay server if configured
+    if (surveyData.relayUrl.trim()) {
+      const url = surveyData.relayUrl.trim().replace(/\/+$/, '');
+      const host = url.replace(/^https?:\/\//, '').replace(/:\d+$/, '').replace(/\/.*$/, '');
+      const relay = {
+        id: generateId(),
+        quic_addr: host + ':4433',
+        http_url: url,
+        region: surveyData.relayLabel.trim() || 'custom',
+        priority: 0,
+        password: surveyData.relayPassword.trim() || undefined,
+      };
+      const config = await window.yaver.getConfig();
+      if (!config.relay_servers) config.relay_servers = [];
+      config.relay_servers.push(relay);
+      await window.yaver.saveConfig(config);
+    }
+  } catch (err) {
+    // Continue even if survey submission fails
+    console.error('Survey submission error:', err);
+  }
+
+  surveyIsSubmitting = false;
+
+  // Hide survey, show main app
+  document.getElementById('survey-overlay').classList.remove('active');
+  showMainApp();
+  loadConfig();
+  loadSettingsUI();
+  updateDashboard();
 }
 
 // ---------------------------------------------------------------------------

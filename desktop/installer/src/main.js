@@ -527,6 +527,71 @@ ipcMain.handle('save-settings', async (_event, settings) => {
 });
 
 // ---------------------------------------------------------------------------
+// Survey & User info handlers
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('submit-survey', async (_event, data) => {
+  const token = getToken();
+  if (!token) return { success: false, error: 'Not signed in' };
+  try {
+    const body = JSON.stringify(data);
+    return await new Promise((resolve) => {
+      const url = new URL('/auth/survey', CONVEX_SITE_URL);
+      const mod = url.protocol === 'https:' ? https : http;
+      const req = mod.request(url.toString(), {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      }, (res) => {
+        let responseData = '';
+        res.on('data', (chunk) => { responseData += chunk; });
+        res.on('end', () => {
+          resolve({ success: res.statusCode === 200, data: responseData });
+        });
+      });
+      req.on('error', (err) => resolve({ success: false, error: err.message }));
+      req.write(body);
+      req.end();
+    });
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('get-user-info', async () => {
+  const token = getToken();
+  if (!token) return { signedIn: false };
+  try {
+    return await new Promise((resolve) => {
+      const url = new URL('/auth/validate', CONVEX_SITE_URL);
+      https.get(url.toString(), {
+        headers: { 'Authorization': `Bearer ${token}` },
+      }, (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            try {
+              const parsed = JSON.parse(data);
+              resolve({ signedIn: true, user: parsed.user || parsed });
+            } catch {
+              resolve({ signedIn: true });
+            }
+          } else {
+            resolve({ signedIn: false });
+          }
+        });
+      }).on('error', () => resolve({ signedIn: false }));
+    });
+  } catch {
+    return { signedIn: false };
+  }
+});
+
+// ---------------------------------------------------------------------------
 // File picker handler
 // ---------------------------------------------------------------------------
 

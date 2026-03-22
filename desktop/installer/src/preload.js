@@ -42,6 +42,10 @@ contextBridge.exposeInMainWorld('yaver', {
   sendExecInput: (id, input) => ipcRenderer.invoke('agent-request', 'POST', `/exec/${id}/input`, { input }),
   signalExec: (id, signal) => ipcRenderer.invoke('agent-request', 'POST', `/exec/${id}/signal`, { signal }),
 
+  // Doctor & Tools
+  runDoctor: () => ipcRenderer.invoke('agent-request', 'GET', '/agent/doctor'),
+  getTools: () => ipcRenderer.invoke('agent-request', 'GET', '/agent/tools'),
+
   // Config (local ~/.yaver/config.json)
   getConfig: () => ipcRenderer.invoke('get-config'),
   saveConfig: (config) => ipcRenderer.invoke('save-config', config),
@@ -49,6 +53,10 @@ contextBridge.exposeInMainWorld('yaver', {
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
+
+  // Survey & Auth
+  submitSurvey: (data) => ipcRenderer.invoke('submit-survey', data),
+  getUserInfo: () => ipcRenderer.invoke('get-user-info'),
 
   // File picker for image attachments
   pickFile: (options) => ipcRenderer.invoke('pick-file', options),

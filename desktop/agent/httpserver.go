@@ -62,6 +62,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/agent/runner/switch", s.auth(s.handleRunnerSwitch))
 	mux.HandleFunc("/agent/shutdown", s.auth(s.handleShutdown))
 	mux.HandleFunc("/agent/clean", s.auth(s.handleClean))
+	mux.HandleFunc("/agent/doctor", s.auth(s.handleDoctor))
+	mux.HandleFunc("/agent/tools", s.auth(s.handleTools))
 	mux.HandleFunc("/tmux/sessions", s.auth(s.handleTmuxSessions))
 	mux.HandleFunc("/tmux/adopt", s.auth(s.handleTmuxAdopt))
 	mux.HandleFunc("/tmux/detach", s.auth(s.handleTmuxDetach))
@@ -787,6 +789,234 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 		"ok":     true,
 		"taskId": task.ID,
 		"status": task.Status,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Doctor & Tools handlers
+// ---------------------------------------------------------------------------
+
+// handleDoctor runs system diagnostics and returns results as JSON.
+func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "use GET")
+		return
+	}
+
+	type checkResult struct {
+		Name    string `json:"name"`
+		Status  string `json:"status"` // "pass", "warn", "fail"
+		Detail  string `json:"detail"`
+		Section string `json:"section"`
+	}
+
+	var checks []checkResult
+
+	addCheck := func(section, name, status, detail string) {
+		checks = append(checks, checkResult{Name: name, Status: status, Detail: detail, Section: section})
+	}
+
+	// Config
+	cfg, err := LoadConfig()
+	if err != nil {
+		addCheck("config", "Config file", "fail", fmt.Sprintf("Error: %v", err))
+	} else {
+		p, _ := ConfigPath()
+		addCheck("config", "Config file", "pass", p)
+	}
+	addCheck("config", "Version", "pass", version)
+
+	// Auth
+	if cfg == nil || cfg.AuthToken == "" {
+		addCheck("auth", "Auth token", "fail", "Not signed in")
+	} else {
+		addCheck("auth", "Auth token", "pass", "Present")
+		if cfg.DeviceID != "" {
+			addCheck("auth", "Device ID", "pass", cfg.DeviceID[:8]+"...")
+		} else {
+			addCheck("auth", "Device ID", "fail", "Not set")
+		}
+	}
+
+	// Agent
+	agentPID, agentRunning := isAgentRunning()
+	if agentRunning {
+		addCheck("agent", "Agent process", "pass", fmt.Sprintf("Running (PID %d)", agentPID))
+	} else {
+		addCheck("agent", "Agent process", "warn", "Not running")
+	}
+
+	if tmuxAvailable() {
+		addCheck("agent", "Tmux", "pass", "available")
+	} else {
+		addCheck("agent", "Tmux", "warn", "not installed")
+	}
+
+	// HTTP server
+	statusClient := &http.Client{Timeout: 3 * time.Second}
+	if resp, err := statusClient.Get("http://127.0.0.1:18080/health"); err == nil {
+		resp.Body.Close()
+		addCheck("agent", "HTTP server", "pass", "Listening on :18080")
+	} else {
+		addCheck("agent", "HTTP server", "warn", "Not reachable on port 18080")
+	}
+
+	// AI Runners
+	runners := []struct{ id, name, cmd, install string }{
+		{"claude", "Claude Code", "claude", "npm install -g @anthropic-ai/claude-code"},
+		{"codex", "OpenAI Codex", "codex", "npm install -g @openai/codex"},
+		{"aider", "Aider", "aider", "pip install aider-chat"},
+		{"ollama", "Ollama", "ollama", "brew install ollama"},
+		{"goose", "Goose", "goose", "pip install goose-ai"},
+		{"amp", "Amp", "amp", "npm install -g @anthropic/amp"},
+		{"opencode", "OpenCode", "opencode", "go install github.com/mbreithecker/opencode@latest"},
+	}
+	for _, r := range runners {
+		p, err := osexec.LookPath(r.cmd)
+		if err != nil {
+			addCheck("runners", r.name, "warn", "Not installed — "+r.install)
+		} else {
+			out, verr := osexec.Command(r.cmd, "--version").CombinedOutput()
+			if verr == nil {
+				ver := strings.TrimSpace(strings.Split(string(out), "\n")[0])
+				if len(ver) > 60 {
+					ver = ver[:60]
+				}
+				addCheck("runners", r.name, "pass", fmt.Sprintf("%s (%s)", p, ver))
+			} else {
+				addCheck("runners", r.name, "pass", p)
+			}
+		}
+	}
+
+	// Relay servers
+	if cfg != nil && len(cfg.RelayServers) > 0 {
+		relayClient := &http.Client{Timeout: 5 * time.Second}
+		for _, rs := range cfg.RelayServers {
+			label := rs.Label
+			if label == "" {
+				label = rs.ID
+			}
+			start := time.Now()
+			resp, err := relayClient.Get(rs.HttpURL + "/health")
+			rtt := time.Since(start)
+			if err != nil {
+				addCheck("relay", "Relay: "+label, "fail", "Unreachable")
+			} else {
+				resp.Body.Close()
+				addCheck("relay", "Relay: "+label, "pass", fmt.Sprintf("OK (%dms)", rtt.Milliseconds()))
+			}
+		}
+	} else {
+		addCheck("relay", "Relay servers", "warn", "None configured")
+	}
+
+	// Network
+	ip := getLocalIP()
+	if ip != "" {
+		addCheck("network", "Local IP", "pass", ip)
+	} else {
+		addCheck("network", "Local IP", "warn", "Could not determine")
+	}
+
+	// Voice
+	if cfg != nil && cfg.Speech != nil && cfg.Speech.Provider != "" {
+		addCheck("voice", "Speech provider", "pass", cfg.Speech.Provider)
+		if cfg.Speech.TTSEnabled {
+			addCheck("voice", "TTS", "pass", "Enabled")
+		} else {
+			addCheck("voice", "TTS", "pass", "Disabled")
+		}
+	} else {
+		addCheck("voice", "Speech provider", "warn", "Not configured")
+	}
+
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":     true,
+		"checks": checks,
+	})
+}
+
+// handleTools scans for installed AI tools and returns their info.
+func (s *HTTPServer) handleTools(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "use GET")
+		return
+	}
+
+	type toolInfo struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Command   string `json:"command"`
+		Installed bool   `json:"installed"`
+		Path      string `json:"path,omitempty"`
+		Version   string `json:"version,omitempty"`
+		Install   string `json:"installCmd"`
+	}
+
+	tools := []struct{ id, name, cmd, install string }{
+		{"claude", "Claude Code", "claude", "npm install -g @anthropic-ai/claude-code"},
+		{"codex", "OpenAI Codex", "codex", "npm install -g @openai/codex"},
+		{"aider", "Aider", "aider", "pip install aider-chat"},
+		{"ollama", "Ollama", "ollama", "brew install ollama"},
+		{"goose", "Goose", "goose", "pip install goose-ai"},
+		{"amp", "Amp", "amp", "npm install -g @anthropic/amp"},
+		{"opencode", "OpenCode", "opencode", "go install github.com/mbreithecker/opencode@latest"},
+		{"qwen", "Qwen", "qwen", "pip install qwen-agent"},
+		{"cursor", "Cursor", "cursor", "https://cursor.com"},
+	}
+
+	var result []toolInfo
+	for _, t := range tools {
+		ti := toolInfo{ID: t.id, Name: t.name, Command: t.cmd, Install: t.install}
+		p, err := osexec.LookPath(t.cmd)
+		if err == nil {
+			ti.Installed = true
+			ti.Path = p
+			out, verr := osexec.Command(t.cmd, "--version").CombinedOutput()
+			if verr == nil {
+				ver := strings.TrimSpace(strings.Split(string(out), "\n")[0])
+				if len(ver) > 60 {
+					ver = ver[:60]
+				}
+				ti.Version = ver
+			}
+		}
+		result = append(result, ti)
+	}
+
+	// Also check supporting tools
+	type supportTool struct {
+		Name      string `json:"name"`
+		Command   string `json:"command"`
+		Installed bool   `json:"installed"`
+		Purpose   string `json:"purpose"`
+	}
+	var support []supportTool
+	supportChecks := []struct{ name, cmd, purpose string }{
+		{"tmux", "tmux", "Session management"},
+		{"Node.js", "node", "JS toolchain"},
+		{"Python", "python3", "Python toolchain"},
+		{"Go", "go", "Go toolchain"},
+		{"Git", "git", "Version control"},
+		{"sox", "sox", "Audio recording"},
+		{"ffmpeg", "ffmpeg", "Media processing"},
+		{"whisper", "whisper-cpp", "On-device STT"},
+		{"Docker", "docker", "Container runtime"},
+		{"cloudflared", "cloudflared", "Cloudflare Tunnel"},
+	}
+	for _, s := range supportChecks {
+		st := supportTool{Name: s.name, Command: s.cmd, Purpose: s.purpose}
+		if _, err := osexec.LookPath(s.cmd); err == nil {
+			st.Installed = true
+		}
+		support = append(support, st)
+	}
+
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":      true,
+		"tools":   result,
+		"support": support,
 	})
 }
 

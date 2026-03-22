@@ -588,6 +588,308 @@
       border: none; border-radius: 50%; cursor: pointer;
       font-size: 10px; display: flex; align-items: center; justify-content: center;
     }
+
+    /* ---- Survey overlay ---- */
+    .survey-overlay {
+      display: none;
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--bg);
+      z-index: 150;
+      flex-direction: column;
+    }
+    .survey-overlay.active { display: flex; }
+
+    .survey-dots {
+      display: flex; justify-content: center; align-items: center;
+      gap: 8px; padding: 40px 0 8px;
+    }
+    .survey-dot {
+      height: 6px; border-radius: 3px;
+      transition: width 0.2s, background 0.2s;
+    }
+
+    .survey-content {
+      flex: 1; overflow-y: auto;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 32px 24px;
+    }
+
+    .survey-page { display: none; width: 100%; max-width: 480px; }
+    .survey-page.active { display: block; }
+
+    .survey-page-title {
+      font-size: 22px; font-weight: 600; margin-bottom: 6px;
+      text-align: center; letter-spacing: -0.3px; color: #f0f0f0;
+    }
+    .survey-page-subtitle {
+      font-size: 14px; margin-bottom: 28px;
+      text-align: center; color: var(--text-secondary);
+    }
+
+    .survey-input {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      font-size: 15px;
+      margin-bottom: 20px;
+      background: var(--bg-card);
+      color: var(--text);
+      outline: none;
+      font-family: inherit;
+    }
+    .survey-input:focus { border-color: var(--accent); }
+    .survey-input::placeholder { color: var(--text-dim); }
+
+    .survey-grid {
+      display: flex; flex-wrap: wrap; gap: 12px;
+    }
+
+    .survey-card {
+      width: calc(50% - 6px);
+      padding: 24px 16px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.15s;
+    }
+    .survey-card:hover { border-color: var(--accent); }
+    .survey-card.selected {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .survey-card .survey-card-title {
+      font-size: 15px; font-weight: 600; color: var(--text);
+    }
+    .survey-card.selected .survey-card-title { color: #fff; }
+    .survey-card .survey-card-desc {
+      font-size: 11px; margin-top: 4px; color: var(--text-dim);
+    }
+    .survey-card.selected .survey-card-desc { color: rgba(255,255,255,0.7); }
+
+    .survey-chip-container {
+      display: flex; flex-wrap: wrap; gap: 8px;
+    }
+    .survey-chip {
+      padding: 8px 14px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .survey-chip:hover { border-color: var(--accent); }
+    .survey-chip.selected {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .survey-option {
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      cursor: pointer;
+      margin-bottom: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text);
+      transition: all 0.15s;
+    }
+    .survey-option:hover { border-color: var(--accent); }
+    .survey-option.selected {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .survey-company-grid {
+      display: flex; flex-wrap: wrap; gap: 8px;
+    }
+    .survey-company-btn {
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      width: calc(33.33% - 6px);
+      text-align: center;
+      transition: all 0.15s;
+    }
+    .survey-company-btn:hover { border-color: var(--accent); }
+    .survey-company-btn.selected {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .survey-section-label {
+      font-size: 11px; font-weight: 600;
+      letter-spacing: 1px; color: var(--text-secondary);
+      margin-bottom: 12px; margin-top: 28px;
+    }
+
+    .survey-verbosity-box {
+      margin-top: 20px; padding: 20px;
+      border-radius: 16px; border: 1px solid var(--border);
+      background: var(--bg-card);
+    }
+    .survey-verbosity-number {
+      color: var(--accent); font-weight: 700;
+      font-size: 48px; text-align: center; margin-bottom: 4px;
+    }
+    .survey-verbosity-desc {
+      color: var(--text-dim); font-size: 13px;
+      text-align: center; margin-bottom: 20px;
+    }
+    .survey-verbosity-bar {
+      display: flex; gap: 4px; align-items: center;
+    }
+    .survey-verbosity-btn {
+      flex: 1; height: 36px; border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700; color: #fff;
+      transition: all 0.12s;
+    }
+    .survey-verbosity-btn.filled {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .survey-verbosity-labels {
+      display: flex; justify-content: space-between; margin-top: 6px;
+      font-size: 11px; color: var(--text-dim);
+    }
+
+    .survey-hint {
+      font-size: 12px; text-align: center;
+      margin-top: 20px; color: var(--text-dim);
+    }
+
+    .survey-bottom {
+      display: flex; justify-content: space-between;
+      align-items: center; padding: 12px 24px;
+      flex-shrink: 0;
+    }
+    .survey-btn-back {
+      padding: 10px 20px; border-radius: 10px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 14px; font-weight: 500;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .survey-btn-back:hover { border-color: var(--accent); color: var(--text); }
+    .survey-btn-next {
+      padding: 10px 28px; border-radius: 10px;
+      background: var(--text);
+      color: var(--bg);
+      font-size: 14px; font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .survey-btn-next:hover { opacity: 0.9; }
+    .survey-btn-next:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .survey-skip {
+      font-size: 13px; font-weight: 500;
+      text-align: center; color: var(--text-dim);
+      padding: 8px; cursor: pointer;
+      transition: color 0.12s;
+    }
+    .survey-skip:hover { color: var(--text-secondary); }
+
+    .survey-inline-continue {
+      align-self: flex-end;
+      padding: 12px 28px; border-radius: 10px;
+      background: var(--text); color: var(--bg);
+      font-size: 14px; font-weight: 600;
+      border: none; cursor: pointer;
+      transition: all 0.12s;
+    }
+    .survey-inline-continue:hover { opacity: 0.9; }
+    .survey-inline-continue:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ---- Legal overlay (terms/privacy) ---- */
+    .legal-overlay {
+      display: none;
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--bg);
+      z-index: 160;
+      flex-direction: column;
+    }
+    .legal-overlay.active { display: flex; }
+
+    .legal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 40px 20px 12px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .legal-back {
+      font-size: 14px; color: var(--accent-light);
+      background: none; border: none; cursor: pointer;
+      font-weight: 500;
+    }
+    .legal-back:hover { text-decoration: underline; }
+    .legal-header-title {
+      font-size: 17px; font-weight: 600; color: var(--text);
+    }
+    .legal-header-spacer { width: 40px; }
+
+    .legal-body {
+      flex: 1; overflow-y: auto; padding: 16px 20px 40px;
+    }
+
+    .legal-updated {
+      font-size: 12px; color: var(--text-dim); margin-bottom: 16px;
+    }
+    .legal-section-title {
+      font-size: 16px; font-weight: 700; color: var(--text);
+      margin-top: 28px; margin-bottom: 12px;
+      padding-bottom: 8px; border-bottom: 1px solid var(--border);
+    }
+    .legal-sub-title {
+      font-size: 14px; font-weight: 600; color: var(--text);
+      margin-top: 16px; margin-bottom: 8px;
+    }
+    .legal-text {
+      font-size: 13px; line-height: 1.55; color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+    .legal-bullet {
+      font-size: 13px; line-height: 1.55; color: var(--text-secondary);
+      margin-bottom: 4px; padding-left: 8px;
+    }
+    .legal-footer {
+      margin-top: 32px; padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+    .legal-footer-text {
+      font-size: 11px; color: var(--text-dim); margin-bottom: 4px;
+    }
+
+    /* Sign-in legal links */
+    .signin-legal-links {
+      margin-top: 16px; font-size: 12px; color: var(--text-dim);
+    }
+    .signin-legal-links a {
+      color: var(--accent-light); cursor: pointer; text-decoration: none;
+    }
+    .signin-legal-links a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -622,6 +924,10 @@
             <svg width="18" height="18" viewBox="0 0 24 24"><rect x="1" y="1" width="10" height="10" fill="#F25022"/><rect x="13" y="1" width="10" height="10" fill="#7FBA00"/><rect x="1" y="13" width="10" height="10" fill="#00A4EF"/><rect x="13" y="13" width="10" height="10" fill="#FFB900"/></svg>
             Sign in with Microsoft
           </button>
+        </div>
+        <div class="signin-legal-links">
+          By signing in, you agree to our<br>
+          <a onclick="showTermsView()">Terms of Service</a> and <a onclick="showPrivacyView()">Privacy Policy</a>
         </div>
       </div>
 
@@ -929,6 +1235,14 @@
               </div>
             </div>
 
+            <div class="settings-section">
+              <h3>Legal</h3>
+              <div class="btn-row" style="gap:12px">
+                <button class="btn btn-outline btn-sm" onclick="showTermsView()">Terms of Service</button>
+                <button class="btn btn-outline btn-sm" onclick="showPrivacyView()">Privacy Policy</button>
+              </div>
+            </div>
+
           </div>
         </div>
 
@@ -974,6 +1288,276 @@
       </div>
     </div>
 
+  </div>
+
+  <!-- ===== Survey Overlay ===== -->
+  <div class="survey-overlay" id="survey-overlay">
+    <div class="survey-dots" id="survey-dots"></div>
+
+    <div class="survey-content">
+      <!-- Page 0: Name -->
+      <div class="survey-page active" id="survey-page-0">
+        <div class="survey-page-title">How can we call you?</div>
+        <div class="survey-page-subtitle">Let's get to know each other</div>
+        <input type="text" class="survey-input" id="survey-name" placeholder="Your name" autocomplete="off">
+        <button class="survey-inline-continue" id="survey-name-continue" onclick="surveyNext()" disabled>Continue</button>
+      </div>
+
+      <!-- Page 1: Role -->
+      <div class="survey-page" id="survey-page-1">
+        <div class="survey-page-title">What best describes you?</div>
+        <div class="survey-page-subtitle">Help us personalize your experience</div>
+        <div class="survey-grid" id="survey-role-grid"></div>
+      </div>
+
+      <!-- Page 2: AI Agent / Runner -->
+      <div class="survey-page" id="survey-page-2">
+        <div class="survey-page-title">Choose your AI agent</div>
+        <div class="survey-page-subtitle">Yaver runs any terminal AI tool on your machine</div>
+        <div class="survey-grid" id="survey-runner-grid"></div>
+        <input type="text" class="survey-input" id="survey-custom-command" placeholder="e.g. my-ai-tool --auto {prompt}" style="display:none; margin-top:16px;">
+        <div class="survey-hint">You can change this anytime in Settings</div>
+      </div>
+
+      <!-- Page 3: Voice Input -->
+      <div class="survey-page" id="survey-page-3">
+        <div class="survey-page-title">Voice input</div>
+        <div class="survey-page-subtitle">Send tasks by speaking instead of typing</div>
+        <div class="survey-grid" id="survey-speech-grid"></div>
+        <div id="survey-speech-key-section" style="display:none;">
+          <input type="password" class="survey-input" id="survey-speech-api-key" placeholder="API Key" style="margin-top:16px;">
+          <div id="survey-speech-key-hint" style="font-size:11px; color:var(--text-dim); margin-top:-12px; margin-bottom:12px; padding:0 4px;"></div>
+        </div>
+      </div>
+
+      <!-- Page 4: Verbosity -->
+      <div class="survey-page" id="survey-page-4">
+        <div class="survey-page-title">Response detail</div>
+        <div class="survey-page-subtitle">How verbose should AI responses be?</div>
+        <div class="survey-verbosity-box">
+          <div class="survey-verbosity-number" id="survey-verbosity-number">10</div>
+          <div class="survey-verbosity-desc" id="survey-verbosity-desc">Full -- everything: diffs, reasoning, alternatives</div>
+          <div class="survey-verbosity-bar" id="survey-verbosity-bar"></div>
+          <div class="survey-verbosity-labels">
+            <span>Minimal</span><span>Full</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Page 5: Relay Server -->
+      <div class="survey-page" id="survey-page-5">
+        <div class="survey-page-title">Relay server</div>
+        <div class="survey-page-subtitle">Optional -- for connecting outside your home Wi-Fi</div>
+        <input type="text" class="survey-input" id="survey-relay-url" placeholder="URL, e.g. https://relay.example.com" style="margin-top:16px;">
+        <input type="password" class="survey-input" id="survey-relay-password" placeholder="Password (optional)">
+        <input type="text" class="survey-input" id="survey-relay-label" placeholder="Label, e.g. home, office (optional)">
+        <div style="font-size:11px; color:var(--text-dim); margin-top:-8px; padding:0 4px;">
+          Skip if you're always on the same Wi-Fi or use Tailscale.
+        </div>
+      </div>
+
+      <!-- Page 6: Tech Stack (developers only) -->
+      <div class="survey-page" id="survey-page-6">
+        <div class="survey-page-title">Your tech stack</div>
+        <div class="survey-page-subtitle">Select all that apply</div>
+        <div class="survey-chip-container" id="survey-languages-grid"></div>
+        <div class="survey-section-label">EXPERIENCE</div>
+        <div id="survey-experience-list"></div>
+      </div>
+
+      <!-- Page 7: Use Case -->
+      <div class="survey-page" id="survey-page-7">
+        <div class="survey-page-title">How will you use Yaver?</div>
+        <div class="survey-page-subtitle">Almost done</div>
+        <div class="survey-section-label" style="margin-top:0">PRIMARY USE</div>
+        <div id="survey-usecase-list"></div>
+        <div class="survey-section-label">TEAM SIZE</div>
+        <div class="survey-company-grid" id="survey-company-grid"></div>
+      </div>
+    </div>
+
+    <div id="survey-bottom-bar" class="survey-bottom" style="display:none;">
+      <button class="survey-btn-back" onclick="surveyBack()">Back</button>
+      <button class="survey-btn-next" id="survey-btn-next" onclick="surveyNext()">Continue</button>
+    </div>
+    <div id="survey-skip-bar" style="display:none; text-align:center; padding-bottom:12px;">
+      <span class="survey-skip" onclick="finishSurvey()">Skip for now</span>
+    </div>
+  </div>
+
+  <!-- ===== Terms of Service Overlay ===== -->
+  <div class="legal-overlay" id="terms-overlay">
+    <div class="legal-header">
+      <button class="legal-back" onclick="hideTermsView()">Back</button>
+      <span class="legal-header-title">Terms of Service</span>
+      <span class="legal-header-spacer"></span>
+    </div>
+    <div class="legal-body">
+      <div class="legal-updated">Effective Date: March 12, 2026</div>
+      <p class="legal-text">Please read these Terms of Service ("Terms" or "Agreement") carefully. This is a legal agreement between you ("you," "your," or "End-User") and SIMKAB ELEKTRIK ("we," "us," or "Developer") concerning your use of the Yaver application, desktop agent, CLI tool, and related services (the "Service"), made available through Apple's App Store, Google Play Store, and our website at yaver.io.</p>
+      <p class="legal-text">By downloading, installing, or using the Service, you agree to be bound by this Agreement. If you do not agree, do not download, install, or use the Service.</p>
+
+      <div class="legal-section-title">1. Acknowledgement</div>
+      <p class="legal-text">1.1 This Agreement is concluded between you and SIMKAB ELEKTRIK only, and not with Apple Inc. ("Apple") or Google LLC ("Google"). Neither Apple nor Google is a party to this Agreement and has no obligations with respect to the Service or its content.</p>
+      <p class="legal-text">1.2 This Agreement does not conflict with the Apple Media Services Terms and Conditions or the Google Play Developer Distribution Agreement.</p>
+
+      <div class="legal-section-title">2. Scope of License</div>
+      <p class="legal-text">2.1 Subject to your compliance with this Agreement, SIMKAB ELEKTRIK grants you a limited, non-exclusive, non-transferable license to download, install, and use the Service on devices you own or control, solely for your personal or internal business use in software development and related activities.</p>
+      <p class="legal-text">2.2 You may not rent, lease, lend, sell, redistribute, sublicense, reverse-engineer, or create derivative works based on the Service.</p>
+
+      <div class="legal-section-title">3. Description of Service</div>
+      <p class="legal-text">3.1 Yaver is a peer-to-peer development tool that enables you to interact with Claude AI from any device by connecting directly to your development machines. The Service consists of:</p>
+      <p class="legal-bullet">&bull; A mobile application (iOS and Android) for sending tasks and viewing output</p>
+      <p class="legal-bullet">&bull; A desktop agent (macOS, Windows, Linux) that runs Claude CLI on your machine</p>
+      <p class="legal-bullet">&bull; A CLI tool for terminal-based interaction</p>
+      <p class="legal-bullet">&bull; A web application for authentication and account management</p>
+      <p class="legal-bullet">&bull; A backend service for authentication and peer device discovery only</p>
+      <p class="legal-text">3.2 The Service uses a peer-to-peer architecture. Your code, prompts, and AI outputs are transmitted directly between your devices and are never stored on or transmitted through our servers.</p>
+
+      <div class="legal-section-title">4. Permitted Use</div>
+      <p class="legal-text">4.1 You agree to use the Service only for lawful purposes and in accordance with these Terms. You must not use the Service in any way that is unlawful, fraudulent, or harmful.</p>
+      <p class="legal-text">4.2 You are solely responsible for ensuring that your use of Claude AI through the Service complies with Anthropic's usage policies and any applicable laws and regulations.</p>
+      <p class="legal-text">4.3 You are responsible for maintaining the security of your devices and network connections used with the Service.</p>
+
+      <div class="legal-section-title">5. Third-Party Services</div>
+      <p class="legal-text">5.1 The Service integrates with third-party services including Anthropic's Claude AI and authentication providers (Apple, Google, Microsoft). You agree to comply with the applicable terms of those third-party services.</p>
+      <p class="legal-text">5.2 We are not responsible for the availability, accuracy, or content of third-party services. Your use of Claude AI is subject to Anthropic's terms of service.</p>
+
+      <div class="legal-section-title">6. Account and Security</div>
+      <p class="legal-text">6.1 You are responsible for safeguarding your account credentials and for any activity that occurs under your account.</p>
+      <p class="legal-text">6.2 You must notify us immediately of any unauthorized use of your account or any other breach of security.</p>
+      <p class="legal-text">6.3 You may delete your account at any time through the mobile app or by contacting us. Account deletion will permanently remove your data from our servers.</p>
+
+      <div class="legal-section-title">7. Maintenance and Support</div>
+      <p class="legal-text">7.1 SIMKAB ELEKTRIK is solely responsible for providing maintenance and support for the Service as described in this Agreement or as required by applicable law.</p>
+      <p class="legal-text">7.2 Apple and Google have no obligation to furnish any maintenance or support services with respect to the Service.</p>
+
+      <div class="legal-section-title">8. Warranty Disclaimer</div>
+      <p class="legal-text">8.1 TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT.</p>
+      <p class="legal-text">8.2 We do not warrant that the Service will be uninterrupted, error-free, or secure. We do not guarantee the accuracy or reliability of any AI-generated output.</p>
+      <p class="legal-text">8.3 If the Service fails to conform to any applicable warranty, you may notify Apple or Google, who may refund the purchase price (if any). To the extent permitted by law, Apple and Google have no other warranty obligation with respect to the Service.</p>
+
+      <div class="legal-section-title">9. Limitation of Liability</div>
+      <p class="legal-text">9.1 TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT SHALL SIMKAB ELEKTRIK BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR ANY LOSS OF PROFITS OR REVENUES, WHETHER INCURRED DIRECTLY OR INDIRECTLY, OR ANY LOSS OF DATA, USE, GOODWILL, OR OTHER INTANGIBLE LOSSES.</p>
+      <p class="legal-text">9.2 You acknowledge that AI-generated outputs may contain errors or inaccuracies. You are solely responsible for reviewing and validating any code or content generated through the Service before using it in production.</p>
+
+      <div class="legal-section-title">10. Product Claims</div>
+      <p class="legal-text">10.1 SIMKAB ELEKTRIK, not Apple or Google, is responsible for addressing any claims you or any third party may have relating to: (a) product liability; (b) failure to conform to applicable legal or regulatory requirements; and (c) claims arising under consumer protection or similar legislation.</p>
+
+      <div class="legal-section-title">11. Intellectual Property</div>
+      <p class="legal-text">11.1 The Service and all intellectual property rights therein are and shall remain the sole and exclusive property of SIMKAB ELEKTRIK. No rights are granted to you other than the limited license expressly set forth in this Agreement.</p>
+      <p class="legal-text">11.2 In the event of any third-party claim that the Service or your use thereof infringes a third party's intellectual property rights, SIMKAB ELEKTRIK (not Apple or Google) will be solely responsible for the investigation, defense, settlement, and discharge of any such claim.</p>
+
+      <div class="legal-section-title">12. Third-Party Beneficiary</div>
+      <p class="legal-text">12.1 You and SIMKAB ELEKTRIK acknowledge that Apple and Google are third-party beneficiaries of this Agreement and, upon your acceptance, will have the right to enforce this Agreement against you.</p>
+
+      <div class="legal-section-title">13. Termination</div>
+      <p class="legal-text">13.1 This Agreement is effective until terminated. Your rights under this Agreement will terminate automatically if you fail to comply with any of its terms. Upon termination, you must cease all use of the Service and delete all copies.</p>
+
+      <div class="legal-section-title">14. Changes to This Agreement</div>
+      <p class="legal-text">14.1 We may modify this Agreement at any time. Changes are effective upon posting or notification through the Service. Your continued use constitutes acceptance of the updated terms.</p>
+
+      <div class="legal-section-title">15. Governing Law</div>
+      <p class="legal-text">15.1 This Agreement shall be governed by and construed in accordance with the laws of Turkey, without regard to conflict of law principles.</p>
+
+      <div class="legal-section-title">16. Contact</div>
+      <p class="legal-text">SIMKAB ELEKTRIK</p>
+      <p class="legal-text">Yunus Emre Mah. Adalar Sokak No:12 Sancaktepe / Istanbul, Turkey</p>
+      <p class="legal-text">Email: kivanc.cakmak@simkab.com</p>
+
+      <div class="legal-footer">
+        <div class="legal-footer-text">SIMKAB ELEKTRIK -- Yunus Emre Mah. Adalar Sokak No:12, Sancaktepe, Istanbul, Turkey</div>
+        <div class="legal-footer-text">Copyright &copy; 2026 Yaver. All Rights Reserved.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Privacy Policy Overlay ===== -->
+  <div class="legal-overlay" id="privacy-overlay">
+    <div class="legal-header">
+      <button class="legal-back" onclick="hidePrivacyView()">Back</button>
+      <span class="legal-header-title">Privacy Policy</span>
+      <span class="legal-header-spacer"></span>
+    </div>
+    <div class="legal-body">
+      <div class="legal-updated">Last updated: March 12, 2026</div>
+      <p class="legal-text">Yaver is a peer-to-peer development tool that lets you use Claude AI from any device, connecting directly to your development machines. This Privacy Policy describes our policies and procedures on the collection, use, and disclosure of your information when you use the Service and tells you about your privacy rights and how the law protects you.</p>
+      <p class="legal-text">We use your Personal Data to provide and improve the Service. By using the Service, you agree to the collection and use of information in accordance with this Privacy Policy.</p>
+
+      <div class="legal-section-title">Interpretation and Definitions</div>
+      <div class="legal-sub-title">Interpretation</div>
+      <p class="legal-text">The words of which the initial letter is capitalized have meanings defined under the following conditions. The following definitions shall have the same meaning regardless of whether they appear in singular or in plural.</p>
+      <div class="legal-sub-title">Definitions</div>
+      <p class="legal-text">For the purposes of this Privacy Policy:</p>
+      <p class="legal-bullet">&bull; <strong>Account</strong> means a unique account created for you to access our Service or parts of our Service.</p>
+      <p class="legal-bullet">&bull; <strong>Application</strong> means the software programs provided by the Company, including the Yaver mobile app, desktop agent, and CLI tool.</p>
+      <p class="legal-bullet">&bull; <strong>Company</strong> (referred to as either "the Company", "We", "Us", or "Our" in this Agreement) refers to SIMKAB ELEKTRIK, Yunus Emre Mah. Adalar Sokak No:12 Sancaktepe/Istanbul.</p>
+      <p class="legal-bullet">&bull; <strong>Country</strong> refers to: Turkey</p>
+      <p class="legal-bullet">&bull; <strong>Device</strong> means any device that can access the Service such as a computer, a cellphone, or a digital tablet.</p>
+      <p class="legal-bullet">&bull; <strong>Personal Data</strong> is any information that relates to an identified or identifiable individual.</p>
+      <p class="legal-bullet">&bull; <strong>Service</strong> refers to the Application or the Website or both.</p>
+      <p class="legal-bullet">&bull; <strong>Usage Data</strong> refers to data collected automatically, either generated by the use of the Service or from the Service infrastructure itself.</p>
+      <p class="legal-bullet">&bull; <strong>Website</strong> refers to Yaver, accessible from yaver.io.</p>
+      <p class="legal-bullet">&bull; <strong>You</strong> means the individual accessing or using the Service, or the company, or other legal entity on behalf of which such individual is accessing or using the Service.</p>
+
+      <div class="legal-section-title">Privacy-First Architecture</div>
+      <p class="legal-text">Yaver is designed with a privacy-first, peer-to-peer architecture. Your code, task data, prompts, and AI outputs flow directly between your devices over encrypted connections. Our servers are used only for authentication and device discovery -- we never see, store, or process your code or task content.</p>
+      <p class="legal-bullet">&bull; No code is stored on our servers</p>
+      <p class="legal-bullet">&bull; No task data or AI output passes through our infrastructure</p>
+      <p class="legal-bullet">&bull; No logs of your prompts or responses are captured</p>
+      <p class="legal-bullet">&bull; Device-to-device communication is end-to-end encrypted</p>
+
+      <div class="legal-section-title">Collecting and Using Your Personal Data</div>
+      <div class="legal-sub-title">Personal Data</div>
+      <p class="legal-text">While using our Service, we may ask you to provide us with certain personally identifiable information that can be used to contact or identify you. This may include:</p>
+      <p class="legal-bullet">&bull; Email address</p>
+      <p class="legal-bullet">&bull; Name (as provided by your authentication provider)</p>
+      <p class="legal-bullet">&bull; Usage Data</p>
+
+      <div class="legal-sub-title">Usage Data</div>
+      <p class="legal-text">Usage Data is collected automatically when using the Service. This may include your Device's Internet Protocol address, browser type, the pages of our Service that you visit, the time and date of your visit, unique device identifiers, and other diagnostic data.</p>
+
+      <div class="legal-sub-title">Device Registration Data</div>
+      <p class="legal-text">When you register a device with Yaver, we store basic device metadata (device name, platform, and network address) solely for the purpose of enabling peer discovery between your devices. This data is used only to help your devices find each other and is not shared with third parties.</p>
+
+      <div class="legal-sub-title">Use of Your Personal Data</div>
+      <p class="legal-text">The Company may use Personal Data for the following purposes:</p>
+      <p class="legal-bullet">&bull; To provide and maintain our Service, including authentication and device discovery.</p>
+      <p class="legal-bullet">&bull; To manage your Account and registration as a user of the Service.</p>
+      <p class="legal-bullet">&bull; To contact you by email regarding updates, security notices, or administrative messages.</p>
+      <p class="legal-bullet">&bull; To manage your requests and provide support.</p>
+      <p class="legal-bullet">&bull; For analytics: to understand usage patterns and improve the Service.</p>
+
+      <div class="legal-sub-title">Retention of Your Personal Data</div>
+      <p class="legal-text">The Company will retain your Personal Data only for as long as is necessary for the purposes set out in this Privacy Policy. We will retain and use your Personal Data to the extent necessary to comply with our legal obligations, resolve disputes, and enforce our agreements and policies.</p>
+
+      <div class="legal-section-title">Disclosure of Your Personal Data</div>
+      <div class="legal-sub-title">Business Transactions</div>
+      <p class="legal-text">If the Company is involved in a merger, acquisition, or asset sale, your Personal Data may be transferred. We will provide notice before your Personal Data is transferred and becomes subject to a different Privacy Policy.</p>
+      <div class="legal-sub-title">Law Enforcement</div>
+      <p class="legal-text">Under certain circumstances, the Company may be required to disclose your Personal Data if required to do so by law or in response to valid requests by public authorities.</p>
+
+      <div class="legal-section-title">Security of Your Personal Data</div>
+      <p class="legal-text">The security of your Personal Data is important to us. Yaver's peer-to-peer architecture means your code and task data never pass through our servers. For authentication data that we do handle, we use commercially acceptable means to protect it. However, no method of transmission over the Internet or electronic storage is 100% secure.</p>
+
+      <div class="legal-section-title">Account Deletion</div>
+      <p class="legal-text">You may delete your account at any time through the mobile app settings or by contacting us. When you delete your account, we will permanently remove your authentication data, device registrations, and any associated personal information from our servers.</p>
+
+      <div class="legal-section-title">Children's Privacy</div>
+      <p class="legal-text">Our Service does not address anyone under the age of 13. We do not knowingly collect personally identifiable information from anyone under the age of 13.</p>
+
+      <div class="legal-section-title">Changes to this Privacy Policy</div>
+      <p class="legal-text">We may update our Privacy Policy from time to time. We will notify you of any changes by posting the new Privacy Policy on this page and updating the "Last updated" date. You are advised to review this Privacy Policy periodically for any changes.</p>
+
+      <div class="legal-section-title">Contact Us</div>
+      <p class="legal-text">If you have any questions about this Privacy Policy, you can contact us:</p>
+      <p class="legal-bullet">&bull; Email: kivanc.cakmak@simkab.com</p>
+
+      <div class="legal-footer">
+        <div class="legal-footer-text">SIMKAB ELEKTRIK -- Yunus Emre Mah. Adalar Sokak No:12, Sancaktepe, Istanbul, Turkey</div>
+        <div class="legal-footer-text">Copyright &copy; 2026 Yaver. All Rights Reserved.</div>
+      </div>
+    </div>
   </div>
 
   <script src="renderer.js"></script>

@@ -1,7 +1,7 @@
 {
-  "name": "yaver-installer",
-  "version": "1.0.1",
-  "description": "Yaver Desktop Agent Installer",
+  "name": "yaver-desktop",
+  "version": "1.1.0",
+  "description": "Yaver Desktop — AI agent control panel",
   "author": {
     "name": "Yaver",
     "email": "kivanc.cakmak@simkab.com"
@@ -25,7 +25,9 @@
     },
     "win": {
       "target": ["nsis"],
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "signingHashAlgorithms": ["sha256"],
+      "sign": "../../keys/sign-windows.sh"
     },
     "linux": {
       "target": ["deb", "AppImage"],
