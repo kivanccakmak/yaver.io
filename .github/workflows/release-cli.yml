@@ -347,3 +347,35 @@ jobs:
           git add -A
           git diff --cached --quiet || git commit -m "Update yaver to v${VERSION}"
           git push origin main
+
+      - name: Submit Winget manifest
+        env:
+          GH_TOKEN: ${{ secrets.YAVER_CLI_REPO_TOKEN }}
+        run: |
+          REPO="${{ secrets.YAVER_CLI_REPO || github.repository }}"
+          MDIR="manifests/y/Yaver/Yaver/${VERSION}"
+          mkdir -p "$MDIR"
+
+          cat > "$MDIR/Yaver.Yaver.yaml" <<WINGET
+          # yaml-language-server: \$schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json
+          PackageIdentifier: Yaver.Yaver
+          PackageVersion: "${VERSION}"
+          PackageName: Yaver CLI
+          Publisher: Yaver
+          License: MIT
+          ShortDescription: AI coding agent on your phone — P2P remote control for Claude Code, Codex, Aider, Ollama
+          PackageUrl: https://yaver.io
+          Installers:
+            - Architecture: x64
+              InstallerType: portable
+              InstallerUrl: https://github.com/${REPO}/releases/download/v${VERSION}/yaver-windows-amd64.exe
+              InstallerSha256: ${SHA_WINDOWS_AMD64}
+              Commands:
+                - yaver
+          ManifestType: singleton
+          ManifestVersion: 1.6.0
+          WINGET
+
+          echo "Winget manifest generated at $MDIR/Yaver.Yaver.yaml"
+          echo "To publish: fork microsoft/winget-pkgs, add this manifest, and submit a PR."
+          echo "Or use: wingetcreate submit --token \$GH_TOKEN $MDIR"

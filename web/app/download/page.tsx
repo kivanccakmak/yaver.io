@@ -187,6 +187,15 @@ export default function DownloadPage() {
               </div>
             </div>
             <div>
+              <p className="mb-2 text-xs text-surface-500">Winget (Windows)</p>
+              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
+                <span className="text-surface-500">&gt;</span>{" "}
+                <span className="text-surface-300 select-all">
+                  winget install Yaver.Yaver
+                </span>
+              </div>
+            </div>
+            <div>
               <p className="mb-2 text-xs text-surface-500">Quick install (macOS / Linux)</p>
               <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
                 <span className="text-surface-500">$</span>{" "}
@@ -250,6 +259,72 @@ export default function DownloadPage() {
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Desktop App (GUI) */}
+        <div className="mb-12">
+          <h2 className="mb-6 text-xs font-semibold uppercase tracking-wider text-surface-500">
+            Desktop App (GUI)
+          </h2>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            {[
+              {
+                name: "macOS",
+                desc: "macOS 13+ (Apple Silicon & Intel)",
+                highlighted: platform === "macos",
+                buttons: [
+                  { label: "Apple Silicon (.dmg)", file: "Yaver-latest-apple-silicon.dmg", primary: true },
+                  { label: "Intel (.dmg)", file: "Yaver-latest-intel.dmg" },
+                ],
+              },
+              {
+                name: "Windows",
+                desc: "Windows 10+ (64-bit, code-signed)",
+                highlighted: platform === "windows",
+                buttons: [
+                  { label: "Download Installer", file: "Yaver-Setup.exe", primary: true },
+                ],
+              },
+              {
+                name: "Linux",
+                desc: "x86_64 & ARM64",
+                highlighted: platform === "linux",
+                buttons: [
+                  { label: ".deb", file: "Yaver-latest-amd64.deb", primary: true },
+                  { label: ".AppImage", file: "Yaver-latest-x86_64.AppImage" },
+                ],
+              },
+            ].map((p) => (
+              <div
+                key={p.name}
+                className={`card ${p.highlighted ? "border-surface-600" : ""}`}
+              >
+                {p.highlighted && (
+                  <div className="mb-3 text-xs text-surface-400">
+                    Detected your platform
+                  </div>
+                )}
+                <h3 className="mb-1 text-base font-semibold text-surface-50">
+                  {p.name}
+                </h3>
+                <p className="mb-5 text-xs text-surface-500">{p.desc}</p>
+                <div className="flex flex-wrap gap-2">
+                  {p.buttons.map((btn) => (
+                    <a
+                      key={btn.label}
+                      href={`${GITHUB_RELEASE}/download/${btn.file}`}
+                      className={btn.primary ? "btn-primary py-2 px-4 text-xs" : "btn-secondary py-2 px-4 text-xs"}
+                    >
+                      {btn.label}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="mt-4 text-xs text-surface-600">
+            The desktop app provides a GUI for managing your agent, viewing tasks, and configuring settings. The CLI is still required for the agent itself.
+          </p>
         </div>
 
         {/* Mobile app */}
