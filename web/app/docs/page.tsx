@@ -11,7 +11,7 @@ const docs = [
   {
     title: "MCP integration",
     description:
-      "Connect Yaver as an MCP server from Claude Desktop, Claude Web UI, or any MCP-compatible client. 1000 built-in tools.",
+      "Connect Yaver as an MCP server from Claude Desktop, Claude Web UI, or any MCP-compatible client. 340 built-in tools.",
     href: "/docs/mcp",
     tags: ["MCP", "Claude", "Tools"],
   },

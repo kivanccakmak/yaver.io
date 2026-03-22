@@ -1150,8 +1150,62 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, platformTools...)
 
-	// --- Bulk tools (data-driven CLI wrappers) ---
-	tools = append(tools, getBulkToolDefinitions()...)
+	// --- Docker Extended ---
+	dockerExtTools := []map[string]interface{}{
+		{"name": "docker_prune", "description": "Prune Docker resources (containers, images, volumes, networks, or all).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"what"}, "properties": map[string]interface{}{"what": map[string]interface{}{"type": "string", "description": "containers, images, volumes, networks, or all"}}}},
+		{"name": "docker_disk_usage", "description": "Show Docker disk usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "docker_networks", "description": "List Docker networks.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "docker_volumes", "description": "List Docker volumes.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "docker_inspect", "description": "Inspect a Docker container or image (detailed JSON).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"target"}, "properties": map[string]interface{}{"target": map[string]interface{}{"type": "string", "description": "Container or image name/ID"}}}},
+		{"name": "docker_stats", "description": "Show live resource usage of all containers.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "docker_build", "description": "Build a Docker image from Dockerfile.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "tag": map[string]interface{}{"type": "string", "description": "Image tag"}, "dockerfile": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_pull", "description": "Pull a Docker image.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"image"}, "properties": map[string]interface{}{"image": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_push", "description": "Push a Docker image to registry.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"image"}, "properties": map[string]interface{}{"image": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_stop", "description": "Stop a running container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_start", "description": "Start a stopped container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_restart", "description": "Restart a container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_rm", "description": "Remove a container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string"}, "force": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "docker_rmi", "description": "Remove an image.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"image"}, "properties": map[string]interface{}{"image": map[string]interface{}{"type": "string"}, "force": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "docker_top", "description": "Show processes in a container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_port", "description": "Show port mappings.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_cp", "description": "Copy files between host and container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"source", "destination"}, "properties": map[string]interface{}{"source": map[string]interface{}{"type": "string"}, "destination": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_history", "description": "Show image layer history.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"image"}, "properties": map[string]interface{}{"image": map[string]interface{}{"type": "string"}}}},
+	}
+	tools = append(tools, dockerExtTools...)
+
+	// --- Git Extended ---
+	gitExtTools := []map[string]interface{}{
+		{"name": "git_stash", "description": "Manage git stashes (list, save, pop, apply, drop).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "list, save, pop, apply, drop"}, "message": map[string]interface{}{"type": "string"}}}},
+		{"name": "git_blame_file", "description": "Show line-by-line blame.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string"}, "lines": map[string]interface{}{"type": "string", "description": "Line range (e.g. 10,20)"}}}},
+		{"name": "git_log_advanced", "description": "Advanced git log with filters.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "author": map[string]interface{}{"type": "string"}, "since": map[string]interface{}{"type": "string"}, "until": map[string]interface{}{"type": "string"}, "path": map[string]interface{}{"type": "string"}, "count": map[string]interface{}{"type": "integer"}}}},
+		{"name": "git_branches", "description": "List branches sorted by recent activity.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "git_tags", "description": "List tags.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "git_remotes", "description": "List remotes.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "git_reflog", "description": "Show reflog (undo history).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "count": map[string]interface{}{"type": "integer"}}}},
+		{"name": "git_shortlog", "description": "Show commit count by author.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+	}
+	tools = append(tools, gitExtTools...)
+
+	// --- Helm ---
+	helmTools := []map[string]interface{}{
+		{"name": "helm_list", "description": "List Helm releases.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"namespace": map[string]interface{}{"type": "string"}}}},
+		{"name": "helm_status", "description": "Show Helm release status.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"release"}, "properties": map[string]interface{}{"release": map[string]interface{}{"type": "string"}, "namespace": map[string]interface{}{"type": "string"}}}},
+		{"name": "helm_values", "description": "Show Helm release values.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"release"}, "properties": map[string]interface{}{"release": map[string]interface{}{"type": "string"}, "namespace": map[string]interface{}{"type": "string"}}}},
+		{"name": "helm_search", "description": "Search Helm charts.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "helm_repos", "description": "List Helm repos.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "helm_history", "description": "Show release history.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"release"}, "properties": map[string]interface{}{"release": map[string]interface{}{"type": "string"}, "namespace": map[string]interface{}{"type": "string"}}}},
+	}
+	tools = append(tools, helmTools...)
+
+	// --- System Extended ---
+	sysExtTools := []map[string]interface{}{
+		{"name": "free_memory", "description": "Show memory/swap usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "listen_ports", "description": "Show listening ports and owning processes.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "find_large_files", "description": "Find large files.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "size_mb": map[string]interface{}{"type": "integer", "description": "Min size in MB (default: 100)"}}}},
+		{"name": "tree_dir", "description": "Show directory tree.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "depth": map[string]interface{}{"type": "integer"}}}},
+		{"name": "lines_of_code", "description": "Count lines of code by language.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+	}
+	tools = append(tools, sysExtTools...)
 
 	return map[string]interface{}{
 		"tools": tools,

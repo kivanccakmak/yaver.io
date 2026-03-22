@@ -4352,11 +4352,89 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 	case "railway_deploy":
 		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpRailwayDeploy(a.Dir))
 
+	// --- Docker Extended ---
+	case "docker_prune":
+		var a struct { What string `json:"what"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerPrune(a.What))
+	case "docker_disk_usage":
+		return mcpToolJSON(mcpDockerDiskUsage())
+	case "docker_networks":
+		return mcpToolJSON(mcpDockerNetworks())
+	case "docker_volumes":
+		return mcpToolJSON(mcpDockerVolumes())
+	case "docker_inspect":
+		var a struct { Target string `json:"target"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerInspect(a.Target))
+	case "docker_stats":
+		return mcpToolJSON(mcpDockerStats())
+	case "docker_build":
+		var a struct { Dir string `json:"directory"`; Tag string `json:"tag"`; Dockerfile string `json:"dockerfile"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerBuild(a.Dir, a.Tag, a.Dockerfile))
+	case "docker_pull":
+		var a struct { Image string `json:"image"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerPull(a.Image))
+	case "docker_push":
+		var a struct { Image string `json:"image"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerPush(a.Image))
+	case "docker_stop":
+		var a struct { Container string `json:"container"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerStop(a.Container))
+	case "docker_start":
+		var a struct { Container string `json:"container"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerStart(a.Container))
+	case "docker_restart":
+		var a struct { Container string `json:"container"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerRestart(a.Container))
+	case "docker_rm":
+		var a struct { Container string `json:"container"`; Force bool `json:"force"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerRm(a.Container, a.Force))
+	case "docker_rmi":
+		var a struct { Image string `json:"image"`; Force bool `json:"force"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerRmi(a.Image, a.Force))
+	case "docker_top":
+		var a struct { Container string `json:"container"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerTop(a.Container))
+	case "docker_port":
+		var a struct { Container string `json:"container"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerPort(a.Container))
+	case "docker_cp":
+		var a struct { Src string `json:"source"`; Dst string `json:"destination"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerCp(a.Src, a.Dst))
+	case "docker_history":
+		var a struct { Image string `json:"image"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpDockerHistory(a.Image))
+
+	// --- Git Extended ---
+	case "git_stash":
+		var a struct { Action string `json:"action"`; Message string `json:"message"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGitStash(a.Action, a.Message))
+	case "git_blame_file":
+		var a struct { File string `json:"file"`; Lines string `json:"lines"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGitBlame(a.File, a.Lines))
+	case "git_log_advanced":
+		var a struct { Dir string `json:"directory"`; Author string `json:"author"`; Since string `json:"since"`; Until string `json:"until"`; Path string `json:"path"`; Count int `json:"count"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGitLogAdvanced(a.Dir, a.Author, a.Since, a.Until, a.Path, a.Count))
+	case "git_branches":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGitBranches(a.Dir))
+	case "git_tags":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGitTags(a.Dir))
+	case "git_remotes":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGitRemotes(a.Dir))
+	case "git_reflog":
+		var a struct { Dir string `json:"directory"`; Count int `json:"count"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGitReflog(a.Dir, a.Count))
+	case "git_shortlog":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGitShortlog(a.Dir))
+
+	// --- Helm ---
+	case "helm_list":
+		var a struct { NS string `json:"namespace"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpHelmList(a.NS))
+	case "helm_status":
+		var a struct { Release string `json:"release"`; NS string `json:"namespace"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpHelmStatus(a.Release, a.NS))
+	case "helm_values":
+		var a struct { Release string `json:"release"`; NS string `json:"namespace"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpHelmValues(a.Release, a.NS))
+	case "helm_search":
+		var a struct { Query string `json:"query"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpHelmSearch(a.Query))
+	case "helm_repos":
+		return mcpToolJSON(mcpHelmRepos())
+	case "helm_history":
+		var a struct { Release string `json:"release"`; NS string `json:"namespace"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpHelmHistory(a.Release, a.NS))
+
+	// --- System Extended ---
+	case "free_memory":
+		return mcpToolJSON(mcpFreeMemory())
+	case "listen_ports":
+		return mcpToolJSON(mcpListenPorts())
+	case "find_large_files":
+		var a struct { Dir string `json:"directory"`; SizeMB int `json:"size_mb"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpFindLargeFiles(a.Dir, a.SizeMB))
+	case "tree_dir":
+		var a struct { Dir string `json:"directory"`; Depth int `json:"depth"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpTreeDir(a.Dir, a.Depth))
+	case "lines_of_code":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpLinesOfCode(a.Dir))
+
 	default:
-		// Try bulk tools (data-driven CLI wrappers)
-		if result, ok := handleBulkTool(call.Name, call.Arguments); ok {
-			return mcpToolJSON(result)
-		}
 		return mcpToolError("unknown tool: " + call.Name)
 	}
 }
