@@ -67,7 +67,7 @@ _yaver_completions() {
             return 0
             ;;
         mcp)
-            COMPREPLY=($(compgen -W "deploy list remove status" -- "$cur"))
+            COMPREPLY=($(compgen -W "deploy list remove status setup" -- "$cur"))
             return 0
             ;;
         completion)
@@ -155,7 +155,7 @@ _yaver() {
             _describe 'subcommand' subcommands
             ;;
         mcp)
-            subcommands=('deploy:Deploy MCP server' 'list:List deployments' 'remove:Remove deployment' 'status:Check status')
+            subcommands=('deploy:Deploy MCP server' 'list:List deployments' 'remove:Remove deployment' 'status:Check status' 'setup:Configure MCP for editors')
             _describe 'subcommand' subcommands
             ;;
         completion)
@@ -254,6 +254,7 @@ complete -c yaver -n '__fish_seen_subcommand_from mcp' -a 'deploy' -d 'Deploy MC
 complete -c yaver -n '__fish_seen_subcommand_from mcp' -a 'list' -d 'List deployments'
 complete -c yaver -n '__fish_seen_subcommand_from mcp' -a 'remove' -d 'Remove deployment'
 complete -c yaver -n '__fish_seen_subcommand_from mcp' -a 'status' -d 'Check status'
+complete -c yaver -n '__fish_seen_subcommand_from mcp' -a 'setup' -d 'Configure MCP for editors'
 
 # completion subcommands
 complete -c yaver -n '__fish_seen_subcommand_from completion' -a 'bash' -d 'Bash completions'

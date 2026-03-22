@@ -161,6 +161,15 @@ export default function DownloadPage() {
               </div>
             </div>
             <div>
+              <p className="mb-2 text-xs text-surface-500">Nix</p>
+              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
+                <span className="text-surface-500">$</span>{" "}
+                <span className="text-surface-300 select-all">
+                  nix run github:kivanccakmak/yaver.io -- version
+                </span>
+              </div>
+            </div>
+            <div>
               <p className="mb-2 text-xs text-surface-500">apt (Debian / Ubuntu)</p>
               <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px] space-y-1">
                 <div>

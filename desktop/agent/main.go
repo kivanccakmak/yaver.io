@@ -146,6 +146,7 @@ Usage:
   yaver tmux adopt <session>  Adopt an existing tmux session as a Yaver task
   yaver tmux detach <task-id>  Stop monitoring an adopted session (session keeps running)
   yaver mcp         Start MCP server (local stdio or network HTTP)
+  yaver mcp setup <editor>  Auto-configure MCP for Claude/Cursor/VS Code/Windsurf/Zed
   yaver email       Email connector setup and management (Office 365 / Gmail)
   yaver acl         Agent Communication Layer — connect to other MCP servers
   yaver status      Show auth, relay, and connection status
@@ -4197,6 +4198,9 @@ func runMCP(args []string) {
 			return
 		case "status":
 			mcpRemoteCmd("status", args[1:])
+			return
+		case "setup":
+			runMCPSetup(args[1:])
 			return
 		}
 	}

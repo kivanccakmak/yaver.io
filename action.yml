@@ -1,0 +1,83 @@
+name: "Yaver Task"
+description: "Run AI coding agent tasks on your dev machine from GitHub Actions"
+author: "Yaver"
+branding:
+  icon: "terminal"
+  color: "gray-dark"
+
+inputs:
+  agent-url:
+    description: "Yaver agent URL (e.g. https://relay.example.com/proxy/<device-id>)"
+    required: true
+  webhook-secret:
+    description: "Webhook secret configured on the agent"
+    required: true
+  prompt:
+    description: "Task prompt for the AI agent"
+    required: true
+  runner:
+    description: "AI runner (claude, codex, aider, goose, ollama, etc.)"
+    required: false
+    default: "claude"
+  work-dir:
+    description: "Working directory on the remote machine"
+    required: false
+    default: ""
+  wait:
+    description: "Wait for task completion (true/false)"
+    required: false
+    default: "false"
+  timeout:
+    description: "Timeout in seconds (only if wait=true)"
+    required: false
+    default: "300"
+
+outputs:
+  task-id:
+    description: "Created task ID"
+    value: ${{ steps.trigger.outputs.task_id }}
+  status:
+    description: "Task status (created, running, completed, failed)"
+    value: ${{ steps.trigger.outputs.status }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Trigger Yaver task
+      id: trigger
+      shell: bash
+      run: |
+        BODY="{\"title\": $(echo '${{ inputs.prompt }}' | jq -Rs .), \"runner\": \"${{ inputs.runner }}\"}"
+        if [ -n "${{ inputs.work-dir }}" ]; then
+          BODY=$(echo "$BODY" | jq '. + {"workDir": "${{ inputs.work-dir }}"}')
+        fi
+
+        RESPONSE=$(curl -sf -X POST "${{ inputs.agent-url }}/webhooks/trigger" \
+          -H "Content-Type: application/json" \
+          -H "X-Webhook-Secret: ${{ inputs.webhook-secret }}" \
+          -d "$BODY")
+
+        TASK_ID=$(echo "$RESPONSE" | jq -r '.id // .taskId // empty')
+        echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
+        echo "Task created: $TASK_ID"
+
+        if [ "${{ inputs.wait }}" = "true" ] && [ -n "$TASK_ID" ]; then
+          TIMEOUT=${{ inputs.timeout }}
+          ELAPSED=0
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+            STATUS=$(curl -sf "${{ inputs.agent-url }}/tasks/$TASK_ID" \
+              -H "X-Webhook-Secret: ${{ inputs.webhook-secret }}" | jq -r '.status // "unknown"')
+            echo "[$ELAPSED s] Status: $STATUS"
+            if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ] || [ "$STATUS" = "stopped" ]; then
+              echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "status=timeout" >> "$GITHUB_OUTPUT"
+          echo "Task timed out after ${TIMEOUT}s"
+          exit 1
+        else
+          echo "status=created" >> "$GITHUB_OUTPUT"
+        fi
