@@ -992,6 +992,50 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, dailyTools...)
 
+	// --- Infrastructure & SaaS ---
+	infraTools := []map[string]interface{}{
+		// Kubernetes
+		{"name": "k8s_pods", "description": "List Kubernetes pods.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_logs", "description": "Get logs from a Kubernetes pod.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"pod"}, "properties": map[string]interface{}{"pod": map[string]interface{}{"type": "string"}, "namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}, "container": map[string]interface{}{"type": "string"}, "tail": map[string]interface{}{"type": "integer"}}}},
+		{"name": "k8s_describe", "description": "Describe a Kubernetes resource.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"resource", "name"}, "properties": map[string]interface{}{"resource": map[string]interface{}{"type": "string", "description": "pod, service, deployment, etc."}, "name": map[string]interface{}{"type": "string"}, "namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_get", "description": "Get Kubernetes resources (pods, services, deployments, etc.).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"resource"}, "properties": map[string]interface{}{"resource": map[string]interface{}{"type": "string", "description": "pods, services, deployments, ingress, configmaps, secrets, nodes, etc."}, "namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_apply", "description": "Apply a Kubernetes manifest file.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string", "description": "Path to YAML manifest"}, "namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_exec", "description": "Execute a command in a Kubernetes pod.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"pod", "command"}, "properties": map[string]interface{}{"pod": map[string]interface{}{"type": "string"}, "command": map[string]interface{}{"type": "string"}, "namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}, "container": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_contexts", "description": "List available Kubernetes contexts.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "k8s_namespaces", "description": "List Kubernetes namespaces.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"context": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_top", "description": "Show resource usage (CPU/memory) for pods or nodes.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"resource"}, "properties": map[string]interface{}{"resource": map[string]interface{}{"type": "string", "description": "pods or nodes"}, "namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_events", "description": "Show recent Kubernetes events (warnings, errors).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}}}},
+		// Terraform
+		{"name": "tf_plan", "description": "Run terraform plan.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "tf_apply", "description": "Run terraform apply.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "auto_approve": map[string]interface{}{"type": "boolean", "description": "Auto-approve (default: false)"}}}},
+		{"name": "tf_state", "description": "List terraform state resources.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "tf_output", "description": "Show terraform outputs.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "tf_init", "description": "Initialize terraform.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "tf_validate", "description": "Validate terraform configuration.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Serverless
+		{"name": "lambda_list", "description": "List AWS Lambda functions.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "lambda_invoke", "description": "Invoke an AWS Lambda function.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}, "payload": map[string]interface{}{"type": "string", "description": "JSON payload"}}}},
+		{"name": "lambda_logs", "description": "Get AWS Lambda function logs.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}, "minutes": map[string]interface{}{"type": "integer", "description": "Minutes of logs (default: 30)"}}}},
+		// Vercel
+		{"name": "vercel_status", "description": "Show Vercel deployments.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "vercel_logs", "description": "Get Vercel deployment logs.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"url"}, "properties": map[string]interface{}{"url": map[string]interface{}{"type": "string", "description": "Deployment URL"}}}},
+		{"name": "vercel_env", "description": "List Vercel environment variables.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Netlify
+		{"name": "netlify_status", "description": "Show Netlify site status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Sentry
+		{"name": "sentry_issues", "description": "List recent Sentry errors.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"org", "project"}, "properties": map[string]interface{}{"org": map[string]interface{}{"type": "string"}, "project": map[string]interface{}{"type": "string"}}}},
+		// Linear
+		{"name": "linear_issues", "description": "List Linear issues.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"api_key"}, "properties": map[string]interface{}{"api_key": map[string]interface{}{"type": "string", "description": "Linear API key"}, "team": map[string]interface{}{"type": "string", "description": "Team key filter"}}}},
+		// Notion
+		{"name": "notion_search", "description": "Search Notion pages and databases.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"api_key", "query"}, "properties": map[string]interface{}{"api_key": map[string]interface{}{"type": "string", "description": "Notion integration token"}, "query": map[string]interface{}{"type": "string"}}}},
+		// 1Password
+		{"name": "op_get", "description": "Look up a 1Password item (passwords masked).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"item"}, "properties": map[string]interface{}{"item": map[string]interface{}{"type": "string", "description": "Item name or ID"}, "vault": map[string]interface{}{"type": "string"}}}},
+		{"name": "op_list", "description": "List 1Password items.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"vault": map[string]interface{}{"type": "string"}}}},
+		// Raycast
+		{"name": "raycast", "description": "Trigger a Raycast extension (macOS).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"command"}, "properties": map[string]interface{}{"command": map[string]interface{}{"type": "string", "description": "Raycast command path"}}}},
+	}
+	tools = append(tools, infraTools...)
+
 	return map[string]interface{}{
 		"tools": tools,
 	}

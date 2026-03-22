@@ -3938,6 +3938,141 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		json.Unmarshal(call.Arguments, &args)
 		return mcpToolJSON(mcpDomainCheck(args.Domain))
 
+	// --- Kubernetes ---
+	case "k8s_pods":
+		var a struct { NS string `json:"namespace"`; Ctx string `json:"context"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpK8sPods(a.NS, a.Ctx))
+	case "k8s_logs":
+		var a struct { Pod string `json:"pod"`; NS string `json:"namespace"`; Ctx string `json:"context"`; Container string `json:"container"`; Tail int `json:"tail"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpK8sLogs(a.Pod, a.NS, a.Ctx, a.Container, a.Tail))
+	case "k8s_describe":
+		var a struct { Resource string `json:"resource"`; Name string `json:"name"`; NS string `json:"namespace"`; Ctx string `json:"context"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpK8sDescribe(a.Resource, a.Name, a.NS, a.Ctx))
+	case "k8s_get":
+		var a struct { Resource string `json:"resource"`; NS string `json:"namespace"`; Ctx string `json:"context"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpK8sGet(a.Resource, a.NS, a.Ctx))
+	case "k8s_apply":
+		var a struct { File string `json:"file"`; NS string `json:"namespace"`; Ctx string `json:"context"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpK8sApply(a.File, a.NS, a.Ctx))
+	case "k8s_exec":
+		var a struct { Pod string `json:"pod"`; Command string `json:"command"`; NS string `json:"namespace"`; Ctx string `json:"context"`; Container string `json:"container"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpK8sExec(a.Pod, a.NS, a.Ctx, a.Command, a.Container))
+	case "k8s_contexts":
+		return mcpToolJSON(mcpK8sContexts())
+	case "k8s_namespaces":
+		var a struct { Ctx string `json:"context"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpK8sNamespaces(a.Ctx))
+	case "k8s_top":
+		var a struct { Resource string `json:"resource"`; NS string `json:"namespace"`; Ctx string `json:"context"` }
+		json.Unmarshal(call.Arguments, &a)
+		if a.Resource == "nodes" {
+			return mcpToolJSON(mcpK8sTopNodes(a.Ctx))
+		}
+		return mcpToolJSON(mcpK8sTopPods(a.NS, a.Ctx))
+	case "k8s_events":
+		var a struct { NS string `json:"namespace"`; Ctx string `json:"context"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpK8sEvents(a.NS, a.Ctx))
+
+	// --- Terraform ---
+	case "tf_plan":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpTerraformPlan(a.Dir))
+	case "tf_apply":
+		var a struct { Dir string `json:"directory"`; Auto bool `json:"auto_approve"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpTerraformApply(a.Dir, a.Auto))
+	case "tf_state":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpTerraformState(a.Dir))
+	case "tf_output":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpTerraformOutput(a.Dir))
+	case "tf_init":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpTerraformInit(a.Dir))
+	case "tf_validate":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpTerraformValidate(a.Dir))
+
+	// --- Serverless ---
+	case "lambda_list":
+		return mcpToolJSON(mcpLambdaList())
+	case "lambda_invoke":
+		var a struct { Name string `json:"name"`; Payload string `json:"payload"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpLambdaInvoke(a.Name, a.Payload))
+	case "lambda_logs":
+		var a struct { Name string `json:"name"`; Minutes int `json:"minutes"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpLambdaLogs(a.Name, a.Minutes))
+
+	// --- Vercel ---
+	case "vercel_status":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpVercelStatus(a.Dir))
+	case "vercel_logs":
+		var a struct { URL string `json:"url"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpVercelLogs(a.URL))
+	case "vercel_env":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpVercelEnv(a.Dir))
+
+	// --- Netlify ---
+	case "netlify_status":
+		var a struct { Dir string `json:"directory"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpNetlifyStatus(a.Dir))
+
+	// --- Sentry ---
+	case "sentry_issues":
+		var a struct { Org string `json:"org"`; Project string `json:"project"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpSentryIssues(a.Org, a.Project))
+
+	// --- Linear ---
+	case "linear_issues":
+		var a struct { APIKey string `json:"api_key"`; Team string `json:"team"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpLinearIssues(a.APIKey, a.Team))
+
+	// --- Notion ---
+	case "notion_search":
+		var a struct { APIKey string `json:"api_key"`; Query string `json:"query"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpNotionSearch(a.APIKey, a.Query))
+
+	// --- 1Password ---
+	case "op_get":
+		var a struct { Item string `json:"item"`; Vault string `json:"vault"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpOnePasswordGet(a.Item, a.Vault))
+	case "op_list":
+		var a struct { Vault string `json:"vault"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpOnePasswordList(a.Vault))
+
+	// --- Raycast ---
+	case "raycast":
+		var a struct { Command string `json:"command"` }
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpRaycastTrigger(a.Command))
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}

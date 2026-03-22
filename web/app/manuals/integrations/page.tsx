@@ -281,7 +281,7 @@ X-Webhook-Secret: <secret>
             3. MCP Tools
           </h2>
           <p className="mb-6 text-sm leading-relaxed text-surface-400">
-            Yaver exposes 192 MCP tools. Connect from Claude Desktop, Claude
+            Yaver exposes 221 MCP tools. Connect from Claude Desktop, Claude
             Code, or any MCP-compatible client to control your agent
             programmatically.
           </p>
@@ -397,7 +397,7 @@ X-Webhook-Secret: <secret>
               <code className="rounded bg-surface-900 px-1.5 py-0.5 text-surface-400">
                 yaver mcp --list-tools
               </code>{" "}
-              for the full list of 192 tools.
+              for the full list of 221 tools.
             </p>
           </div>
 
