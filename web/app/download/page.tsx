@@ -232,7 +232,7 @@ export default function DownloadPage() {
               <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
                 <span className="text-surface-500">$</span>{" "}
                 <span className="text-surface-300 select-all">
-                  docker run --rm yaver/cli version
+                  docker run --rm kivanccakmak/yaver-cli version
                 </span>
               </div>
             </div>

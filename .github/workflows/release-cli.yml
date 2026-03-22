@@ -545,7 +545,7 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            yaver/cli:latest
-            yaver/cli:${{ env.VERSION }}
+            kivanccakmak/yaver-cli:latest
+            kivanccakmak/yaver-cli:${{ env.VERSION }}
             ghcr.io/${{ github.repository }}/cli:latest
             ghcr.io/${{ github.repository }}/cli:${{ env.VERSION }}
