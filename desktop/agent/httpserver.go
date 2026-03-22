@@ -64,6 +64,9 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/agent/clean", s.auth(s.handleClean))
 	mux.HandleFunc("/agent/doctor", s.auth(s.handleDoctor))
 	mux.HandleFunc("/agent/tools", s.auth(s.handleTools))
+	mux.HandleFunc("/session/list", s.auth(s.handleSessionList))
+	mux.HandleFunc("/session/export", s.auth(s.handleSessionExport))
+	mux.HandleFunc("/session/import", s.auth(s.handleSessionImport))
 	mux.HandleFunc("/tmux/sessions", s.auth(s.handleTmuxSessions))
 	mux.HandleFunc("/tmux/adopt", s.auth(s.handleTmuxAdopt))
 	mux.HandleFunc("/tmux/detach", s.auth(s.handleTmuxDetach))
@@ -1017,6 +1020,81 @@ func (s *HTTPServer) handleTools(w http.ResponseWriter, r *http.Request) {
 		"ok":      true,
 		"tools":   result,
 		"support": support,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Session transfer handlers
+// ---------------------------------------------------------------------------
+
+func (s *HTTPServer) handleSessionList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "use GET")
+		return
+	}
+	sessions := ListTransferableSessions(s.taskMgr)
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "sessions": sessions})
+}
+
+func (s *HTTPServer) handleSessionExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	var body struct {
+		TaskID           string `json:"taskId"`
+		IncludeWorkspace bool   `json:"includeWorkspace"`
+		WorkspaceMode    string `json:"workspaceMode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if body.TaskID == "" {
+		jsonError(w, http.StatusBadRequest, "taskId is required")
+		return
+	}
+	bundle, err := ExportSession(s.taskMgr, body.TaskID, ExportOptions{
+		IncludeWorkspace: body.IncludeWorkspace,
+		WorkspaceMode:    body.WorkspaceMode,
+	})
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	log.Printf("[HTTP] Session exported: task=%s agent=%s turns=%d", body.TaskID, bundle.AgentType, len(bundle.Task.Turns))
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "bundle": bundle})
+}
+
+func (s *HTTPServer) handleSessionImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	var body struct {
+		Bundle         TransferBundle `json:"bundle"`
+		WorkDir        string         `json:"workDir,omitempty"`
+		ResumeOnImport bool           `json:"resumeOnImport"`
+		GitClone       bool           `json:"gitClone"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	taskID, warnings, err := ImportSession(s.taskMgr, &body.Bundle, ImportOptions{
+		WorkDir:        body.WorkDir,
+		ResumeOnImport: body.ResumeOnImport,
+		GitClone:       body.GitClone,
+	})
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	log.Printf("[HTTP] Session imported: task=%s warnings=%d", taskID, len(warnings))
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":       true,
+		"taskId":   taskID,
+		"warnings": warnings,
 	})
 }
 
@@ -2345,6 +2423,177 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 			} else {
 				sb.WriteString(fmt.Sprintf("FAIL  %s  status: %d\n", t.URL, resp.StatusCode))
 			}
+		}
+		return mcpToolResult(sb.String())
+
+	// --- Session Transfer ---
+	case "session_list":
+		sessions := ListTransferableSessions(s.taskMgr)
+		if len(sessions) == 0 {
+			return mcpToolResult("No transferable sessions found.")
+		}
+		var sb strings.Builder
+		sb.WriteString("Transferable sessions:\n\n")
+		for _, sess := range sessions {
+			resumable := ""
+			if sess.Resumable {
+				resumable = " [resumable]"
+			}
+			sb.WriteString(fmt.Sprintf("- %s (%s) — \"%s\" [%s, %d turns]%s\n",
+				sess.TaskID, sess.AgentType, sess.Title, sess.Status, sess.Turns, resumable))
+			if sess.GitRemote != "" {
+				sb.WriteString(fmt.Sprintf("  Git: %s @ %s\n", sess.GitRemote, sess.GitBranch))
+			}
+		}
+		return mcpToolResult(sb.String())
+
+	case "session_export":
+		var args struct {
+			TaskID           string `json:"task_id"`
+			IncludeWorkspace bool   `json:"include_workspace"`
+			WorkspaceMode    string `json:"workspace_mode"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.TaskID == "" {
+			return mcpToolError("task_id is required")
+		}
+		bundle, err := ExportSession(s.taskMgr, args.TaskID, ExportOptions{
+			IncludeWorkspace: args.IncludeWorkspace,
+			WorkspaceMode:    args.WorkspaceMode,
+		})
+		if err != nil {
+			return mcpToolError(err.Error())
+		}
+		bundleJSON, _ := json.MarshalIndent(bundle, "", "  ")
+		return mcpToolResult(fmt.Sprintf("Session exported (%d bytes, %d turns, agent=%s).\n\nBundle JSON:\n%s",
+			len(bundleJSON), len(bundle.Task.Turns), bundle.AgentType, string(bundleJSON)))
+
+	case "session_import":
+		var args struct {
+			BundleJSON string `json:"bundle_json"`
+			WorkDir    string `json:"work_dir"`
+			GitClone   bool   `json:"git_clone"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.BundleJSON == "" {
+			return mcpToolError("bundle_json is required")
+		}
+		var bundle TransferBundle
+		if err := json.Unmarshal([]byte(args.BundleJSON), &bundle); err != nil {
+			return mcpToolError(fmt.Sprintf("invalid bundle JSON: %v", err))
+		}
+		taskID, warnings, err := ImportSession(s.taskMgr, &bundle, ImportOptions{
+			WorkDir:  args.WorkDir,
+			GitClone: args.GitClone,
+		})
+		if err != nil {
+			return mcpToolError(err.Error())
+		}
+		result := fmt.Sprintf("Session imported! Task ID: %s", taskID)
+		if len(warnings) > 0 {
+			result += "\n\nWarnings:\n"
+			for _, w := range warnings {
+				result += "- " + w + "\n"
+			}
+		}
+		return mcpToolResult(result)
+
+	case "session_transfer":
+		var args struct {
+			TaskID           string `json:"task_id"`
+			TargetDevice     string `json:"target_device"`
+			IncludeWorkspace bool   `json:"include_workspace"`
+			WorkspaceMode    string `json:"workspace_mode"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.TaskID == "" || args.TargetDevice == "" {
+			return mcpToolError("task_id and target_device are required")
+		}
+		// Export
+		bundle, err := ExportSession(s.taskMgr, args.TaskID, ExportOptions{
+			IncludeWorkspace: args.IncludeWorkspace,
+			WorkspaceMode:    args.WorkspaceMode,
+		})
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("export failed: %v", err))
+		}
+		// Find target device
+		cfg, err := LoadConfig()
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("load config: %v", err))
+		}
+		targetURL := resolveDeviceURL(cfg, args.TargetDevice, true)
+		// Send to target
+		importBody, _ := json.Marshal(map[string]interface{}{
+			"bundle":   bundle,
+			"gitClone": args.WorkspaceMode == "git",
+		})
+		req, _ := http.NewRequest("POST", targetURL+"/session/import", bytes.NewReader(importBody))
+		req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+		req.Header.Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 120 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("transfer failed: %v", err))
+		}
+		defer resp.Body.Close()
+		var importResp struct {
+			OK       bool     `json:"ok"`
+			TaskID   string   `json:"taskId"`
+			Warnings []string `json:"warnings"`
+			Error    string   `json:"error"`
+		}
+		json.NewDecoder(resp.Body).Decode(&importResp)
+		if !importResp.OK {
+			return mcpToolError(fmt.Sprintf("import failed on target: %s", importResp.Error))
+		}
+		result := fmt.Sprintf("Session transferred successfully!\nSource: %s (task %s)\nTarget: %s (task %s)",
+			s.hostname, args.TaskID, args.TargetDevice, importResp.TaskID)
+		if len(importResp.Warnings) > 0 {
+			result += "\n\nWarnings:\n"
+			for _, w := range importResp.Warnings {
+				result += "- " + w + "\n"
+			}
+		}
+		log.Printf("[MCP] Session transferred: %s -> %s (task %s -> %s)", s.hostname, args.TargetDevice, args.TaskID, importResp.TaskID)
+		return mcpToolResult(result)
+
+	// --- Exec ---
+	case "exec_command":
+		var args struct {
+			Command string `json:"command"`
+			WorkDir string `json:"work_dir"`
+			Timeout int    `json:"timeout"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Command == "" {
+			return mcpToolError("command is required")
+		}
+		if s.execMgr == nil {
+			return mcpToolError("exec is not enabled on this agent")
+		}
+		sess, err := s.execMgr.StartExec(args.Command, args.WorkDir, "", nil, args.Timeout)
+		if err != nil {
+			return mcpToolError(err.Error())
+		}
+		// Wait for completion (up to timeout)
+		select {
+		case <-sess.doneCh:
+		case <-time.After(time.Duration(args.Timeout) * time.Second):
+			if args.Timeout == 0 {
+				<-sess.doneCh // wait forever if no timeout
+			}
+		}
+		snapshot := sess.Snapshot()
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Exit code: %v\n", snapshot["exitCode"]))
+		if stdout, ok := snapshot["stdout"].(string); ok && stdout != "" {
+			sb.WriteString("\n--- stdout ---\n")
+			sb.WriteString(stdout)
+		}
+		if stderr, ok := snapshot["stderr"].(string); ok && stderr != "" {
+			sb.WriteString("\n--- stderr ---\n")
+			sb.WriteString(stderr)
 		}
 		return mcpToolResult(sb.String())
 

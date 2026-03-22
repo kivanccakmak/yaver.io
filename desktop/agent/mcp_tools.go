@@ -591,6 +591,77 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, tunnelTools...)
 
+	// --- Session Transfer ---
+	sessionTools := []map[string]interface{}{
+		{
+			"name":        "session_list",
+			"description": "List AI agent sessions that can be transferred to another machine. Shows task ID, agent type, title, status, and whether the session is resumable.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "session_export",
+			"description": "Export an AI agent session as a portable bundle. The bundle contains conversation history, agent-specific session files, and optionally workspace info (git patch or tar). Use this to prepare a session for transfer to another machine.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"task_id"},
+				"properties": map[string]interface{}{
+					"task_id":           map[string]interface{}{"type": "string", "description": "The task ID of the session to export"},
+					"include_workspace": map[string]interface{}{"type": "boolean", "description": "Include workspace files in the bundle (default: false)"},
+					"workspace_mode":    map[string]interface{}{"type": "string", "description": "How to include workspace: 'none', 'git' (git patch), or 'tar'. Default: 'git' if git repo, else 'none'."},
+				},
+			},
+		},
+		{
+			"name":        "session_import",
+			"description": "Import a session bundle that was exported from another machine. Creates a new task with the transferred session state. Supports Claude Code, Aider, Codex, Goose, Amp, OpenCode, and custom agents.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"bundle_json"},
+				"properties": map[string]interface{}{
+					"bundle_json": map[string]interface{}{"type": "string", "description": "The JSON string of the transfer bundle"},
+					"work_dir":    map[string]interface{}{"type": "string", "description": "Target working directory (default: agent's work dir)"},
+					"git_clone":   map[string]interface{}{"type": "boolean", "description": "Clone the git repo from the bundle's remote URL (default: false)"},
+				},
+			},
+		},
+		{
+			"name":        "session_transfer",
+			"description": "Transfer an AI agent session from THIS machine to another device in one step. The session (conversation history, agent state, optionally workspace) is packaged, sent to the target device, and imported there. The user can then continue working from the target device via mobile or desktop. Supports Claude Code, Aider, Codex, Goose, Amp, OpenCode sessions.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"task_id", "target_device"},
+				"properties": map[string]interface{}{
+					"task_id":           map[string]interface{}{"type": "string", "description": "The task ID of the session to transfer"},
+					"target_device":     map[string]interface{}{"type": "string", "description": "Target device ID or hostname prefix (from your registered devices)"},
+					"include_workspace": map[string]interface{}{"type": "boolean", "description": "Include workspace files (default: false)"},
+					"workspace_mode":    map[string]interface{}{"type": "string", "description": "How to transfer workspace: 'none', 'git', or 'tar'. Default: 'git'."},
+				},
+			},
+		},
+	}
+	tools = append(tools, sessionTools...)
+
+	// --- Exec (Remote Command Execution) ---
+	execTools := []map[string]interface{}{
+		{
+			"name":        "exec_command",
+			"description": "Execute a shell command on this machine and return the output. Like SSH but local. Commands are validated through the sandbox (dangerous patterns like rm -rf / are blocked). Use this for quick commands — for long-running tasks, use create_task instead.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"command"},
+				"properties": map[string]interface{}{
+					"command":  map[string]interface{}{"type": "string", "description": "Shell command to execute"},
+					"work_dir": map[string]interface{}{"type": "string", "description": "Working directory (default: agent's work dir)"},
+					"timeout":  map[string]interface{}{"type": "integer", "description": "Timeout in seconds (default: 300, max: 3600)"},
+				},
+			},
+		},
+	}
+	tools = append(tools, execTools...)
+
 	return map[string]interface{}{
 		"tools": tools,
 	}

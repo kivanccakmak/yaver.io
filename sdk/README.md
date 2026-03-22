@@ -197,6 +197,37 @@ cd sdk/examples/c && gcc -o client client_basic.c -L../../go/clib -lyaver
 ./client
 ```
 
+## Session Transfer
+
+Transfer AI agent sessions between machines. Move a Claude Code, Aider, Codex, Goose, or any other agent session from your laptop to a headless server — and keep working from your phone.
+
+### CLI
+
+```bash
+yaver session list
+yaver session transfer abc12345 --to my-server
+yaver session export abc12345 --output bundle.json
+yaver session import --input bundle.json
+```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/session/list` | GET | List transferable sessions |
+| `/session/export` | POST | Export a session bundle (conversation history, agent state, workspace) |
+| `/session/import` | POST | Import a session bundle on the target machine |
+
+### MCP Tools
+
+Session transfer is also available as MCP tools — use it directly from within Claude Code without leaving your terminal:
+
+```
+# From Claude Code, just ask:
+"Transfer this session to my server"
+# Claude Code will use the session_transfer MCP tool automatically
+```
+
 ## Testing
 
 ```bash

@@ -92,6 +92,8 @@ func main() {
 		runTmux(os.Args[2:])
 	case "exec":
 		runExec(os.Args[2:])
+	case "session":
+		runSession(os.Args[2:])
 	case "clean":
 		runClean(os.Args[2:])
 	case "doctor":
@@ -145,6 +147,7 @@ Usage:
   yaver status      Show auth, relay, and connection status
   yaver devices     List your registered devices
   yaver exec        Execute a command on a remote device (like SSH)
+  yaver session     Transfer AI agent sessions between machines
   yaver clean       Remove old tasks, images, and logs (default: older than 30 days)
   yaver purge       Factory reset — remove all local data (auth, sessions, tasks, logs)
   yaver reset       Alias for purge
@@ -1104,6 +1107,23 @@ func runServe(args []string) {
 
 	go heartbeatLoop(ctx, cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID, taskMgr)
 	go metricsLoop(ctx, cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID)
+
+	// Periodic auto-update check (every 6 hours when idle)
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if cfg.AutoUpdate && taskMgr.GetRunningTaskCount() == 0 {
+					log.Println("[auto-update] Periodic check (agent idle)...")
+					checkAutoUpdate(cfg)
+				}
+			}
+		}
+	}()
 
 	// Warm up the runner — fork Claude at startup to establish a session
 	go taskMgr.WarmUp()

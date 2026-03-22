@@ -1410,6 +1410,55 @@ run_sdk_tests() {
         tail -20 "$TEST_DIR/sdk-python-integration.log"
     fi
 
+    # Session transfer test
+    info "Testing session transfer (export/import)..."
+    # Create a task first
+    local task_resp=$(curl -s -X POST "$base_url/tasks" \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" \
+        -d '{"title":"Transfer test task"}')
+    local test_task_id=$(echo "$task_resp" | grep -o '"taskId":"[^"]*"' | cut -d'"' -f4)
+
+    if [ -n "$test_task_id" ]; then
+        sleep 2  # Let it run briefly
+
+        # List transferable sessions
+        local list_resp=$(curl -s "$base_url/session/list" \
+            -H "Authorization: Bearer $token")
+        if echo "$list_resp" | grep -q '"ok":true'; then
+            pass "Session list endpoint works"
+        else
+            fail "Session list endpoint failed"
+        fi
+
+        # Export
+        local export_resp=$(curl -s -X POST "$base_url/session/export" \
+            -H "Authorization: Bearer $token" \
+            -H "Content-Type: application/json" \
+            -d "{\"taskId\":\"$test_task_id\"}")
+        if echo "$export_resp" | grep -q '"ok":true'; then
+            pass "Session export works"
+
+            # Import (to same agent for testing)
+            local bundle=$(echo "$export_resp" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)['bundle']))" 2>/dev/null)
+            if [ -n "$bundle" ]; then
+                local import_resp=$(curl -s -X POST "$base_url/session/import" \
+                    -H "Authorization: Bearer $token" \
+                    -H "Content-Type: application/json" \
+                    -d "{\"bundle\":$bundle}")
+                if echo "$import_resp" | grep -q '"ok":true'; then
+                    pass "Session import works (round-trip)"
+                else
+                    fail "Session import failed"
+                fi
+            fi
+        else
+            fail "Session export failed"
+        fi
+    else
+        fail "Could not create test task for transfer test"
+    fi
+
     kill "$agent_pid" 2>/dev/null || true
 }
 

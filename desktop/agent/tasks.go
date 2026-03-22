@@ -350,6 +350,19 @@ func (tm *TaskManager) GetOwnRunnerProcesses() []RunnerProcess {
 }
 
 // GetAgentStatus returns the current agent and runner health.
+// GetRunningTaskCount returns the number of currently running tasks.
+func (tm *TaskManager) GetRunningTaskCount() int {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	count := 0
+	for _, t := range tm.tasks {
+		if t.Status == TaskStatusRunning {
+			count++
+		}
+	}
+	return count
+}
+
 func (tm *TaskManager) GetAgentStatus() AgentStatus {
 	// Check runner binary
 	runnerInfo := RunnerStatusInfo{

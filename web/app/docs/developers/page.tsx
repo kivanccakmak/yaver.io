@@ -123,6 +123,7 @@ export default function DevelopersPage() {
               ["doctor", "System Health Check (yaver doctor)"],
               ["running-tests", "Running Tests"],
               ["integration-test-suite", "Integration Test Suite"],
+              ["session-transfer", "Session Transfer"],
               ["pr-rules", "Pull Request Rules"],
               ["sdk", "SDK — Embed Yaver"],
               ["contributing", "Contributing"],
@@ -1755,6 +1756,41 @@ CLI Agent ◄──QUIC──────────────── Relay (:
                 Credentials are stored as GitHub Actions secrets.
                 See <InlineCode>.github/workflows/test-suite.yml</InlineCode>.
               </p>
+            </div>
+          </div>
+        </section>
+
+        {/* ─── Session Transfer ─── */}
+        <section className="mb-20">
+          <SectionHeading id="session-transfer">Session Transfer</SectionHeading>
+          <Prose>
+            Transfer AI agent sessions between machines. Move a Claude Code, Aider,
+            Codex, Goose, or any other agent session from your laptop to a headless
+            server &mdash; and keep working from your phone.
+          </Prose>
+
+          <div className="space-y-4">
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">CLI Usage</h4>
+              <Terminal title="session transfer">
+                <Cmd>yaver session list</Cmd>
+                <Cmd>yaver session transfer abc12345 --to my-server</Cmd>
+                <Cmd>yaver session export abc12345 --output bundle.json</Cmd>
+                <Cmd>yaver session import --input bundle.json</Cmd>
+              </Terminal>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">MCP Support</h4>
+              <Prose>
+                Session transfer is also available as MCP tools &mdash; use it directly
+                from within Claude Code without leaving your terminal.
+              </Prose>
+              <Terminal title="MCP usage">
+                <Comment># From Claude Code, just ask:</Comment>
+                <Output>&quot;Transfer this session to my server&quot;</Output>
+                <Comment># Claude Code will use the session_transfer MCP tool automatically</Comment>
+              </Terminal>
             </div>
           </div>
         </section>

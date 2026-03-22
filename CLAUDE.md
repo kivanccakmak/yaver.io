@@ -87,6 +87,7 @@ Yaver is an open-source P2P tool that lets developers use any AI coding agent (C
 5. **Multi-relay redundancy** — Multiple relay servers can be configured. If one goes down, traffic routes through others. Clients try all relays in priority order.
 6. **Application-layer only** — No TUN/TAP, no VPN rights. Won't conflict with user's existing VPN.
 7. **LLM-agnostic** — Works with any terminal AI agent: Claude Code, Codex, Aider, Ollama, Qwen, etc.
+8. **Session Transfer** — Transfer AI agent sessions (Claude Code, Aider, Codex, Goose, Amp, OpenCode) between machines via `yaver session transfer`. Includes conversation history, agent-specific state files, and optional workspace (via git or tar). Also available as MCP tools for use directly from within AI agents.
 
 ## Networking Stack
 
