@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
 
 const CONVEX_SITE_URL = process.env.NEXT_PUBLIC_CONVEX_SITE_URL || "https://perceptive-minnow-557.eu-west-1.convex.site";
 
@@ -94,7 +95,27 @@ export default function ChatWidget() {
                   : "bg-surface-800/50 text-surface-300"
               }`}
             >
-              {msg.content}
+              {msg.role === "assistant" ? (
+                <ReactMarkdown
+                  components={{
+                    a: ({ href, children }) => (
+                      <a href={href} target="_blank" rel="noopener noreferrer" className="underline text-[#818cf8] hover:text-[#a5b4fc]">
+                        {children}
+                      </a>
+                    ),
+                    p: ({ children }) => <p className="mb-1 last:mb-0">{children}</p>,
+                    strong: ({ children }) => <strong className="font-semibold text-surface-100">{children}</strong>,
+                    ul: ({ children }) => <ul className="list-disc pl-4 mb-1">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal pl-4 mb-1">{children}</ol>,
+                    li: ({ children }) => <li className="mb-0.5">{children}</li>,
+                    code: ({ children }) => <code className="bg-surface-900/50 px-1 rounded text-[12px]">{children}</code>,
+                  }}
+                >
+                  {msg.content}
+                </ReactMarkdown>
+              ) : (
+                msg.content
+              )}
             </div>
           </div>
         ))}
