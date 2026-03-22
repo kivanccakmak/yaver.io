@@ -4534,6 +4534,110 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 	case "hostname_info":
 		return mcpToolJSON(mcpHostnameInfo())
 
+	// --- Compilers & Language Suites ---
+	case "make_targets":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpMakeTargets(a.Dir))
+	case "make_run":
+		var a struct { Dir string `json:"directory"`; Target string `json:"target"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpMakeRun(a.Dir, a.Target))
+	case "make_clean":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpMakeClean(a.Dir))
+	case "cmake_configure":
+		var a struct { Dir string `json:"directory"`; BuildDir string `json:"build_dir"`; Gen string `json:"generator"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCMakeConfigure(a.Dir, a.BuildDir, a.Gen))
+	case "cmake_build":
+		var a struct { Dir string `json:"directory"`; BuildDir string `json:"build_dir"`; Parallel int `json:"parallel"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCMakeBuild(a.Dir, a.BuildDir, a.Parallel))
+	case "cmake_test":
+		var a struct { Dir string `json:"directory"`; BuildDir string `json:"build_dir"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCMakeTest(a.Dir, a.BuildDir))
+	case "cmake_install":
+		var a struct { Dir string `json:"directory"`; BuildDir string `json:"build_dir"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCMakeInstall(a.Dir, a.BuildDir))
+	case "gcc_compile":
+		var a struct { File string `json:"file"`; Output string `json:"output"`; Flags []string `json:"flags"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGCCCompile(a.File, a.Output, a.Flags))
+	case "clang_compile":
+		var a struct { File string `json:"file"`; Output string `json:"output"`; Flags []string `json:"flags"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpClangCompile(a.File, a.Output, a.Flags))
+	case "clang_tidy_check":
+		var a struct { File string `json:"file"`; Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpClangTidy(a.File, a.Dir))
+	case "clang_format_file":
+		var a struct { File string `json:"file"`; InPlace bool `json:"in_place"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpClangFormat(a.File, a.InPlace))
+	case "objdump":
+		var a struct { File string `json:"file"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpLLVMObjdump(a.File))
+	case "binary_size":
+		var a struct { File string `json:"file"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpLLVMSize(a.File))
+	case "nm_symbols":
+		var a struct { File string `json:"file"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpLLVMNM(a.File))
+	case "compiler_version":
+		var a struct { Compiler string `json:"compiler"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCompilerVersion(a.Compiler))
+	// Cargo (Rust)
+	case "cargo_build":
+		var a struct { Dir string `json:"directory"`; Release bool `json:"release"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCargoBuild(a.Dir, a.Release))
+	case "cargo_test_suite":
+		var a struct { Dir string `json:"directory"`; TestName string `json:"test_name"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCargoTest(a.Dir, a.TestName))
+	case "cargo_clippy":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCargoClippy(a.Dir))
+	case "cargo_fmt":
+		var a struct { Dir string `json:"directory"`; Check bool `json:"check"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCargoFmt(a.Dir, a.Check))
+	case "cargo_doc":
+		var a struct { Dir string `json:"directory"`; Open bool `json:"open"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCargoDoc(a.Dir, a.Open))
+	case "cargo_bench_suite":
+		var a struct { Dir string `json:"directory"`; Bench string `json:"bench"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCargoBench(a.Dir, a.Bench))
+	case "cargo_tree_deps":
+		var a struct { Dir string `json:"directory"`; Depth int `json:"depth"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCargoTree(a.Dir, a.Depth))
+	case "cargo_update_deps":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCargoUpdate(a.Dir))
+	case "cargo_audit_deps":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCargoAudit(a.Dir))
+	case "cargo_check_only":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCargoCheck(a.Dir))
+	case "cargo_clean":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCargoClean(a.Dir))
+	case "cargo_add_crate":
+		var a struct { Dir string `json:"directory"`; Crate string `json:"crate"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCargoAdd(a.Dir, a.Crate))
+	case "cargo_remove_crate":
+		var a struct { Dir string `json:"directory"`; Crate string `json:"crate"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCargoRemove(a.Dir, a.Crate))
+	// Go
+	case "go_build":
+		var a struct { Dir string `json:"directory"`; Output string `json:"output"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGoBuild(a.Dir, a.Output))
+	case "go_test_suite":
+		var a struct { Dir string `json:"directory"`; Verbose bool `json:"verbose"`; Race bool `json:"race"`; Cover bool `json:"cover"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGoTest(a.Dir, a.Verbose, a.Race, a.Cover))
+	case "go_vet_check":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGoVet(a.Dir))
+	case "go_mod_tidy":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGoModTidy(a.Dir))
+	case "go_mod_graph":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGoModGraph(a.Dir))
+	case "go_mod_why":
+		var a struct { Dir string `json:"directory"`; Module string `json:"module"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGoModWhy(a.Dir, a.Module))
+	case "go_generate":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGoGenerate(a.Dir))
+	case "go_fmt_check":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGoFmt(a.Dir))
+	case "go_staticcheck":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGoStaticcheck(a.Dir))
+	case "go_vulncheck":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGoVulncheck(a.Dir))
+	// Python
+	case "pytest_suite":
+		var a struct { Dir string `json:"directory"`; Verbose bool `json:"verbose"`; Coverage bool `json:"coverage"`; Marker string `json:"marker"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpPytest(a.Dir, a.Verbose, a.Coverage, a.Marker))
+	case "ruff_suite":
+		var a struct { Dir string `json:"directory"`; Action string `json:"action"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpRuff(a.Dir, a.Action))
+	case "mypy_check":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpMypy(a.Dir))
+	case "black_format":
+		var a struct { Dir string `json:"directory"`; Check bool `json:"check"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpBlack(a.Dir, a.Check))
+	case "pip_compile":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpPipCompile(a.Dir))
+	case "uv_install":
+		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpUVInstall(a.Dir))
+	// Node.js/TypeScript
+	case "npm_run_script":
+		var a struct { Dir string `json:"directory"`; Script string `json:"script"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpNPMRun(a.Dir, a.Script))
+	case "tsc_check":
+		var a struct { Dir string `json:"directory"`; NoEmit bool `json:"no_emit"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpTSC(a.Dir, a.NoEmit))
+	case "eslint_check":
+		var a struct { Dir string `json:"directory"`; Fix bool `json:"fix"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpESLint(a.Dir, a.Fix))
+	case "prettier_check":
+		var a struct { Dir string `json:"directory"`; Check bool `json:"check"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpPrettier(a.Dir, a.Check))
+	case "biome_suite":
+		var a struct { Dir string `json:"directory"`; Action string `json:"action"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpBiome(a.Dir, a.Action))
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}
