@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,9 @@ type RelayServer struct {
 	// deviceID -> active agent tunnel
 	mu      sync.RWMutex
 	tunnels map[string]*agentTunnel
+
+	// Bandwidth management
+	bandwidth *BandwidthManager
 }
 
 type agentTunnel struct {
@@ -48,13 +52,33 @@ type agentTunnel struct {
 }
 
 func NewRelayServer(quicPort, httpPort int, password string) *RelayServer {
-	return &RelayServer{
+	s := &RelayServer{
 		quicPort:  quicPort,
 		httpPort:  httpPort,
 		password:  password,
 		startedAt: time.Now(),
 		tunnels:   make(map[string]*agentTunnel),
 	}
+	// Initialize bandwidth manager
+	dataDir := os.Getenv("RELAY_DATA_DIR")
+	if dataDir == "" {
+		dataDir = "/var/lib/yaver-relay"
+		if home, err := os.UserHomeDir(); err == nil {
+			dataDir = filepath.Join(home, ".yaver-relay")
+		}
+	}
+	s.bandwidth = NewBandwidthManager(nil, dataDir)
+
+	// Log bandwidth stats every 5 minutes
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.bandwidth.LogUsage()
+		}
+	}()
+
+	return s
 }
 
 // getPassword returns the current relay password (thread-safe).
@@ -231,6 +255,7 @@ func (s *RelayServer) runHTTPProxy(ctx context.Context) error {
 	mux.HandleFunc("/tunnels", s.handleListTunnels)
 	mux.HandleFunc("/admin/set-password", s.handleSetPassword)
 	mux.HandleFunc("/admin/status", s.handleAdminStatus)
+	mux.HandleFunc("/admin/bandwidth", s.handleBandwidthStats)
 	mux.HandleFunc("/d/", s.handleProxy) // /d/{deviceId}/...
 
 	srv := &http.Server{
@@ -258,11 +283,16 @@ func (s *RelayServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	count := len(s.tunnels)
 	s.mu.RUnlock()
 
+	bwStats := s.bandwidth.GetStats()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":      true,
-		"tunnels": count,
-		"version": version,
+		"ok":              true,
+		"tunnels":         count,
+		"version":         version,
+		"activeDevices":   bwStats.ActiveDevices,
+		"loadPercent":     bwStats.LoadPercent,
+		"limitsRelaxed":   bwStats.LimitsRelaxed,
+		"bandwidthMultiplier": bwStats.CurrentMultiplier,
 	})
 }
 
@@ -392,6 +422,16 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Check bandwidth limit
+	if err := s.bandwidth.CheckAllowed(deviceID, r.ContentLength); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": err.Error(),
+		})
+		return
+	}
+
 	// Find the tunnel
 	s.mu.RLock()
 	tunnel, ok := s.tunnels[deviceID]
@@ -504,6 +544,14 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(tunnelResp.StatusCode)
 	w.Write(tunnelResp.Body)
+
+	// Record bandwidth usage
+	bytesIn := int64(len(reqData))
+	if r.ContentLength > 0 {
+		bytesIn += r.ContentLength
+	}
+	bytesOut := int64(len(tunnelResp.Body))
+	s.bandwidth.RecordBytes(deviceID, bytesIn, bytesOut, false)
 }
 
 // proxySSE handles Server-Sent Events by streaming from the QUIC stream.
@@ -556,6 +604,15 @@ func (s *RelayServer) logTunnels(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (s *RelayServer) handleBandwidthStats(w http.ResponseWriter, r *http.Request) {
+	stats := s.bandwidth.GetStats()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":    true,
+		"stats": stats,
+	})
 }
 
 // --- CORS ---
