@@ -3692,6 +3692,96 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		json.Unmarshal(call.Arguments, &args)
 		return mcpToolJSON(mcpSonosControl(args.IP, args.Action))
 
+	// --- Productivity & Sharing ---
+	case "standup":
+		var args struct {
+			Directory string `json:"directory"`
+			Days      int    `json:"days"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpStandup(args.Directory, args.Days))
+	case "create_gist":
+		var args struct {
+			Content     string `json:"content"`
+			Filename    string `json:"filename"`
+			Description string `json:"description"`
+			Public      bool   `json:"public"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpCreateGist(args.Filename, args.Content, args.Description, args.Public))
+	case "changelog":
+		var args struct {
+			Directory string `json:"directory"`
+			From      string `json:"from"`
+			To        string `json:"to"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpChangelog(args.Directory, args.From, args.To))
+	case "commit_message":
+		var args struct {
+			Directory string `json:"directory"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpCommitMessage(args.Directory))
+	case "gitignore":
+		var args struct {
+			Languages []string `json:"languages"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpGitignore(args.Languages))
+	case "license":
+		var args struct {
+			Type   string `json:"type"`
+			Author string `json:"author"`
+			Year   int    `json:"year"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpLicense(args.Type, args.Author, args.Year))
+	case "color":
+		var args struct {
+			Input string `json:"input"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpColor(args.Input))
+	case "figlet":
+		var args struct {
+			Text string `json:"text"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpFiglet(args.Text))
+	case "lorem_ipsum":
+		var args struct {
+			Paragraphs int `json:"paragraphs"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpLoremIpsum(args.Paragraphs))
+	case "tldr":
+		var args struct {
+			Command string `json:"command"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpTldr(args.Command))
+	case "github_badge":
+		var args struct {
+			Directory string `json:"directory"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpGitHubBadge(args.Directory))
+	case "invite":
+		var args struct {
+			Method    string `json:"method"`
+			Recipient string `json:"recipient"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpInvite(args.Method, args.Recipient))
+	case "git_stats":
+		var args struct {
+			Directory string `json:"directory"`
+			Days      int    `json:"days"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpGitStats(args.Directory, args.Days))
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}
