@@ -4638,6 +4638,84 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 	case "biome_suite":
 		var a struct { Dir string `json:"directory"`; Action string `json:"action"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpBiome(a.Dir, a.Action))
 
+	// --- Static Analysis ---
+	case "cppcheck":
+		var a struct { Dir string `json:"directory"`; File string `json:"file"`; Severity string `json:"severity"`; EnableAll bool `json:"enable_all"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCppcheck(a.Dir, a.File, a.Severity, a.EnableAll))
+	case "shellcheck":
+		var a struct { File string `json:"file"`; Shell string `json:"shell"`; Severity string `json:"severity"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpShellcheck(a.File, a.Shell, a.Severity))
+	case "hadolint":
+		var a struct { File string `json:"file"`; TrustedRegistries []string `json:"trusted_registries"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpHadolint(a.File, a.TrustedRegistries))
+	case "semgrep":
+		var a struct { Dir string `json:"directory"`; Config string `json:"config"`; AutoConfig bool `json:"auto_config"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpSemgrep(a.Dir, a.Config, a.AutoConfig))
+	case "sonarscanner":
+		var a struct { Dir string `json:"directory"`; ProjectKey string `json:"project_key"`; HostURL string `json:"host_url"`; Token string `json:"token"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpSonarScanner(a.Dir, a.ProjectKey, a.HostURL, a.Token))
+	case "bandit":
+		var a struct { Dir string `json:"directory"`; File string `json:"file"`; Severity string `json:"severity"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpBandit(a.Dir, a.File, a.Severity))
+	case "gosec":
+		var a struct { Dir string `json:"directory"`; NoFail bool `json:"no_fail"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGosec(a.Dir, a.NoFail))
+	case "brakeman":
+		var a struct { Dir string `json:"directory"`; Confidence int `json:"confidence"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpBrakeman(a.Dir, a.Confidence))
+	case "safety_check":
+		var a struct { Dir string `json:"directory"`; File string `json:"file"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpSafetyCheck(a.Dir, a.File))
+	case "trivy_fs_scan":
+		var a struct { Dir string `json:"directory"`; Severity string `json:"severity"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpTrivyFSScan(a.Dir, a.Severity))
+	// --- Profiling & Debugging ---
+	case "valgrind_memcheck":
+		var a struct { Binary string `json:"binary"`; Args []string `json:"args"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpValgrindMemcheck(a.Binary, a.Args))
+	case "valgrind_callgrind":
+		var a struct { Binary string `json:"binary"`; Args []string `json:"args"`; OutputFile string `json:"output_file"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpValgrindCallgrind(a.Binary, a.Args, a.OutputFile))
+	case "valgrind_massif":
+		var a struct { Binary string `json:"binary"`; Args []string `json:"args"`; OutputFile string `json:"output_file"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpValgrindMassif(a.Binary, a.Args, a.OutputFile))
+	case "gdb_backtrace":
+		var a struct { PID int `json:"pid"`; Binary string `json:"binary"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGDBBacktrace(a.PID, a.Binary))
+	case "lldb_backtrace":
+		var a struct { PID int `json:"pid"`; Binary string `json:"binary"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpLLDBBacktrace(a.PID, a.Binary))
+	case "strace_trace":
+		var a struct { PID int `json:"pid"`; Binary string `json:"binary"`; SyscallFilter string `json:"syscall_filter"`; Args []string `json:"args"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpStraceTrace(a.PID, a.Binary, a.SyscallFilter, a.Args))
+	case "ltrace_trace":
+		var a struct { PID int `json:"pid"`; Binary string `json:"binary"`; Args []string `json:"args"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpLtraceTrace(a.PID, a.Binary, a.Args))
+	case "perf_record":
+		var a struct { Binary string `json:"binary"`; Args []string `json:"args"`; Duration int `json:"duration"`; OutputFile string `json:"output_file"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpPerfRecord(a.Binary, a.Args, a.Duration, a.OutputFile))
+	case "perf_stat":
+		var a struct { Binary string `json:"binary"`; Args []string `json:"args"`; Events string `json:"events"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpPerfStat(a.Binary, a.Args, a.Events))
+	case "go_pprof_cpu":
+		var a struct { Dir string `json:"directory"`; Duration int `json:"duration"`; Binary string `json:"binary"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGoPprofCPU(a.Dir, a.Duration, a.Binary))
+	case "go_pprof_heap":
+		var a struct { Dir string `json:"directory"`; URL string `json:"url"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGoPprofHeap(a.Dir, a.URL))
+	case "heaptrack":
+		var a struct { Binary string `json:"binary"`; Args []string `json:"args"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpHeaptrack(a.Binary, a.Args))
+	// --- Code Metrics ---
+	case "cyclomatic_complexity":
+		var a struct { Dir string `json:"directory"`; Language string `json:"language"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCyclomaticComplexity(a.Dir, a.Language))
+	case "lizard":
+		var a struct { Dir string `json:"directory"`; Threshold int `json:"threshold"`; Languages string `json:"languages"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpLizard(a.Dir, a.Threshold, a.Languages))
+	case "loc_count":
+		var a struct { Dir string `json:"directory"`; Tool string `json:"tool"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpLOCCount(a.Dir, a.Tool))
+
+	// --- System Logs & Debugging ---
+	case "journalctl":
+		var a struct { Unit string `json:"unit"`; Priority string `json:"priority"`; Lines int `json:"lines"`; Boot bool `json:"boot"`; Since string `json:"since"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpJournalctl(a.Unit, a.Priority, a.Lines, a.Boot, a.Since))
+	case "journalctl_errors":
+		return mcpToolJSON(mcpJournalctlErrors())
+	case "journalctl_disk_usage":
+		return mcpToolJSON(mcpJournalctlDiskUsage())
+	case "systemctl":
+		var a struct { Action string `json:"action"`; Unit string `json:"unit"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpSystemctl(a.Action, a.Unit))
+	case "gdb_attach":
+		var a struct { PID int `json:"pid"`; Commands string `json:"commands"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGDBAttach(a.PID, a.Commands))
+	case "gdb_core_dump":
+		var a struct { Binary string `json:"binary"`; Core string `json:"corefile"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpGDBCoreDump(a.Binary, a.Core))
+	case "lldb_attach":
+		var a struct { PID int `json:"pid"`; Commands string `json:"commands"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpLLDBAttach(a.PID, a.Commands))
+	case "coredump_list":
+		return mcpToolJSON(mcpCoredumpList())
+	case "coredump_info":
+		var a struct { PID string `json:"pid"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCoredumpInfo(a.PID))
+	case "syslog":
+		var a struct { File string `json:"file"`; Lines int `json:"lines"`; Filter string `json:"filter"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpSyslog(a.File, a.Lines, a.Filter))
+	case "auth_log":
+		var a struct { Lines int `json:"lines"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpAuthLog(a.Lines))
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}

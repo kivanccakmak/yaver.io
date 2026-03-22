@@ -469,3 +469,208 @@ func mcpHostnameInfo() interface{} {
 	}
 	return map[string]interface{}{"info": out}
 }
+
+// ---------------------------------------------------------------------------
+// Journalctl — systemd journal
+// ---------------------------------------------------------------------------
+
+func mcpJournalctl(unit string, priority string, lines int, boot bool, since string) interface{} {
+	args := []string{"--no-pager"}
+	if unit != "" {
+		args = append(args, "-u", unit)
+	}
+	if priority != "" {
+		args = append(args, "-p", priority)
+	}
+	if lines > 0 {
+		args = append(args, "-n", strconv.Itoa(lines))
+	} else {
+		args = append(args, "-n", "100")
+	}
+	if boot {
+		args = append(args, "-b")
+	}
+	if since != "" {
+		args = append(args, "--since", since)
+	}
+	out, err := runCmd("journalctl", args...)
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("journalctl: %s — %s", err, out)}
+	}
+	return map[string]interface{}{"logs": out}
+}
+
+func mcpJournalctlErrors() interface{} {
+	out, err := runCmd("journalctl", "--no-pager", "-p", "err", "-b", "-n", "50")
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	return map[string]interface{}{"errors": out}
+}
+
+func mcpJournalctlDiskUsage() interface{} {
+	out, err := runCmd("journalctl", "--disk-usage")
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	return map[string]interface{}{"usage": out}
+}
+
+// ---------------------------------------------------------------------------
+// Systemctl — systemd service management
+// ---------------------------------------------------------------------------
+
+func mcpSystemctl(action, unit string) interface{} {
+	switch action {
+	case "status":
+		out, _ := runCmd("systemctl", "status", unit, "--no-pager")
+		return map[string]interface{}{"status": out}
+	case "start":
+		out, err := runCmd("sudo", "systemctl", "start", unit)
+		if err != nil {
+			return map[string]interface{}{"error": err.Error(), "output": out}
+		}
+		return map[string]interface{}{"ok": true, "started": unit}
+	case "stop":
+		out, err := runCmd("sudo", "systemctl", "stop", unit)
+		if err != nil {
+			return map[string]interface{}{"error": err.Error(), "output": out}
+		}
+		return map[string]interface{}{"ok": true, "stopped": unit}
+	case "restart":
+		out, err := runCmd("sudo", "systemctl", "restart", unit)
+		if err != nil {
+			return map[string]interface{}{"error": err.Error(), "output": out}
+		}
+		return map[string]interface{}{"ok": true, "restarted": unit}
+	case "enable":
+		out, err := runCmd("sudo", "systemctl", "enable", unit)
+		if err != nil {
+			return map[string]interface{}{"error": err.Error(), "output": out}
+		}
+		return map[string]interface{}{"ok": true, "enabled": unit}
+	case "disable":
+		out, err := runCmd("sudo", "systemctl", "disable", unit)
+		if err != nil {
+			return map[string]interface{}{"error": err.Error(), "output": out}
+		}
+		return map[string]interface{}{"ok": true, "disabled": unit}
+	case "list":
+		out, _ := runCmd("systemctl", "list-units", "--type=service", "--no-pager", "--no-legend")
+		return map[string]interface{}{"services": out}
+	case "failed":
+		out, _ := runCmd("systemctl", "--failed", "--no-pager", "--no-legend")
+		return map[string]interface{}{"failed": out}
+	case "timers":
+		out, _ := runCmd("systemctl", "list-timers", "--no-pager")
+		return map[string]interface{}{"timers": out}
+	default:
+		return map[string]interface{}{"error": "action: status, start, stop, restart, enable, disable, list, failed, timers"}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GDB / LLDB — advanced debugging
+// ---------------------------------------------------------------------------
+
+func mcpGDBAttach(pid int, commands string) interface{} {
+	if commands == "" {
+		commands = "bt\ninfo threads\ninfo registers\ndetach\nquit"
+	}
+	out, err := runCmd("sh", "-c", fmt.Sprintf("echo '%s' | gdb -batch -p %d 2>&1", commands, pid))
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("gdb: %s — %s", err, out)}
+	}
+	return map[string]interface{}{"output": out, "pid": pid}
+}
+
+func mcpGDBCoreDump(binary, corefile string) interface{} {
+	out, err := runCmd("gdb", "-batch", "-ex", "bt full", "-ex", "info threads", "-ex", "quit", binary, corefile)
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("gdb: %s — %s", err, out)}
+	}
+	return map[string]interface{}{"backtrace": out, "binary": binary, "core": corefile}
+}
+
+func mcpLLDBAttach(pid int, commands string) interface{} {
+	if commands == "" {
+		commands = "bt all\nregister read\ndetach\nquit"
+	}
+	out, err := runCmd("sh", "-c", fmt.Sprintf("echo '%s' | lldb -p %d 2>&1", commands, pid))
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("lldb: %s — %s", err, out)}
+	}
+	return map[string]interface{}{"output": out, "pid": pid}
+}
+
+// ---------------------------------------------------------------------------
+// Coredump management
+// ---------------------------------------------------------------------------
+
+func mcpCoredumpList() interface{} {
+	out, err := runCmd("coredumpctl", "list", "--no-pager")
+	if err != nil {
+		// macOS fallback
+		out, err = runCmd("ls", "-la", "/cores/")
+		if err != nil {
+			return map[string]interface{}{"error": "no coredump tool available. Linux: coredumpctl. macOS: /cores/"}
+		}
+		return map[string]interface{}{"cores": out, "location": "/cores/"}
+	}
+	return map[string]interface{}{"coredumps": out}
+}
+
+func mcpCoredumpInfo(pid string) interface{} {
+	out, err := runCmd("coredumpctl", "info", pid)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	return map[string]interface{}{"info": out}
+}
+
+// ---------------------------------------------------------------------------
+// System logs (syslog, auth, etc.)
+// ---------------------------------------------------------------------------
+
+func mcpSyslog(logFile string, lines int, filter string) interface{} {
+	if lines <= 0 {
+		lines = 100
+	}
+	if logFile == "" {
+		if runtime.GOOS == "darwin" {
+			logFile = "/var/log/system.log"
+		} else {
+			logFile = "/var/log/syslog"
+		}
+	}
+	var out string
+	var err error
+	if filter != "" {
+		out, err = runCmd("sh", "-c", fmt.Sprintf("tail -%d %s | grep -i '%s'", lines*5, logFile, filter))
+	} else {
+		out, err = runCmd("tail", fmt.Sprintf("-%d", lines), logFile)
+	}
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("cannot read %s: %s", logFile, err)}
+	}
+	return map[string]interface{}{"logs": out, "file": logFile}
+}
+
+func mcpAuthLog(lines int) interface{} {
+	if lines <= 0 {
+		lines = 50
+	}
+	// Try auth.log, secure, or macOS unified log
+	out, err := runCmd("tail", fmt.Sprintf("-%d", lines), "/var/log/auth.log")
+	if err != nil {
+		out, err = runCmd("tail", fmt.Sprintf("-%d", lines), "/var/log/secure")
+		if err != nil {
+			if runtime.GOOS == "darwin" {
+				out, _ = runCmd("log", "show", "--predicate", "eventMessage contains 'auth'", "--last", "1h", "--style", "compact")
+			} else {
+				out, _ = runCmd("journalctl", "-u", "sshd", "--no-pager", "-n", fmt.Sprintf("%d", lines))
+			}
+		}
+	}
+	return map[string]interface{}{"auth_logs": out}
+}
