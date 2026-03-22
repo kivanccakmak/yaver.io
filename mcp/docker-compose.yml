@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  yaver-mcp:
+    build: .
+    container_name: yaver-mcp
+    ports:
+      - "18100:18100"
+    environment:
+      - MCP_PASSWORD=${MCP_PASSWORD:-}
+    volumes:
+      - mcp-plugins:/plugins
+      - ${WORK_DIR:-.}:/workspace
+    restart: unless-stopped
+
+volumes:
+  mcp-plugins:
