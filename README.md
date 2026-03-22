@@ -13,7 +13,7 @@
 - **Session Transfer** — Move AI sessions between machines. Start on your laptop, continue on your server.
 - **Task Scheduling** — Cron-like scheduling for AI tasks. Run code reviews every morning.
 - **Notifications** — Telegram, Discord, Slack alerts when tasks complete.
-- **MCP Tools** — 40+ tools: file search, git ops, exec, screenshots, session transfer — all usable from within Claude Code.
+- **MCP Tools** — 48 tools: file search, git ops, exec, screenshots, session transfer — usable from Claude Desktop, Cursor, VS Code, Windsurf, Zed.
 - **CI/CD Webhooks** — Trigger AI tasks from GitHub Actions, GitLab CI, or any webhook.
 - **Free Relay** — Every user gets a free relay server (public.yaver.io). Self-host your own anytime.
 - **SDKs** — Go, Python, JS/TS, Flutter/Dart, C — embed Yaver in your own apps.
@@ -53,19 +53,54 @@ No code, task data, or AI output ever touches our servers. The relay is a pass-t
 ## Quick Start
 
 ```bash
-# Install
-brew install kivanccakmak/yaver/yaver
+# Install (pick one)
+brew install kivanccakmak/yaver/yaver          # macOS / Linux
+scoop bucket add yaver https://github.com/kivanccakmak/scoop-yaver && scoop install yaver  # Windows
+winget install Yaver.Yaver                      # Windows (Winget)
+curl -fsSL https://yaver.io/install.sh | sh     # Quick install (macOS / Linux)
+irm https://yaver.io/install.ps1 | iex          # Quick install (Windows PowerShell)
 
 # Sign in & start agent
 yaver auth
-yaver serve
 ```
+
+### All Installation Methods
+
+| Method | Command |
+|--------|---------|
+| **Homebrew** | `brew install kivanccakmak/yaver/yaver` |
+| **Scoop** | `scoop bucket add yaver https://github.com/kivanccakmak/scoop-yaver && scoop install yaver` |
+| **Winget** | `winget install Yaver.Yaver` |
+| **Chocolatey** | `choco install yaver` |
+| **AUR** | `git clone https://github.com/kivanccakmak/aur-yaver.git && cd aur-yaver && makepkg -si` |
+| **apt** | See [download page](https://yaver.io/download) for repo setup |
+| **RPM** | `sudo rpm -i https://github.com/kivanccakmak/yaver.io/releases/latest/download/yaver_latest_x86_64.rpm` |
+| **Nix** | `nix run github:kivanccakmak/yaver.io` |
+| **Docker** | `docker run --rm kivanccakmak/yaver-cli version` |
+| **curl** | `curl -fsSL https://yaver.io/install.sh \| sh` |
+| **PowerShell** | `irm https://yaver.io/install.ps1 \| iex` |
+| **Binary** | Download from [releases](https://github.com/kivanccakmak/yaver.io/releases) |
+
+### Desktop App (GUI)
+
+Download the desktop app with full GUI from the [download page](https://yaver.io/download) — available as DMG (macOS), installer (Windows), deb/AppImage (Linux).
 
 ## MCP Integration
 
-Yaver implements the Model Context Protocol (MCP) with 30+ tools. Connect from Claude Desktop, Claude Web UI, or any MCP-compatible client.
+Yaver implements the Model Context Protocol (MCP) with 48 tools. Connect from Claude Desktop, Cursor, VS Code, Windsurf, Zed, or any MCP-compatible client.
 
-### Local MCP (stdio) — Claude Desktop
+### One-Command Setup
+
+```bash
+yaver mcp setup claude       # Claude Desktop
+yaver mcp setup cursor       # Cursor
+yaver mcp setup vscode       # VS Code
+yaver mcp setup windsurf     # Windsurf
+yaver mcp setup zed          # Zed
+yaver mcp setup show         # Show config JSON (copy/paste manually)
+```
+
+### Manual Setup — Claude Desktop
 
 Add to your `claude_desktop_config.json`:
 
@@ -87,6 +122,19 @@ yaver mcp --mode http --port 18090
 ```
 
 Connect from any MCP client at `http://your-machine:18090/mcp`.
+
+### GitHub Action
+
+Trigger AI tasks from CI/CD:
+
+```yaml
+- uses: kivanccakmak/yaver.io@main
+  with:
+    agent-url: ${{ secrets.YAVER_AGENT_URL }}
+    webhook-secret: ${{ secrets.YAVER_WEBHOOK_SECRET }}
+    prompt: "Review this PR and suggest improvements"
+    runner: claude
+```
 
 ### Available MCP Tools
 
@@ -224,21 +272,26 @@ yaver config        Get/set configuration
 yaver status        Show auth, agent, relay, and connection status
 yaver doctor        System health check (auth, runners, relay, network)
 yaver devices       List registered devices
+yaver exec          Execute a command on a remote device
+yaver session       Transfer AI agent sessions between machines
 yaver stop          Stop the agent
 yaver restart       Restart the agent
 yaver logs          View agent logs
+yaver completion    Generate shell completions (bash/zsh/fish)
 yaver version       Print version
 ```
 
-### Install
+### Shell Completions
 
 ```bash
-# macOS / Linux
-brew install kivanccakmak/yaver/yaver
+# Bash — add to ~/.bashrc
+eval "$(yaver completion bash)"
 
-# Windows
-scoop bucket add yaver https://github.com/kivanccakmak/scoop-yaver
-scoop install yaver
+# Zsh — add to ~/.zshrc
+eval "$(yaver completion zsh)"
+
+# Fish
+yaver completion fish | source
 ```
 
 ## Voice Input & Text-to-Speech

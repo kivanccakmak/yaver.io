@@ -136,7 +136,7 @@ export default function McpPage() {
             {[
               ["what-is-mcp", "What is MCP?"],
               ["installation", "Installation"],
-              ["local-mcp", "Local MCP (stdio) \u2014 Claude Desktop"],
+              ["local-mcp", "Local MCP (stdio) \u2014 Claude Desktop, Cursor, VS Code & more"],
               ["network-mcp", "Network MCP (HTTP) \u2014 Remote Access"],
               ["available-tools", "Available Tools (48)"],
               ["email-setup", "Email Setup"],
@@ -230,18 +230,38 @@ export default function McpPage() {
         {/* ─── Section 3: Local MCP (stdio) ─── */}
         <section className="mb-20">
           <SectionHeading id="local-mcp">
-            Local MCP (stdio) &mdash; for Claude Desktop
+            Local MCP (stdio) &mdash; for Claude Desktop, Cursor, VS Code &amp; more
           </SectionHeading>
           <Prose>
             The stdio transport runs Yaver as a local process that communicates
             over standard input/output. This is the simplest setup for Claude
-            Desktop and other local MCP clients.
+            Desktop, Cursor, VS Code, Windsurf, Zed, and other local MCP clients.
           </Prose>
 
-          <SubHeading>Configuration</SubHeading>
+          <SubHeading>One-Command Setup</SubHeading>
           <Prose>
-            Add the following to your{" "}
-            <InlineCode>claude_desktop_config.json</InlineCode>:
+            The fastest way to configure any editor:
+          </Prose>
+
+          <div className="mb-8">
+            <Terminal title="terminal">
+              <Cmd>yaver mcp setup claude</Cmd>
+              <Output>Added Yaver MCP server to Claude Desktop.</Output>
+              <Output>Config: ~/Library/Application Support/Claude/claude_desktop_config.json</Output>
+              <Output>Restart Claude Desktop to activate.</Output>
+              <Divider />
+              <Comment>Also supports: cursor, vscode, windsurf, zed</Comment>
+              <Cmd>yaver mcp setup cursor</Cmd>
+              <Cmd>yaver mcp setup vscode</Cmd>
+              <Cmd>yaver mcp setup windsurf</Cmd>
+              <Cmd>yaver mcp setup zed</Cmd>
+            </Terminal>
+          </div>
+
+          <SubHeading>Manual Configuration</SubHeading>
+          <Prose>
+            Or add the following to your{" "}
+            <InlineCode>claude_desktop_config.json</InlineCode> manually:
           </Prose>
 
           <div className="mb-8">

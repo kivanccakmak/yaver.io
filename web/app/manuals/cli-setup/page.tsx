@@ -98,11 +98,134 @@ export default function CLISetupManual() {
             </div>
           </div>
 
+          <h3 className="mb-2 mt-6 text-sm font-semibold text-surface-200">
+            More methods
+          </h3>
+          <div className="overflow-x-auto mb-4">
+            <table className="w-full text-sm">
+              <tbody className="text-surface-400">
+                <tr className="border-b border-surface-800/60">
+                  <td className="py-2 pr-4 font-medium text-surface-300">Winget</td>
+                  <td className="py-2 font-mono text-xs">winget install Yaver.Yaver</td>
+                </tr>
+                <tr className="border-b border-surface-800/60">
+                  <td className="py-2 pr-4 font-medium text-surface-300">Chocolatey</td>
+                  <td className="py-2 font-mono text-xs">choco install yaver</td>
+                </tr>
+                <tr className="border-b border-surface-800/60">
+                  <td className="py-2 pr-4 font-medium text-surface-300">AUR</td>
+                  <td className="py-2 font-mono text-xs">git clone https://github.com/kivanccakmak/aur-yaver.git &amp;&amp; cd aur-yaver &amp;&amp; makepkg -si</td>
+                </tr>
+                <tr className="border-b border-surface-800/60">
+                  <td className="py-2 pr-4 font-medium text-surface-300">Nix</td>
+                  <td className="py-2 font-mono text-xs">nix run github:kivanccakmak/yaver.io</td>
+                </tr>
+                <tr className="border-b border-surface-800/60">
+                  <td className="py-2 pr-4 font-medium text-surface-300">Docker</td>
+                  <td className="py-2 font-mono text-xs">docker run --rm kivanccakmak/yaver-cli version</td>
+                </tr>
+                <tr>
+                  <td className="py-2 pr-4 font-medium text-surface-300">apt/deb/rpm</td>
+                  <td className="py-2 font-mono text-xs">See <a href="/download" className="text-surface-300 underline">download page</a></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
           <p className="text-xs text-surface-500">
-            You can also download binaries directly from the{" "}
+            Download binaries directly from the{" "}
             <Link href="/download" className="text-surface-300 underline underline-offset-2 hover:text-surface-100">
               download page
-            </Link>.
+            </Link>. Desktop GUI app (DMG/EXE/DEB) also available there.
+          </p>
+        </section>
+
+        {/* Shell completions */}
+        <section className="mb-12">
+          <h2 className="mb-3 text-lg font-semibold text-surface-100">
+            Shell completions
+          </h2>
+          <p className="mb-4 text-sm text-surface-400">
+            Enable tab completion for all commands and subcommands.
+          </p>
+          <div className="terminal mb-4">
+            <div className="terminal-header">
+              <div className="terminal-dot bg-[#ff5f57]" />
+              <div className="terminal-dot bg-[#febc2e]" />
+              <div className="terminal-dot bg-[#28c840]" />
+              <span className="ml-3 text-xs text-surface-500">terminal</span>
+            </div>
+            <div className="terminal-body space-y-2 text-[13px]">
+              <div className="text-surface-500"># Bash &mdash; add to ~/.bashrc</div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200 select-all">{`eval "$(yaver completion bash)"`}</span>
+              </div>
+              <div className="h-px bg-surface-800/60" />
+              <div className="text-surface-500"># Zsh &mdash; add to ~/.zshrc</div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200 select-all">{`eval "$(yaver completion zsh)"`}</span>
+              </div>
+              <div className="h-px bg-surface-800/60" />
+              <div className="text-surface-500"># Fish</div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200 select-all">yaver completion fish | source</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* MCP setup */}
+        <section className="mb-12">
+          <h2 className="mb-3 text-lg font-semibold text-surface-100">
+            MCP &mdash; connect to AI editors
+          </h2>
+          <p className="mb-4 text-sm text-surface-400">
+            Yaver exposes 48 tools via the Model Context Protocol. One command to configure your editor:
+          </p>
+          <div className="terminal mb-4">
+            <div className="terminal-header">
+              <div className="terminal-dot bg-[#ff5f57]" />
+              <div className="terminal-dot bg-[#febc2e]" />
+              <div className="terminal-dot bg-[#28c840]" />
+              <span className="ml-3 text-xs text-surface-500">terminal</span>
+            </div>
+            <div className="terminal-body space-y-2 text-[13px]">
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200">yaver mcp setup claude</span>
+                <span className="ml-2 text-surface-500"># Claude Desktop</span>
+              </div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200">yaver mcp setup cursor</span>
+                <span className="ml-2 text-surface-500"># Cursor</span>
+              </div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200">yaver mcp setup vscode</span>
+                <span className="ml-2 text-surface-500"># VS Code</span>
+              </div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200">yaver mcp setup windsurf</span>
+                <span className="ml-2 text-surface-500"># Windsurf</span>
+              </div>
+              <div>
+                <span className="text-surface-400">$</span>{" "}
+                <span className="text-surface-200">yaver mcp setup zed</span>
+                <span className="ml-2 text-surface-500"># Zed</span>
+              </div>
+            </div>
+          </div>
+          <p className="text-xs text-surface-500">
+            See the full{" "}
+            <Link href="/docs/mcp" className="text-surface-300 underline underline-offset-2 hover:text-surface-100">
+              MCP documentation
+            </Link>{" "}
+            for available tools, network mode, ACL, and plugins.
           </p>
         </section>
 
