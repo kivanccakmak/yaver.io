@@ -13,7 +13,7 @@
 - **Session Transfer** — Move AI sessions between machines. Start on your laptop, continue on your server.
 - **Task Scheduling** — Cron-like scheduling for AI tasks. Run code reviews every morning.
 - **Notifications** — Telegram, Discord, Slack alerts when tasks complete.
-- **MCP Tools** — 437 tools: file search, git ops, exec, screenshots, session transfer — usable from Claude Desktop, Cursor, VS Code, Windsurf, Zed.
+- **MCP Tools** — 450+ tools: file search, git ops, exec, screenshots, session transfer — usable from Claude Desktop, Cursor, VS Code, Windsurf, Zed.
 - **CI/CD Webhooks** — Trigger AI tasks from GitHub Actions, GitLab CI, or any webhook.
 - **Free Relay** — Every user gets a free relay server (public.yaver.io). Self-host your own anytime.
 - **SDKs** — Go, Python, JS/TS, Flutter/Dart, C — embed Yaver in your own apps.
@@ -87,7 +87,7 @@ Download the desktop app with full GUI from the [download page](https://yaver.io
 
 ## MCP Integration
 
-Yaver implements the Model Context Protocol (MCP) with 437 tools. Connect from Claude Desktop, Cursor, VS Code, Windsurf, Zed, or any MCP-compatible client.
+Yaver implements the Model Context Protocol (MCP) with 450+ tools. Connect from Claude Desktop, Cursor, VS Code, Windsurf, Zed, or any MCP-compatible client.
 
 ### One-Command Setup
 
@@ -138,29 +138,37 @@ Trigger AI tasks from CI/CD:
 
 ### Available MCP Tools
 
-| Category | Tools |
-|----------|-------|
-| **Tasks** | `create_task`, `list_tasks`, `get_task`, `stop_task`, `continue_task` |
-| **Docker** | `docker_ps`, `docker_logs`, `docker_exec`, `docker_images`, `docker_compose` |
-| **Testing** | `run_tests` (auto-detects go/jest/vitest/pytest/cargo) |
-| **Code Quality** | `lint`, `format_code`, `type_check` (auto-detects toolchain) |
-| **Dependencies** | `deps_outdated`, `deps_audit`, `deps_list` (npm/pip/cargo/go) |
-| **GitHub** | `github_prs`, `github_issues`, `github_ci_status` |
-| **Database** | `db_query`, `db_schema` (SQLite, Postgres, MySQL, Redis) |
-| **HTTP Client** | `http_request`, `http_timing` |
-| **Network** | `dns_lookup`, `ping`, `ssl_check` |
-| **Processes** | `process_list`, `process_kill`, `port_check` |
-| **Data Utils** | `base64`, `hash`, `uuid`, `jq`, `regex_test`, `diff` |
-| **Archive** | `archive_create`, `archive_extract` |
-| **Services** | `service_status`, `service_action`, `service_list` |
-| **Cloud** | `cloud_cli` (AWS, GCP, Azure) |
-| **Environment** | `env_list`, `env_read`, `crontab` |
-| **Filesystem** | `read_file`, `write_file`, `list_directory`, `search_files` |
-| **Email** | `email_list_inbox`, `email_get`, `email_send`, `email_sync`, `email_search` |
-| **System** | `get_info`, `get_system_info`, `screenshot`, `clipboard_read`, `clipboard_write` |
-| **Session** | `session_list`, `session_transfer`, `session_export`, `session_import` |
-| **ACL** | `acl_list_peers`, `acl_add_peer`, `acl_call_peer_tool`, `acl_health` |
-| **Benchmark** | `benchmark` (auto-detects go bench/cargo bench) |
+| Category | Tools | Count |
+|----------|-------|-------|
+| **Docker** | ps, logs, exec, build, push, pull, prune, stats, inspect, compose, networks, volumes | 23 |
+| **Kubernetes** | pods, logs, describe, get, apply, exec, top, events, contexts, namespaces | 11 |
+| **Terraform** | plan, apply, state, output, init, validate | 6 |
+| **Helm** | list, status, values, search, repos, history | 6 |
+| **Git** | info, stash, blame, reflog, branches, tags, log advanced, shortlog, stats | 13 |
+| **Compilers** | gcc, clang, clang-tidy, clang-format, objdump, nm, binary size | 8 |
+| **Rust/Cargo** | build, test, clippy, fmt, doc, bench, tree, update, audit, check, add/remove | 14 |
+| **Go** | build, test (race/cover), vet, mod tidy/graph/why, generate, staticcheck, vulncheck | 11 |
+| **Python** | pytest (coverage/markers), ruff (check/format/fix), mypy, black, pip-compile, uv | 6 |
+| **Node/TS** | npm run, tsc, eslint (--fix), prettier, biome (check/format/lint) | 5 |
+| **Make/CMake** | targets, run, clean, configure, build, test, install | 7 |
+| **Static Analysis** | cppcheck, shellcheck, hadolint, semgrep, bandit, gosec, trivy | 10+ |
+| **Profiling** | valgrind (memcheck/callgrind/massif), perf, strace, ltrace, go pprof | 10+ |
+| **Testing** | run_tests (auto-detect), lint, format_code, type_check, benchmark | 4 |
+| **Dependencies** | outdated, audit, list — npm/pip/cargo/go auto-detect | 3 |
+| **Package Registries** | npm, PyPI, crates.io, Go modules, pub.dev, Homebrew, RubyGems, Maven, NuGet, Docker Hub | 24 |
+| **GitHub + GitLab** | PRs, issues, CI, releases, stars, trending, MRs, pipelines | 10 |
+| **Platforms** | Supabase, Convex, Cloudflare (Workers/Pages/R2/D1/KV), Vercel, Netlify, Firebase, Fly.io, Railway | 33 |
+| **Database** | query + schema (SQLite, Postgres, MySQL, Redis) | 2 |
+| **Network** | tcpdump, tshark, nmap, netcat, port scan, arp, traceroute, mtr, curl timings | 18 |
+| **Linux Sysadmin** | dmesg, lsmod, modprobe, systemctl, journalctl, ufw, iptables, df, du, lsblk, tree, top, ps, vmstat | 30 |
+| **Smart Home** | Home Assistant, Philips Hue, Shelly, Sonos, Nanoleaf, Elgato, Tasmota, Govee | 20 |
+| **Mobile Dev** | App Store, TestFlight, Play Store, Xcode, Gradle, Flutter, Expo, CocoaPods | 25 |
+| **Daily Utils** | JWT decode, epoch, cron explain, subnet calc, fake data, domain check, color, QR | 13 |
+| **Finance** | stocks, crypto, currency exchange | 3 |
+| **Location** | EV charging, restaurants, hotels, geocode, directions, weather | 9 |
+| **Productivity** | standup, changelog, gist, badges, gitignore, license, invite | 13 |
+| **Desktop** | notify, volume, music, TTS, timer, calculator, clipboard | 26 |
+| **Core** | tasks, sessions, tmux, scheduling, email, notifications, ACL, MCP peers | 67 |
 
 See [MCP Integration Guide](https://yaver.io/docs/mcp) for full documentation.
 
