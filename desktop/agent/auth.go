@@ -409,6 +409,46 @@ func ReportRunnerUsage(baseURL, token, deviceID, taskID, runner, model, source s
 	return nil
 }
 
+// UserSettings holds the user's account-level settings from Convex.
+type UserSettings struct {
+	ForceRelay          bool   `json:"forceRelay"`
+	RelayUrl            string `json:"relayUrl"`
+	RelayPassword       string `json:"relayPassword"`
+	TunnelUrl           string `json:"tunnelUrl"`
+	RunnerID            string `json:"runnerId"`
+	CustomRunnerCommand string `json:"customRunnerCommand"`
+}
+
+// FetchUserSettings fetches the user's settings from Convex GET /settings.
+func FetchUserSettings(baseURL, token string) (*UserSettings, error) {
+	req, err := newBearerRequest("GET", baseURL+"/settings", token, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create settings request: %w", err)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch settings: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, ErrAuthExpired
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("settings request failed (status %d)", resp.StatusCode)
+	}
+
+	var result struct {
+		Settings UserSettings `json:"settings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parse settings: %w", err)
+	}
+	return &result.Settings, nil
+}
+
 // MarkOffline tells the backend this device is going offline.
 func MarkOffline(baseURL, token, deviceID string) error {
 	payload := map[string]string{"deviceId": deviceID}

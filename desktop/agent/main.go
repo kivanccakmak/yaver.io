@@ -945,11 +945,29 @@ func runServe(args []string) {
 		}
 	}
 
+	// Fetch user settings from Convex (relay config, runner, etc.)
+	userSettings, userSettingsErr := FetchUserSettings(cfg.ConvexSiteURL, cfg.AuthToken)
+	if userSettingsErr != nil {
+		log.Printf("Warning: could not fetch user settings: %v", userSettingsErr)
+	} else if userSettings.RelayUrl != "" && !*noRelay && len(relayServers) == 0 {
+		// Use relay from user settings (priority between config.json and platformConfig)
+		log.Printf("Using relay from user settings: %s", userSettings.RelayUrl)
+		relayServers = append(relayServers, RelayServerInfo{
+			ID:       "user-settings",
+			HttpURL:  userSettings.RelayUrl,
+			Region:   "user",
+			Priority: 1,
+		})
+		if userSettings.RelayPassword != "" {
+			effectiveRelayPassword = userSettings.RelayPassword
+		}
+	}
+
 	platformCfg, platformErr := FetchPlatformConfig(cfg.ConvexSiteURL)
 	if platformErr != nil {
 		log.Printf("Warning: could not fetch platform config: %v", platformErr)
 	} else {
-		// Populate relay servers from Convex if not already set from config.json
+		// Populate relay servers from Convex if not already set from config.json or user settings
 		if !*noRelay && len(relayServers) == 0 {
 			relayServers = platformCfg.RelayServers
 			if len(relayServers) > 0 {
@@ -1220,7 +1238,10 @@ func runServe(args []string) {
 
 	// Start relay tunnels with hot-reload support
 	// Initial relay tunnels are started, and config is polled for changes every 30s
-	relayMgr := newRelayManager(ctx, cfg.DeviceID, cfg.AuthToken, fmt.Sprintf("127.0.0.1:%d", *httpPort), effectiveRelayPassword)
+	relayMgr := newRelayManager(ctx, cfg.DeviceID, cfg.AuthToken, fmt.Sprintf("127.0.0.1:%d", *httpPort), effectiveRelayPassword, cfg.ConvexSiteURL)
+	if userSettings != nil && userSettings.RelayUrl != "" {
+		relayMgr.lastSettingsRelay = userSettings.RelayUrl
+	}
 	relayMgr.applyRelayServers(relayServers, relayPasswords)
 	if !*noRelay {
 		go relayMgr.watchConfig(ctx)
@@ -3787,17 +3808,20 @@ type relayManager struct {
 	authToken       string
 	agentAddr       string
 	globalPassword  string
+	convexSiteURL   string
 	activeTunnels   map[string]context.CancelFunc // keyed by QuicAddr
 	healthStatus    map[string]*RelayHealthStatus  // keyed by httpUrl
+	lastSettingsRelay string // last relayUrl from user settings (for change detection)
 }
 
-func newRelayManager(ctx context.Context, deviceID, authToken, agentAddr, globalPassword string) *relayManager {
+func newRelayManager(ctx context.Context, deviceID, authToken, agentAddr, globalPassword, convexSiteURL string) *relayManager {
 	return &relayManager{
 		parentCtx:      ctx,
 		deviceID:       deviceID,
 		authToken:      authToken,
 		agentAddr:      agentAddr,
 		globalPassword: globalPassword,
+		convexSiteURL:  convexSiteURL,
 		activeTunnels:  make(map[string]context.CancelFunc),
 		healthStatus:   make(map[string]*RelayHealthStatus),
 	}
@@ -3864,7 +3888,7 @@ func (rm *relayManager) reloadNow() {
 	log.Printf("[RELAY] Config reloaded: %d relay server(s)", len(servers))
 }
 
-// watchConfig polls config.json every 30s for relay server changes.
+// watchConfig polls config.json and Convex user settings every 30s for relay server changes.
 func (rm *relayManager) watchConfig(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -3874,30 +3898,56 @@ func (rm *relayManager) watchConfig(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Check config.json first (highest priority)
 			cfg, err := LoadConfig()
+			if err == nil && len(cfg.RelayServers) > 0 {
+				var servers []RelayServerInfo
+				passwords := make(map[string]string)
+				for _, rs := range cfg.RelayServers {
+					servers = append(servers, RelayServerInfo{
+						ID:       rs.ID,
+						QuicAddr: rs.QuicAddr,
+						HttpURL:  rs.HttpURL,
+						Region:   rs.Region,
+						Priority: rs.Priority,
+					})
+					if rs.Password != "" {
+						passwords[rs.QuicAddr] = rs.Password
+					}
+				}
+				if cfg.RelayPassword != "" {
+					rm.globalPassword = cfg.RelayPassword
+				}
+				rm.applyRelayServers(servers, passwords)
+				continue
+			}
+
+			// No local config — check Convex user settings for relay changes
+			if rm.convexSiteURL == "" {
+				continue
+			}
+			settings, err := FetchUserSettings(rm.convexSiteURL, rm.authToken)
 			if err != nil {
 				continue
 			}
-			if len(cfg.RelayServers) == 0 {
+			if settings.RelayUrl == "" {
 				continue
 			}
-			var servers []RelayServerInfo
-			passwords := make(map[string]string)
-			for _, rs := range cfg.RelayServers {
-				servers = append(servers, RelayServerInfo{
-					ID:       rs.ID,
-					QuicAddr: rs.QuicAddr,
-					HttpURL:  rs.HttpURL,
-					Region:   rs.Region,
-					Priority: rs.Priority,
-				})
-				if rs.Password != "" {
-					passwords[rs.QuicAddr] = rs.Password
-				}
+			// Only re-apply if the relay URL changed
+			if settings.RelayUrl == rm.lastSettingsRelay {
+				continue
 			}
-			// Update global password if changed
-			if cfg.RelayPassword != "" {
-				rm.globalPassword = cfg.RelayPassword
+			rm.lastSettingsRelay = settings.RelayUrl
+			log.Printf("[RELAY] User settings relay changed: %s", settings.RelayUrl)
+			servers := []RelayServerInfo{{
+				ID:       "user-settings",
+				HttpURL:  settings.RelayUrl,
+				Region:   "user",
+				Priority: 1,
+			}}
+			passwords := make(map[string]string)
+			if settings.RelayPassword != "" {
+				rm.globalPassword = settings.RelayPassword
 			}
 			rm.applyRelayServers(servers, passwords)
 		}

@@ -4434,6 +4434,44 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 	case "lines_of_code":
 		var a struct { Dir string `json:"directory"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpLinesOfCode(a.Dir))
 
+	// --- Network & Packet Capture ---
+	case "tcpdump":
+		var a struct { Iface string `json:"interface"`; Count int `json:"count"`; Filter string `json:"filter"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpTcpdump(a.Iface, a.Count, a.Filter))
+	case "tcpdump_http":
+		var a struct { Iface string `json:"interface"`; Count int `json:"count"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpTcpdumpHTTP(a.Iface, a.Count))
+	case "tcpdump_dns":
+		var a struct { Iface string `json:"interface"`; Count int `json:"count"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpTcpdumpDNS(a.Iface, a.Count))
+	case "tshark":
+		var a struct { Iface string `json:"interface"`; Count int `json:"count"`; Filter string `json:"filter"`; Fields string `json:"fields"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpTshark(a.Iface, a.Count, a.Filter, a.Fields))
+	case "pcap_analyze":
+		var a struct { File string `json:"file"`; Filter string `json:"filter"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpPcapAnalyze(a.File, a.Filter))
+	case "pcap_stats":
+		var a struct { File string `json:"file"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpPcapStats(a.File))
+	case "netcat":
+		var a struct { Host string `json:"host"`; Port int `json:"port"`; Data string `json:"data"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpNetcat(a.Host, a.Port, a.Data))
+	case "port_scan":
+		var a struct { Host string `json:"host"`; Ports string `json:"ports"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpPortScan(a.Host, a.Ports))
+	case "arp_table":
+		return mcpToolJSON(mcpArpTable())
+	case "arp_scan":
+		var a struct { Subnet string `json:"subnet"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpArpScan(a.Subnet))
+	case "nmap_scan":
+		var a struct { Target string `json:"target"`; Type string `json:"type"`; Ports string `json:"ports"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpNmapScan(a.Target, a.Type, a.Ports))
+	case "traceroute_host":
+		var a struct { Host string `json:"host"`; MaxHops int `json:"max_hops"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpTraceroute(a.Host, a.MaxHops))
+	case "mtr_report":
+		var a struct { Host string `json:"host"`; Count int `json:"count"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpMtr(a.Host, a.Count))
+	case "network_interfaces":
+		return mcpToolJSON(mcpNetworkInterfaces())
+	case "ip_route":
+		return mcpToolJSON(mcpIPRoute())
+	case "network_connections":
+		var a struct { State string `json:"state"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpNetworkConnections(a.State))
+	case "bandwidth_test":
+		var a struct { Host string `json:"host"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpBandwidthTest(a.Host))
+	case "curl_timings":
+		var a struct { URL string `json:"url"` }; json.Unmarshal(call.Arguments, &a); return mcpToolJSON(mcpCurlTimings(a.URL))
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}

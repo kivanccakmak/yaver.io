@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, internalQuery, QueryCtx } from "./_generated/server";
+import { mutation, query, internalQuery, QueryCtx, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -20,6 +20,29 @@ export function randomHex(bytes: number = 32): string {
   return Array.from(buf)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+/**
+ * Fetch the first platform relay server from platformConfig to use as default for new users.
+ * Returns { relayUrl, relayPassword } or {} if no relay configured.
+ */
+async function getDefaultRelay(ctx: MutationCtx): Promise<{ relayUrl?: string; relayPassword?: string }> {
+  const config = await ctx.db
+    .query("platformConfig")
+    .withIndex("by_key", (q) => q.eq("key", "relay_servers"))
+    .unique();
+  if (!config?.value) return {};
+  try {
+    const relays = JSON.parse(config.value);
+    if (!Array.isArray(relays) || relays.length === 0) return {};
+    const first = relays[0];
+    return {
+      relayUrl: first.httpUrl || undefined,
+      relayPassword: first.password || undefined,
+    };
+  } catch {
+    return {};
+  }
 }
 
 /** Validate a session token hash and return the associated user, or null. */
@@ -124,10 +147,12 @@ export const createOrUpdateUser = mutation({
       avatarUrl: args.avatarUrl,
       createdAt: Date.now(),
     });
-    // Create default settings for new user
+    // Create default settings for new user with platform relay as default
+    const defaultRelay = await getDefaultRelay(ctx);
     await ctx.db.insert("userSettings", {
       userId: userDocId,
       forceRelay: false,
+      ...defaultRelay,
     });
     return userDocId;
   },
@@ -268,10 +293,12 @@ export const createEmailUser = mutation({
       passwordHash: args.passwordHash,
       createdAt: Date.now(),
     });
-    // Create default settings for new user
+    // Create default settings for new user with platform relay as default
+    const defaultRelay = await getDefaultRelay(ctx);
     await ctx.db.insert("userSettings", {
       userId: userDocId,
       forceRelay: false,
+      ...defaultRelay,
     });
     return userDocId;
   },
