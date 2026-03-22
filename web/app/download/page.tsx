@@ -21,7 +21,7 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
 }
 
-const GITHUB_CLI = "https://github.com/kivanccakmak/yaver-cli/releases/latest";
+const GITHUB_CLI = "https://github.com/kivanccakmak/yaver.io/releases/latest";
 const GITHUB_RELEASE = "https://github.com/kivanccakmak/yaver.io/releases/latest";
 
 function ghCliUrl(filename: string): string {
@@ -165,7 +165,7 @@ export default function DownloadPage() {
               <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
                 <span className="text-surface-500">$</span>{" "}
                 <span className="text-surface-300 select-all">
-                  sudo rpm -i https://github.com/kivanccakmak/yaver-cli/releases/latest/download/yaver_{cliVersion || "latest"}_aarch64.rpm
+                  sudo rpm -i https://github.com/kivanccakmak/yaver.io/releases/latest/download/yaver_{cliVersion || "latest"}_aarch64.rpm
                 </span>
               </div>
             </div>

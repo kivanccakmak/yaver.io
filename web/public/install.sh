@@ -3,7 +3,7 @@
 # Usage: curl -fsSL https://yaver.io/install.sh | sh
 set -e
 
-REPO="kivanccakmak/yaver-cli"
+REPO="kivanccakmak/yaver.io"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
 # Detect OS and architecture

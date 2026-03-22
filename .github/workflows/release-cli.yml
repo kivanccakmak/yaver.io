@@ -197,20 +197,153 @@ jobs:
     needs: [validate, release]
     runs-on: ubuntu-latest
     environment: production
-    if: false  # Enable after first successful release
     env:
       VERSION: ${{ needs.validate.outputs.version }}
     steps:
+      - name: Download release assets and compute SHA256
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ secrets.YAVER_CLI_REPO || github.repository }}"
+          mkdir -p assets
+          for BINARY in yaver-darwin-arm64 yaver-darwin-amd64 yaver-linux-arm64 yaver-linux-amd64 yaver-windows-amd64.exe; do
+            gh release download "v${VERSION}" --repo "$REPO" --pattern "$BINARY" --dir assets
+          done
+          cd assets
+          sha256sum * > ../checksums.txt
+          cat ../checksums.txt
+
+          # Export hashes as env vars
+          echo "SHA_DARWIN_ARM64=$(sha256sum yaver-darwin-arm64 | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "SHA_DARWIN_AMD64=$(sha256sum yaver-darwin-amd64 | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "SHA_LINUX_ARM64=$(sha256sum yaver-linux-arm64 | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "SHA_LINUX_AMD64=$(sha256sum yaver-linux-amd64 | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "SHA_WINDOWS_AMD64=$(sha256sum yaver-windows-amd64.exe | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
       - name: Update Homebrew tap
         env:
           GH_TOKEN: ${{ secrets.YAVER_CLI_REPO_TOKEN }}
         run: |
-          # TODO: Compute SHA256 from release artifacts and PR to homebrew-yaver tap
-          echo "Homebrew tap update: not yet implemented"
+          REPO="${{ secrets.YAVER_CLI_REPO || github.repository }}"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/kivanccakmak/homebrew-yaver.git" homebrew-yaver
+          cat > homebrew-yaver/Formula/yaver.rb <<FORMULA
+          class Yaver < Formula
+            desc "AI coding agent on your phone — P2P remote control for Claude Code, Codex, Aider, Ollama"
+            homepage "https://yaver.io"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/${REPO}/releases/download/v${VERSION}/yaver-darwin-arm64"
+                sha256 "${SHA_DARWIN_ARM64}"
+              else
+                url "https://github.com/${REPO}/releases/download/v${VERSION}/yaver-darwin-amd64"
+                sha256 "${SHA_DARWIN_AMD64}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/${REPO}/releases/download/v${VERSION}/yaver-linux-arm64"
+                sha256 "${SHA_LINUX_ARM64}"
+              else
+                url "https://github.com/${REPO}/releases/download/v${VERSION}/yaver-linux-amd64"
+                sha256 "${SHA_LINUX_AMD64}"
+              end
+            end
+
+            def install
+              binary = Dir["yaver-*"].first
+              bin.install binary => "yaver"
+            end
+
+            test do
+              assert_match "yaver", shell_output("#{bin}/yaver version")
+            end
+          end
+          FORMULA
+          cd homebrew-yaver
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "Update yaver to v${VERSION}"
+          git push origin main
 
       - name: Update Scoop manifest
         env:
           GH_TOKEN: ${{ secrets.YAVER_CLI_REPO_TOKEN }}
         run: |
-          # TODO: Compute SHA256 from release artifacts and PR to scoop-yaver
-          echo "Scoop manifest update: not yet implemented"
+          REPO="${{ secrets.YAVER_CLI_REPO || github.repository }}"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/kivanccakmak/scoop-yaver.git" scoop-yaver
+          cat > scoop-yaver/yaver.json <<MANIFEST
+          {
+            "version": "${VERSION}",
+            "description": "AI coding agent on your phone — P2P remote control for Claude Code, Codex, Aider, Ollama",
+            "homepage": "https://yaver.io",
+            "license": "MIT",
+            "architecture": {
+              "64bit": {
+                "url": "https://github.com/${REPO}/releases/download/v${VERSION}/yaver-windows-amd64.exe",
+                "hash": "${SHA_WINDOWS_AMD64}"
+              }
+            },
+            "bin": [["yaver-windows-amd64.exe", "yaver"]],
+            "checkver": {
+              "github": "https://github.com/${REPO}"
+            },
+            "autoupdate": {
+              "architecture": {
+                "64bit": {
+                  "url": "https://github.com/${REPO}/releases/download/v\$version/yaver-windows-amd64.exe"
+                }
+              }
+            }
+          }
+          MANIFEST
+          cd scoop-yaver
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "Update yaver to v${VERSION}"
+          git push origin main
+
+      - name: Update AUR PKGBUILD
+        env:
+          GH_TOKEN: ${{ secrets.YAVER_CLI_REPO_TOKEN }}
+        run: |
+          REPO="${{ secrets.YAVER_CLI_REPO || github.repository }}"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/kivanccakmak/aur-yaver.git" aur-yaver
+          cat > aur-yaver/PKGBUILD <<'PKGBUILD_HEADER'
+          # Maintainer: Yaver <packages@yaver.io>
+          pkgname=yaver
+          PKGBUILD_HEADER
+          cat >> aur-yaver/PKGBUILD <<PKGBUILD_BODY
+          pkgver=${VERSION}
+          pkgrel=1
+          pkgdesc="Run AI coding agents from your phone — Claude, Codex, Aider, or custom"
+          arch=('x86_64' 'aarch64')
+          url="https://yaver.io"
+          license=('MIT')
+          provides=('yaver')
+
+          source_x86_64=("https://github.com/${REPO}/releases/download/v\${pkgver}/yaver-linux-amd64")
+          source_aarch64=("https://github.com/${REPO}/releases/download/v\${pkgver}/yaver-linux-arm64")
+
+          sha256sums_x86_64=('${SHA_LINUX_AMD64}')
+          sha256sums_aarch64=('${SHA_LINUX_ARM64}')
+
+          package() {
+              if [ "\$CARCH" = "x86_64" ]; then
+                  install -Dm755 yaver-linux-amd64 "\$pkgdir/usr/bin/yaver"
+              else
+                  install -Dm755 yaver-linux-arm64 "\$pkgdir/usr/bin/yaver"
+              fi
+          }
+          PKGBUILD_BODY
+          cd aur-yaver
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "Update yaver to v${VERSION}"
+          git push origin main

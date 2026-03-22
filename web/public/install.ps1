@@ -2,7 +2,7 @@
 # Usage: irm https://yaver.io/install.ps1 | iex
 $ErrorActionPreference = "Stop"
 
-$repo = "kivanccakmak/yaver-cli"
+$repo = "kivanccakmak/yaver.io"
 $installDir = "$env:LOCALAPPDATA\yaver"
 
 Write-Host "Installing yaver..." -ForegroundColor Cyan
