@@ -28,6 +28,8 @@ type Config struct {
 	Speech        *SpeechConfig       `json:"speech,omitempty"`
 	Notifications *NotificationConfig `json:"notifications,omitempty"`
 	WebhookSecret string              `json:"webhook_secret,omitempty"`
+	HAURL         string              `json:"ha_url,omitempty"`
+	HAToken       string              `json:"ha_token,omitempty"`
 }
 
 // ExecConfig controls remote command execution settings.

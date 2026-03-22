@@ -3353,6 +3353,194 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		json.Unmarshal(call.Arguments, &args)
 		return mcpToolJSON(mcpCloudCmd(args.Provider, args.Args))
 
+	// --- Home Assistant ---
+	case "ha_states":
+		var args struct {
+			Filter string `json:"filter"`
+			URL    string `json:"url"`
+			Token  string `json:"token"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Token == "" {
+			cfg, _ := LoadConfig()
+			if cfg.HAToken != "" {
+				args.Token = cfg.HAToken
+			}
+			if cfg.HAURL != "" && args.URL == "" {
+				args.URL = cfg.HAURL
+			}
+		}
+		return mcpToolJSON(mcpHAStates(args.URL, args.Token, args.Filter))
+	case "ha_service":
+		var args struct {
+			Domain  string                 `json:"domain"`
+			Service string                 `json:"service"`
+			Data    map[string]interface{} `json:"data"`
+			URL     string                 `json:"url"`
+			Token   string                 `json:"token"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Token == "" {
+			cfg, _ := LoadConfig()
+			if cfg.HAToken != "" {
+				args.Token = cfg.HAToken
+			}
+			if cfg.HAURL != "" && args.URL == "" {
+				args.URL = cfg.HAURL
+			}
+		}
+		return mcpToolJSON(mcpHAService(args.URL, args.Token, args.Domain, args.Service, args.Data))
+	case "ha_toggle":
+		var args struct {
+			EntityID string `json:"entity_id"`
+			URL      string `json:"url"`
+			Token    string `json:"token"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Token == "" {
+			cfg, _ := LoadConfig()
+			if cfg.HAToken != "" {
+				args.Token = cfg.HAToken
+			}
+			if cfg.HAURL != "" && args.URL == "" {
+				args.URL = cfg.HAURL
+			}
+		}
+		return mcpToolJSON(mcpHAToggle(args.URL, args.Token, args.EntityID))
+	case "mqtt_publish":
+		var args struct {
+			Topic   string `json:"topic"`
+			Message string `json:"message"`
+			Broker  string `json:"broker"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpMQTTPublish(args.Broker, args.Topic, args.Message))
+
+	// --- Desktop Control ---
+	case "desktop_notify":
+		var args struct {
+			Title   string `json:"title"`
+			Message string `json:"message"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDesktopNotify(args.Title, args.Message))
+	case "open_url":
+		var args struct {
+			URL string `json:"url"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpOpenURL(args.URL))
+	case "volume":
+		var args struct {
+			Action string `json:"action"`
+			Level  int    `json:"level"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpVolume(args.Action, args.Level))
+	case "screen_lock":
+		return mcpToolJSON(mcpScreenLock())
+	case "say":
+		var args struct {
+			Text string `json:"text"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpSay(args.Text))
+	case "brightness":
+		var args struct {
+			Action string `json:"action"`
+			Level  int    `json:"level"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpBrightness(args.Action, args.Level))
+
+	// --- Music ---
+	case "music":
+		var args struct {
+			Action string `json:"action"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpMusicControl(args.Action))
+
+	// --- Weather ---
+	case "weather":
+		var args struct {
+			Location string `json:"location"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpWeather(args.Location))
+
+	// --- System Extras ---
+	case "battery":
+		return mcpToolJSON(mcpBattery())
+	case "disk_usage":
+		var args struct {
+			Path string `json:"path"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDiskUsage(args.Path))
+	case "wifi_info":
+		return mcpToolJSON(mcpWiFiInfo())
+	case "public_ip":
+		return mcpToolJSON(mcpPublicIP())
+	case "uptime":
+		return mcpToolJSON(mcpUptime())
+	case "speed_test":
+		return mcpToolJSON(mcpSpeedTest())
+	case "site_check":
+		var args struct {
+			URL string `json:"url"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpSiteCheck(args.URL))
+
+	// --- Utilities ---
+	case "password_gen":
+		var args struct {
+			Length    int  `json:"length"`
+			NoSymbols bool `json:"no_symbols"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpPasswordGen(args.Length, args.NoSymbols))
+	case "qr_code":
+		var args struct {
+			Text string `json:"text"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpQRCode(args.Text))
+	case "timer":
+		var args struct {
+			Seconds int    `json:"seconds"`
+			Label   string `json:"label"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpTimer(args.Seconds, args.Label))
+	case "calculate":
+		var args struct {
+			Expression string `json:"expression"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpCalculate(args.Expression))
+	case "world_clock":
+		var args struct {
+			Timezones []string `json:"timezones"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpWorldClock(args.Timezones))
+	case "countdown":
+		var args struct {
+			Date string `json:"date"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpCountdown(args.Date))
+	case "convert_units":
+		var args struct {
+			Value float64 `json:"value"`
+			From  string  `json:"from"`
+			To    string  `json:"to"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpConvertUnits(args.Value, args.From, args.To))
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}
