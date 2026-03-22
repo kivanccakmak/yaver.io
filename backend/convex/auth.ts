@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, QueryCtx } from "./_generated/server";
+import { mutation, query, internalQuery, QueryCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -382,5 +382,16 @@ export const deleteAccount = mutation({
 
     // Delete the user
     await ctx.db.delete(userId);
+  },
+});
+
+/** Look up a user by email (internal only — used by webhook handlers). */
+export const getUserByEmail = internalQuery({
+  args: { email: v.string() },
+  handler: async (ctx, { email }) => {
+    return await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", email))
+      .first();
   },
 });

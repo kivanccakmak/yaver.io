@@ -224,6 +224,41 @@ export default defineSchema({
     .index("by_userCode", ["userCode"])
     .index("by_deviceCode", ["deviceCode"]),
 
+  // Managed relay subscriptions (LemonSqueezy payments)
+  subscriptions: defineTable({
+    userId: v.id("users"),
+    plan: v.string(), // "relay-monthly" | "relay-yearly"
+    status: v.string(), // "active" | "past_due" | "cancelled" | "expired"
+    lemonSqueezyId: v.string(), // LemonSqueezy subscription ID
+    lemonSqueezyCustomerId: v.string(),
+    currentPeriodEnd: v.number(), // Unix timestamp
+    cancelledAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"])
+    .index("by_lemon_id", ["lemonSqueezyId"])
+    .index("by_status", ["status"]),
+
+  // Managed relay servers (provisioned on Hetzner)
+  managedRelays: defineTable({
+    userId: v.id("users"),
+    subscriptionId: v.id("subscriptions"),
+    status: v.string(), // "provisioning" | "active" | "stopping" | "stopped" | "error"
+    hetznerServerId: v.optional(v.string()),
+    serverIp: v.optional(v.string()),
+    domain: v.optional(v.string()), // e.g. "abc123.relay.yaver.io"
+    region: v.string(), // "eu" | "us" — Hetzner datacenter
+    password: v.string(), // relay password (auto-generated)
+    quicPort: v.number(),
+    httpPort: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastHealthCheck: v.optional(v.number()),
+    errorMessage: v.optional(v.string()),
+  }).index("by_user", ["userId"])
+    .index("by_subscription", ["subscriptionId"])
+    .index("by_status", ["status"]),
+
   mobileStreamLogs: defineTable({
     userId: v.optional(v.string()),
     platform: v.string(),

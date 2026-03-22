@@ -1,6 +1,6 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { sha256Hex } from "./auth";
 
 const http = httpRouter();
@@ -1205,6 +1205,152 @@ http.route({
   handler: httpAction(async (ctx) => {
     await ctx.runMutation(api.aiModels.seed, {});
     return jsonResponse({ ok: true });
+  }),
+});
+
+// ── Subscription & Managed Relay ─────────────────────────────────────
+
+/** Generate a random relay password. */
+function generateRelayPassword(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let result = "";
+  for (let i = 0; i < 32; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+/** POST /webhooks/lemonsqueezy — LemonSqueezy webhook (no auth — validated by signature). */
+http.route({
+  path: "/webhooks/lemonsqueezy",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    // Verify webhook signature
+    const signature = request.headers.get("x-signature");
+    const body = await request.text();
+
+    // TODO: Verify HMAC signature with LEMONSQUEEZY_WEBHOOK_SECRET env var
+    // For now, check basic structure
+
+    let payload;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      return errorResponse("Invalid JSON", 400);
+    }
+
+    const eventName = payload.meta?.event_name;
+    const data = payload.data?.attributes;
+
+    if (!eventName || !data) {
+      return errorResponse("Invalid payload", 400);
+    }
+
+    // Extract user email from custom data or customer email
+    const userEmail = payload.meta?.custom_data?.user_email || data.user_email;
+    if (!userEmail) {
+      return errorResponse("No user email", 400);
+    }
+
+    // Find user by email
+    const user = await ctx.runQuery(internal.auth.getUserByEmail, { email: userEmail });
+    if (!user) {
+      return errorResponse("User not found", 404);
+    }
+
+    const lemonSqueezyId = String(payload.data.id);
+    const customerId = String(data.customer_id);
+
+    switch (eventName) {
+      case "subscription_created":
+      case "subscription_updated":
+      case "subscription_resumed": {
+        const plan = data.variant_name?.includes("yearly") ? "relay-yearly" : "relay-monthly";
+        const status = data.status === "active" ? "active" : data.status === "past_due" ? "past_due" : "active";
+        const periodEnd = new Date(data.renews_at || data.ends_at).getTime();
+
+        const subId = await ctx.runMutation(internal.subscriptions.upsertFromWebhook, {
+          lemonSqueezyId,
+          lemonSqueezyCustomerId: customerId,
+          userId: user._id,
+          plan,
+          status,
+          currentPeriodEnd: periodEnd,
+        });
+
+        // If new subscription, create managed relay
+        if (eventName === "subscription_created") {
+          const password = generateRelayPassword();
+          await ctx.runMutation(internal.managedRelays.create, {
+            userId: user._id,
+            subscriptionId: subId,
+            region: payload.meta?.custom_data?.region || "eu",
+            password,
+          });
+          // TODO: Trigger Hetzner provisioning via action
+        }
+        break;
+      }
+
+      case "subscription_cancelled":
+      case "subscription_expired": {
+        await ctx.runMutation(internal.subscriptions.cancel, { lemonSqueezyId });
+        break;
+      }
+
+      case "subscription_payment_failed": {
+        await ctx.runMutation(internal.subscriptions.upsertFromWebhook, {
+          lemonSqueezyId,
+          lemonSqueezyCustomerId: customerId,
+          userId: user._id,
+          plan: "relay-monthly",
+          status: "past_due",
+          currentPeriodEnd: Date.now(),
+        });
+        break;
+      }
+    }
+
+    return jsonResponse({ ok: true });
+  }),
+});
+
+/** GET /subscription — Get subscription and managed relay status (authenticated). */
+http.route({
+  path: "/subscription",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+
+    const session = await ctx.runQuery(api.auth.validateSession, { tokenHash });
+    if (!session) return errorResponse("Unauthorized", 401);
+
+    // Get user doc to get _id
+    const userDocId = await ctx.runQuery(api.auth.getUserDocId, { tokenHash });
+    if (!userDocId) return errorResponse("User not found", 404);
+
+    const [subscription, relay] = await Promise.all([
+      ctx.runQuery(api.subscriptions.getByUser, { userId: userDocId }),
+      ctx.runQuery(api.managedRelays.getByUser, { userId: userDocId }),
+    ]);
+
+    return jsonResponse({
+      subscription: subscription ? {
+        plan: subscription.plan,
+        status: subscription.status,
+        currentPeriodEnd: subscription.currentPeriodEnd,
+        cancelledAt: subscription.cancelledAt,
+      } : null,
+      relay: relay ? {
+        status: relay.status,
+        domain: relay.domain,
+        region: relay.region,
+        quicPort: relay.quicPort,
+        httpPort: relay.httpPort,
+      } : null,
+    });
   }),
 });
 
