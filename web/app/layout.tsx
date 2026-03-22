@@ -13,17 +13,18 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Yaver - Use Claude from Anywhere",
+  title: "Yaver - Use Any AI Agent from Anywhere",
   description:
-    "Access Claude AI from any device with peer-to-peer encrypted connections. Real-time streaming, multi-device support, and seamless integration.",
+    "Use any AI coding agent from your phone, tablet, or any device. Open-source P2P tool connecting to your dev machines with real-time streaming and multi-device support.",
   keywords: [
-    "Claude",
-    "AI",
-    "Anthropic",
+    "AI agent",
+    "Claude Code",
+    "Codex",
+    "Aider",
     "P2P",
-    "encrypted",
-    "multi-device",
-    "streaming",
+    "mobile coding",
+    "MCP server",
+    "remote development",
   ],
   icons: {
     icon: [
@@ -34,7 +35,7 @@ export const metadata: Metadata = {
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
   },
   openGraph: {
-    title: "Yaver - Use Claude from Anywhere",
+    title: "Yaver - Use Any AI Agent from Anywhere",
     description:
       "Access Claude AI from any device with peer-to-peer encrypted connections.",
     url: "https://yaver.io",
@@ -44,7 +45,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Yaver - Use Claude from Anywhere",
+    title: "Yaver - Use Any AI Agent from Anywhere",
     description:
       "Access Claude AI from any device with peer-to-peer encrypted connections.",
     images: ["/og-image.png"],
