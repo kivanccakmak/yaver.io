@@ -3541,6 +3541,157 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		json.Unmarshal(call.Arguments, &args)
 		return mcpToolJSON(mcpConvertUnits(args.Value, args.From, args.To))
 
+	// --- Philips Hue ---
+	case "hue_lights":
+		var args struct {
+			BridgeIP string `json:"bridge_ip"`
+			APIKey   string `json:"api_key"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpHueLights(args.BridgeIP, args.APIKey))
+	case "hue_control":
+		var args struct {
+			BridgeIP   string `json:"bridge_ip"`
+			APIKey     string `json:"api_key"`
+			LightID    string `json:"light_id"`
+			Action     string `json:"action"`
+			Brightness int    `json:"brightness"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpHueControl(args.BridgeIP, args.APIKey, args.LightID, args.Action, args.Brightness))
+	case "hue_scenes":
+		var args struct {
+			BridgeIP string `json:"bridge_ip"`
+			APIKey   string `json:"api_key"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpHueScenes(args.BridgeIP, args.APIKey))
+
+	// --- Shelly ---
+	case "shelly_status":
+		var args struct {
+			IP string `json:"ip"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpShellyStatus(args.IP))
+	case "shelly_control":
+		var args struct {
+			IP      string `json:"ip"`
+			Action  string `json:"action"`
+			Channel int    `json:"channel"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpShellyControl(args.IP, args.Channel, args.Action))
+	case "shelly_power":
+		var args struct {
+			IP string `json:"ip"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpShellyPower(args.IP))
+
+	// --- Elgato Key Light ---
+	case "elgato_status":
+		var args struct {
+			IP string `json:"ip"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpElgatoStatus(args.IP))
+	case "elgato_control":
+		var args struct {
+			IP          string `json:"ip"`
+			On          bool   `json:"on"`
+			Brightness  int    `json:"brightness"`
+			Temperature int    `json:"temperature"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpElgatoControl(args.IP, args.On, args.Brightness, args.Temperature))
+
+	// --- Nanoleaf ---
+	case "nanoleaf":
+		var args struct {
+			IP         string `json:"ip"`
+			Token      string `json:"token"`
+			Action     string `json:"action"`
+			Brightness int    `json:"brightness"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpNanoleafControl(args.IP, args.Token, args.Action, args.Brightness))
+
+	// --- Tasmota ---
+	case "tasmota":
+		var args struct {
+			IP      string `json:"ip"`
+			Command string `json:"command"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpTasmotaControl(args.IP, args.Command))
+
+	// --- Govee ---
+	case "govee_devices":
+		var args struct {
+			APIKey string `json:"api_key"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpGoveeDevices(args.APIKey))
+	case "govee_control":
+		var args struct {
+			APIKey     string         `json:"api_key"`
+			Device     string         `json:"device"`
+			Model      string         `json:"model"`
+			Action     string         `json:"action"`
+			Brightness int            `json:"brightness"`
+			Color      map[string]int `json:"color"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpGoveeControl(args.APIKey, args.Device, args.Model, args.Action, args.Brightness, args.Color))
+
+	// --- Wake on LAN ---
+	case "wake_on_lan":
+		var args struct {
+			MAC string `json:"mac"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpWakeOnLAN(args.MAC))
+
+	// --- Apple Shortcuts ---
+	case "run_shortcut":
+		var args struct {
+			Name  string `json:"name"`
+			Input string `json:"input"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpRunShortcut(args.Name, args.Input))
+	case "list_shortcuts":
+		return mcpToolJSON(mcpListShortcuts())
+
+	// --- ADB ---
+	case "adb_devices":
+		return mcpToolJSON(mcpADBDevices())
+	case "adb_command":
+		var args struct {
+			Command string `json:"command"`
+			Device  string `json:"device"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpADBCommand(args.Device, args.Command))
+	case "adb_screenshot":
+		var args struct {
+			Device string `json:"device"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpADBScreenshot(args.Device))
+
+	// --- Sonos ---
+	case "sonos_discover":
+		return mcpToolJSON(mcpSonosDiscover())
+	case "sonos_control":
+		var args struct {
+			IP     string `json:"ip"`
+			Action string `json:"action"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpSonosControl(args.IP, args.Action))
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}

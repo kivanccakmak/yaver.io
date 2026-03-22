@@ -183,7 +183,7 @@ export default function CLISetupManual() {
             MCP &mdash; connect to AI editors
           </h2>
           <p className="mb-4 text-sm text-surface-400">
-            Yaver exposes 111 tools via the Model Context Protocol. One command to configure your editor:
+            Yaver exposes 157 tools via the Model Context Protocol. One command to configure your editor:
           </p>
           <div className="terminal mb-4">
             <div className="terminal-header">

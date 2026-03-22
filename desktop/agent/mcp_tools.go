@@ -907,6 +907,41 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, lifestyleTools...)
 
+	// --- IoT & Smart Devices ---
+	iotTools := []map[string]interface{}{
+		// Philips Hue (local bridge, no cloud)
+		{"name": "hue_lights", "description": "List all Philips Hue lights on your bridge.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"bridge_ip", "api_key"}, "properties": map[string]interface{}{"bridge_ip": map[string]interface{}{"type": "string", "description": "Hue bridge IP"}, "api_key": map[string]interface{}{"type": "string", "description": "Hue API key"}}}},
+		{"name": "hue_control", "description": "Control a Philips Hue light — on, off, toggle, brightness, color.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"bridge_ip", "api_key", "light_id", "action"}, "properties": map[string]interface{}{"bridge_ip": map[string]interface{}{"type": "string"}, "api_key": map[string]interface{}{"type": "string"}, "light_id": map[string]interface{}{"type": "string", "description": "Light number (e.g. '1')"}, "action": map[string]interface{}{"type": "string", "description": "on, off, toggle, brightness, color"}, "brightness": map[string]interface{}{"type": "integer", "description": "0-254 for brightness, 0-65535 for color hue"}}}},
+		{"name": "hue_scenes", "description": "List Hue scenes.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"bridge_ip", "api_key"}, "properties": map[string]interface{}{"bridge_ip": map[string]interface{}{"type": "string"}, "api_key": map[string]interface{}{"type": "string"}}}},
+		// Shelly (local HTTP, no hub)
+		{"name": "shelly_status", "description": "Get Shelly device status (smart plug, relay, light).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"ip"}, "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string", "description": "Shelly device IP"}}}},
+		{"name": "shelly_control", "description": "Control a Shelly relay/plug — on, off, toggle.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"ip", "action"}, "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string"}, "action": map[string]interface{}{"type": "string", "description": "on, off, toggle"}, "channel": map[string]interface{}{"type": "integer", "description": "Relay channel (default: 0)"}}}},
+		{"name": "shelly_power", "description": "Get power consumption from a Shelly device.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"ip"}, "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string"}}}},
+		// Elgato Key Light
+		{"name": "elgato_status", "description": "Get Elgato Key Light status (for streaming/video calls).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string", "description": "Key Light IP (default: elgato-key-light.local)"}}}},
+		{"name": "elgato_control", "description": "Control Elgato Key Light — on/off, brightness, color temperature.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string"}, "on": map[string]interface{}{"type": "boolean", "description": "Turn on/off"}, "brightness": map[string]interface{}{"type": "integer", "description": "Brightness 0-100"}, "temperature": map[string]interface{}{"type": "integer", "description": "Color temp 143-344 (warm to cool)"}}}},
+		// Nanoleaf
+		{"name": "nanoleaf", "description": "Control Nanoleaf light panels — on, off, brightness, effects.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"ip", "token", "action"}, "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string"}, "token": map[string]interface{}{"type": "string", "description": "Nanoleaf auth token"}, "action": map[string]interface{}{"type": "string", "description": "on, off, brightness, effects, status"}, "brightness": map[string]interface{}{"type": "integer"}}}},
+		// Tasmota
+		{"name": "tasmota", "description": "Send commands to Tasmota-flashed devices (smart plugs, relays).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"ip", "command"}, "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string"}, "command": map[string]interface{}{"type": "string", "description": "Tasmota command (e.g. Power ON, Status, Power TOGGLE)"}}}},
+		// Govee LED strips
+		{"name": "govee_devices", "description": "List Govee devices (LED strips, lights).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"api_key"}, "properties": map[string]interface{}{"api_key": map[string]interface{}{"type": "string", "description": "Govee API key"}}}},
+		{"name": "govee_control", "description": "Control Govee lights/LED strips — on, off, brightness, color.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"api_key", "device", "model", "action"}, "properties": map[string]interface{}{"api_key": map[string]interface{}{"type": "string"}, "device": map[string]interface{}{"type": "string", "description": "Device address"}, "model": map[string]interface{}{"type": "string", "description": "Device model"}, "action": map[string]interface{}{"type": "string", "description": "on, off, brightness, color"}, "brightness": map[string]interface{}{"type": "integer"}, "color": map[string]interface{}{"type": "object", "description": "{r: 255, g: 0, b: 0}"}}}},
+		// Wake on LAN
+		{"name": "wake_on_lan", "description": "Send a Wake-on-LAN magic packet to wake up a machine.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"mac"}, "properties": map[string]interface{}{"mac": map[string]interface{}{"type": "string", "description": "MAC address (e.g. AA:BB:CC:DD:EE:FF)"}}}},
+		// Apple Shortcuts
+		{"name": "run_shortcut", "description": "Run an Apple Shortcut (macOS only).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string", "description": "Shortcut name"}, "input": map[string]interface{}{"type": "string", "description": "Input text"}}}},
+		{"name": "list_shortcuts", "description": "List available Apple Shortcuts (macOS only).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// ADB (Android)
+		{"name": "adb_devices", "description": "List connected Android devices/emulators.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "adb_command", "description": "Run a command on an Android device via ADB.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"command"}, "properties": map[string]interface{}{"command": map[string]interface{}{"type": "string", "description": "Shell command"}, "device": map[string]interface{}{"type": "string", "description": "Device serial (optional)"}}}},
+		{"name": "adb_screenshot", "description": "Take a screenshot from an Android device.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device": map[string]interface{}{"type": "string"}}}},
+		// Sonos
+		{"name": "sonos_discover", "description": "Discover Sonos speakers on the network.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "sonos_control", "description": "Control a Sonos speaker — play, pause, next, previous, volume.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"ip", "action"}, "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string", "description": "Sonos speaker IP"}, "action": map[string]interface{}{"type": "string", "description": "play, pause, next, previous, volume_up, volume_down, status"}}}},
+	}
+	tools = append(tools, iotTools...)
+
 	return map[string]interface{}{
 		"tools": tools,
 	}
