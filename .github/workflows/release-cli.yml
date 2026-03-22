@@ -89,6 +89,60 @@ jobs:
           tar czf "yaver-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" yaver
           rm yaver
 
+      - name: Build deb and rpm packages (Linux)
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y rpm
+          cd desktop/agent
+          BINARY="yaver-${{ matrix.goos }}-${{ matrix.goarch }}"
+          DEB_ARCH="${{ matrix.goarch }}"
+          RPM_ARCH="${{ matrix.goarch }}"
+          if [ "$DEB_ARCH" = "amd64" ]; then RPM_ARCH="x86_64"; fi
+          if [ "$DEB_ARCH" = "arm64" ]; then RPM_ARCH="aarch64"; fi
+
+          # Build .deb
+          DEB_DIR="/tmp/yaver-deb"
+          rm -rf "$DEB_DIR"
+          mkdir -p "$DEB_DIR/usr/local/bin" "$DEB_DIR/DEBIAN"
+          cp "$BINARY" "$DEB_DIR/usr/local/bin/yaver"
+          chmod 755 "$DEB_DIR/usr/local/bin/yaver"
+          cat > "$DEB_DIR/DEBIAN/control" <<CONTROL
+          Package: yaver
+          Version: ${VERSION}
+          Architecture: ${DEB_ARCH}
+          Maintainer: Yaver <packages@yaver.io>
+          Description: AI coding agent on your phone — P2P remote control for Claude Code, Codex, Aider, Ollama
+          Homepage: https://yaver.io
+          Section: devel
+          Priority: optional
+          CONTROL
+          dpkg-deb --build "$DEB_DIR" "yaver_${VERSION}_${DEB_ARCH}.deb"
+
+          # Build .rpm
+          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          cp "$BINARY" ~/rpmbuild/SOURCES/yaver
+          cat > ~/rpmbuild/SPECS/yaver.spec <<SPEC
+          Name: yaver
+          Version: ${VERSION}
+          Release: 1
+          Summary: AI coding agent — P2P remote control for Claude Code, Codex, Aider, Ollama
+          License: MIT
+          URL: https://yaver.io
+
+          %description
+          Run AI coding agents from your phone — Claude Code, Codex, Aider, or custom.
+
+          %install
+          mkdir -p %{buildroot}/usr/local/bin
+          cp %{_sourcedir}/yaver %{buildroot}/usr/local/bin/yaver
+          chmod 755 %{buildroot}/usr/local/bin/yaver
+
+          %files
+          /usr/local/bin/yaver
+          SPEC
+          rpmbuild -bb --target "${RPM_ARCH}" ~/rpmbuild/SPECS/yaver.spec
+          cp ~/rpmbuild/RPMS/${RPM_ARCH}/yaver-${VERSION}-1.${RPM_ARCH}.rpm "yaver_${VERSION}_${RPM_ARCH}.rpm"
+
       - name: Package zip (Windows)
         if: matrix.goos == 'windows'
         run: |
@@ -151,6 +205,8 @@ jobs:
             desktop/agent/yaver-*.tar.gz
             desktop/agent/yaver-*.zip
             desktop/agent/yaver-*.exe
+            desktop/agent/yaver-*.deb
+            desktop/agent/yaver-*.rpm
             desktop/agent/Yaver-*.dmg
           retention-days: 7
 
@@ -172,7 +228,7 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release
-          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.exe" -o -name "*.dmg" \) -exec cp {} release/ \;
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.exe" -o -name "*.dmg" -o -name "*.deb" -o -name "*.rpm" \) -exec cp {} release/ \;
           cd release
           sha256sum * > checksums.txt
           echo "Release files:"
@@ -379,3 +435,117 @@ jobs:
           echo "Winget manifest generated at $MDIR/Yaver.Yaver.yaml"
           echo "To publish: fork microsoft/winget-pkgs, add this manifest, and submit a PR."
           echo "Or use: wingetcreate submit --token \$GH_TOKEN $MDIR"
+
+      - name: Update Chocolatey package
+        env:
+          GH_TOKEN: ${{ secrets.YAVER_CLI_REPO_TOKEN }}
+        run: |
+          REPO="${{ secrets.YAVER_CLI_REPO || github.repository }}"
+          mkdir -p choco-yaver/tools
+          cat > choco-yaver/yaver.nuspec <<NUSPEC
+          <?xml version="1.0" encoding="utf-8"?>
+          <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+            <metadata>
+              <id>yaver</id>
+              <version>${VERSION}</version>
+              <title>Yaver CLI</title>
+              <authors>Yaver</authors>
+              <owners>kivanccakmak</owners>
+              <projectUrl>https://yaver.io</projectUrl>
+              <licenseUrl>https://github.com/${REPO}/blob/main/LICENSE</licenseUrl>
+              <requireLicenseAcceptance>false</requireLicenseAcceptance>
+              <description>AI coding agent on your phone — P2P remote control for Claude Code, Codex, Aider, Ollama</description>
+              <summary>Run AI coding agents from your phone</summary>
+              <tags>yaver ai cli developer-tools remote</tags>
+            </metadata>
+          </package>
+          NUSPEC
+
+          cat > choco-yaver/tools/chocolateyinstall.ps1 <<'CHOCO_HEADER'
+          \$ErrorActionPreference = 'Stop'
+          CHOCO_HEADER
+          cat >> choco-yaver/tools/chocolateyinstall.ps1 <<CHOCO_BODY
+          \$url = "https://github.com/${REPO}/releases/download/v${VERSION}/yaver-windows-amd64.exe"
+          \$checksum = "${SHA_WINDOWS_AMD64}"
+          \$installDir = "\$(Split-Path -parent \$MyInvocation.MyCommand.Definition)"
+          Get-ChocolateyWebFile -PackageName 'yaver' -FileFullPath "\$installDir/yaver.exe" -Url64bit \$url -Checksum64 \$checksum -ChecksumType64 'sha256'
+          CHOCO_BODY
+
+          echo "Chocolatey package generated at choco-yaver/"
+          echo "To publish: choco pack choco-yaver/yaver.nuspec && choco push yaver.${VERSION}.nupkg --api-key \$CHOCO_API_KEY"
+
+      - name: Update apt repository
+        env:
+          GH_TOKEN: ${{ secrets.YAVER_CLI_REPO_TOKEN }}
+        run: |
+          REPO="${{ secrets.YAVER_CLI_REPO || github.repository }}"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/kivanccakmak/apt-yaver.git" apt-yaver
+
+          # Download deb packages from release
+          for ARCH in amd64 arm64; do
+            DEB="yaver_${VERSION}_${ARCH}.deb"
+            gh release download "v${VERSION}" --repo "$REPO" --pattern "$DEB" --dir apt-yaver/pool/ 2>/dev/null || echo "No $DEB found in release"
+          done
+
+          # Regenerate Packages index
+          cd apt-yaver
+          mkdir -p dists/stable/main/binary-amd64 dists/stable/main/binary-arm64
+          for ARCH in amd64 arm64; do
+            if ls pool/yaver_*_${ARCH}.deb 1>/dev/null 2>&1; then
+              dpkg-scanpackages --arch "$ARCH" pool/ > "dists/stable/main/binary-${ARCH}/Packages"
+              gzip -k -f "dists/stable/main/binary-${ARCH}/Packages"
+            fi
+          done
+
+          # Generate Release file
+          cat > dists/stable/Release <<RELEASE
+          Origin: Yaver
+          Label: Yaver
+          Suite: stable
+          Codename: stable
+          Architectures: amd64 arm64
+          Components: main
+          Description: Yaver CLI apt repository
+          RELEASE
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "Update yaver to v${VERSION}"
+          git push origin main
+
+  docker:
+    needs: [validate, release]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: desktop/agent
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            yaver/cli:latest
+            yaver/cli:${{ env.VERSION }}
+            ghcr.io/${{ github.repository }}/cli:latest
+            ghcr.io/${{ github.repository }}/cli:${{ env.VERSION }}

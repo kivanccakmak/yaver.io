@@ -100,6 +100,8 @@ func main() {
 		runClean(os.Args[2:])
 	case "doctor":
 		runDoctor()
+	case "completion":
+		runCompletion(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	case "version", "--version", "-v":
@@ -154,6 +156,8 @@ Usage:
   yaver purge       Factory reset — remove all local data (auth, sessions, tasks, logs)
   yaver reset       Alias for purge
   yaver uninstall   Remove config, certs, and stop the agent
+  yaver completion <bash|zsh|fish>  Generate shell completions
+  yaver doctor      Diagnose issues
   yaver help        Show this help message
   yaver version     Print version
 
