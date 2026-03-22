@@ -3801,6 +3801,14 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		return mcpToolJSON(mcpEVNetworks(args.Country))
 	case "ev_connector_types":
 		return mcpToolJSON(mcpEVConnectorTypes())
+	case "nobetci_eczane":
+		var args struct { City string `json:"city"`; District string `json:"district"` }
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpNobetciEczane(args.City, args.District))
+	case "eczane_nearby":
+		var args struct { Lat float64 `json:"lat"`; Lon float64 `json:"lon"`; Radius int `json:"radius"` }
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpEczaneSearch(args.Lat, args.Lon, args.Radius))
 	case "places_search":
 		var args struct {
 			Query string  `json:"query"`

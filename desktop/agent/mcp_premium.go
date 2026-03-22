@@ -189,6 +189,128 @@ func mcpEVConnectorTypes() interface{} {
 }
 
 // ---------------------------------------------------------------------------
+// Nöbetçi Eczane — Turkey on-duty pharmacies
+// ---------------------------------------------------------------------------
+
+func mcpNobetciEczane(city, district string) interface{} {
+	// nosyapi.com free API for nöbetçi eczane
+	if city == "" {
+		return map[string]interface{}{"error": "city required (e.g. istanbul, ankara, izmir)"}
+	}
+	city = strings.ToLower(city)
+
+	// Try nosyapi
+	u := fmt.Sprintf("https://www.nosyapi.com/apiv2/pharmacy?city=%s", url.QueryEscape(city))
+	if district != "" {
+		u += "&district=" + url.QueryEscape(strings.ToLower(district))
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(u)
+	if err != nil {
+		// Fallback: collectapi (free tier)
+		return mcpNobetciEczaneFallback(city, district)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return mcpNobetciEczaneFallback(city, district)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]interface{}
+	json.Unmarshal(body, &result)
+
+	// Parse and simplify
+	if data, ok := result["data"].([]interface{}); ok {
+		var pharmacies []map[string]interface{}
+		for _, p := range data {
+			if pm, ok := p.(map[string]interface{}); ok {
+				pharmacies = append(pharmacies, map[string]interface{}{
+					"name":    pm["pharmacyName"],
+					"address": pm["address"],
+					"phone":   pm["phone"],
+					"district": pm["dist"],
+					"city":    pm["city"],
+					"loc":     pm["loc"],
+				})
+			}
+		}
+		return map[string]interface{}{
+			"pharmacies": pharmacies,
+			"count":      len(pharmacies),
+			"city":       city,
+			"district":   district,
+			"type":       "nöbetçi eczane (on-duty pharmacy)",
+		}
+	}
+	return result
+}
+
+func mcpNobetciEczaneFallback(city, district string) interface{} {
+	// Fallback: use collectapi free endpoint
+	u := fmt.Sprintf("https://www.nosyapi.com/apiv2/pharmacy?city=%s", url.QueryEscape(city))
+	if district != "" {
+		u += "&district=" + url.QueryEscape(district)
+	}
+
+	// Another fallback: scrape from eczaneler.gen.tr via Google
+	// For now return helpful info
+	return map[string]interface{}{
+		"city":    city,
+		"note":    "API unavailable. Check manually:",
+		"sources": []string{
+			"https://www.eczaneler.gen.tr/nobetci-" + city,
+			"https://www.google.com/search?q=nöbetçi+eczane+" + city,
+			"https://www.turksaglik.com/nobetci-eczane/" + city,
+		},
+	}
+}
+
+func mcpEczaneSearch(lat, lon float64, radius int) interface{} {
+	if radius <= 0 {
+		radius = 2000
+	}
+	// Use Overpass API to find pharmacies from OpenStreetMap
+	query := fmt.Sprintf(`[out:json][timeout:10];
+node["amenity"="pharmacy"](around:%d,%f,%f);
+out body 20;`, radius, lat, lon)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post("https://overpass-api.de/api/interpreter",
+		"application/x-www-form-urlencoded",
+		strings.NewReader("data="+url.QueryEscape(query)))
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var result map[string]interface{}
+	json.Unmarshal(body, &result)
+
+	var pharmacies []map[string]interface{}
+	if elements, ok := result["elements"].([]interface{}); ok {
+		for _, e := range elements {
+			if m, ok := e.(map[string]interface{}); ok {
+				tags, _ := m["tags"].(map[string]interface{})
+				pharmacies = append(pharmacies, map[string]interface{}{
+					"name":       tags["name"],
+					"phone":      tags["phone"],
+					"website":    tags["website"],
+					"address":    fmt.Sprintf("%v %v", tags["addr:street"], tags["addr:housenumber"]),
+					"opening":    tags["opening_hours"],
+					"wheelchair": tags["wheelchair"],
+					"lat":        m["lat"],
+					"lon":        m["lon"],
+				})
+			}
+		}
+	}
+	return map[string]interface{}{"pharmacies": pharmacies, "count": len(pharmacies), "radius_m": radius}
+}
+
+// ---------------------------------------------------------------------------
 // Places search — Nominatim/OpenStreetMap (FREE, no key)
 // ---------------------------------------------------------------------------
 
