@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -150,10 +149,8 @@ func (em *ExecManager) StartExec(command, workDir, shell string, env map[string]
 	}
 	cmd.Dir = workDir
 
-	// Set process group for signal delivery
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
+	// Set process group for signal delivery (platform-specific)
+	setProcGroup(cmd)
 
 	// Merge environment
 	cmd.Env = append(cmd.Environ(), "TERM=xterm-256color")
@@ -347,20 +344,11 @@ func (em *ExecManager) SignalExec(id, sig string) error {
 	sig = strings.ToUpper(sig)
 	switch sig {
 	case "SIGINT", "INT":
-		if runtime.GOOS == "windows" {
-			return s.cmd.Process.Signal(syscall.SIGINT)
-		}
-		return syscall.Kill(-s.cmd.Process.Pid, syscall.SIGINT)
+		return killProcessGroup(s.cmd.Process.Pid, "INT")
 	case "SIGTERM", "TERM":
-		if runtime.GOOS == "windows" {
-			return s.cmd.Process.Kill()
-		}
-		return syscall.Kill(-s.cmd.Process.Pid, syscall.SIGTERM)
+		return killProcessGroup(s.cmd.Process.Pid, "TERM")
 	case "SIGKILL", "KILL":
-		if runtime.GOOS == "windows" {
-			return s.cmd.Process.Kill()
-		}
-		return syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
+		return killProcessGroup(s.cmd.Process.Pid, "KILL")
 	default:
 		return fmt.Errorf("unsupported signal: %s (use SIGINT, SIGTERM, or SIGKILL)", sig)
 	}
@@ -379,11 +367,7 @@ func (em *ExecManager) KillExec(id string) error {
 	s.mu.RUnlock()
 	if running {
 		if s.cmd != nil && s.cmd.Process != nil {
-			if runtime.GOOS != "windows" {
-				syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
-			} else {
-				s.cmd.Process.Kill()
-			}
+			killProcessGroup(s.cmd.Process.Pid, "KILL")
 		}
 		s.cancel()
 		// Wait for process to finish
