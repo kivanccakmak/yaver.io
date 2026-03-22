@@ -74,7 +74,34 @@ npx convex run platformConfig:get '{"key":"relay_servers"}'
 npx convex run platformConfig:set '{"key":"relay_servers","value":"[{\"id\":\"relay1\",\"quicAddr\":\"<your-ip>:4433\",\"httpUrl\":\"https://relay.yourdomain.com\",\"region\":\"eu\",\"priority\":1}]"}'
 ```
 
-## Quick Start
+## One-Line Install (any VPS)
+
+Install a self-hosted relay on any Linux VPS with a single command:
+
+```bash
+curl -fsSL https://yaver.io/install-relay.sh | sudo bash -s -- \
+  --domain relay.example.com \
+  --password your-secret-password
+```
+
+This automatically:
+1. Installs Docker
+2. Pulls and runs the relay container
+3. Sets up nginx reverse proxy
+4. Gets Let's Encrypt SSL (auto-renewing)
+5. Configures firewall
+6. Sets up Watchtower for auto-updates
+
+**Requirements:** Linux VPS with root access, domain pointing to the server's IP (A record), ports 80/443/4433 open.
+
+Then add it to your Yaver CLI:
+```bash
+yaver relay add https://relay.example.com --password your-secret-password
+```
+
+The relay is a pass-through proxy — it never stores, reads, or logs your data. All connections are encrypted via QUIC (TLS 1.3).
+
+## Quick Start (from source)
 
 ### Build
 

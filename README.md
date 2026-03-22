@@ -3,7 +3,32 @@
 [![Tests](https://github.com/kivanccakmak/yaver.io/actions/workflows/test-suite.yml/badge.svg)](https://github.com/kivanccakmak/yaver.io/actions/workflows/test-suite.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-**Your AI coding agent, on your phone.** Yaver is an open-source P2P tool that lets developers use any AI coding agent (Claude Code, Codex, Aider, Ollama, etc.) from their mobile device or any terminal, connecting directly to their development machines. Task data flows peer-to-peer — servers only handle auth and peer discovery.
+**Your code never leaves your machine.** Yaver is an open-source P2P tool that lets developers use any AI coding agent (Claude Code, Codex, Aider, Ollama, etc.) from their mobile device, desktop app, or any terminal — connecting directly to their development machines with encrypted P2P connections. Free and open-source. Self-host everything. No vendor lock-in.
+
+## Key Features
+
+- **P2P Encrypted** — Your code, tasks, and AI output flow directly between your devices. Servers only handle auth.
+- **Any AI Agent** — Claude Code, Codex, Aider, Ollama, Goose, Amp, OpenCode, or any custom CLI tool.
+- **Remote Exec** — Run shell commands on any device (like SSH but through Yaver's transport).
+- **Session Transfer** — Move AI sessions between machines. Start on your laptop, continue on your server.
+- **Task Scheduling** — Cron-like scheduling for AI tasks. Run code reviews every morning.
+- **Notifications** — Telegram, Discord, Slack alerts when tasks complete.
+- **MCP Tools** — 40+ tools: file search, git ops, exec, screenshots, session transfer — all usable from within Claude Code.
+- **CI/CD Webhooks** — Trigger AI tasks from GitHub Actions, GitLab CI, or any webhook.
+- **Free Relay** — Every user gets a free relay server (public.yaver.io). Self-host your own anytime.
+- **SDKs** — Go, Python, JS/TS, Flutter/Dart, C — embed Yaver in your own apps.
+
+## Self-Host a Relay Server
+
+Install a relay on any VPS with one command:
+
+```bash
+curl -fsSL https://yaver.io/install-relay.sh | sudo bash -s -- \
+  --domain relay.example.com \
+  --password your-secret
+```
+
+This installs Docker, deploys the relay, sets up nginx + Let's Encrypt SSL, and configures auto-updates. The relay is a pass-through proxy — it never stores your data. All connections are encrypted via QUIC (TLS 1.3).
 
 ## How It Works
 
