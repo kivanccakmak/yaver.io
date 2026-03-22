@@ -380,6 +380,14 @@ run_unit_tests() {
             tail -20 "$TEST_DIR/relay-test.log"
         fi
     fi
+
+    info "Running MCP server tests..."
+    if (cd "$ROOT_DIR/mcp" && go test -v -count=1 ./... > "$TEST_DIR/mcp-test.log" 2>&1); then
+        pass "MCP server tests passed"
+    else
+        fail "MCP server tests failed"
+        tail -20 "$TEST_DIR/mcp-test.log"
+    fi
 }
 
 # ── Build Tests ────────────────────────────────────────────────────

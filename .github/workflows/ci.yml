@@ -18,6 +18,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       backend: ${{ steps.filter.outputs.backend }}
       installer: ${{ steps.filter.outputs.installer }}
+      mcp: ${{ steps.filter.outputs.mcp }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -28,6 +29,8 @@ jobs:
               - 'desktop/agent/**'
             relay:
               - 'relay/**'
+            mcp:
+              - 'mcp/**'
             mobile:
               - 'mobile/**'
             web:
@@ -51,7 +54,7 @@ jobs:
 
   go-tests:
     needs: changes
-    if: needs.changes.outputs.cli == 'true' || needs.changes.outputs.relay == 'true'
+    if: needs.changes.outputs.cli == 'true' || needs.changes.outputs.relay == 'true' || needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +67,9 @@ jobs:
       - name: Test relay
         if: needs.changes.outputs.relay == 'true'
         run: cd relay && go test -v ./... 2>/dev/null || echo "No relay tests"
+      - name: Test MCP server
+        if: needs.changes.outputs.mcp == 'true'
+        run: cd mcp && go test -v ./...
 
   go-build:
     needs: changes
