@@ -372,6 +372,7 @@ export class QuicClient {
       body: JSON.stringify({
         title,
         description,
+        source: "mobile",
         ...(model ? { model } : {}),
         ...(runner ? { runner } : {}),
         ...(customCommand ? { customCommand } : {}),
@@ -625,6 +626,45 @@ export class QuicClient {
     } catch {
       return null;
     }
+  }
+
+  /** Get notification/integration config from agent. */
+  async getNotificationsConfig(): Promise<Record<string, any> | null> {
+    if (!this.isConnected && !this.hasConnectionInfo) return null;
+    try {
+      const res = await fetch(`${this.baseUrl}/notifications/config`, {
+        headers: this.authHeaders,
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.config ?? null;
+    } catch { return null; }
+  }
+
+  /** Save notification/integration config to agent. */
+  async saveNotificationsConfig(config: Record<string, any>): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.baseUrl}/notifications/config`, {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify(config),
+      });
+      return res.ok;
+    } catch { return false; }
+  }
+
+  /** Test a notification channel. */
+  async testNotification(channel: string): Promise<string> {
+    try {
+      const res = await fetch(`${this.baseUrl}/notifications/test`, {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ channel }),
+      });
+      if (!res.ok) return "Failed";
+      const data = await res.json();
+      return data.result ?? "Sent";
+    } catch { return "Failed"; }
   }
 
   /** Get detailed agent status (runner health, processes, system info). */

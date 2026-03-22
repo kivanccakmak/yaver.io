@@ -439,6 +439,7 @@ async function createNewTask() {
     description: document.getElementById('new-task-description').value.trim(),
     model: document.getElementById('new-task-model').value.trim(),
     runner: document.getElementById('new-task-runner').value,
+    source: 'desktop-app',
     images: pendingImages.filter(Boolean),
   };
 
@@ -859,6 +860,145 @@ function removeTunnel(idx) {
 
 function toggleSwitch(el) {
   el.classList.toggle('on');
+}
+
+// ---- Integrations ----
+
+async function loadIntegrations() {
+  try {
+    const resp = await window.yaver.getNotificationsConfig();
+    if (!resp || !resp.ok || !resp.config) return;
+    const c = resp.config;
+
+    // Telegram
+    if (c.telegram) {
+      document.getElementById('intg-telegram-token').value = c.telegram.botToken || '';
+      document.getElementById('intg-telegram-chatid').value = c.telegram.chatId || '';
+      setToggle('intg-telegram-enabled', c.telegram.enabled);
+    }
+    // Discord
+    if (c.discord) {
+      document.getElementById('intg-discord-url').value = c.discord.webhookUrl || '';
+      setToggle('intg-discord-enabled', c.discord.enabled);
+    }
+    // Slack
+    if (c.slack) {
+      document.getElementById('intg-slack-url').value = c.slack.webhookUrl || '';
+      setToggle('intg-slack-enabled', c.slack.enabled);
+    }
+    // Teams
+    if (c.teams) {
+      document.getElementById('intg-teams-url').value = c.teams.webhookUrl || '';
+      setToggle('intg-teams-enabled', c.teams.enabled);
+    }
+    // Email
+    if (c.email_notify) {
+      document.getElementById('intg-email-to').value = c.email_notify.to || '';
+      setToggle('intg-email-enabled', c.email_notify.enabled);
+    }
+    // Linear
+    if (c.linear) {
+      document.getElementById('intg-linear-key').value = c.linear.apiKey || '';
+      document.getElementById('intg-linear-team').value = c.linear.teamId || '';
+      setToggle('intg-linear-enabled', c.linear.enabled);
+    }
+    // Jira
+    if (c.jira) {
+      document.getElementById('intg-jira-url').value = c.jira.baseUrl || '';
+      document.getElementById('intg-jira-email').value = c.jira.email || '';
+      document.getElementById('intg-jira-token').value = c.jira.apiToken || '';
+      document.getElementById('intg-jira-project').value = c.jira.projectKey || '';
+      setToggle('intg-jira-enabled', c.jira.enabled);
+    }
+    // PagerDuty
+    if (c.pagerduty) {
+      document.getElementById('intg-pd-key').value = c.pagerduty.routingKey || '';
+      setToggle('intg-pd-enabled', c.pagerduty.enabled);
+      setToggle('intg-pd-failonly', c.pagerduty.onFailOnly);
+    }
+    // Opsgenie
+    if (c.opsgenie) {
+      document.getElementById('intg-og-key').value = c.opsgenie.apiKey || '';
+      setToggle('intg-og-enabled', c.opsgenie.enabled);
+      setToggle('intg-og-failonly', c.opsgenie.onFailOnly);
+    }
+  } catch (e) {
+    console.error('Failed to load integrations:', e);
+  }
+}
+
+function setToggle(id, val) {
+  const el = document.getElementById(id);
+  if (el) { if (val) el.classList.add('on'); else el.classList.remove('on'); }
+}
+
+function isToggleOn(id) {
+  const el = document.getElementById(id);
+  return el ? el.classList.contains('on') : false;
+}
+
+async function saveIntegrations() {
+  const config = {
+    telegram: {
+      botToken: document.getElementById('intg-telegram-token').value.trim(),
+      chatId: document.getElementById('intg-telegram-chatid').value.trim(),
+      enabled: isToggleOn('intg-telegram-enabled'),
+    },
+    discord: {
+      webhookUrl: document.getElementById('intg-discord-url').value.trim(),
+      enabled: isToggleOn('intg-discord-enabled'),
+    },
+    slack: {
+      webhookUrl: document.getElementById('intg-slack-url').value.trim(),
+      enabled: isToggleOn('intg-slack-enabled'),
+    },
+    teams: {
+      webhookUrl: document.getElementById('intg-teams-url').value.trim(),
+      enabled: isToggleOn('intg-teams-enabled'),
+    },
+    email_notify: {
+      to: document.getElementById('intg-email-to').value.trim(),
+      enabled: isToggleOn('intg-email-enabled'),
+    },
+    linear: {
+      apiKey: document.getElementById('intg-linear-key').value.trim(),
+      teamId: document.getElementById('intg-linear-team').value.trim(),
+      enabled: isToggleOn('intg-linear-enabled'),
+    },
+    jira: {
+      baseUrl: document.getElementById('intg-jira-url').value.trim(),
+      email: document.getElementById('intg-jira-email').value.trim(),
+      apiToken: document.getElementById('intg-jira-token').value.trim(),
+      projectKey: document.getElementById('intg-jira-project').value.trim(),
+      enabled: isToggleOn('intg-jira-enabled'),
+    },
+    pagerduty: {
+      routingKey: document.getElementById('intg-pd-key').value.trim(),
+      enabled: isToggleOn('intg-pd-enabled'),
+      onFailOnly: isToggleOn('intg-pd-failonly'),
+    },
+    opsgenie: {
+      apiKey: document.getElementById('intg-og-key').value.trim(),
+      enabled: isToggleOn('intg-og-enabled'),
+      onFailOnly: isToggleOn('intg-og-failonly'),
+    },
+  };
+
+  try {
+    await window.yaver.saveNotificationsConfig(config);
+    alert('Integrations saved!');
+  } catch (e) {
+    alert('Failed to save: ' + e.message);
+  }
+}
+
+async function testIntegration(channel) {
+  try {
+    const resp = await window.yaver.testNotification(channel);
+    alert(resp && resp.result ? resp.result : 'Test sent');
+  } catch (e) {
+    alert('Test failed: ' + e.message);
+  }
 }
 
 // ---- Clean ----

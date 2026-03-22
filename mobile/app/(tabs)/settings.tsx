@@ -69,6 +69,12 @@ export default function SettingsScreen() {
   const [showMetrics, setShowMetrics] = useState(false);
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
 
+  // Integrations
+  const [showIntegrations, setShowIntegrations] = useState(false);
+  const [intgConfig, setIntgConfig] = useState<Record<string, any>>({});
+  const [intgLoading, setIntgLoading] = useState(false);
+  const [intgSaving, setIntgSaving] = useState(false);
+
   // Speech settings
   const [speechProvider, setSpeechProvider] = useState<SpeechProvider | null>("on-device");
   const [speechApiKey, setSpeechApiKey] = useState("");
@@ -1803,6 +1809,140 @@ export default function SettingsScreen() {
               </React.Fragment>
             ))}
           </View>
+        </View>
+
+        {/* Integrations */}
+        <View style={styles.section}>
+          <Pressable
+            onPress={async () => {
+              setShowIntegrations(!showIntegrations);
+              if (!showIntegrations && connectionStatus === "connected") {
+                setIntgLoading(true);
+                const cfg = await quicClient.getNotificationsConfig();
+                if (cfg) setIntgConfig(cfg);
+                setIntgLoading(false);
+              }
+            }}
+            style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 8 }]}
+          >
+            <View style={styles.themeRow}>
+              <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Integrations</Text>
+              <Text style={{ color: c.textMuted }}>{showIntegrations ? "▲" : "▼"}</Text>
+            </View>
+          </Pressable>
+
+          {showIntegrations && (
+            <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 4, padding: 16 }]}>
+              {intgLoading ? (
+                <ActivityIndicator color={c.accent} />
+              ) : connectionStatus !== "connected" ? (
+                <Text style={{ color: c.textMuted, fontSize: 13 }}>Connect to a device to configure integrations.</Text>
+              ) : (
+                <>
+                  <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 12 }}>
+                    Get notified when tasks complete. Configure channels below.
+                  </Text>
+
+                  {/* Discord */}
+                  <Text style={{ color: c.textPrimary, fontWeight: "600", fontSize: 13, marginTop: 8 }}>Discord</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.border }]}
+                    placeholder="Webhook URL"
+                    placeholderTextColor={c.textMuted}
+                    value={intgConfig.discord?.webhookUrl ?? ""}
+                    onChangeText={(t) => setIntgConfig((p) => ({ ...p, discord: { ...p.discord, webhookUrl: t, enabled: true } }))}
+                  />
+
+                  {/* Slack */}
+                  <Text style={{ color: c.textPrimary, fontWeight: "600", fontSize: 13, marginTop: 12 }}>Slack</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.border }]}
+                    placeholder="Webhook URL"
+                    placeholderTextColor={c.textMuted}
+                    value={intgConfig.slack?.webhookUrl ?? ""}
+                    onChangeText={(t) => setIntgConfig((p) => ({ ...p, slack: { ...p.slack, webhookUrl: t, enabled: true } }))}
+                  />
+
+                  {/* Telegram */}
+                  <Text style={{ color: c.textPrimary, fontWeight: "600", fontSize: 13, marginTop: 12 }}>Telegram</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.border }]}
+                    placeholder="Bot Token"
+                    placeholderTextColor={c.textMuted}
+                    secureTextEntry
+                    value={intgConfig.telegram?.botToken ?? ""}
+                    onChangeText={(t) => setIntgConfig((p) => ({ ...p, telegram: { ...p.telegram, botToken: t, enabled: true } }))}
+                  />
+                  <TextInput
+                    style={[styles.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.border, marginTop: 6 }]}
+                    placeholder="Chat ID"
+                    placeholderTextColor={c.textMuted}
+                    value={intgConfig.telegram?.chatId ?? ""}
+                    onChangeText={(t) => setIntgConfig((p) => ({ ...p, telegram: { ...p.telegram, chatId: t, enabled: true } }))}
+                  />
+
+                  {/* Teams */}
+                  <Text style={{ color: c.textPrimary, fontWeight: "600", fontSize: 13, marginTop: 12 }}>Teams</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.border }]}
+                    placeholder="Webhook URL"
+                    placeholderTextColor={c.textMuted}
+                    value={intgConfig.teams?.webhookUrl ?? ""}
+                    onChangeText={(t) => setIntgConfig((p) => ({ ...p, teams: { ...p.teams, webhookUrl: t, enabled: true } }))}
+                  />
+
+                  {/* Linear */}
+                  <Text style={{ color: c.textPrimary, fontWeight: "600", fontSize: 13, marginTop: 16 }}>Linear</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.border }]}
+                    placeholder="API Key"
+                    placeholderTextColor={c.textMuted}
+                    secureTextEntry
+                    value={intgConfig.linear?.apiKey ?? ""}
+                    onChangeText={(t) => setIntgConfig((p) => ({ ...p, linear: { ...p.linear, apiKey: t, enabled: true } }))}
+                  />
+                  <TextInput
+                    style={[styles.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.border, marginTop: 6 }]}
+                    placeholder="Team ID"
+                    placeholderTextColor={c.textMuted}
+                    value={intgConfig.linear?.teamId ?? ""}
+                    onChangeText={(t) => setIntgConfig((p) => ({ ...p, linear: { ...p.linear, teamId: t } }))}
+                  />
+
+                  {/* PagerDuty */}
+                  <Text style={{ color: c.textPrimary, fontWeight: "600", fontSize: 13, marginTop: 16 }}>PagerDuty</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.border }]}
+                    placeholder="Routing Key"
+                    placeholderTextColor={c.textMuted}
+                    secureTextEntry
+                    value={intgConfig.pagerduty?.routingKey ?? ""}
+                    onChangeText={(t) => setIntgConfig((p) => ({ ...p, pagerduty: { ...p.pagerduty, routingKey: t, enabled: true, onFailOnly: p.pagerduty?.onFailOnly ?? true } }))}
+                  />
+
+                  {/* Save button */}
+                  <Pressable
+                    onPress={async () => {
+                      setIntgSaving(true);
+                      const ok = await quicClient.saveNotificationsConfig(intgConfig);
+                      setIntgSaving(false);
+                      Alert.alert(ok ? "Saved" : "Error", ok ? "Integrations saved." : "Failed to save.");
+                    }}
+                    style={({ pressed }) => [
+                      { marginTop: 16, paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8, backgroundColor: c.accent, alignItems: "center" as const },
+                      pressed && { opacity: 0.7 },
+                    ]}
+                  >
+                    {intgSaving ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <Text style={{ color: "#fff", fontWeight: "600", fontSize: 14 }}>Save Integrations</Text>
+                    )}
+                  </Pressable>
+                </>
+              )}
+            </View>
+          )}
         </View>
 
         {/* Sign out */}

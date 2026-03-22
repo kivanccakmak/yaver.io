@@ -613,6 +613,39 @@
     }
     .toggle-switch.on::after { transform: translateX(18px); }
 
+    /* Integration groups */
+    .integration-group {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      overflow: hidden;
+    }
+    .integration-group summary {
+      padding: 10px 14px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      background: var(--bg-card);
+      color: var(--text);
+      list-style: none;
+    }
+    .integration-group summary::before {
+      content: '+ ';
+      color: var(--text-dim);
+    }
+    .integration-group[open] summary::before {
+      content: '- ';
+    }
+    .integration-group[open] summary {
+      border-bottom: 1px solid var(--border);
+    }
+    .integration-group > :not(summary) {
+      padding: 0 14px;
+    }
+    .integration-group > .input-group:first-of-type { padding-top: 12px; }
+    .integration-group > .toggle-row { padding: 8px 14px; }
+    .integration-group > button { margin: 0 14px 12px; }
+
     /* Scrollbar */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -1041,6 +1074,9 @@
         <div class="nav-item" data-panel="panel-settings" onclick="switchPanel(this)">
           <span class="nav-icon">&#9881;</span> Settings
         </div>
+        <div class="nav-item" data-panel="panel-integrations" onclick="switchPanel(this); loadIntegrations()">
+          <span class="nav-icon">&#9832;</span> Integrations
+        </div>
 
         <div class="sidebar-footer">
           <div class="user-info" id="sidebar-user-info">Signed in</div>
@@ -1297,6 +1333,102 @@
                 <button class="btn btn-outline btn-sm" onclick="showTermsView()">Terms of Service</button>
                 <button class="btn btn-outline btn-sm" onclick="showPrivacyView()">Privacy Policy</button>
               </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- ===== Integrations Panel ===== -->
+        <div class="panel" id="panel-integrations">
+          <div class="panel-header">
+            <h2>Integrations</h2>
+            <button class="btn btn-primary btn-sm" onclick="saveIntegrations()">Save</button>
+          </div>
+          <div class="panel-body">
+
+            <div class="settings-section">
+              <h3>Chat Notifications</h3>
+              <p style="font-size:12px; color:var(--text-dim); margin-bottom:12px">Get notified when tasks complete or fail.</p>
+
+              <details class="integration-group">
+                <summary>Telegram</summary>
+                <div class="input-group"><label>Bot Token</label><input type="password" id="intg-telegram-token" placeholder="From @BotFather"></div>
+                <div class="input-group"><label>Chat ID</label><input type="text" id="intg-telegram-chatid" placeholder="User or group chat ID"></div>
+                <div class="toggle-row"><div><div class="toggle-label">Enabled</div></div><div class="toggle-switch" id="intg-telegram-enabled" onclick="toggleSwitch(this)"></div></div>
+                <button class="btn btn-outline btn-sm" onclick="testIntegration('telegram')" style="margin-top:8px">Test</button>
+              </details>
+
+              <details class="integration-group">
+                <summary>Discord</summary>
+                <div class="input-group"><label>Webhook URL</label><input type="text" id="intg-discord-url" placeholder="https://discord.com/api/webhooks/..."></div>
+                <div class="toggle-row"><div><div class="toggle-label">Enabled</div></div><div class="toggle-switch" id="intg-discord-enabled" onclick="toggleSwitch(this)"></div></div>
+                <button class="btn btn-outline btn-sm" onclick="testIntegration('discord')" style="margin-top:8px">Test</button>
+              </details>
+
+              <details class="integration-group">
+                <summary>Slack</summary>
+                <div class="input-group"><label>Webhook URL</label><input type="text" id="intg-slack-url" placeholder="https://hooks.slack.com/services/..."></div>
+                <div class="toggle-row"><div><div class="toggle-label">Enabled</div></div><div class="toggle-switch" id="intg-slack-enabled" onclick="toggleSwitch(this)"></div></div>
+                <button class="btn btn-outline btn-sm" onclick="testIntegration('slack')" style="margin-top:8px">Test</button>
+              </details>
+
+              <details class="integration-group">
+                <summary>Microsoft Teams</summary>
+                <div class="input-group"><label>Webhook URL</label><input type="text" id="intg-teams-url" placeholder="https://outlook.office.com/webhook/..."></div>
+                <div class="toggle-row"><div><div class="toggle-label">Enabled</div></div><div class="toggle-switch" id="intg-teams-enabled" onclick="toggleSwitch(this)"></div></div>
+                <button class="btn btn-outline btn-sm" onclick="testIntegration('teams')" style="margin-top:8px">Test</button>
+              </details>
+
+              <details class="integration-group">
+                <summary>Email</summary>
+                <div class="input-group"><label>Recipient Email</label><input type="email" id="intg-email-to" placeholder="you@example.com"></div>
+                <div class="toggle-row"><div><div class="toggle-label">Enabled</div></div><div class="toggle-switch" id="intg-email-enabled" onclick="toggleSwitch(this)"></div></div>
+                <button class="btn btn-outline btn-sm" onclick="testIntegration('email')" style="margin-top:8px">Test</button>
+              </details>
+            </div>
+
+            <div class="settings-section">
+              <h3>Issue Tracking</h3>
+              <p style="font-size:12px; color:var(--text-dim); margin-bottom:12px">Auto-create issues when tasks complete.</p>
+
+              <details class="integration-group">
+                <summary>Linear</summary>
+                <div class="input-group"><label>API Key</label><input type="password" id="intg-linear-key" placeholder="lin_api_..."></div>
+                <div class="input-group"><label>Team ID</label><input type="text" id="intg-linear-team" placeholder="Team UUID"></div>
+                <div class="toggle-row"><div><div class="toggle-label">Enabled</div></div><div class="toggle-switch" id="intg-linear-enabled" onclick="toggleSwitch(this)"></div></div>
+                <button class="btn btn-outline btn-sm" onclick="testIntegration('linear')" style="margin-top:8px">Test</button>
+              </details>
+
+              <details class="integration-group">
+                <summary>Jira</summary>
+                <div class="input-group"><label>Base URL</label><input type="text" id="intg-jira-url" placeholder="https://mycompany.atlassian.net"></div>
+                <div class="input-group"><label>Email</label><input type="email" id="intg-jira-email" placeholder="you@company.com"></div>
+                <div class="input-group"><label>API Token</label><input type="password" id="intg-jira-token" placeholder="Jira API token"></div>
+                <div class="input-group"><label>Project Key</label><input type="text" id="intg-jira-project" placeholder="DEV"></div>
+                <div class="toggle-row"><div><div class="toggle-label">Enabled</div></div><div class="toggle-switch" id="intg-jira-enabled" onclick="toggleSwitch(this)"></div></div>
+                <button class="btn btn-outline btn-sm" onclick="testIntegration('jira')" style="margin-top:8px">Test</button>
+              </details>
+            </div>
+
+            <div class="settings-section">
+              <h3>Alerting</h3>
+              <p style="font-size:12px; color:var(--text-dim); margin-bottom:12px">Trigger alerts on task failures.</p>
+
+              <details class="integration-group">
+                <summary>PagerDuty</summary>
+                <div class="input-group"><label>Routing Key</label><input type="password" id="intg-pd-key" placeholder="Events API v2 routing key"></div>
+                <div class="toggle-row"><div><div class="toggle-label">Enabled</div></div><div class="toggle-switch" id="intg-pd-enabled" onclick="toggleSwitch(this)"></div></div>
+                <div class="toggle-row"><div><div class="toggle-label">Failures only</div><div class="toggle-desc">Only alert when tasks fail</div></div><div class="toggle-switch active" id="intg-pd-failonly" onclick="toggleSwitch(this)"></div></div>
+                <button class="btn btn-outline btn-sm" onclick="testIntegration('pagerduty')" style="margin-top:8px">Test</button>
+              </details>
+
+              <details class="integration-group">
+                <summary>Opsgenie</summary>
+                <div class="input-group"><label>API Key</label><input type="password" id="intg-og-key" placeholder="Opsgenie API key"></div>
+                <div class="toggle-row"><div><div class="toggle-label">Enabled</div></div><div class="toggle-switch" id="intg-og-enabled" onclick="toggleSwitch(this)"></div></div>
+                <div class="toggle-row"><div><div class="toggle-label">Failures only</div><div class="toggle-desc">Only alert when tasks fail</div></div><div class="toggle-switch active" id="intg-og-failonly" onclick="toggleSwitch(this)"></div></div>
+                <button class="btn btn-outline btn-sm" onclick="testIntegration('opsgenie')" style="margin-top:8px">Test</button>
+              </details>
             </div>
 
           </div>

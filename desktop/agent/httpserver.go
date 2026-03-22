@@ -511,6 +511,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		Model         string            `json:"model"`
 		Runner        string            `json:"runner"`        // runner ID: "claude", "codex", "aider" — empty uses default
 		CustomCommand string            `json:"customCommand"` // arbitrary command — runs via sh -c
+		Source        string            `json:"source"`        // client type: "mobile", "desktop-app", "web", "cli"
 		SpeechContext *SpeechContext     `json:"speechContext"` // voice input/output preferences
 		Images        []ImageAttachment `json:"images,omitempty"`
 	}
@@ -523,7 +524,16 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "mobile", body.Runner, body.CustomCommand, body.Images, body.SpeechContext)
+	source := body.Source
+	if source == "" {
+		// Fall back to header, then default
+		source = r.Header.Get("X-Yaver-Source")
+	}
+	if source == "" {
+		source = "mobile"
+	}
+
+	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, source, body.Runner, body.CustomCommand, body.Images, body.SpeechContext)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create task: %v", err))
 		return
