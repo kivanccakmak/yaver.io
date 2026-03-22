@@ -832,6 +832,43 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, devTools...)
 
+	// --- Developer Tools 2 ---
+	devTools2 := []map[string]interface{}{
+		// Database
+		{"name": "db_query", "description": "Execute a database query (SQLite, PostgreSQL, MySQL, Redis).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"driver", "query"}, "properties": map[string]interface{}{"driver": map[string]interface{}{"type": "string", "description": "Database: sqlite, postgres, mysql, redis"}, "dsn": map[string]interface{}{"type": "string", "description": "Connection string (or path for SQLite). Uses DATABASE_URL env if empty for postgres."}, "query": map[string]interface{}{"type": "string", "description": "SQL query or Redis command"}}}},
+		{"name": "db_schema", "description": "Show database schema/tables.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"driver"}, "properties": map[string]interface{}{"driver": map[string]interface{}{"type": "string", "description": "Database: sqlite, postgres, mysql"}, "dsn": map[string]interface{}{"type": "string", "description": "Connection string"}}}},
+		// Network diagnostics
+		{"name": "dns_lookup", "description": "DNS lookup for a hostname.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"host"}, "properties": map[string]interface{}{"host": map[string]interface{}{"type": "string", "description": "Hostname to lookup"}, "type": map[string]interface{}{"type": "string", "description": "Record type: A, AAAA, MX, CNAME, TXT (default: A)"}}}},
+		{"name": "ping", "description": "Ping a host.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"host"}, "properties": map[string]interface{}{"host": map[string]interface{}{"type": "string", "description": "Host to ping"}, "count": map[string]interface{}{"type": "integer", "description": "Number of pings (default: 4)"}}}},
+		{"name": "ssl_check", "description": "Check SSL/TLS certificate for a domain — expiry, issuer, SANs.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"host"}, "properties": map[string]interface{}{"host": map[string]interface{}{"type": "string", "description": "Domain to check (e.g. yaver.io)"}}}},
+		{"name": "http_timing", "description": "Measure HTTP response time and get basic info.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"url"}, "properties": map[string]interface{}{"url": map[string]interface{}{"type": "string", "description": "URL to measure"}}}},
+		// Data tools
+		{"name": "base64", "description": "Base64 encode or decode text.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action", "input"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "encode or decode"}, "input": map[string]interface{}{"type": "string", "description": "Text to encode/decode"}}}},
+		{"name": "hash", "description": "Hash text with MD5 or SHA256.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"input"}, "properties": map[string]interface{}{"input": map[string]interface{}{"type": "string", "description": "Text to hash"}, "algorithm": map[string]interface{}{"type": "string", "description": "md5 or sha256 (default: sha256)"}}}},
+		{"name": "uuid", "description": "Generate a new UUID v4.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "jq", "description": "Query/transform JSON with jq expressions.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"expression", "input"}, "properties": map[string]interface{}{"expression": map[string]interface{}{"type": "string", "description": "jq expression (e.g. '.data[] | .name')"}, "input": map[string]interface{}{"type": "string", "description": "JSON input"}}}},
+		{"name": "regex_test", "description": "Test a regex pattern against input text.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"pattern", "input"}, "properties": map[string]interface{}{"pattern": map[string]interface{}{"type": "string", "description": "Regex pattern"}, "input": map[string]interface{}{"type": "string", "description": "Text to match against"}}}},
+		// Archive
+		{"name": "archive_create", "description": "Create a zip or tar.gz archive.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"source"}, "properties": map[string]interface{}{"source": map[string]interface{}{"type": "string", "description": "File or directory to archive"}, "output": map[string]interface{}{"type": "string", "description": "Output filename (auto-generated if empty)"}, "format": map[string]interface{}{"type": "string", "description": "zip or tar.gz (default: tar.gz)"}}}},
+		{"name": "archive_extract", "description": "Extract a zip or tar.gz archive.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"path"}, "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string", "description": "Archive file path"}, "destination": map[string]interface{}{"type": "string", "description": "Extraction directory (default: current)"}}}},
+		// System services
+		{"name": "service_status", "description": "Check status of a system service (systemd on Linux, brew services on macOS).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string", "description": "Service name (e.g. nginx, postgresql, docker)"}}}},
+		{"name": "service_action", "description": "Start, stop, restart, enable, or disable a system service.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name", "action"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string", "description": "Service name"}, "action": map[string]interface{}{"type": "string", "description": "start, stop, restart, enable, disable"}}}},
+		{"name": "service_list", "description": "List system services and their status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Benchmark
+		{"name": "benchmark", "description": "Run project benchmarks. Auto-detects: go bench, cargo bench, npm bench.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"command": map[string]interface{}{"type": "string", "description": "Custom benchmark command (auto-detected if empty)"}, "directory": map[string]interface{}{"type": "string", "description": "Project directory"}}}},
+		// Diff
+		{"name": "diff", "description": "Compare two files and show differences.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"path_a", "path_b"}, "properties": map[string]interface{}{"path_a": map[string]interface{}{"type": "string", "description": "First file path"}, "path_b": map[string]interface{}{"type": "string", "description": "Second file path"}}}},
+		// Environment
+		{"name": "env_list", "description": "List environment variables (secrets are masked).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"filter": map[string]interface{}{"type": "string", "description": "Filter by name (case-insensitive)"}}}},
+		{"name": "env_read", "description": "Read a .env file (secrets are masked).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string", "description": "Path to .env file (default: .env)"}}}},
+		// Crontab
+		{"name": "crontab", "description": "List or add system crontab entries.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "list or add (default: list)"}, "entry": map[string]interface{}{"type": "string", "description": "Cron entry to add (required for 'add')"}}}},
+		// Cloud CLI
+		{"name": "cloud_cli", "description": "Run AWS, GCP, or Azure CLI commands.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider", "args"}, "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "description": "aws, gcloud, or az"}, "args": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "CLI arguments (e.g. ['s3', 'ls'])"}}}},
+	}
+	tools = append(tools, devTools2...)
+
 	return map[string]interface{}{
 		"tools": tools,
 	}

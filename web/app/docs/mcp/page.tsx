@@ -138,7 +138,7 @@ export default function McpPage() {
               ["installation", "Installation"],
               ["local-mcp", "Local MCP (stdio) \u2014 Claude Desktop, Cursor, VS Code & more"],
               ["network-mcp", "Network MCP (HTTP) \u2014 Remote Access"],
-              ["available-tools", "Available Tools (48)"],
+              ["available-tools", "Available Tools (111)"],
               ["email-setup", "Email Setup"],
               ["acl", "ACL \u2014 Connecting to Other MCP Servers"],
               ["standalone-mcp", "Standalone MCP Server"],
@@ -391,10 +391,10 @@ export default function McpPage() {
         {/* ─── Section 5: Available Tools ─── */}
         <section className="mb-20">
           <SectionHeading id="available-tools">
-            Available Tools (48)
+            Available Tools (111)
           </SectionHeading>
           <Prose>
-            Yaver exposes 48 tools through MCP, organized by category. AI
+            Yaver exposes 111 tools through MCP, organized by category. AI
             agents can discover and use these tools automatically. This means
             Claude Code, Aider, Codex, or any MCP-compatible agent can manage
             tasks, adopt tmux sessions, configure relay servers, and more &mdash;

@@ -13,7 +13,7 @@
 - **Session Transfer** — Move AI sessions between machines. Start on your laptop, continue on your server.
 - **Task Scheduling** — Cron-like scheduling for AI tasks. Run code reviews every morning.
 - **Notifications** — Telegram, Discord, Slack alerts when tasks complete.
-- **MCP Tools** — 48 tools: file search, git ops, exec, screenshots, session transfer — usable from Claude Desktop, Cursor, VS Code, Windsurf, Zed.
+- **MCP Tools** — 111 tools: file search, git ops, exec, screenshots, session transfer — usable from Claude Desktop, Cursor, VS Code, Windsurf, Zed.
 - **CI/CD Webhooks** — Trigger AI tasks from GitHub Actions, GitLab CI, or any webhook.
 - **Free Relay** — Every user gets a free relay server (public.yaver.io). Self-host your own anytime.
 - **SDKs** — Go, Python, JS/TS, Flutter/Dart, C — embed Yaver in your own apps.
@@ -87,7 +87,7 @@ Download the desktop app with full GUI from the [download page](https://yaver.io
 
 ## MCP Integration
 
-Yaver implements the Model Context Protocol (MCP) with 48 tools. Connect from Claude Desktop, Cursor, VS Code, Windsurf, Zed, or any MCP-compatible client.
+Yaver implements the Model Context Protocol (MCP) with 111 tools. Connect from Claude Desktop, Cursor, VS Code, Windsurf, Zed, or any MCP-compatible client.
 
 ### One-Command Setup
 
@@ -141,12 +141,26 @@ Trigger AI tasks from CI/CD:
 | Category | Tools |
 |----------|-------|
 | **Tasks** | `create_task`, `list_tasks`, `get_task`, `stop_task`, `continue_task` |
-| **System** | `get_info`, `get_system_info`, `get_config`, `set_work_dir`, `list_projects` |
-| **Runners** | `list_runners`, `switch_runner` |
-| **Relay** | `get_relay_config`, `add_relay_server`, `remove_relay_server` |
+| **Docker** | `docker_ps`, `docker_logs`, `docker_exec`, `docker_images`, `docker_compose` |
+| **Testing** | `run_tests` (auto-detects go/jest/vitest/pytest/cargo) |
+| **Code Quality** | `lint`, `format_code`, `type_check` (auto-detects toolchain) |
+| **Dependencies** | `deps_outdated`, `deps_audit`, `deps_list` (npm/pip/cargo/go) |
+| **GitHub** | `github_prs`, `github_issues`, `github_ci_status` |
+| **Database** | `db_query`, `db_schema` (SQLite, Postgres, MySQL, Redis) |
+| **HTTP Client** | `http_request`, `http_timing` |
+| **Network** | `dns_lookup`, `ping`, `ssl_check` |
+| **Processes** | `process_list`, `process_kill`, `port_check` |
+| **Data Utils** | `base64`, `hash`, `uuid`, `jq`, `regex_test`, `diff` |
+| **Archive** | `archive_create`, `archive_extract` |
+| **Services** | `service_status`, `service_action`, `service_list` |
+| **Cloud** | `cloud_cli` (AWS, GCP, Azure) |
+| **Environment** | `env_list`, `env_read`, `crontab` |
 | **Filesystem** | `read_file`, `write_file`, `list_directory`, `search_files` |
 | **Email** | `email_list_inbox`, `email_get`, `email_send`, `email_sync`, `email_search` |
-| **ACL** | `acl_list_peers`, `acl_add_peer`, `acl_remove_peer`, `acl_list_peer_tools`, `acl_call_peer_tool`, `acl_health` |
+| **System** | `get_info`, `get_system_info`, `screenshot`, `clipboard_read`, `clipboard_write` |
+| **Session** | `session_list`, `session_transfer`, `session_export`, `session_import` |
+| **ACL** | `acl_list_peers`, `acl_add_peer`, `acl_call_peer_tool`, `acl_health` |
+| **Benchmark** | `benchmark` (auto-detects go bench/cargo bench) |
 
 See [MCP Integration Guide](https://yaver.io/docs/mcp) for full documentation.
 

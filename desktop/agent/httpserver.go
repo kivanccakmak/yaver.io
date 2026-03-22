@@ -3192,6 +3192,167 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		json.Unmarshal(call.Arguments, &args)
 		return mcpToolJSON(mcpGitHubCIStatus(args.Directory))
 
+	// --- Database ---
+	case "db_query":
+		var args struct {
+			Driver string `json:"driver"`
+			DSN    string `json:"dsn"`
+			Query  string `json:"query"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDBQuery(args.Driver, args.DSN, args.Query))
+	case "db_schema":
+		var args struct {
+			Driver string `json:"driver"`
+			DSN    string `json:"dsn"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDBSchemas(args.Driver, args.DSN))
+
+	// --- Network Diagnostics ---
+	case "dns_lookup":
+		var args struct {
+			Host string `json:"host"`
+			Type string `json:"type"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDNSLookup(args.Host, args.Type))
+	case "ping":
+		var args struct {
+			Host  string `json:"host"`
+			Count int    `json:"count"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpPing(args.Host, args.Count))
+	case "ssl_check":
+		var args struct {
+			Host string `json:"host"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpSSLCheck(args.Host))
+	case "http_timing":
+		var args struct {
+			URL string `json:"url"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpHTTPTiming(args.URL))
+
+	// --- Data Tools ---
+	case "base64":
+		var args struct {
+			Action string `json:"action"`
+			Input  string `json:"input"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpBase64(args.Action, args.Input))
+	case "hash":
+		var args struct {
+			Input     string `json:"input"`
+			Algorithm string `json:"algorithm"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpHash(args.Algorithm, args.Input))
+	case "uuid":
+		return mcpToolJSON(mcpUUID())
+	case "jq":
+		var args struct {
+			Expression string `json:"expression"`
+			Input      string `json:"input"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpJQ(args.Expression, args.Input))
+	case "regex_test":
+		var args struct {
+			Pattern string `json:"pattern"`
+			Input   string `json:"input"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpRegexTest(args.Pattern, args.Input))
+
+	// --- Archive ---
+	case "archive_create":
+		var args struct {
+			Source string `json:"source"`
+			Output string `json:"output"`
+			Format string `json:"format"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpArchiveCreate(args.Format, args.Source, args.Output))
+	case "archive_extract":
+		var args struct {
+			Path        string `json:"path"`
+			Destination string `json:"destination"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpArchiveExtract(args.Path, args.Destination))
+
+	// --- System Services ---
+	case "service_status":
+		var args struct {
+			Name string `json:"name"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpServiceStatus(args.Name))
+	case "service_action":
+		var args struct {
+			Name   string `json:"name"`
+			Action string `json:"action"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpServiceAction(args.Name, args.Action))
+	case "service_list":
+		return mcpToolJSON(mcpServiceList())
+
+	// --- Benchmark ---
+	case "benchmark":
+		var args struct {
+			Command   string `json:"command"`
+			Directory string `json:"directory"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpBenchmark(args.Command, args.Directory))
+
+	// --- Diff ---
+	case "diff":
+		var args struct {
+			PathA string `json:"path_a"`
+			PathB string `json:"path_b"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpDiff(args.PathA, args.PathB))
+
+	// --- Environment ---
+	case "env_list":
+		var args struct {
+			Filter string `json:"filter"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpEnvList(args.Filter))
+	case "env_read":
+		var args struct {
+			Path string `json:"path"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpEnvRead(args.Path))
+
+	// --- Crontab ---
+	case "crontab":
+		var args struct {
+			Action string `json:"action"`
+			Entry  string `json:"entry"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpCrontab(args.Action, args.Entry))
+
+	// --- Cloud CLI ---
+	case "cloud_cli":
+		var args struct {
+			Provider string   `json:"provider"`
+			Args     []string `json:"args"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpCloudCmd(args.Provider, args.Args))
+
 	default:
 		return mcpToolError("unknown tool: " + call.Name)
 	}
