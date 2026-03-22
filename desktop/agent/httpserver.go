@@ -24,6 +24,8 @@ type HTTPServer struct {
 	hostname    string
 	taskMgr     *TaskManager
 	execMgr     *ExecManager
+	scheduler   *Scheduler
+	analytics   *Analytics
 	aclMgr      *ACLManager
 	emailMgr    *EmailManager
 	server      *http.Server
@@ -64,6 +66,9 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/agent/clean", s.auth(s.handleClean))
 	mux.HandleFunc("/agent/doctor", s.auth(s.handleDoctor))
 	mux.HandleFunc("/agent/tools", s.auth(s.handleTools))
+	mux.HandleFunc("/schedules", s.auth(s.handleSchedules))
+	mux.HandleFunc("/schedules/", s.auth(s.handleScheduleByID))
+	mux.HandleFunc("/analytics", s.auth(s.handleAnalytics))
 	mux.HandleFunc("/session/list", s.auth(s.handleSessionList))
 	mux.HandleFunc("/session/export", s.auth(s.handleSessionExport))
 	mux.HandleFunc("/session/import", s.auth(s.handleSessionImport))
@@ -1021,6 +1026,98 @@ func (s *HTTPServer) handleTools(w http.ResponseWriter, r *http.Request) {
 		"tools":   result,
 		"support": support,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Scheduler handlers
+// ---------------------------------------------------------------------------
+
+func (s *HTTPServer) handleSchedules(w http.ResponseWriter, r *http.Request) {
+	if s.scheduler == nil {
+		jsonError(w, http.StatusServiceUnavailable, "scheduler not enabled")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		schedules := s.scheduler.ListSchedules()
+		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "schedules": schedules})
+	case http.MethodPost:
+		var st ScheduledTask
+		if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
+			jsonError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if err := s.scheduler.AddSchedule(&st); err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		jsonReply(w, http.StatusCreated, map[string]interface{}{"ok": true, "schedule": st})
+	default:
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *HTTPServer) handleScheduleByID(w http.ResponseWriter, r *http.Request) {
+	if s.scheduler == nil {
+		jsonError(w, http.StatusServiceUnavailable, "scheduler not enabled")
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/schedules/")
+	parts := strings.SplitN(path, "/", 2)
+	id := parts[0]
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+
+	switch action {
+	case "":
+		if r.Method == http.MethodDelete {
+			if err := s.scheduler.RemoveSchedule(id); err != nil {
+				jsonError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true})
+		} else {
+			st, ok := s.scheduler.GetSchedule(id)
+			if !ok {
+				jsonError(w, http.StatusNotFound, "schedule not found")
+				return
+			}
+			jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "schedule": st})
+		}
+	case "pause":
+		if err := s.scheduler.PauseSchedule(id); err != nil {
+			jsonError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true})
+	case "resume":
+		if err := s.scheduler.ResumeSchedule(id); err != nil {
+			jsonError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true})
+	default:
+		jsonError(w, http.StatusNotFound, "unknown action")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Analytics handler
+// ---------------------------------------------------------------------------
+
+func (s *HTTPServer) handleAnalytics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "use GET")
+		return
+	}
+	if s.analytics == nil {
+		jsonError(w, http.StatusServiceUnavailable, "analytics not available")
+		return
+	}
+	stats := s.analytics.GetStats()
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "analytics": stats})
 }
 
 // ---------------------------------------------------------------------------
@@ -2596,6 +2693,63 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 			sb.WriteString(stderr)
 		}
 		return mcpToolResult(sb.String())
+
+	case "schedule_task":
+		var args struct {
+			Title          string `json:"title"`
+			RunAt          string `json:"run_at"`
+			RepeatInterval int    `json:"repeat_interval"`
+			Cron           string `json:"cron"`
+			MaxRuns        int    `json:"max_runs"`
+			Runner         string `json:"runner"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if args.Title == "" {
+			return mcpToolError("title is required")
+		}
+		if s.scheduler == nil {
+			return mcpToolError("scheduler not available")
+		}
+		st := &ScheduledTask{
+			Title:          args.Title,
+			RunAt:          args.RunAt,
+			RepeatInterval: args.RepeatInterval,
+			Cron:           args.Cron,
+			MaxRuns:        args.MaxRuns,
+			Runner:         args.Runner,
+		}
+		if err := s.scheduler.AddSchedule(st); err != nil {
+			return mcpToolError(err.Error())
+		}
+		return mcpToolResult(fmt.Sprintf("Scheduled! ID: %s, Next run: %s", st.ID, st.NextRunAt))
+
+	case "list_schedules":
+		if s.scheduler == nil {
+			return mcpToolError("scheduler not available")
+		}
+		schedules := s.scheduler.ListSchedules()
+		if len(schedules) == 0 {
+			return mcpToolResult("No scheduled tasks.")
+		}
+		var sb strings.Builder
+		for _, st := range schedules {
+			sb.WriteString(fmt.Sprintf("- %s [%s] \"%s\" next:%s runs:%d\n",
+				st.ID, st.Status, st.Title, st.NextRunAt, st.RunCount))
+		}
+		return mcpToolResult(sb.String())
+
+	case "cancel_schedule":
+		var args struct {
+			ScheduleID string `json:"schedule_id"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if s.scheduler == nil {
+			return mcpToolError("scheduler not available")
+		}
+		if err := s.scheduler.RemoveSchedule(args.ScheduleID); err != nil {
+			return mcpToolError(err.Error())
+		}
+		return mcpToolResult("Schedule cancelled: " + args.ScheduleID)
 
 	default:
 		return mcpToolError("unknown tool: " + call.Name)

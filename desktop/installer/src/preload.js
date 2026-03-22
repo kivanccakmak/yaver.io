@@ -46,6 +46,9 @@ contextBridge.exposeInMainWorld('yaver', {
   runDoctor: () => ipcRenderer.invoke('agent-request', 'GET', '/agent/doctor'),
   getTools: () => ipcRenderer.invoke('agent-request', 'GET', '/agent/tools'),
 
+  // Analytics
+  getAnalytics: () => ipcRenderer.invoke('agent-request', 'GET', '/analytics'),
+
   // Config (local ~/.yaver/config.json)
   getConfig: () => ipcRenderer.invoke('get-config'),
   saveConfig: (config) => ipcRenderer.invoke('save-config', config),

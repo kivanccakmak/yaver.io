@@ -662,6 +662,46 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, execTools...)
 
+	// --- Task Scheduling ---
+	scheduleTools := []map[string]interface{}{
+		{
+			"name":        "schedule_task",
+			"description": "Schedule a task to run at a specific time or on a recurring basis. Supports one-shot (runAt), interval-based (repeatInterval in minutes), and cron expressions.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"title"},
+				"properties": map[string]interface{}{
+					"title":           map[string]interface{}{"type": "string", "description": "Task prompt"},
+					"run_at":          map[string]interface{}{"type": "string", "description": "ISO8601 datetime for one-shot execution (e.g. '2026-03-22T15:00:00Z')"},
+					"repeat_interval": map[string]interface{}{"type": "integer", "description": "Repeat every N minutes"},
+					"cron":            map[string]interface{}{"type": "string", "description": "Cron expression (minute hour day month weekday), e.g. '0 9 * * 1-5' for weekdays at 9am"},
+					"max_runs":        map[string]interface{}{"type": "integer", "description": "Maximum number of runs (0 = unlimited)"},
+					"runner":          map[string]interface{}{"type": "string", "description": "Runner ID (claude, codex, aider, etc.)"},
+				},
+			},
+		},
+		{
+			"name":        "list_schedules",
+			"description": "List all scheduled and recurring tasks with their status, next run time, and history.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "cancel_schedule",
+			"description": "Cancel/remove a scheduled task by ID.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"schedule_id"},
+				"properties": map[string]interface{}{
+					"schedule_id": map[string]interface{}{"type": "string", "description": "Schedule ID to cancel"},
+				},
+			},
+		},
+	}
+	tools = append(tools, scheduleTools...)
+
 	return map[string]interface{}{
 		"tools": tools,
 	}

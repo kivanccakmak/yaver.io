@@ -1159,8 +1159,11 @@ func runServe(args []string) {
 	// Start HTTP server (V1 — primary, also serves MCP)
 	httpServer := NewHTTPServer(*httpPort, cfg.AuthToken, ownerUserID, cfg.ConvexSiteURL, hostname, taskMgr)
 	httpServer.execMgr = NewExecManager(taskMgr.workDir, cfg.Sandbox)
+	httpServer.scheduler = NewScheduler(taskMgr)
+	httpServer.scheduler.Start(ctx)
 	httpServer.aclMgr = aclMgr
 	httpServer.emailMgr = emailMgr
+	httpServer.analytics = NewAnalytics()
 	httpServer.onShutdown = func() {
 		log.Println("Shutdown requested via API — stopping agent")
 		cancel() // cancel the main context, triggers graceful shutdown
