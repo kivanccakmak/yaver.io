@@ -391,6 +391,12 @@ python3 -m build
 python3 -m twine upload dist/* --username __token__ --password YOUR_PYPI_TOKEN
 ```
 
+#### Flutter/Dart (`yaver` on pub.dev)
+Requires a pub.dev account linked to a verified publisher.
+```bash
+cd sdk/flutter && dart pub publish
+```
+
 #### Go (`github.com/kivanccakmak/yaver.io/sdk/go/yaver`)
 No publishing needed — Go modules import directly from GitHub via `go get`.
 

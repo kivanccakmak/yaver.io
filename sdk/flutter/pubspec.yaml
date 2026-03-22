@@ -1,0 +1,16 @@
+name: yaver
+description: Yaver SDK — embed P2P AI agent connectivity into your Flutter & Dart apps. Create tasks, stream output, manage devices, and transcribe speech.
+version: 0.2.0
+homepage: https://yaver.io
+repository: https://github.com/kivanccakmak/yaver.io/tree/main/sdk/flutter
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+
+dependencies:
+  http: ^1.2.0
+
+dev_dependencies:
+  lints: ^4.0.0
+  test: ^1.25.0

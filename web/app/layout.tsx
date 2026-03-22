@@ -49,6 +49,10 @@ export const metadata: Metadata = {
     images: ["/og-image.png"],
   },
   metadataBase: new URL("https://yaver.io"),
+  manifest: "/manifest.webmanifest",
+  alternates: {
+    canonical: "https://yaver.io",
+  },
 };
 
 export default function RootLayout({
@@ -73,6 +77,28 @@ export default function RootLayout({
         </Script>
       </head>
       <body className={`${inter.variable} font-sans`}>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@type": "SoftwareApplication",
+              name: "Yaver",
+              applicationCategory: "DeveloperApplication",
+              operatingSystem: "macOS, Windows, Linux, iOS, Android",
+              description:
+                "Open-source P2P tool that lets developers use any AI coding agent from their mobile device, connecting directly to development machines.",
+              url: "https://yaver.io",
+              downloadUrl: "https://yaver.io/download",
+              offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+              author: {
+                "@type": "Organization",
+                name: "Yaver",
+                url: "https://yaver.io",
+              },
+            }),
+          }}
+        />
         <ThemeProvider>
           <div className="flex min-h-screen flex-col">
             <Header />

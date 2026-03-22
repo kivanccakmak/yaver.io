@@ -40,6 +40,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
       - name: Run test suite
         id: tests
         env:

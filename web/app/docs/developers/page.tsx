@@ -1879,7 +1879,7 @@ CLI Agent ◄──QUIC──────────────── Relay (:
           <Prose>
             Yaver provides embeddable SDKs so you can integrate P2P AI agent
             connectivity into your own applications. Available for Go, Python,
-            JavaScript/TypeScript, and C/C++ (via shared library).
+            JavaScript/TypeScript, Flutter/Dart, and C/C++ (via shared library).
           </Prose>
 
           <div className="space-y-4">
@@ -1931,6 +1931,22 @@ CLI Agent ◄──QUIC──────────────── Relay (:
             </div>
 
             <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">Flutter / Dart</h4>
+              <Terminal title="Flutter SDK">
+                <Comment># flutter pub add yaver</Comment>
+                <div className="text-surface-300">{`import 'package:yaver/yaver.dart';`}</div>
+                <div className="text-surface-300 mt-2">{`final client = YaverClient('http://localhost:18080', token);`}</div>
+                <div className="text-surface-300">{`final task = await client.createTask('Fix the bug');`}</div>
+                <div className="text-surface-300">{`await for (final chunk in client.streamOutput(task.id)) {`}</div>
+                <div className="text-surface-300">{`  stdout.write(chunk);`}</div>
+                <div className="text-surface-300">{`}`}</div>
+              </Terminal>
+              <p className="mt-3 text-xs text-surface-500">
+                Works on iOS, Android, Web, and Desktop. Full type-safe models. Includes auth client, speech transcription, and image attachments.
+              </p>
+            </div>
+
+            <div className="card">
               <h4 className="mb-3 text-sm font-medium text-surface-200">C / C++ (shared library)</h4>
               <Terminal title="Build & link">
                 <Cmd>cd sdk/go/clib</Cmd>
@@ -1957,6 +1973,7 @@ YaverFreeClient(client);`}</pre>
                 <Output>✓ Python SDK tests passed</Output>
                 <Output>✓ JS/TS SDK typecheck passed</Output>
                 <Output>✓ JS/TS SDK built</Output>
+                <Output>✓ Flutter/Dart SDK analysis passed</Output>
               </Terminal>
             </div>
           </div>

@@ -8,6 +8,7 @@ Embed Yaver's P2P AI agent connectivity into your own applications.
 npm install yaver-sdk          # JavaScript / TypeScript
 pip install yaver              # Python
 go get github.com/kivanccakmak/yaver.io/sdk/go/yaver  # Go
+flutter pub add yaver          # Flutter / Dart
 ```
 
 C/C++: build the shared library from source (see below).
@@ -153,6 +154,13 @@ for await (const chunk of client.streamOutput(taskId)) {
 }
 ```
 
+```dart
+// Flutter/Dart — Stream
+await for (final chunk in client.streamOutput(taskId)) {
+  stdout.write(chunk);
+}
+```
+
 ## Examples
 
 See `sdk/examples/` for runnable examples:
@@ -200,6 +208,7 @@ Runs:
 - C shared library build
 - Python SDK unit tests (mock server)
 - JS/TS typecheck + build
+- Flutter/Dart analysis
 - Go SDK integration tests (live agent)
 - Python SDK integration tests (live agent)
 
@@ -208,5 +217,6 @@ Runs:
 - [npm: yaver-sdk](https://www.npmjs.com/package/yaver-sdk)
 - [PyPI: yaver](https://pypi.org/project/yaver/)
 - [Go: github.com/kivanccakmak/yaver.io/sdk/go/yaver](https://pkg.go.dev/github.com/kivanccakmak/yaver.io/sdk/go/yaver)
+- [pub.dev: yaver](https://pub.dev/packages/yaver)
 - [Yaver](https://yaver.io)
 - [GitHub](https://github.com/kivanccakmak/yaver.io)

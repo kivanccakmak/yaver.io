@@ -1333,6 +1333,18 @@ run_sdk_tests() {
         tail -20 "$TEST_DIR/sdk-js-build.log"
     fi
 
+    info "Analyzing Flutter/Dart SDK..."
+    if command -v dart > /dev/null 2>&1; then
+        if (cd "$ROOT_DIR/sdk/flutter" && dart pub get > /dev/null 2>&1 && dart analyze > "$TEST_DIR/sdk-flutter-analyze.log" 2>&1); then
+            pass "Flutter/Dart SDK analysis passed"
+        else
+            fail "Flutter/Dart SDK analysis failed"
+            tail -20 "$TEST_DIR/sdk-flutter-analyze.log"
+        fi
+    else
+        skip "Flutter/Dart SDK analysis (dart not installed)"
+    fi
+
     # ── Integration tests (start agent, test each SDK against it) ─────
 
     local agent_bin="$TEST_DIR/yaver"
