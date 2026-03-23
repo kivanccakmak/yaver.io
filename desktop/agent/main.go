@@ -243,6 +243,9 @@ func runAuth(args []string) {
 		if cfg.DeviceID == "" {
 			cfg.DeviceID = uuid.New().String()
 		}
+		// Clear any manually configured relay — use per-user relay from backend
+		cfg.RelayServers = nil
+		cfg.RelayPassword = ""
 		if err := SaveConfig(cfg); err != nil {
 			log.Fatalf("save config: %v", err)
 		}
@@ -276,6 +279,9 @@ func runAuth(args []string) {
 		if cfg.DeviceID == "" {
 			cfg.DeviceID = uuid.New().String()
 		}
+		// Clear any manually configured relay — use per-user relay from backend
+		cfg.RelayServers = nil
+		cfg.RelayPassword = ""
 		if err := SaveConfig(cfg); err != nil {
 			log.Fatalf("save config: %v", err)
 		}
@@ -367,6 +373,9 @@ func runAuth(args []string) {
 		if cfg.DeviceID == "" {
 			cfg.DeviceID = uuid.New().String()
 		}
+		// Clear any manually configured relay — use per-user relay from backend
+		cfg.RelayServers = nil
+		cfg.RelayPassword = ""
 		if err := SaveConfig(cfg); err != nil {
 			log.Fatalf("save config: %v", err)
 		}
@@ -953,25 +962,40 @@ func runServe(args []string) {
 	userSettings, userSettingsErr := FetchUserSettings(cfg.ConvexSiteURL, cfg.AuthToken)
 	if userSettingsErr != nil {
 		log.Printf("Warning: could not fetch user settings: %v", userSettingsErr)
-	} else if userSettings.RelayUrl != "" && !*noRelay && len(relayServers) == 0 {
-		// Use relay from user settings (priority between config.json and platformConfig)
-		log.Printf("Using relay from user settings: %s", userSettings.RelayUrl)
-		relayServers = append(relayServers, RelayServerInfo{
-			ID:       "user-settings",
-			HttpURL:  userSettings.RelayUrl,
-			Region:   "user",
-			Priority: 1,
-		})
-		if userSettings.RelayPassword != "" {
-			effectiveRelayPassword = userSettings.RelayPassword
-		}
+	} else if userSettings.RelayPassword != "" {
+		effectiveRelayPassword = userSettings.RelayPassword
 	}
 
+	// Fetch platform config first so we can match user's relayUrl to a full relay entry
 	platformCfg, platformErr := FetchPlatformConfig(cfg.ConvexSiteURL)
 	if platformErr != nil {
 		log.Printf("Warning: could not fetch platform config: %v", platformErr)
-	} else {
-		// Populate relay servers from Convex if not already set from config.json or user settings
+	}
+
+	// Build relay server list: config.json > user settings matched with platform > platform config
+	if !*noRelay && len(relayServers) == 0 && userSettingsErr == nil && userSettings.RelayUrl != "" && platformErr == nil {
+		// Match user's relayUrl against platform config to get full relay info (incl. QUIC address)
+		for _, rs := range platformCfg.RelayServers {
+			if rs.HttpURL == userSettings.RelayUrl {
+				relayServers = append(relayServers, rs)
+				log.Printf("Using relay from user settings: %s (QUIC: %s)", rs.HttpURL, rs.QuicAddr)
+				break
+			}
+		}
+		if len(relayServers) == 0 {
+			// relayUrl doesn't match any platform relay — use as-is (custom relay)
+			log.Printf("Using custom relay from user settings: %s", userSettings.RelayUrl)
+			relayServers = append(relayServers, RelayServerInfo{
+				ID:       "user-settings",
+				HttpURL:  userSettings.RelayUrl,
+				Region:   "user",
+				Priority: 1,
+			})
+		}
+	}
+
+	if platformErr == nil {
+		// Populate relay servers from platform config if not already set
 		if !*noRelay && len(relayServers) == 0 {
 			relayServers = platformCfg.RelayServers
 			if len(relayServers) > 0 {
@@ -2613,10 +2637,24 @@ func runStatus() {
 	}
 
 	if len(cfg.RelayServers) == 0 {
-		if cfg.RelayPassword == "" {
-			fmt.Println("  Password: not set")
+		// Try to show relay info from user settings (per-user relay)
+		if cfg.AuthToken != "" && cfg.ConvexSiteURL != "" {
+			if us, err := FetchUserSettings(cfg.ConvexSiteURL, cfg.AuthToken); err == nil && us.RelayUrl != "" {
+				pw := ""
+				if us.RelayPassword != "" {
+					pw = " [per-user password]"
+				}
+				fmt.Printf("  Server:   %s (from account settings)%s\n", us.RelayUrl, pw)
+			} else if cfg.RelayPassword == "" {
+				fmt.Println("  Password: not set")
+				fmt.Println("  Servers:  none configured (will fetch from Convex on serve)")
+			}
+		} else {
+			if cfg.RelayPassword == "" {
+				fmt.Println("  Password: not set")
+			}
+			fmt.Println("  Servers:  none configured (will fetch from Convex on serve)")
 		}
-		fmt.Println("  Servers:  none configured (will fetch from Convex on serve)")
 	} else {
 		// Load cached health from agent's background health checks
 		cachedHealth := make(map[string]*RelayHealthStatus)
