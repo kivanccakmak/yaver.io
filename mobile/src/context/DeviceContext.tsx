@@ -302,67 +302,75 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   }, [activeDevice]);
 
   // Fetch relay servers: local AsyncStorage > Convex user settings > Convex platform config
+  // Extracted so it can be called on startup AND on reconnection (when relay list is empty).
+  const fetchRelayServers = useCallback(async () => {
+    try {
+      // 1. Check for user-configured custom relays in local storage first
+      const customRaw = await AsyncStorage.getItem(RELAYS_KEY);
+      if (customRaw) {
+        const customRelays: RelayServer[] = JSON.parse(customRaw);
+        if (customRelays.length > 0) {
+          quicClient.setRelayServers(customRelays);
+          console.log("[DeviceContext] Using", customRelays.length, "custom relay server(s)");
+          return;
+        }
+      }
+
+      // 2. No local relays — check Convex user settings (account-level relay config)
+      if (token) {
+        try {
+          const settings = await getUserSettings(token);
+          if (settings.relayUrl) {
+            const accountRelay: RelayServer = {
+              id: "account",
+              quicAddr: "",
+              httpUrl: settings.relayUrl,
+              region: "account",
+              priority: 1,
+              password: settings.relayPassword,
+            };
+            quicClient.setRelayServers([accountRelay]);
+            // Persist to AsyncStorage so it works offline and on next launch
+            await AsyncStorage.setItem(RELAYS_KEY, JSON.stringify([accountRelay]));
+            await AsyncStorage.setItem(SYNC_KEY, "true");
+            console.log("[DeviceContext] Loaded relay from Convex user settings:", settings.relayUrl);
+            return;
+          }
+        } catch {
+          // Best-effort — fall through to platform config
+        }
+      }
+
+      // 3. No account-level relay — fall back to Convex platform config
+      const res = await fetch(`${CONVEX_SITE_URL}/config`);
+      if (res.ok) {
+        const data = await res.json();
+        const servers: RelayServer[] = data.relayServers || [];
+        quicClient.setRelayServers(servers);
+        console.log("[DeviceContext] Loaded", servers.length, "relay server(s) from Convex");
+      }
+    } catch {
+      sendTelemetry(token, "relays-failed", "Could not fetch relay config");
+    }
+  }, [token]);
+
+  // Initial relay fetch on mount
   const relaysFetched = useRef(false);
   useEffect(() => {
     if (relaysFetched.current) return;
     relaysFetched.current = true;
-    (async () => {
-      try {
-        // 1. Check for user-configured custom relays in local storage first
-        const customRaw = await AsyncStorage.getItem(RELAYS_KEY);
-        if (customRaw) {
-          const customRelays: RelayServer[] = JSON.parse(customRaw);
-          if (customRelays.length > 0) {
-            quicClient.setRelayServers(customRelays);
-            console.log("[DeviceContext] Using", customRelays.length, "custom relay server(s)");
-            sendTelemetry(token, "relays-loaded", `Loaded ${customRelays.length} custom relay(s)`, JSON.stringify(customRelays.map(s => s.id)));
-            return;
-          }
-        }
+    fetchRelayServers().finally(() => setRelaysReady(true));
+  }, [fetchRelayServers]);
 
-        // 2. No local relays — check Convex user settings (account-level relay config)
-        if (token) {
-          try {
-            const settings = await getUserSettings(token);
-            if (settings.relayUrl) {
-              const accountRelay: RelayServer = {
-                id: "account",
-                quicAddr: "",
-                httpUrl: settings.relayUrl,
-                region: "account",
-                priority: 1,
-                password: settings.relayPassword,
-              };
-              quicClient.setRelayServers([accountRelay]);
-              // Persist to AsyncStorage so it works offline and on next launch
-              await AsyncStorage.setItem(RELAYS_KEY, JSON.stringify([accountRelay]));
-              // Also enable relay sync so future changes propagate
-              await AsyncStorage.setItem(SYNC_KEY, "true");
-              console.log("[DeviceContext] Loaded relay from Convex user settings:", settings.relayUrl);
-              sendTelemetry(token, "relays-loaded", "Loaded relay from account settings", settings.relayUrl);
-              return;
-            }
-          } catch {
-            // Best-effort — fall through to platform config
-          }
-        }
-
-        // 3. No account-level relay — fall back to Convex platform config
-        const res = await fetch(`${CONVEX_SITE_URL}/config`);
-        if (res.ok) {
-          const data = await res.json();
-          const servers: RelayServer[] = data.relayServers || [];
-          quicClient.setRelayServers(servers);
-          console.log("[DeviceContext] Loaded", servers.length, "relay server(s) from Convex");
-          sendTelemetry(token, "relays-loaded", `Loaded ${servers.length} relay(s) from Convex`, JSON.stringify(servers.map(s => s.id)));
-        }
-      } catch {
-        sendTelemetry(token, "relays-failed", "Could not fetch relay config");
-      } finally {
-        setRelaysReady(true);
-      }
-    })();
-  }, [token]);
+  // Re-fetch relay config when connection is lost and relay list is empty.
+  // This handles the case where relays weren't available at startup (e.g. settings
+  // not yet seeded) but are now available after the backend created them on login.
+  useEffect(() => {
+    if (connectionStatus !== "error" && connectionStatus !== "disconnected") return;
+    if (quicClient.relayServerCount > 0) return;
+    console.log("[DeviceContext] Connection lost with no relays — re-fetching relay config");
+    fetchRelayServers();
+  }, [connectionStatus, fetchRelayServers]);
 
   // Fetch Cloudflare Tunnels from local storage or Convex user settings
   const tunnelsFetched = useRef(false);
