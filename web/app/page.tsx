@@ -820,57 +820,69 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Enterprise & Privacy-First Use Cases */}
+      {/* What You Can Do */}
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-6xl">
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
-            Enterprise &amp; Privacy-First Use Cases
+            What you can do with Yaver
           </h2>
           <p className="mx-auto mb-16 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
-            From local-only AI coding to multi-user GPU servers and agent-to-agent orchestration.
+            Run AI agents on any machine from anywhere. No subscriptions, no API keys for local models, no vendor lock-in. Fully open-source.
           </p>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div className="card">
-              <h3 className="mb-2 text-sm font-semibold text-surface-100">Privacy-First AI Coding</h3>
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Code from your phone</h3>
               <p className="text-sm leading-relaxed text-surface-400">
-                Run Ollama, Qwen, or any local LLM. Your code never leaves your network. Connect from Claude Web UI via MCP to use local models for sensitive codebases.
+                Send coding tasks to Claude Code, Codex, or Aider running on your dev machine &mdash; from your phone on the couch, commuting, or at a caf&eacute;. Review diffs, approve changes, and merge PRs without opening your laptop.
               </p>
             </div>
             <div className="card">
-              <h3 className="mb-2 text-sm font-semibold text-surface-100">Shared GPU Servers</h3>
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Free local AI &mdash; no API keys</h3>
               <p className="text-sm leading-relaxed text-surface-400">
-                Multiple developers share the same machine with isolated agents. Each user runs their own yaver serve with separate auth, tasks, and sandboxed execution.
+                Run Ollama with Qwen, Llama, DeepSeek, or CodeGemma on your own hardware. Zero cost, fully private. Control it remotely from your phone or any terminal. Great for sensitive codebases that can&apos;t leave your network.
               </p>
             </div>
             <div className="card">
-              <h3 className="mb-2 text-sm font-semibold text-surface-100">MCP Integration &mdash; 473 Tools</h3>
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Headless server tasks</h3>
               <p className="text-sm leading-relaxed text-surface-400">
-                The most comprehensive MCP server for developers. Docker, Kubernetes, Terraform, Git, testing, linting, databases, package registries, CI/CD, smart home, and more. One command to connect: <code className="rounded bg-surface-800 px-1.5 py-0.5 text-xs text-surface-300">yaver mcp setup claude</code>
+                Install <code className="rounded bg-surface-800 px-1.5 py-0.5 text-xs text-surface-300">yaver serve</code> on a headless Linux box, GPU server, or Raspberry Pi. Run AI agents remotely &mdash; code generation, log analysis, data processing &mdash; and get results on your phone.
               </p>
             </div>
             <div className="card">
-              <h3 className="mb-2 text-sm font-semibold text-surface-100">Tmux Session Adoption</h3>
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Adopt running sessions</h3>
               <p className="text-sm leading-relaxed text-surface-400">
-                Start Claude Code, Aider, or any agent in tmux on your laptop. Yaver discovers it, detects the running agent, and lets you adopt the session &mdash; control it from your phone seamlessly. Walk away from your desk without losing context.
+                Start Claude Code or Aider in tmux on your laptop. Walk away. Yaver discovers the session and lets you control it from your phone &mdash; seamlessly, without losing context.
               </p>
             </div>
             <div className="card">
-              <h3 className="mb-2 text-sm font-semibold text-surface-100">Email Automation</h3>
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Multi-machine workflow</h3>
               <p className="text-sm leading-relaxed text-surface-400">
-                Office 365 and Gmail connectors let AI agents read, search, and send emails. Synced to a local database for fast retrieval. Perfect for automated workflows.
+                Transfer AI sessions between machines with <code className="rounded bg-surface-800 px-1.5 py-0.5 text-xs text-surface-300">yaver session transfer</code>. Start a task on your work laptop, continue on your home server. Conversation history and workspace travel with you.
               </p>
             </div>
             <div className="card">
-              <h3 className="mb-2 text-sm font-semibold text-surface-100">Agent-to-Agent (ACL)</h3>
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Shared GPU server</h3>
               <p className="text-sm leading-relaxed text-surface-400">
-                Agent Communication Layer connects Yaver with other MCP servers &mdash; local Ollama, remote databases, or other AI tools. Chain agents together for complex workflows.
+                Multiple developers share the same machine with isolated agents. Each user runs their own <code className="rounded bg-surface-800 px-1.5 py-0.5 text-xs text-surface-300">yaver serve</code> with separate auth, tasks, and sandboxed execution.
               </p>
             </div>
             <div className="card">
-              <h3 className="mb-2 text-sm font-semibold text-surface-100">Security Sandbox</h3>
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">473 MCP tools</h3>
               <p className="text-sm leading-relaxed text-surface-400">
-                Built-in command sandbox blocks dangerous operations: no rm -rf /, no filesystem encryption, no privilege escalation. Configurable deny-list with secure defaults.
+                Docker, Kubernetes, Terraform, Git, databases, CI/CD, and more &mdash; all as MCP tools. Connect with one command: <code className="rounded bg-surface-800 px-1.5 py-0.5 text-xs text-surface-300">yaver mcp setup claude</code>
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Agent-to-agent chaining</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Connect Yaver with other MCP servers &mdash; local Ollama, remote databases, or other AI tools. Chain agents together: Claude Code writes code, Ollama reviews it, Aider applies fixes.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Scheduled &amp; automated tasks</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Cron-like scheduling for AI tasks. Run code reviews every morning, generate reports overnight, or trigger builds from GitHub webhooks. Get notified via Telegram, Discord, or Slack when done.
               </p>
             </div>
           </div>
