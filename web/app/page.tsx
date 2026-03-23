@@ -216,7 +216,7 @@ export default function HomePage() {
                   <div>
                     <h4 className="text-sm font-medium text-surface-200">Android</h4>
                     <p className="mt-1 text-xs text-surface-500">Phone &amp; Tablet</p>
-                    <a href="https://github.com/kivanccakmak/yaver.io/releases/latest/download/Yaver-1.10.0.apk" target="_blank" rel="noopener noreferrer"
+                    <a href="https://github.com/kivanccakmak/yaver.io/releases/latest/download/Yaver-1.11.0.apk" target="_blank" rel="noopener noreferrer"
                       className="mt-2 inline-block rounded-lg bg-surface-800 px-3 py-1.5 text-xs font-medium text-surface-300 hover:bg-surface-700 transition-colors">
                       Download APK
                     </a>
@@ -390,7 +390,7 @@ export default function HomePage() {
                 </p>
                 <p className="mt-1 text-xs text-surface-400">
                   Q4 quantization &mdash; 19 GB download, ~22 GB in memory.
-                  GPU optional but faster. Works on Apple Silicon, Linux, and Windows.
+                  GPU optional but faster. Works on Apple Silicon and Linux.
                 </p>
               </div>
               <Link

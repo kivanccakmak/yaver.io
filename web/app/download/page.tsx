@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CONVEX_URL } from "@/lib/constants";
 
-type Platform = "macos" | "windows" | "linux" | "ios" | "android" | "unknown";
+type Platform = "macos" | "linux" | "ios" | "android" | "unknown";
 
 function detectPlatform(): Platform {
   if (typeof window === "undefined") return "unknown";
@@ -12,7 +12,6 @@ function detectPlatform(): Platform {
   if (ua.includes("iphone") || ua.includes("ipad")) return "ios";
   if (ua.includes("android")) return "android";
   if (ua.includes("mac")) return "macos";
-  if (ua.includes("win")) return "windows";
   if (ua.includes("linux")) return "linux";
   return "unknown";
 }
@@ -82,7 +81,7 @@ export default function DownloadPage() {
           <h2 className="mb-6 text-xs font-semibold uppercase tracking-wider text-surface-500">
             Desktop CLI {cliVersion && <span className="normal-case tracking-normal text-surface-600">v{cliVersion}</span>}
           </h2>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {[
               {
                 name: "macOS",
@@ -91,14 +90,6 @@ export default function DownloadPage() {
                 buttons: [
                   { label: "Apple Silicon", file: "yaver-darwin-arm64", primary: true },
                   { label: "Intel", file: "yaver-darwin-amd64" },
-                ],
-              },
-              {
-                name: "Windows",
-                desc: "Windows 10+ (64-bit, code-signed)",
-                highlighted: platform === "windows",
-                buttons: [
-                  { label: "Download .exe", file: "yaver-windows-amd64.exe", primary: true },
                 ],
               },
               {
@@ -202,41 +193,6 @@ export default function DownloadPage() {
               </div>
             </div>
             <div>
-              <p className="mb-2 text-xs text-surface-500">Scoop (Windows)</p>
-              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px] space-y-1">
-                <div>
-                  <span className="text-surface-500">&gt;</span>{" "}
-                  <span className="text-surface-300 select-all">
-                    scoop bucket add yaver https://github.com/kivanccakmak/scoop-yaver
-                  </span>
-                </div>
-                <div>
-                  <span className="text-surface-500">&gt;</span>{" "}
-                  <span className="text-surface-300 select-all">
-                    scoop install yaver
-                  </span>
-                </div>
-              </div>
-            </div>
-            <div>
-              <p className="mb-2 text-xs text-surface-500">Winget (Windows)</p>
-              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
-                <span className="text-surface-500">&gt;</span>{" "}
-                <span className="text-surface-300 select-all">
-                  winget install Yaver.Yaver
-                </span>
-              </div>
-            </div>
-            <div>
-              <p className="mb-2 text-xs text-surface-500">Chocolatey (Windows)</p>
-              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
-                <span className="text-surface-500">&gt;</span>{" "}
-                <span className="text-surface-300 select-all">
-                  choco install yaver
-                </span>
-              </div>
-            </div>
-            <div>
               <p className="mb-2 text-xs text-surface-500">Docker</p>
               <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
                 <span className="text-surface-500">$</span>{" "}
@@ -251,15 +207,6 @@ export default function DownloadPage() {
                 <span className="text-surface-500">$</span>{" "}
                 <span className="text-surface-300 select-all">
                   curl -fsSL https://yaver.io/install.sh | sh
-                </span>
-              </div>
-            </div>
-            <div>
-              <p className="mb-2 text-xs text-surface-500">Quick install (Windows PowerShell)</p>
-              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
-                <span className="text-surface-500">&gt;</span>{" "}
-                <span className="text-surface-300 select-all">
-                  irm https://yaver.io/install.ps1 | iex
                 </span>
               </div>
             </div>
@@ -278,15 +225,6 @@ export default function DownloadPage() {
                 <span className="text-surface-500">$</span>{" "}
                 <span className="text-surface-300 select-all">
                   brew upgrade yaver
-                </span>
-              </div>
-            </div>
-            <div>
-              <p className="mb-2 text-xs text-surface-500">Scoop (Windows)</p>
-              <div className="rounded-lg bg-surface-950 px-4 py-3 font-mono text-[13px]">
-                <span className="text-surface-500">&gt;</span>{" "}
-                <span className="text-surface-300 select-all">
-                  scoop update yaver
                 </span>
               </div>
             </div>
@@ -316,7 +254,7 @@ export default function DownloadPage() {
           <h2 className="mb-6 text-xs font-semibold uppercase tracking-wider text-surface-500">
             Desktop App (GUI)
           </h2>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {[
               {
                 name: "macOS",
@@ -325,14 +263,6 @@ export default function DownloadPage() {
                 buttons: [
                   { label: "Apple Silicon (.dmg)", file: "Yaver-latest-apple-silicon.dmg", primary: true },
                   { label: "Intel (.dmg)", file: "Yaver-latest-intel.dmg" },
-                ],
-              },
-              {
-                name: "Windows",
-                desc: "Windows 10+ (64-bit, code-signed)",
-                highlighted: platform === "windows",
-                buttons: [
-                  { label: "Download Installer", file: "Yaver-Setup.exe", primary: true },
                 ],
               },
               {
