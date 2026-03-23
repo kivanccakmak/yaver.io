@@ -169,11 +169,13 @@ export const seedDefaults = mutation({
       .withIndex("by_key", (q) => q.eq("key", "relay_servers"))
       .unique();
     let defaultRelayUrl: string | undefined;
+    let defaultRelayPassword: string | undefined;
     if (config?.value) {
       try {
         const relays = JSON.parse(config.value);
         if (Array.isArray(relays) && relays.length > 0) {
           defaultRelayUrl = relays[0].httpUrl;
+          defaultRelayPassword = relays[0].password;
         }
       } catch { /* ignore */ }
     }
@@ -191,17 +193,22 @@ export const seedDefaults = mutation({
           userId: user._id,
           forceRelay: false,
           relayUrl: defaultRelayUrl,
-          relayPassword: randomHex(16),
+          relayPassword: defaultRelayPassword,
         });
         seeded++;
-      } else if (!existing.relayPassword) {
-        // Backfill relay password for existing users without one
-        const patch: Record<string, unknown> = { relayPassword: randomHex(16) };
-        if (!existing.relayUrl && defaultRelayUrl) {
+      } else if (existing.relayPassword !== defaultRelayPassword || existing.relayUrl !== defaultRelayUrl) {
+        // Sync relay config to match platform config
+        const patch: Record<string, unknown> = {};
+        if (defaultRelayPassword && existing.relayPassword !== defaultRelayPassword) {
+          patch.relayPassword = defaultRelayPassword;
+        }
+        if (defaultRelayUrl && existing.relayUrl !== defaultRelayUrl) {
           patch.relayUrl = defaultRelayUrl;
         }
-        await ctx.db.patch(existing._id, patch);
-        updated++;
+        if (Object.keys(patch).length > 0) {
+          await ctx.db.patch(existing._id, patch);
+          updated++;
+        }
       }
     }
     return { seeded, updated, total: allUsers.length };

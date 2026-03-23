@@ -39,7 +39,7 @@ async function getDefaultRelay(ctx: MutationCtx): Promise<{ relayUrl?: string; r
     const first = relays[0];
     return {
       relayUrl: first.httpUrl || undefined,
-      relayPassword: randomHex(16), // unique per-user password, validated by relay via Convex
+      relayPassword: first.password || undefined, // shared relay password from platform config
     };
   } catch {
     return {};
