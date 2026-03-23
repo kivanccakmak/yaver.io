@@ -45,19 +45,20 @@ export const set = mutation({
       .query("userSettings")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .first();
-    const patch = {
-      forceRelay: args.forceRelay,
-      runnerId: args.runnerId,
-      customRunnerCommand: args.customRunnerCommand,
-      relayUrl: args.relayUrl,
-      relayPassword: args.relayPassword,
-      tunnelUrl: args.tunnelUrl,
-      speechProvider: args.speechProvider,
-      speechApiKey: args.speechApiKey,
-      ttsEnabled: args.ttsEnabled,
-      verbosity: args.verbosity,
-      keyStorage: args.keyStorage,
-    };
+    // Only include fields that were explicitly provided — undefined fields must NOT
+    // overwrite existing values (e.g. relayUrl/relayPassword set during signup).
+    const patch: Record<string, unknown> = {};
+    if (args.forceRelay !== undefined) patch.forceRelay = args.forceRelay;
+    if (args.runnerId !== undefined) patch.runnerId = args.runnerId;
+    if (args.customRunnerCommand !== undefined) patch.customRunnerCommand = args.customRunnerCommand;
+    if (args.relayUrl !== undefined) patch.relayUrl = args.relayUrl;
+    if (args.relayPassword !== undefined) patch.relayPassword = args.relayPassword;
+    if (args.tunnelUrl !== undefined) patch.tunnelUrl = args.tunnelUrl;
+    if (args.speechProvider !== undefined) patch.speechProvider = args.speechProvider;
+    if (args.speechApiKey !== undefined) patch.speechApiKey = args.speechApiKey;
+    if (args.ttsEnabled !== undefined) patch.ttsEnabled = args.ttsEnabled;
+    if (args.verbosity !== undefined) patch.verbosity = args.verbosity;
+    if (args.keyStorage !== undefined) patch.keyStorage = args.keyStorage;
     if (existing) {
       await ctx.db.patch(existing._id, patch);
     } else {
@@ -93,19 +94,20 @@ export const setByToken = mutation({
       .query("userSettings")
       .withIndex("by_userId", (q) => q.eq("userId", userId))
       .first();
-    const patch = {
-      forceRelay: args.forceRelay,
-      runnerId: args.runnerId,
-      customRunnerCommand: args.customRunnerCommand,
-      relayUrl: args.relayUrl,
-      relayPassword: args.relayPassword,
-      tunnelUrl: args.tunnelUrl,
-      speechProvider: args.speechProvider,
-      speechApiKey: args.speechApiKey,
-      ttsEnabled: args.ttsEnabled,
-      verbosity: args.verbosity,
-      keyStorage: args.keyStorage,
-    };
+    // Only include fields that were explicitly provided — undefined fields must NOT
+    // overwrite existing values (e.g. relayUrl/relayPassword set during signup).
+    const patch: Record<string, unknown> = {};
+    if (args.forceRelay !== undefined) patch.forceRelay = args.forceRelay;
+    if (args.runnerId !== undefined) patch.runnerId = args.runnerId;
+    if (args.customRunnerCommand !== undefined) patch.customRunnerCommand = args.customRunnerCommand;
+    if (args.relayUrl !== undefined) patch.relayUrl = args.relayUrl;
+    if (args.relayPassword !== undefined) patch.relayPassword = args.relayPassword;
+    if (args.tunnelUrl !== undefined) patch.tunnelUrl = args.tunnelUrl;
+    if (args.speechProvider !== undefined) patch.speechProvider = args.speechProvider;
+    if (args.speechApiKey !== undefined) patch.speechApiKey = args.speechApiKey;
+    if (args.ttsEnabled !== undefined) patch.ttsEnabled = args.ttsEnabled;
+    if (args.verbosity !== undefined) patch.verbosity = args.verbosity;
+    if (args.keyStorage !== undefined) patch.keyStorage = args.keyStorage;
     if (existing) {
       await ctx.db.patch(existing._id, patch);
     } else {

@@ -215,7 +215,12 @@ export default function HomePage() {
                   <svg className="mt-0.5 h-6 w-6 shrink-0 text-surface-400" fill="currentColor" viewBox="0 0 24 24"><path d="M17.523 2.238l-1.931 3.334c1.88.907 3.261 2.565 3.713 4.608H4.694c.452-2.043 1.833-3.701 3.714-4.608L6.477 2.238a.357.357 0 01.13-.487.357.357 0 01.487.13l1.962 3.389A8.97 8.97 0 0112 4.749c1.07 0 2.088.188 3.039.521l1.962-3.389a.357.357 0 01.487-.13.357.357 0 01.13.487h-.095zM9.5 7.5a.75.75 0 100-1.5.75.75 0 000 1.5zm5 0a.75.75 0 100-1.5.75.75 0 000 1.5zM4.5 11.68h15c.276 0 .5.224.5.5v7.5c0 1.401-1.119 2.5-2.5 2.5h-11C5.119 22.18 4 21.061 4 19.68v-7.5c0-.276.224-.5.5-.5z"/></svg>
                   <div>
                     <h4 className="text-sm font-medium text-surface-200">Android</h4>
-                    <span className="mt-1 text-xs text-surface-500">Coming soon</span>
+                    <p className="mt-1 text-xs text-surface-500">Phone &amp; Tablet</p>
+                    <a href="https://github.com/kivanccakmak/yaver.io/releases/latest/download/Yaver-1.10.0.apk" target="_blank" rel="noopener noreferrer"
+                      className="mt-2 inline-block rounded-lg bg-surface-800 px-3 py-1.5 text-xs font-medium text-surface-300 hover:bg-surface-700 transition-colors">
+                      Download APK
+                    </a>
+                    <span className="ml-2 text-[10px] text-surface-600">Play Store soon</span>
                   </div>
                 </div>
                 <p className="mt-4 pt-4 border-t border-surface-800/60 text-xs text-surface-500">
@@ -1015,21 +1020,18 @@ export default function HomePage() {
               <div className="flex-1">
                 <div className="mb-1 flex items-center gap-2">
                   <span className="rounded-full bg-[#6366f1]/20 px-2 py-0.5 text-[10px] font-medium text-[#818cf8]">
-                    easiest
+                    coming soon
                   </span>
                   <h3 className="text-sm font-semibold text-surface-100">Managed Relay</h3>
                 </div>
                 <p className="text-sm text-surface-400">
-                  No VPS, no Docker, no DNS records. Sign up and your agent connects
-                  automatically. Multi-region, auto-failover, always up to date.
+                  No VPS, no Docker, no DNS records. Dedicated Hetzner Cloud server,
+                  auto-provisioned. Multi-region, auto-failover, always up to date.
                 </p>
               </div>
-              <Link
-                href="/pricing"
-                className="btn-primary shrink-0 px-5 py-2 text-sm"
-              >
-                $10/mo &rarr;
-              </Link>
+              <span className="shrink-0 rounded-lg border border-surface-700 bg-surface-800/50 px-5 py-2 text-sm font-medium text-surface-400">
+                $10/mo &mdash; soon
+              </span>
             </div>
           </div>
 

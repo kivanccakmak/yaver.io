@@ -115,6 +115,20 @@ export const createOrUpdateUser = mutation({
         patch.fullName = args.fullName;
       }
       await ctx.db.patch(byProvider._id, patch);
+      // Ensure user has relay settings (may have been lost due to deletion/re-creation)
+      const settings = await ctx.db
+        .query("userSettings")
+        .withIndex("by_userId", (q) => q.eq("userId", byProvider._id))
+        .first();
+      if (!settings) {
+        const defaultRelay = await getDefaultRelay(ctx);
+        await ctx.db.insert("userSettings", { userId: byProvider._id, forceRelay: false, ...defaultRelay });
+      } else if (!settings.relayPassword) {
+        const defaultRelay = await getDefaultRelay(ctx);
+        if (defaultRelay.relayPassword) {
+          await ctx.db.patch(settings._id, defaultRelay);
+        }
+      }
       return byProvider._id;
     }
 
@@ -134,6 +148,20 @@ export const createOrUpdateUser = mutation({
       }
       if (Object.keys(patch).length > 0) {
         await ctx.db.patch(byEmail._id, patch);
+      }
+      // Ensure user has relay settings
+      const settings = await ctx.db
+        .query("userSettings")
+        .withIndex("by_userId", (q) => q.eq("userId", byEmail._id))
+        .first();
+      if (!settings) {
+        const defaultRelay = await getDefaultRelay(ctx);
+        await ctx.db.insert("userSettings", { userId: byEmail._id, forceRelay: false, ...defaultRelay });
+      } else if (!settings.relayPassword) {
+        const defaultRelay = await getDefaultRelay(ctx);
+        if (defaultRelay.relayPassword) {
+          await ctx.db.patch(settings._id, defaultRelay);
+        }
       }
       return byEmail._id;
     }
