@@ -1,6 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { validateSessionInternal } from "./auth";
+import { validateSessionInternal, randomHex } from "./auth";
 
 export const get = query({
   args: { userId: v.id("users") },
@@ -154,14 +154,31 @@ export const setByEmail = mutation({
 });
 
 /**
- * Seed default settings (forceRelay: false) for all users who don't have settings yet.
+ * Seed default settings for all users who don't have settings yet.
+ * Also generates per-user relay passwords and sets relayUrl for users missing them.
  * Run once: npx convex run userSettings:seedDefaults
  */
 export const seedDefaults = mutation({
   args: {},
   handler: async (ctx) => {
+    // Fetch default relay URL from platform config
+    const config = await ctx.db
+      .query("platformConfig")
+      .withIndex("by_key", (q) => q.eq("key", "relay_servers"))
+      .unique();
+    let defaultRelayUrl: string | undefined;
+    if (config?.value) {
+      try {
+        const relays = JSON.parse(config.value);
+        if (Array.isArray(relays) && relays.length > 0) {
+          defaultRelayUrl = relays[0].httpUrl;
+        }
+      } catch { /* ignore */ }
+    }
+
     const allUsers = await ctx.db.query("users").collect();
     let seeded = 0;
+    let updated = 0;
     for (const user of allUsers) {
       const existing = await ctx.db
         .query("userSettings")
@@ -171,11 +188,36 @@ export const seedDefaults = mutation({
         await ctx.db.insert("userSettings", {
           userId: user._id,
           forceRelay: false,
+          relayUrl: defaultRelayUrl,
+          relayPassword: randomHex(16),
         });
         seeded++;
+      } else if (!existing.relayPassword) {
+        // Backfill relay password for existing users without one
+        const patch: Record<string, unknown> = { relayPassword: randomHex(16) };
+        if (!existing.relayUrl && defaultRelayUrl) {
+          patch.relayUrl = defaultRelayUrl;
+        }
+        await ctx.db.patch(existing._id, patch);
+        updated++;
       }
     }
-    return { seeded, total: allUsers.length };
+    return { seeded, updated, total: allUsers.length };
+  },
+});
+
+/**
+ * Validate a relay password — checks if any user has this relayPassword.
+ * Called by relay servers via POST /relay/validate to authenticate per-user passwords.
+ */
+export const validateRelayPassword = query({
+  args: { password: v.string() },
+  handler: async (ctx, args) => {
+    if (!args.password) return null;
+    const allSettings = await ctx.db.query("userSettings").collect();
+    const match = allSettings.find((s) => s.relayPassword === args.password);
+    if (!match) return null;
+    return { userId: match.userId };
   },
 });
 

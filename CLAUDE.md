@@ -366,12 +366,27 @@ cd mobile
 npx expo prebuild --platform android
 ```
 
-#### Build release AAB
+#### Deploy to Google Play
+```bash
+# Full deploy (bumps versionCode, builds AAB, prints upload instructions):
+JAVA_HOME=$(/usr/libexec/java_home -v 17) ./scripts/deploy-playstore.sh
+
+# Upload AAB to internal testing track:
+PLAY_STORE_KEY_FILE=keys/google-play-service-account.json python3 scripts/upload-playstore.py
+```
+
+#### Build release AAB only (no upload)
 Requires Java 17:
 ```bash
 cd mobile/android
 JAVA_HOME=$(/usr/libexec/java_home -v 17) ./gradlew bundleRelease
 ```
+
+#### Known issue: expo-modules-core `components.release` error
+If Android build fails with `Could not get unknown property 'release' for SoftwareComponent`, patch `node_modules/expo-modules-core/android/ExpoModulesCorePlugin.gradle` line ~91: wrap `from components.release` in `if (components.findByName('release') != null)`. This is an Expo SDK 52 + AGP compatibility issue.
+
+#### Known issue: `expo-share-intent` version
+Must use `expo-share-intent@3.2.3` with Expo SDK 52. Version 4+ requires Expo 53+, version 6+ requires Expo 55+.
 
 ### SDK Publishing
 

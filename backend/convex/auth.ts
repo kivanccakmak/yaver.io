@@ -23,7 +23,8 @@ export function randomHex(bytes: number = 32): string {
 }
 
 /**
- * Fetch the first platform relay server from platformConfig to use as default for new users.
+ * Fetch the first platform relay server and generate a unique per-user relay password.
+ * Each user gets their own random password — the relay validates it via Convex backend.
  * Returns { relayUrl, relayPassword } or {} if no relay configured.
  */
 async function getDefaultRelay(ctx: MutationCtx): Promise<{ relayUrl?: string; relayPassword?: string }> {
@@ -38,7 +39,7 @@ async function getDefaultRelay(ctx: MutationCtx): Promise<{ relayUrl?: string; r
     const first = relays[0];
     return {
       relayUrl: first.httpUrl || undefined,
-      relayPassword: first.password || undefined,
+      relayPassword: randomHex(16), // unique per-user password, validated by relay via Convex
     };
   } catch {
     return {};

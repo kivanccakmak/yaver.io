@@ -34,6 +34,13 @@ type RelayServer struct {
 	pwMu     sync.RWMutex
 	password string // shared password for relay authentication (empty = no auth)
 
+	// Convex backend URL for per-user password validation (empty = use shared password only)
+	convexURL string
+
+	// Cache of validated per-user passwords (password -> expiry time)
+	validatedPwMu sync.RWMutex
+	validatedPw   map[string]time.Time // password -> cache expiry
+
 	startedAt time.Time // server start time for uptime tracking
 
 	// deviceID -> active agent tunnel
@@ -51,13 +58,15 @@ type agentTunnel struct {
 	connAt   time.Time
 }
 
-func NewRelayServer(quicPort, httpPort int, password string) *RelayServer {
+func NewRelayServer(quicPort, httpPort int, password, convexURL string) *RelayServer {
 	s := &RelayServer{
-		quicPort:  quicPort,
-		httpPort:  httpPort,
-		password:  password,
-		startedAt: time.Now(),
-		tunnels:   make(map[string]*agentTunnel),
+		quicPort:    quicPort,
+		httpPort:    httpPort,
+		password:    password,
+		convexURL:   convexURL,
+		validatedPw: make(map[string]time.Time),
+		startedAt:   time.Now(),
+		tunnels:     make(map[string]*agentTunnel),
 	}
 	// Initialize bandwidth manager
 	dataDir := os.Getenv("RELAY_DATA_DIR")
@@ -93,6 +102,64 @@ func (s *RelayServer) setPassword(pw string) {
 	s.pwMu.Lock()
 	defer s.pwMu.Unlock()
 	s.password = pw
+}
+
+// validatePassword checks a password against the shared password or Convex backend.
+// Returns true if the password is valid.
+func (s *RelayServer) validatePassword(pw string) bool {
+	// 1. Check shared password (self-hosted mode)
+	if sharedPw := s.getPassword(); sharedPw != "" && pw == sharedPw {
+		return true
+	}
+
+	// 2. If no Convex URL configured and no shared password, allow all
+	if s.convexURL == "" && s.getPassword() == "" {
+		return true
+	}
+
+	// 3. If no Convex URL configured but shared password didn't match, reject
+	if s.convexURL == "" {
+		return false
+	}
+
+	// 4. Check cache first
+	s.validatedPwMu.RLock()
+	if expiry, ok := s.validatedPw[pw]; ok && time.Now().Before(expiry) {
+		s.validatedPwMu.RUnlock()
+		return true
+	}
+	s.validatedPwMu.RUnlock()
+
+	// 5. Validate against Convex backend
+	ok := s.validatePasswordViaConvex(pw)
+	if ok {
+		s.validatedPwMu.Lock()
+		s.validatedPw[pw] = time.Now().Add(5 * time.Minute)
+		s.validatedPwMu.Unlock()
+	}
+	return ok
+}
+
+// validatePasswordViaConvex calls the Convex backend to check a per-user relay password.
+func (s *RelayServer) validatePasswordViaConvex(pw string) bool {
+	url := strings.TrimRight(s.convexURL, "/") + "/relay/validate"
+	body, _ := json.Marshal(map[string]string{"password": pw})
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(url, "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		log.Printf("[RELAY] Convex validation error: %v", err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("[RELAY] Convex validation parse error: %v", err)
+		return false
+	}
+	return result.OK
 }
 
 // Start runs both the QUIC tunnel listener and the HTTP proxy.
@@ -198,17 +265,14 @@ func (s *RelayServer) handleAgentConnection(ctx context.Context, conn quic.Conne
 		return
 	}
 
-	// Validate relay password if configured
-	if pw := s.getPassword(); pw != "" && reg.Password != pw {
+	// Validate relay password (shared or per-user via Convex)
+	if !s.validatePassword(reg.Password) {
 		resp, _ := json.Marshal(RegisterResp{Type: "error", OK: false, Message: "invalid relay password"})
 		stream.Write(resp)
 		stream.Close()
 		conn.CloseWithError(1, "invalid relay password")
 		return
 	}
-
-	// TODO: Validate token against Convex backend
-	// For now, accept any non-empty token (the agent already validated it)
 
 	// Register the tunnel
 	tunnel := &agentTunnel{
@@ -410,16 +474,15 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 		forwardPath = "/" + parts[1]
 	}
 
-	// Validate relay password if configured
-	if pw := s.getPassword(); pw != "" {
-		if r.Header.Get("X-Relay-Password") != pw {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"error": "invalid relay password",
-			})
-			return
-		}
+	// Validate relay password (shared or per-user via Convex)
+	relayPw := r.Header.Get("X-Relay-Password")
+	if !s.validatePassword(relayPw) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "invalid relay password",
+		})
+		return
 	}
 
 	// Check bandwidth limit

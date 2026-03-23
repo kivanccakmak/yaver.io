@@ -817,6 +817,29 @@ http.route({
   }),
 });
 
+// ── Relay Password Validation ────────────────────────────────────────
+
+/** POST /relay/validate — Relay servers call this to validate per-user passwords. No user auth required (relay auth). */
+http.route({
+  path: "/relay/validate",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const body = await request.json();
+      if (!body.password || typeof body.password !== "string") {
+        return jsonResponse({ ok: false, error: "password required" }, 400);
+      }
+      const result = await ctx.runQuery(api.userSettings.validateRelayPassword, { password: body.password });
+      if (!result) {
+        return jsonResponse({ ok: false }, 401);
+      }
+      return jsonResponse({ ok: true, userId: result.userId });
+    } catch {
+      return jsonResponse({ ok: false, error: "internal error" }, 500);
+    }
+  }),
+});
+
 // ── Mobile Stream Logs ──────────────────────────────────────────────
 
 http.route({

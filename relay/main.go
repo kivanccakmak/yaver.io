@@ -70,6 +70,7 @@ Serve flags:
   --quic-port    QUIC port for agent tunnels (default 4433)
   --http-port    HTTP port for mobile clients (default 8443)
   --password     Shared password for relay authentication (env: RELAY_PASSWORD)
+  --convex-url   Convex backend URL for per-user password validation (env: CONVEX_URL)
 
 Tunnel flags:
   --relay        Relay server address (e.g. relay.yaver.io:4433)
@@ -104,6 +105,7 @@ func runServe(args []string) {
 	quicPort := fs.Int("quic-port", 4433, "QUIC port for agent tunnels")
 	httpPort := fs.Int("http-port", 8443, "HTTP port for mobile clients")
 	password := fs.String("password", "", "Shared password for relay authentication (env: RELAY_PASSWORD)")
+	convexURL := fs.String("convex-url", "", "Convex backend URL for per-user password validation (env: CONVEX_URL)")
 	fs.Parse(args)
 
 	pw := *password
@@ -119,13 +121,23 @@ func runServe(args []string) {
 		}
 	}
 
+	cURL := *convexURL
+	if cURL == "" {
+		cURL = os.Getenv("CONVEX_URL")
+	}
+
 	log.Printf("yaver-relay %s starting...", version)
 	log.Printf("  QUIC tunnel port: %d", *quicPort)
 	log.Printf("  HTTP proxy port:  %d", *httpPort)
 	if pw != "" {
-		log.Printf("  Password auth:    enabled")
+		log.Printf("  Password auth:    enabled (shared)")
+	} else if cURL != "" {
+		log.Printf("  Password auth:    enabled (per-user via Convex)")
 	} else {
 		log.Printf("  Password auth:    disabled (open)")
+	}
+	if cURL != "" {
+		log.Printf("  Convex backend:   %s", cURL)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -139,7 +151,7 @@ func runServe(args []string) {
 		cancel()
 	}()
 
-	server := NewRelayServer(*quicPort, *httpPort, pw)
+	server := NewRelayServer(*quicPort, *httpPort, pw, cURL)
 	if err := server.Start(ctx); err != nil {
 		log.Fatalf("server error: %v", err)
 	}

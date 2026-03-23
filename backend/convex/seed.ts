@@ -60,7 +60,14 @@ export const all = mutation({
 
     // ── Default Platform Config ──
     const defaults: Record<string, string> = {
-      relay_servers: "[]",
+      relay_servers: JSON.stringify([{
+        id: "public-free",
+        quicAddr: "46.224.110.38:4433",
+        httpUrl: "https://public.yaver.io",
+        region: "eu",
+        priority: 1,
+        label: "Free (EU)",
+      }]),
       cli_version: "0.0.0",
       mobile_version: "0.0.0",
       relay_version: "0.0.0",
