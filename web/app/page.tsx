@@ -1417,8 +1417,9 @@ await for (final chunk in c.streamOutput(task.id)) {
             Feedback SDKs &mdash; develop mobile apps from your phone
           </h3>
           <p className="mx-auto mb-8 max-w-2xl text-center text-sm text-surface-400">
-            Embed in your app during development. Record screen + voice, report bugs visually, AI fixes them in real-time.
-            Shake-to-report, floating button, or voice commands. Auto-disabled in production.
+            Embed in your app during development. Record screen + voice, capture crashes with full stack traces,
+            stream every log and navigation event to the AI agent like a flight recorder.
+            Shake-to-report, floating button, or voice commands. No conflicts with Sentry or Crashlytics. Auto-disabled in production.
           </p>
 
           <div className="space-y-4">
@@ -1427,11 +1428,15 @@ await for (final chunk in c.streamOutput(task.id)) {
                 <span className="text-sm font-semibold text-surface-100">React Native</span>
                 <span className="rounded-full bg-[#8b5cf6]/20 px-2 py-0.5 text-[10px] text-[#a78bfa]">feedback</span>
               </div>
-              <pre className="rounded-lg bg-surface-950 p-3 text-xs text-surface-300 overflow-x-auto"><code>{`import { YaverFeedback } from '@yaver/feedback-react-native';
+              <pre className="rounded-lg bg-surface-950 p-3 text-xs text-surface-300 overflow-x-auto"><code>{`import { YaverFeedback, BlackBox } from '@yaver/feedback-react-native';
 
 if (__DEV__) {
   YaverFeedback.init({ trigger: 'shake' });
-  // Shake phone → record screen + voice → AI fixes bugs
+  BlackBox.start();        // stream logs, crashes, navigation to agent
+  BlackBox.wrapConsole();  // capture console.log/warn/error
+
+  // Crashes auto-captured with full stack traces
+  // No conflicts with Sentry/Crashlytics — observe-only
   // Three modes: live (hot reload), narrated, batch
 }`}</code></pre>
             </div>
@@ -1447,6 +1452,9 @@ if (kDebugMode) {
     trigger: FeedbackTrigger.shake,
     mode: FeedbackMode.live, // agent watches + fixes in real-time
   ));
+  BlackBox.start();  // flight recorder — logs, crashes, navigation
+  // Wrap error handlers without conflicts:
+  FlutterError.onError = YaverFeedback.wrapFlutterErrorHandler(FlutterError.onError);
 }`}</code></pre>
             </div>
             <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
@@ -1459,6 +1467,7 @@ if (kDebugMode) {
 if (process.env.NODE_ENV === 'development') {
   YaverFeedback.init({ trigger: 'floating-button' });
   // Click → record screen + voice → AI sees and fixes
+  // JS errors auto-captured with stack traces
   // Auto-discovers dev machine on LAN
 }`}</code></pre>
             </div>
