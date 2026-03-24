@@ -214,7 +214,7 @@ export const FloatingButton: React.FC<FloatingButtonProps> = ({
   }, []);
 
   const isTerminal = stylePreset === 'terminal';
-  const buttonIcon = icon ?? 'Y';
+  const buttonIcon = icon ?? 'y';
   const btnBg = isConnected ? color : `${color}88`;
 
   return (
@@ -309,7 +309,7 @@ export const FloatingButton: React.FC<FloatingButtonProps> = ({
         activeOpacity={0.7}
         onPress={handleTap}
       >
-        <Text style={[s.buttonIcon, isTerminal && s.mono, { fontSize: isTerminal ? 14 : 18 }]}>
+        <Text style={[s.buttonIcon, isTerminal && s.mono, { fontSize: 22 }]}>
           {chatOpen ? '\u2715' : buttonIcon}
         </Text>
         {showStatusDot && (
@@ -335,7 +335,7 @@ const s = StyleSheet.create({
   },
   buttonTerminal: { borderRadius: 10 },
   buttonMinimal: { /* borderRadius set inline */ },
-  buttonIcon: { color: '#fff', fontWeight: '900' },
+  buttonIcon: { color: '#fff', fontWeight: '800', fontStyle: 'italic' as const },
   statusDot: {
     position: 'absolute',
     top: -2,

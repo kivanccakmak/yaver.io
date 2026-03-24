@@ -219,7 +219,7 @@ export function FeedbackOverlay() {
         activeOpacity={0.7}
         onPress={handleTap}
       >
-        <Text style={styles.buttonIcon}>{chatOpen ? "\u2715" : ">_"}</Text>
+        <Text style={styles.buttonIcon}>{chatOpen ? "\u2715" : "y"}</Text>
         <View style={[styles.statusDot, isConnected ? styles.green : styles.red]} />
       </TouchableOpacity>
     </Animated.View>
@@ -246,9 +246,9 @@ const styles = StyleSheet.create({
   },
   buttonIcon: {
     color: "#fff",
-    fontSize: 14,
-    fontWeight: "900",
-    fontFamily: "Courier",
+    fontSize: 22,
+    fontWeight: "800",
+    fontStyle: "italic",
   },
   statusDot: {
     position: "absolute",
