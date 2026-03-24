@@ -62,6 +62,31 @@ export const FloatingButton: React.FC<FloatingButtonProps> = ({
   const [sending, setSending] = useState(false);
   const [lastResponse, setLastResponse] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('disconnected');
+  const connectionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Poll connection status every 5s
+  React.useEffect(() => {
+    const checkConnection = async () => {
+      const client = YaverFeedback.getP2PClient();
+      if (!client) {
+        setConnectionStatus('disconnected');
+        return;
+      }
+      try {
+        const ok = await client.health();
+        setConnectionStatus(ok ? 'connected' : 'disconnected');
+      } catch {
+        setConnectionStatus('disconnected');
+      }
+    };
+
+    checkConnection();
+    connectionPollRef.current = setInterval(checkConnection, 5000);
+    return () => {
+      if (connectionPollRef.current) clearInterval(connectionPollRef.current);
+    };
+  }, []);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -140,6 +165,38 @@ export const FloatingButton: React.FC<FloatingButtonProps> = ({
     }
   }, [message]);
 
+  const handleReconnect = useCallback(async () => {
+    setConnectionStatus('connecting');
+    try {
+      const config = YaverFeedback.getConfig();
+      if (!config) return;
+
+      const result = await (await import('./Discovery')).YaverDiscovery.discover({
+        convexUrl: config.convexUrl,
+        authToken: config.authToken,
+        preferredDeviceId: config.preferredDeviceId,
+      });
+      if (result) {
+        config.agentUrl = result.url;
+        // Recreate P2P client with new URL
+        const { P2PClient } = await import('./P2PClient');
+        const client = new P2PClient(result.url, config.authToken);
+        const ok = await client.health();
+        setConnectionStatus(ok ? 'connected' : 'disconnected');
+        if (ok) {
+          setLastResponse(`Reconnected to ${result.hostname}`);
+          BlackBox.log(`Reconnected to ${result.hostname} at ${result.url}`, 'FloatingButton');
+        }
+      } else {
+        setConnectionStatus('disconnected');
+        setLastResponse('No agent found');
+      }
+    } catch {
+      setConnectionStatus('disconnected');
+      setLastResponse('Reconnect failed');
+    }
+  }, []);
+
   const handleReload = useCallback(async () => {
     const config = YaverFeedback.getConfig();
     if (!config?.agentUrl) return;
@@ -200,12 +257,31 @@ export const FloatingButton: React.FC<FloatingButtonProps> = ({
             </TouchableOpacity>
           </View>
 
+          {/* Connection status bar */}
+          <View style={styles.statusBar}>
+            <View style={[
+              styles.statusIndicator,
+              connectionStatus === 'connected' && styles.statusIndicatorConnected,
+              connectionStatus === 'disconnected' && styles.statusIndicatorDisconnected,
+              connectionStatus === 'connecting' && styles.statusIndicatorConnecting,
+            ]} />
+            <Text style={styles.statusText}>
+              {connectionStatus === 'connected' ? 'Connected' :
+               connectionStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
+            </Text>
+            {connectionStatus === 'disconnected' && (
+              <TouchableOpacity onPress={handleReconnect} style={styles.reconnectBtn}>
+                <Text style={styles.reconnectBtnText}>Reconnect</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
           {/* Quick actions */}
           <View style={styles.quickActions}>
             <TouchableOpacity
               style={styles.quickBtn}
               onPress={handleReload}
-              disabled={reloading}
+              disabled={reloading || connectionStatus !== 'connected'}
             >
               <Text style={styles.quickBtnText}>
                 {reloading ? 'Reloading...' : 'Hot Reload'}
@@ -243,9 +319,15 @@ export const FloatingButton: React.FC<FloatingButtonProps> = ({
         </View>
       )}
 
-      {/* The button itself */}
+      {/* The button itself — color reflects connection status */}
       <TouchableOpacity
-        style={[styles.button, { width: size, height: size, borderRadius: size / 2 }]}
+        style={[
+          styles.button,
+          { width: size, height: size, borderRadius: size / 2 },
+          connectionStatus === 'connected' && styles.buttonConnected,
+          connectionStatus === 'disconnected' && styles.buttonDisconnected,
+          connectionStatus === 'connecting' && styles.buttonConnecting,
+        ]}
         activeOpacity={0.8}
         onPress={handleTap}
         onLongPress={handleLongPress}
@@ -258,7 +340,11 @@ export const FloatingButton: React.FC<FloatingButtonProps> = ({
           <View
             style={[
               styles.statusDot,
-              isStreaming ? styles.statusDotActive : styles.statusDotInactive,
+              connectionStatus === 'connected' && isStreaming
+                ? styles.statusDotActive
+                : connectionStatus === 'connecting'
+                  ? styles.statusDotConnecting
+                  : styles.statusDotInactive,
             ]}
           />
         )}
@@ -302,7 +388,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#22c55e',
   },
   statusDotInactive: {
-    backgroundColor: '#555',
+    backgroundColor: '#ef4444',
+  },
+  statusDotConnecting: {
+    backgroundColor: '#fbbf24',
+  },
+  // ─── Connection-aware button colors ────────────
+  buttonConnected: {
+    backgroundColor: 'rgba(99, 102, 241, 0.9)',  // indigo — all good
+  },
+  buttonDisconnected: {
+    backgroundColor: 'rgba(239, 68, 68, 0.7)',   // red — disconnected
+  },
+  buttonConnecting: {
+    backgroundColor: 'rgba(251, 191, 36, 0.7)',  // amber — connecting
   },
   // ─── Chat panel ────────────────────────────────
   chatPanel: {
@@ -372,6 +471,44 @@ const styles = StyleSheet.create({
     color: '#ccc',
     fontSize: 11,
     fontWeight: '500',
+  },
+  // ─── Connection status bar ──────────────────────
+  statusBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    paddingVertical: 4,
+  },
+  statusIndicator: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  statusIndicatorConnected: {
+    backgroundColor: '#22c55e',
+  },
+  statusIndicatorDisconnected: {
+    backgroundColor: '#ef4444',
+  },
+  statusIndicatorConnecting: {
+    backgroundColor: '#fbbf24',
+  },
+  statusText: {
+    color: '#999',
+    fontSize: 11,
+    flex: 1,
+  },
+  reconnectBtn: {
+    backgroundColor: 'rgba(99, 102, 241, 0.2)',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  reconnectBtnText: {
+    color: '#8b8bf5',
+    fontSize: 10,
+    fontWeight: '600',
   },
   response: {
     marginTop: 8,
