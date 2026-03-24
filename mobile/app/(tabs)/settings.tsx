@@ -77,7 +77,7 @@ export default function SettingsScreen() {
   const [feedbackMode, setFeedbackMode] = useState<'live' | 'narrated' | 'batch'>('live');
   const [blackBoxEnabled, setBlackBoxEnabled] = useState(false);
   const [feedbackVoice, setFeedbackVoice] = useState(true);
-  const [feedbackButtonColor, setFeedbackButtonColor] = useState("#ec4899");
+  const [feedbackButtonColor, setFeedbackButtonColor] = useState("#6366f1");
   const [intgConfig, setIntgConfig] = useState<Record<string, any>>({});
   const [intgLoading, setIntgLoading] = useState(false);
   const [intgSaving, setIntgSaving] = useState(false);
@@ -2099,7 +2099,7 @@ export default function SettingsScreen() {
                   {/* Button color */}
                   <Text style={[styles.sectionLabel, { color: c.textMuted, marginTop: 12, marginBottom: 8 }]}>Button Color</Text>
                   <View style={{ flexDirection: "row", gap: 8 }}>
-                    {["#ec4899", "#6366f1", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6"].map((color) => (
+                    {["#6366f1", "#ec4899", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6"].map((color) => (
                       <Pressable
                         key={color}
                         onPress={async () => {

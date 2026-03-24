@@ -16,7 +16,7 @@ import { useAuth } from "../context/AuthContext";
 import { useDevice } from "../context/DeviceContext";
 
 const BUTTON_SIZE = 40;
-const DEFAULT_COLOR = "#ec4899"; // hot pink — unmistakable debug tool
+const DEFAULT_COLOR = "#6366f1"; // indigo — Yaver brand
 
 /**
  * Global feedback overlay — draggable debug console button.
@@ -287,7 +287,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 11,
     fontWeight: "700",
-    color: "#ec4899",
+    color: "#6366f1",
     fontFamily: "Courier",
     textTransform: "uppercase",
     letterSpacing: 1,
@@ -317,7 +317,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   prompt: {
-    color: "#ec4899",
+    color: "#6366f1",
     fontSize: 14,
     fontWeight: "700",
     fontFamily: "Courier",
@@ -335,7 +335,7 @@ const styles = StyleSheet.create({
     borderColor: "#222",
   },
   goBtn: {
-    backgroundColor: "#ec4899",
+    backgroundColor: "#6366f1",
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 6,

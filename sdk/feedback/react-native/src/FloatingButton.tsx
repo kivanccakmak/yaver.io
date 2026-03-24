@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -14,46 +14,85 @@ import {
 import { YaverFeedback } from './YaverFeedback';
 import { BlackBox } from './BlackBox';
 
-interface FloatingButtonProps {
-  /** Called when user taps the button (opens full modal by default). */
+export interface FloatingButtonProps {
+  /** Called when user taps the button (opens inline console by default). */
   onPress?: () => void;
-  /** Initial position. Default: top-right corner. */
+  /** Initial position. Default: top-right corner, below status bar. */
   initialPosition?: { x: number; y: number };
-  /** Button size in pixels. Default: 48. */
+  /** Button size in pixels. Default: 40. */
   size?: number;
-  /** Whether to show the inline chat panel on long-press. Default: true. */
-  enableChat?: boolean;
-  /** Show streaming status dot. Default: true. */
-  showStreamingDot?: boolean;
+  /**
+   * Button background color. Default: "#ec4899" (hot pink).
+   * Use a distinctive color so the debug button is never confused
+   * with your app's UI. Suggested: pink, purple, lime.
+   */
+  color?: string;
+  /** Show connection status dot on the button. Default: true. */
+  showStatusDot?: boolean;
+  /**
+   * Style preset:
+   * - "terminal" (default) — dark terminal look with >_ icon, monospace font, pink accents
+   * - "minimal" — small circle, single-letter icon, clean panel
+   */
+  style?: 'terminal' | 'minimal';
+  /** Custom icon text. Default: "Y". */
+  icon?: string;
+  /** Agent base URL (auto-detected from YaverFeedback config if omitted). */
+  agentUrl?: string;
+  /** Auth token (auto-detected from YaverFeedback config if omitted). */
+  authToken?: string;
+  /**
+   * Health check interval in ms. The button polls the agent's /health
+   * endpoint to show connection status. Default: 5000. Set to 0 to disable.
+   */
+  healthCheckInterval?: number;
 }
 
-const DEFAULT_SIZE = 48;
+const DEFAULT_SIZE = 40;
+const DEFAULT_COLOR = '#6366f1';
 
 /**
- * Draggable floating button for the Yaver Feedback SDK.
+ * Draggable debug console button for the Yaver Feedback SDK.
  *
- * - **Tap** → opens the full FeedbackModal
- * - **Long-press** → expands into a mini chat panel for quick agent interaction
- * - **Drag** → reposition anywhere on screen
+ * Drop this into any React Native app for an instant debug console:
  *
- * The chat panel lets the user:
- * - Type messages to the agent (creates tasks)
- * - Trigger hot reload
- * - See streaming status (green dot = black box active)
+ * ```tsx
+ * import { FloatingButton } from '@yaver/feedback-react-native';
  *
- * Default position: top-right corner (avoids overlap with bottom nav/tab bars).
- * User can drag it anywhere.
+ * function App() {
+ *   return (
+ *     <>
+ *       <YourApp />
+ *       <FloatingButton />
+ *     </>
+ *   );
+ * }
+ * ```
+ *
+ * - **Tap** → expand terminal-style console panel
+ * - **Drag** → reposition anywhere
+ * - **Type** → send tasks to the AI agent
+ * - **"reload"** → trigger hot reload
+ * - **"quit"** → disable the SDK
+ *
+ * The button is hot pink by default — unmistakable debug tool,
+ * never confused with app UI. Customize with `color` prop.
  */
 export const FloatingButton: React.FC<FloatingButtonProps> = ({
   onPress,
   initialPosition,
   size = DEFAULT_SIZE,
-  enableChat = true,
-  showStreamingDot = true,
+  color = DEFAULT_COLOR,
+  showStatusDot = true,
+  style: stylePreset = 'terminal',
+  icon,
+  agentUrl: agentUrlProp,
+  authToken: authTokenProp,
+  healthCheckInterval = 5000,
 }) => {
   const { width: screenWidth } = Dimensions.get('window');
-  const defaultX = initialPosition?.x ?? (screenWidth - size - 12);
-  const defaultY = initialPosition?.y ?? 60; // top area, below status bar
+  const defaultX = initialPosition?.x ?? (screenWidth - size - 10);
+  const defaultY = initialPosition?.y ?? 90;
 
   const pan = useRef(new Animated.ValueXY({ x: defaultX, y: defaultY })).current;
   const isDragging = useRef(false);
@@ -62,53 +101,55 @@ export const FloatingButton: React.FC<FloatingButtonProps> = ({
   const [sending, setSending] = useState(false);
   const [lastResponse, setLastResponse] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('disconnected');
-  const connectionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
 
-  // Poll connection status every 5s
-  React.useEffect(() => {
-    const checkConnection = async () => {
-      const client = YaverFeedback.getP2PClient();
-      if (!client) {
-        setConnectionStatus('disconnected');
-        return;
-      }
+  // Resolve agent URL and token
+  const config = YaverFeedback.getConfig();
+  const agentUrl = agentUrlProp || config?.agentUrl;
+  const authToken = authTokenProp || config?.authToken;
+
+  // Connection health polling
+  useEffect(() => {
+    if (!healthCheckInterval || !agentUrl) return;
+
+    const check = async () => {
       try {
-        const ok = await client.health();
-        setConnectionStatus(ok ? 'connected' : 'disconnected');
+        const client = YaverFeedback.getP2PClient();
+        if (client) {
+          setIsConnected(await client.health());
+        } else if (agentUrl) {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 3000);
+          const resp = await fetch(`${agentUrl.replace(/\/$/, '')}/health`, {
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+          setIsConnected(resp.ok);
+        }
       } catch {
-        setConnectionStatus('disconnected');
+        setIsConnected(false);
       }
     };
 
-    checkConnection();
-    connectionPollRef.current = setInterval(checkConnection, 5000);
-    return () => {
-      if (connectionPollRef.current) clearInterval(connectionPollRef.current);
-    };
-  }, []);
+    check();
+    const interval = setInterval(check, healthCheckInterval);
+    return () => clearInterval(interval);
+  }, [agentUrl, healthCheckInterval]);
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_, gs) =>
-        Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5,
+        Math.abs(gs.dx) > 4 || Math.abs(gs.dy) > 4,
       onPanResponderGrant: () => {
         pan.extractOffset();
         isDragging.current = false;
       },
       onPanResponderMove: (_, gs) => {
-        if (Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5) {
-          isDragging.current = true;
-        }
-        Animated.event([null, { dx: pan.x, dy: pan.y }], {
-          useNativeDriver: false,
-        })(_, gs);
+        if (Math.abs(gs.dx) > 4 || Math.abs(gs.dy) > 4) isDragging.current = true;
+        Animated.event([null, { dx: pan.x, dy: pan.y }], { useNativeDriver: false })(_, gs);
       },
-      onPanResponderRelease: () => {
-        pan.flattenOffset();
-        // No-op on drag end — tap/long-press handled separately
-      },
+      onPanResponderRelease: () => pan.flattenOffset(),
     }),
   ).current;
 
@@ -117,402 +158,252 @@ export const FloatingButton: React.FC<FloatingButtonProps> = ({
     if (onPress) {
       onPress();
     } else {
-      YaverFeedback.startReport();
+      setChatOpen((prev) => !prev);
+      setLastResponse(null);
     }
   }, [onPress]);
 
-  const handleLongPress = useCallback(() => {
-    if (!enableChat) return;
-    setChatOpen((prev) => !prev);
-    setLastResponse(null);
-  }, [enableChat]);
-
   const handleSend = useCallback(async () => {
-    if (!message.trim()) return;
-    const config = YaverFeedback.getConfig();
-    if (!config?.agentUrl) return;
-
+    if (!message.trim() || !agentUrl || !authToken) return;
     setSending(true);
     setLastResponse(null);
     Keyboard.dismiss();
-
     try {
-      const url = config.agentUrl.replace(/\/$/, '');
-      const response = await fetch(`${url}/tasks`, {
+      const url = agentUrl.replace(/\/$/, '');
+      const resp = await fetch(`${url}/tasks`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${config.authToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          title: message.trim(),
-          source: 'feedback-chat',
-        }),
+        headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: message.trim(), source: 'feedback-console' }),
       });
-
-      if (response.ok) {
-        const data = await response.json();
-        setLastResponse(`Task created: ${data.id ?? 'ok'}`);
-        BlackBox.log(`Chat task: ${message.trim()}`, 'FloatingButton');
+      if (resp.ok) {
+        const data = await resp.json();
+        setLastResponse(`> task ${data.id ?? 'ok'}`);
+        BlackBox.log(`Console task: ${message.trim()}`, 'FloatingButton');
       } else {
-        setLastResponse(`Error: ${response.status}`);
+        setLastResponse(`> err ${resp.status}`);
       }
       setMessage('');
-    } catch (err) {
-      setLastResponse(`Failed: ${String(err)}`);
+    } catch (e) {
+      setLastResponse(`> fail: ${String(e).slice(0, 40)}`);
     } finally {
       setSending(false);
     }
-  }, [message]);
-
-  const handleReconnect = useCallback(async () => {
-    setConnectionStatus('connecting');
-    try {
-      const config = YaverFeedback.getConfig();
-      if (!config) return;
-
-      const result = await (await import('./Discovery')).YaverDiscovery.discover({
-        convexUrl: config.convexUrl,
-        authToken: config.authToken,
-        preferredDeviceId: config.preferredDeviceId,
-      });
-      if (result) {
-        config.agentUrl = result.url;
-        // Recreate P2P client with new URL
-        const { P2PClient } = await import('./P2PClient');
-        const client = new P2PClient(result.url, config.authToken);
-        const ok = await client.health();
-        setConnectionStatus(ok ? 'connected' : 'disconnected');
-        if (ok) {
-          setLastResponse(`Reconnected to ${result.hostname}`);
-          BlackBox.log(`Reconnected to ${result.hostname} at ${result.url}`, 'FloatingButton');
-        }
-      } else {
-        setConnectionStatus('disconnected');
-        setLastResponse('No agent found');
-      }
-    } catch {
-      setConnectionStatus('disconnected');
-      setLastResponse('Reconnect failed');
-    }
-  }, []);
+  }, [message, agentUrl, authToken]);
 
   const handleReload = useCallback(async () => {
-    const config = YaverFeedback.getConfig();
-    if (!config?.agentUrl) return;
-
+    if (!agentUrl || !authToken) return;
     setReloading(true);
     try {
-      await fetch(`${config.agentUrl.replace(/\/$/, '')}/exec`, {
+      await fetch(`${agentUrl.replace(/\/$/, '')}/exec`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${config.authToken}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: 'reload', type: 'hot-reload' }),
       });
-      BlackBox.lifecycle('Hot reload triggered from floating chat');
+      setLastResponse('> reload ok');
+      BlackBox.lifecycle('Hot reload triggered from debug console');
     } catch {
-      // silent
+      setLastResponse('> reload fail');
     } finally {
       setReloading(false);
     }
+  }, [agentUrl, authToken]);
+
+  const handleDisable = useCallback(() => {
+    YaverFeedback.setEnabled(false);
+    setChatOpen(false);
   }, []);
 
-  const isStreaming = BlackBox.isStreaming;
+  const isTerminal = stylePreset === 'terminal';
+  const buttonIcon = icon ?? 'Y';
+  const btnBg = isConnected ? color : `${color}88`;
 
   return (
     <Animated.View
-      style={[
-        styles.root,
-        { transform: [{ translateX: pan.x }, { translateY: pan.y }] },
-      ]}
+      style={[s.root, { transform: [{ translateX: pan.x }, { translateY: pan.y }] }]}
       {...panResponder.panHandlers}
     >
-      {/* Chat panel (expanded) */}
+      {/* Console panel */}
       {chatOpen && (
-        <View style={styles.chatPanel}>
-          {/* Input row */}
-          <View style={styles.inputRow}>
+        <View style={[s.panel, isTerminal ? s.panelTerminal : s.panelMinimal, { borderColor: `${color}44` }]}>
+          {/* Header */}
+          <View style={s.headerRow}>
+            <Text style={[s.headerTitle, isTerminal && s.mono, { color }]}>
+              {isTerminal ? 'YAVER DEBUG' : 'Yaver'}
+            </Text>
+            <View style={[s.dotSmall, isConnected ? s.green : s.red]} />
+            <Text style={[s.headerStatus, isTerminal && s.mono]}>
+              {isConnected ? 'live' : 'off'}
+            </Text>
+            <TouchableOpacity onPress={() => setChatOpen(false)} style={s.xBtn}>
+              <Text style={s.xBtnText}>{'\u2715'}</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Input */}
+          <View style={s.inputRow}>
+            {isTerminal && <Text style={[s.prompt, { color }]}>&gt;</Text>}
             <TextInput
-              style={styles.input}
-              placeholder="Ask the agent..."
-              placeholderTextColor="#666"
+              style={[s.input, isTerminal && s.mono]}
+              placeholder={isTerminal ? 'tell the agent...' : 'Type a message...'}
+              placeholderTextColor="#444"
               value={message}
               onChangeText={setMessage}
               onSubmitEditing={handleSend}
               returnKeyType="send"
-              blurOnSubmit={false}
             />
             <TouchableOpacity
-              style={[styles.sendBtn, sending && styles.sendBtnDisabled]}
+              style={[s.goBtn, { backgroundColor: color }, (sending || !message.trim()) && s.dim]}
               onPress={handleSend}
-              disabled={sending || !message.trim()}
+              disabled={sending || !message.trim() || !isConnected}
             >
               {sending ? (
                 <ActivityIndicator color="#fff" size="small" />
               ) : (
-                <Text style={styles.sendBtnText}>Send</Text>
+                <Text style={[s.goBtnText, isTerminal && s.mono]}>
+                  {isTerminal ? 'run' : 'Send'}
+                </Text>
               )}
             </TouchableOpacity>
           </View>
 
-          {/* Connection status bar */}
-          <View style={styles.statusBar}>
-            <View style={[
-              styles.statusIndicator,
-              connectionStatus === 'connected' && styles.statusIndicatorConnected,
-              connectionStatus === 'disconnected' && styles.statusIndicatorDisconnected,
-              connectionStatus === 'connecting' && styles.statusIndicatorConnecting,
-            ]} />
-            <Text style={styles.statusText}>
-              {connectionStatus === 'connected' ? 'Connected' :
-               connectionStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
-            </Text>
-            {connectionStatus === 'disconnected' && (
-              <TouchableOpacity onPress={handleReconnect} style={styles.reconnectBtn}>
-                <Text style={styles.reconnectBtnText}>Reconnect</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
           {/* Quick actions */}
-          <View style={styles.quickActions}>
+          <View style={s.actionsRow}>
             <TouchableOpacity
-              style={styles.quickBtn}
+              style={[s.actionBtn, !isConnected && s.dim]}
               onPress={handleReload}
-              disabled={reloading || connectionStatus !== 'connected'}
+              disabled={reloading || !isConnected}
             >
-              <Text style={styles.quickBtnText}>
-                {reloading ? 'Reloading...' : 'Hot Reload'}
+              <Text style={[s.actionText, isTerminal && s.mono]}>
+                {reloading ? '...' : 'reload'}
               </Text>
             </TouchableOpacity>
-
             <TouchableOpacity
-              style={styles.quickBtn}
+              style={s.actionBtn}
               onPress={() => {
                 setChatOpen(false);
-                if (onPress) onPress();
-                else YaverFeedback.startReport();
+                YaverFeedback.startReport();
               }}
             >
-              <Text style={styles.quickBtnText}>Full Report</Text>
+              <Text style={[s.actionText, isTerminal && s.mono]}>report</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.quickBtn,
-                YaverFeedback.isEnabled() ? styles.quickBtnActive : styles.quickBtnDanger,
-              ]}
-              onPress={() => YaverFeedback.setEnabled(!YaverFeedback.isEnabled())}
-            >
-              <Text style={styles.quickBtnText}>
-                {YaverFeedback.isEnabled() ? 'Disable' : 'Enable'}
-              </Text>
+            <TouchableOpacity style={s.actionBtn} onPress={handleDisable}>
+              <Text style={[s.actionText, isTerminal && s.mono, { color: '#f87171' }]}>quit</Text>
             </TouchableOpacity>
           </View>
 
-          {/* Response */}
+          {/* Output */}
           {lastResponse && (
-            <Text style={styles.response}>{lastResponse}</Text>
+            <Text style={[s.output, isTerminal && s.mono]}>{lastResponse}</Text>
           )}
         </View>
       )}
 
-      {/* The button itself — color reflects connection status */}
+      {/* The button */}
       <TouchableOpacity
         style={[
-          styles.button,
-          { width: size, height: size, borderRadius: size / 2 },
-          connectionStatus === 'connected' && styles.buttonConnected,
-          connectionStatus === 'disconnected' && styles.buttonDisconnected,
-          connectionStatus === 'connecting' && styles.buttonConnecting,
+          s.button,
+          isTerminal ? s.buttonTerminal : s.buttonMinimal,
+          { backgroundColor: btnBg, width: size, height: size },
+          !isTerminal && { borderRadius: size / 2 },
         ]}
-        activeOpacity={0.8}
+        activeOpacity={0.7}
         onPress={handleTap}
-        onLongPress={handleLongPress}
-        delayLongPress={400}
       >
-        <Text style={styles.label}>{chatOpen ? 'X' : 'Y'}</Text>
-
-        {/* Streaming status dot */}
-        {showStreamingDot && (
-          <View
-            style={[
-              styles.statusDot,
-              connectionStatus === 'connected' && isStreaming
-                ? styles.statusDotActive
-                : connectionStatus === 'connecting'
-                  ? styles.statusDotConnecting
-                  : styles.statusDotInactive,
-            ]}
-          />
+        <Text style={[s.buttonIcon, isTerminal && s.mono, { fontSize: isTerminal ? 14 : 18 }]}>
+          {chatOpen ? '\u2715' : buttonIcon}
+        </Text>
+        {showStatusDot && (
+          <View style={[s.statusDot, isConnected ? s.green : s.red]} />
         )}
       </TouchableOpacity>
     </Animated.View>
   );
 };
 
-const styles = StyleSheet.create({
-  root: {
-    position: 'absolute',
-    zIndex: 9999,
-    alignItems: 'flex-end',
-  },
+const s = StyleSheet.create({
+  root: { position: 'absolute', zIndex: 99999, alignItems: 'flex-end' },
+  mono: { fontFamily: 'Courier' },
+  // Button variants
   button: {
-    backgroundColor: 'rgba(99, 102, 241, 0.9)',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 6,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.5,
+    shadowRadius: 5,
+    elevation: 10,
   },
-  label: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: '700',
-  },
+  buttonTerminal: { borderRadius: 10 },
+  buttonMinimal: { /* borderRadius set inline */ },
+  buttonIcon: { color: '#fff', fontWeight: '900' },
   statusDot: {
     position: 'absolute',
-    top: 2,
-    right: 2,
-    width: 10,
-    height: 10,
+    top: -2,
+    right: -2,
+    width: 9,
+    height: 9,
     borderRadius: 5,
     borderWidth: 1.5,
-    borderColor: 'rgba(99, 102, 241, 0.9)',
+    borderColor: '#000',
   },
-  statusDotActive: {
-    backgroundColor: '#22c55e',
-  },
-  statusDotInactive: {
-    backgroundColor: '#ef4444',
-  },
-  statusDotConnecting: {
-    backgroundColor: '#fbbf24',
-  },
-  // ─── Connection-aware button colors ────────────
-  buttonConnected: {
-    backgroundColor: 'rgba(99, 102, 241, 0.9)',  // indigo — all good
-  },
-  buttonDisconnected: {
-    backgroundColor: 'rgba(239, 68, 68, 0.7)',   // red — disconnected
-  },
-  buttonConnecting: {
-    backgroundColor: 'rgba(251, 191, 36, 0.7)',  // amber — connecting
-  },
-  // ─── Chat panel ────────────────────────────────
-  chatPanel: {
-    width: 280,
-    backgroundColor: '#1a1a2e',
-    borderRadius: 16,
-    padding: 12,
-    marginBottom: 8,
+  green: { backgroundColor: '#22c55e' },
+  red: { backgroundColor: '#ef4444' },
+  // Panel variants
+  panel: {
+    width: 260,
+    padding: 10,
+    marginBottom: 6,
+    borderWidth: 1,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
+    shadowOpacity: 0.5,
     shadowRadius: 8,
-    elevation: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(99, 102, 241, 0.3)',
+    elevation: 12,
   },
-  inputRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 8,
+  panelTerminal: {
+    backgroundColor: '#0a0a0a',
+    borderRadius: 12,
   },
+  panelMinimal: {
+    backgroundColor: '#1a1a2e',
+    borderRadius: 16,
+  },
+  // Header
+  headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 5 },
+  headerTitle: { flex: 1, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1 },
+  dotSmall: { width: 6, height: 6, borderRadius: 3 },
+  headerStatus: { fontSize: 10, color: '#666' },
+  xBtn: { paddingHorizontal: 6, paddingVertical: 2 },
+  xBtnText: { color: '#666', fontSize: 12 },
+  // Input
+  inputRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 6 },
+  prompt: { fontSize: 14, fontWeight: '700' },
   input: {
     flex: 1,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    color: '#fff',
-    fontSize: 13,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  sendBtn: {
-    backgroundColor: '#6366f1',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    justifyContent: 'center',
-  },
-  sendBtnDisabled: {
-    opacity: 0.5,
-  },
-  sendBtnText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  quickActions: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  quickBtn: {
-    flex: 1,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderRadius: 8,
-    paddingVertical: 6,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-  },
-  quickBtnActive: {
-    borderColor: 'rgba(34, 197, 94, 0.3)',
-  },
-  quickBtnDanger: {
-    borderColor: 'rgba(239, 68, 68, 0.3)',
-  },
-  quickBtnText: {
-    color: '#ccc',
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  // ─── Connection status bar ──────────────────────
-  statusBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-    paddingVertical: 4,
-  },
-  statusIndicator: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
-  },
-  statusIndicatorConnected: {
-    backgroundColor: '#22c55e',
-  },
-  statusIndicatorDisconnected: {
-    backgroundColor: '#ef4444',
-  },
-  statusIndicatorConnecting: {
-    backgroundColor: '#fbbf24',
-  },
-  statusText: {
-    color: '#999',
-    fontSize: 11,
-    flex: 1,
-  },
-  reconnectBtn: {
-    backgroundColor: 'rgba(99, 102, 241, 0.2)',
+    backgroundColor: '#111',
     borderRadius: 6,
     paddingHorizontal: 8,
-    paddingVertical: 3,
+    paddingVertical: 6,
+    color: '#e5e5e5',
+    fontSize: 12,
+    borderWidth: 1,
+    borderColor: '#222',
   },
-  reconnectBtnText: {
-    color: '#8b8bf5',
-    fontSize: 10,
-    fontWeight: '600',
+  goBtn: { borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 },
+  goBtnText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  dim: { opacity: 0.3 },
+  // Actions
+  actionsRow: { flexDirection: 'row', gap: 4 },
+  actionBtn: {
+    flex: 1,
+    paddingVertical: 5,
+    borderRadius: 6,
+    alignItems: 'center',
+    backgroundColor: '#111',
+    borderWidth: 1,
+    borderColor: '#1a1a1a',
   },
-  response: {
-    marginTop: 8,
-    color: '#8b8bf5',
-    fontSize: 11,
-  },
+  actionText: { fontSize: 10, color: '#888', fontWeight: '600' },
+  // Output
+  output: { marginTop: 6, fontSize: 11, color: '#22c55e' },
 });
