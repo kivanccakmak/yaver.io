@@ -136,7 +136,7 @@ Phone (text result) ← agent HTTP response ← transcribed text ←────
 
 Two tiers (all dedicated, no sharing):
 - **CPU Machine** ($49/mo) — 8 vCPU / 16 GB RAM / 160 GB NVMe (Hetzner CX42). Pre-installed: Node.js, Python, Go, Rust, Docker, Expo CLI, EAS CLI, Yaver server.
-- **GPU Machine** ($299/mo) — Dedicated NVIDIA RTX 4000, 20 GB VRAM (Hetzner GEX44). Includes Ollama + Qwen 2.5 Coder 32B, PersonaPlex 7B (voice AI), Whisper (STT). Full local AI stack.
+- **GPU Machine** ($449/mo) — Dedicated NVIDIA RTX 4000, 20 GB VRAM (Hetzner GEX44). Includes Ollama + Qwen 2.5 Coder 32B, PersonaPlex 7B (voice AI), Whisper (STT). Full local AI stack.
 - **Managed Relay** ($10/mo) — shared relay infra, no dedicated server.
 
 **Multi-user / Team mode**: CPU and GPU machines support `--multi-user` mode for team sharing. Each user gets isolated workspace, tasks, and sessions. GPU resources are shared across team members. See "Multi-User Mode" section below.

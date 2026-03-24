@@ -39,7 +39,7 @@ const docs = [
   {
     title: "Cloud machines",
     description:
-      "Dedicated CPU ($49/mo) and GPU ($299/mo) dev machines with multi-user team access, shared GPU, and isolated workspaces.",
+      "Dedicated CPU ($49/mo) and GPU ($449/mo) dev machines with multi-user team access, shared GPU, and isolated workspaces.",
     href: "/docs/cloud-machines",
     tags: ["GPU", "Teams", "Multi-user"],
   },

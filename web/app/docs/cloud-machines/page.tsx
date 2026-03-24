@@ -160,7 +160,7 @@ export default function CloudMachinesPage() {
 
             <div className="card">
               <h4 className="mb-2 text-sm font-medium text-surface-200">
-                GPU Machine &mdash; $299/mo
+                GPU Machine &mdash; $449/mo
               </h4>
               <p className="text-sm leading-relaxed text-surface-400">
                 16 vCPU, 64 GB RAM, 320 GB NVMe, NVIDIA RTX 4000 with 20 GB
@@ -215,7 +215,7 @@ export default function CloudMachinesPage() {
                 <tr className="border-b border-surface-800/50">
                   <td className="py-2.5 pr-6 text-surface-300">Price</td>
                   <td className="py-2.5 pr-6">$49/mo</td>
-                  <td className="py-2.5">$299/mo</td>
+                  <td className="py-2.5">$449/mo</td>
                 </tr>
                 <tr className="border-b border-surface-800/50">
                   <td className="py-2.5 pr-6 text-surface-300">Dev tooling</td>
@@ -281,7 +281,7 @@ cloud-gpu-01        online    cloud   eu-central`}
             Multi-User / Team Access
           </SectionHeading>
           <Prose>
-            The $299 GPU machine supports multiple users. A team admin creates a
+            The $449 GPU machine supports multiple users. A team admin creates a
             team, invites members by email, and each member authenticates with
             their own Apple, Google, or Microsoft account. No shared passwords,
             no SSH keys to manage.

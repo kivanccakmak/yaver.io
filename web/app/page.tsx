@@ -1153,7 +1153,7 @@ export default function HomePage() {
                 <div className="mb-3 flex items-center justify-between">
                   <h4 className="text-sm font-semibold text-surface-100">CPU Dev Machine</h4>
                   <span className="rounded-lg border border-surface-700 bg-surface-800 px-3 py-1 text-xs font-medium text-surface-300">
-                    from $29/mo
+                    from $49/mo
                   </span>
                 </div>
                 <p className="mb-3 text-xs text-surface-500">Your own dedicated cloud dev environment for building, testing, and deploying &mdash; always-on, entirely yours.</p>
@@ -1178,7 +1178,7 @@ export default function HomePage() {
                     <span className="rounded-full bg-[#76b900]/20 px-2 py-0.5 text-[10px] font-medium text-[#76b900]">recommended</span>
                   </div>
                   <span className="rounded-lg border border-[#76b900]/30 bg-[#76b900]/10 px-3 py-1 text-xs font-medium text-[#76b900]">
-                    $299/mo
+                    $449/mo
                   </span>
                 </div>
                 <p className="mb-3 text-xs text-surface-500">Everything in the CPU tier, plus a dedicated GPU for voice AI, local LLMs, and ML workloads &mdash; the full mobile coding experience.</p>
@@ -1736,7 +1736,7 @@ if (process.env.NODE_ENV === 'development') {
             />
             <FAQItem
               question="What is the Cloud Dev Machine?"
-              answer="A dedicated Linux dev environment provisioned just for you — not shared with anyone. CPU machines ($29/mo) come with 4 vCPU, 8 GB RAM, 80 GB NVMe. Pro CPU ($49/mo) doubles that to 8 vCPU, 16 GB RAM, 160 GB NVMe. GPU machines ($299/mo) add a dedicated NVIDIA RTX 4000 with 20 GB VRAM, Ollama + Qwen 2.5 Coder 32B, and PersonaPlex 7B for voice AI. All tiers include Node.js, Python, Go, Rust, Docker, Expo CLI, EAS CLI. Perfect for vibe coding: run 'yaver expo start' for hot reload on your phone, 'yaver expo build ios --eas' to build iOS without a Mac. Shake phone → speak what's broken → AI fixes code → hot reload. All credentials stay on your machine, never on Yaver servers. Coming soon."
+              answer="A dedicated Linux dev environment provisioned just for you — not shared with anyone. CPU machines ($49/mo) come with 8 vCPU, 16 GB RAM, 160 GB NVMe. GPU machines ($449/mo) add a dedicated NVIDIA RTX 4000 with 20 GB VRAM, Ollama + Qwen 2.5 Coder 32B, and PersonaPlex 7B for voice AI. All tiers include Node.js, Python, Go, Rust, Docker, Expo CLI, EAS CLI. Perfect for vibe coding: run 'yaver expo start' for hot reload on your phone, 'yaver expo build ios --eas' to build iOS without a Mac. Shake phone → speak what's broken → AI fixes code → hot reload. All credentials stay on your machine, never on Yaver servers. Coming soon."
             />
           </div>
         </div>

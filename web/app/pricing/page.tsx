@@ -295,7 +295,7 @@ function PricingContent() {
               <p className="mt-1 text-xs text-surface-500">Dedicated NVIDIA RTX 4000</p>
             </div>
             <div className="mb-5">
-              <span className="text-3xl font-bold text-surface-50">$299</span>
+              <span className="text-3xl font-bold text-surface-50">$449</span>
               <span className="ml-1 text-sm text-surface-500">/mo</span>
             </div>
             <ul className="mb-6 flex-1 space-y-2.5">
@@ -320,7 +320,7 @@ function PricingContent() {
               rel="noopener noreferrer"
               className="block w-full rounded-lg bg-[#76b900] py-2.5 text-center text-sm font-medium text-white transition-colors hover:bg-[#6aa300]"
             >
-              Subscribe &mdash; $299/mo
+              Subscribe &mdash; $449/mo
             </a>
           </div>
         </div>
@@ -431,7 +431,7 @@ curl http://localhost:8080/health`}</code>
               answer="Yes. Just self-host and point the CLI at your own machine. The managed plans are for people who don't want to manage infrastructure."
             />
             <FAQItem
-              question="Why is GPU $299?"
+              question="Why is GPU $449?"
               answer="Because we provision a dedicated NVIDIA RTX 4000 server entirely for you — no sharing. It includes pre-loaded AI models (Qwen 2.5 Coder, PersonaPlex, Whisper), setup, monitoring, and automatic updates."
             />
             <FAQItem
