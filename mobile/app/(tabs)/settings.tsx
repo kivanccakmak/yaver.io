@@ -71,6 +71,12 @@ export default function SettingsScreen() {
 
   // Integrations
   const [showIntegrations, setShowIntegrations] = useState(false);
+  const [showFeedbackSDK, setShowFeedbackSDK] = useState(false);
+  const [feedbackEnabled, setFeedbackEnabled] = useState(false);
+  const [feedbackTrigger, setFeedbackTrigger] = useState<'shake' | 'floating-button' | 'manual'>('shake');
+  const [feedbackMode, setFeedbackMode] = useState<'live' | 'narrated' | 'batch'>('batch');
+  const [blackBoxEnabled, setBlackBoxEnabled] = useState(false);
+  const [feedbackVoice, setFeedbackVoice] = useState(true);
   const [intgConfig, setIntgConfig] = useState<Record<string, any>>({});
   const [intgLoading, setIntgLoading] = useState(false);
   const [intgSaving, setIntgSaving] = useState(false);
@@ -137,6 +143,20 @@ export default function SettingsScreen() {
           if (tunnels.length > 0) {
             quicClient.setTunnelServers(tunnels);
           }
+        } catch {}
+      }
+    });
+    // Load feedback SDK config
+    const fbKey = user?.id ? `@yaver/u/${user.id}/feedback_config` : "@yaver/feedback_config";
+    AsyncStorage.getItem(fbKey).then((raw) => {
+      if (raw) {
+        try {
+          const cfg = JSON.parse(raw);
+          setFeedbackEnabled(cfg.enabled ?? false);
+          setFeedbackTrigger(cfg.trigger ?? 'shake');
+          setFeedbackMode(cfg.feedbackMode ?? 'batch');
+          setBlackBoxEnabled(cfg.blackBox ?? false);
+          setFeedbackVoice(cfg.voiceEnabled ?? true);
         } catch {}
       }
     });
@@ -1939,6 +1959,145 @@ export default function SettingsScreen() {
                       <Text style={{ color: "#fff", fontWeight: "600", fontSize: 14 }}>Save Integrations</Text>
                     )}
                   </Pressable>
+                </>
+              )}
+            </View>
+          )}
+        </View>
+
+        {/* Feedback SDK */}
+        <View style={styles.section}>
+          <Pressable
+            onPress={() => setShowFeedbackSDK(!showFeedbackSDK)}
+            style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
+          >
+            <View style={styles.themeRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Feedback SDK</Text>
+                <Text style={{ fontSize: 11, color: c.textMuted, marginTop: 2 }}>
+                  {feedbackEnabled ? `Enabled (${feedbackTrigger}, ${feedbackMode})` : "Disabled"}
+                </Text>
+              </View>
+              <Text style={{ color: c.textMuted }}>{showFeedbackSDK ? "\u25B2" : "\u25BC"}</Text>
+            </View>
+          </Pressable>
+
+          {showFeedbackSDK && (
+            <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 4, padding: 16 }]}>
+              {/* Enable/Disable */}
+              <View style={[styles.themeRow, { marginBottom: 16 }]}>
+                <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Enable Feedback SDK</Text>
+                <Switch
+                  value={feedbackEnabled}
+                  onValueChange={async (val) => {
+                    setFeedbackEnabled(val);
+                    const fbKey = user?.id ? `@yaver/u/${user.id}/feedback_config` : "@yaver/feedback_config";
+                    const cfg = { enabled: val, trigger: feedbackTrigger, feedbackMode, blackBox: blackBoxEnabled, voiceEnabled: feedbackVoice };
+                    await AsyncStorage.setItem(fbKey, JSON.stringify(cfg));
+                  }}
+                  trackColor={{ true: c.accent }}
+                />
+              </View>
+
+              {feedbackEnabled && (
+                <>
+                  {/* Trigger mode */}
+                  <Text style={[styles.sectionLabel, { color: c.textMuted, marginBottom: 8 }]}>Trigger</Text>
+                  <View style={{ flexDirection: "row", gap: 8, marginBottom: 16 }}>
+                    {(["shake", "floating-button", "manual"] as const).map((t) => (
+                      <Pressable
+                        key={t}
+                        onPress={async () => {
+                          setFeedbackTrigger(t);
+                          const fbKey = user?.id ? `@yaver/u/${user.id}/feedback_config` : "@yaver/feedback_config";
+                          const cfg = { enabled: feedbackEnabled, trigger: t, feedbackMode, blackBox: blackBoxEnabled, voiceEnabled: feedbackVoice };
+                          await AsyncStorage.setItem(fbKey, JSON.stringify(cfg));
+                        }}
+                        style={{
+                          flex: 1,
+                          paddingVertical: 8,
+                          borderRadius: 8,
+                          alignItems: "center" as const,
+                          backgroundColor: feedbackTrigger === t ? c.accent + "30" : c.bgInput,
+                          borderWidth: 1,
+                          borderColor: feedbackTrigger === t ? c.accent : c.border,
+                        }}
+                      >
+                        <Text style={{ fontSize: 12, color: feedbackTrigger === t ? c.accent : c.textSecondary }}>
+                          {t === "floating-button" ? "Float" : t === "shake" ? "Shake" : "Manual"}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+
+                  {/* Feedback mode */}
+                  <Text style={[styles.sectionLabel, { color: c.textMuted, marginBottom: 8 }]}>Mode</Text>
+                  <View style={{ flexDirection: "row", gap: 8, marginBottom: 16 }}>
+                    {(["live", "narrated", "batch"] as const).map((m) => (
+                      <Pressable
+                        key={m}
+                        onPress={async () => {
+                          setFeedbackMode(m);
+                          const fbKey = user?.id ? `@yaver/u/${user.id}/feedback_config` : "@yaver/feedback_config";
+                          const cfg = { enabled: feedbackEnabled, trigger: feedbackTrigger, feedbackMode: m, blackBox: blackBoxEnabled, voiceEnabled: feedbackVoice };
+                          await AsyncStorage.setItem(fbKey, JSON.stringify(cfg));
+                        }}
+                        style={{
+                          flex: 1,
+                          paddingVertical: 8,
+                          borderRadius: 8,
+                          alignItems: "center" as const,
+                          backgroundColor: feedbackMode === m ? c.accent + "30" : c.bgInput,
+                          borderWidth: 1,
+                          borderColor: feedbackMode === m ? c.accent : c.border,
+                        }}
+                      >
+                        <Text style={{ fontSize: 12, color: feedbackMode === m ? c.accent : c.textSecondary }}>
+                          {m.charAt(0).toUpperCase() + m.slice(1)}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+
+                  {/* Black Box streaming */}
+                  <View style={[styles.themeRow, { marginBottom: 16 }]}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Black Box Streaming</Text>
+                      <Text style={{ fontSize: 11, color: c.textMuted, marginTop: 2 }}>
+                        Stream logs, crashes, navigation to agent
+                      </Text>
+                    </View>
+                    <Switch
+                      value={blackBoxEnabled}
+                      onValueChange={async (val) => {
+                        setBlackBoxEnabled(val);
+                        const fbKey = user?.id ? `@yaver/u/${user.id}/feedback_config` : "@yaver/feedback_config";
+                        const cfg = { enabled: feedbackEnabled, trigger: feedbackTrigger, feedbackMode, blackBox: val, voiceEnabled: feedbackVoice };
+                        await AsyncStorage.setItem(fbKey, JSON.stringify(cfg));
+                      }}
+                      trackColor={{ true: c.accent }}
+                    />
+                  </View>
+
+                  {/* Voice */}
+                  <View style={[styles.themeRow, { marginBottom: 8 }]}>
+                    <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Voice Input</Text>
+                    <Switch
+                      value={feedbackVoice}
+                      onValueChange={async (val) => {
+                        setFeedbackVoice(val);
+                        const fbKey = user?.id ? `@yaver/u/${user.id}/feedback_config` : "@yaver/feedback_config";
+                        const cfg = { enabled: feedbackEnabled, trigger: feedbackTrigger, feedbackMode, blackBox: blackBoxEnabled, voiceEnabled: val };
+                        await AsyncStorage.setItem(fbKey, JSON.stringify(cfg));
+                      }}
+                      trackColor={{ true: c.accent }}
+                    />
+                  </View>
+
+                  <Text style={{ fontSize: 11, color: c.textMuted, marginTop: 8 }}>
+                    Settings apply to the embedded Yaver Feedback SDK. The SDK captures screen recordings,
+                    voice notes, crash stack traces, and app logs — sending them to your connected AI agent for automatic fixes.
+                  </Text>
                 </>
               )}
             </View>

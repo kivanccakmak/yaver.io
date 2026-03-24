@@ -3843,8 +3843,9 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 					// Try to refresh token first
 					if refreshErr := RefreshToken(baseURL, token); refreshErr != nil {
 						if !authExpiredLogged {
-							log.Println("[auth] WARNING: Auth token expired! Run 'yaver auth' to re-authenticate.")
-							log.Println("[auth] The agent will continue running but the device will appear offline.")
+							log.Println("[auth] WARNING: Auth token expired or revoked.")
+							log.Println("[auth] This can happen if you signed out from all devices or your session expired.")
+							log.Println("[auth] Run 'yaver auth' to re-authenticate. The agent will continue running but the device will appear offline.")
 							authExpiredLogged = true
 						}
 					} else {
