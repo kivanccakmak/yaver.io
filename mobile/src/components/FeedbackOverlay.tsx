@@ -15,37 +15,38 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../context/AuthContext";
 import { useDevice } from "../context/DeviceContext";
 
-const BUTTON_SIZE = 40;
-const DEFAULT_COLOR = "#6366f1"; // indigo — Yaver brand
+const BUTTON_SIZE = 46;
+const PANEL_WIDTH = 280;
 
 /**
- * Global feedback overlay — draggable debug console button.
+ * Global feedback overlay — draggable indigo "y" debug button.
+ * Reads config from AsyncStorage. Appears when Feedback SDK is enabled.
  *
- * When user enables Feedback SDK in Settings, this appears as a
- * hot-pink terminal-style ">_" button in the top-right corner.
- * Tap to expand chat panel. Drag to reposition.
- *
- * Distinctively styled so it's never confused with app UI:
- * - Hot pink default (customizable via settings)
- * - Terminal prompt icon ">_"
- * - Green/red connection dot
+ * Panel auto-positions: opens left when button is near right edge,
+ * opens right when near left edge.
  */
 export function FeedbackOverlay() {
   const { user, token } = useAuth();
   const { activeDevice, connectionStatus } = useDevice();
   const [enabled, setEnabled] = useState(false);
-  const [buttonColor, setButtonColor] = useState(DEFAULT_COLOR);
+  const [buttonColor, setButtonColor] = useState("#6366f1");
   const [chatOpen, setChatOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
-  const [lastResponse, setLastResponse] = useState<string | null>(null);
+  const [output, setOutput] = useState<string[]>([]);
   const [reloading, setReloading] = useState(false);
   const isDragging = useRef(false);
+  const buttonPosX = useRef(0);
 
   const { width: screenWidth } = Dimensions.get("window");
-  const pan = useRef(
-    new Animated.ValueXY({ x: screenWidth - BUTTON_SIZE - 10, y: 90 })
-  ).current;
+  const startX = screenWidth - BUTTON_SIZE - 10;
+  const pan = useRef(new Animated.ValueXY({ x: startX, y: 90 })).current;
+
+  // Track button X position for panel alignment
+  useEffect(() => {
+    const id = pan.x.addListener(({ value }) => { buttonPosX.current = value; });
+    return () => pan.x.removeListener(id);
+  }, [pan.x]);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -64,7 +65,7 @@ export function FeedbackOverlay() {
     })
   ).current;
 
-  // Load and poll config from AsyncStorage
+  // Load config — reset state on re-enable
   useEffect(() => {
     if (!user?.id) return;
     const key = `@yaver/u/${user.id}/feedback_config`;
@@ -73,65 +74,130 @@ export function FeedbackOverlay() {
         const raw = await AsyncStorage.getItem(key);
         if (!raw) return;
         const cfg = JSON.parse(raw);
-        setEnabled(cfg.enabled === true);
+        const newEnabled = cfg.enabled === true;
+        if (newEnabled && !enabled) {
+          // Re-enable: reset chat state
+          setChatOpen(false);
+          setOutput([]);
+          setMessage("");
+          setSending(false);
+        }
+        setEnabled(newEnabled);
         if (cfg.buttonColor) setButtonColor(cfg.buttonColor);
       } catch {}
     };
     load();
     const interval = setInterval(load, 2000);
     return () => clearInterval(interval);
-  }, [user?.id]);
+  }, [user?.id, enabled]);
 
   const agentUrl = activeDevice ? `http://${activeDevice.host}:${activeDevice.port}` : null;
   const isConnected = connectionStatus === "connected" && !!agentUrl;
 
+  const addOutput = useCallback((line: string) => {
+    setOutput((prev) => [...prev.slice(-8), line]); // keep last 9 lines
+  }, []);
+
   const handleTap = useCallback(() => {
     if (isDragging.current) return;
     setChatOpen((prev) => !prev);
-    setLastResponse(null);
   }, []);
 
+  // Send message → create task → poll for output
   const handleSend = useCallback(async () => {
     if (!message.trim() || !agentUrl || !token) return;
+    const msg = message.trim();
     setSending(true);
-    setLastResponse(null);
+    setMessage("");
     Keyboard.dismiss();
+    addOutput(`> ${msg}`);
+
     try {
       const resp = await fetch(`${agentUrl}/tasks`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ title: message.trim(), source: "feedback-chat" }),
+        body: JSON.stringify({ title: msg, source: "feedback-console" }),
       });
-      if (resp.ok) {
-        const data = await resp.json();
-        setLastResponse(`> task ${data.id ?? "ok"}`);
-      } else {
-        setLastResponse(`> err ${resp.status}`);
+      if (!resp.ok) {
+        addOutput(`err: ${resp.status}`);
+        setSending(false);
+        return;
       }
-      setMessage("");
+      const data = await resp.json();
+      const taskId = data.id ?? data.task?.id;
+      if (!taskId) {
+        addOutput("task created (no id)");
+        setSending(false);
+        return;
+      }
+      addOutput(`task ${taskId} started...`);
+
+      // Poll task output for up to 30s
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        try {
+          const statusResp = await fetch(`${agentUrl}/tasks/${taskId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!statusResp.ok) {
+            clearInterval(poll);
+            setSending(false);
+            return;
+          }
+          const task = await statusResp.json();
+          const t = task.task ?? task;
+
+          if (t.status === "finished" || t.status === "failed" || t.status === "stopped") {
+            // Get the last bit of output
+            const out = t.output ?? t.rawOutput ?? "";
+            if (out) {
+              const lines = out.split("\n").filter((l: string) => l.trim());
+              const last3 = lines.slice(-3);
+              for (const l of last3) addOutput(l.slice(0, 60));
+            }
+            addOutput(t.status === "finished" ? "done." : `${t.status}.`);
+            clearInterval(poll);
+            setSending(false);
+          } else if (attempts >= 15) {
+            addOutput("running in background...");
+            clearInterval(poll);
+            setSending(false);
+          }
+        } catch {
+          clearInterval(poll);
+          setSending(false);
+        }
+      }, 2000);
     } catch (e) {
-      setLastResponse(`> fail: ${String(e).slice(0, 40)}`);
-    } finally {
+      addOutput(`fail: ${String(e).slice(0, 40)}`);
       setSending(false);
     }
-  }, [message, agentUrl, token]);
+  }, [message, agentUrl, token, addOutput]);
 
+  // Reload
   const handleReload = useCallback(async () => {
     if (!agentUrl || !token) return;
     setReloading(true);
+    addOutput("> reload");
     try {
-      await fetch(`${agentUrl}/exec`, {
+      const resp = await fetch(`${agentUrl}/exec`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ command: "reload", type: "hot-reload" }),
       });
-      setLastResponse("> reload ok");
-    } catch {
-      setLastResponse("> reload fail");
+      if (resp.ok) {
+        const data = await resp.json();
+        addOutput(data.output ?? data.message ?? "reload triggered");
+      } else {
+        addOutput(`reload err: ${resp.status}`);
+      }
+    } catch (e) {
+      addOutput(`reload fail: ${String(e).slice(0, 30)}`);
     } finally {
       setReloading(false);
     }
-  }, [agentUrl, token]);
+  }, [agentUrl, token, addOutput]);
 
   const handleDisable = useCallback(async () => {
     if (!user?.id) return;
@@ -146,30 +212,47 @@ export function FeedbackOverlay() {
 
   if (!enabled) return null;
 
-  // Button tint based on connection
-  const btnBg = isConnected ? buttonColor : `${buttonColor}88`;
+  // Panel alignment: if button is in right half, panel opens to the left
+  const panelOnLeft = buttonPosX.current > screenWidth / 2;
+  const btnBg = isConnected ? buttonColor : `${buttonColor}66`;
 
   return (
     <Animated.View
-      style={[styles.root, { transform: [{ translateX: pan.x }, { translateY: pan.y }] }]}
+      style={[
+        styles.root,
+        { transform: [{ translateX: pan.x }, { translateY: pan.y }] },
+        panelOnLeft ? { alignItems: "flex-end" } : { alignItems: "flex-start" },
+      ]}
       {...panResponder.panHandlers}
     >
-      {/* Chat panel */}
+      {/* Panel */}
       {chatOpen && (
-        <View style={styles.panel}>
+        <View style={[styles.panel, { borderColor: `${buttonColor}44`, shadowColor: buttonColor }]}>
           {/* Header */}
           <View style={styles.headerRow}>
-            <Text style={styles.headerTitle}>yaver debug</Text>
-            <View style={[styles.dotSmall, isConnected ? styles.green : styles.red]} />
+            <Text style={[styles.headerTitle, { color: buttonColor }]}>yaver debug</Text>
+            <View style={[styles.dot, isConnected ? styles.green : styles.red]} />
             <Text style={styles.headerStatus}>{isConnected ? "live" : "off"}</Text>
-            <TouchableOpacity onPress={handleDisable} style={styles.xBtn}>
-              <Text style={styles.xBtnText}>\u2715</Text>
+            <TouchableOpacity onPress={() => setChatOpen(false)} style={styles.xBtn}>
+              <Text style={styles.xBtnText}>{"\u2715"}</Text>
             </TouchableOpacity>
           </View>
 
-          {/* Terminal-style input */}
+          {/* Output area */}
+          {output.length > 0 && (
+            <View style={styles.outputArea}>
+              {output.map((line, i) => (
+                <Text key={i} style={[styles.outputLine, line.startsWith(">") && { color: "#9ca3af" }]}>
+                  {line}
+                </Text>
+              ))}
+              {sending && <ActivityIndicator color={buttonColor} size="small" style={{ marginTop: 4 }} />}
+            </View>
+          )}
+
+          {/* Input */}
           <View style={styles.inputRow}>
-            <Text style={styles.prompt}>&gt;</Text>
+            <Text style={[styles.prompt, { color: buttonColor }]}>&gt;</Text>
             <TextInput
               style={styles.input}
               placeholder="tell the agent..."
@@ -180,19 +263,15 @@ export function FeedbackOverlay() {
               returnKeyType="send"
             />
             <TouchableOpacity
-              style={[styles.goBtn, (sending || !message.trim()) && styles.dim]}
+              style={[styles.goBtn, { backgroundColor: buttonColor }, (sending || !message.trim()) && styles.dim]}
               onPress={handleSend}
               disabled={sending || !message.trim() || !isConnected}
             >
-              {sending ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Text style={styles.goBtnText}>run</Text>
-              )}
+              <Text style={styles.goBtnText}>run</Text>
             </TouchableOpacity>
           </View>
 
-          {/* Quick actions */}
+          {/* Actions */}
           <View style={styles.actionsRow}>
             <TouchableOpacity
               style={[styles.actionBtn, !isConnected && styles.dim]}
@@ -201,19 +280,20 @@ export function FeedbackOverlay() {
             >
               <Text style={styles.actionText}>{reloading ? "..." : "reload"}</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() => setOutput([])}
+            >
+              <Text style={styles.actionText}>clear</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.actionBtn} onPress={handleDisable}>
               <Text style={[styles.actionText, { color: "#f87171" }]}>quit</Text>
             </TouchableOpacity>
           </View>
-
-          {/* Output */}
-          {lastResponse && (
-            <Text style={styles.output}>{lastResponse}</Text>
-          )}
         </View>
       )}
 
-      {/* The button — terminal-style >_ icon */}
+      {/* Button */}
       <TouchableOpacity
         style={[styles.button, { backgroundColor: btnBg }]}
         activeOpacity={0.7}
@@ -230,12 +310,11 @@ const styles = StyleSheet.create({
   root: {
     position: "absolute",
     zIndex: 99999,
-    alignItems: "flex-end",
   },
   button: {
     width: BUTTON_SIZE,
     height: BUTTON_SIZE,
-    borderRadius: 10,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
     shadowColor: "#000",
@@ -246,7 +325,7 @@ const styles = StyleSheet.create({
   },
   buttonIcon: {
     color: "#fff",
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: "800",
     fontStyle: "italic",
   },
@@ -254,122 +333,90 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: -2,
     right: -2,
-    width: 9,
-    height: 9,
+    width: 10,
+    height: 10,
     borderRadius: 5,
     borderWidth: 1.5,
     borderColor: "#000",
   },
   green: { backgroundColor: "#22c55e" },
   red: { backgroundColor: "#ef4444" },
-  // Panel — dark terminal style
+  // Panel
   panel: {
-    width: 260,
+    width: PANEL_WIDTH,
     backgroundColor: "#0a0a0a",
     borderRadius: 12,
     padding: 10,
     marginBottom: 6,
     borderWidth: 1,
-    borderColor: "#ec489944",
-    shadowColor: "#ec4899",
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.15,
+    shadowOpacity: 0.2,
     shadowRadius: 12,
     elevation: 12,
   },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 8,
+    marginBottom: 6,
     gap: 5,
   },
   headerTitle: {
     flex: 1,
+    fontSize: 13,
+    fontWeight: "800",
+    fontStyle: "italic",
+  },
+  dot: { width: 7, height: 7, borderRadius: 4 },
+  headerStatus: { fontSize: 10, color: "#555", fontFamily: "Courier" },
+  xBtn: { paddingHorizontal: 6, paddingVertical: 2 },
+  xBtnText: { color: "#555", fontSize: 14 },
+  // Output
+  outputArea: {
+    backgroundColor: "#111",
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 6,
+    maxHeight: 140,
+  },
+  outputLine: {
     fontSize: 11,
-    fontWeight: "700",
-    color: "#6366f1",
+    color: "#22c55e",
     fontFamily: "Courier",
-    textTransform: "uppercase",
-    letterSpacing: 1,
+    lineHeight: 16,
   },
-  dotSmall: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  headerStatus: {
-    fontSize: 10,
-    color: "#666",
-    fontFamily: "Courier",
-  },
-  xBtn: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  xBtnText: {
-    color: "#666",
-    fontSize: 12,
-  },
+  // Input
   inputRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
     marginBottom: 6,
   },
-  prompt: {
-    color: "#6366f1",
-    fontSize: 14,
-    fontWeight: "700",
-    fontFamily: "Courier",
-  },
+  prompt: { fontSize: 16, fontWeight: "700", fontFamily: "Courier" },
   input: {
     flex: 1,
     backgroundColor: "#111",
     borderRadius: 6,
     paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingVertical: 7,
     color: "#e5e5e5",
-    fontSize: 12,
+    fontSize: 13,
     fontFamily: "Courier",
     borderWidth: 1,
     borderColor: "#222",
   },
-  goBtn: {
-    backgroundColor: "#6366f1",
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  goBtnText: {
-    color: "#fff",
-    fontSize: 11,
-    fontWeight: "700",
-    fontFamily: "Courier",
-  },
+  goBtn: { borderRadius: 6, paddingHorizontal: 12, paddingVertical: 7 },
+  goBtnText: { color: "#fff", fontSize: 12, fontWeight: "700", fontFamily: "Courier" },
   dim: { opacity: 0.3 },
-  actionsRow: {
-    flexDirection: "row",
-    gap: 4,
-  },
+  // Actions
+  actionsRow: { flexDirection: "row", gap: 4 },
   actionBtn: {
     flex: 1,
-    paddingVertical: 5,
+    paddingVertical: 6,
     borderRadius: 6,
     alignItems: "center",
     backgroundColor: "#111",
     borderWidth: 1,
     borderColor: "#1a1a1a",
   },
-  actionText: {
-    fontSize: 10,
-    color: "#888",
-    fontWeight: "600",
-    fontFamily: "Courier",
-  },
-  output: {
-    marginTop: 6,
-    fontSize: 11,
-    color: "#22c55e",
-    fontFamily: "Courier",
-  },
+  actionText: { fontSize: 11, color: "#888", fontWeight: "600", fontFamily: "Courier" },
 });
