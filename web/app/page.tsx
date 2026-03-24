@@ -55,7 +55,11 @@ function WaitlistButton({ plan }: { plan: string }) {
       <input
         type="email" placeholder="your@email.com" value={email}
         onChange={(e) => setEmail(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") handleSubmit();
+          if (e.key === "Escape") setShowInput(false);
+        }}
+        onBlur={() => { if (!email) setShowInput(false); }}
         className="flex-1 rounded-lg border border-surface-700 bg-surface-900 px-3 py-2 text-sm text-surface-200 placeholder:text-surface-600 focus:border-[#6366f1] focus:outline-none"
         autoFocus
       />
@@ -64,6 +68,12 @@ function WaitlistButton({ plan }: { plan: string }) {
         className="rounded-lg bg-[#6366f1] px-4 py-2 text-sm font-medium text-white hover:bg-[#5558e6] disabled:opacity-50"
       >
         {loading ? "..." : "Go"}
+      </button>
+      <button
+        onClick={() => setShowInput(false)}
+        className="rounded-lg border border-surface-700 px-2 py-2 text-sm text-surface-500 hover:text-surface-200"
+      >
+        {"\u2715"}
       </button>
     </div>
   );
