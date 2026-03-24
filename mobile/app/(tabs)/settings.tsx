@@ -73,10 +73,11 @@ export default function SettingsScreen() {
   const [showIntegrations, setShowIntegrations] = useState(false);
   const [showFeedbackSDK, setShowFeedbackSDK] = useState(false);
   const [feedbackEnabled, setFeedbackEnabled] = useState(false);
-  const [feedbackTrigger, setFeedbackTrigger] = useState<'shake' | 'floating-button' | 'manual'>('shake');
-  const [feedbackMode, setFeedbackMode] = useState<'live' | 'narrated' | 'batch'>('batch');
+  const [feedbackTrigger, setFeedbackTrigger] = useState<'shake' | 'floating-button' | 'manual'>('floating-button');
+  const [feedbackMode, setFeedbackMode] = useState<'live' | 'narrated' | 'batch'>('live');
   const [blackBoxEnabled, setBlackBoxEnabled] = useState(false);
   const [feedbackVoice, setFeedbackVoice] = useState(true);
+  const [feedbackButtonColor, setFeedbackButtonColor] = useState("#ec4899");
   const [intgConfig, setIntgConfig] = useState<Record<string, any>>({});
   const [intgLoading, setIntgLoading] = useState(false);
   const [intgSaving, setIntgSaving] = useState(false);
@@ -153,10 +154,11 @@ export default function SettingsScreen() {
         try {
           const cfg = JSON.parse(raw);
           setFeedbackEnabled(cfg.enabled ?? false);
-          setFeedbackTrigger(cfg.trigger ?? 'shake');
-          setFeedbackMode(cfg.feedbackMode ?? 'batch');
+          setFeedbackTrigger(cfg.trigger ?? 'floating-button');
+          setFeedbackMode(cfg.feedbackMode ?? 'live');
           setBlackBoxEnabled(cfg.blackBox ?? false);
           setFeedbackVoice(cfg.voiceEnabled ?? true);
+          if (cfg.buttonColor) setFeedbackButtonColor(cfg.buttonColor);
         } catch {}
       }
     });
@@ -2094,9 +2096,33 @@ export default function SettingsScreen() {
                     />
                   </View>
 
-                  <Text style={{ fontSize: 11, color: c.textMuted, marginTop: 8 }}>
-                    Settings apply to the embedded Yaver Feedback SDK. The SDK captures screen recordings,
-                    voice notes, crash stack traces, and app logs — sending them to your connected AI agent for automatic fixes.
+                  {/* Button color */}
+                  <Text style={[styles.sectionLabel, { color: c.textMuted, marginTop: 12, marginBottom: 8 }]}>Button Color</Text>
+                  <View style={{ flexDirection: "row", gap: 8 }}>
+                    {["#ec4899", "#6366f1", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6"].map((color) => (
+                      <Pressable
+                        key={color}
+                        onPress={async () => {
+                          setFeedbackButtonColor(color);
+                          const fbKey = user?.id ? `@yaver/u/${user.id}/feedback_config` : "@yaver/feedback_config";
+                          const raw = await AsyncStorage.getItem(fbKey);
+                          const cfg = raw ? JSON.parse(raw) : {};
+                          cfg.buttonColor = color;
+                          await AsyncStorage.setItem(fbKey, JSON.stringify(cfg));
+                        }}
+                        style={{
+                          width: 32, height: 32, borderRadius: 16,
+                          backgroundColor: color,
+                          borderWidth: 2,
+                          borderColor: feedbackButtonColor === color ? "#fff" : "transparent",
+                        }}
+                      />
+                    ))}
+                  </View>
+
+                  <Text style={{ fontSize: 11, color: c.textMuted, marginTop: 12 }}>
+                    The debug button appears as a draggable &gt;_ terminal icon.
+                    Tap to expand the console. Send tasks, trigger hot reload, or disable the SDK.
                   </Text>
                 </>
               )}

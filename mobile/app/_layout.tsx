@@ -4,6 +4,7 @@ import React from "react";
 import { AuthProvider } from "../src/context/AuthContext";
 import { DeviceProvider } from "../src/context/DeviceContext";
 import { ThemeProvider, useTheme } from "../src/context/ThemeContext";
+import { FeedbackOverlay } from "../src/components/FeedbackOverlay";
 
 function InnerLayout() {
   const { isDark, colors } = useTheme();
@@ -17,6 +18,7 @@ function InnerLayout() {
           animation: "fade",
         }}
       />
+      <FeedbackOverlay />
     </>
   );
 }
