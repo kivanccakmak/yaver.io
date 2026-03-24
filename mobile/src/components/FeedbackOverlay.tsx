@@ -35,6 +35,7 @@ export function FeedbackOverlay() {
   const [sending, setSending] = useState(false);
   const [output, setOutput] = useState<string[]>([]);
   const [reloading, setReloading] = useState(false);
+  const [fullSize, setFullSize] = useState(false);
   const isDragging = useRef(false);
   const buttonPosX = useRef(0);
 
@@ -263,40 +264,54 @@ export function FeedbackOverlay() {
     >
       {/* Panel */}
       {chatOpen && (
-        <View style={[styles.panel, { borderColor: `${buttonColor}44`, shadowColor: buttonColor }]}>
+        <View style={[
+          fullSize ? styles.panelFull : styles.panel,
+          { borderColor: `${buttonColor}44`, shadowColor: buttonColor },
+          fullSize && { width: screenWidth - 24, position: "absolute", right: -(screenWidth - BUTTON_SIZE - 24), top: BUTTON_SIZE + 8 },
+        ]}>
           {/* Header */}
           <View style={styles.headerRow}>
             <Text style={[styles.headerTitle, { color: buttonColor }]}>yaver debug</Text>
             <View style={[styles.dot, isConnected ? styles.green : styles.red]} />
             <Text style={styles.headerStatus}>{isConnected ? "live" : "off"}</Text>
-            <TouchableOpacity onPress={() => setChatOpen(false)} style={styles.xBtn}>
+            <TouchableOpacity onPress={() => setFullSize(!fullSize)} style={styles.xBtn}>
+              <Text style={styles.xBtnText}>{fullSize ? "\u25A1" : "\u2197"}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { setChatOpen(false); setFullSize(false); }} style={styles.xBtn}>
               <Text style={styles.xBtnText}>{"\u2715"}</Text>
             </TouchableOpacity>
           </View>
 
           {/* Output area */}
-          {output.length > 0 && (
-            <View style={styles.outputArea}>
-              {output.map((line, i) => (
-                <Text key={i} style={[styles.outputLine, line.startsWith(">") && { color: "#9ca3af" }]}>
-                  {line}
-                </Text>
-              ))}
-              {sending && <ActivityIndicator color={buttonColor} size="small" style={{ marginTop: 4 }} />}
-            </View>
-          )}
+          <View style={[styles.outputArea, fullSize && styles.outputAreaFull]}>
+            {output.length > 0 ? output.map((line, i) => (
+              <Text key={i} style={[
+                styles.outputLine,
+                fullSize && styles.outputLineFull,
+                line.startsWith(">") && { color: "#9ca3af" },
+              ]}>
+                {line}
+              </Text>
+            )) : (
+              <Text style={[styles.outputLine, { color: "#333" }]}>
+                {isConnected ? "connected. type a message or use actions below." : "not connected to agent."}
+              </Text>
+            )}
+            {sending && <ActivityIndicator color={buttonColor} size="small" style={{ marginTop: 4 }} />}
+          </View>
 
           {/* Input */}
           <View style={styles.inputRow}>
             <Text style={[styles.prompt, { color: buttonColor }]}>&gt;</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, fullSize && styles.inputFull]}
               placeholder="tell the agent..."
               placeholderTextColor="#444"
               value={message}
               onChangeText={setMessage}
               onSubmitEditing={handleSend}
               returnKeyType="send"
+              multiline={fullSize}
             />
             <TouchableOpacity
               style={[styles.goBtn, { backgroundColor: buttonColor }, (sending || !message.trim()) && styles.dim]}
@@ -310,7 +325,7 @@ export function FeedbackOverlay() {
           {/* Action cards */}
           <View style={styles.cardRow}>
             <TouchableOpacity
-              style={[styles.card, !isConnected && styles.dim]}
+              style={[styles.card, fullSize && styles.cardFull, !isConnected && styles.dim]}
               onPress={handleReload}
               disabled={sending || !isConnected}
             >
@@ -318,7 +333,7 @@ export function FeedbackOverlay() {
               <Text style={styles.cardLabel}>Hot Reload</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.card, !isConnected && styles.dim]}
+              style={[styles.card, fullSize && styles.cardFull, !isConnected && styles.dim]}
               onPress={() => handleBuild("ios")}
               disabled={sending || !isConnected}
             >
@@ -326,7 +341,7 @@ export function FeedbackOverlay() {
               <Text style={styles.cardLabel}>Build iOS</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.card, !isConnected && styles.dim]}
+              style={[styles.card, fullSize && styles.cardFull, !isConnected && styles.dim]}
               onPress={() => handleBuild("android")}
               disabled={sending || !isConnected}
             >
@@ -395,7 +410,7 @@ const styles = StyleSheet.create({
   },
   green: { backgroundColor: "#22c55e" },
   red: { backgroundColor: "#ef4444" },
-  // Panel
+  // Panel — mini
   panel: {
     width: PANEL_WIDTH,
     backgroundColor: "#0a0a0a",
@@ -407,6 +422,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 12,
     elevation: 12,
+  },
+  // Panel — full size
+  panelFull: {
+    backgroundColor: "#0a0a0a",
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 15,
   },
   headerRow: {
     flexDirection: "row",
@@ -474,6 +500,11 @@ const styles = StyleSheet.create({
   },
   cardIcon: { fontSize: 18, marginBottom: 2 },
   cardLabel: { fontSize: 10, color: "#999", fontWeight: "600", fontFamily: "Courier" },
+  cardFull: { paddingVertical: 14 },
+  // Full-size overrides
+  outputAreaFull: { maxHeight: 300, minHeight: 160 },
+  outputLineFull: { fontSize: 13, lineHeight: 20 },
+  inputFull: { fontSize: 15, paddingVertical: 10 },
   actionsRow: { flexDirection: "row", gap: 4 },
   actionBtn: {
     flex: 1,
