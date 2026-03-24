@@ -859,10 +859,16 @@ func runServe(args []string) {
 	// Check for auto-update before forking
 	checkAutoUpdate(cfg)
 
-	// Validate token before forking
+	// Validate token before forking — try refresh if expired, but never exit
 	if _, err := ValidateTokenUser(cfg.ConvexSiteURL, cfg.AuthToken); err != nil {
-		fmt.Fprintf(os.Stderr, "Token expired or invalid. Run 'yaver auth' to re-authenticate.\n")
-		os.Exit(1)
+		// Try refreshing the token first
+		if refreshErr := RefreshToken(cfg.ConvexSiteURL, cfg.AuthToken); refreshErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: token validation failed (%v). The agent will start but the device may appear offline.\n", err)
+			fmt.Fprintf(os.Stderr, "Run 'yaver auth' to re-authenticate. The agent will NOT sign you out automatically.\n")
+			// Continue anyway — the heartbeat loop will keep retrying and the user can re-auth
+		} else {
+			fmt.Println("Token refreshed successfully.")
+		}
 	}
 
 	// If not debug mode, fork into background
@@ -2664,9 +2670,10 @@ func runStatus() {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("Auth:     expired\n")
+		fmt.Printf("Auth:     session expired (agent still running)\n")
 		fmt.Println()
-		fmt.Println("Session expired. Run 'yaver auth' to re-authenticate.")
+		fmt.Println("Your session expired but the agent is still running locally.")
+		fmt.Println("Run 'yaver auth' to refresh. Only 'yaver signout' will clear your credentials.")
 		return
 	}
 
