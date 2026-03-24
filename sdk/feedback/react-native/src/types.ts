@@ -3,6 +3,23 @@ export interface FeedbackConfig {
   agentUrl?: string;
   /** Auth token for the Yaver agent */
   authToken: string;
+  /**
+   * Convex site URL for cloud IP resolution.
+   * When set, the SDK fetches the agent's IP from Convex instead of
+   * requiring a hardcoded agentUrl. Works with cloud machines (CPU/GPU)
+   * where the IP is managed by Yaver.
+   *
+   * Set this OR agentUrl — not both. If both are set, agentUrl wins.
+   *
+   * @example
+   * convexUrl: 'https://your-app.convex.site'
+   */
+  convexUrl?: string;
+  /**
+   * Preferred device ID to connect to (from Convex device list).
+   * If omitted with convexUrl, connects to the first online device.
+   */
+  preferredDeviceId?: string;
   /** How feedback collection is triggered */
   trigger?: 'shake' | 'floating-button' | 'manual';
   /** Enable/disable the SDK. Defaults to __DEV__ */
@@ -30,6 +47,17 @@ export interface FeedbackConfig {
    * raw audio is attached to the feedback report.
    */
   voiceEnabled?: boolean;
+  /**
+   * Maximum number of captured errors to keep in memory (ring buffer).
+   * Oldest errors are evicted when the buffer is full.
+   * Default: 5.
+   *
+   * Errors are captured via `YaverFeedback.attachError()` or
+   * `YaverFeedback.wrapErrorHandler()`. The SDK never auto-hooks global
+   * error handlers — this avoids conflicts with Sentry, Crashlytics,
+   * Bugsnag, or any other error tracking tool.
+   */
+  maxCapturedErrors?: number;
 }
 
 export interface FeedbackBundle {
@@ -40,6 +68,22 @@ export interface FeedbackBundle {
   /** Transcribed text from voice annotation (if STT/S2S provider is available on agent). */
   audioTranscript?: string;
   screenshots: string[];
+  /** Captured errors with stack traces, attached automatically when captureErrors is enabled. */
+  errors?: CapturedError[];
+}
+
+/** An error captured by the SDK's global error handler. */
+export interface CapturedError {
+  /** Error message. */
+  message: string;
+  /** Parsed stack frames (e.g. "at CheckoutButton.handlePress (CheckoutScreen.tsx:47)"). */
+  stack: string[];
+  /** Whether this was a fatal (unrecoverable) error. */
+  isFatal: boolean;
+  /** Unix timestamp in milliseconds when the error occurred. */
+  timestamp: number;
+  /** Optional developer-attached context via YaverFeedback.attachError(). */
+  metadata?: Record<string, unknown>;
 }
 
 export interface FeedbackMetadata {

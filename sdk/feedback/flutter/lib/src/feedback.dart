@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
+import 'blackbox.dart';
 import 'discovery.dart';
 import 'feedback_overlay.dart';
 import 'p2p_client.dart';
@@ -47,6 +49,7 @@ class YaverFeedback {
   static GlobalKey? _repaintBoundaryKey;
   static P2PClient? _client;
   static StreamController<String>? _commentaryController;
+  static List<CapturedError> _errorBuffer = [];
 
   /// Initializes the feedback SDK with the given [config].
   ///
@@ -64,6 +67,20 @@ class YaverFeedback {
         authToken: config.authToken,
       );
     }
+
+    // Set up error capture buffer
+    _errorBuffer = [];
+    // NOTE: We intentionally do NOT override FlutterError.onError or
+    // PlatformDispatcher.instance.onError. Sentry, Crashlytics, Firebase,
+    // and other tools all compete for those single-slot handlers.
+    // Hijacking them would break whichever tool the developer already uses,
+    // depending on init order.
+    //
+    // Instead, developers use:
+    //   - YaverFeedback.attachError(error, stackTrace) in catch blocks
+    //   - YaverFeedback.wrapFlutterErrorHandler(existing) to create a
+    //     pass-through wrapper they insert into their own error chain
+    //   - YaverFeedback.wrapPlatformErrorHandler(existing) for async errors
   }
 
   /// Whether [init] has been called.
@@ -88,14 +105,41 @@ class YaverFeedback {
   /// Subscribe to receive real-time commentary from the agent.
   static Stream<String>? get commentaryStream => _commentaryController?.stream;
 
-  /// Enables or disables feedback collection at runtime.
+  static bool _blackBoxWasStreaming = false;
+
+  /// Enables or disables the entire feedback SDK at runtime.
+  ///
+  /// **Disable (false):**
+  /// - Stops BlackBox streaming (flushes remaining events first)
+  /// - Clears error buffer
+  /// - All capture methods become no-ops
+  /// - P2P client stays alive (no reconnection cost on re-enable)
+  ///
+  /// **Enable (true):**
+  /// - Restarts BlackBox if it was running before disable
+  /// - Error buffer starts collecting again
   ///
   /// Throws [StateError] if [init] has not been called.
   static void setEnabled(bool enabled) {
     if (_config == null) {
       throw StateError('YaverFeedback.init() must be called before setEnabled');
     }
+    final wasEnabled = _config!.enabled;
     _config = _config!.copyWith(enabled: enabled);
+
+    if (wasEnabled && !enabled) {
+      // === DISABLE ===
+      _blackBoxWasStreaming = BlackBox.isStreaming;
+      if (BlackBox.isStreaming) {
+        BlackBox.stop();
+      }
+      _errorBuffer.clear();
+    } else if (!wasEnabled && enabled) {
+      // === ENABLE ===
+      if (_blackBoxWasStreaming) {
+        BlackBox.start();
+      }
+    }
   }
 
   /// Sets the [GlobalKey] for the app's [RepaintBoundary] used to capture
@@ -288,6 +332,69 @@ class YaverFeedback {
       _config!.authToken,
       bundle,
     );
+  }
+
+  /// Manually attach an error with optional metadata.
+  /// Use this in catch blocks to give the agent extra context.
+  /// No-op when the SDK is disabled.
+  static void attachError(Object error, StackTrace? stackTrace, {Map<String, dynamic>? metadata}) {
+    if (!(_config?.enabled ?? false)) return;
+    final captured = CapturedError(
+      message: error.toString(),
+      stack: (stackTrace?.toString() ?? '').split('\n').where((l) => l.trim().isNotEmpty).toList(),
+      isFatal: false,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      metadata: metadata,
+    );
+    _errorBuffer.add(captured);
+    final max = _config?.maxCapturedErrors ?? 5;
+    if (_errorBuffer.length > max) {
+      _errorBuffer.removeAt(0);
+    }
+  }
+
+  /// Returns the current captured errors buffer.
+  static List<CapturedError> getCapturedErrors() => List.unmodifiable(_errorBuffer);
+
+  /// Clears the captured errors buffer.
+  static void clearCapturedErrors() => _errorBuffer.clear();
+
+  /// Returns a pass-through [FlutterExceptionHandler] that records the error
+  /// in Yaver's buffer and then calls [next]. Insert this into your existing
+  /// error handler chain without replacing anything.
+  ///
+  /// ```dart
+  /// final previous = FlutterError.onError;
+  /// FlutterError.onError = YaverFeedback.wrapFlutterErrorHandler(previous);
+  /// // Sentry/Crashlytics can still wrap after this — the chain stays intact.
+  /// ```
+  static FlutterExceptionHandler wrapFlutterErrorHandler(
+    FlutterExceptionHandler? next,
+  ) {
+    return (FlutterErrorDetails details) {
+      attachError(
+        details.exception,
+        details.stack,
+      );
+      next?.call(details);
+    };
+  }
+
+  /// Returns a pass-through handler for [PlatformDispatcher.instance.onError]
+  /// that records the error and then calls [next].
+  ///
+  /// ```dart
+  /// final previous = PlatformDispatcher.instance.onError;
+  /// PlatformDispatcher.instance.onError =
+  ///     YaverFeedback.wrapPlatformErrorHandler(previous);
+  /// ```
+  static ErrorCallback wrapPlatformErrorHandler(
+    ErrorCallback? next,
+  ) {
+    return (Object error, StackTrace stack) {
+      attachError(error, stack);
+      return next?.call(error, stack) ?? false; // false = still propagates
+    };
   }
 
   /// Cleans up resources. Call when the SDK is no longer needed.

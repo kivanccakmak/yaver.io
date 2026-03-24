@@ -832,6 +832,9 @@ func runServe(args []string) {
 	dummy := fs.Bool("dummy", false, "Use dummy runner (fake responses for network testing)")
 	relayPassword := fs.String("relay-password", "", "Password for relay server authentication")
 	vaultPass := fs.String("vault-passphrase", "", "Custom vault passphrase (default: derived from auth token)")
+	multiUser := fs.Bool("multi-user", false, "Enable multi-user mode (shared machines)")
+	teamID := fs.String("team", "", "Restrict access to team members (requires --multi-user)")
+	maxUsers := fs.Int("max-users", 0, "Max concurrent users in multi-user mode (0 = unlimited)")
 	fs.Parse(args)
 
 	if *workDir == "." {
@@ -1300,6 +1303,24 @@ func runServe(args []string) {
 	} else {
 		httpServer.feedbackMgr = fbMgr
 		log.Printf("Feedback manager ready (%d existing reports)", len(fbMgr.ListFeedback()))
+	}
+	if bbMgr, err := NewBlackBoxManager(); err != nil {
+		log.Printf("Warning: blackbox unavailable: %v", err)
+	} else {
+		httpServer.blackboxMgr = bbMgr
+		log.Printf("Black box manager ready")
+	}
+	if *multiUser {
+		muMgr, err := NewMultiUserManager(MultiUserConfig{
+			TeamID:   *teamID,
+			MaxUsers: *maxUsers,
+		})
+		if err != nil {
+			log.Printf("Warning: multi-user mode unavailable: %v", err)
+		} else {
+			httpServer.multiUserMgr = muMgr
+			log.Printf("Multi-user mode enabled (team=%q, maxUsers=%d, users=%d)", *teamID, *maxUsers, len(muMgr.ListUsers()))
+		}
 	}
 
 	// Initialize vault (P2P encrypted key store)

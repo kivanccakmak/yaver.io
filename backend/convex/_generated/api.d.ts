@@ -13,6 +13,7 @@ import type * as aiModels from "../aiModels.js";
 import type * as aiRunners from "../aiRunners.js";
 import type * as auth from "../auth.js";
 import type * as authLogs from "../authLogs.js";
+import type * as cloudMachines from "../cloudMachines.js";
 import type * as developerLogs from "../developerLogs.js";
 import type * as deviceCode from "../deviceCode.js";
 import type * as deviceEvents from "../deviceEvents.js";
@@ -28,6 +29,7 @@ import type * as runnerUsage from "../runnerUsage.js";
 import type * as seed from "../seed.js";
 import type * as subscriptions from "../subscriptions.js";
 import type * as survey from "../survey.js";
+import type * as teams from "../teams.js";
 import type * as totp from "../totp.js";
 import type * as userSettings from "../userSettings.js";
 
@@ -43,6 +45,7 @@ declare const fullApi: ApiFromModules<{
   aiRunners: typeof aiRunners;
   auth: typeof auth;
   authLogs: typeof authLogs;
+  cloudMachines: typeof cloudMachines;
   developerLogs: typeof developerLogs;
   deviceCode: typeof deviceCode;
   deviceEvents: typeof deviceEvents;
@@ -58,6 +61,7 @@ declare const fullApi: ApiFromModules<{
   seed: typeof seed;
   subscriptions: typeof subscriptions;
   survey: typeof survey;
+  teams: typeof teams;
   totp: typeof totp;
   userSettings: typeof userSettings;
 }>;

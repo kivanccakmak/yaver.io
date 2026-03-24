@@ -134,14 +134,77 @@ Phone (text result) ← agent HTTP response ← transcribed text ←────
 
 ### Cloud Dev Machine (GPU tier)
 
-Three tiers (all dedicated, no sharing):
-- **CPU Dev Machine** ($29/mo) — 4 vCPU / 8 GB RAM / 80 GB NVMe (Hetzner CX32). Pre-installed: Node.js, Python, Go, Rust, Docker, Expo CLI, EAS CLI.
-- **Pro CPU Machine** ($49/mo) — 8 vCPU / 16 GB RAM / 160 GB NVMe (Hetzner CX42). Everything in CPU, doubled resources.
-- **GPU Dev Machine** ($299/mo) — Dedicated NVIDIA RTX 4000, 20 GB VRAM (Hetzner GEX44). Includes Ollama + Qwen 2.5 Coder 32B, PersonaPlex 7B (voice AI), Whisper (STT). Full local AI stack.
+Two tiers (all dedicated, no sharing):
+- **CPU Machine** ($49/mo) — 8 vCPU / 16 GB RAM / 160 GB NVMe (Hetzner CX42). Pre-installed: Node.js, Python, Go, Rust, Docker, Expo CLI, EAS CLI, Yaver server.
+- **GPU Machine** ($299/mo) — Dedicated NVIDIA RTX 4000, 20 GB VRAM (Hetzner GEX44). Includes Ollama + Qwen 2.5 Coder 32B, PersonaPlex 7B (voice AI), Whisper (STT). Full local AI stack.
 - **Managed Relay** ($10/mo) — shared relay infra, no dedicated server.
-- **Teams** ($15/user/mo, min 3 users) — relay + team admin + centralized billing.
+
+**Multi-user / Team mode**: CPU and GPU machines support `--multi-user` mode for team sharing. Each user gets isolated workspace, tasks, and sessions. GPU resources are shared across team members. See "Multi-User Mode" section below.
 
 **Important**: Never mention Hetzner, server costs, or infrastructure provider in customer-facing content (landing page, CLI output, emails). Customers buy convenience and reliability, not a reseller relationship.
+
+## Feedback SDK (Error Capture + Black Box Streaming)
+
+The Feedback SDK captures visual bug reports from device testing and sends them to the AI agent. Available for React Native, Flutter, and Web.
+
+### Error Capture (observe-only, no conflicts)
+The SDK **never hijacks global error handlers** — no conflicts with Sentry, Crashlytics, Bugsnag, or any other tool. Two explicit patterns:
+- `wrapErrorHandler(existing)` — pass-through wrapper for the error handler chain
+- `attachError(err, metadata)` — manual capture in catch blocks
+- `wrapConsole()` — opt-in console.log/warn/error interception (BlackBox only)
+
+### Black Box Streaming (flight recorder)
+Continuous streaming of all app events to the agent via `/blackbox/events`:
+- Event types: `log`, `error`, `navigation`, `lifecycle`, `network`, `state`, `render`
+- Ring buffer on agent (last 1000 events per device)
+- Injected into fix prompts via `GenerateBlackBoxContext()`
+- Fatal crashes auto-create fix tasks
+- `/blackbox/subscribe` SSE for live log watching
+
+### Key Files
+| File | Purpose |
+|------|---------|
+| `sdk/feedback/react-native/src/BlackBox.ts` | RN black box streaming client |
+| `sdk/feedback/react-native/src/YaverFeedback.ts` | SDK entry, error buffer, wrapErrorHandler |
+| `sdk/feedback/react-native/src/FeedbackModal.tsx` | Modal with hot reload button + streaming indicator |
+| `sdk/feedback/flutter/lib/src/blackbox.dart` | Flutter black box + NavigatorObserver |
+| `sdk/feedback/flutter/lib/src/feedback.dart` | Flutter SDK entry, wrapFlutterErrorHandler |
+| `desktop/agent/blackbox.go` | BlackBoxManager, session management, prompt generation |
+| `desktop/agent/blackbox_http.go` | HTTP: /blackbox/stream, /events, /logs, /subscribe, /context |
+
+## Multi-User Mode (Shared Machines)
+
+Shared CPU/GPU machines support multiple users with isolated workspaces. Each user authenticates with their own OAuth account (Apple/Google/Microsoft) — no shared passwords, no SSH keys.
+
+### How it works
+1. Machine starts with `yaver serve --multi-user --team <teamId>`
+2. Team member connects from Yaver app → token validated against Convex → team membership checked
+3. `MultiUserManager` creates isolated `UserSession` at `/var/yaver/users/yaver-{userId[:8]}/`
+4. Each user gets: own workspace, task queue, feedback reports, AI agent sessions, black box streams
+5. GPU resources (Ollama, PersonaPlex) shared across all users
+
+### Team Management
+- Teams managed via Convex: `teams` + `teamMembers` tables
+- Admin creates team, invites members by email
+- Endpoints: `POST /teams`, `POST /teams/members`, `GET /teams/validate`
+- Agent validates team membership on every request via `GET /auth/validate` (returns `teams[]`)
+
+### Key Files
+| File | Purpose |
+|------|---------|
+| `desktop/agent/multiuser.go` | MultiUserManager, UserSession, workspace isolation |
+| `desktop/agent/multiuser_http.go` | HTTP handlers + multiUserAuth middleware |
+| `backend/convex/teams.ts` | Team CRUD mutations/queries |
+| `backend/convex/cloudMachines.ts` | Machine provisioning mutations/queries |
+| `backend/convex/schema.ts` | teams, teamMembers, cloudMachines tables |
+| `scripts/provision-machine.sh` | Hetzner machine provisioning (dev tools + GPU + Yaver) |
+
+### CLI Flags
+```bash
+yaver serve --multi-user              # Enable multi-user mode
+yaver serve --multi-user --team team_abc  # Restrict to team members
+yaver serve --multi-user --max-users 10   # Limit concurrent users
+```
 
 ## Networking Stack
 

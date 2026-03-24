@@ -29,6 +29,20 @@ const docs = [
     href: "/docs/contributing",
     tags: ["OSS", "PR", "Issues"],
   },
+  {
+    title: "Feedback SDK",
+    description:
+      "Error capture, black box streaming, and visual bug reports. Screen recording + voice + stack traces sent directly to your AI agent.",
+    href: "/docs/feedback-sdk",
+    tags: ["SDK", "React Native", "Flutter", "Errors"],
+  },
+  {
+    title: "Cloud machines",
+    description:
+      "Dedicated CPU ($49/mo) and GPU ($299/mo) dev machines with multi-user team access, shared GPU, and isolated workspaces.",
+    href: "/docs/cloud-machines",
+    tags: ["GPU", "Teams", "Multi-user"],
+  },
 ];
 
 const manualLinks = [

@@ -34,8 +34,10 @@ type HTTPServer struct {
 	tunnelMgr   *TunnelManager
 	testMgr     *TestManager
 	feedbackMgr *FeedbackManager
-	server      *http.Server
-	onShutdown  func() // called when mobile requests agent shutdown
+	blackboxMgr  *BlackBoxManager
+	multiUserMgr *MultiUserManager // nil in single-user mode
+	server       *http.Server
+	onShutdown   func() // called when mobile requests agent shutdown
 
 	// Cache validated tokens (token -> userId) to avoid repeated Convex calls
 	tokenCache sync.Map
@@ -106,6 +108,19 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/feedback", s.auth(s.handleFeedback))
 	mux.HandleFunc("/feedback/stream", s.auth(s.handleFeedbackStream))
 	mux.HandleFunc("/feedback/", s.auth(s.handleFeedbackByID))
+
+	// Black box (flight-recorder streaming from device SDKs)
+	mux.HandleFunc("/blackbox/stream", s.auth(s.handleBlackBoxStream))
+	mux.HandleFunc("/blackbox/events", s.auth(s.handleBlackBoxEvents))
+	mux.HandleFunc("/blackbox/logs", s.auth(s.handleBlackBoxLogs))
+	mux.HandleFunc("/blackbox/subscribe", s.auth(s.handleBlackBoxSubscribe))
+	mux.HandleFunc("/blackbox/context", s.auth(s.handleBlackBoxContext))
+
+	// Multi-user management (shared machines)
+	mux.HandleFunc("/users", s.auth(s.handleMultiUserList))
+	mux.HandleFunc("/users/me", s.auth(s.handleMultiUserMe))
+	mux.HandleFunc("/users/", s.auth(s.handleMultiUserRemove))
+	mux.HandleFunc("/sessions", s.auth(s.handleMultiUserSessions))
 
 	// Voice (real-time speech-to-speech & transcription)
 	mux.HandleFunc("/voice/status", s.auth(s.handleVoiceStatus))

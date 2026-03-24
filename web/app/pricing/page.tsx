@@ -8,9 +8,7 @@ import { useSearchParams } from "next/navigation";
 const CHECKOUT = {
   relay:       "https://yaver.lemonsqueezy.com/checkout/buy/RELAY_PRODUCT_ID",
   cpu:         "https://yaver.lemonsqueezy.com/checkout/buy/CPU_PRODUCT_ID",
-  pro_cpu:     "https://yaver.lemonsqueezy.com/checkout/buy/PRO_CPU_PRODUCT_ID",
   gpu:         "https://yaver.lemonsqueezy.com/checkout/buy/GPU_PRODUCT_ID",
-  teams:       "https://yaver.lemonsqueezy.com/checkout/buy/TEAMS_PRODUCT_ID",
 } as const;
 
 const CONVEX_SITE_URL =
@@ -256,19 +254,18 @@ function PricingContent() {
               <p className="mt-1 text-xs text-surface-500">Your own dedicated dev machine</p>
             </div>
             <div className="mb-5">
-              <span className="text-3xl font-bold text-surface-50">$29</span>
+              <span className="text-3xl font-bold text-surface-50">$49</span>
               <span className="ml-1 text-sm text-surface-500">/mo</span>
-              <span className="ml-2 text-xs text-surface-500">or $49/mo Pro</span>
             </div>
             <ul className="mb-6 flex-1 space-y-2.5">
               {[
-                "4 vCPU / 8 GB RAM / 80 GB NVMe",
-                "Pro: 8 vCPU / 16 GB RAM / 160 GB NVMe",
+                "8 vCPU / 16 GB RAM / 160 GB NVMe",
                 "Ready in minutes, entirely yours",
                 "Node.js, Python, Go, Rust, Docker",
                 "Expo CLI + EAS CLI pre-installed",
                 "Build iOS without a Mac (EAS Build)",
                 "Managed relay included",
+                "Yaver server pre-installed",
                 "Accessible via Yaver app or SSH",
               ].map((f) => (
                 <li key={f} className="flex items-start gap-2 text-xs text-surface-300">
@@ -282,15 +279,7 @@ function PricingContent() {
               rel="noopener noreferrer"
               className="block w-full rounded-lg bg-[#6366f1] py-2.5 text-center text-sm font-medium text-white transition-colors hover:bg-[#5558e6]"
             >
-              Subscribe &mdash; $29/mo
-            </a>
-            <a
-              href={CHECKOUT.pro_cpu}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-2 block text-center text-xs text-surface-500 hover:text-surface-300"
-            >
-              or get Pro ($49/mo) &rarr;
+              Subscribe &mdash; $49/mo
             </a>
           </div>
 
@@ -332,60 +321,6 @@ function PricingContent() {
               className="block w-full rounded-lg bg-[#76b900] py-2.5 text-center text-sm font-medium text-white transition-colors hover:bg-[#6aa300]"
             >
               Subscribe &mdash; $299/mo
-            </a>
-          </div>
-        </div>
-
-        {/* ── Teams + Enterprise ────────────────────────────────── */}
-        <div className="mt-12 grid gap-5 sm:grid-cols-2">
-          <div className="rounded-2xl border border-surface-800 bg-[#1a1d27] p-6">
-            <h3 className="mb-1 text-base font-semibold text-surface-100">Teams</h3>
-            <p className="mb-4 text-xs text-surface-500">
-              $15/user/mo &middot; minimum 3 users
-            </p>
-            <ul className="mb-6 space-y-2">
-              {[
-                "Managed relay for all seats",
-                "Team admin dashboard",
-                "Centralized billing",
-                "Members can add CPU/GPU machines as add-ons",
-              ].map((f) => (
-                <li key={f} className="flex items-start gap-2 text-xs text-surface-300">
-                  <Check /> {f}
-                </li>
-              ))}
-            </ul>
-            <a
-              href={CHECKOUT.teams}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block w-full rounded-lg border border-surface-700 bg-surface-800/50 py-2.5 text-center text-sm font-medium text-surface-300 transition-colors hover:bg-surface-800 hover:text-surface-100"
-            >
-              Subscribe for Teams
-            </a>
-          </div>
-
-          <div className="rounded-2xl border border-surface-800 bg-[#1a1d27] p-6">
-            <h3 className="mb-1 text-base font-semibold text-surface-100">Enterprise</h3>
-            <p className="mb-4 text-xs text-surface-500">Custom pricing</p>
-            <ul className="mb-6 space-y-2">
-              {[
-                "SSO / SAML integration",
-                "SLA with guaranteed uptime",
-                "On-prem deployment support",
-                "Dedicated account manager",
-                "Custom machine configurations",
-              ].map((f) => (
-                <li key={f} className="flex items-start gap-2 text-xs text-surface-300">
-                  <Check /> {f}
-                </li>
-              ))}
-            </ul>
-            <a
-              href="mailto:kivanc.cakmak@simkab.com?subject=Yaver%20Enterprise"
-              className="block w-full rounded-lg border border-surface-700 bg-surface-800/50 py-2.5 text-center text-sm font-medium text-surface-300 transition-colors hover:bg-surface-800 hover:text-surface-100"
-            >
-              Contact Us
             </a>
           </div>
         </div>
@@ -500,8 +435,8 @@ curl http://localhost:8080/health`}</code>
               answer="Because we provision a dedicated NVIDIA RTX 4000 server entirely for you — no sharing. It includes pre-loaded AI models (Qwen 2.5 Coder, PersonaPlex, Whisper), setup, monitoring, and automatic updates."
             />
             <FAQItem
-              question="What's the difference between CPU ($29) and Pro CPU ($49)?"
-              answer="More compute. CPU: 4 vCPU, 8 GB RAM, 80 GB storage. Pro CPU: 8 vCPU, 16 GB RAM, 160 GB storage. Both are dedicated to you only."
+              question="What specs does the CPU Machine have?"
+              answer="8 vCPU, 16 GB RAM, 160 GB NVMe storage. Entirely dedicated to you — no sharing, no noisy neighbors."
             />
             <FAQItem
               question="Is the shared relay good enough?"

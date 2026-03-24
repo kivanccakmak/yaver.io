@@ -28,6 +28,7 @@
 /// ```
 library yaver_feedback;
 
+export 'src/blackbox.dart';
 export 'src/connection_widget.dart';
 export 'src/discovery.dart';
 export 'src/feedback.dart';

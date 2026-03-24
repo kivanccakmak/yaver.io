@@ -13,6 +13,12 @@ export interface FeedbackConfig {
   maxRecordingDuration?: number;
   /** Position of floating button */
   buttonPosition?: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+  /**
+   * Max captured errors in ring buffer. Default: 5.
+   * Errors are captured via YaverFeedback.attachError() or wrapErrorHandler().
+   * The SDK never auto-hooks window.onerror — no conflicts with Sentry, etc.
+   */
+  maxCapturedErrors?: number;
 }
 
 export interface TimelineEvent {
@@ -44,6 +50,17 @@ export interface FeedbackBundle {
   video?: Blob;
   audio?: Blob;
   screenshots: Blob[];
+  /** Captured errors with stack traces. */
+  errors?: CapturedError[];
+}
+
+/** An error captured by the SDK's global error handler. */
+export interface CapturedError {
+  message: string;
+  stack: string[];
+  isFatal: boolean;
+  timestamp: number;
+  metadata?: Record<string, unknown>;
 }
 
 export interface DiscoveryResult {

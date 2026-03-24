@@ -81,12 +81,42 @@ YaverDiscovery.discover(): Promise<DiscoveryResult | null>
 YaverDiscovery.connect(url: string): Promise<DiscoveryResult | null>
 ```
 
+## Error Capture
+
+Capture JS errors with full stack traces and attach them to feedback reports.
+
+**No conflicts with Sentry, Bugsnag, or any other tool.** The SDK never auto-hooks `window.onerror` or `unhandledrejection`. You explicitly insert it into your error chain.
+
+### Wrap the error handler
+
+```typescript
+// Insert Yaver into the error chain
+window.addEventListener('error', (event) => {
+  YaverFeedback.attachError(event.error);
+});
+window.addEventListener('unhandledrejection', (event) => {
+  YaverFeedback.attachError(event.reason);
+});
+```
+
+### Manual attach
+
+```typescript
+try {
+  await riskyOperation();
+} catch (err) {
+  YaverFeedback.attachError(err, { context: 'checkout', cartItems: 3 });
+  throw err;
+}
+```
+
 ## What Gets Captured
 
 - Screen recording (WebM/VP9, via `getDisplayMedia`)
 - Microphone audio (WebM/Opus, for voice annotations)
 - Screenshots with annotations
 - Console errors (automatically)
+- JS errors with stack traces (when `captureErrors` is enabled)
 - Page URL and browser info
 - Timeline of all events
 

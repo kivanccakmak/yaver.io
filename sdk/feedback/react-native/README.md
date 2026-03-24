@@ -170,6 +170,73 @@ In live mode, the feedback modal shows a "Speak to Fix" button. When you tap it:
 
 This enables a hands-free workflow: see a bug, say what to fix, and the agent makes the change.
 
+## Error Capture
+
+Capture JS errors with full stack traces and attach them to feedback reports. The agent gets file names, line numbers, and optional context — goes straight to the right line.
+
+**No conflicts with Sentry, Crashlytics, Bugsnag, or any other tool.** The SDK never auto-hooks global error handlers. You explicitly insert it into your error chain wherever you want.
+
+### Option 1: Wrap the error handler (recommended)
+
+```typescript
+import { ErrorUtils } from 'react-native';
+
+// Insert Yaver into the error chain — works alongside Sentry, Crashlytics, etc.
+const existing = ErrorUtils.getGlobalHandler();
+ErrorUtils.setGlobalHandler(YaverFeedback.wrapErrorHandler(existing));
+
+// Other tools can still wrap after this. The chain stays intact:
+// Sentry → Yaver wrapper → original RN handler
+```
+
+`wrapErrorHandler` returns a pass-through function that records the error in Yaver's ring buffer, then calls the next handler. It never swallows errors.
+
+### Option 2: Manual attach (in catch blocks)
+
+```typescript
+try {
+  await riskyOperation();
+} catch (err) {
+  YaverFeedback.attachError(err, {
+    context: 'checkout-flow',
+    userId: currentUser.id,
+    cartItems: cart.length,
+  });
+  throw err; // still propagate
+}
+```
+
+### What the agent receives
+
+```json
+{
+  "errors": [
+    {
+      "message": "Cannot read property 'id' of undefined",
+      "stack": [
+        "at CheckoutButton.handlePress (CheckoutScreen.tsx:47)",
+        "at processQueue (react-native/Libraries/Renderer/...)"
+      ],
+      "isFatal": false,
+      "timestamp": 1742812200000,
+      "metadata": {
+        "context": "checkout-flow",
+        "cartItems": 3
+      }
+    }
+  ]
+}
+```
+
+### API
+
+| Method | Description |
+|--------|-------------|
+| `attachError(error, metadata?)` | Manually attach an error with optional context |
+| `wrapErrorHandler(next?)` | Returns a pass-through handler for the error chain |
+| `getCapturedErrors()` | Get the current error buffer |
+| `clearCapturedErrors()` | Clear the error buffer |
+
 ## Configuration
 
 ```typescript
@@ -184,6 +251,7 @@ YaverFeedback.init({
   maxRecordingDuration: 120,               // Max recording duration in seconds (default: 120)
   feedbackMode: 'batch',                   // 'live' | 'narrated' | 'batch' (default: 'batch')
   agentCommentaryLevel: 0,                 // 0-10 (default: 0, only relevant in live mode)
+  maxCapturedErrors: 5,                    // Error ring buffer size (default: 5)
 });
 ```
 
@@ -303,6 +371,9 @@ YaverFeedback.setEnabled(false);
 | `getP2PClient()` | Get the P2P client instance |
 | `getFeedbackMode()` | Get the current feedback mode |
 | `getCommentaryLevel()` | Get the agent commentary level (0-10) |
+| `attachError(error, metadata?)` | Manually attach an error with optional context |
+| `getCapturedErrors()` | Get the current captured errors buffer |
+| `clearCapturedErrors()` | Clear the captured errors buffer |
 
 ### YaverDiscovery
 

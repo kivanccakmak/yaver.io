@@ -16,29 +16,47 @@ const SUBNETS = ['192.168.1', '192.168.0', '10.0.0', '10.0.1'];
 const HOST_SUFFIXES = [1, 2, 50, 100, 101, 200];
 
 /**
- * Device discovery for finding Yaver agents on the local network.
+ * Device discovery for finding Yaver agents on the local network or via Convex.
  *
- * Tries a stored connection first, then scans common LAN IPs by probing
- * the agent's `/health` endpoint with a 2s timeout.
+ * Three discovery strategies (tried in order):
+ * 1. **Convex cloud** — fetch agent IP from Convex `/devices/list` (for cloud machines)
+ * 2. **Stored connection** — try cached URL from last successful connection
+ * 3. **LAN scan** — probe common LAN IPs via `/health` endpoint
  */
 export class YaverDiscovery {
   /**
-   * Try stored connection first, then scan common LAN IPs.
-   * Returns the first agent found, or null if none reachable.
+   * Discover an agent. Tries Convex cloud first (if configured),
+   * then stored connection, then LAN scan.
    */
-  static async discover(): Promise<DiscoveryResult | null> {
-    // Try stored connection first
+  static async discover(options?: {
+    convexUrl?: string;
+    authToken?: string;
+    preferredDeviceId?: string;
+  }): Promise<DiscoveryResult | null> {
+    // Strategy 1: Convex cloud discovery (for cloud machines)
+    if (options?.convexUrl && options?.authToken) {
+      const result = await YaverDiscovery.discoverFromConvex(
+        options.convexUrl,
+        options.authToken,
+        options.preferredDeviceId,
+      );
+      if (result) {
+        await YaverDiscovery.store(result);
+        return result;
+      }
+    }
+
+    // Strategy 2: Try stored connection
     const stored = await YaverDiscovery.getStored();
     if (stored) {
       const result = await YaverDiscovery.probe(stored.url);
       if (result) {
         return result;
       }
-      // Stored connection is stale — clear it
       await YaverDiscovery.clear();
     }
 
-    // Scan common LAN IPs in parallel
+    // Strategy 3: Scan common LAN IPs in parallel
     const candidates: string[] = [];
     for (const subnet of SUBNETS) {
       for (const suffix of HOST_SUFFIXES) {
@@ -46,7 +64,6 @@ export class YaverDiscovery {
       }
     }
 
-    // Probe all candidates concurrently — first one wins
     const results = await Promise.allSettled(
       candidates.map((url) => YaverDiscovery.probe(url)),
     );
@@ -59,6 +76,59 @@ export class YaverDiscovery {
     }
 
     return null;
+  }
+
+  /**
+   * Fetch the agent URL from Convex device list or cloud machines.
+   * No hardcoded IPs needed — Convex knows where the agent is.
+   */
+  static async discoverFromConvex(
+    convexUrl: string,
+    authToken: string,
+    preferredDeviceId?: string,
+  ): Promise<DiscoveryResult | null> {
+    const base = convexUrl.replace(/\/$/, '');
+
+    try {
+      // Try cloud machines first (CPU/GPU managed machines)
+      const machinesRes = await fetch(`${base}/machines`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+
+      if (machinesRes.ok) {
+        const { machines } = await machinesRes.json();
+        const activeMachine = (machines ?? []).find(
+          (m: { status: string; serverIp?: string }) => m.status === 'active' && m.serverIp,
+        );
+        if (activeMachine?.serverIp) {
+          const url = `http://${activeMachine.serverIp}:${DEFAULT_PORT}`;
+          const probed = await YaverDiscovery.probe(url);
+          if (probed) return probed;
+        }
+      }
+
+      // Fall back to device list (personal machines registered with Convex)
+      const devicesRes = await fetch(`${base}/devices/list`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+
+      if (!devicesRes.ok) return null;
+      const data = await devicesRes.json();
+      const devices = data.devices ?? data ?? [];
+
+      // Find preferred device or first online one
+      const target = preferredDeviceId
+        ? devices.find((d: { deviceId: string }) => d.deviceId === preferredDeviceId)
+        : devices.find((d: { isOnline: boolean }) => d.isOnline);
+
+      if (!target?.quicHost) return null;
+
+      const port = target.httpPort ?? DEFAULT_PORT;
+      const url = `http://${target.quicHost}:${port}`;
+      return await YaverDiscovery.probe(url);
+    } catch {
+      return null;
+    }
   }
 
   /**

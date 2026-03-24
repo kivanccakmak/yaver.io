@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { YaverFeedback } from './YaverFeedback';
+import { BlackBox } from './BlackBox';
 import { captureScreenshot, startAudioRecording, stopAudioRecording } from './capture';
 import { uploadFeedback } from './upload';
 import { TimelineEvent, DeviceInfo, FeedbackBundle, AgentCommentary } from './types';
@@ -43,6 +44,7 @@ export const FeedbackModal: React.FC = () => {
   const [mode, setMode] = useState<FeedbackMode>('batch');
   const [commentary, setCommentary] = useState<AgentCommentary[]>([]);
   const [isVoiceCommand, setIsVoiceCommand] = useState(false);
+  const [isReloading, setIsReloading] = useState(false);
   const mountedRef = useRef(true);
   const commentaryListRef = useRef<FlatList>(null);
 
@@ -216,6 +218,34 @@ export const FeedbackModal: React.FC = () => {
     }
   }, [isVoiceCommand]);
 
+  const handleReload = useCallback(async () => {
+    const config = YaverFeedback.getConfig();
+    if (!config?.agentUrl) return;
+
+    setIsReloading(true);
+    try {
+      const response = await fetch(`${config.agentUrl.replace(/\/$/, '')}/exec`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ command: 'reload', type: 'hot-reload' }),
+      });
+      if (response.ok) {
+        BlackBox.lifecycle('Hot reload triggered from feedback SDK');
+      }
+    } catch (err) {
+      if (mountedRef.current) {
+        setError('Reload failed: ' + String(err));
+      }
+    } finally {
+      if (mountedRef.current) {
+        setIsReloading(false);
+      }
+    }
+  }, []);
+
   const handleSend = useCallback(async () => {
     const config = YaverFeedback.getConfig();
     if (!config || !config.agentUrl) return;
@@ -241,6 +271,9 @@ export const FeedbackModal: React.FC = () => {
 
       const audioEvent = timeline.find((e) => e.type === 'audio');
 
+      // Include captured errors from the error buffer
+      const capturedErrors = YaverFeedback.getCapturedErrors();
+
       const bundle: FeedbackBundle = {
         metadata: {
           timestamp: new Date().toISOString(),
@@ -249,6 +282,7 @@ export const FeedbackModal: React.FC = () => {
         },
         screenshots,
         audio: audioEvent?.path,
+        errors: capturedErrors.length > 0 ? capturedErrors : undefined,
       };
 
       await uploadFeedback(config.agentUrl, config.authToken, bundle);
@@ -375,6 +409,26 @@ export const FeedbackModal: React.FC = () => {
                 {isRecordingAudio ? 'Stop Recording' : 'Voice Note'}
               </Text>
             </TouchableOpacity>
+          </View>
+
+          {/* Hot Reload + Streaming status */}
+          <View style={styles.actions}>
+            <TouchableOpacity
+              style={[styles.actionButton, styles.reloadButton]}
+              onPress={handleReload}
+              disabled={isReloading}
+            >
+              <Text style={styles.actionText}>
+                {isReloading ? 'Reloading...' : 'Hot Reload'}
+              </Text>
+            </TouchableOpacity>
+
+            <View style={[styles.actionButton, styles.streamingIndicator]}>
+              <View style={[styles.streamingDot, BlackBox.isStreaming && styles.streamingDotActive]} />
+              <Text style={styles.streamingText}>
+                {BlackBox.isStreaming ? 'Streaming' : 'Not streaming'}
+              </Text>
+            </View>
           </View>
 
           {/* Voice command button */}
@@ -596,5 +650,29 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '700',
+  },
+  reloadButton: {
+    backgroundColor: 'rgba(251,191,36,0.2)',
+    borderColor: 'rgba(251,191,36,0.4)',
+  },
+  streamingIndicator: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  streamingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#555',
+    marginRight: 6,
+  },
+  streamingDotActive: {
+    backgroundColor: '#22c55e',
+  },
+  streamingText: {
+    color: '#999',
+    fontSize: 12,
   },
 });

@@ -23,6 +23,7 @@
  */
 
 export { YaverFeedback } from './YaverFeedback';
+export { BlackBox } from './BlackBox';
 export { initExpo } from './expo';
 export { YaverDiscovery } from './Discovery';
 export { P2PClient } from './P2PClient';
@@ -43,6 +44,8 @@ export type {
   AgentCommentary,
   FeedbackStreamEvent,
   VoiceCapability,
+  CapturedError,
 } from './types';
+export type { BlackBoxEvent, BlackBoxConfig } from './BlackBox';
 export type { DiscoveryResult } from './Discovery';
 export type { FeedbackEvent } from './P2PClient';

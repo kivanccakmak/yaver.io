@@ -291,7 +291,19 @@ http.route({
     if (!user) {
       return errorResponse("Unauthorized", 401);
     }
-    return jsonResponse({ user });
+
+    // Also return team memberships (needed by multi-user agents)
+    const authHeader = request.headers.get("Authorization")!;
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+    const userDocId = await ctx.runQuery(api.auth.getUserDocId, { tokenHash });
+
+    let teams: { teamId: string; role: string }[] = [];
+    if (userDocId) {
+      const userTeams = await ctx.runQuery(api.teams.getTeamsForUser, { userId: userDocId });
+      teams = (userTeams || []).map((t: any) => ({ teamId: t.teamId, role: t.role }));
+    }
+
+    return jsonResponse({ user: { ...user, teams } });
   }),
 });
 
@@ -1301,24 +1313,40 @@ http.route({
           currentPeriodEnd: periodEnd,
         });
 
-        // If new subscription, create managed relay
+        // If new subscription, provision the appropriate resource
         if (eventName === "subscription_created") {
-          const password = generateRelayPassword();
-          const relayId = await ctx.runMutation(internal.managedRelays.create, {
-            userId: user._id,
-            subscriptionId: subId,
-            region: payload.meta?.custom_data?.region || "eu",
-            password,
-          });
+          const productType = payload.meta?.custom_data?.product_type || "relay";
+          const region = payload.meta?.custom_data?.region || "eu";
 
-          // Trigger automated provisioning (Hetzner + Cloudflare + SSL)
-          await ctx.scheduler.runAfter(0, internal.provisionRelay.provision, {
-            userId: user._id,
-            subscriptionId: subId,
-            relayId,
-            region: payload.meta?.custom_data?.region || "eu",
-            password,
-          });
+          if (productType === "cpu" || productType === "gpu") {
+            // Cloud dev machine — create and provision
+            const teamId = payload.meta?.custom_data?.team_id;
+            await ctx.runMutation(api.cloudMachines.create, {
+              userId: user._id,
+              machineType: productType,
+              teamId,
+              region,
+              subscriptionId: subId,
+            });
+          } else {
+            // Managed relay (default)
+            const password = generateRelayPassword();
+            const relayId = await ctx.runMutation(internal.managedRelays.create, {
+              userId: user._id,
+              subscriptionId: subId,
+              region,
+              password,
+            });
+
+            // Trigger automated provisioning (Hetzner + Cloudflare + SSL)
+            await ctx.scheduler.runAfter(0, internal.provisionRelay.provision, {
+              userId: user._id,
+              subscriptionId: subId,
+              relayId,
+              region,
+              password,
+            });
+          }
         }
         break;
       }
@@ -1394,6 +1422,192 @@ http.route({
         httpPort: relay.httpPort,
       } : null,
     });
+  }),
+});
+
+// --- Teams (shared machines, multi-user) ---
+
+/** GET /teams — List teams for the authenticated user. */
+http.route({
+  path: "/teams",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+
+    const session = await ctx.runQuery(api.auth.validateSession, { tokenHash });
+    if (!session) return errorResponse("Unauthorized", 401);
+
+    const userDocId = await ctx.runQuery(api.auth.getUserDocId, { tokenHash });
+    if (!userDocId) return errorResponse("User not found", 404);
+
+    const teams = await ctx.runQuery(api.teams.getTeamsForUser, { userId: userDocId });
+    return jsonResponse({ teams });
+  }),
+});
+
+/** POST /teams — Create a team. */
+http.route({
+  path: "/teams",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+
+    const session = await ctx.runQuery(api.auth.validateSession, { tokenHash });
+    if (!session) return errorResponse("Unauthorized", 401);
+
+    const userDocId = await ctx.runQuery(api.auth.getUserDocId, { tokenHash });
+    if (!userDocId) return errorResponse("User not found", 404);
+
+    const body = await request.json();
+    const teamId = await ctx.runMutation(api.teams.create, {
+      name: body.name || "My Team",
+      ownerId: userDocId,
+      plan: body.plan || "cpu",
+      maxMembers: body.maxMembers || 10,
+    });
+
+    return jsonResponse({ teamId });
+  }),
+});
+
+/** POST /teams/members — Add a member to a team. */
+http.route({
+  path: "/teams/members",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+
+    const session = await ctx.runQuery(api.auth.validateSession, { tokenHash });
+    if (!session) return errorResponse("Unauthorized", 401);
+
+    const userDocId = await ctx.runQuery(api.auth.getUserDocId, { tokenHash });
+    if (!userDocId) return errorResponse("User not found", 404);
+
+    const body = await request.json();
+    if (!body.teamId || !body.email) return errorResponse("teamId and email required", 400);
+
+    // Verify caller is team admin
+    const team = await ctx.runQuery(api.teams.getByTeamId, { teamId: body.teamId });
+    if (!team) return errorResponse("Team not found", 404);
+
+    const isMember = await ctx.runQuery(api.teams.isMember, { teamId: body.teamId, userId: userDocId });
+    if (!isMember) return errorResponse("Not a team member", 403);
+
+    try {
+      const result = await ctx.runMutation(api.teams.addMember, {
+        teamId: body.teamId,
+        userEmail: body.email,
+        role: body.role || "member",
+        invitedBy: userDocId,
+      });
+      return jsonResponse(result);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return errorResponse(msg, 400);
+    }
+  }),
+});
+
+/** GET /teams/members?teamId=xxx — List members of a team. */
+http.route({
+  path: "/teams/members",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+
+    const session = await ctx.runQuery(api.auth.validateSession, { tokenHash });
+    if (!session) return errorResponse("Unauthorized", 401);
+
+    const url = new URL(request.url);
+    const teamId = url.searchParams.get("teamId");
+    if (!teamId) return errorResponse("teamId required", 400);
+
+    const members = await ctx.runQuery(api.teams.listMembers, { teamId });
+    return jsonResponse({ members });
+  }),
+});
+
+/** GET /teams/validate?teamId=xxx — Check if authenticated user is a team member.
+ *  Used by the multi-user agent to validate team access. */
+http.route({
+  path: "/teams/validate",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+
+    const session = await ctx.runQuery(api.auth.validateSession, { tokenHash });
+    if (!session) return errorResponse("Unauthorized", 401);
+
+    const userDocId = await ctx.runQuery(api.auth.getUserDocId, { tokenHash });
+    if (!userDocId) return errorResponse("User not found", 404);
+
+    const url = new URL(request.url);
+    const teamId = url.searchParams.get("teamId");
+    if (!teamId) return errorResponse("teamId required", 400);
+
+    const isMember = await ctx.runQuery(api.teams.isMember, { teamId, userId: userDocId });
+    return jsonResponse({ isMember, teamId, userId: session.userId });
+  }),
+});
+
+// --- Cloud Machines ---
+
+/** GET /machines — List cloud machines for the authenticated user. */
+http.route({
+  path: "/machines",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+
+    const session = await ctx.runQuery(api.auth.validateSession, { tokenHash });
+    if (!session) return errorResponse("Unauthorized", 401);
+
+    const userDocId = await ctx.runQuery(api.auth.getUserDocId, { tokenHash });
+    if (!userDocId) return errorResponse("User not found", 404);
+
+    const machines = await ctx.runQuery(api.cloudMachines.listForUser, { userId: userDocId });
+    return jsonResponse({ machines });
+  }),
+});
+
+/** POST /machines — Create a cloud machine (called by webhook or admin). */
+http.route({
+  path: "/machines",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+
+    const session = await ctx.runQuery(api.auth.validateSession, { tokenHash });
+    if (!session) return errorResponse("Unauthorized", 401);
+
+    const userDocId = await ctx.runQuery(api.auth.getUserDocId, { tokenHash });
+    if (!userDocId) return errorResponse("User not found", 404);
+
+    const body = await request.json();
+    const machineId = await ctx.runMutation(api.cloudMachines.create, {
+      userId: userDocId,
+      machineType: body.machineType || "cpu",
+      teamId: body.teamId,
+      region: body.region || "eu",
+      repoUrl: body.repoUrl,
+      sshPublicKey: body.sshPublicKey,
+    });
+
+    return jsonResponse({ machineId });
   }),
 });
 

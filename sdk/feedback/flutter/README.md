@@ -253,6 +253,51 @@ if (path != null) {
 }
 ```
 
+## Error Capture
+
+Capture Flutter and async errors with full stack traces. The agent gets the exact error, stack frames, and optional context.
+
+**No conflicts with Sentry, Crashlytics, Firebase, or any other tool.** The SDK never auto-hooks `FlutterError.onError` or `PlatformDispatcher.instance.onError`. You explicitly insert it into your error chain.
+
+### Option 1: Wrap the error handlers (recommended)
+
+```dart
+// Insert Yaver into the Flutter error chain
+final previous = FlutterError.onError;
+FlutterError.onError = YaverFeedback.wrapFlutterErrorHandler(previous);
+
+// And for async errors
+final prevPlatform = PlatformDispatcher.instance.onError;
+PlatformDispatcher.instance.onError =
+    YaverFeedback.wrapPlatformErrorHandler(prevPlatform);
+
+// Sentry/Crashlytics can still wrap after this — the chain stays intact.
+```
+
+### Option 2: Manual attach (in catch blocks)
+
+```dart
+try {
+  await riskyOperation();
+} catch (e, stack) {
+  YaverFeedback.attachError(e, stack, metadata: {
+    'context': 'checkout-flow',
+    'cartItems': cart.length,
+  });
+  rethrow;
+}
+```
+
+### API
+
+| Method | Description |
+|--------|-------------|
+| `attachError(error, stackTrace, {metadata})` | Manually attach an error |
+| `wrapFlutterErrorHandler(next)` | Returns a pass-through `FlutterExceptionHandler` |
+| `wrapPlatformErrorHandler(next)` | Returns a pass-through `ErrorCallback` |
+| `getCapturedErrors()` | Get the current error buffer |
+| `clearCapturedErrors()` | Clear the error buffer |
+
 ## Configuration Options
 
 | Parameter | Type | Default | Description |
@@ -264,6 +309,7 @@ if (path != null) {
 | `maxRecordingDuration` | `int` | `60` | Max voice recording seconds |
 | `mode` | `FeedbackMode` | `.narrated` | Feedback delivery mode (live, narrated, batch) |
 | `agentCommentaryLevel` | `int` | `5` | Commentary verbosity 0-10 |
+| `maxCapturedErrors` | `int` | `5` | Error ring buffer size |
 
 ## Floating Button
 

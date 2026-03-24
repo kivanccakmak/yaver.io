@@ -233,6 +233,25 @@ func (s *HTTPServer) handleFeedbackFix(w http.ResponseWriter, r *http.Request, f
 		return
 	}
 
+	// Inject black box context if available for this device
+	if s.blackboxMgr != nil {
+		report, ok := s.feedbackMgr.GetFeedback(feedbackID)
+		if ok && report.DeviceInfo.Platform != "" {
+			// Try to find a matching black box session
+			for _, sess := range s.blackboxMgr.ListSessions() {
+				if sess["platform"] == report.DeviceInfo.Platform {
+					if session := s.blackboxMgr.GetSession(sess["deviceId"].(string)); session != nil {
+						bbCtx := session.GenerateBlackBoxContext(100)
+						if bbCtx != "" {
+							prompt = bbCtx + "\n" + prompt
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+
 	// Create a task with the generated prompt
 	if s.taskMgr != nil {
 		task, err := s.taskMgr.CreateTask(prompt, "", "", "feedback", "", "", nil)

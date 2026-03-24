@@ -28,6 +28,15 @@ const (
 // 0 = silent, 5 = suggests fixes on obvious issues, 10 = comments on everything it sees.
 type AgentCommentaryLevel int
 
+// CapturedError represents an error with stack trace captured by the SDK.
+type CapturedError struct {
+	Message   string                 `json:"message"`
+	Stack     []string               `json:"stack"`
+	IsFatal   bool                   `json:"isFatal"`
+	Timestamp int64                  `json:"timestamp"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+}
+
 // FeedbackReport represents a visual bug report from device testing.
 type FeedbackReport struct {
 	ID          string          `json:"id"`
@@ -37,6 +46,7 @@ type FeedbackReport struct {
 	Transcript  string          `json:"transcript,omitempty"`
 	Screenshots []string        `json:"screenshots,omitempty"`
 	Timeline    []TimelineEvent `json:"timeline,omitempty"`
+	Errors      []CapturedError `json:"errors,omitempty"`
 	DeviceInfo  DeviceFBInfo    `json:"deviceInfo"`
 	AppVersion  string          `json:"appVersion,omitempty"`
 	BuildID     string          `json:"buildId,omitempty"`
@@ -257,6 +267,26 @@ func (fm *FeedbackManager) GenerateFixPrompt(id string) (string, error) {
 		sb.WriteString("\n")
 	}
 
+	// Captured errors
+	if len(r.Errors) > 0 {
+		sb.WriteString("Captured errors:\n")
+		for i, e := range r.Errors {
+			fatal := ""
+			if e.IsFatal {
+				fatal = " [FATAL]"
+			}
+			sb.WriteString(fmt.Sprintf("  Error %d%s: %s\n", i+1, fatal, e.Message))
+			for _, frame := range e.Stack {
+				sb.WriteString(fmt.Sprintf("    %s\n", frame))
+			}
+			if len(e.Metadata) > 0 {
+				metaJSON, _ := json.Marshal(e.Metadata)
+				sb.WriteString(fmt.Sprintf("    context: %s\n", string(metaJSON)))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
 	// Transcript
 	if r.Transcript != "" {
 		sb.WriteString("Voice transcript:\n")
@@ -279,6 +309,7 @@ func (fm *FeedbackManager) GenerateFixPrompt(id string) (string, error) {
 	}
 
 	sb.WriteString("Please fix these issues based on the user's feedback. The user tested the app on their physical device and recorded these problems.\n")
+	sb.WriteString("Note: If a live black box stream is active for this device, the full app log context (console logs, navigation history, error traces, network requests) will be included separately.\n")
 
 	return sb.String(), nil
 }

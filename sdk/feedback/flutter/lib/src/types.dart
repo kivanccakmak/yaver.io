@@ -26,10 +26,20 @@ enum FeedbackMode {
 /// Configuration for the Yaver Feedback SDK.
 class FeedbackConfig {
   /// The URL of the Yaver agent HTTP server (e.g. `http://192.168.1.100:18080`).
+  /// Set this OR [convexUrl] — not both. If both are set, agentUrl wins.
   final String agentUrl;
 
   /// Auth token for the Yaver agent.
   final String authToken;
+
+  /// Convex site URL for cloud IP resolution.
+  /// When set, the SDK fetches the agent's IP from Convex instead of
+  /// requiring a hardcoded agentUrl. Works with cloud machines (CPU/GPU).
+  final String? convexUrl;
+
+  /// Preferred device ID to connect to (from Convex device list).
+  /// If omitted with [convexUrl], connects to the first online device.
+  final String? preferredDeviceId;
 
   /// How to trigger the feedback flow.
   final FeedbackTrigger trigger;
@@ -48,38 +58,101 @@ class FeedbackConfig {
   /// `0` disables commentary, `10` shows everything. Default is `5`.
   final int agentCommentaryLevel;
 
+  /// Maximum number of captured errors to keep in memory (ring buffer).
+  /// Default: `5`.
+  ///
+  /// Errors are captured via [YaverFeedback.attachError] or
+  /// [YaverFeedback.wrapFlutterErrorHandler]. The SDK never auto-hooks
+  /// global error handlers — this avoids conflicts with Sentry,
+  /// Crashlytics, Firebase, or any other error tracking tool.
+  final int maxCapturedErrors;
+
   /// Creates a new [FeedbackConfig].
   const FeedbackConfig({
     required this.agentUrl,
     required this.authToken,
+    this.convexUrl,
+    this.preferredDeviceId,
     this.trigger = FeedbackTrigger.floatingButton,
     this.enabled = true,
     this.maxRecordingDuration = 60,
     this.mode = FeedbackMode.narrated,
     this.agentCommentaryLevel = 5,
+    this.maxCapturedErrors = 5,
   });
 
   /// Returns a copy of this config with the given fields replaced.
   FeedbackConfig copyWith({
     String? agentUrl,
     String? authToken,
+    String? convexUrl,
+    String? preferredDeviceId,
     FeedbackTrigger? trigger,
     bool? enabled,
     int? maxRecordingDuration,
     FeedbackMode? mode,
     int? agentCommentaryLevel,
+    int? maxCapturedErrors,
   }) {
     return FeedbackConfig(
       agentUrl: agentUrl ?? this.agentUrl,
       authToken: authToken ?? this.authToken,
+      convexUrl: convexUrl ?? this.convexUrl,
+      preferredDeviceId: preferredDeviceId ?? this.preferredDeviceId,
       trigger: trigger ?? this.trigger,
       enabled: enabled ?? this.enabled,
       maxRecordingDuration: maxRecordingDuration ?? this.maxRecordingDuration,
       mode: mode ?? this.mode,
       agentCommentaryLevel:
           agentCommentaryLevel ?? this.agentCommentaryLevel,
+      maxCapturedErrors: maxCapturedErrors ?? this.maxCapturedErrors,
     );
   }
+}
+
+/// An error captured by the SDK's global error handler.
+class CapturedError {
+  /// Error message.
+  final String message;
+
+  /// Parsed stack frames.
+  final List<String> stack;
+
+  /// Whether this was a fatal (unrecoverable) error.
+  final bool isFatal;
+
+  /// Unix timestamp in milliseconds when the error occurred.
+  final int timestamp;
+
+  /// Optional developer-attached context.
+  final Map<String, dynamic>? metadata;
+
+  /// Creates a new [CapturedError].
+  const CapturedError({
+    required this.message,
+    required this.stack,
+    required this.isFatal,
+    required this.timestamp,
+    this.metadata,
+  });
+
+  /// Deserializes a [CapturedError] from a JSON map.
+  factory CapturedError.fromJson(Map<String, dynamic> json) => CapturedError(
+        message: json['message'] as String,
+        stack: (json['stack'] as List).cast<String>(),
+        isFatal: json['isFatal'] as bool? ?? false,
+        timestamp: json['timestamp'] as int,
+        metadata: json['metadata'] as Map<String, dynamic>?,
+      );
+
+  /// Serializes this error to a JSON map.
+  Map<String, dynamic> toJson() => {
+        'message': message,
+        'stack': stack,
+        'isFatal': isFatal,
+        'timestamp': timestamp,
+        if (metadata != null) 'metadata': metadata,
+      };
 }
 
 /// A single event in the feedback timeline.
@@ -180,6 +253,9 @@ class FeedbackBundle {
   /// Device information.
   final DeviceInfo deviceInfo;
 
+  /// Captured errors with stack traces.
+  final List<CapturedError> errors;
+
   /// Creates a new [FeedbackBundle].
   const FeedbackBundle({
     required this.metadata,
@@ -188,6 +264,7 @@ class FeedbackBundle {
     this.screenshotPaths = const [],
     this.timeline = const [],
     required this.deviceInfo,
+    this.errors = const [],
   });
 
   /// Serializes this bundle's metadata to a JSON map.
@@ -201,5 +278,7 @@ class FeedbackBundle {
         'screenshotPaths': screenshotPaths,
         'timeline': timeline.map((e) => e.toJson()).toList(),
         'deviceInfo': deviceInfo.toJson(),
+        if (errors.isNotEmpty)
+          'errors': errors.map((e) => e.toJson()).toList(),
       };
 }

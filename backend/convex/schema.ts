@@ -259,29 +259,59 @@ export default defineSchema({
     .index("by_subscription", ["subscriptionId"])
     .index("by_status", ["status"]),
 
+  // Teams (shared machines, centralized billing)
+  teams: defineTable({
+    teamId: v.string(),             // short unique ID (e.g. "team_abc123")
+    name: v.string(),               // "Acme Engineering"
+    ownerId: v.id("users"),         // admin/billing owner
+    plan: v.string(),               // "cpu" | "gpu" | "custom"
+    maxMembers: v.number(),         // seat limit
+    subscriptionId: v.optional(v.id("subscriptions")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_teamId", ["teamId"])
+    .index("by_owner", ["ownerId"]),
+
+  // Team membership (who has access to which team's machines)
+  teamMembers: defineTable({
+    teamId: v.string(),
+    userId: v.id("users"),
+    role: v.string(),               // "admin" | "member"
+    invitedBy: v.optional(v.id("users")),
+    joinedAt: v.number(),
+  }).index("by_team", ["teamId"])
+    .index("by_user", ["userId"])
+    .index("by_team_user", ["teamId", "userId"]),
+
   // Cloud dev machines (provisioned on Hetzner, subscription required)
   cloudMachines: defineTable({
     userId: v.id("users"),
+    teamId: v.optional(v.string()),   // if team-owned, all team members can access
     subscriptionId: v.optional(v.id("subscriptions")),
-    status: v.string(), // "provisioning" | "active" | "stopping" | "stopped" | "error"
+    machineType: v.string(),          // "cpu" | "gpu"
+    status: v.string(),               // "provisioning" | "active" | "stopping" | "stopped" | "error"
+    multiUser: v.optional(v.boolean()), // true for shared team machines
     hetznerServerId: v.optional(v.string()),
     serverIp: v.optional(v.string()),
     hostname: v.optional(v.string()),
-    region: v.string(), // "eu" | "us"
-    tools: v.array(v.string()), // ["nodejs", "python", "go", "docker", ...]
-    repoUrl: v.optional(v.string()), // cloned on provisioning
+    region: v.string(),               // "eu" | "us"
+    tools: v.array(v.string()),       // ["nodejs", "python", "go", "docker", ...]
+    repoUrl: v.optional(v.string()),  // cloned on provisioning
     sshPublicKey: v.optional(v.string()),
     specs: v.optional(v.object({
       vcpu: v.number(),
       ramGb: v.number(),
       diskGb: v.number(),
-      arch: v.string(), // "arm64" | "amd64"
+      arch: v.string(),               // "arm64" | "amd64"
+      gpu: v.optional(v.string()),    // "rtx4000" | null
+      vram: v.optional(v.number()),   // GB
     })),
     createdAt: v.number(),
     updatedAt: v.number(),
     lastHealthCheck: v.optional(v.number()),
     errorMessage: v.optional(v.string()),
-  }).index("by_user", ["userId"]),
+  }).index("by_user", ["userId"])
+    .index("by_team", ["teamId"]),
 
   mobileStreamLogs: defineTable({
     userId: v.optional(v.string()),
