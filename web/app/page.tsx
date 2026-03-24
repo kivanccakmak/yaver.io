@@ -184,11 +184,12 @@ export default function HomePage() {
               In your pocket.
             </h1>
             <p className="mx-auto max-w-2xl text-base leading-relaxed text-surface-400 md:text-lg">
-              Build mobile apps from your phone. Send tasks to Claude Code, Codex, or any AI agent
-              on your dev machine. Instant builds, hot reload, test on your real device &mdash;
-              record bugs and the AI sees your screen and fixes them live.
-              Ship to TestFlight or Play Store without opening your laptop.
-              Encrypted P2P, no cloud, no middleman.
+              Yaver connects your phone to AI coding agents running on your own hardware.
+              Send a task from anywhere &mdash; the agent writes the code, your machine compiles it,
+              and the result appears on your phone via P2P hot reload. No rebuild cycle, no TestFlight
+              wait, no cloud dependency. When something looks wrong, shake your phone, narrate the bug,
+              and the AI watches your screen in real time and pushes a fix. Everything runs on machines
+              you control. Your code never leaves them.
             </p>
           </div>
 
