@@ -716,11 +716,34 @@ http.route({
   }),
 });
 
-// ── Logout (delete all sessions) ─────────────────────────────────────
+// ── Logout (current session only — other devices stay signed in) ─────
 
-/** POST /auth/logout — Delete all sessions for the authenticated user. */
+/** POST /auth/logout — Delete the current session only.
+ *  Mobile signout does NOT kill CLI or other device sessions. */
 http.route({
   path: "/auth/logout",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+
+    try {
+      await ctx.runMutation(api.auth.deleteSession, { tokenHash });
+      return jsonResponse({ ok: true });
+    } catch {
+      return errorResponse("Failed to logout", 500);
+    }
+  }),
+});
+
+/** POST /auth/logout-all — Delete ALL sessions (sign out everywhere).
+ *  Only for explicit "sign out all devices" action. */
+http.route({
+  path: "/auth/logout-all",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
     const authHeader = request.headers.get("Authorization");
