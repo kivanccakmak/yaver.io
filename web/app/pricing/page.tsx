@@ -4,12 +4,8 @@ import Link from "next/link";
 import { Suspense, useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 
-/* ── LemonSqueezy checkout URLs ─────────────────────────────────── */
-const CHECKOUT = {
-  relay:       "https://yaver.lemonsqueezy.com/checkout/buy/RELAY_PRODUCT_ID",
-  cpu:         "https://yaver.lemonsqueezy.com/checkout/buy/CPU_PRODUCT_ID",
-  gpu:         "https://yaver.lemonsqueezy.com/checkout/buy/GPU_PRODUCT_ID",
-} as const;
+/* ── Waitlist config (replace with LemonSqueezy checkout URLs when ready) ── */
+const WAITLIST_ENABLED = true; // flip to false when Lemon Squeezy is live
 
 const CONVEX_SITE_URL =
   process.env.NEXT_PUBLIC_CONVEX_SITE_URL ||
@@ -113,6 +109,77 @@ function ProvisioningProgress() {
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ── Waitlist button (replaces checkout links until Lemon Squeezy is live) ── */
+function WaitlistButton({ plan, className = "" }: { plan: string; className?: string }) {
+  const [email, setEmail] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [showInput, setShowInput] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!email.includes("@")) return;
+    setLoading(true);
+    try {
+      await fetch(`${CONVEX_SITE_URL}/dev/log`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "web",
+          level: "info",
+          tag: "waitlist",
+          message: `Waitlist signup: ${plan}`,
+          data: JSON.stringify({ email, plan, timestamp: new Date().toISOString() }),
+        }),
+      });
+      setSubmitted(true);
+    } catch {
+      setSubmitted(true); // show success even if logging fails
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (submitted) {
+    return (
+      <div className={`block w-full rounded-lg border border-[#22c55e]/40 bg-[#22c55e]/10 py-2.5 text-center text-sm font-medium text-[#22c55e] ${className}`}>
+        You&apos;re on the list!
+      </div>
+    );
+  }
+
+  if (!showInput) {
+    return (
+      <button
+        onClick={() => setShowInput(true)}
+        className={`block w-full rounded-lg py-2.5 text-center text-sm font-medium transition-colors ${className}`}
+      >
+        Join Waitlist
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex gap-2">
+      <input
+        type="email"
+        placeholder="your@email.com"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+        className="flex-1 rounded-lg border border-surface-700 bg-surface-900 px-3 py-2 text-sm text-surface-200 placeholder:text-surface-600 focus:border-[#6366f1] focus:outline-none"
+        autoFocus
+      />
+      <button
+        onClick={handleSubmit}
+        disabled={loading || !email.includes("@")}
+        className="rounded-lg bg-[#6366f1] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#5558e6] disabled:opacity-50"
+      >
+        {loading ? "..." : "Go"}
+      </button>
     </div>
   );
 }
@@ -232,14 +299,7 @@ function PricingContent() {
                 </li>
               ))}
             </ul>
-            <a
-              href={CHECKOUT.relay}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block w-full rounded-lg border border-surface-700 bg-surface-800/50 py-2.5 text-center text-sm font-medium text-surface-300 transition-colors hover:bg-surface-800 hover:text-surface-100"
-            >
-              Subscribe
-            </a>
+            <WaitlistButton plan="relay" className="border border-surface-700 bg-surface-800/50 text-surface-300 hover:bg-surface-800 hover:text-surface-100" />
           </div>
 
           {/* CPU Dev Machine */}
@@ -273,14 +333,7 @@ function PricingContent() {
                 </li>
               ))}
             </ul>
-            <a
-              href={CHECKOUT.cpu}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block w-full rounded-lg bg-[#6366f1] py-2.5 text-center text-sm font-medium text-white transition-colors hover:bg-[#5558e6]"
-            >
-              Subscribe &mdash; $49/mo
-            </a>
+            <WaitlistButton plan="cpu" className="bg-[#6366f1] text-white hover:bg-[#5558e6]" />
           </div>
 
           {/* GPU Dev Machine */}
@@ -314,14 +367,7 @@ function PricingContent() {
                 </li>
               ))}
             </ul>
-            <a
-              href={CHECKOUT.gpu}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block w-full rounded-lg bg-[#76b900] py-2.5 text-center text-sm font-medium text-white transition-colors hover:bg-[#6aa300]"
-            >
-              Subscribe &mdash; $449/mo
-            </a>
+            <WaitlistButton plan="gpu" className="bg-[#76b900] text-white hover:bg-[#6aa300]" />
           </div>
         </div>
 
