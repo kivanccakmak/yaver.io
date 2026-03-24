@@ -117,6 +117,117 @@ const faqs = [
       },
     ],
   },
+  {
+    category: "Build, Test & Deploy",
+    items: [
+      {
+        q: "Can I build mobile apps from my phone?",
+        a: "Yes. `yaver build flutter apk`, `yaver build gradle apk`, `yaver build xcode ipa`, `yaver build rn android` — all run on your dev machine. The artifact (APK, IPA, AAB) transfers P2P to your phone. On Android, tap to install directly. On iOS, use TestFlight or OTA install via relay. Flutter, React Native, Expo, native Android/iOS, or any custom build command.",
+      },
+      {
+        q: "How does hot reload work remotely?",
+        a: "`yaver debug flutter` starts Flutter's debug server on your dev machine and creates a P2P tunnel. Your phone connects to localhost:9100 through the tunnel — Flutter's hot reload works exactly as if you were sitting at your desk. Same for React Native (Metro on :8081). Latency is ~50ms through relay, ~5ms on LAN.",
+      },
+      {
+        q: "Can I run tests from my phone?",
+        a: "`yaver test unit` auto-detects your test framework and runs it. Supported: Flutter, Jest, Vitest, pytest, Go test, Cargo test, XCTest, Espresso, Playwright, Cypress, Maestro. For Android tests, Yaver auto-boots an emulator if none is running. For iOS, it boots a simulator. Results stream to your phone with pass/fail counts.",
+      },
+      {
+        q: "How does the full pipeline work?",
+        a: "`yaver pipeline --test --deploy p2p` does everything: auto-detects your platform, builds the artifact, runs tests, and if they pass, makes it available for P2P download to your phone. One command. If tests fail, the pipeline stops. You can also deploy to TestFlight (`--deploy testflight`), Play Store (`--deploy playstore`), or trigger GitHub Actions (`--deploy github`).",
+      },
+      {
+        q: "What about TestFlight and Play Store?",
+        a: "`yaver build push testflight` uploads your IPA directly. `yaver build push playstore` uploads your AAB to the internal testing track. Credentials (App Store Connect API key, Google Play service account) are stored in the P2P encrypted vault — never on our servers. You can also use `yaver deploy --ci github` to trigger GitHub Actions, or `--ci gitlab` for GitLab CI.",
+      },
+      {
+        q: "Why not just use GitHub Actions or GitLab CI?",
+        a: "You can — Yaver supports both. But P2P builds are free and instant. GitHub Actions gives you 2,000 free minutes/month then charges $0.008/min. GitLab CI gives 400 free minutes then charges. Yaver P2P: unlimited, free, forever. Your dev machine does the work. No cloud compute needed. Use CI when you want it, skip it when you don't.",
+      },
+      {
+        q: "Does Yaver support Expo?",
+        a: "Yes. `yaver build expo-android` and `yaver build expo-ios` for Expo managed workflow projects. For bare workflow, use the standard Flutter/RN/Gradle/Xcode build commands.",
+      },
+      {
+        q: "What is repo switching?",
+        a: "`yaver repo list` shows all git repos discovered on your machine. `yaver repo switch my-app` changes the agent's working directory to that project. Auto-discovers repos under ~/. No manual path typing, no GitHub/GitLab integration needed. Works with any git repo.",
+      },
+    ],
+  },
+  {
+    category: "Feedback & Visual Bug Reports",
+    items: [
+      {
+        q: "What is the visual feedback loop?",
+        a: "After deploying a build to your phone, you test it and find bugs. Record your screen and narrate what you see — 'this button is broken', 'the layout overlaps'. Send the report to your AI agent via P2P. The agent sees the screen recording, reads your voice transcript, sees the screenshots and timeline, and fixes the bugs. Rebuild. Repeat. Like pair programming, but the AI watches over your shoulder.",
+      },
+      {
+        q: "What are the three feedback modes?",
+        a: "Full Interactive (Live): your screen and voice stream to the agent in real-time. The agent's vision model detects bugs proactively and hot-reloads fixes as you speak. Say 'make this bigger' and it happens. Semi Interactive (Narrated): screen and voice stream live, agent comments on what it sees, but doesn't auto-fix. Say 'fix it now' for specific issues or 'keep in mind for later'. Post Mode (Batch): record everything offline. No streaming. Compress and upload when done. Agent processes the full session afterwards. Best for slow connections or detailed QA.",
+      },
+      {
+        q: "What are agent commentary levels?",
+        a: "A scale from 0-10 controlling how proactive the agent is. Level 0: silent, only responds when asked. Level 3: notes crashes and critical errors. Level 5: comments on obvious UI issues. Level 7: comments on layout, performance, accessibility. Level 10: comments on everything it sees. Like adjusting how chatty your pair programmer is.",
+      },
+      {
+        q: "Can I give voice commands while testing?",
+        a: "Yes. In Full Interactive mode, say things like 'make this button bigger', 'fix this layout', 'run the tests', or 'push to TestFlight'. The agent hears your voice (via on-device speech-to-text), creates a task, and executes it. Hot reload pushes the changes to your phone in seconds.",
+      },
+      {
+        q: "How does the agent see my screen?",
+        a: "On iOS, ReplayKit captures the screen (system permission required once). On Android, MediaProjection API captures the screen. On web, the browser's getDisplayMedia API is used. The video is compressed (H.264/VP9, ~2-5 MB per minute at 720p) before transfer. In live mode, frames stream in real-time. In batch mode, the full recording is compressed and uploaded at the end.",
+      },
+      {
+        q: "Is my screen recording data safe?",
+        a: "Yes. Screen recordings, voice, and screenshots transfer directly to your dev machine via P2P (same encrypted channel as everything else in Yaver). Nothing passes through our servers. The relay is a pass-through that can't read the data. Recordings are stored on your dev machine under ~/.yaver/feedback/ and you can delete them anytime with `yaver feedback delete <id>`.",
+      },
+      {
+        q: "What does `yaver feedback fix` do?",
+        a: "It takes a feedback report (screen recording, voice transcript, screenshots, timeline) and generates a structured prompt for the AI agent. The prompt includes: device info, timeline of events with timestamps, voice transcript, screenshot references, and crash logs. The agent reads this and creates a fix. No manual bug report writing — your recording becomes the bug report.",
+      },
+    ],
+  },
+  {
+    category: "Feedback SDKs",
+    items: [
+      {
+        q: "What are the feedback SDKs?",
+        a: "Open-source libraries you embed in your app during development. Available for React Native (@yaver/feedback-react-native), Flutter (yaver_feedback on pub.dev), and Web (@yaver/feedback-web). They add shake-to-report, screen recording, voice annotation, and P2P upload to your app — all disabled automatically in production builds.",
+      },
+      {
+        q: "Do I need the Yaver mobile app if I use the SDK?",
+        a: "No. The feedback SDK is self-contained. It includes device discovery (auto-finds your Yaver agent on the LAN), a connection UI, screen recording, voice annotation, and P2P upload. Your app connects directly to your dev machine without the Yaver mobile app as a middleman. The SDK is a mini Yaver client embedded in your app.",
+      },
+      {
+        q: "How does device discovery work in the SDK?",
+        a: "The SDK automatically scans your local network for Yaver agents (common IPs on 192.168.x.x, 10.0.x.x, port 18080). It checks the /health endpoint with a 2-second timeout. Once found, the connection is cached. You can also enter the URL manually. Works on WiFi. For remote connections, use a relay URL.",
+      },
+      {
+        q: "How do I install the feedback SDK?",
+        a: "Web: `npm install @yaver/feedback-web` then `YaverFeedback.init({ trigger: 'floating-button' })`. React Native: `npm install @yaver/feedback-react-native` then `YaverFeedback.init({ trigger: 'shake' })`. Flutter: add `yaver_feedback` to pubspec.yaml then `YaverFeedback.init(FeedbackConfig(trigger: FeedbackTrigger.shake))`. All SDKs auto-discover your dev machine.",
+      },
+      {
+        q: "Is the SDK safe for production?",
+        a: "The SDK auto-disables in production. On React Native, it checks `__DEV__`. On web, it checks `process.env.NODE_ENV`. On Flutter, it checks `kDebugMode`. You can also explicitly set `enabled: false`. When disabled, the SDK has zero runtime cost — no network requests, no UI, no screen capture. The floating button and shake detector don't activate.",
+      },
+      {
+        q: "What triggers are available?",
+        a: "React Native: shake phone, floating button, or manual (`YaverFeedback.startReport()`). Flutter: same three options. Web: floating button (corner of screen), keyboard shortcut (Ctrl+Shift+F by default), or manual. You can also use the ConnectionScreen/ConnectionWidget component in your dev settings page for full control.",
+      },
+      {
+        q: "Can I develop my own app using the feedback SDK?",
+        a: "That's exactly what it's for. Install the SDK in your app, run your dev build on your phone, and use the feedback loop to iterate: code → build → test on device → record bugs → AI fixes → hot reload. The SDK connects to your Yaver agent running on your dev machine. Yaver itself uses its own feedback SDK for development (dogfooding).",
+      },
+      {
+        q: "What data does the SDK capture?",
+        a: "Screen recording (ReplayKit on iOS, MediaProjection on Android, getDisplayMedia on web), microphone audio for voice narration, screenshots with annotations, touch/click events, console errors (web), device info (platform, model, OS version, screen size), and a timestamped timeline of all events. Everything is compressed before upload.",
+      },
+      {
+        q: "Can I use the SDK for web development too?",
+        a: "Yes. @yaver/feedback-web works with any web framework (React, Vue, Svelte, vanilla JS). Screen recording uses the browser's getDisplayMedia API. Hot reload works natively through your dev server (webpack, Vite, etc.) — Yaver tunnels the dev server port to your phone's browser. Say 'fix this' while looking at your web app and the AI pushes a fix via HMR.",
+      },
+    ],
+  },
 ];
 
 export default function FAQPage() {
