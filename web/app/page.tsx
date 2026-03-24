@@ -179,15 +179,16 @@ export default function HomePage() {
               </a>
             </div>
             <h1 className="mb-6 text-4xl font-bold tracking-tight text-surface-50 sm:text-5xl md:text-6xl">
-              Your code never leaves
+              Your dev machine.
               <br />
-              your machine
+              In your pocket.
             </h1>
             <p className="mx-auto max-w-2xl text-base leading-relaxed text-surface-400 md:text-lg">
-              Open-source P2P remote for AI coding agents &mdash;
-              Claude Code, Codex, Aider, Ollama, and more.
-              Encrypted peer-to-peer connections. Everything runs under YOUR control.
-              No middleman, no cloud dependency, no vendor lock-in. Like OpenClaw, but for developers.
+              Build mobile apps from your phone. Send tasks to Claude Code, Codex, or any AI agent
+              on your dev machine. Instant builds, hot reload, test on your real device &mdash;
+              record bugs and the AI sees your screen and fixes them live.
+              Ship to TestFlight or Play Store without opening your laptop.
+              Encrypted P2P, no cloud, no middleman.
             </p>
           </div>
 
@@ -462,7 +463,18 @@ export default function HomePage() {
               </p>
             </div>
 
-            <div className="card sm:col-span-2 lg:col-span-2">
+            <div className="card">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg border border-surface-600 bg-surface-800">
+                <span className="text-sm font-bold text-surface-300">V</span>
+              </div>
+              <h3 className="mb-2 text-sm font-semibold text-surface-50">Key Vault</h3>
+              <p className="text-xs text-surface-500">P2P encrypted</p>
+              <p className="mt-2 text-sm leading-relaxed text-surface-400">
+                API keys, SSH keys, signing certificates &mdash; encrypted and synced between your phone and dev machine. NaCl encrypted at rest, auth-gated in transit. Never touches our servers.
+              </p>
+            </div>
+
+            <div className="card sm:col-span-2 lg:col-span-1">
               <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg border border-surface-600 bg-surface-800">
                 <span className="text-sm font-bold text-surface-300">~</span>
               </div>
@@ -885,6 +897,57 @@ export default function HomePage() {
                 Cron-like scheduling for AI tasks. Run code reviews every morning, generate reports overnight, or trigger builds from GitHub webhooks. Get notified via Telegram, Discord, or Slack when done.
               </p>
             </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Build, test &amp; deploy &mdash; no cloud bills</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Full pipeline from your phone: agent writes code, builds it, runs tests, deploys straight to your device. Hot reload via P2P tunnels. Flutter, React Native, Expo, or any framework.
+              </p>
+              <p className="mt-2 text-xs text-surface-500">
+                GitHub Actions: 2,000 free mins/mo, then $0.008/min. GitLab CI: 400 free mins/mo, then paid.{" "}
+                <strong className="text-surface-300">Yaver P2P: unlimited, free, forever.</strong>{" "}
+                Or push to CI if you prefer.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">P2P key vault</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                API keys, signing certificates, SSH keys &mdash; encrypted and synced between your phone and machines. NaCl secretbox encryption, OS keychain storage. Nothing on our servers, nothing in the cloud.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Visual feedback loop</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Test your build on your phone. Record screen and voice &mdash; &ldquo;this button is broken&rdquo;. The AI sees it, reads your transcript, fixes the bugs. Rebuild. Repeat.
+              </p>
+              <p className="mt-2 text-xs text-surface-500">
+                <strong className="text-surface-300">Live</strong> &mdash; agent watches in real-time.
+                <strong className="text-surface-300">Narrated</strong> &mdash; record, send when done.
+                <strong className="text-surface-300">Batch</strong> &mdash; full dump after testing.
+              </p>
+              <p className="mt-2 text-xs text-surface-500">
+                Shake-to-report SDKs: <code className="rounded bg-surface-800 px-1 py-0.5 text-[11px] text-surface-300">@yaver/feedback-web</code>{" "}
+                <code className="rounded bg-surface-800 px-1 py-0.5 text-[11px] text-surface-300">@yaver/feedback-react-native</code>{" "}
+                <code className="rounded bg-surface-800 px-1 py-0.5 text-[11px] text-surface-300">yaver_feedback</code>
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Switch repos on the fly</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Say &ldquo;switch to my-flutter-app&rdquo; and Yaver sets your working directory. Auto-discovers git projects on your machine. No setup needed &mdash; just start coding in any repo from your phone.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">Test before you ship</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                Run unit tests, emulator tests, or browser tests from your phone. Yaver auto-detects your test framework &mdash; Flutter, Jest, pytest, Playwright, Maestro, or XCTest. See results and screenshots before deploying.
+              </p>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 text-sm font-semibold text-surface-100">One command: build &rarr; test &rarr; ship</h3>
+              <p className="text-sm leading-relaxed text-surface-400">
+                <code className="rounded bg-surface-800 px-1.5 py-0.5 text-xs text-surface-300">yaver pipeline --test --deploy p2p</code>. Builds your app, runs tests, and if they pass, sends the artifact straight to your phone. Or push to TestFlight, Play Store, or GitHub &mdash; your choice.
+              </p>
+            </div>
           </div>
         </div>
       </section>
@@ -981,6 +1044,22 @@ export default function HomePage() {
               </ul>
             </div>
 
+            {/* Developer Platforms */}
+            <div className="rounded-xl border border-surface-800 bg-surface-900/40 p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-500/10 text-orange-400">
+                  <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.405.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                  </svg>
+                </div>
+                <h3 className="text-sm font-semibold text-surface-100">Developer Platforms</h3>
+              </div>
+              <ul className="space-y-2 text-sm text-surface-400">
+                <li>GitHub</li>
+                <li>GitLab</li>
+              </ul>
+            </div>
+
             {/* Developer Integrations */}
             <div className="rounded-xl border border-surface-800 bg-surface-900/40 p-5">
               <div className="mb-4 flex items-center gap-2">
@@ -1043,6 +1122,33 @@ export default function HomePage() {
               </div>
               <span className="shrink-0 rounded-lg border border-surface-700 bg-surface-800/50 px-5 py-2 text-sm font-medium text-surface-400">
                 $10/mo &mdash; soon
+              </span>
+            </div>
+          </div>
+
+          {/* Cloud Dev Machine callout */}
+          <div className="mb-8 rounded-xl border border-[#06b6d4]/30 bg-[#06b6d4]/5 p-6">
+            <div className="flex flex-col gap-4 sm:flex-row">
+              <div className="flex-1">
+                <div className="mb-1 flex items-center gap-2">
+                  <span className="rounded-full bg-[#06b6d4]/20 px-2 py-0.5 text-[10px] font-medium text-[#22d3ee]">
+                    coming soon
+                  </span>
+                  <h3 className="text-sm font-semibold text-surface-100">Cloud Dev Machine</h3>
+                </div>
+                <p className="text-sm text-surface-400">
+                  A Linux dev environment provisioned for you. Accessible via Yaver mobile or SSH &mdash; your fallback dev machine when you&apos;re away from your hardware.
+                </p>
+                <ul className="mt-3 space-y-1.5 text-xs text-surface-400">
+                  <li>4 vCPU / 8 GB RAM / 80 GB NVMe (ARM64, Hetzner Cloud)</li>
+                  <li>Pre-installed: Node.js, Python, Go, Rust, Docker</li>
+                  <li>User-selectable tools: Flutter, .NET, Java, Ruby, and more</li>
+                  <li>GitHub / GitLab repo auto-clone on provision</li>
+                  <li>Built-in relay server &mdash; use on-prem and cloud together</li>
+                </ul>
+              </div>
+              <span className="shrink-0 self-start rounded-lg border border-[#06b6d4]/30 bg-[#06b6d4]/10 px-5 py-2 text-sm font-medium text-[#22d3ee]">
+                from $20/mo &mdash; soon
               </span>
             </div>
           </div>
@@ -1263,6 +1369,57 @@ await for (final chunk in c.streamOutput(task.id)) {
 }`}</code></pre>
             </div>
 
+          <h3 className="mt-12 mb-4 text-center text-lg font-bold text-surface-100">
+            Feedback SDKs &mdash; develop mobile apps from your phone
+          </h3>
+          <p className="mx-auto mb-8 max-w-2xl text-center text-sm text-surface-400">
+            Embed in your app during development. Record screen + voice, report bugs visually, AI fixes them in real-time.
+            Shake-to-report, floating button, or voice commands. Auto-disabled in production.
+          </p>
+
+          <div className="space-y-4">
+            <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="text-sm font-semibold text-surface-100">React Native</span>
+                <span className="rounded-full bg-[#8b5cf6]/20 px-2 py-0.5 text-[10px] text-[#a78bfa]">feedback</span>
+              </div>
+              <pre className="rounded-lg bg-surface-950 p-3 text-xs text-surface-300 overflow-x-auto"><code>{`import { YaverFeedback } from '@yaver/feedback-react-native';
+
+if (__DEV__) {
+  YaverFeedback.init({ trigger: 'shake' });
+  // Shake phone → record screen + voice → AI fixes bugs
+  // Three modes: live (hot reload), narrated, batch
+}`}</code></pre>
+            </div>
+            <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="text-sm font-semibold text-surface-100">Flutter</span>
+                <span className="rounded-full bg-[#8b5cf6]/20 px-2 py-0.5 text-[10px] text-[#a78bfa]">feedback</span>
+              </div>
+              <pre className="rounded-lg bg-surface-950 p-3 text-xs text-surface-300 overflow-x-auto"><code>{`import 'package:yaver_feedback/yaver_feedback.dart';
+
+if (kDebugMode) {
+  YaverFeedback.init(FeedbackConfig(
+    trigger: FeedbackTrigger.shake,
+    mode: FeedbackMode.live, // agent watches + fixes in real-time
+  ));
+}`}</code></pre>
+            </div>
+            <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="text-sm font-semibold text-surface-100">Web</span>
+                <span className="rounded-full bg-[#8b5cf6]/20 px-2 py-0.5 text-[10px] text-[#a78bfa]">feedback</span>
+              </div>
+              <pre className="rounded-lg bg-surface-950 p-3 text-xs text-surface-300 overflow-x-auto"><code>{`import { YaverFeedback } from '@yaver/feedback-web';
+
+if (process.env.NODE_ENV === 'development') {
+  YaverFeedback.init({ trigger: 'floating-button' });
+  // Click → record screen + voice → AI sees and fixes
+  // Auto-discovers dev machine on LAN
+}`}</code></pre>
+            </div>
+          </div>
+
           <div className="mt-8 rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
             <h3 className="mb-3 text-sm font-semibold text-surface-100">Install from package managers</h3>
             <div className="space-y-2">
@@ -1284,6 +1441,11 @@ await for (final chunk in c.streamOutput(task.id)) {
               </div>
             </div>
             <p className="mt-3 text-xs text-surface-500">
+              Feedback SDKs:{" "}
+              <code className="rounded bg-surface-950 px-1.5 py-0.5 text-surface-300 select-all">npm install @yaver/feedback-web</code>{" "}
+              <code className="rounded bg-surface-950 px-1.5 py-0.5 text-surface-300 select-all">npm install @yaver/feedback-react-native</code>{" "}
+              <code className="rounded bg-surface-950 px-1.5 py-0.5 text-surface-300 select-all">flutter pub add yaver_feedback</code>
+              <br />
               Also available as a C shared library (.so/.dylib/.dll) for C/C++ and any language with FFI.
               {" "}<a href="https://github.com/kivanccakmak/yaver.io/tree/main/sdk" target="_blank" rel="noopener noreferrer" className="text-surface-400 underline hover:text-surface-200">SDK docs</a>
               {" · "}<a href="https://www.npmjs.com/package/yaver-sdk" target="_blank" rel="noopener noreferrer" className="text-surface-400 underline hover:text-surface-200">npm</a>
@@ -1465,8 +1627,36 @@ await for (final chunk in c.streamOutput(task.id)) {
               answer="Yes — Yaver provides SDKs for Go, Python, and JavaScript/TypeScript. Import the package, point it at a running Yaver agent, and create tasks, stream output, or use speech-to-text from your code. A C shared library (.so/.dylib/.dll) is also available for C/C++ and any language with FFI support (Ruby, Rust, etc)."
             />
             <FAQItem
+              question="How does repo switching work?"
+              answer="Yaver auto-discovers git repos on your machine (scans ~/). Say 'switch to my-app' from your phone or run 'yaver repo switch my-app' from CLI. The agent changes its working directory to your project — no manual path typing. Works with any git repo, no GitHub/GitLab integration needed."
+            />
+            <FAQItem
+              question="Can I run tests from my phone?"
+              answer="Yes. 'yaver test unit' auto-detects your test framework (Flutter, Jest, pytest, Go test, Cargo, XCTest, Espresso, Playwright, Cypress, Maestro) and runs it. You see pass/fail counts and failures on your phone. For the full pipeline: 'yaver pipeline --test --deploy p2p' builds, tests, and deploys in one command."
+            />
+            <FAQItem
+              question="How does the build pipeline work?"
+              answer="Your dev machine builds the app (Flutter, Gradle, Xcode, React Native, or Expo). The artifact (APK, IPA, AAB) transfers P2P to your phone — free and instant. On Android, tap to install directly. On iOS, use TestFlight or OTA install via relay. You can also push to GitHub Actions or GitLab CI instead. No cloud CI minutes consumed for P2P builds."
+            />
+            <FAQItem
+              question="What about TestFlight and Play Store?"
+              answer="'yaver build push testflight' uploads your IPA directly to TestFlight. 'yaver build push playstore' uploads your AAB to Play Store internal testing. Credentials are stored in the P2P encrypted vault — never on our servers."
+            />
+            <FAQItem
+              question="What is the visual feedback loop?"
+              answer="After deploying a build to your phone, you test it and record bugs — screen recording + voice narration. The report goes back to your AI agent via P2P, which sees the recording, reads your transcript, and fixes the issues. Three modes: Live (agent watches in real-time and comments), Narrated (record + send), and Batch (full dump). You can also embed our feedback SDK (@yaver/feedback-web, @yaver/feedback-react-native, yaver_feedback) in your app for shake-to-report during development."
+            />
+            <FAQItem
               question="How do I contribute?"
               answer="Fork the repo, hack on it, open a PR. Check the README for dev setup. Bug reports and feature ideas are welcome as GitHub issues."
+            />
+            <FAQItem
+              question="How does the Key Vault work?"
+              answer="Key Vault syncs API keys, SSH keys, and signing certificates between your phone and dev machine over encrypted P2P connections. Keys are encrypted at rest using NaCl secretbox with Argon2id key derivation. In transit, they're auth-gated — only your authenticated devices can request them. On mobile, keys are stored in the OS keychain (Keychain on iOS, Keystore on Android). On the CLI, they're stored in an encrypted file under ~/.yaver/. Nothing ever touches our servers."
+            />
+            <FAQItem
+              question="What is the Cloud Dev Machine?"
+              answer="A Linux dev environment provisioned for you on Hetzner Cloud — 4 vCPU, 8 GB RAM, 80 GB NVMe (ARM64). Pre-configured with Node.js, Python, Go, Rust, Docker, and your choice of additional tools. Your GitHub/GitLab repos are auto-cloned on provision. Access it via Yaver mobile or SSH. Think of it as a fallback dev machine when you're away from your hardware. Coming soon, starting at $20/mo."
             />
           </div>
         </div>

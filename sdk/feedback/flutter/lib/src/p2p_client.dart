@@ -1,0 +1,231 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:http/http.dart' as http;
+
+import 'types.dart';
+
+/// Lightweight HTTP client for communicating with a Yaver agent.
+///
+/// Provides health checks, agent info, feedback upload, build management,
+/// and artifact download URL generation.
+///
+/// ```dart
+/// final client = P2PClient(
+///   baseUrl: 'http://192.168.1.42:18080',
+///   authToken: 'your-token',
+/// );
+///
+/// if (await client.health()) {
+///   final info = await client.info();
+///   print('Connected to ${info['hostname']}');
+/// }
+/// ```
+class P2PClient {
+  /// The base URL of the Yaver agent (e.g. `http://192.168.1.42:18080`).
+  final String baseUrl;
+
+  /// Auth token for the Yaver agent.
+  final String authToken;
+
+  final http.Client _httpClient;
+
+  /// Creates a new [P2PClient].
+  ///
+  /// Optionally accepts a custom [http.Client] for testing.
+  P2PClient({
+    required this.baseUrl,
+    required this.authToken,
+    http.Client? httpClient,
+  }) : _httpClient = httpClient ?? http.Client();
+
+  /// Returns the normalized base URL (without trailing slash).
+  String get _base =>
+      baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+
+  /// Standard auth headers.
+  Map<String, String> get _headers => {
+        'Authorization': 'Bearer $authToken',
+        'Content-Type': 'application/json',
+      };
+
+  /// Checks if the agent is reachable.
+  ///
+  /// Returns `true` if `/health` responds with HTTP 200.
+  Future<bool> health() async {
+    try {
+      final response = await _httpClient
+          .get(Uri.parse('$_base/health'))
+          .timeout(const Duration(seconds: 3));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Fetches agent information from `/health`.
+  ///
+  /// Returns a map containing `hostname`, `version`, and other agent metadata.
+  ///
+  /// Throws [HttpException] on non-2xx response.
+  Future<Map<String, dynamic>> info() async {
+    final response = await _httpClient.get(
+      Uri.parse('$_base/health'),
+      headers: _headers,
+    );
+    _checkResponse(response);
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  /// Uploads a [FeedbackBundle] to the agent as a multipart POST.
+  ///
+  /// Returns the feedback report ID assigned by the agent.
+  ///
+  /// Throws [HttpException] on non-2xx response.
+  Future<String> uploadFeedback(FeedbackBundle bundle) async {
+    final uri = Uri.parse('$_base/feedback');
+    final request = http.MultipartRequest('POST', uri);
+
+    request.headers['Authorization'] = 'Bearer $authToken';
+    request.fields['metadata'] = jsonEncode(bundle.toJson());
+
+    // Attach video
+    if (bundle.videoPath != null) {
+      final file = File(bundle.videoPath!);
+      if (await file.exists()) {
+        request.files.add(
+          await http.MultipartFile.fromPath('video', bundle.videoPath!),
+        );
+      }
+    }
+
+    // Attach audio
+    if (bundle.audioPath != null) {
+      final file = File(bundle.audioPath!);
+      if (await file.exists()) {
+        request.files.add(
+          await http.MultipartFile.fromPath('audio', bundle.audioPath!),
+        );
+      }
+    }
+
+    // Attach screenshots
+    for (final path in bundle.screenshotPaths) {
+      final file = File(path);
+      if (await file.exists()) {
+        request.files.add(
+          await http.MultipartFile.fromPath('screenshots', path),
+        );
+      }
+    }
+
+    final streamedResponse = await request.send();
+    final body = await streamedResponse.stream.bytesToString();
+
+    if (streamedResponse.statusCode >= 400) {
+      throw HttpException(
+        'Upload failed: HTTP ${streamedResponse.statusCode}: $body',
+      );
+    }
+
+    final json = jsonDecode(body) as Map<String, dynamic>;
+    return json['feedbackId'] as String? ?? json['id'] as String? ?? '';
+  }
+
+  /// Lists available builds from the agent.
+  ///
+  /// Returns a list of build metadata maps.
+  ///
+  /// Throws [HttpException] on non-2xx response.
+  Future<List<Map<String, dynamic>>> listBuilds() async {
+    final response = await _httpClient.get(
+      Uri.parse('$_base/builds'),
+      headers: _headers,
+    );
+    _checkResponse(response);
+
+    final body = jsonDecode(response.body);
+    if (body is List) {
+      return body.cast<Map<String, dynamic>>();
+    }
+    if (body is Map && body.containsKey('builds')) {
+      return (body['builds'] as List).cast<Map<String, dynamic>>();
+    }
+    return [];
+  }
+
+  /// Starts a build for the given [platform] (e.g. `"ios"`, `"android"`).
+  ///
+  /// Returns the build metadata map including the assigned build ID.
+  ///
+  /// Throws [HttpException] on non-2xx response.
+  Future<Map<String, dynamic>> startBuild(String platform) async {
+    final response = await _httpClient.post(
+      Uri.parse('$_base/builds'),
+      headers: _headers,
+      body: jsonEncode({'platform': platform}),
+    );
+    _checkResponse(response);
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  /// Returns the download URL for a build artifact.
+  String getArtifactUrl(String buildId) {
+    return '$_base/builds/$buildId/artifact';
+  }
+
+  /// Sends a feedback event to the live stream endpoint.
+  ///
+  /// Used in [FeedbackMode.live] to stream events in real-time.
+  ///
+  /// Throws [HttpException] on non-2xx response.
+  Future<void> streamEvent(Map<String, dynamic> event) async {
+    final response = await _httpClient.post(
+      Uri.parse('$_base/feedback/stream'),
+      headers: _headers,
+      body: jsonEncode(event),
+    );
+    _checkResponse(response);
+  }
+
+  /// Fetches agent commentary messages.
+  ///
+  /// Returns a list of commentary message maps with `text`, `level`, and
+  /// `timestamp` fields.
+  Future<List<Map<String, dynamic>>> getCommentary({int? since}) async {
+    var url = '$_base/feedback/commentary';
+    if (since != null) {
+      url += '?since=$since';
+    }
+
+    try {
+      final response = await _httpClient.get(
+        Uri.parse(url),
+        headers: _headers,
+      );
+      if (response.statusCode != 200) return [];
+
+      final body = jsonDecode(response.body);
+      if (body is List) return body.cast<Map<String, dynamic>>();
+      if (body is Map && body.containsKey('messages')) {
+        return (body['messages'] as List).cast<Map<String, dynamic>>();
+      }
+    } catch (_) {
+      // Commentary is best-effort — never fail on it
+    }
+    return [];
+  }
+
+  /// Disposes the underlying HTTP client.
+  void dispose() {
+    _httpClient.close();
+  }
+
+  void _checkResponse(http.Response response) {
+    if (response.statusCode >= 400) {
+      throw HttpException(
+        'HTTP ${response.statusCode}: ${response.body}',
+      );
+    }
+  }
+}

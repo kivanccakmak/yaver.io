@@ -1,0 +1,17 @@
+name: yaver_feedback_test_app
+description: Minimal app to test yaver_feedback SDK
+version: 1.0.0
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: '>=3.10.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  yaver_feedback:
+    path: ../../flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

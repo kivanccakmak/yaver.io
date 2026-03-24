@@ -259,6 +259,30 @@ export default defineSchema({
     .index("by_subscription", ["subscriptionId"])
     .index("by_status", ["status"]),
 
+  // Cloud dev machines (provisioned on Hetzner, subscription required)
+  cloudMachines: defineTable({
+    userId: v.id("users"),
+    subscriptionId: v.optional(v.id("subscriptions")),
+    status: v.string(), // "provisioning" | "active" | "stopping" | "stopped" | "error"
+    hetznerServerId: v.optional(v.string()),
+    serverIp: v.optional(v.string()),
+    hostname: v.optional(v.string()),
+    region: v.string(), // "eu" | "us"
+    tools: v.array(v.string()), // ["nodejs", "python", "go", "docker", ...]
+    repoUrl: v.optional(v.string()), // cloned on provisioning
+    sshPublicKey: v.optional(v.string()),
+    specs: v.optional(v.object({
+      vcpu: v.number(),
+      ramGb: v.number(),
+      diskGb: v.number(),
+      arch: v.string(), // "arm64" | "amd64"
+    })),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastHealthCheck: v.optional(v.number()),
+    errorMessage: v.optional(v.string()),
+  }).index("by_user", ["userId"]),
+
   mobileStreamLogs: defineTable({
     userId: v.optional(v.string()),
     platform: v.string(),

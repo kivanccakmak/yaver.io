@@ -10,6 +10,22 @@ const manuals = [
     featured: true,
   },
   {
+    title: "Code from the Beach \u2014 Remote Build, Test & Deploy",
+    description:
+      "Develop from your phone, build on your machine, test automatically, and deploy to your phone, TestFlight, or Play Store \u2014 all over encrypted P2P connections.",
+    href: "/manuals/code-from-beach",
+    tags: ["Build", "Test", "Deploy", "Flutter", "Mobile"],
+    featured: true,
+  },
+  {
+    title: "Visual Feedback Loop \u2014 Bug Reports from Your Phone",
+    description:
+      "Record your screen, narrate the bug, send it to your AI agent \u2014 and get a fix without typing a line of code. Screen recordings, voice notes, and device info flow P2P to your dev machine where the agent turns them into tasks.",
+    href: "/manuals/feedback-loop",
+    tags: ["Feedback", "Testing", "SDK", "Screen Recording"],
+    featured: true,
+  },
+  {
     title: "CLI setup & usage guide",
     description:
       "Install the Yaver CLI, sign in, choose your AI agent, and learn the most useful commands.",

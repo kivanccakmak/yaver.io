@@ -96,8 +96,26 @@ func main() {
 		runExec(os.Args[2:])
 	case "session":
 		runSession(os.Args[2:])
+	case "vault":
+		runVault(os.Args[2:])
+	case "build":
+		runBuild(os.Args[2:])
+	case "debug":
+		runDebug(os.Args[2:])
+	case "deploy":
+		runDeploy(os.Args[2:])
+	case "test":
+		runTest(os.Args[2:])
+	case "repo":
+		runRepo(os.Args[2:])
+	case "pipeline":
+		runPipeline(os.Args[2:])
+	case "feedback":
+		runFeedback(os.Args[2:])
 	case "clean":
 		runClean(os.Args[2:])
+	case "cloud":
+		runCloud(os.Args[2:])
 	case "doctor":
 		runDoctor()
 	case "completion":
@@ -153,6 +171,41 @@ Usage:
   yaver devices     List your registered devices
   yaver exec        Execute a command on a remote device (like SSH)
   yaver session     Transfer AI agent sessions between machines
+  yaver vault add <name> [--category <cat>] [--value <val>]  Add a secret to the vault
+  yaver vault list   List all vault entries
+  yaver vault get <name>  Get a vault entry value
+  yaver vault delete <name>  Delete a vault entry
+  yaver vault export  Export vault as plaintext JSON
+  yaver vault import <file>  Import entries from JSON
+  yaver build flutter apk [--dir <path>]  Build Flutter APK
+  yaver build gradle apk [--dir <path>]   Build Android APK via Gradle
+  yaver build xcode ipa [--scheme <name>]  Build iOS IPA via Xcode
+  yaver build rn android [--dir <path>]   Build React Native Android
+  yaver build list       List all builds
+  yaver build status <id> Show build details
+  yaver build register <file>  Register pre-built artifact
+  yaver debug flutter [--dir <path>]  Start Flutter debug with hot reload tunnel
+  yaver debug rn [--dir <path>]       Start React Native/Metro debug
+  yaver debug --port <N>              Expose any TCP port for remote access
+  yaver deploy --file <path>          Register artifact for P2P transfer
+  yaver deploy --ci github --workflow <file.yml>  Trigger GitHub Actions
+  yaver deploy --ci gitlab --repo <id>  Trigger GitLab CI pipeline
+  yaver test unit [--dir <path>]  Auto-detect and run unit tests
+  yaver test flutter [--dir <path>]  Run Flutter tests
+  yaver test android [--dir <path>]  Run Android tests
+  yaver test ios [--dir <path>]  Run iOS tests on simulator
+  yaver test e2e [--dir <path>]  Run E2E tests (Playwright/Cypress/Maestro)
+  yaver repo list      List discovered projects
+  yaver repo switch <name>  Switch working directory to a project
+  yaver repo refresh   Re-run project discovery
+  yaver pipeline --test --deploy <target>  Build → test → deploy in one command
+  yaver feedback list   List visual bug reports from device testing
+  yaver feedback show <id>  Show feedback details + transcript
+  yaver feedback fix <id>   Create AI task from feedback report
+  yaver cloud create   Create a cloud dev machine (subscription required)
+  yaver cloud status   Show cloud machine status
+  yaver cloud ssh      SSH into your cloud machine
+  yaver cloud destroy  Tear down your cloud machine
   yaver clean       Remove old tasks, images, and logs (default: older than 30 days)
   yaver purge       Factory reset — remove all local data (auth, sessions, tasks, logs)
   yaver reset       Alias for purge
@@ -764,6 +817,7 @@ func runServe(args []string) {
 	debug := fs.Bool("debug", false, "Run in foreground with verbose logging")
 	dummy := fs.Bool("dummy", false, "Use dummy runner (fake responses for network testing)")
 	relayPassword := fs.String("relay-password", "", "Password for relay server authentication")
+	vaultPass := fs.String("vault-passphrase", "", "Custom vault passphrase (default: derived from auth token)")
 	fs.Parse(args)
 
 	if *workDir == "." {
@@ -827,6 +881,9 @@ func runServe(args []string) {
 		}
 		if *relayPassword != "" {
 			childArgs = append(childArgs, fmt.Sprintf("--relay-password=%s", *relayPassword))
+		}
+		if *vaultPass != "" {
+			childArgs = append(childArgs, fmt.Sprintf("--vault-passphrase=%s", *vaultPass))
 		}
 
 		cmd := osexec.Command(execPath, childArgs...)
@@ -1221,6 +1278,30 @@ func runServe(args []string) {
 	httpServer.emailMgr = emailMgr
 	httpServer.analytics = NewAnalytics()
 	httpServer.notifyMgr = NewNotificationManager(cfg.Notifications)
+	httpServer.buildMgr = NewBuildManager(httpServer.execMgr, taskMgr.workDir)
+	httpServer.tunnelMgr = NewTunnelManager()
+	httpServer.testMgr = NewTestManager(httpServer.execMgr, taskMgr.workDir)
+	if fbMgr, err := NewFeedbackManager(); err != nil {
+		log.Printf("Warning: feedback unavailable: %v", err)
+	} else {
+		httpServer.feedbackMgr = fbMgr
+		log.Printf("Feedback manager ready (%d existing reports)", len(fbMgr.ListFeedback()))
+	}
+
+	// Initialize vault (P2P encrypted key store)
+	vaultPassphrase := *vaultPass
+	if vaultPassphrase == "" {
+		vaultPassphrase = os.Getenv("YAVER_VAULT_PASSPHRASE")
+	}
+	if vaultPassphrase == "" {
+		vaultPassphrase = DerivePassphraseFromToken(cfg.AuthToken)
+	}
+	if vs, err := NewVaultStore(vaultPassphrase); err != nil {
+		log.Printf("Warning: vault unavailable: %v", err)
+	} else {
+		httpServer.vaultStore = vs
+		log.Printf("Vault unlocked (%d entries)", len(vs.List()))
+	}
 	globalEmailMgr = emailMgr // enable email notifications
 
 	// Wire notification callbacks

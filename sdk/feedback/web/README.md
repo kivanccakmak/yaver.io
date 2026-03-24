@@ -1,0 +1,118 @@
+# @yaver/feedback-web
+
+Visual feedback SDK for web apps — record screen + voice, take screenshots, send bug reports to your Yaver dev machine. The AI agent receives the report and fixes the bugs automatically.
+
+## Install
+
+```bash
+npm install @yaver/feedback-web
+```
+
+## Quick Start
+
+```typescript
+import { YaverFeedback } from '@yaver/feedback-web';
+
+// Initialize in development only
+if (process.env.NODE_ENV === 'development') {
+  YaverFeedback.init({
+    trigger: 'floating-button', // or 'keyboard' (Ctrl+Shift+F)
+  });
+}
+```
+
+That's it. A small "Y" button appears in the corner. Click it to:
+1. Record your screen + microphone
+2. Take annotated screenshots
+3. Send the report to your Yaver agent
+
+The AI agent gets screen recordings, voice transcripts, console errors, and a timeline — then fixes the bugs and hot-reloads.
+
+## Auto-Discovery
+
+The SDK automatically finds your Yaver agent on the local network. No manual URL configuration needed — just run `yaver serve` on your dev machine.
+
+```typescript
+// Explicit URL (optional — auto-discovers if not set)
+YaverFeedback.init({
+  agentUrl: 'http://192.168.1.100:18080',
+  authToken: 'your-token',
+});
+```
+
+## Connection Widget
+
+For more control, use the `FeedbackWidget` component in your dev tools panel:
+
+```typescript
+import { FeedbackWidget } from '@yaver/feedback-web';
+
+// Mount in your dev settings page
+FeedbackWidget.mount(document.getElementById('yaver-panel'));
+```
+
+Shows: connection status, agent discovery, manual URL input, and feedback controls.
+
+## Trigger Modes
+
+| Mode | How it works |
+|------|-------------|
+| `floating-button` | Small draggable button in corner (default: bottom-right) |
+| `keyboard` | Keyboard shortcut (default: Ctrl+Shift+F) |
+| `manual` | Call `YaverFeedback.startReport()` from your own UI |
+
+## API
+
+```typescript
+// Initialize
+YaverFeedback.init(config?: FeedbackConfig): Promise<void>
+
+// Manual trigger
+YaverFeedback.startReport(): void
+
+// Programmatic recording
+YaverFeedback.startRecording(): Promise<void>
+YaverFeedback.captureScreenshot(annotation?: string): void
+YaverFeedback.addAnnotation(text: string): void
+YaverFeedback.stopAndSend(): Promise<string | null>  // returns report ID
+
+// Discovery
+YaverDiscovery.discover(): Promise<DiscoveryResult | null>
+YaverDiscovery.connect(url: string): Promise<DiscoveryResult | null>
+```
+
+## What Gets Captured
+
+- Screen recording (WebM/VP9, via `getDisplayMedia`)
+- Microphone audio (WebM/Opus, for voice annotations)
+- Screenshots with annotations
+- Console errors (automatically)
+- Page URL and browser info
+- Timeline of all events
+
+## How It Works
+
+1. You test your web app and find a bug
+2. Click the feedback button (or press Ctrl+Shift+F)
+3. Record your screen while narrating the issue
+4. The SDK sends everything to your Yaver agent via HTTP multipart
+5. Run `yaver feedback fix <id>` — the AI agent generates a fix task
+6. Agent fixes the code, you see the changes via hot reload
+
+## Development Only
+
+The SDK auto-disables in production (`process.env.NODE_ENV !== 'development'`). You can also control it manually:
+
+```typescript
+YaverFeedback.init({ enabled: false }); // explicitly disable
+```
+
+## Requirements
+
+- Yaver CLI running on your dev machine (`yaver serve`)
+- Modern browser with `getDisplayMedia` support (Chrome 72+, Firefox 66+, Edge 79+)
+- HTTPS or localhost (required by `getDisplayMedia`)
+
+## License
+
+MIT — part of the [Yaver](https://yaver.io) open-source project.

@@ -1540,11 +1540,69 @@ run_sdk_tests() {
     kill "$agent_pid" 2>/dev/null || true
 }
 
+run_feedback_tests() {
+    header "Feedback SDK Integration"
+
+    local agent_bin="$TEST_DIR/yaver"
+    [ -f "$agent_bin" ] || build_agent "$agent_bin" > /dev/null 2>&1 || { fail "Cannot build agent for feedback tests"; return; }
+
+    local http_port
+    http_port=$(get_free_port)
+    local quic_port
+    quic_port=$(get_free_port)
+
+    info "Creating test account for feedback tests..."
+    local token
+    token=$(create_test_account) || { fail "Cannot create test account for feedback tests"; return; }
+
+    local device_id="test-feedback-$(gen_uuid)"
+    local work_dir="$TEST_DIR/feedback-agent"
+
+    info "Starting agent for feedback tests (HTTP=$http_port)..."
+    local agent_pid
+    agent_pid=$(start_agent "$agent_bin" "$http_port" "$quic_port" "$token" "$device_id" "$work_dir" --no-relay) || {
+        fail "Agent failed to start for feedback tests"; return
+    }
+
+    local base_url="http://127.0.0.1:${http_port}"
+
+    info "Running feedback API tests..."
+    if YAVER_AUTH_TOKEN="$token" node "$ROOT_DIR/sdk/feedback/test-app/test-feedback.js" "$base_url" > "$TEST_DIR/feedback-test.log" 2>&1; then
+        pass "Feedback API tests passed"
+    else
+        fail "Feedback API tests failed"
+        tail -20 "$TEST_DIR/feedback-test.log"
+    fi
+
+    # Vault CRUD via CLI
+    info "Testing vault integration..."
+    if HOME="$work_dir/.yaver-config" "$agent_bin" vault add test-sdk-key --category api-key --value test-value-123 > /dev/null 2>&1; then
+        pass "Vault add works"
+    else
+        fail "Vault add failed"
+    fi
+
+    if HOME="$work_dir/.yaver-config" "$agent_bin" vault get test-sdk-key 2>/dev/null | grep -q "test-value-123"; then
+        pass "Vault get works"
+    else
+        fail "Vault get failed"
+    fi
+
+    if HOME="$work_dir/.yaver-config" "$agent_bin" vault delete test-sdk-key > /dev/null 2>&1; then
+        pass "Vault delete works"
+    else
+        fail "Vault delete failed"
+    fi
+
+    kill "$agent_pid" 2>/dev/null || true
+}
+
     local run_all=true
     local run_builds=false run_lan=false run_relay=false run_relay_docker=false
     local run_relay_binary=false run_tailscale=false run_cloudflare=false run_unit=false
     local run_sdk=false
     local run_auth=false
+    local run_feedback=false
 
     for arg in "$@"; do
         case "$arg" in
@@ -1558,6 +1616,7 @@ run_sdk_tests() {
             --cloudflare)     run_cloudflare=true; run_all=false ;;
             --sdk)            run_sdk=true; run_all=false ;;
             --auth)           run_auth=true; run_all=false ;;
+            --feedback)       run_feedback=true; run_all=false ;;
             --help|-h)
                 cat << 'HELP'
 Usage: ./scripts/test-suite.sh [FLAGS]
@@ -1575,6 +1634,7 @@ Flags:
   --cloudflare      Cloudflare tunnel test
   --sdk             SDK tests (Go, Python, JS/TS, C shared library build)
   --auth            Auth lifecycle (signup, login, validate, profile, settings, logout, delete)
+  --feedback        Feedback SDK integration tests (starts agent, tests HTTP API)
 
 Environment:
   Credentials loaded from: env vars > .env.test > ../talos/.env.test
@@ -1628,6 +1688,10 @@ HELP
 
     if $run_all || $run_sdk; then
         run_sdk_tests
+    fi
+
+    if $run_all || $run_feedback; then
+        run_feedback_tests
     fi
 
     # Summary

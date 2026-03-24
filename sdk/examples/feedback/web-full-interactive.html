@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Yaver Feedback SDK — Full Interactive Mode</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: -apple-system, sans-serif; background: #0d0d1a; color: #e0e0e0; margin: 0; padding: 20px; }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    p { color: #888; font-size: 14px; }
+    .mode-badge { display: inline-block; background: #dc2626; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+    .demo-app { background: #1a1a2e; border-radius: 12px; padding: 20px; margin: 20px 0; }
+    .demo-btn { background: #2563eb; color: white; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; margin: 4px; font-size: 13px; }
+    .demo-btn:hover { background: #1d4ed8; }
+    .demo-btn.danger { background: #dc2626; }
+    .demo-btn.success { background: #16a34a; }
+    pre { background: #111; padding: 12px; border-radius: 8px; font-size: 12px; overflow-x: auto; }
+    code { color: #a78bfa; }
+    .agent-msg { background: #1e1b4b; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0; border-radius: 0 8px 8px 0; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>Full Interactive Mode <span class="mode-badge">LIVE</span></h1>
+  <p>Agent watches your screen in real-time. Hot reload fixes bugs as you speak.</p>
+
+  <div class="demo-app">
+    <h3 style="margin-top:0;">Your App (simulated)</h3>
+    <button class="demo-btn" onclick="alert('Button works!')">Login</button>
+    <button class="demo-btn" onclick="document.getElementById('broken').style.display='block'">Show Bug</button>
+    <div id="broken" style="display:none;background:#dc2626;padding:10px;margin-top:10px;border-radius:8px;">
+      This element overlaps the content — a bug!
+    </div>
+  </div>
+
+  <h3>How Full Interactive Mode Works</h3>
+  <pre><code>import { YaverFeedback } from '@yaver/feedback-web';
+
+// Full Interactive: agent sees everything live, fixes instantly
+YaverFeedback.init({
+  trigger: 'floating-button',
+  // No agentUrl needed — auto-discovers on LAN
+});
+
+// In this mode:
+// 1. You click "Start Recording" → screen + mic stream to agent
+// 2. Agent's vision model watches for UI bugs in real-time
+// 3. You say "that button is broken" → agent hears it
+// 4. Agent changes code → webpack HMR pushes fix → you see it instantly
+// 5. Agent may proactively say: "I see a layout overlap, want me to fix it?"
+// 6. Commentary level controls how chatty the agent is (0-10)</code></pre>
+
+  <h3>Agent Commentary (simulated)</h3>
+  <div class="agent-msg">🔍 I can see a red overlay element that looks unintended. Want me to fix the z-index?</div>
+  <div class="agent-msg">🎤 Heard: "that button is broken" → Looking at the Login button handler...</div>
+  <div class="agent-msg">✅ Fixed the onClick handler. Hot reload applied. Check now.</div>
+
+  <div id="yaver-panel" style="margin-top:20px;"></div>
+
+  <script>
+    // In a real app, you'd import the SDK:
+    // import { YaverFeedback, FeedbackWidget } from '@yaver/feedback-web';
+    // FeedbackWidget.mount(document.getElementById('yaver-panel'));
+    console.log('Full Interactive mode: agent watches screen + mic, fixes in real-time');
+  </script>
+</body>
+</html>

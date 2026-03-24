@@ -18,6 +18,133 @@
 - **Free Relay** — Every user gets a free relay server (public.yaver.io). Self-host your own anytime.
 - **SDKs** — Go, Python, JS/TS, Flutter/Dart, C — embed Yaver in your own apps.
 
+## Code from the Beach
+
+```
+Developer at the beach? No problem.
+
+1. Open Yaver on your phone
+2. Switch to your repo: "switch to my-flutter-app"
+3. Chat with your AI agent — it writes code on your home machine
+4. Build: yaver build flutter apk
+5. Test: yaver test unit
+6. Deploy: artifact transfers P2P to your phone — tap to install
+
+Or run the full pipeline:
+  yaver pipeline --test --deploy p2p
+
+Skip GitHub Actions. Skip TestFlight queues. Your build goes straight to your phone.
+```
+
+### Visual Feedback Loop
+
+The killer feature: test your build on your real device, record bugs visually, and the AI agent fixes them.
+
+```
+You test the app → Record screen + voice → AI agent sees the recording → Fixes the bugs → Rebuilds → Repeat
+```
+
+**Three runtime modes** (user selects at runtime from within their app):
+
+| Mode | What happens | Best for |
+|------|-------------|----------|
+| **Full Interactive** | Screen + voice stream live to agent. Agent's vision model detects bugs in real-time. Hot reload pushes fixes as you speak. Say "make this bigger" and it happens. | Active development, quick iterations |
+| **Semi Interactive** | Screen + voice stream live. Agent comments on what it sees but doesn't auto-fix. Say "fix it now" or "keep in mind for later". | Code review, discussion, QA |
+| **Post Mode** | Record everything offline. No streaming. Compress and submit when done. Agent processes the full session afterwards. | Slow connections, detailed QA, batch reports |
+
+**Agent Commentary Levels** (0-10): Controls how proactive the agent is. Level 0 = silent. Level 5 = comments on obvious issues. Level 10 = comments on everything it sees (layout, performance, accessibility). Like pair programming where the AI watches over your shoulder.
+
+### Feedback SDKs
+
+Embed in your app during development. The SDK provides device discovery, connection UI, screen recording, voice annotation, and P2P upload — all in a single package. Disabled automatically in production builds.
+
+**Install:**
+
+```bash
+# Web (any framework: React, Vue, Svelte, vanilla JS)
+npm install @yaver/feedback-web
+
+# React Native
+npm install @yaver/feedback-react-native
+
+# Flutter
+# Add to pubspec.yaml: yaver_feedback: ^0.1.0
+```
+
+**Quick start (Web):**
+```typescript
+import { YaverFeedback } from '@yaver/feedback-web';
+
+if (process.env.NODE_ENV === 'development') {
+  YaverFeedback.init({ trigger: 'floating-button' });
+  // That's it. A "Y" button appears. Click to record bugs.
+  // Auto-discovers your Yaver agent on the LAN.
+}
+```
+
+**Quick start (React Native):**
+```tsx
+import { YaverFeedback, YaverConnectionScreen } from '@yaver/feedback-react-native';
+
+if (__DEV__) {
+  YaverFeedback.init({ trigger: 'shake' }); // Shake phone to report bug
+}
+
+// In your dev settings:
+<YaverConnectionScreen />  // Shows discovery + feedback controls
+```
+
+**Quick start (Flutter):**
+```dart
+import 'package:yaver_feedback/yaver_feedback.dart';
+
+void main() {
+  if (kDebugMode) {
+    YaverFeedback.init(FeedbackConfig(
+      trigger: FeedbackTrigger.floatingButton,
+      mode: FeedbackMode.narrated,
+      agentCommentaryLevel: 5,
+    ));
+  }
+  runApp(MyApp());
+}
+
+// Add the floating button:
+Stack(children: [child, const YaverFeedbackButton()])
+```
+
+**What each SDK includes:**
+- Device discovery — auto-finds your Yaver agent on the LAN
+- Connection UI — URL input, connect button, status indicator
+- Screen recording — ReplayKit (iOS), MediaProjection (Android), getDisplayMedia (Web)
+- Voice annotation — microphone recording synced to timeline
+- Screenshot capture — tap to annotate at any moment
+- P2P upload — multipart POST to agent, works through relay
+- Three runtime modes — user selects live/semi/post at runtime
+- Agent commentary — chat-like view of agent's observations
+- Voice commands — "fix this now", "push to TestFlight", "run the tests"
+- Auto-disabled in production — only active in `__DEV__` / development mode
+
+**CLI commands:**
+```bash
+yaver feedback list              # List bug reports from device testing
+yaver feedback show <id>         # View timeline, transcript, screenshots
+yaver feedback fix <id>          # AI agent creates a fix task from the report
+yaver feedback delete <id>       # Delete a report
+```
+
+**Dogfooding:** Yaver's own mobile app embeds its own feedback SDK. We develop Yaver with Yaver.
+
+**Key capabilities:**
+
+- **Repo switching** — `yaver repo switch my-app` auto-discovers git repos under `~/` and changes the agent's working directory. No manual path typing.
+- **Auto-detect testing** — `yaver test unit` detects your framework (Flutter, Jest, pytest, Go test, Cargo, XCTest, Espresso, Playwright, Cypress, Maestro) and runs the right command. Pass/fail counts stream to your phone.
+- **Full pipeline** — `yaver pipeline --test --deploy p2p` builds, tests, and deploys in one command. Stops on test failure by default.
+- **Platform-aware builds** — When you request a build from your phone, the agent knows your platform (iOS or Android) and builds the right artifact (APK/AAB for Android, IPA for iOS).
+- **Expo support** — `yaver build expo-android` and `yaver build expo-ios` for Expo-managed projects. Runs `eas build` or `expo prebuild` + native build depending on your setup.
+- **Auto vault sync** — When your phone connects to the agent, keys and signing credentials from the P2P encrypted vault sync automatically. No manual key management on each connect.
+- **Store uploads** — `yaver build push testflight` and `yaver build push playstore` upload directly to app stores. Credentials stay in the vault.
+
 ## Self-Host a Relay Server
 
 Install a relay on any VPS with one command:
@@ -296,6 +423,15 @@ yaver doctor        System health check (auth, runners, relay, network)
 yaver devices       List registered devices
 yaver exec          Execute a command on a remote device
 yaver session       Transfer AI agent sessions between machines
+yaver build         Build apps (Flutter, Gradle, Xcode, React Native)
+yaver test          Run tests (auto-detect framework)
+yaver deploy        Deploy to phone, TestFlight, Play Store, or CI
+yaver debug         Hot reload debug sessions
+yaver repo          Switch between projects
+yaver vault         P2P encrypted key management
+yaver pipeline      Build → test → deploy in one command
+yaver feedback      Visual bug reports (list/show/fix) — screen recording + voice from device
+yaver cloud         Cloud dev machines (coming soon)
 yaver stop          Stop the agent
 yaver restart       Restart the agent
 yaver logs          View agent logs
@@ -429,6 +565,20 @@ tr := yaver.NewTranscriber(&yaver.SpeechConfig{Provider: "openai", APIKey: "sk-.
 result, _ := tr.Transcribe(audioPath)
 fmt.Println(result.Text)
 ```
+
+### Feedback SDKs — Visual Bug Reports from Inside Your App
+
+Embed in your app during development. Screen recording + voice + screenshots → sent to AI agent via P2P. Auto-disabled in production.
+
+| SDK | Install | Trigger Modes |
+|-----|---------|---------------|
+| **Web** | `npm install @yaver/feedback-web` | Floating button, keyboard shortcut (Ctrl+Shift+F), manual |
+| **React Native** | `npm install @yaver/feedback-react-native` | Shake-to-report, floating button, manual |
+| **Flutter** | `yaver_feedback: ^0.1.0` in pubspec.yaml | Shake, floating button, manual |
+
+All SDKs include: auto device discovery, connection UI, screen recording, voice annotation, three runtime modes (Full Interactive / Semi Interactive / Post Mode), agent commentary, voice commands.
+
+See [Feedback SDK Examples](sdk/examples/feedback/) for demos of each mode.
 
 ## System Health Check
 

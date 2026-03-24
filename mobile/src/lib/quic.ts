@@ -12,9 +12,12 @@
  * - Local task + output cache via AsyncStorage for offline / P2P sync
  */
 
+import { Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { cacheTaskList, cacheTaskOutput, getCachedTaskList, getDeletedTaskIds } from "./storage";
 import { beaconListener } from "./beacon";
 import NetInfo from "@react-native-community/netinfo";
+import type { BuildInfo, BuildSummary } from "./builds";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -244,6 +247,25 @@ export class QuicClient {
 
   getRelayServers(): RelayServer[] {
     return [...this.relayServers];
+  }
+
+  /** Public accessor for the resolved base URL (direct, relay, or tunnel). */
+  get baseUrl(): string {
+    // Cloudflare Tunnel — direct HTTPS to tunnel URL (no relay proxy path)
+    if (this._tunnelUrl) {
+      return this._tunnelUrl;
+    }
+    // Use active relay if we're going through a relay server
+    if (this.activeRelayUrl) {
+      return `${this.activeRelayUrl}/d/${this.deviceId}`;
+    }
+    // Direct connection (same network / Tailscale)
+    return `http://${this.host}:${this.port}`;
+  }
+
+  /** Public accessor for auth headers (for use by builds, vault, etc.). */
+  getAuthHeaders(): Record<string, string> {
+    return this.authHeaders;
   }
 
   /** Get health status for all relay servers. */
@@ -857,6 +879,80 @@ export class QuicClient {
     }
   }
 
+  // ── Builds ────────────────────────────────────────────────────────
+
+  /** List all builds on the connected agent. */
+  async listBuilds(): Promise<BuildSummary[]> {
+    const resp = await this.fetchWithTimeout(`${this.baseUrl}/builds`, {
+      headers: this.authHeaders,
+    }, 10_000);
+    if (!resp.ok) return [];
+    return resp.json();
+  }
+
+  /** Get detailed info for a specific build. */
+  async getBuild(id: string): Promise<BuildInfo | null> {
+    const resp = await this.fetchWithTimeout(`${this.baseUrl}/builds/${id}`, {
+      headers: this.authHeaders,
+    }, 10_000);
+    if (!resp.ok) return null;
+    return resp.json();
+  }
+
+  /** Get the URL for downloading a build artifact. */
+  getArtifactUrl(buildId: string): string {
+    return `${this.baseUrl}/builds/${buildId}/artifact`;
+  }
+
+  /** Start a new build on the connected agent. */
+  async startBuild(platform: string, workDir?: string): Promise<BuildInfo> {
+    this.assertConnected();
+    const resp = await this.fetchWithTimeout(`${this.baseUrl}/builds`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ platform, workDir: workDir || "" }),
+    }, 10_000);
+    if (!resp.ok) throw new Error(`Start build failed: ${resp.status}`);
+    return resp.json();
+  }
+
+  /** Cancel a running build. */
+  async cancelBuild(id: string): Promise<void> {
+    await this.fetchWithTimeout(`${this.baseUrl}/builds/${id}`, {
+      method: "DELETE",
+      headers: this.authHeaders,
+    }, 10_000);
+  }
+
+  /** Start a build targeting the current mobile platform. */
+  async startBuildForMyPlatform(buildSystem: 'flutter' | 'gradle' | 'rn' | 'expo', workDir?: string): Promise<BuildInfo> {
+    const platformMap: Record<string, Record<string, string>> = {
+      flutter: { ios: 'flutter-ipa', android: 'flutter-apk' },
+      gradle: { android: 'gradle-apk' },
+      rn: { ios: 'rn-ios', android: 'rn-android' },
+      expo: { ios: 'expo-ios', android: 'expo-android' },
+    };
+    const platform = platformMap[buildSystem]?.[Platform.OS];
+    if (!platform) throw new Error(`${buildSystem} does not support ${Platform.OS}`);
+    return this.startBuild(platform, workDir);
+  }
+
+  /** Sync vault entries from the connected agent and cache locally. */
+  async syncVault(): Promise<void> {
+    try {
+      const resp = await this.fetchWithTimeout(`${this.baseUrl}/vault/list`, {
+        headers: this.authHeaders,
+      }, 10_000);
+      if (resp.ok) {
+        const entries = await resp.json();
+        // Cache vault entries locally
+        await AsyncStorage.setItem('vault_cache', JSON.stringify(entries));
+      }
+    } catch {
+      // Silent fail — vault sync is best-effort
+    }
+  }
+
   // ── EventEmitter ───────────────────────────────────────────────────
 
   /** Register a listener for output lines. Returns an unsubscribe function. */
@@ -884,21 +980,11 @@ export class QuicClient {
 
   // ── Private helpers ────────────────────────────────────────────────
 
-  private get baseUrl(): string {
-    // Cloudflare Tunnel — direct HTTPS to tunnel URL (no relay proxy path)
-    if (this._tunnelUrl) {
-      return this._tunnelUrl;
-    }
-    // Use active relay if we're going through a relay server
-    if (this.activeRelayUrl) {
-      return `${this.activeRelayUrl}/d/${this.deviceId}`;
-    }
-    // Direct connection (same network / Tailscale)
-    return `http://${this.host}:${this.port}`;
-  }
-
   private get authHeaders(): Record<string, string> {
-    const headers: Record<string, string> = { Authorization: `Bearer ${this.token}` };
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.token}`,
+      'X-Client-Platform': Platform.OS, // 'ios' or 'android'
+    };
     if (this.activeRelayUrl && this.activeRelayPassword) {
       headers['X-Relay-Password'] = this.activeRelayPassword;
     }
@@ -1149,6 +1235,8 @@ export class QuicClient {
       this.reconnectAttempt = 0;
       this.setConnectionState("connected");
       this.startPolling();
+      // Best-effort vault sync on connect
+      this.syncVault();
     } catch (err) {
       this.setConnectionState("error");
       this.scheduleReconnect();

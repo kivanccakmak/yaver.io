@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Yaver Feedback SDK — Post Mode</title>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: -apple-system, sans-serif; background: #0d0d1a; color: #e0e0e0; margin: 0; padding: 20px; }
+    h1 { font-size: 20px; }
+    .mode-badge { display: inline-block; background: #16a34a; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+    pre { background: #111; padding: 12px; border-radius: 8px; font-size: 12px; overflow-x: auto; }
+    code { color: #a78bfa; }
+  </style>
+</head>
+<body>
+  <h1>Post Mode <span class="mode-badge">BATCH</span></h1>
+  <p>Record everything offline. Submit compressed bundle when done. Agent analyzes afterwards.</p>
+
+  <pre><code>import { YaverFeedback } from '@yaver/feedback-web';
+
+// Post Mode: no streaming, pure offline recording
+YaverFeedback.init({
+  trigger: 'floating-button',
+});
+
+// In this mode:
+// 1. User clicks "Start Recording"
+// 2. Screen + mic captured locally (no network traffic)
+// 3. User tests the app, narrates bugs verbally
+// 4. User takes screenshots at key moments
+// 5. User clicks "Stop & Send"
+// 6. SDK compresses video (H.264/VP9), audio (AAC/Opus)
+// 7. Builds metadata: timeline, screenshots, device info, console errors
+// 8. Uploads compressed bundle to agent via multipart POST
+// 9. Agent processes everything at once
+// 10. Agent generates fix prompt from the full session
+//
+// Best for: slow connections, detailed testing sessions, QA workflows
+// Bundle size: ~2-5 MB per minute of recording (720p)
+//
+// On the agent side:
+//   yaver feedback list          — see the report
+//   yaver feedback show <id>     — view timeline + transcript
+//   yaver feedback fix <id>      — create AI task from the report</code></pre>
+
+  <h3>What gets captured (no streaming)</h3>
+  <ul>
+    <li>Screen recording (WebM/VP9 or MP4/H.264)</li>
+    <li>Microphone audio (voice narration)</li>
+    <li>Screenshots with annotations</li>
+    <li>Console errors (automatic)</li>
+    <li>Mouse/tap events timeline</li>
+    <li>Page URL, browser info, viewport size</li>
+    <li>All compressed before upload</li>
+  </ul>
+
+  <h3>What the agent gets</h3>
+  <pre><code>{
+  "source": "in-app-sdk",
+  "deviceInfo": { "platform": "web", "browser": "Chrome", "screenSize": "1920x1080" },
+  "timeline": [
+    { "time": 3.0, "type": "voice", "text": "login button broken" },
+    { "time": 5.0, "type": "screenshot", "file": "screenshot_0.png" },
+    { "time": 8.0, "type": "console-error", "text": "TypeError: undefined is not a function" }
+  ],
+  "transcript": "The login button doesn't respond. Also there's a TypeError in the console.",
+  "consoleErrors": ["TypeError: undefined is not a function at login.js:42"]
+}</code></pre>
+</body>
+</html>

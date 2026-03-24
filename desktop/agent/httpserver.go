@@ -29,6 +29,11 @@ type HTTPServer struct {
 	aclMgr      *ACLManager
 	emailMgr    *EmailManager
 	notifyMgr   *NotificationManager
+	vaultStore  *VaultStore
+	buildMgr    *BuildManager
+	tunnelMgr   *TunnelManager
+	testMgr     *TestManager
+	feedbackMgr *FeedbackManager
 	server      *http.Server
 	onShutdown  func() // called when mobile requests agent shutdown
 
@@ -88,6 +93,34 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// Exec (remote command execution)
 	mux.HandleFunc("/exec", s.auth(s.handleExec))
 	mux.HandleFunc("/exec/", s.auth(s.handleExecByID))
+
+	// Tunnels (TCP port tunneling for hot reload)
+	mux.HandleFunc("/tunnels", s.auth(s.handleTunnels))
+	mux.HandleFunc("/tunnels/", s.auth(s.handleTunnelByID))
+
+	// Tests (automated test sessions)
+	mux.HandleFunc("/tests", s.auth(s.handleTests))
+	mux.HandleFunc("/tests/", s.auth(s.handleTestByID))
+
+	// Feedback (visual bug reports from device testing)
+	mux.HandleFunc("/feedback", s.auth(s.handleFeedback))
+	mux.HandleFunc("/feedback/stream", s.auth(s.handleFeedbackStream))
+	mux.HandleFunc("/feedback/", s.auth(s.handleFeedbackByID))
+
+	// Agent context (repo switching)
+	mux.HandleFunc("/agent/workdir", s.auth(s.handleAgentWorkdir))
+	mux.HandleFunc("/agent/context", s.auth(s.handleAgentContext))
+
+	// Builds (remote build & artifact transfer)
+	mux.HandleFunc("/builds", s.auth(s.handleBuilds))
+	mux.HandleFunc("/builds/register", s.auth(s.handleBuildRegister))
+	mux.HandleFunc("/builds/", s.auth(s.handleBuildByID))
+
+	// Vault (P2P encrypted key sync)
+	mux.HandleFunc("/vault/list", s.auth(s.handleVaultList))
+	mux.HandleFunc("/vault/get", s.auth(s.handleVaultGet))
+	mux.HandleFunc("/vault/set", s.auth(s.handleVaultSet))
+	mux.HandleFunc("/vault/delete", s.auth(s.handleVaultDelete))
 
 	// MCP (Model Context Protocol) endpoint — JSON-RPC 2.0 over HTTP
 	mux.HandleFunc("/mcp", s.handleMCP)

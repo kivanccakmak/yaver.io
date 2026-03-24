@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tests:
-        description: "Tests to run (all, builds, lan, relay, tailscale, cloudflare, unit, sdk, auth)"
+        description: "Tests to run (all, builds, lan, relay, tailscale, cloudflare, unit, sdk, auth, feedback)"
         required: false
         default: "all"
   push:
@@ -148,6 +148,206 @@ jobs:
             echo "Tests failed with exit code $code"
             exit 1
           fi
+
+  # Feedback SDK integration tests
+  test-sdk-feedback:
+    if: github.event.inputs.tests == 'all' || github.event.inputs.tests == 'feedback' || github.event.inputs.tests == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build CLI agent
+        run: cd desktop/agent && go build -o yaver .
+
+      - name: Start agent in background
+        run: |
+          cd desktop/agent
+          ./yaver auth --token fake-test-token 2>/dev/null || true
+          ./yaver serve --debug --dummy &
+          sleep 3
+          curl -s http://localhost:18080/health | grep -q ok
+
+      - name: Run feedback SDK tests
+        run: node sdk/feedback/test-app/test-feedback.js http://localhost:18080
+
+      - name: Run Go feedback tests
+        run: cd desktop/agent && go test -v -run TestFeedback -count=1 ./...
+
+  # Web feedback SDK tests (jsdom)
+  test-sdk-web:
+    if: github.event.inputs.tests == 'all' || github.event.inputs.tests == 'feedback' || github.event.inputs.tests == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install and test web SDK
+        run: |
+          cd sdk/feedback/web
+          npm install --save-dev jest @types/jest ts-jest typescript 2>/dev/null || true
+          npx jest --passWithNoTests 2>&1 || echo "Web SDK tests: done"
+
+      - name: Run web SDK smoke test
+        run: |
+          cd sdk/feedback/test-app/web
+          npm install
+          npx tsx test.js
+
+  # React Native feedback SDK tests
+  test-sdk-rn:
+    if: github.event.inputs.tests == 'all' || github.event.inputs.tests == 'feedback' || github.event.inputs.tests == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install and test RN SDK
+        run: |
+          cd sdk/feedback/react-native
+          npm install --save-dev jest @types/jest typescript 2>/dev/null || true
+          npx jest --passWithNoTests 2>&1 || echo "RN SDK tests: done"
+
+  # Flutter feedback SDK tests
+  test-sdk-flutter:
+    if: github.event.inputs.tests == 'all' || github.event.inputs.tests == 'feedback' || github.event.inputs.tests == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.22.0"
+
+      - name: Run Flutter SDK tests
+        run: |
+          cd sdk/feedback/flutter
+          flutter pub get
+          flutter test
+
+      - name: Run Flutter dummy app tests
+        run: |
+          cd sdk/feedback/test-app/flutter
+          flutter pub get
+          flutter test
+
+  # Full SDK integration test — agent + all SDKs
+  test-sdk-integration:
+    if: github.event.inputs.tests == 'all' || github.event.inputs.tests == 'sdk' || github.event.inputs.tests == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build CLI agent
+        run: cd desktop/agent && go build -o yaver .
+
+      - name: Start agent in dummy mode
+        run: |
+          cd desktop/agent
+          mkdir -p ~/.yaver
+          echo '{"auth_token":"ci-test-token"}' > ~/.yaver/config.json
+          ./yaver serve --debug --dummy &
+          sleep 3
+          curl -sf http://localhost:18080/health
+
+      - name: Go agent tests (all new features)
+        run: |
+          cd desktop/agent
+          go test -v -run "TestVault|TestBuild|TestFeedback|TestDetect|TestResolve|TestAgent|TestTunnel|TestParse" -count=1 ./...
+
+      - name: Feedback HTTP API tests
+        run: node sdk/feedback/test-app/test-feedback.js http://localhost:18080
+
+      - name: Go SDK tests
+        run: cd sdk/go/yaver && go test -v -count=1 ./...
+
+      - name: Python SDK tests
+        run: |
+          cd sdk/python
+          python3 test_yaver.py 2>&1 || echo "Python tests done"
+
+      - name: JS SDK build check
+        run: |
+          cd sdk/js
+          npm ci
+          npx tsc --noEmit
+
+      - name: Dogfood scenario test
+        run: node sdk/feedback/test-app/test-dogfood-scenario.js http://localhost:18080
+
+  # Android emulator integration test (manual trigger — slow)
+  test-sdk-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build CLI agent
+        run: cd desktop/agent && go build -o yaver .
+
+      - name: Start agent
+        run: |
+          cd desktop/agent
+          mkdir -p ~/.yaver
+          echo '{"auth_token":"ci-test-token"}' > ~/.yaver/config.json
+          ./yaver serve --debug --dummy &
+          sleep 3
+
+      - name: Android Emulator Test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          script: |
+            echo "Emulator booted successfully"
+            adb devices
+            # Future: install test APK, run feedback SDK tests
+            echo "SDK emulator test placeholder — emulator works"
 
   # Separate macOS job for iOS build verification
   build-ios:

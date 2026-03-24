@@ -1041,6 +1041,45 @@ AI Agent options:
           </div>
         </section>
 
+        {/* Build, Test & Deploy Pipeline */}
+        <section className="mb-12">
+          <SectionHeading id="pipeline">
+            Build, Test &amp; Deploy Pipeline
+          </SectionHeading>
+          <Prose>
+            The <InlineCode>yaver build</InlineCode>, <InlineCode>yaver test</InlineCode>,{" "}
+            <InlineCode>yaver deploy</InlineCode>, and <InlineCode>yaver pipeline</InlineCode>{" "}
+            commands work with any self-hosted setup &mdash; no cloud CI required.
+            Builds run entirely on your dev machine using your local toolchains
+            (Flutter, Gradle, Xcode, React Native, Expo). Artifacts transfer P2P
+            to your phone or get pushed to TestFlight / Play Store.
+          </Prose>
+
+          <div className="mb-8">
+            <Terminal title="pipeline">
+              <Comment># Build, test, and deploy in one command</Comment>
+              <Cmd>yaver pipeline --test --deploy p2p</Cmd>
+              <Divider />
+              <Comment># Or run each step individually</Comment>
+              <Cmd>yaver build flutter apk</Cmd>
+              <Cmd>yaver test unit</Cmd>
+              <Cmd>yaver deploy --target p2p</Cmd>
+              <Divider />
+              <Comment># Push to app stores</Comment>
+              <Cmd>yaver build push testflight</Cmd>
+              <Cmd>yaver build push playstore</Cmd>
+            </Terminal>
+          </div>
+
+          <Prose>
+            CI integration is optional. If you prefer cloud CI, use{" "}
+            <InlineCode>yaver deploy --ci github</InlineCode> or{" "}
+            <InlineCode>yaver deploy --ci gitlab</InlineCode> to trigger
+            workflows remotely. But for most day-to-day development, P2P builds
+            are faster and free.
+          </Prose>
+        </section>
+
         {/* Bottom CTA */}
         <div className="rounded-xl border border-surface-800 bg-surface-900 p-6 text-center">
           <p className="mb-2 text-sm font-medium text-surface-200">
