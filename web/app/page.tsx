@@ -3,6 +3,72 @@
 import Link from "next/link";
 import { useState } from "react";
 
+const CONVEX_SITE_URL =
+  process.env.NEXT_PUBLIC_CONVEX_SITE_URL ||
+  "https://shocking-echidna-394.eu-west-1.convex.site";
+
+function WaitlistButton({ plan }: { plan: string }) {
+  const [email, setEmail] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [showInput, setShowInput] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!email.includes("@")) return;
+    setLoading(true);
+    try {
+      await fetch(`${CONVEX_SITE_URL}/dev/log`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "web", level: "info", tag: "waitlist",
+          message: `Waitlist signup: ${plan}`,
+          data: JSON.stringify({ email, plan, timestamp: new Date().toISOString() }),
+        }),
+      });
+    } catch { /* best effort */ }
+    setSubmitted(true);
+    setLoading(false);
+  };
+
+  if (submitted) {
+    return (
+      <div className="block w-full rounded-lg border border-[#22c55e]/40 bg-[#22c55e]/10 py-2.5 text-center text-sm font-medium text-[#22c55e]">
+        You&apos;re on the list!
+      </div>
+    );
+  }
+
+  if (!showInput) {
+    return (
+      <button
+        onClick={() => setShowInput(true)}
+        className="block w-full rounded-lg border border-surface-700 bg-surface-800/50 py-2.5 text-center text-sm font-medium text-surface-300 transition-colors hover:bg-surface-800 hover:text-surface-100"
+      >
+        Join Waitlist
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex gap-2">
+      <input
+        type="email" placeholder="your@email.com" value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+        className="flex-1 rounded-lg border border-surface-700 bg-surface-900 px-3 py-2 text-sm text-surface-200 placeholder:text-surface-600 focus:border-[#6366f1] focus:outline-none"
+        autoFocus
+      />
+      <button
+        onClick={handleSubmit} disabled={loading || !email.includes("@")}
+        className="rounded-lg bg-[#6366f1] px-4 py-2 text-sm font-medium text-white hover:bg-[#5558e6] disabled:opacity-50"
+      >
+        {loading ? "..." : "Go"}
+      </button>
+    </div>
+  );
+}
+
 function FAQItem({ question, answer }: { question: string; answer: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -195,7 +261,7 @@ export default function HomePage() {
               <Link href="/download" className="btn-primary px-8 py-3 text-sm font-medium">
                 Get the App &mdash; Free
               </Link>
-              <Link href="/pricing" className="btn-secondary px-8 py-3 text-sm font-medium">
+              <Link href="#pricing" className="btn-secondary px-8 py-3 text-sm font-medium">
                 See Pricing &rarr;
               </Link>
             </div>
@@ -1103,247 +1169,162 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Self-Hosting */}
-      <section className="border-t border-surface-800/60 px-6 py-24">
-        <div className="mx-auto max-w-4xl">
+      {/* Pricing */}
+      <section id="pricing" className="border-t border-surface-800/60 px-6 py-24">
+        <div className="mx-auto max-w-5xl">
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
-            Relay options
+            Simple, honest pricing
           </h2>
           <p className="mx-auto mb-12 max-w-2xl text-center text-sm text-surface-400">
-            Use our managed relay for zero setup, self-host on any VPS, or skip the relay
-            entirely with Tailscale. The relay is a pass-through proxy &mdash; it stores nothing.
+            Your code stays on your machine. We handle the infrastructure.
+            Self-host everything for free, or let us run it for you.
           </p>
 
-          {/* Managed relay callout */}
-          <div className="mb-8 rounded-xl border border-[#6366f1]/30 bg-[#6366f1]/5 p-6">
-            <div className="flex flex-col items-center gap-4 sm:flex-row">
-              <div className="flex-1">
-                <div className="mb-1 flex items-center gap-2">
-                  <span className="rounded-full bg-[#6366f1]/20 px-2 py-0.5 text-[10px] font-medium text-[#818cf8]">
-                    coming soon
-                  </span>
-                  <h3 className="text-sm font-semibold text-surface-100">Managed Relay</h3>
-                </div>
-                <p className="text-sm text-surface-400">
-                  No VPS, no Docker, no DNS records. Zero-config P2P tunneling,
-                  auto-provisioned. Multi-region, auto-failover, always up to date.
-                </p>
+          {/* Plan cards */}
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            {/* Self-Hosted */}
+            <div className="flex flex-col rounded-2xl border border-surface-800 bg-[#1a1d27] p-6">
+              <h3 className="text-base font-semibold text-surface-100">Self-Hosted</h3>
+              <p className="mt-1 text-xs text-surface-500">MIT licensed</p>
+              <div className="my-5">
+                <span className="text-3xl font-bold text-surface-50">$0</span>
+                <span className="ml-1 text-sm text-surface-500">free forever</span>
               </div>
-              <span className="shrink-0 rounded-lg border border-surface-700 bg-surface-800/50 px-5 py-2 text-sm font-medium text-surface-400">
-                $10/mo &mdash; soon
-              </span>
+              <ul className="mb-6 flex-1 space-y-2.5 text-xs text-surface-300">
+                <li>Run your own relay server</li>
+                <li>Fork, hack, self-host everything</li>
+                <li>All features included</li>
+                <li>Unlimited devices</li>
+              </ul>
+              <Link
+                href="https://github.com/kivanccakmak/yaver.io"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block w-full rounded-lg border border-surface-700 py-2.5 text-center text-sm font-medium text-surface-300 hover:border-surface-500 hover:text-surface-100"
+              >
+                Get Started
+              </Link>
+            </div>
+
+            {/* Managed Relay */}
+            <div className="flex flex-col rounded-2xl border border-surface-800 bg-[#1a1d27] p-6">
+              <h3 className="text-base font-semibold text-surface-100">Managed Relay</h3>
+              <p className="mt-1 text-xs text-surface-500">Zero-config P2P tunneling</p>
+              <div className="my-5">
+                <span className="text-3xl font-bold text-surface-50">$10</span>
+                <span className="ml-1 text-sm text-surface-500">/mo</span>
+              </div>
+              <ul className="mb-6 flex-1 space-y-2.5 text-xs text-surface-300">
+                <li>No VPS or port forwarding</li>
+                <li>Works on any network</li>
+                <li>Auto-provisioned in minutes</li>
+                <li>Your own subdomain</li>
+              </ul>
+              <WaitlistButton plan="relay" />
+            </div>
+
+            {/* CPU Machine */}
+            <div className="relative flex flex-col rounded-2xl border border-[#6366f1]/40 bg-[#1a1d27] p-6">
+              <div className="absolute -top-3 right-6">
+                <span className="rounded-full bg-[#6366f1] px-3 py-1 text-[10px] font-semibold text-white">popular</span>
+              </div>
+              <h3 className="text-base font-semibold text-surface-100">CPU Machine</h3>
+              <p className="mt-1 text-xs text-surface-500">Dedicated dev machine</p>
+              <div className="my-5">
+                <span className="text-3xl font-bold text-surface-50">$49</span>
+                <span className="ml-1 text-sm text-surface-500">/mo</span>
+              </div>
+              <ul className="mb-6 flex-1 space-y-2.5 text-xs text-surface-300">
+                <li>8 vCPU / 16 GB RAM / 160 GB NVMe</li>
+                <li>Node.js, Python, Go, Rust, Docker</li>
+                <li>Expo CLI + EAS CLI pre-installed</li>
+                <li>Build iOS without a Mac</li>
+                <li>Managed relay included</li>
+                <li>Yaver server pre-installed</li>
+              </ul>
+              <WaitlistButton plan="cpu" />
+            </div>
+
+            {/* GPU Machine */}
+            <div className="relative flex flex-col rounded-2xl border border-[#76b900]/40 bg-[#76b900]/[0.03] p-6">
+              <div className="absolute -top-3 right-6">
+                <span className="rounded-full bg-[#76b900] px-3 py-1 text-[10px] font-semibold text-white">GPU</span>
+              </div>
+              <h3 className="text-base font-semibold text-surface-100">GPU Machine</h3>
+              <p className="mt-1 text-xs text-surface-500">NVIDIA RTX 4000</p>
+              <div className="my-5">
+                <span className="text-3xl font-bold text-surface-50">$449</span>
+                <span className="ml-1 text-sm text-surface-500">/mo</span>
+              </div>
+              <ul className="mb-6 flex-1 space-y-2.5 text-xs text-surface-300">
+                <li>RTX 4000 &mdash; 20 GB VRAM</li>
+                <li>Everything in CPU Machine, plus:</li>
+                <li>Ollama + Qwen 2.5 Coder 32B</li>
+                <li>PersonaPlex 7B &mdash; voice AI</li>
+                <li>Full local AI stack &mdash; no API keys</li>
+                <li>Multi-user team support</li>
+              </ul>
+              <WaitlistButton plan="gpu" />
             </div>
           </div>
 
-          {/* Cloud Dev Machine callout */}
-          <div className="mb-8 space-y-4">
-            <div className="flex items-center gap-2">
-              <span className="rounded-full bg-[#06b6d4]/20 px-2 py-0.5 text-[10px] font-medium text-[#22d3ee]">
-                coming soon
-              </span>
-              <h3 className="text-sm font-semibold text-surface-100">Cloud Dev Machines</h3>
+          {/* Self-host relay */}
+          <div className="mt-12">
+            <h3 className="mb-4 text-center text-lg font-semibold text-surface-100">
+              Or self-host the relay for free
+            </h3>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+                <div className="mb-3 flex items-center gap-2">
+                  <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-400">recommended</span>
+                  <h4 className="text-sm font-semibold text-surface-100">One-command setup</h4>
+                </div>
+                <div className="terminal">
+                  <div className="terminal-header">
+                    <div className="terminal-dot bg-[#ff5f57]" />
+                    <div className="terminal-dot bg-[#febc2e]" />
+                    <div className="terminal-dot bg-[#28c840]" />
+                    <span className="ml-3 text-xs text-surface-500">your laptop</span>
+                  </div>
+                  <div className="terminal-body space-y-2 text-[13px]">
+                    <div>
+                      <span className="text-surface-400">$</span>{" "}
+                      <span className="text-surface-200 select-all">
+                        ./scripts/setup-relay.sh 1.2.3.4 relay.example.com --password secret
+                      </span>
+                    </div>
+                    <div className="pl-2 text-green-400/80">Relay running at https://relay.example.com</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
+                <h4 className="mb-3 text-sm font-semibold text-surface-100">Docker</h4>
+                <div className="terminal">
+                  <div className="terminal-header">
+                    <div className="terminal-dot bg-[#ff5f57]" />
+                    <div className="terminal-dot bg-[#febc2e]" />
+                    <div className="terminal-dot bg-[#28c840]" />
+                    <span className="ml-3 text-xs text-surface-500">on your VPS</span>
+                  </div>
+                  <div className="terminal-body space-y-2 text-[13px]">
+                    <div>
+                      <span className="text-surface-400">$</span>{" "}
+                      <span className="text-surface-200 select-all">cd relay &amp;&amp; RELAY_PASSWORD=secret docker compose up -d</span>
+                    </div>
+                    <div className="pl-2 text-green-400/80">{`{"status":"ok"}`}</div>
+                  </div>
+                </div>
+              </div>
             </div>
-            <p className="text-sm text-surface-400">
-              Linux dev environments provisioned for you. Accessible via Yaver mobile or SSH &mdash; your fallback dev machine when you&apos;re away from your hardware.
+            <p className="mt-4 text-center text-xs text-surface-500">
+              Or skip the relay entirely with{" "}
+              <code className="rounded bg-surface-800 px-1.5 py-0.5 text-surface-300">yaver serve --no-relay</code>
+              {" "}and Tailscale.{" "}
+              <Link href="/docs/self-hosting" className="text-surface-300 underline hover:text-surface-100">
+                Full self-hosting guide &rarr;
+              </Link>
             </p>
-
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {/* CPU Dev Machine */}
-              <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
-                <div className="mb-3 flex items-center justify-between">
-                  <h4 className="text-sm font-semibold text-surface-100">CPU Dev Machine</h4>
-                  <span className="rounded-lg border border-surface-700 bg-surface-800 px-3 py-1 text-xs font-medium text-surface-300">
-                    from $49/mo
-                  </span>
-                </div>
-                <p className="mb-3 text-xs text-surface-500">Your own dedicated cloud dev environment for building, testing, and deploying &mdash; always-on, entirely yours.</p>
-                <ul className="space-y-1.5 text-xs text-surface-400">
-                  <li>4 vCPU / 8 GB RAM / 80 GB NVMe &mdash; or 8 vCPU / 16 GB RAM / 160 GB NVMe ($49/mo Pro)</li>
-                  <li>Pre-installed: Node.js, Python, Go, Rust, Docker, Expo CLI, EAS CLI</li>
-                  <li>EAS Build: <code className="text-[#22d3ee]">yaver expo build ios --eas</code> &mdash; build iOS without a Mac</li>
-                  <li>Expo vibe coding: <code className="text-[#22d3ee]">yaver expo start</code> &rarr; hot reload on your phone via P2P</li>
-                  <li>Shake phone &rarr; visual feedback &rarr; AI fixes code &rarr; hot reload loop</li>
-                  <li>GitHub / GitLab repo auto-clone on provision</li>
-                  <li>Built-in relay server &mdash; use on-prem and cloud together</li>
-                  <li>Accessible via Yaver mobile app or SSH</li>
-                  <li>Credentials never leave your machine &mdash; EAS tokens, Apple certs stay P2P</li>
-                </ul>
-              </div>
-
-              {/* GPU Dev Machine */}
-              <div className="rounded-xl border border-[#76b900]/30 bg-[#76b900]/5 p-5">
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <h4 className="text-sm font-semibold text-surface-100">GPU Dev Machine</h4>
-                    <span className="rounded-full bg-[#76b900]/20 px-2 py-0.5 text-[10px] font-medium text-[#76b900]">recommended</span>
-                  </div>
-                  <span className="rounded-lg border border-[#76b900]/30 bg-[#76b900]/10 px-3 py-1 text-xs font-medium text-[#76b900]">
-                    $449/mo
-                  </span>
-                </div>
-                <p className="mb-3 text-xs text-surface-500">Everything in the CPU tier, plus a dedicated GPU for voice AI, local LLMs, and ML workloads &mdash; the full mobile coding experience.</p>
-                <ul className="space-y-1.5 text-xs text-surface-400">
-                  <li>Dedicated server + <strong className="text-surface-200">NVIDIA RTX 4000 GPU</strong> (20 GB VRAM) &mdash; entirely yours</li>
-                  <li>Everything in CPU Dev Machine, plus:</li>
-                  <li><strong className="text-surface-200">Qwen 2.5 Coder 32B via Ollama</strong> &mdash; GPT-4o-class open-source coding LLM, runs entirely on-device</li>
-                  <li><strong className="text-surface-200">PersonaPlex 7B pre-loaded</strong> &mdash; speak tasks from your phone, hands-free mobile coding</li>
-                  <li>Voice feedback loop: shake phone &rarr; speak what&apos;s broken &rarr; AI hears, fixes code, rebuilds &rarr; hot reload</li>
-                  <li>Full local AI stack: Ollama + Qwen 2.5 Coder + PersonaPlex + Whisper &mdash; no API keys, no cloud, no cost</li>
-                  <li>Run additional models: vLLM, Stable Diffusion, or any HuggingFace model that fits in 24 GB VRAM</li>
-                  <li>GPU-accelerated builds for ML/AI projects</li>
-                  <li>On-prem everything &mdash; code, voice, AI inference &mdash; no data leaves your machine</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {/* Option 1: Automated */}
-            <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
-              <div className="mb-3 flex items-center gap-2">
-                <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-400">
-                  recommended
-                </span>
-                <h3 className="text-sm font-semibold text-surface-100">One-command setup</h3>
-              </div>
-              <p className="mb-4 text-xs text-surface-400">
-                Installs Docker, nginx, Let&apos;s Encrypt SSL, firewall, and deploys the relay container.
-                Needs a VPS with SSH access and a DNS A record.
-              </p>
-              <div className="terminal">
-                <div className="terminal-header">
-                  <div className="terminal-dot bg-[#ff5f57]" />
-                  <div className="terminal-dot bg-[#febc2e]" />
-                  <div className="terminal-dot bg-[#28c840]" />
-                  <span className="ml-3 text-xs text-surface-500">your laptop</span>
-                </div>
-                <div className="terminal-body space-y-2 text-[13px]">
-                  <div>
-                    <span className="text-surface-400">$</span>{" "}
-                    <span className="text-surface-200 select-all">
-                      ./scripts/setup-relay.sh 1.2.3.4 relay.example.com --password secret
-                    </span>
-                  </div>
-                  <div className="pl-2 text-green-400/80">
-                    Relay running at https://relay.example.com
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Option 2: Docker manual */}
-            <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
-              <h3 className="mb-3 text-sm font-semibold text-surface-100">Docker (manual)</h3>
-              <p className="mb-4 text-xs text-surface-400">
-                Clone only the relay directory, set a password, start with Docker Compose.
-                Add nginx + Let&apos;s Encrypt for HTTPS.
-              </p>
-              <div className="terminal">
-                <div className="terminal-header">
-                  <div className="terminal-dot bg-[#ff5f57]" />
-                  <div className="terminal-dot bg-[#febc2e]" />
-                  <div className="terminal-dot bg-[#28c840]" />
-                  <span className="ml-3 text-xs text-surface-500">on your VPS</span>
-                </div>
-                <div className="terminal-body space-y-2 text-[13px]">
-                  <div className="text-surface-500"># sparse clone + start</div>
-                  <div>
-                    <span className="text-surface-400">$</span>{" "}
-                    <span className="text-surface-200 select-all">
-                      RELAY_PASSWORD=secret docker compose up -d
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-surface-400">$</span>{" "}
-                    <span className="text-surface-200">curl localhost:8443/health</span>
-                  </div>
-                  <div className="pl-2 text-green-400/80">
-                    {`{"status":"ok"}`}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Option 3: Native binary */}
-            <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
-              <h3 className="mb-3 text-sm font-semibold text-surface-100">Native binary (no Docker)</h3>
-              <p className="mb-4 text-xs text-surface-400">
-                Cross-compile the Go binary, copy to server, run directly or as a systemd service.
-                No container runtime needed.
-              </p>
-              <div className="terminal">
-                <div className="terminal-header">
-                  <div className="terminal-dot bg-[#ff5f57]" />
-                  <div className="terminal-dot bg-[#febc2e]" />
-                  <div className="terminal-dot bg-[#28c840]" />
-                  <span className="ml-3 text-xs text-surface-500">build &amp; deploy</span>
-                </div>
-                <div className="terminal-body space-y-2 text-[13px]">
-                  <div>
-                    <span className="text-surface-400">$</span>{" "}
-                    <span className="text-surface-200 select-all">
-                      cd relay &amp;&amp; GOOS=linux go build -o yaver-relay .
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-surface-400">$</span>{" "}
-                    <span className="text-surface-200 select-all">
-                      scp yaver-relay root@vps:/usr/local/bin/
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-surface-400">$</span>{" "}
-                    <span className="text-surface-200">
-                      ssh root@vps &apos;RELAY_PASSWORD=secret yaver-relay serve&apos;
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Option 4: Tailscale */}
-            <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
-              <h3 className="mb-3 text-sm font-semibold text-surface-100">No relay (Tailscale)</h3>
-              <p className="mb-4 text-xs text-surface-400">
-                Skip the relay entirely. Install Tailscale on both devices, connect
-                over your tailnet. WireGuard end-to-end encryption, ~5ms latency.
-              </p>
-              <div className="terminal">
-                <div className="terminal-header">
-                  <div className="terminal-dot bg-[#ff5f57]" />
-                  <div className="terminal-dot bg-[#febc2e]" />
-                  <div className="terminal-dot bg-[#28c840]" />
-                  <span className="ml-3 text-xs text-surface-500">terminal</span>
-                </div>
-                <div className="terminal-body space-y-2 text-[13px]">
-                  <div>
-                    <span className="text-surface-400">$</span>{" "}
-                    <span className="text-surface-200 select-all">
-                      yaver serve --no-relay
-                    </span>
-                  </div>
-                  <div className="pl-2 text-green-400/80">
-                    Listening on tailnet...
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="mx-auto mt-8 max-w-2xl rounded-xl border border-surface-800 bg-surface-900/50 p-4">
-            <p className="text-center text-sm text-surface-400">
-              <strong className="text-surface-200">VPS requirements:</strong>{" "}
-              1 vCPU, 512 MB RAM, any Linux. DigitalOcean, Linode, AWS, or any VPS works.
-            </p>
-          </div>
-
-          <div className="mt-6 text-center">
-            <Link
-              href="/docs/self-hosting"
-              className="text-sm text-surface-300 underline underline-offset-2 hover:text-surface-100"
-            >
-              Full self-hosting guide &rarr;
-            </Link>
           </div>
         </div>
       </section>
