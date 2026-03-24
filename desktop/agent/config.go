@@ -26,6 +26,7 @@ type Config struct {
 	Email         *EmailConfig        `json:"email,omitempty"`
 	ACLPeers      []ACLPeerConfig     `json:"acl_peers,omitempty"`
 	Speech        *SpeechConfig       `json:"speech,omitempty"`
+	Voice         *VoiceConfig        `json:"voice,omitempty"`
 	Notifications *NotificationConfig `json:"notifications,omitempty"`
 	WebhookSecret string              `json:"webhook_secret,omitempty"`
 	HAURL         string              `json:"ha_url,omitempty"`

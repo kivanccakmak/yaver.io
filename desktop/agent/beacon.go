@@ -18,11 +18,12 @@ const (
 
 // beaconPayload is the JSON broadcast on the LAN.
 type beaconPayload struct {
-	Version       int    `json:"v"`
-	DeviceID      string `json:"id"` // first 8 chars
-	Port          int    `json:"p"`
-	Name          string `json:"n"`
-	TokenFingerprint string `json:"th"` // first 8 chars of SHA256(userId)
+	Version          int    `json:"v"`
+	DeviceID         string `json:"id"`            // first 8 chars
+	Port             int    `json:"p"`
+	Name             string `json:"n"`
+	TokenFingerprint string `json:"th"`            // first 8 chars of SHA256(userId)
+	VoiceCapable     bool   `json:"vc,omitempty"`  // true if voice transcription is available
 }
 
 // tokenFingerprint returns the first 8 hex chars of SHA256(userId).

@@ -87,7 +87,61 @@ Yaver is an open-source P2P tool that lets developers use any AI coding agent (C
 5. **Multi-relay redundancy** — Multiple relay servers can be configured. If one goes down, traffic routes through others. Clients try all relays in priority order.
 6. **Application-layer only** — No TUN/TAP, no VPN rights. Won't conflict with user's existing VPN.
 7. **LLM-agnostic** — Works with any terminal AI agent: Claude Code, Codex, Aider, Ollama, Qwen, etc.
+9. **Voice-first mobile** — Voice input is always available in the mobile app and Feedback SDK. Audio is recorded on-device and sent to the agent for transcription. S2S providers (PersonaPlex, OpenAI Realtime) are optional for real-time voice conversations.
+10. **Provider-agnostic voice** — Like LLM-agnosticism for coding agents, voice is provider-agnostic: PersonaPlex (free, on-prem), OpenAI Realtime (paid, cloud), or any future provider via the VoiceProvider interface.
 8. **Session Transfer** — Transfer AI agent sessions (Claude Code, Aider, Codex, Goose, Amp, OpenCode) between machines via `yaver session transfer`. Includes conversation history, agent-specific state files, and optional workspace (via git or tar). Also available as MCP tools for use directly from within AI agents.
+
+## Voice AI Architecture
+
+Yaver supports provider-agnostic real-time voice AI. Voice input is always available (mobile/SDK can always record and send audio). Speech-to-speech providers are optional enhancements.
+
+### Providers
+
+| Provider | Type | Cost | GPU | Setup |
+|----------|------|------|-----|-------|
+| NVIDIA PersonaPlex 7B | On-prem S2S | Free | NVIDIA A100/H100 or Apple Silicon | `yaver voice setup --provider personaplex` |
+| OpenAI Realtime API | Cloud S2S | Paid per token | None (cloud) | `yaver voice setup --provider openai --api-key <key>` |
+| Whisper (local) | STT only | Free | Optional | `yaver config set speech.provider whisper` |
+| OpenAI Whisper API | STT only | $0.003/min | None | `yaver config set speech.provider openai` |
+| Deepgram Nova-2 | STT only | $0.004/min | None | `yaver config set speech.provider deepgram` |
+| AssemblyAI | STT only | $0.002/min | None | `yaver config set speech.provider assemblyai` |
+
+### How Voice Flows
+
+```
+Phone (mic) → Yaver mobile/SDK → agent HTTP /voice/transcribe → Provider (S2S or STT)
+                                                                      ↓
+Phone (text result) ← agent HTTP response ← transcribed text ←───────┘
+```
+
+- **Always-on voice input**: Mobile app and Feedback SDK always show a mic button. Audio is recorded on-device.
+- **Auto-transcription**: If STT or S2S is configured on the agent, audio is transcribed automatically.
+- **Fallback**: If no provider is configured, raw audio is saved and attached to the task/feedback for the AI agent.
+- **Capability discovery**: Mobile checks `/voice/status` and `/info` (includes `voiceInputEnabled`, `voiceProvider`, `sttProvider`). Beacon includes `vc` flag.
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `desktop/agent/voice.go` | VoiceProvider interface, registry, GPU detection |
+| `desktop/agent/voice_personaplex.go` | PersonaPlex 7B provider (download, serve, stream) |
+| `desktop/agent/voice_openai.go` | OpenAI Realtime API provider |
+| `desktop/agent/voice_cmd.go` | CLI: `yaver voice setup/serve/status/test/providers` |
+| `desktop/agent/voice_http.go` | HTTP: `/voice/status`, `/voice/transcribe`, `/voice/providers`, `/voice/config` |
+| `desktop/agent/voice_test.go` | Unit tests for voice subsystem |
+| `sdk/feedback/react-native/src/types.ts` | `VoiceCapability` type, `voiceEnabled` in FeedbackConfig |
+| `sdk/feedback/react-native/src/P2PClient.ts` | `voiceStatus()`, `transcribeVoice()` methods |
+
+### Cloud Dev Machine (GPU tier)
+
+Three tiers (all dedicated, no sharing):
+- **CPU Dev Machine** ($29/mo) — 4 vCPU / 8 GB RAM / 80 GB NVMe (Hetzner CX32). Pre-installed: Node.js, Python, Go, Rust, Docker, Expo CLI, EAS CLI.
+- **Pro CPU Machine** ($49/mo) — 8 vCPU / 16 GB RAM / 160 GB NVMe (Hetzner CX42). Everything in CPU, doubled resources.
+- **GPU Dev Machine** ($299/mo) — Dedicated NVIDIA RTX 4000, 20 GB VRAM (Hetzner GEX44). Includes Ollama + Qwen 2.5 Coder 32B, PersonaPlex 7B (voice AI), Whisper (STT). Full local AI stack.
+- **Managed Relay** ($10/mo) — shared relay infra, no dedicated server.
+- **Teams** ($15/user/mo, min 3 users) — relay + team admin + centralized billing.
+
+**Important**: Never mention Hetzner, server costs, or infrastructure provider in customer-facing content (landing page, CLI output, emails). Customers buy convenience and reliability, not a reseller relationship.
 
 ## Networking Stack
 

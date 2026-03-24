@@ -107,6 +107,12 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/feedback/stream", s.auth(s.handleFeedbackStream))
 	mux.HandleFunc("/feedback/", s.auth(s.handleFeedbackByID))
 
+	// Voice (real-time speech-to-speech & transcription)
+	mux.HandleFunc("/voice/status", s.auth(s.handleVoiceStatus))
+	mux.HandleFunc("/voice/transcribe", s.auth(s.handleVoiceTranscribe))
+	mux.HandleFunc("/voice/providers", s.auth(s.handleVoiceProviders))
+	mux.HandleFunc("/voice/config", s.auth(s.handleVoiceConfig))
+
 	// Agent context (repo switching)
 	mux.HandleFunc("/agent/workdir", s.auth(s.handleAgentWorkdir))
 	mux.HandleFunc("/agent/context", s.auth(s.handleAgentContext))
@@ -223,12 +229,31 @@ func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPServer) handleInfo(w http.ResponseWriter, r *http.Request) {
 	hostname, _ := os.Hostname()
-	jsonReply(w, http.StatusOK, map[string]interface{}{
+	info := map[string]interface{}{
 		"ok":       true,
 		"hostname": hostname,
 		"version":  version,
 		"workDir":  s.taskMgr.workDir,
-	})
+	}
+
+	// Voice capability — always true (mobile can always send audio)
+	info["voiceInputEnabled"] = true
+
+	// S2S provider status
+	cfg, _ := LoadConfig()
+	if cfg != nil && cfg.Voice != nil && cfg.Voice.S2SProvider != "" {
+		if p, ok := GetVoiceProvider(cfg.Voice.S2SProvider); ok {
+			status := p.Status()
+			info["voiceProvider"] = status.Provider
+			info["voiceReady"] = status.Ready
+		}
+	}
+	// STT available
+	if cfg != nil && cfg.Speech != nil && cfg.Speech.Provider != "" {
+		info["sttProvider"] = cfg.Speech.Provider
+	}
+
+	jsonReply(w, http.StatusOK, info)
 }
 
 // handleAgentStatus returns detailed agent and runner health status.

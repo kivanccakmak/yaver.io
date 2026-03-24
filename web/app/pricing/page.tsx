@@ -4,13 +4,20 @@ import Link from "next/link";
 import { Suspense, useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 
-const MONTHLY_CHECKOUT_URL =
-  "https://yaver.lemonsqueezy.com/checkout/buy/MONTHLY_PRODUCT_ID";
-const YEARLY_CHECKOUT_URL =
-  "https://yaver.lemonsqueezy.com/checkout/buy/YEARLY_PRODUCT_ID";
+/* ── LemonSqueezy checkout URLs ─────────────────────────────────── */
+const CHECKOUT = {
+  relay:       "https://yaver.lemonsqueezy.com/checkout/buy/RELAY_PRODUCT_ID",
+  cpu:         "https://yaver.lemonsqueezy.com/checkout/buy/CPU_PRODUCT_ID",
+  pro_cpu:     "https://yaver.lemonsqueezy.com/checkout/buy/PRO_CPU_PRODUCT_ID",
+  gpu:         "https://yaver.lemonsqueezy.com/checkout/buy/GPU_PRODUCT_ID",
+  teams:       "https://yaver.lemonsqueezy.com/checkout/buy/TEAMS_PRODUCT_ID",
+} as const;
 
-const CONVEX_SITE_URL = process.env.NEXT_PUBLIC_CONVEX_SITE_URL || "https://shocking-echidna-394.eu-west-1.convex.site";
+const CONVEX_SITE_URL =
+  process.env.NEXT_PUBLIC_CONVEX_SITE_URL ||
+  "https://shocking-echidna-394.eu-west-1.convex.site";
 
+/* ── Provisioning progress (kept from original) ──────────────────── */
 const PROVISIONING_STEPS = [
   { label: "Creating your dedicated server...", key: "creating" },
   { label: "Setting up DNS (yourname.relay.yaver.io)...", key: "dns" },
@@ -20,7 +27,9 @@ const PROVISIONING_STEPS = [
   { label: "Your relay is ready!", key: "ready" },
 ];
 
-type ProvisioningStatus = "pending" | "creating" | "dns" | "ssl" | "deploying" | "health" | "ready" | "error";
+type ProvisioningStatus =
+  | "pending" | "creating" | "dns" | "ssl"
+  | "deploying" | "health" | "ready" | "error";
 
 function ProvisioningProgress() {
   const [status, setStatus] = useState<ProvisioningStatus>("creating");
@@ -34,17 +43,13 @@ function ProvisioningProgress() {
       });
       if (!res.ok) return;
       const data = await res.json();
-      if (data.provisioningStatus) {
+      if (data.provisioningStatus)
         setStatus(data.provisioningStatus as ProvisioningStatus);
-      }
-      if (data.relayUrl) {
-        setRelayUrl(data.relayUrl);
-      }
-      if (data.provisioningStatus === "error") {
+      if (data.relayUrl) setRelayUrl(data.relayUrl);
+      if (data.provisioningStatus === "error")
         setError(data.error || "Provisioning failed. Please contact support.");
-      }
     } catch {
-      // Silently retry on next poll
+      /* retry on next poll */
     }
   }, []);
 
@@ -54,14 +59,17 @@ function ProvisioningProgress() {
     return () => clearInterval(interval);
   }, [pollStatus]);
 
-  const currentStepIndex = PROVISIONING_STEPS.findIndex((s) => s.key === status);
+  const currentStepIndex = PROVISIONING_STEPS.findIndex(
+    (s) => s.key === status,
+  );
 
   return (
     <div className="mx-auto max-w-lg rounded-2xl border border-[#6366f1]/40 bg-[#1a1d27] p-8">
       <h2 className="mb-6 text-center text-xl font-bold text-surface-50">
-        {status === "ready" ? "Your relay is live!" : "Setting up your relay..."}
+        {status === "ready"
+          ? "Your relay is live!"
+          : "Setting up your relay..."}
       </h2>
-
       {error ? (
         <div className="rounded-lg bg-red-500/10 p-4 text-center text-sm text-red-400">
           {error}
@@ -71,8 +79,6 @@ function ProvisioningProgress() {
           {PROVISIONING_STEPS.map((step, i) => {
             const isComplete = i < currentStepIndex || status === "ready";
             const isCurrent = i === currentStepIndex && status !== "ready";
-            const isPending = i > currentStepIndex && status !== "ready";
-
             return (
               <div key={step.key} className="flex items-center gap-3">
                 <div className="flex h-6 w-6 shrink-0 items-center justify-center">
@@ -86,15 +92,7 @@ function ProvisioningProgress() {
                     <div className="h-3 w-3 rounded-full bg-surface-700" />
                   )}
                 </div>
-                <span
-                  className={`text-sm ${
-                    isComplete
-                      ? "text-surface-300"
-                      : isCurrent
-                        ? "font-medium text-surface-100"
-                        : "text-surface-600"
-                  }`}
-                >
+                <span className={`text-sm ${isComplete ? "text-surface-300" : isCurrent ? "font-medium text-surface-100" : "text-surface-600"}`}>
                   {step.key === "ready" && status === "ready" ? (
                     <span className="text-[#22c55e]">{step.label}</span>
                   ) : (
@@ -106,11 +104,12 @@ function ProvisioningProgress() {
           })}
         </div>
       )}
-
       {relayUrl && status === "ready" && (
         <div className="mt-6 rounded-lg bg-[#0f1117] p-4 text-center">
           <p className="mb-1 text-xs text-surface-500">Your relay URL</p>
-          <p className="font-mono text-sm font-medium text-[#6366f1]">{relayUrl}</p>
+          <p className="font-mono text-sm font-medium text-[#6366f1]">
+            {relayUrl}
+          </p>
           <p className="mt-3 text-xs text-surface-500">
             This relay is now configured in your devices automatically.
           </p>
@@ -120,26 +119,30 @@ function ProvisioningProgress() {
   );
 }
 
+/* ── Small helpers ──────────────────────────────────────────────── */
+function Check({ accent = "text-surface-500" }: { accent?: string }) {
+  return (
+    <svg className={`h-4 w-4 shrink-0 ${accent}`} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+    </svg>
+  );
+}
+
 function FAQItem({ question, answer }: { question: string; answer: string }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="border-b border-surface-800/60">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between py-5 text-left"
-      >
+      <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between py-5 text-left">
         <span className="text-sm font-medium text-surface-100">{question}</span>
         <span className="ml-4 shrink-0 text-surface-500">{open ? "\u2212" : "+"}</span>
       </button>
-      {open && (
-        <p className="pb-5 text-sm leading-relaxed text-surface-400">{answer}</p>
-      )}
+      {open && <p className="pb-5 text-sm leading-relaxed text-surface-400">{answer}</p>}
     </div>
   );
 }
 
+/* ── Main pricing content ──────────────────────────────────────── */
 function PricingContent() {
-  const [billing, setBilling] = useState<"monthly" | "yearly">("monthly");
   const searchParams = useSearchParams();
   const showProvisioning = searchParams.get("success") === "true";
 
@@ -149,10 +152,7 @@ function PricingContent() {
         <div className="mx-auto max-w-4xl">
           <ProvisioningProgress />
           <div className="mt-8 text-center">
-            <Link
-              href="/pricing"
-              className="text-xs text-surface-500 hover:text-surface-50"
-            >
+            <Link href="/pricing" className="text-xs text-surface-500 hover:text-surface-50">
               Back to pricing
             </Link>
           </div>
@@ -163,138 +163,282 @@ function PricingContent() {
 
   return (
     <div className="px-6 py-20">
-      <div className="mx-auto max-w-4xl">
-        {/* Header */}
+      <div className="mx-auto max-w-6xl">
+        {/* ── Header ───────────────────────────────────────────── */}
         <div className="mb-16 text-center">
           <h1 className="mb-4 text-3xl font-bold text-surface-50 md:text-4xl">
-            Free and open-source. Always.
+            Simple, honest pricing.
           </h1>
           <p className="mx-auto max-w-xl text-sm leading-relaxed text-surface-500">
-            Yaver is a P2P tool — your code stays on your machines, encrypted end-to-end.
-            Every user gets a free relay server included. Self-host everything or use our infrastructure — your choice.
+            Your code stays on your machine. We handle the infrastructure.
+            Self-host everything for free, or let us run it for you.
           </p>
         </div>
 
-        {/* Billing toggle */}
-        <div className="mb-10 flex items-center justify-center gap-3">
-          <button
-            onClick={() => setBilling("monthly")}
-            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-              billing === "monthly"
-                ? "bg-[#6366f1] text-white"
-                : "text-surface-400 hover:text-surface-200"
-            }`}
-          >
-            Monthly
-          </button>
-          <button
-            onClick={() => setBilling("yearly")}
-            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-              billing === "yearly"
-                ? "bg-[#6366f1] text-white"
-                : "text-surface-400 hover:text-surface-200"
-            }`}
-          >
-            Yearly
-            <span className="ml-1.5 rounded-full bg-[#22c55e]/10 px-2 py-0.5 text-[11px] font-medium text-[#22c55e]">
-              Save 17%
-            </span>
-          </button>
-        </div>
-
-        {/* Pricing cards */}
-        <div className="grid gap-6 md:grid-cols-2">
-          {/* Free — everyone gets this */}
-          <div className="relative rounded-2xl border border-[#22c55e]/40 bg-[#1a1d27] p-8">
-            <div className="absolute -top-3 left-6">
-              <span className="rounded-full bg-[#22c55e] px-3 py-1 text-[11px] font-semibold text-white">
-                Included for everyone
-              </span>
+        {/* ── 4 Plan cards ─────────────────────────────────────── */}
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          {/* Self-Hosted */}
+          <div className="relative flex flex-col rounded-2xl border border-surface-800 bg-[#1a1d27] p-6">
+            <div className="mb-5">
+              <h2 className="text-base font-semibold text-surface-100">Self-Hosted</h2>
+              <p className="mt-1 text-xs text-surface-500">MIT licensed</p>
             </div>
-            <div className="mb-6">
-              <h2 className="text-lg font-semibold text-surface-100">Free Relay</h2>
-              <p className="mt-1 text-xs text-surface-500">public.yaver.io — ready to use</p>
+            <div className="mb-5">
+              <span className="text-3xl font-bold text-surface-50">$0</span>
+              <span className="ml-1 text-sm text-surface-500">free forever</span>
             </div>
-            <div className="mb-6">
-              <span className="text-4xl font-bold text-surface-50">$0</span>
-              <span className="ml-1 text-sm text-surface-500">forever</span>
-            </div>
-            <ul className="mb-8 space-y-3">
+            <ul className="mb-6 flex-1 space-y-2.5">
               {[
-                "P2P encrypted connections — your code never leaves your machines",
-                "Free shared relay (public.yaver.io)",
-                "Bandwidth adapts dynamically — relaxed when server is idle",
-                "All features included — no paywall, no limits on functionality",
+                "Run your own relay server",
+                "Fork, hack, self-host everything",
+                "All features included",
                 "Unlimited devices",
-                "Self-host your own relay anytime (Docker, any VPS)",
-              ].map((feature) => (
-                <li key={feature} className="flex items-start gap-2.5 text-sm text-surface-300">
-                  <span className="mt-0.5 text-[#22c55e]">
-                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                    </svg>
-                  </span>
-                  {feature}
+                "P2P encrypted connections",
+              ].map((f) => (
+                <li key={f} className="flex items-start gap-2 text-xs text-surface-300">
+                  <Check accent="text-[#22c55e]" /> {f}
                 </li>
               ))}
             </ul>
-            <div className="rounded-lg border border-surface-800 bg-[#0f1117] p-4 text-xs text-surface-500 leading-relaxed">
-              <strong className="text-surface-300">Is the free relay secure?</strong> Yes — the relay is a pass-through proxy.
-              It never stores, reads, or logs your data. All connections are encrypted via QUIC (TLS 1.3).
-              The relay only sees encrypted bytes passing through. Your auth tokens, code, and task data are
-              end-to-end encrypted between your devices.
-            </div>
+            <Link
+              href="https://github.com/kivanccakmak/yaver.io"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block w-full rounded-lg border border-surface-700 bg-transparent py-2.5 text-center text-sm font-medium text-surface-300 transition-colors hover:border-surface-500 hover:text-surface-100"
+            >
+              Get Started
+            </Link>
           </div>
 
-          {/* Dedicated relay — optional utility */}
-          <div className="rounded-2xl border border-surface-800 bg-[#1a1d27] p-8">
-            <div className="mb-6">
-              <h2 className="text-lg font-semibold text-surface-100">Dedicated Relay</h2>
-              <p className="mt-1 text-xs text-surface-500">Optional — your own server, if you want one</p>
+          {/* Managed Relay */}
+          <div className="relative flex flex-col rounded-2xl border border-surface-800 bg-[#1a1d27] p-6">
+            <div className="mb-5">
+              <h2 className="text-base font-semibold text-surface-100">Managed Relay</h2>
+              <p className="mt-1 text-xs text-surface-500">Zero-config P2P tunneling</p>
             </div>
-            <div className="mb-6">
-              <span className="text-4xl font-bold text-surface-50">
-                {billing === "monthly" ? "$10" : "$100"}
-              </span>
-              <span className="ml-1 text-sm text-surface-500">
-                /{billing === "monthly" ? "month" : "year"}
-              </span>
+            <div className="mb-5">
+              <span className="text-3xl font-bold text-surface-50">$10</span>
+              <span className="ml-1 text-sm text-surface-500">/mo</span>
             </div>
-            <ul className="mb-8 space-y-3">
+            <ul className="mb-6 flex-1 space-y-2.5">
               {[
-                "Your own dedicated server (Hetzner Cloud ARM)",
-                "No bandwidth limits",
-                "Auto-provisioned in ~90 seconds",
-                "Your own subdomain (*.relay.yaver.io)",
-                "HTTPS with auto-renewing certificates",
-                "Auto-updates — always the latest relay version",
-              ].map((feature) => (
-                <li key={feature} className="flex items-start gap-2.5 text-sm text-surface-300">
-                  <span className="mt-0.5 text-surface-500">
-                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                    </svg>
-                  </span>
-                  {feature}
+                "No VPS or port forwarding",
+                "Works on any network",
+                "Dedicated server, just yours",
+                "Auto-provisioned in minutes",
+                "Your own subdomain",
+                "Auto-updates, always current",
+              ].map((f) => (
+                <li key={f} className="flex items-start gap-2 text-xs text-surface-300">
+                  <Check /> {f}
                 </li>
               ))}
             </ul>
             <a
-              href={billing === "monthly" ? MONTHLY_CHECKOUT_URL : YEARLY_CHECKOUT_URL}
+              href={CHECKOUT.relay}
               target="_blank"
               rel="noopener noreferrer"
-              className="block w-full rounded-lg border border-surface-700 bg-surface-800/50 px-4 py-2.5 text-center text-sm font-medium text-surface-300 transition-colors hover:bg-surface-800 hover:text-surface-100"
+              className="block w-full rounded-lg border border-surface-700 bg-surface-800/50 py-2.5 text-center text-sm font-medium text-surface-300 transition-colors hover:bg-surface-800 hover:text-surface-100"
             >
-              Get a dedicated relay
+              Subscribe
             </a>
-            <p className="mt-3 text-center text-[11px] text-surface-600">
-              Or self-host your own — same software, zero cost.
-              This just saves you the setup.
-            </p>
+          </div>
+
+          {/* CPU Dev Machine */}
+          <div className="relative flex flex-col rounded-2xl border border-[#6366f1]/40 bg-[#1a1d27] p-6">
+            <div className="absolute -top-3 right-6">
+              <span className="rounded-full bg-[#6366f1] px-3 py-1 text-[10px] font-semibold text-white">
+                popular
+              </span>
+            </div>
+            <div className="mb-5">
+              <h2 className="text-base font-semibold text-surface-100">CPU Machine</h2>
+              <p className="mt-1 text-xs text-surface-500">Your own dedicated dev machine</p>
+            </div>
+            <div className="mb-5">
+              <span className="text-3xl font-bold text-surface-50">$29</span>
+              <span className="ml-1 text-sm text-surface-500">/mo</span>
+              <span className="ml-2 text-xs text-surface-500">or $49/mo Pro</span>
+            </div>
+            <ul className="mb-6 flex-1 space-y-2.5">
+              {[
+                "4 vCPU / 8 GB RAM / 80 GB NVMe",
+                "Pro: 8 vCPU / 16 GB RAM / 160 GB NVMe",
+                "Ready in minutes, entirely yours",
+                "Node.js, Python, Go, Rust, Docker",
+                "Expo CLI + EAS CLI pre-installed",
+                "Build iOS without a Mac (EAS Build)",
+                "Managed relay included",
+                "Accessible via Yaver app or SSH",
+              ].map((f) => (
+                <li key={f} className="flex items-start gap-2 text-xs text-surface-300">
+                  <Check accent="text-[#6366f1]" /> {f}
+                </li>
+              ))}
+            </ul>
+            <a
+              href={CHECKOUT.cpu}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block w-full rounded-lg bg-[#6366f1] py-2.5 text-center text-sm font-medium text-white transition-colors hover:bg-[#5558e6]"
+            >
+              Subscribe &mdash; $29/mo
+            </a>
+            <a
+              href={CHECKOUT.pro_cpu}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 block text-center text-xs text-surface-500 hover:text-surface-300"
+            >
+              or get Pro ($49/mo) &rarr;
+            </a>
+          </div>
+
+          {/* GPU Dev Machine */}
+          <div className="relative flex flex-col rounded-2xl border border-[#76b900]/40 bg-[#76b900]/[0.03] p-6">
+            <div className="absolute -top-3 right-6">
+              <span className="rounded-full bg-[#76b900] px-3 py-1 text-[10px] font-semibold text-white">
+                GPU
+              </span>
+            </div>
+            <div className="mb-5">
+              <h2 className="text-base font-semibold text-surface-100">GPU Machine</h2>
+              <p className="mt-1 text-xs text-surface-500">Dedicated NVIDIA RTX 4000</p>
+            </div>
+            <div className="mb-5">
+              <span className="text-3xl font-bold text-surface-50">$299</span>
+              <span className="ml-1 text-sm text-surface-500">/mo</span>
+            </div>
+            <ul className="mb-6 flex-1 space-y-2.5">
+              {[
+                "NVIDIA RTX 4000 — 20 GB VRAM",
+                "Everything in CPU Machine, plus:",
+                "Ollama + Qwen 2.5 Coder 32B pre-loaded",
+                "PersonaPlex 7B — voice AI, hands-free coding",
+                "Run any HuggingFace model locally",
+                "Full local AI stack — no API keys",
+                "GPU-accelerated ML builds",
+                "Your code never leaves your machine",
+              ].map((f) => (
+                <li key={f} className="flex items-start gap-2 text-xs text-surface-300">
+                  <Check accent="text-[#76b900]" /> {f}
+                </li>
+              ))}
+            </ul>
+            <a
+              href={CHECKOUT.gpu}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block w-full rounded-lg bg-[#76b900] py-2.5 text-center text-sm font-medium text-white transition-colors hover:bg-[#6aa300]"
+            >
+              Subscribe &mdash; $299/mo
+            </a>
           </div>
         </div>
 
-        {/* Self-host section */}
+        {/* ── Teams + Enterprise ────────────────────────────────── */}
+        <div className="mt-12 grid gap-5 sm:grid-cols-2">
+          <div className="rounded-2xl border border-surface-800 bg-[#1a1d27] p-6">
+            <h3 className="mb-1 text-base font-semibold text-surface-100">Teams</h3>
+            <p className="mb-4 text-xs text-surface-500">
+              $15/user/mo &middot; minimum 3 users
+            </p>
+            <ul className="mb-6 space-y-2">
+              {[
+                "Managed relay for all seats",
+                "Team admin dashboard",
+                "Centralized billing",
+                "Members can add CPU/GPU machines as add-ons",
+              ].map((f) => (
+                <li key={f} className="flex items-start gap-2 text-xs text-surface-300">
+                  <Check /> {f}
+                </li>
+              ))}
+            </ul>
+            <a
+              href={CHECKOUT.teams}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block w-full rounded-lg border border-surface-700 bg-surface-800/50 py-2.5 text-center text-sm font-medium text-surface-300 transition-colors hover:bg-surface-800 hover:text-surface-100"
+            >
+              Subscribe for Teams
+            </a>
+          </div>
+
+          <div className="rounded-2xl border border-surface-800 bg-[#1a1d27] p-6">
+            <h3 className="mb-1 text-base font-semibold text-surface-100">Enterprise</h3>
+            <p className="mb-4 text-xs text-surface-500">Custom pricing</p>
+            <ul className="mb-6 space-y-2">
+              {[
+                "SSO / SAML integration",
+                "SLA with guaranteed uptime",
+                "On-prem deployment support",
+                "Dedicated account manager",
+                "Custom machine configurations",
+              ].map((f) => (
+                <li key={f} className="flex items-start gap-2 text-xs text-surface-300">
+                  <Check /> {f}
+                </li>
+              ))}
+            </ul>
+            <a
+              href="mailto:kivanc.cakmak@simkab.com?subject=Yaver%20Enterprise"
+              className="block w-full rounded-lg border border-surface-700 bg-surface-800/50 py-2.5 text-center text-sm font-medium text-surface-300 transition-colors hover:bg-surface-800 hover:text-surface-100"
+            >
+              Contact Us
+            </a>
+          </div>
+        </div>
+
+        {/* ── Comparison table ──────────────────────────────────── */}
+        <section className="mt-20">
+          <h2 className="mb-8 text-center text-xl font-bold text-surface-50">
+            Compare plans
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-surface-800">
+                  <th className="pb-4 pr-6 text-xs font-medium text-surface-500">Feature</th>
+                  <th className="pb-4 px-4 text-center text-xs font-medium text-surface-500">Self-Hosted</th>
+                  <th className="pb-4 px-4 text-center text-xs font-medium text-surface-500">Relay</th>
+                  <th className="pb-4 px-4 text-center text-xs font-medium text-surface-500">CPU Machine</th>
+                  <th className="pb-4 pl-4 text-center text-xs font-medium text-surface-500">GPU Machine</th>
+                </tr>
+              </thead>
+              <tbody className="text-surface-300">
+                {([
+                  ["Managed relay",              false, true,  true,  true],
+                  ["Works on your hardware",     true,  true,  "opt", "opt"],
+                  ["Dedicated cloud machine",    false, false, true,  true],
+                  ["NVIDIA GPU (20 GB VRAM)",    false, false, false, true],
+                  ["Ollama + Qwen 2.5 Coder",   false, false, false, true],
+                  ["Voice AI (PersonaPlex)",     false, false, false, true],
+                  ["EAS Build (iOS w/o Mac)",    false, false, true,  true],
+                  ["Auto-provisioned",           false, true,  true,  true],
+                  ["Setup needed",               true,  false, false, false],
+                ] as [string, boolean | string, boolean | string, boolean | string, boolean | string][]).map(([feature, ...vals]) => (
+                  <tr key={feature} className="border-b border-surface-800/40">
+                    <td className="py-3 pr-6 text-xs text-surface-400">{feature}</td>
+                    {vals.map((v, i) => (
+                      <td key={i} className="py-3 px-4 text-center text-xs">
+                        {v === true ? (
+                          <span className="text-[#22c55e]">&#10003;</span>
+                        ) : v === false ? (
+                          <span className="text-surface-600">&mdash;</span>
+                        ) : (
+                          <span className="text-surface-400">optional</span>
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* ── Self-host section ────────────────────────────────── */}
         <section className="mt-20 rounded-2xl border border-surface-800 bg-[#1a1d27] p-8">
           <h2 className="mb-4 text-xl font-bold text-surface-50">Self-host for free</h2>
           <p className="mb-6 text-sm leading-relaxed text-surface-400">
@@ -315,62 +459,64 @@ curl http://localhost:8080/health`}</code>
             </pre>
           </div>
           <div className="mt-4 flex gap-3">
-            <Link
-              href="/docs/self-hosting"
-              className="text-sm text-[#6366f1] hover:underline"
-            >
+            <Link href="/docs/self-hosting" className="text-sm text-[#6366f1] hover:underline">
               Self-hosting guide
             </Link>
             <span className="text-surface-700">|</span>
-            <Link
-              href="/manuals/relay-setup"
-              className="text-sm text-[#6366f1] hover:underline"
-            >
+            <Link href="/manuals/relay-setup" className="text-sm text-[#6366f1] hover:underline">
               Relay setup manual
             </Link>
           </div>
         </section>
 
-        {/* FAQ */}
+        {/* ── FAQ ──────────────────────────────────────────────── */}
         <section className="mt-20">
           <h2 className="mb-8 text-center text-xl font-bold text-surface-50">
             Frequently asked questions
           </h2>
           <div className="mx-auto max-w-2xl">
             <FAQItem
-              question="Why do I need a relay server?"
-              answer="When your mobile device and desktop are on different networks (e.g., you're on cellular or at a coffee shop), they can't connect directly. A relay server acts as a pass-through proxy so your devices can always reach each other. It never stores any of your data — it's a transparent pipe."
+              question="Do I need a card to self-host?"
+              answer="No. The self-hosted version is MIT licensed and completely free. You can run it forever without signing up or paying anything."
             />
             <FAQItem
-              question="Can I self-host instead of paying?"
-              answer="Absolutely. Yaver is fully open-source and the relay server is included. You can run it on any VPS (Hetzner, DigitalOcean, AWS, etc.), a Raspberry Pi, or even use Tailscale to skip the relay entirely. The managed plan is for people who prefer a zero-maintenance setup."
+              question="What happens when I subscribe to a machine plan?"
+              answer="We create a dedicated server just for you. It appears in the Yaver app within minutes. No sharing — the machine is entirely yours."
             />
             <FAQItem
-              question="What happens if I cancel my subscription?"
-              answer="Your managed relay server will continue running for 7 days after cancellation to give you time to migrate. After that, the server is deprovisioned. Your Yaver account, devices, and all local data remain intact — you just fall back to the shared relay or your own self-hosted relay."
+              question="What happens when I cancel?"
+              answer="Your server stays active until the end of the billing period, then is deleted after a 24-hour grace period. Your Yaver account and local data remain intact."
+            />
+            <FAQItem
+              question="Is my code safe on a cloud machine?"
+              answer="Your machine connects through Yaver's P2P system — exactly like your local machine. The relay never sees your code. All data flows directly between your devices, encrypted end-to-end."
+            />
+            <FAQItem
+              question="Can I bring my own server?"
+              answer="Yes. Just self-host and point the CLI at your own machine. The managed plans are for people who don't want to manage infrastructure."
+            />
+            <FAQItem
+              question="Why is GPU $299?"
+              answer="Because we provision a dedicated NVIDIA RTX 4000 server entirely for you — no sharing. It includes pre-loaded AI models (Qwen 2.5 Coder, PersonaPlex, Whisper), setup, monitoring, and automatic updates."
+            />
+            <FAQItem
+              question="What's the difference between CPU ($29) and Pro CPU ($49)?"
+              answer="More compute. CPU: 4 vCPU, 8 GB RAM, 80 GB storage. Pro CPU: 8 vCPU, 16 GB RAM, 160 GB storage. Both are dedicated to you only."
             />
             <FAQItem
               question="Is the shared relay good enough?"
-              answer="For most users, yes. The shared relay handles typical usage well. The managed plan is best for power users who want guaranteed bandwidth, lower latency, and a dedicated server that's not shared with anyone else."
-            />
-            <FAQItem
-              question="Can I change regions after provisioning?"
-              answer="Not yet, but it's on the roadmap. For now, choose the region closest to you when signing up. If you need to switch, contact support and we'll re-provision in the new region."
+              answer="For most users, yes. The shared relay handles typical usage well. The managed plan ($10/mo) is best for power users who want guaranteed bandwidth and a dedicated server."
             />
           </div>
         </section>
 
-        {/* Infrastructure note */}
         <p className="mt-12 text-center text-xs leading-relaxed text-surface-600">
-          This is an infrastructure hosting service. Your relay server runs on dedicated
-          hardware provisioned specifically for your account.
+          All machines are dedicated &mdash; no sharing, no noisy neighbors.
+          Managed by Yaver, provisioned specifically for your account.
         </p>
 
         <div className="mt-6 text-center">
-          <Link
-            href="/"
-            className="text-xs text-surface-500 hover:text-surface-50"
-          >
+          <Link href="/" className="text-xs text-surface-500 hover:text-surface-50">
             Back to home
           </Link>
         </div>
@@ -381,7 +527,13 @@ curl http://localhost:8080/health`}</code>
 
 export default function PricingPage() {
   return (
-    <Suspense fallback={<div className="flex h-96 items-center justify-center"><div className="text-surface-500">Loading...</div></div>}>
+    <Suspense
+      fallback={
+        <div className="flex h-96 items-center justify-center">
+          <div className="text-surface-500">Loading...</div>
+        </div>
+      }
+    >
       <PricingContent />
     </Suspense>
   );

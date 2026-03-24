@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import { FeedbackBundle } from './types';
+import { FeedbackBundle, VoiceCapability } from './types';
 
 export interface FeedbackEvent {
   type: string;
@@ -160,6 +160,58 @@ export class P2PClient {
     }
 
     return response.json();
+  }
+
+  /**
+   * Get voice capability info from the agent.
+   * voiceInputEnabled is always true — mobile can always record and send audio.
+   * s2sProvider/sttProvider indicate whether transcription is available.
+   */
+  async voiceStatus(): Promise<VoiceCapability> {
+    const response = await this.request('GET', '/voice/status');
+    const data = await response.json();
+    return {
+      voiceInputEnabled: data.voiceInputEnabled ?? true,
+      s2sProvider: data.s2sProvider ?? undefined,
+      s2sReady: data.s2sReady ?? false,
+      sttProvider: data.sttProvider ?? undefined,
+      sttReady: data.sttReady ?? false,
+    };
+  }
+
+  /**
+   * Send voice audio to the agent for transcription.
+   * Works with any configured STT or S2S provider on the agent.
+   * If no provider is configured, audio is saved for manual review.
+   * @returns Transcribed text (or empty string if no provider available).
+   */
+  async transcribeVoice(audioUri: string): Promise<{ text: string; provider: string; audioFile?: string }> {
+    const formData = new FormData();
+    formData.append('audio', {
+      uri: Platform.OS === 'android' ? `file://${audioUri}` : audioUri,
+      type: 'audio/wav',
+      name: 'voice_input.wav',
+    } as any);
+
+    const response = await fetch(`${this.baseUrl}/voice/transcribe`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.authToken}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`[P2PClient] Voice transcribe failed (${response.status}): ${text}`);
+    }
+
+    const result = await response.json();
+    return {
+      text: result.text ?? '',
+      provider: result.provider ?? 'none',
+      audioFile: result.audioFile,
+    };
   }
 
   /** Get the download URL for a build artifact. */

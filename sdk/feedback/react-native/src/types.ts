@@ -22,12 +22,23 @@ export interface FeedbackConfig {
    * Only relevant in live mode. Default: 0.
    */
   agentCommentaryLevel?: number;
+  /**
+   * Enable voice input for feedback annotations. Always true by default.
+   * Audio is recorded on the device and sent to the agent for transcription.
+   * Works regardless of whether a speech-to-speech provider is configured —
+   * if STT is available on the agent, audio is auto-transcribed; otherwise
+   * raw audio is attached to the feedback report.
+   */
+  voiceEnabled?: boolean;
 }
 
 export interface FeedbackBundle {
   metadata: FeedbackMetadata;
   video?: string;
+  /** Voice annotation audio file path (WAV). Always available when voiceEnabled. */
   audio?: string;
+  /** Transcribed text from voice annotation (if STT/S2S provider is available on agent). */
+  audioTranscript?: string;
   screenshots: string[];
 }
 
@@ -77,4 +88,18 @@ export interface FeedbackStreamEvent {
   type: string;
   timestamp: string;
   data: any;
+}
+
+/** Voice capability info returned by the agent's /voice/status endpoint. */
+export interface VoiceCapability {
+  /** Always true — mobile can always record and send audio. */
+  voiceInputEnabled: boolean;
+  /** Speech-to-speech provider (e.g. "personaplex", "openai"), or null. */
+  s2sProvider?: string;
+  /** Whether the S2S provider is ready for real-time sessions. */
+  s2sReady?: boolean;
+  /** Speech-to-text provider for transcription (e.g. "whisper", "openai"). */
+  sttProvider?: string;
+  /** Whether STT is ready (auto-transcription of voice input). */
+  sttReady?: boolean;
 }

@@ -191,6 +191,14 @@ export default function HomePage() {
               and the AI watches your screen in real time and pushes a fix. Everything runs on machines
               you control. Your code never leaves them.
             </p>
+            <div className="mt-8 flex flex-col items-center justify-center gap-4 sm:flex-row">
+              <Link href="/download" className="btn-primary px-8 py-3 text-sm font-medium">
+                Get the App &mdash; Free
+              </Link>
+              <Link href="/pricing" className="btn-secondary px-8 py-3 text-sm font-medium">
+                See Pricing &rarr;
+              </Link>
+            </div>
           </div>
 
           {/* Getting started — inline in hero */}
@@ -1117,7 +1125,7 @@ export default function HomePage() {
                   <h3 className="text-sm font-semibold text-surface-100">Managed Relay</h3>
                 </div>
                 <p className="text-sm text-surface-400">
-                  No VPS, no Docker, no DNS records. Dedicated Hetzner Cloud server,
+                  No VPS, no Docker, no DNS records. Zero-config P2P tunneling,
                   auto-provisioned. Multi-region, auto-failover, always up to date.
                 </p>
               </div>
@@ -1128,29 +1136,64 @@ export default function HomePage() {
           </div>
 
           {/* Cloud Dev Machine callout */}
-          <div className="mb-8 rounded-xl border border-[#06b6d4]/30 bg-[#06b6d4]/5 p-6">
-            <div className="flex flex-col gap-4 sm:flex-row">
-              <div className="flex-1">
-                <div className="mb-1 flex items-center gap-2">
-                  <span className="rounded-full bg-[#06b6d4]/20 px-2 py-0.5 text-[10px] font-medium text-[#22d3ee]">
-                    coming soon
+          <div className="mb-8 space-y-4">
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-[#06b6d4]/20 px-2 py-0.5 text-[10px] font-medium text-[#22d3ee]">
+                coming soon
+              </span>
+              <h3 className="text-sm font-semibold text-surface-100">Cloud Dev Machines</h3>
+            </div>
+            <p className="text-sm text-surface-400">
+              Linux dev environments provisioned for you. Accessible via Yaver mobile or SSH &mdash; your fallback dev machine when you&apos;re away from your hardware.
+            </p>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {/* CPU Dev Machine */}
+              <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
+                <div className="mb-3 flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-surface-100">CPU Dev Machine</h4>
+                  <span className="rounded-lg border border-surface-700 bg-surface-800 px-3 py-1 text-xs font-medium text-surface-300">
+                    from $29/mo
                   </span>
-                  <h3 className="text-sm font-semibold text-surface-100">Cloud Dev Machine</h3>
                 </div>
-                <p className="text-sm text-surface-400">
-                  A Linux dev environment provisioned for you. Accessible via Yaver mobile or SSH &mdash; your fallback dev machine when you&apos;re away from your hardware.
-                </p>
-                <ul className="mt-3 space-y-1.5 text-xs text-surface-400">
-                  <li>4 vCPU / 8 GB RAM / 80 GB NVMe (ARM64, Hetzner Cloud)</li>
-                  <li>Pre-installed: Node.js, Python, Go, Rust, Docker</li>
-                  <li>User-selectable tools: Flutter, .NET, Java, Ruby, and more</li>
+                <p className="mb-3 text-xs text-surface-500">Your own dedicated cloud dev environment for building, testing, and deploying &mdash; always-on, entirely yours.</p>
+                <ul className="space-y-1.5 text-xs text-surface-400">
+                  <li>4 vCPU / 8 GB RAM / 80 GB NVMe &mdash; or 8 vCPU / 16 GB RAM / 160 GB NVMe ($49/mo Pro)</li>
+                  <li>Pre-installed: Node.js, Python, Go, Rust, Docker, Expo CLI, EAS CLI</li>
+                  <li>EAS Build: <code className="text-[#22d3ee]">yaver expo build ios --eas</code> &mdash; build iOS without a Mac</li>
+                  <li>Expo vibe coding: <code className="text-[#22d3ee]">yaver expo start</code> &rarr; hot reload on your phone via P2P</li>
+                  <li>Shake phone &rarr; visual feedback &rarr; AI fixes code &rarr; hot reload loop</li>
                   <li>GitHub / GitLab repo auto-clone on provision</li>
                   <li>Built-in relay server &mdash; use on-prem and cloud together</li>
+                  <li>Accessible via Yaver mobile app or SSH</li>
+                  <li>Credentials never leave your machine &mdash; EAS tokens, Apple certs stay P2P</li>
                 </ul>
               </div>
-              <span className="shrink-0 self-start rounded-lg border border-[#06b6d4]/30 bg-[#06b6d4]/10 px-5 py-2 text-sm font-medium text-[#22d3ee]">
-                from $20/mo &mdash; soon
-              </span>
+
+              {/* GPU Dev Machine */}
+              <div className="rounded-xl border border-[#76b900]/30 bg-[#76b900]/5 p-5">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-semibold text-surface-100">GPU Dev Machine</h4>
+                    <span className="rounded-full bg-[#76b900]/20 px-2 py-0.5 text-[10px] font-medium text-[#76b900]">recommended</span>
+                  </div>
+                  <span className="rounded-lg border border-[#76b900]/30 bg-[#76b900]/10 px-3 py-1 text-xs font-medium text-[#76b900]">
+                    $299/mo
+                  </span>
+                </div>
+                <p className="mb-3 text-xs text-surface-500">Everything in the CPU tier, plus a dedicated GPU for voice AI, local LLMs, and ML workloads &mdash; the full mobile coding experience.</p>
+                <ul className="space-y-1.5 text-xs text-surface-400">
+                  <li>Dedicated server + <strong className="text-surface-200">NVIDIA RTX 4000 GPU</strong> (20 GB VRAM) &mdash; entirely yours</li>
+                  <li>Everything in CPU Dev Machine, plus:</li>
+                  <li><strong className="text-surface-200">Qwen 2.5 Coder 32B via Ollama</strong> &mdash; GPT-4o-class open-source coding LLM, runs entirely on-device</li>
+                  <li><strong className="text-surface-200">PersonaPlex 7B pre-loaded</strong> &mdash; speak tasks from your phone, hands-free mobile coding</li>
+                  <li>Voice feedback loop: shake phone &rarr; speak what&apos;s broken &rarr; AI hears, fixes code, rebuilds &rarr; hot reload</li>
+                  <li>Full local AI stack: Ollama + Qwen 2.5 Coder + PersonaPlex + Whisper &mdash; no API keys, no cloud, no cost</li>
+                  <li>Run additional models: vLLM, Stable Diffusion, or any HuggingFace model that fits in 24 GB VRAM</li>
+                  <li>GPU-accelerated builds for ML/AI projects</li>
+                  <li>On-prem everything &mdash; code, voice, AI inference &mdash; no data leaves your machine</li>
+                </ul>
+              </div>
             </div>
           </div>
 
@@ -1290,7 +1333,7 @@ export default function HomePage() {
           <div className="mx-auto mt-8 max-w-2xl rounded-xl border border-surface-800 bg-surface-900/50 p-4">
             <p className="text-center text-sm text-surface-400">
               <strong className="text-surface-200">VPS requirements:</strong>{" "}
-              1 vCPU, 512 MB RAM, any Linux. Hetzner, DigitalOcean, Linode, AWS &mdash; any VPS works.
+              1 vCPU, 512 MB RAM, any Linux. DigitalOcean, Linode, AWS, or any VPS works.
             </p>
           </div>
 
@@ -1461,12 +1504,35 @@ if (process.env.NODE_ENV === 'development') {
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-4xl">
           <h2 className="mb-4 text-center text-2xl font-bold text-surface-50 md:text-3xl">
-            Voice Input &amp; Text-to-Speech
+            Voice AI &mdash; Speak to Code
           </h2>
           <p className="mx-auto mb-16 max-w-2xl text-center text-sm leading-relaxed text-surface-400">
-            Speak your tasks from mobile or CLI. Choose a free on-device model or bring your own cloud API key.
+            Voice input is always available &mdash; speak your tasks, annotate feedback, or have real-time conversations with your AI agent. Choose from free on-device STT, cloud APIs, or full speech-to-speech models.
           </p>
 
+          {/* Speech-to-Speech providers */}
+          <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-surface-500">Real-Time Speech-to-Speech</h3>
+          <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="rounded-xl border border-[#76b900]/30 bg-[#76b900]/5 p-5">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-semibold text-surface-100">NVIDIA PersonaPlex 7B</span>
+                <span className="rounded-full bg-[#76b900]/20 px-2 py-0.5 text-xs font-medium text-[#76b900]">free &middot; on-prem</span>
+              </div>
+              <p className="text-xs leading-relaxed text-surface-500">Full-duplex voice AI with 170ms turn-taking. Runs on your GPU (NVIDIA A100/H100 or Apple Silicon). No API key, no cloud, no cost. Pre-loaded on Yaver Cloud GPU machines.</p>
+              <code className="mt-2 block text-xs text-surface-400">yaver voice setup --provider personaplex</code>
+            </div>
+            <div className="rounded-xl border border-surface-800/60 bg-surface-900/50 p-5">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-semibold text-surface-100">OpenAI Realtime API</span>
+                <span className="rounded-full bg-surface-800 px-2 py-0.5 text-xs text-surface-400">paid &middot; cloud</span>
+              </div>
+              <p className="text-xs leading-relaxed text-surface-500">OpenAI&apos;s hosted Realtime API. No GPU needed &mdash; audio is processed on OpenAI&apos;s servers. Billed per token.</p>
+              <code className="mt-2 block text-xs text-surface-400">yaver voice setup --provider openai --api-key sk-...</code>
+            </div>
+          </div>
+
+          {/* STT providers */}
+          <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-surface-500">Speech-to-Text (always available)</h3>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {[
               {
@@ -1514,6 +1580,10 @@ if (process.env.NODE_ENV === 'development') {
               <p className="text-xs leading-relaxed text-surface-500">Type <code className="rounded bg-surface-800 px-1">/voice</code> in <code className="rounded bg-surface-800 px-1">yaver connect</code> to record and submit tasks by voice from any terminal.</p>
             </div>
           </div>
+
+          <p className="mt-6 text-center text-xs text-surface-500">
+            Voice input works everywhere &mdash; mobile app, feedback SDK, CLI. Audio is always recorded and sent to your dev machine. If STT is configured, it&apos;s auto-transcribed. Otherwise, raw audio is attached to the task for the AI agent to process.
+          </p>
         </div>
       </section>
 
@@ -1657,7 +1727,7 @@ if (process.env.NODE_ENV === 'development') {
             />
             <FAQItem
               question="What is the Cloud Dev Machine?"
-              answer="A Linux dev environment provisioned for you on Hetzner Cloud — 4 vCPU, 8 GB RAM, 80 GB NVMe (ARM64). Pre-configured with Node.js, Python, Go, Rust, Docker, and your choice of additional tools. Your GitHub/GitLab repos are auto-cloned on provision. Access it via Yaver mobile or SSH. Think of it as a fallback dev machine when you're away from your hardware. Coming soon, starting at $20/mo."
+              answer="A dedicated Linux dev environment provisioned just for you — not shared with anyone. CPU machines ($29/mo) come with 4 vCPU, 8 GB RAM, 80 GB NVMe. Pro CPU ($49/mo) doubles that to 8 vCPU, 16 GB RAM, 160 GB NVMe. GPU machines ($299/mo) add a dedicated NVIDIA RTX 4000 with 20 GB VRAM, Ollama + Qwen 2.5 Coder 32B, and PersonaPlex 7B for voice AI. All tiers include Node.js, Python, Go, Rust, Docker, Expo CLI, EAS CLI. Perfect for vibe coding: run 'yaver expo start' for hot reload on your phone, 'yaver expo build ios --eas' to build iOS without a Mac. Shake phone → speak what's broken → AI fixes code → hot reload. All credentials stay on your machine, never on Yaver servers. Coming soon."
             />
           </div>
         </div>
@@ -1876,8 +1946,17 @@ if (process.env.NODE_ENV === 'development') {
 
             {/* Speech & Voice */}
             <div>
-              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-surface-500">Speech &amp; Voice</p>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-surface-500">Speech &amp; Voice AI</p>
               <ul className="space-y-2.5 text-sm">
+                <li>
+                  <a href="https://huggingface.co/nvidia/personaplex-7b-v1" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">NVIDIA PersonaPlex 7B</a>
+                  <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>
+                  <span className="text-surface-500"> — real-time speech-to-speech with 170ms turn-taking (Yaver&apos;s recommended S2S provider)</span>
+                </li>
+                <li>
+                  <a href="https://platform.openai.com/docs/guides/realtime" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">OpenAI Realtime API</a>
+                  <span className="text-surface-500"> — cloud speech-to-speech (Yaver&apos;s paid S2S provider)</span>
+                </li>
                 <li>
                   <a href="https://github.com/ggerganov/whisper.cpp" target="_blank" rel="noopener noreferrer" className="font-medium text-surface-300 hover:text-surface-50">whisper.cpp</a>
                   <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-400">OSS</span>

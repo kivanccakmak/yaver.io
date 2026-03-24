@@ -23,6 +23,7 @@
  */
 
 export { YaverFeedback } from './YaverFeedback';
+export { initExpo } from './expo';
 export { YaverDiscovery } from './Discovery';
 export { P2PClient } from './P2PClient';
 export { YaverConnectionScreen } from './ConnectionScreen';
@@ -41,6 +42,7 @@ export type {
   FeedbackReport,
   AgentCommentary,
   FeedbackStreamEvent,
+  VoiceCapability,
 } from './types';
 export type { DiscoveryResult } from './Discovery';
 export type { FeedbackEvent } from './P2PClient';

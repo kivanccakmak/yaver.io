@@ -31,7 +31,7 @@ _yaver_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    commands="auth signout connect serve logs stop clear-logs restart shutdown ping attach status devices config relay tunnel set-runner mcp email acl tmux exec session clean discover purge uninstall doctor completion help version"
+    commands="auth signout connect serve logs stop clear-logs restart shutdown ping attach status devices config relay tunnel set-runner mcp email acl tmux exec session vault build expo debug deploy test repo pipeline feedback voice clean cloud discover purge uninstall doctor completion help version"
 
     case "$prev" in
         yaver)
@@ -68,6 +68,38 @@ _yaver_completions() {
             ;;
         mcp)
             COMPREPLY=($(compgen -W "deploy list remove status setup" -- "$cur"))
+            return 0
+            ;;
+        expo)
+            COMPREPLY=($(compgen -W "setup start build status" -- "$cur"))
+            return 0
+            ;;
+        build)
+            COMPREPLY=($(compgen -W "flutter gradle xcode rn custom list status register push" -- "$cur"))
+            return 0
+            ;;
+        debug)
+            COMPREPLY=($(compgen -W "flutter rn" -- "$cur"))
+            return 0
+            ;;
+        feedback)
+            COMPREPLY=($(compgen -W "list show fix delete" -- "$cur"))
+            return 0
+            ;;
+        voice)
+            COMPREPLY=($(compgen -W "setup serve status test providers" -- "$cur"))
+            return 0
+            ;;
+        vault)
+            COMPREPLY=($(compgen -W "add list get delete export import" -- "$cur"))
+            return 0
+            ;;
+        test)
+            COMPREPLY=($(compgen -W "unit flutter android ios e2e" -- "$cur"))
+            return 0
+            ;;
+        cloud)
+            COMPREPLY=($(compgen -W "create status ssh destroy" -- "$cur"))
             return 0
             ;;
         completion)
@@ -110,6 +142,17 @@ _yaver() {
         'tmux:Tmux session management'
         'exec:Execute command on remote device'
         'session:Transfer agent sessions'
+        'vault:Encrypted key vault'
+        'build:Build mobile/desktop apps'
+        'expo:Expo integration (setup, start, build)'
+        'debug:Hot reload debug sessions'
+        'deploy:Deploy artifacts and CI'
+        'test:Run tests'
+        'repo:Project discovery'
+        'pipeline:Build-test-deploy pipeline'
+        'feedback:Visual bug reports from device'
+        'voice:Voice AI providers (speech-to-speech)'
+        'cloud:Cloud dev machine'
         'clean:Remove old tasks/logs'
         'discover:Discover projects'
         'purge:Complete wipe'
@@ -158,6 +201,38 @@ _yaver() {
             subcommands=('deploy:Deploy MCP server' 'list:List deployments' 'remove:Remove deployment' 'status:Check status' 'setup:Configure MCP for editors')
             _describe 'subcommand' subcommands
             ;;
+        expo)
+            subcommands=('setup:Inject Feedback SDK into Expo project' 'start:Start Metro + P2P tunnel' 'build:Build via Expo (local or EAS)' 'status:Show Expo session status')
+            _describe 'subcommand' subcommands
+            ;;
+        build)
+            subcommands=('flutter:Flutter build' 'gradle:Gradle build' 'xcode:Xcode build' 'rn:React Native build' 'custom:Custom command' 'list:List builds' 'status:Build details' 'register:Register artifact' 'push:Push to store')
+            _describe 'subcommand' subcommands
+            ;;
+        debug)
+            subcommands=('flutter:Flutter debug session' 'rn:React Native/Metro debug')
+            _describe 'subcommand' subcommands
+            ;;
+        feedback)
+            subcommands=('list:List feedback reports' 'show:Show report details' 'fix:Create task from feedback' 'delete:Delete report')
+            _describe 'subcommand' subcommands
+            ;;
+        voice)
+            subcommands=('setup:Set up voice provider' 'serve:Start inference server' 'status:Show provider status' 'test:Record and transcribe test clip' 'providers:List available providers')
+            _describe 'subcommand' subcommands
+            ;;
+        vault)
+            subcommands=('add:Add secret' 'list:List entries' 'get:Get value' 'delete:Delete entry' 'export:Export vault' 'import:Import vault')
+            _describe 'subcommand' subcommands
+            ;;
+        test)
+            subcommands=('unit:Unit tests' 'flutter:Flutter tests' 'android:Android tests' 'ios:iOS tests' 'e2e:E2E tests')
+            _describe 'subcommand' subcommands
+            ;;
+        cloud)
+            subcommands=('create:Create cloud machine' 'status:Show status' 'ssh:SSH into machine' 'destroy:Tear down machine')
+            _describe 'subcommand' subcommands
+            ;;
         completion)
             subcommands=('bash:Bash completions' 'zsh:Zsh completions' 'fish:Fish completions')
             _describe 'subcommand' subcommands
@@ -198,6 +273,7 @@ complete -c yaver -n '__fish_use_subcommand' -a 'acl' -d 'Agent Communication La
 complete -c yaver -n '__fish_use_subcommand' -a 'tmux' -d 'Tmux session management'
 complete -c yaver -n '__fish_use_subcommand' -a 'exec' -d 'Execute remote command'
 complete -c yaver -n '__fish_use_subcommand' -a 'session' -d 'Transfer agent sessions'
+complete -c yaver -n '__fish_use_subcommand' -a 'voice' -d 'Voice AI providers'
 complete -c yaver -n '__fish_use_subcommand' -a 'clean' -d 'Remove old tasks/logs'
 complete -c yaver -n '__fish_use_subcommand' -a 'discover' -d 'Discover projects'
 complete -c yaver -n '__fish_use_subcommand' -a 'purge' -d 'Complete wipe'
@@ -255,6 +331,13 @@ complete -c yaver -n '__fish_seen_subcommand_from mcp' -a 'list' -d 'List deploy
 complete -c yaver -n '__fish_seen_subcommand_from mcp' -a 'remove' -d 'Remove deployment'
 complete -c yaver -n '__fish_seen_subcommand_from mcp' -a 'status' -d 'Check status'
 complete -c yaver -n '__fish_seen_subcommand_from mcp' -a 'setup' -d 'Configure MCP for editors'
+
+# voice subcommands
+complete -c yaver -n '__fish_seen_subcommand_from voice' -a 'setup' -d 'Set up voice provider'
+complete -c yaver -n '__fish_seen_subcommand_from voice' -a 'serve' -d 'Start inference server'
+complete -c yaver -n '__fish_seen_subcommand_from voice' -a 'status' -d 'Show provider status'
+complete -c yaver -n '__fish_seen_subcommand_from voice' -a 'test' -d 'Record and transcribe test clip'
+complete -c yaver -n '__fish_seen_subcommand_from voice' -a 'providers' -d 'List available providers'
 
 # completion subcommands
 complete -c yaver -n '__fish_seen_subcommand_from completion' -a 'bash' -d 'Bash completions'

@@ -102,6 +102,8 @@ func main() {
 		runBuild(os.Args[2:])
 	case "debug":
 		runDebug(os.Args[2:])
+	case "expo":
+		runExpo(os.Args[2:])
 	case "deploy":
 		runDeploy(os.Args[2:])
 	case "test":
@@ -112,6 +114,8 @@ func main() {
 		runPipeline(os.Args[2:])
 	case "feedback":
 		runFeedback(os.Args[2:])
+	case "voice":
+		runVoice(os.Args[2:])
 	case "clean":
 		runClean(os.Args[2:])
 	case "cloud":
@@ -184,6 +188,11 @@ Usage:
   yaver build list       List all builds
   yaver build status <id> Show build details
   yaver build register <file>  Register pre-built artifact
+  yaver expo setup [--dir <path>]      Inject Feedback SDK into Expo project
+  yaver expo start [--dir <path>]     Start Expo Metro + P2P tunnel for hot reload
+  yaver expo build android [--eas]    Build via Expo (--eas for cloud, no Mac needed)
+  yaver expo build ios [--eas]        Build iOS via EAS Build (no Mac needed)
+  yaver expo status                   Show Expo session + tunnel status
   yaver debug flutter [--dir <path>]  Start Flutter debug with hot reload tunnel
   yaver debug rn [--dir <path>]       Start React Native/Metro debug
   yaver debug --port <N>              Expose any TCP port for remote access
@@ -199,6 +208,11 @@ Usage:
   yaver repo switch <name>  Switch working directory to a project
   yaver repo refresh   Re-run project discovery
   yaver pipeline --test --deploy <target>  Build → test → deploy in one command
+  yaver voice setup [--provider <name>]  Set up a voice provider (personaplex, openai)
+  yaver voice serve      Start voice inference server (PersonaPlex)
+  yaver voice status     Show voice provider status
+  yaver voice test       Record & transcribe a test clip
+  yaver voice providers  List available voice providers
   yaver feedback list   List visual bug reports from device testing
   yaver feedback show <id>  Show feedback details + transcript
   yaver feedback fix <id>   Create AI task from feedback report
