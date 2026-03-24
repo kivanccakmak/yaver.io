@@ -16,7 +16,7 @@ import { useAuth } from "../context/AuthContext";
 import { useDevice } from "../context/DeviceContext";
 
 const BUTTON_SIZE = 46;
-const PANEL_WIDTH = 280;
+const PANEL_WIDTH = 300;
 
 /**
  * Global feedback overlay — draggable indigo "y" debug button.
@@ -175,29 +175,65 @@ export function FeedbackOverlay() {
     }
   }, [message, agentUrl, token, addOutput]);
 
-  // Reload
-  const handleReload = useCallback(async () => {
+  // Generic: send a prefixed task to agent and poll output
+  const runAgentAction = useCallback(async (label: string, prompt: string) => {
     if (!agentUrl || !token) return;
-    setReloading(true);
-    addOutput("> reload");
+    addOutput(`> ${label}`);
+    setSending(true);
     try {
-      const resp = await fetch(`${agentUrl}/exec`, {
+      const resp = await fetch(`${agentUrl}/tasks`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ command: "reload", type: "hot-reload" }),
+        body: JSON.stringify({
+          title: prompt,
+          source: "feedback-sdk",
+          description: `[Feedback SDK] User triggered "${label}" from the debug console.`,
+        }),
       });
-      if (resp.ok) {
-        const data = await resp.json();
-        addOutput(data.output ?? data.message ?? "reload triggered");
-      } else {
-        addOutput(`reload err: ${resp.status}`);
-      }
+      if (!resp.ok) { addOutput(`err: ${resp.status}`); setSending(false); return; }
+      const data = await resp.json();
+      const taskId = data.id ?? data.task?.id;
+      if (!taskId) { addOutput("started (no id)"); setSending(false); return; }
+      addOutput(`${label}: task ${taskId}...`);
+
+      // Poll output
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        try {
+          const sr = await fetch(`${agentUrl}/tasks/${taskId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!sr.ok) { clearInterval(poll); setSending(false); return; }
+          const t = (await sr.json()).task ?? (await sr.json());
+          if (t.status === "finished" || t.status === "failed" || t.status === "stopped") {
+            const out = t.output ?? t.rawOutput ?? "";
+            if (out) {
+              for (const l of out.split("\n").filter((l: string) => l.trim()).slice(-3)) {
+                addOutput(l.slice(0, 60));
+              }
+            }
+            addOutput(t.status === "finished" ? "done." : `${t.status}.`);
+            clearInterval(poll); setSending(false);
+          } else if (attempts >= 30) {
+            addOutput("running in background...");
+            clearInterval(poll); setSending(false);
+          }
+        } catch { clearInterval(poll); setSending(false); }
+      }, 2000);
     } catch (e) {
-      addOutput(`reload fail: ${String(e).slice(0, 30)}`);
-    } finally {
-      setReloading(false);
+      addOutput(`fail: ${String(e).slice(0, 40)}`);
+      setSending(false);
     }
   }, [agentUrl, token, addOutput]);
+
+  const handleReload = useCallback(() => {
+    runAgentAction("hot-reload", "Hot reload the app. Restart the dev server and trigger a refresh on the connected device.");
+  }, [runAgentAction]);
+
+  const handleBuild = useCallback((platform: string) => {
+    runAgentAction(`build-${platform}`, `Build and deploy the ${platform} app. Run the appropriate build command (expo build, xcodebuild, or gradle) and report the result.`);
+  }, [runAgentAction]);
 
   const handleDisable = useCallback(async () => {
     if (!user?.id) return;
@@ -271,19 +307,37 @@ export function FeedbackOverlay() {
             </TouchableOpacity>
           </View>
 
-          {/* Actions */}
-          <View style={styles.actionsRow}>
+          {/* Action cards */}
+          <View style={styles.cardRow}>
             <TouchableOpacity
-              style={[styles.actionBtn, !isConnected && styles.dim]}
+              style={[styles.card, !isConnected && styles.dim]}
               onPress={handleReload}
-              disabled={reloading || !isConnected}
+              disabled={sending || !isConnected}
             >
-              <Text style={styles.actionText}>{reloading ? "..." : "reload"}</Text>
+              <Text style={[styles.cardIcon, { color: "#fbbf24" }]}>{"\u21BB"}</Text>
+              <Text style={styles.cardLabel}>Hot Reload</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.actionBtn}
-              onPress={() => setOutput([])}
+              style={[styles.card, !isConnected && styles.dim]}
+              onPress={() => handleBuild("ios")}
+              disabled={sending || !isConnected}
             >
+              <Text style={[styles.cardIcon, { color: "#60a5fa" }]}>{"\u2692"}</Text>
+              <Text style={styles.cardLabel}>Build iOS</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.card, !isConnected && styles.dim]}
+              onPress={() => handleBuild("android")}
+              disabled={sending || !isConnected}
+            >
+              <Text style={[styles.cardIcon, { color: "#34d399" }]}>{"\u2692"}</Text>
+              <Text style={styles.cardLabel}>Build Android</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Bottom row */}
+          <View style={styles.actionsRow}>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => setOutput([])}>
               <Text style={styles.actionText}>clear</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.actionBtn} onPress={handleDisable}>
@@ -408,6 +462,18 @@ const styles = StyleSheet.create({
   goBtnText: { color: "#fff", fontSize: 12, fontWeight: "700", fontFamily: "Courier" },
   dim: { opacity: 0.3 },
   // Actions
+  cardRow: { flexDirection: "row", gap: 6, marginBottom: 6 },
+  card: {
+    flex: 1,
+    backgroundColor: "#111",
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#1a1a1a",
+  },
+  cardIcon: { fontSize: 18, marginBottom: 2 },
+  cardLabel: { fontSize: 10, color: "#999", fontWeight: "600", fontFamily: "Courier" },
   actionsRow: { flexDirection: "row", gap: 4 },
   actionBtn: {
     flex: 1,
