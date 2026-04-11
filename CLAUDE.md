@@ -4,6 +4,7 @@
 - **Never push or commit without explicit user permission.** Vercel auto-deploy is disabled; use `./scripts/deploy-vercel.sh` for production deploys.
 - **Vercel deploy size guard**: `web/` must stay under 10 MB. The deploy script enforces this. Do not add large assets to `web/`.
 - **NEVER commit credentials, IPs, API keys, or secrets to the repo.** The repo is open-source on GitHub. All credentials must go in `.env.test` (gitignored), env vars, or GitHub Actions secrets. This includes Hetzner server IPs, Apple Developer keys, SSH key paths, relay passwords, Tailscale IPs. If you see a hardcoded credential, replace it with an env var or placeholder immediately.
+- **Open-source safety — nothing sensitive may leak through any file that ends up in the repo.** Everything in `yaver.io/` is published publicly. Before saving a file, assume it will be read by strangers: no hardcoded credentials, no private infra IPs or hostnames, no internal-only URLs, no customer data, no personal identifiers, no file paths that embed usernames or secrets, no Slack/issue/PR links that could leak context, no raw logs from real users. Any "dev-only" shim, test fixture, or debug helper that touches real infra belongs outside the repo (e.g. `.env.test`, `../talos/`, or a gitignored scratch dir) — never inline it into a committed file because "it's just local." This applies to CLAUDE.md memory notes too.
 
 ## Repository & Deployment
 - **Source of truth**: GitLab (`gitlab.com/kivanccakmak/yaver.io`) — development happens here
@@ -280,9 +281,18 @@ The test suite auto-detects the remote server's CPU architecture (aarch64 on the
 - `cd backend && npx convex dev` — Start Convex dev server
 - `cd web && npm run dev` — Start web dev server
 - `cd mobile/ios && xcodebuild ...` or open in Xcode — Build and run on device/simulator
+- `cd mobile && npm run web` — Run the mobile app in a browser (dev/preview only)
 - `cd desktop/agent && go run . serve` — Run desktop agent
 - `cd desktop/installer && npm run dist` — Build desktop installers (Electron GUI)
 - `cd relay && go run . serve --password your-secret` — Run relay server locally
+
+### Mobile Web Target (dev-only)
+The mobile app supports `expo start --web` as a development convenience so the UI can be iterated on in a browser without running a simulator. **Production is still iOS + Android only.** Notes:
+- Enabled via `react-native-web`, `react-dom`, `@expo/metro-runtime` and the `web` section in `mobile/app.json`.
+- The LAN beacon (`src/lib/beacon.ts`, `react-native-udp`) cannot run in a browser. A no-op stub at `src/lib/beacon.web.ts` is picked up automatically by Metro's `.web.ts` platform extension. Discovery just returns no local devices; the QUIC client falls through to its Convex-IP / relay paths.
+- Apple Sign-In is unavailable on web (`expo-apple-authentication` stubs to `isAvailableAsync() => false`); the login screen falls back to the OAuth redirect flow.
+- Direct HTTP connections to a desktop agent are subject to browser CORS/mixed-content rules — running against `http://localhost:18080` works; hitting private LAN IPs from an `https://` origin will not. Relay connections work as long as the relay serves HTTPS.
+- Do not ship the web target anywhere user-facing without a security review: the mobile app talks to users' own desktop agents, and the browser threat model is different.
 
 ### CLI Development (`desktop/agent/`)
 The `yaver` CLI is a Go binary in `desktop/agent/`. Run from source during development:
