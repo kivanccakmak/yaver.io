@@ -85,11 +85,13 @@ export type ConnectionPath = "lan-beacon" | "lan-convex-ip" | "relay" | null;
 export type OutputCallback = (taskId: string, line: string) => void;
 export type ConnectionStateCallback = (state: ConnectionState) => void;
 export type ConnectionModeCallback = (mode: ConnectionMode) => void;
+export type ReconnectAttemptCallback = (attempt: number) => void;
 
 type EventMap = {
   output: OutputCallback;
   connectionState: ConnectionStateCallback;
   connectionMode: ConnectionModeCallback;
+  reconnectAttempt: ReconnectAttemptCallback;
 };
 
 type EventName = keyof EventMap;
@@ -118,10 +120,13 @@ export class QuicClient {
   private pollInterval: ReturnType<typeof setInterval> | null = null;
 
   // Reconnection — max 15 retries, then give up (needs headroom for network transitions)
+  // `reconnectAttempt` is the 1-indexed number of the attempt currently in
+  // progress or just completed. 0 means idle (connected or never started).
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  reconnectAttempt = 0;
+  private _reconnectAttempt = 0;
+  private _reconnectStopped = false;
   private readonly baseBackoffMs = 1000;
-  private readonly maxReconnectAttempts = 15;
+  private readonly _maxReconnectAttempts = 15;
 
   private _connectionMode: ConnectionMode = null;
   private _connectionPath: ConnectionPath = null;
@@ -132,6 +137,7 @@ export class QuicClient {
     output: [],
     connectionState: [],
     connectionMode: [],
+    reconnectAttempt: [],
   };
 
   /** Set relay servers fetched from platform config. */
@@ -165,6 +171,20 @@ export class QuicClient {
 
   get relayServerCount(): number {
     return this.relayServers.length;
+  }
+
+  /** 1-indexed number of the current reconnect attempt. 0 = idle. */
+  get reconnectAttempt(): number {
+    return this._reconnectAttempt;
+  }
+
+  get maxReconnectAttempts(): number {
+    return this._maxReconnectAttempts;
+  }
+
+  /** True when the user has asked us to stop trying to reconnect. */
+  get reconnectStopped(): boolean {
+    return this._reconnectStopped;
   }
 
   getRelayServers(): RelayServer[] {
@@ -249,7 +269,8 @@ export class QuicClient {
     this.deviceId = deviceId;
     this.activeRelayUrl = null;
     this.activeRelayPassword = null;
-    this.reconnectAttempt = 0;
+    this._reconnectStopped = false;
+    this.setReconnectAttempt(1);
 
     await this.attemptConnect();
   }
@@ -259,6 +280,8 @@ export class QuicClient {
     this.clearTimers();
     this.setConnectionState("disconnected");
     this.setConnectionMode(null);
+    this.setReconnectAttempt(0);
+    this._reconnectStopped = false;
     this.host = null;
     this.port = null;
     this.token = null;
@@ -578,6 +601,8 @@ export class QuicClient {
   on(event: "connectionState", callback: ConnectionStateCallback): () => void;
   /** Register a listener for connection mode changes (direct vs relay). */
   on(event: "connectionMode", callback: ConnectionModeCallback): () => void;
+  /** Register a listener for reconnect attempt counter changes. */
+  on(event: "reconnectAttempt", callback: ReconnectAttemptCallback): () => void;
   on<E extends EventName>(event: E, callback: EventMap[E]): () => void {
     (this.listeners[event] as Array<EventMap[E]>).push(callback);
     return () => {
@@ -649,6 +674,31 @@ export class QuicClient {
     }
   }
 
+  private setReconnectAttempt(n: number): void {
+    if (this._reconnectAttempt === n) return;
+    this._reconnectAttempt = n;
+    for (const cb of this.listeners.reconnectAttempt) {
+      try {
+        cb(n);
+      } catch {
+        // Listener errors should not break the client.
+      }
+    }
+  }
+
+  /**
+   * User-initiated: stop the reconnection loop. The client stays in "error"
+   * state until the user explicitly triggers a new connect.
+   */
+  stopReconnect(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this._reconnectStopped = true;
+    this.setConnectionState("error");
+  }
+
   private emit(event: "output", taskId: string, line: string): void {
     for (const cb of this.listeners.output) {
       try {
@@ -681,7 +731,8 @@ export class QuicClient {
     this.clearTimers();
     this.activeRelayUrl = null;
     this.activeRelayPassword = null;
-    this.reconnectAttempt = 0;
+    this._reconnectStopped = false;
+    this.setReconnectAttempt(1);
     this.attemptConnect().catch(() => {});
   }
 
@@ -793,17 +844,12 @@ export class QuicClient {
         throw new Error("Could not reach agent (direct or via relay)");
       }
 
-      this.reconnectAttempt = 0;
+      this.setReconnectAttempt(0);
       this.setConnectionState("connected");
       this.startPolling();
-    } catch (err) {
+    } catch {
       this.setConnectionState("error");
       this.scheduleReconnect();
-      // Only throw on the initial connect call (attempt 0)
-      if (this.reconnectAttempt === 0) {
-        this.reconnectAttempt = 1;
-        throw err;
-      }
     }
   }
 
@@ -818,7 +864,8 @@ export class QuicClient {
       // Still worth re-probing: the current path may be dead after a network switch.
       // Clear polling so attemptConnect can restart it on the new path.
       this.clearTimers();
-      this.reconnectAttempt = 0;
+      this._reconnectStopped = false;
+      this.setReconnectAttempt(1);
       this.attemptConnect().catch(() => {});
       return;
     }
@@ -827,28 +874,32 @@ export class QuicClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.reconnectAttempt = 0;
+    this._reconnectStopped = false;
+    this.setReconnectAttempt(1);
     this.attemptConnect().catch(() => {});
   }
 
   private scheduleReconnect(): void {
     if (!this.host || !this.port || !this.token) return;
+    if (this._reconnectStopped) return;
 
-    // Give up after max retries
-    if (this.reconnectAttempt >= this.maxReconnectAttempts) {
+    // Give up after max retries — attempt `_maxReconnectAttempts` just failed.
+    if (this._reconnectAttempt >= this._maxReconnectAttempts) {
       console.log("[QUIC] Max reconnect attempts reached, giving up");
       this.setConnectionState("error");
       return;
     }
 
+    // Exponential backoff indexed by the attempt that just failed (1, 2, 4, 8… capped).
     const delay = Math.min(
-      this.baseBackoffMs * Math.pow(2, this.reconnectAttempt),
+      this.baseBackoffMs * Math.pow(2, this._reconnectAttempt - 1),
       30_000
     );
-    this.reconnectAttempt++;
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      if (this._reconnectStopped) return;
+      this.setReconnectAttempt(this._reconnectAttempt + 1);
       this.attemptConnect().catch(() => {
         // Reconnection failure is handled inside attemptConnect.
       });

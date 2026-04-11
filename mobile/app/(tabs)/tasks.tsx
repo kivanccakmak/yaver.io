@@ -316,6 +316,7 @@ export default function TasksScreen() {
   const [reconnectError, setReconnectError] = useState<string | null>(null);
   const [quicState, setQuicState] = useState<ConnectionState>(quicClient.connectionState);
   const [connMode, setConnMode] = useState<ConnectionMode>(quicClient.connectionMode);
+  const [reconnectAttempt, setReconnectAttempt] = useState<number>(quicClient.reconnectAttempt);
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [pingRtt, setPingRtt] = useState<number | null>(null);
   const [isPinging, setIsPinging] = useState(false);
@@ -334,7 +335,8 @@ export default function TasksScreen() {
   useEffect(() => {
     const unsub1 = quicClient.on("connectionState", setQuicState);
     const unsub2 = quicClient.on("connectionMode", setConnMode);
-    return () => { unsub1(); unsub2(); };
+    const unsub3 = quicClient.on("reconnectAttempt", setReconnectAttempt);
+    return () => { unsub1(); unsub2(); unsub3(); };
   }, []);
 
   // Fetch agent status when connected
@@ -643,6 +645,11 @@ export default function TasksScreen() {
   const banner = BANNER_CONFIG[effectiveState];
   const isEffectivelyConnected = effectiveState === "connected";
   const modeLabel = connMode === "relay" ? " via Relay" : connMode === "direct" ? " Direct" : "";
+  // Show the attempt counter while we're actively retrying (attempt > 0 and
+  // not yet connected). Clamp to max so the display never exceeds N/15.
+  const showReconnectProgress =
+    reconnectAttempt > 0 && !isEffectivelyConnected && !!activeDevice;
+  const displayedAttempt = Math.min(reconnectAttempt, quicClient.maxReconnectAttempts);
 
   const chatMessages = selectedTask ? buildChatMessages(selectedTask) : [];
   const isRunning = selectedTask?.status === "running" || selectedTask?.status === "queued";
@@ -656,7 +663,24 @@ export default function TasksScreen() {
             <View style={[s.dot, { backgroundColor: banner.dot }]} />
             <Text style={[s.bannerText, { color: banner.text, flexShrink: 1 }]} numberOfLines={1}>
               {banner.label}{modeLabel}{activeDevice ? ` \u00b7 ${activeDevice.name}` : ""}
+              {showReconnectProgress ? ` \u00b7 ${displayedAttempt}/${quicClient.maxReconnectAttempts}` : ""}
             </Text>
+            {showReconnectProgress && (
+              <Pressable
+                onPress={() => quicClient.stopReconnect()}
+                style={{
+                  marginLeft: 10,
+                  paddingHorizontal: 10,
+                  paddingVertical: 3,
+                  borderRadius: 6,
+                  backgroundColor: "#ef444422",
+                  borderWidth: 1,
+                  borderColor: "#ef444455",
+                }}
+              >
+                <Text style={{ color: "#f87171", fontSize: 11, fontWeight: "600" }}>Stop</Text>
+              </Pressable>
+            )}
           </View>
           {isEffectivelyConnected && (
             <View style={{ flexDirection: "row", alignItems: "center", marginTop: 4, marginLeft: 18 }}>

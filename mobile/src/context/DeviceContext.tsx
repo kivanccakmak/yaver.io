@@ -227,12 +227,18 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       } else if (state === "connecting") {
         setConnectionStatus("connecting");
       } else if (state === "error") {
-        const gaveUp = quicClient.reconnectAttempt >= 15;
+        const gaveUp =
+          quicClient.reconnectAttempt >= quicClient.maxReconnectAttempts ||
+          quicClient.reconnectStopped;
         if (gaveUp) {
           quicClient.disconnect();
           setConnectionStatus("disconnected");
           setActiveDevice(null);
-          setLastError("Could not connect to device");
+          setLastError(
+            quicClient.reconnectStopped
+              ? "Reconnection stopped"
+              : "Could not connect to device"
+          );
         } else {
           setConnectionStatus("error");
           setLastError("Connection lost — reconnecting...");
