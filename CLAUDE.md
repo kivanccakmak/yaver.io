@@ -266,6 +266,23 @@ See `.env.test.example` for all available variables.
 
 **CI:** Runs via `.github/workflows/test-suite.yml` on pushes to `main` and via manual `workflow_dispatch`.
 
+### Browser E2E Tests (`e2e/`)
+Playwright-driven browser tests that exercise the Next.js landing page + auth flow in Chromium. Free to run on GitHub Actions; public repo so minutes are unmetered.
+
+```bash
+cd e2e
+npm install
+npx playwright install --with-deps chromium   # first run only
+npm test                                      # boots web dev server, runs headless
+npm run test:headed                           # watch it in a real browser window
+npm run test:ui                               # Playwright UI mode
+npm run report                                # open last HTML report
+```
+
+**Dummy test user:** `global-setup.ts` creates a throwaway user against the live Convex backend (`POST /auth/signup` with a randomized `e2e-<uuid>@yaver.test` email) and `global-teardown.ts` deletes it via `/auth/delete-account` after the run. No credentials live in the repo and parallel runs never collide. To point tests at a deployed URL instead of the local dev server, set `E2E_BASE_URL=https://yaver.io` before running.
+
+**CI:** `.github/workflows/e2e.yml` runs on PRs and pushes to `main` that touch `web/` or `e2e/`. It boots the Next.js dev server inside the job, runs Playwright against it, and uploads the HTML report + failure traces as artifacts.
+
 ### Running remote tests (private — credentials in .env.test)
 The `.env.test` file (gitignored) contains credentials for the shared Hetzner server used by Talos/Yaver. It's loaded automatically by the test suite. To run remote tests:
 ```bash
