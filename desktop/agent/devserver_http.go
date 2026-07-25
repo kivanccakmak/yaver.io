@@ -1225,6 +1225,36 @@ func (s *HTTPServer) handleDevServerStatus(w http.ResponseWriter, r *http.Reques
 
 	status.IOSInstallMethod = resolvedIOSMethod
 	status.IOSInstallReason = resolvedIOSReason
+
+	// ── The web sibling can DIE without anything noticing ───────────────────
+	//
+	// DevMode "web" means the caller asked for a browser preview, which the
+	// agent serves from a SECOND process on WebPort (proxied at /dev-web/).
+	// Status remembered that it started one; it never checked one was alive. So
+	// after the sibling exited the agent kept answering
+	//
+	//   running: true, devMode: "web", webPort: null,
+	//   servingLabel: "Serving expo preview", error: none
+	//
+	// while /dev-web/ returned 503 "no Expo Web preview running". Observed on a
+	// real iPhone 2026-07-25 against talos and sfmg: the Projects card showed a
+	// green dot and an "Open in Yaver" button, and tapping it sat on "Starting
+	// expo dev server…" forever. EVERY surface — phone, web, TV — reads this
+	// payload, so one lying field produced identical unexplainable hangs
+	// everywhere, and no client fix can outrank the status it is given.
+	//
+	// devMode "web" with WebPort 0 is not a transient state to wait through —
+	// it is impossible, and it means the preview exited. Probe the real thing
+	// (CLAUDE.md: "probe the real capability, never the proxy") and say so, so
+	// clients can render a named failure with a Retry instead of a spinner.
+	if strings.EqualFold(status.DevMode, "web") && status.WebPort == 0 {
+		status.Serving = false
+		status.ServingLabel = "Browser preview is not running"
+		if strings.TrimSpace(status.Error) == "" {
+			status.Error = "the browser preview exited — start it again to render this project in a browser"
+		}
+	}
+
 	if status.Port > 0 {
 		if ip := strings.TrimSpace(getLocalIP()); ip != "" && ip != "0.0.0.0" {
 			status.DirectURL = fmt.Sprintf("http://%s:%d", ip, status.Port)
