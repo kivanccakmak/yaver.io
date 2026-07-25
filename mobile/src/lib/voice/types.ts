@@ -190,7 +190,12 @@ export type VoiceState =
   | "judging"
   | "confirming"
   | "dispatching"
-  | "speaking";
+  | "speaking"
+  // Terminal: capture cannot start and retrying will not help (e.g. the
+  // on-device speech model failed to load, or mic permission was denied).
+  // Carries a human reason on the event so the surface can show it instead of
+  // looping a wrong "mic broken" line forever.
+  | "unavailable";
 
 export interface VoiceCoreEvent {
   state: VoiceState;

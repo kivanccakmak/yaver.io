@@ -65,6 +65,8 @@ export interface VoiceCoreDeps {
   /** Consecutive empty listens (heard nothing) before parking to idle so we
    *  don't hold the mic/battery forever. Default 3. */
   maxIdleTimeouts?: number;
+  /** Consecutive capture-start failures before the terminal "unavailable" state. Default 3. */
+  maxCaptureFails?: number;
   /** How often the endpointer is polled while listening. Default 150ms. */
   tickMs?: number;
 }
@@ -93,12 +95,17 @@ export class VoiceConversationCore {
   /** Consecutive empty listens. */
   private emptyTimeouts = 0;
 
+  /** Consecutive capture-start failures. Reset on the first success. */
+  private captureFailStreak = 0;
+  private maxCaptureFails = 3;
+
   constructor(deps: VoiceCoreDeps) {
     this.d = deps;
     this.endpointCfg = { ...DEFAULT_ENDPOINT_CONFIG, ...(deps.endpoint ?? {}) };
     this.endpointer = new UtteranceEndpointer(this.endpointCfg, deps.clock.now());
     this.tickMs = deps.tickMs ?? 150;
     this.maxIdleTimeouts = deps.maxIdleTimeouts ?? 3;
+    this.maxCaptureFails = deps.maxCaptureFails ?? 3;
   }
 
   // ── public API ─────────────────────────────────────────────────────────
@@ -188,11 +195,22 @@ export class VoiceConversationCore {
       );
     } catch (e) {
       if (!this.alive(myGen)) return;
-      // Capture failed (mic/permission/route). Speak it and resume — never a
-      // dead-end while driving.
-      await this.speakThenResume(myGen, "I couldn't open the microphone.");
+      this.captureFailStreak++;
+      const { spoken, reason } = classifyCaptureFailure(e);
+      // Do NOT loop a wrong line forever. A model-load failure or a denied
+      // permission will fail every retry, so after a few tries enter a TERMINAL
+      // "unavailable" state carrying the REAL reason — never the reflexive "I
+      // couldn't open the microphone", which sends a user whose speech MODEL
+      // failed hunting a mic problem that isn't there.
+      if (this.captureFailStreak >= this.maxCaptureFails) {
+        this.setState("unavailable", { text: reason });
+        await this.d.tts.speak(spoken).catch(() => {});
+        return;
+      }
+      await this.speakThenResume(myGen, spoken);
       return;
     }
+    this.captureFailStreak = 0;
     if (!this.alive(myGen)) {
       void session.stop().catch(() => {});
       return;
@@ -383,4 +401,34 @@ export class VoiceConversationCore {
       return "";
     }
   }
+}
+
+
+/**
+ * classifyCaptureFailure turns a capture-start error into an ACCURATE spoken
+ * line + a machine reason. The old code spoke "I couldn't open the microphone"
+ * for every failure, including an on-device speech-MODEL load failure — the
+ * exact vague-error-costs-a-session class. Name the real cause.
+ */
+export function classifyCaptureFailure(e: unknown): { spoken: string; reason: string } {
+  const msg = (e instanceof Error ? e.message : String(e ?? "")).toLowerCase();
+  if (msg.includes("initialize on-device") || msg.includes("whisper") || msg.includes("model")) {
+    return {
+      spoken: "The on-device speech model didn't load. Voice isn't available on this device right now.",
+      reason: "speech-model-failed",
+    };
+  }
+  if (msg.includes("permission") || msg.includes("denied") || msg.includes("not authorized")) {
+    return {
+      spoken: "Microphone permission is off. Turn it on in Settings to use voice.",
+      reason: "mic-permission-denied",
+    };
+  }
+  if (msg.includes("route") || msg.includes("audio session") || msg.includes("busy")) {
+    return {
+      spoken: "The microphone is in use by something else. Close it and try again.",
+      reason: "mic-busy",
+    };
+  }
+  return { spoken: "I couldn't open the microphone.", reason: "capture-failed" };
 }
