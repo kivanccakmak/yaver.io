@@ -59,6 +59,17 @@ owner bearer token (`desktop/agent/remote_runtime_mcp.go:3`). This gives an AI
 runner a path to observe and operate the app if the UI gives it the session
 handle and visible state.
 
+Mobile already has the tmux attach product shape Web UI should copy. The mobile
+shell supports three PTY targets: a raw shell, a stable runner tmux session, and
+an arbitrary named tmux session (`mobile/app/shell.tsx:38`). Its deep link
+`/shell?session=<tmux>` opens straight onto that named `/ws/runner` session
+(`mobile/app/shell.tsx:94`). Runner chips attach to stable `yaver-<runner>`
+tmux sessions, and leaving the screen only drops the socket; the tmux process
+continues (`mobile/app/shell.tsx:208`). Web UI currently has `WebShellModal`,
+which opens the generic terminal/runner launcher over the agent PTY path, but
+named tmux attach/adopt/list parity is not yet part of the Web UI runtime
+workflow (`web/components/dashboard/WebShellModal.tsx:3`).
+
 The new Web UI bundle-preview fix proved three important false greens in the
 real Mac mini loop: build success can be lost as a transport error, a dev bundle
 can be present but unusable without its signature, and a signed relay response
@@ -91,6 +102,9 @@ The missing product shape is a first-class Runtime Lab:
   the Mac mini" or "open Talos Wear from Web UI" in dashboard chat, and the
   product should resolve the project/target, start the operation, and route the
   UI into the relevant Runtime Lab/Webview view automatically
+- tmux session attach parity with mobile: Web UI should list/adopt/open named
+  tmux sessions, attach to runner panes, and let the user vibe from an existing
+  tmux session without local SSH
 
 Without that, users feel stuck because the UI reports partial status while the
 operation that matters may still be impossible.
@@ -139,6 +153,71 @@ Implementation contract:
 - short phrasing is part of the contract: "open Talos for watchOS", "run SFMG on
   Wear", "show Yaver TV", and "open this for web" must work without requiring
   the user to know target IDs or which dashboard tab owns the surface
+- tmux phrasing is part of the contract: "attach to the Talos Codex tmux",
+  "vibe from the existing n2n session", "open the running Claude session",
+  "detach and keep it running", and "close that tmux" must route to the terminal
+  surface with the selected tmux session and the right safety semantics
+
+## Web UI Tmux Attach Parity
+
+Yaver's AI-runner model is tmux-backed. Web UI needs the same attach surface
+mobile has, otherwise a browser user can start runtime work but cannot reliably
+observe or steer the long-running runner session that owns it.
+
+Current mobile contract to preserve:
+
+- raw shell target opens `/ws/terminal`
+- runner target opens `/ws/runner?runner=<id>&name=yaver-<runner>`
+- arbitrary tmux target opens `/ws/runner?name=<sessionName>`
+- deep link `/shell?session=<tmux>` attaches directly to that named session
+- closing the view detaches the socket; it does not kill tmux
+- destructive close is explicit and warns that it kills the session
+
+Required Web UI behavior:
+
+- list live tmux sessions with names, panes, active runner classification, task
+  correlation, last activity, and a scrollback preview
+- open any named tmux session in an xterm-backed modal/page, not only a fresh
+  shell
+- support runner chips for stable `yaver-codex`, `yaver-claude`, and
+  `yaver-opencode` sessions
+- support attach, detach, adopt, close-pane, and close-session actions matching
+  mobile's semantics
+- detach means close the browser WebSocket and keep tmux running
+- close means terminate only the named pane/session after explicit confirmation
+- route task cards, runtime sessions, and chat results to the same terminal view
+  with an explicit `session=<tmux>` state param
+- show connection state, WebSocket state, last byte time, resize state, and
+  close/error reasons so a terminal does not become another silent spinner
+- integrate runner keeper state: when the user attaches, set mode
+  `user-driven`; on detach, let the user choose `auto` or `off`
+
+Chat examples:
+
+- "attach to Talos Codex tmux" -> find the Talos task/project session, route to
+  terminal with `session=<name>`, set runner keeper mode `user-driven`, and show
+  the live pane.
+- "vibe from the existing n2n session" -> resolve the active n2n tmux session,
+  attach the Web UI terminal, and keep the Runtime Lab/session context visible.
+- "resume the Yaver mobile runner" -> open the existing tmux if present; if not,
+  create or attach the stable `yaver-codex` or selected runner session and
+  record that it was created.
+- "detach and keep it running" -> close the browser WebSocket, set keeper mode
+  `auto` or user-selected `off`, and leave the session alive.
+- "close that tmux" -> require explicit confirmation, then terminate only the
+  named tmux session or pane the user selected.
+
+Closed-loop tmux tests:
+
+- stub or real agent reports two tmux sessions; Web UI renders both names and
+  previews
+- chat command "attach to Talos Codex tmux" routes to terminal state with the
+  expected `session` parameter
+- WebSocket URL for arbitrary session uses `/ws/runner?name=<sessionName>`, not
+  `/ws/terminal`
+- attach calls runner keeper attach/user-driven; detach can flip to auto/off
+- closing the modal without destructive confirmation does not kill tmux
+- stale/no-output terminal shows last byte time and a reconnect action
 
 ## WatchOS/Wear Specific Gaps
 
@@ -212,6 +291,9 @@ For each project `talos`, `sfmg`, and `yaver`:
 - Runner handoff path: call the runtime MCP frame/control path or `develop_for`
   equivalent with the session id and assert the runner can see an image result
   plus log tail.
+- Tmux attach path: list live tmux sessions, attach to an existing session, see
+  real pane output, detach without killing it, and close only after explicit
+  confirmation.
 
 Pass criteria:
 
@@ -222,6 +304,8 @@ Pass criteria:
 - console shows live stream state and real latest log line
 - browser, mobile, and eventual desktop surfaces see the same session id and
   target labels
+- tmux attach/detach/close semantics match mobile and never destroy a session on
+  ordinary modal close/navigation
 
 ## Web UI Implementation Slices
 
@@ -252,11 +336,15 @@ Pass criteria:
    and visible console entries. The chat path and button path must call the same
    operation helpers so they cannot drift.
 
-7. Add Playwright/Node closed-loop tests against a real or stubbed agent route
+7. Add Web UI tmux attach parity: session list, named attach route, stable
+   runner chips, adopt/detach/close actions, and runner keeper integration.
+
+8. Add Playwright/Node closed-loop tests against a real or stubbed agent route
    for the Web UI contracts: target matrix renders watch targets, disabled
    reasons are visible, frame preflight failure blocks a green status, stream
    status transitions are visible, control buttons send the expected JSON, and
    chat requests navigate to the expected surface with the expected target.
+   Include tmux attach tests for named session routing and non-destructive close.
 
 ## Desktop App Requirement
 
@@ -268,6 +356,7 @@ not invent a second runtime model. The shared contract is:
 - same visible log stream states
 - same control lease semantics
 - same runner handoff payload
+- same tmux attach/detach/close semantics as Web UI and mobile
 
 The desktop app can render through native WebView/Electron/SwiftUI, but it must
 not hide the runtime operation behind a generic "build" or "preview" button.
