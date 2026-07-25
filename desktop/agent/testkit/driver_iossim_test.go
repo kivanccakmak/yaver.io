@@ -39,3 +39,41 @@ func TestPickSimulatorPrefersIPhoneWhenAvailable(t *testing.T) {
 		t.Fatalf("pickSimulatorFromList(iPhone) = %q, want iPhone UDID", got)
 	}
 }
+
+// The renamed-simulator case, verbatim from the Mac mini: the only simulator is
+// "wrtc-test" — an iPhone-15-type device on iOS 26.4, booted — and matching by
+// display name reported `no available simulator matching "iPhone"`. Type
+// identifiers are the truth; names are decoration.
+func TestRankSimulatorsFromJSONMatchesTypeNotJustName(t *testing.T) {
+	jsonOut := `{"devices":{
+		"com.apple.CoreSimulator.SimRuntime.iOS-26-4":[
+			{"name":"wrtc-test","udid":"UDID-WRTC","state":"Booted","isAvailable":true,
+			 "deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-15"}],
+		"com.apple.CoreSimulator.SimRuntime.watchOS-26-4":[
+			{"name":"my watch","udid":"UDID-WATCH","state":"Shutdown","isAvailable":true,
+			 "deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-9-45mm"}]}}`
+
+	got := RankSimulatorsFromJSON(jsonOut, "iPhone")
+	if len(got) != 1 || got[0] != "UDID-WRTC" {
+		t.Fatalf("a renamed iPhone-type simulator must match an iPhone request by TYPE, got %v", got)
+	}
+	// A watch request finds the watch, not the phone.
+	if got := RankSimulatorsFromJSON(jsonOut, "Apple Watch"); len(got) != 1 || got[0] != "UDID-WATCH" {
+		t.Fatalf("watch request resolved wrongly: %v", got)
+	}
+	// No filter: everything, booted first.
+	all := RankSimulatorsFromJSON(jsonOut, "")
+	if len(all) != 2 || all[0] != "UDID-WRTC" {
+		t.Fatalf("unfiltered ranking should lead with the booted device: %v", all)
+	}
+	// Unavailable devices never rank.
+	unavailable := `{"devices":{"r":[{"name":"iPhone 15","udid":"U1","state":"Shutdown","isAvailable":false,
+		"deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-15"}]}}`
+	if got := RankSimulatorsFromJSON(unavailable, "iPhone"); len(got) != 0 {
+		t.Fatalf("an unavailable device was ranked: %v", got)
+	}
+	// Garbage JSON degrades to empty, not panic.
+	if got := RankSimulatorsFromJSON("{not json", "iPhone"); got != nil {
+		t.Fatalf("garbage input should yield nil, got %v", got)
+	}
+}

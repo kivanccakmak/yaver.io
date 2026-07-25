@@ -2,6 +2,7 @@ package testkit
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -134,16 +135,86 @@ func (d *IOSSimDriver) Shutdown(ctx context.Context, udid string) error {
 // RankSimulators returns every available simulator UDID matching deviceType,
 // best fit first. Callers that need exclusivity walk the list; callers that just
 // want "a" simulator take element 0.
+//
+// JSON, not the text listing: the text lines carry only the DISPLAY NAME, and a
+// simulator the user renamed ("wrtc-test") stops matching "iPhone" even though
+// its device TYPE is an iPhone. On a real Mac mini that made the WebRTC lane
+// report `no available simulator matching "iPhone"` with a healthy iPhone-type
+// simulator booted on iOS 26.4. The JSON carries deviceTypeIdentifier
+// ("com.apple.CoreSimulator.SimDeviceType.iPhone-15"), which names the truth
+// regardless of what anyone called the device.
 func RankSimulators(ctx context.Context, deviceType string) ([]string, error) {
-	out, err := runCtx(ctx, "xcrun", "simctl", "list", "devices", "available")
+	out, err := runCtx(ctx, "xcrun", "simctl", "list", "devices", "available", "--json")
 	if err != nil {
 		return nil, fmt.Errorf("simctl list devices: %w", err)
 	}
-	ranked := rankSimulatorsFromList(out, deviceType)
+	ranked := RankSimulatorsFromJSON(out, deviceType)
 	if len(ranked) == 0 {
-		return nil, fmt.Errorf("no available simulator matching %q", deviceType)
+		return nil, fmt.Errorf("no available simulator matching %q (checked device TYPES, not just names)", deviceType)
 	}
 	return ranked, nil
+}
+
+// RankSimulatorsFromJSON ranks devices from `simctl list devices --json` output:
+// booted first, then by how specifically they match deviceType (type identifier
+// or display name, case-insensitive).
+func RankSimulatorsFromJSON(jsonOut, deviceType string) []string {
+	var listing struct {
+		Devices map[string][]struct {
+			Name                 string `json:"name"`
+			UDID                 string `json:"udid"`
+			State                string `json:"state"`
+			IsAvailable          bool   `json:"isAvailable"`
+			DeviceTypeIdentifier string `json:"deviceTypeIdentifier"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &listing); err != nil {
+		return nil
+	}
+	want := strings.ToLower(strings.TrimSpace(deviceType))
+	type candidate struct {
+		udid  string
+		score int
+	}
+	var found []candidate
+	for runtimeID, devices := range listing.Devices {
+		for _, d := range devices {
+			if !d.IsAvailable || d.UDID == "" {
+				continue
+			}
+			typeID := strings.ToLower(d.DeviceTypeIdentifier)
+			name := strings.ToLower(d.Name)
+			if want != "" && !strings.Contains(typeID, strings.ReplaceAll(want, " ", "-")) &&
+				!strings.Contains(typeID, want) && !strings.Contains(name, want) {
+				continue
+			}
+			score := 10
+			// Prefer phone-class runtimes when nothing was asked for.
+			lower := strings.ToLower(runtimeID) + " " + typeID
+			switch {
+			case strings.Contains(lower, "iphone"):
+				score = 40
+			case strings.Contains(lower, "ipad"):
+				score = 35
+			case strings.Contains(lower, "vision"), strings.Contains(lower, "xros"):
+				score = 30
+			case strings.Contains(lower, "tv"):
+				score = 20
+			case strings.Contains(lower, "watch"):
+				score = 15
+			}
+			if strings.EqualFold(d.State, "Booted") {
+				score += 100 // warm — seconds instead of a cold boot
+			}
+			found = append(found, candidate{udid: d.UDID, score: score})
+		}
+	}
+	sort.SliceStable(found, func(i, j int) bool { return found[i].score > found[j].score })
+	out := make([]string, 0, len(found))
+	for _, c := range found {
+		out = append(out, c.udid)
+	}
+	return out
 }
 
 func pickSimulator(ctx context.Context, deviceType string) (string, error) {
