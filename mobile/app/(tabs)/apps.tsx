@@ -84,6 +84,28 @@ interface RepoItem {
   subframeworks?: string[];
 }
 
+type MobileDiscoveryState = {
+  status?: "idle" | "discovering" | "partial" | "ready";
+  discovering?: boolean;
+  partiallyReady?: boolean;
+  lastCompletedAt?: string;
+  scanMs?: number;
+  timedOut?: boolean;
+  permDenied?: number;
+  scanError?: string;
+};
+
+type PreviewProbeState = {
+  href?: string;
+  reason?: string;
+  mountId?: string;
+  mountChildren?: number;
+  bodyChildren?: number;
+  bodyTextLen?: number;
+  visibleBoxCount?: number;
+  mediaCount?: number;
+};
+
 // Branded vector icons via mobile/src/components/FrameworkIcon.tsx \u2014 see
 // that file for the per-framework MaterialCommunityIcon + brand-color
 // mapping. Kept in sync with hotreload.tsx so the two surfaces render
@@ -556,6 +578,7 @@ export default function AppsScreen() {
   const [deepShuffleText, setDeepShuffleText] = useState("");
   const [deepShuffleStep, setDeepShuffleStep] = useState("");
   const [projectsDiscovering, setProjectsDiscovering] = useState(false);
+  const [mobileDiscovery, setMobileDiscovery] = useState<MobileDiscoveryState | null>(null);
   const webViewRef = useRef<WebView>(null);
   // Browser-preview cold-start retry budget (see the WebView onError/onHttpError
   // below). A web dev server can take up to a minute to compile on first open.
@@ -574,6 +597,7 @@ export default function AppsScreen() {
   // (a preview you cannot leave would be worse than a header you cannot hide).
   const [previewFullScreen, setPreviewFullScreen] = useState(false);
   const [webPreviewLogs, setWebPreviewLogs] = useState<string[]>([]);
+  const [webPreviewProbe, setWebPreviewProbe] = useState<PreviewProbeState | null>(null);
   useEffect(() => () => { if (webPreviewRetryTimer.current) clearTimeout(webPreviewRetryTimer.current); }, []);
   // Elapsed + last-output heartbeat.
   //
@@ -593,6 +617,7 @@ export default function AppsScreen() {
     setWebPreviewContentLoaded(false);
     setWebPreviewFailed(false);
     setWebPreviewLogs([]);
+    setWebPreviewProbe(null);
     setWebPreviewStartedAt(Date.now());
     setWebPreviewLastLogAt(null);
   }, []);
@@ -629,6 +654,7 @@ export default function AppsScreen() {
     if (!activeDevice?.id) return;
     setProjects([]);
     setProjectsDiscovering(false);
+    setMobileDiscovery(null);
     setDevStatus(null);
     setWorkerSession(null);
     setRepos([]);
@@ -676,6 +702,7 @@ export default function AppsScreen() {
         if (!mounted) return;
         setProjects(mergeProjectRows(projectsData.projects, reposData.repos));
         setProjectsDiscovering(!!projectsData.discovery?.discovering);
+        setMobileDiscovery(projectsData.discovery ?? null);
         setRepos([]);
       } catch {}
     };
@@ -1521,7 +1548,24 @@ export default function AppsScreen() {
 
   const ensureHermesDevServer = useCallback(async (workDir: string, framework?: string) => {
     const currentStatus = await quicClient.getDevServerStatus();
-    if (currentStatus?.running && currentStatus.workDir === workDir) {
+    // `running` alone is NOT "the lane I need is up".
+    //
+    // A dev server for this workDir can be serving the WEB target (caller
+    // "web-ui") or the Hermes/native one (caller "mobile"). This guard used to
+    // return early on running + matching workDir, so asking for one lane while
+    // the OTHER was already up silently did nothing: the caller then waited on
+    // a surface nobody had started.
+    //
+    // Observed 2026-07-25 on a real iPhone — Metro up for sfmg, browser preview
+    // tapped, and the agent answered `running: true, servingLabel: "Serving
+    // expo preview", webPort: null` while /dev-web/ returned
+    //   503 {"error":"no Expo Web preview running — POST /dev/web-preview/start"}
+    // The phone sat on "Starting expo dev server… 1:04 elapsed" forever. Both
+    // sides were telling the truth about DIFFERENT lanes.
+    //
+    // So compare the lane, not just the flag. Wrong lane ⇒ fall through and
+    // start the right one.
+    if (currentStatus?.running && currentStatus.workDir === workDir && !isWebServedStatus(currentStatus)) {
       return;
     }
 
@@ -1812,6 +1856,28 @@ export default function AppsScreen() {
     devStatus && reportedBundlePath
       ? quicClient.getDevServerBundleUrl(devWebLane || reportedBundlePath)
       : "";
+  const visibleProjects = projects.filter((p) => {
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      const match = projectTerms(p).some((term) => term.toLowerCase().includes(q));
+      if (!match) return false;
+    }
+    if (activeFilter) {
+      return getProjectCategory(p) === activeFilter;
+    }
+    return true;
+  });
+  const activeFilterLabel = activeFilter
+    ? activeFilter[0].toUpperCase() + activeFilter.slice(1)
+    : "All";
+  const scanDiagnosticLine = mobileDiscovery
+    ? [
+        typeof mobileDiscovery.scanMs === "number" ? `scan ${Math.round(mobileDiscovery.scanMs / 100) / 10}s` : "",
+        mobileDiscovery.timedOut ? "timed out" : "",
+        mobileDiscovery.permDenied ? `${mobileDiscovery.permDenied} permission-denied dirs` : "",
+        mobileDiscovery.scanError || "",
+      ].filter(Boolean).join(" · ")
+    : "";
 
   if (!effectivelyConnected) {
     // Banner first (always actionable) so the user can tap Switch ›
@@ -2195,19 +2261,7 @@ export default function AppsScreen() {
           refreshControl={
             <RefreshControl refreshing={pullRefreshing} onRefresh={onPullRefresh} tintColor={c.accent} colors={[c.accent]} progressBackgroundColor={c.bgCard} />
           }
-          data={projects.filter((p) => {
-            // Fuzzy search
-            if (search.trim()) {
-              const q = search.toLowerCase();
-              const match = projectTerms(p).some((term) => term.toLowerCase().includes(q));
-              if (!match) return false;
-            }
-            // Category filter
-            if (activeFilter) {
-              return getProjectCategory(p) === activeFilter;
-            }
-            return true;
-          })}
+          data={visibleProjects}
           keyExtractor={(item) => item.path}
           contentContainerStyle={[s.listContent, layout.gridCols("repos") > 1 ? null : tabletContent]}
           renderItem={({ item }) => {
@@ -2293,6 +2347,13 @@ export default function AppsScreen() {
                 body={`Nothing named “${search.trim()}” on ${activeDevice.name || "this machine"}.`}
                 action={{ label: "Clear search", onPress: () => setSearch("") }}
               />
+            ) : projects.length > 0 ? (
+              <EmptyState
+                icon="filter-outline"
+                title={`No ${activeFilterLabel.toLowerCase()} projects`}
+                body={`${projects.length} project${projects.length === 1 ? "" : "s"} found on ${activeDevice.name || "this machine"}, but none match the ${activeFilterLabel} filter.`}
+                action={{ label: "Show all", onPress: () => setActiveFilter(null) }}
+              />
             ) : (
               <EmptyState
                 icon="folder-open-outline"
@@ -2301,7 +2362,7 @@ export default function AppsScreen() {
                 body={
                   projectsDiscovering
                     ? `Looking through the home directory on ${activeDevice.name || "your machine"}.`
-                    : `Yaver found nothing to build on ${activeDevice.name || "this machine"}.`
+                    : `Yaver found nothing to build on ${activeDevice.name || "this machine"}.${scanDiagnosticLine ? ` ${scanDiagnosticLine}.` : ""}`
                 }
                 action={
                   projectsDiscovering
@@ -2832,7 +2893,15 @@ export default function AppsScreen() {
               onMessage={(e) => {
                 try {
                   const m = JSON.parse(e.nativeEvent.data);
-                  if (m && m.t === "yaver-rendered") {
+                  if (m && (m.t === "yaver-preview-probe" || m.t === "yaver-preview-timeout")) {
+                    setWebPreviewProbe((m.state || null) as PreviewProbeState | null);
+                    if (m.t === "yaver-preview-timeout") {
+                      const reason = String(m.state?.reason || "preview probe timed out");
+                      setWebPreviewLogs((prev) => [...prev, `[preview] render probe timed out: ${reason}`].slice(-60));
+                      setWebPreviewFailed(true);
+                    }
+                  } else if (m && m.t === "yaver-rendered") {
+                    setWebPreviewProbe((m.state || null) as PreviewProbeState | null);
                     setWebPreviewContentLoaded(true);
                     setWebPreviewFailed(false);
                     webPreviewRetryRef.current = 0;
@@ -2918,6 +2987,11 @@ export default function AppsScreen() {
                         </Text>
                       ) : null;
                     })() : null}
+                    {webPreviewProbe ? (
+                      <Text style={[s.previewSubtle, { color: c.textMuted, marginTop: 6 }]} numberOfLines={2}>
+                        probe {webPreviewProbe.reason || "waiting"} · {webPreviewProbe.mountId ? `#${webPreviewProbe.mountId} children ${webPreviewProbe.mountChildren ?? 0}` : `body children ${webPreviewProbe.bodyChildren ?? 0}`} · {(() => { try { return new URL(webPreviewProbe.href || bundleUrl).pathname; } catch { return webPreviewProbe.href || ""; } })()}
+                      </Text>
+                    ) : null}
                     {webPreviewLogs.length === 0 && bundlerLine ? (
                       <Text style={[s.previewSubtle, { color: c.textMuted }]} numberOfLines={1}>{bundlerLine}</Text>
                     ) : null}
