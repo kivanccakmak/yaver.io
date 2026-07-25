@@ -13,6 +13,7 @@
  */
 
 import { Platform } from "react-native";
+import { hasNativeTransports } from "./platformTransport";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   loadConnectionCache,
@@ -6735,7 +6736,25 @@ export class QuicClient {
 
       // Check if we're on WiFi (direct connection possible) or cellular (relay only)
       const netState = await NetInfo.fetch();
-      const isWifi = netState.type === "wifi" || netState.type === "ethernet";
+      // A BROWSER is always direct-capable, whatever NetInfo says.
+      //
+      // In a browser navigator.connection exposes no `type` at all — only
+      // effectiveType ("4g" on a laptop sitting on Wi-Fi) — so NetInfo reports
+      // non-wifi and this flag came out FALSE. That sent the connect path down
+      // the "cellular → relay only" branch, and the relay is QUIC, which a
+      // browser cannot speak. The result was "Transport pending · Agent status
+      // unavailable" forever in Chromium while the same account showed
+      // "Relay · 301ms" on a real iPhone. Nothing was broken: the app was
+      // waiting on a leg that could never complete.
+      //
+      // Measured 2026-07-25 from a browser page on the RN-web build: a direct
+      // fetch to the agent returned /info 200 and /projects 200 with 30
+      // projects. The lane works completely — it was simply never chosen.
+      //
+      // hasNativeTransports is false ONLY on web (platformTransport.ts detects
+      // a DOM), so a device is bit-for-bit unaffected: on iOS and Android this
+      // OR-term is always false and the expression is exactly what it was.
+      const isWifi = netState.type === "wifi" || netState.type === "ethernet" || !hasNativeTransports;
       this._networkType = netState.type;
       // Feed the direct-probe negative cache with a stable identity for the
       // current network — SSID for Wi-Fi, carrier for cellular, plain type
