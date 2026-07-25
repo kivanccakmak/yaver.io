@@ -59,9 +59,16 @@ func TestRewriteLeavesExplicitBaseAlone(t *testing.T) {
 }
 
 func TestRewriteNoBaseIsNoOp(t *testing.T) {
-	in := `<html><head><script src="/foo.js"></script></head></html>`
+	// A page with no base and only RELATIVE assets is unchanged.
+	in := `<html><head><script src="foo.js"></script></head></html>`
 	if rewriteDevIndexBaseHrefHTML(in) != in {
-		t.Fatal("a document with no base tag must be returned unchanged")
+		t.Fatal("a document with no base tag and only relative assets must be unchanged")
+	}
+	// But a root-absolute asset is made relative even without a base tag —
+	// otherwise it 404s through the /dev/ proxy (the whole point).
+	got := rewriteDevIndexBaseHrefHTML(`<script src="/foo.js"></script>`)
+	if !strings.Contains(got, `src="foo.js"`) {
+		t.Fatalf("root-absolute asset not made relative: %s", got)
 	}
 }
 
@@ -109,5 +116,31 @@ func TestModifyResponseNilSafe(t *testing.T) {
 	resp := &http.Response{Header: http.Header{"Content-Type": []string{"text/html"}}}
 	if err := rewriteDevIndexBaseHref(resp); err != nil {
 		t.Fatal("nil body must be a no-op")
+	}
+}
+
+// Live Metro (Expo web) serves its entry as a ROOT-ABSOLUTE path, which ignores
+// <base href> and 404s through the /dev/ proxy. Static `expo export` uses
+// relative paths, which is why fixtures missed this. Pin the fix.
+func TestRewriteMakesAbsoluteMetroBundleRelative(t *testing.T) {
+	in := `<head><base href="/"><script src="/node_modules/expo/AppEntry.bundle?platform=web&dev=true"></script></head>`
+	out := rewriteDevIndexBaseHrefHTML(in)
+	if strings.Contains(out, `src="/node_modules`) {
+		t.Fatalf("absolute bundle path not made relative — it will 404 through the proxy:\n%s", out)
+	}
+	if !strings.Contains(out, `src="node_modules/expo/AppEntry.bundle?platform=web&dev=true"`) {
+		t.Fatalf("expected base-relative bundle path:\n%s", out)
+	}
+}
+
+func TestRewriteLeavesProtocolRelativeAndAbsoluteURLsAlone(t *testing.T) {
+	for _, in := range []string{
+		`<script src="//cdn.example.com/x.js"></script>`,
+		`<script src="https://cdn.example.com/x.js"></script>`,
+		`<link href="https://fonts.example/x.css">`,
+	} {
+		if got := rewriteDevIndexBaseHrefHTML(in); got != in {
+			t.Fatalf("external/protocol-relative URL was altered:\n  in:  %s\n  out: %s", in, got)
+		}
 	}
 }

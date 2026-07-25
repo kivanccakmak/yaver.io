@@ -36,17 +36,56 @@ var devBaseHrefRe = regexp.MustCompile(`(?i)<base\s+href\s*=\s*["'](/?)["']\s*/?
 // about the transport is hardcoded.
 const devProxyBaseHref = "./"
 
+// devAbsAssetRe matches src="/..." / href="/..." with a SINGLE leading slash
+// (i.e. root-absolute, not protocol-relative "//host"). Capture 1 is the attr,
+// capture 2 is the path minus that leading slash.
+var devAbsAssetRe = regexp.MustCompile(`(?i)\b(src|href)="/([^/"][^"]*)"`)
+
+// devBaseTagRe matches a whole <base ...> tag, protected across the abs-asset
+// pass so its href is never touched.
+var devBaseTagRe = regexp.MustCompile(`(?i)<base\b[^>]*>`)
+
 // rewriteDevIndexBaseHrefHTML rewrites a root <base href> to devProxyBaseHref.
 // Pure and content-only so it can be unit-tested without a live proxy.
 // Returns the input unchanged when there is nothing root-based to rewrite.
 func rewriteDevIndexBaseHrefHTML(html string) string {
 	// Only touch a base that points at root; never clobber an explicit base.
-	return devBaseHrefRe.ReplaceAllStringFunc(html, func(m string) string {
+	out := devBaseHrefRe.ReplaceAllStringFunc(html, func(m string) string {
 		// m is the whole <base ...> tag. Guard: if the captured href was
 		// non-root the outer regex wouldn't have matched, so any match here is
 		// a root base and safe to replace.
 		return `<base href="` + devProxyBaseHref + `">`
 	})
+	// Also make ROOT-ABSOLUTE asset paths base-relative.
+	//
+	// A relative <base href="./"> only fixes RELATIVE asset refs. A live Metro
+	// dev server (Expo web) serves its entry as an ABSOLUTE path:
+	//   <script src="/node_modules/expo/AppEntry.bundle?platform=web...">
+	// and absolute paths ignore <base> entirely, so through the /dev/ proxy —
+	// and doubly so through the relay's /d/<id>/dev/ — that resolves to the
+	// server ROOT and 404s. The whole app then fails to boot. Missed until now
+	// because `expo export -p web` (static) uses RELATIVE paths, while live
+	// Metro uses absolute ones — the test fixtures and the real thing differ.
+	//
+	// Stripping the leading slash turns "/node_modules/..." into
+	// "node_modules/...", which the base href then resolves under /dev/ (and
+	// under /d/<id>/dev/ on the relay). Correct for a dev preview: every asset
+	// the served page needs lives under the dev-server root, which IS the
+	// proxy root here. Protocol-relative (//host) and full URLs are untouched.
+	//
+	// The <base> tag's OWN href must not be rewritten (its whole job is to be
+	// the base), so protect every base tag across the abs pass and restore it.
+	const baseMark = "\x00YVBASE\x00"
+	var bases []string
+	out = devBaseTagRe.ReplaceAllStringFunc(out, func(m string) string {
+		bases = append(bases, m)
+		return baseMark
+	})
+	out = devAbsAssetRe.ReplaceAllString(out, `${1}="${2}"`)
+	for _, b := range bases {
+		out = strings.Replace(out, baseMark, b, 1)
+	}
+	return out
 }
 
 // rewriteDevIndexBaseHref is the httputil.ReverseProxy ModifyResponse hook. It
