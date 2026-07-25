@@ -158,7 +158,25 @@ async function waitForDevPreviewUrl(bundleUrl?: string): Promise<{ url: string; 
   const signedUrl = signedBundlePreviewUrl(bundleUrl);
   if (signedUrl) return { url: signedUrl, note: "Web UI bundle ready." };
   let lastError = "";
-  for (let i = 0; i < 16; i++) {
+  // ── The 12-second cliff ────────────────────────────────────────────────────
+  // This loop used to run 16 times at 750ms = TWELVE SECONDS, then declare
+  // failure. A cold web compile takes 30s–3min: the agent itself allows 120s
+  // just for the port to bind, and Expo/Next/Flutter spend longer than that on
+  // a first build. So the dashboard reported
+  //
+  //   web ui failed: Preview URL returned HTTP 503
+  //
+  // 23 seconds after the click (observed 2026-07-25 on yaver.io) while the dev
+  // server was compiling normally and would have served a moment later. The
+  // 503 was the agent being HONEST about starting up; the client turned it into
+  // a verdict.
+  //
+  // Two rules this now follows: a transient "still starting" is not a failure,
+  // and a wait must say how long it has been waiting (that is why the final
+  // message carries elapsed seconds instead of a bare HTTP code).
+  const startedAt = Date.now();
+  const budgetMs = 180_000;
+  for (let i = 0; Date.now() - startedAt < budgetMs; i++) {
     const status = await agentClient.getDevServerStatus();
     if (status?.error) lastError = status.error;
     if (status?.webPort && status.webPort > 0 && agentClient.devWebPreviewUrl) {
@@ -171,9 +189,15 @@ async function waitForDevPreviewUrl(bundleUrl?: string): Promise<{ url: string; 
       if (probed.ok) return { url: agentClient.devPreviewUrl, note: status?.servingLabel || "Web UI running in this dashboard." };
       lastError = probed.error;
     }
-    await sleep(750);
+    await sleep(i < 8 ? 750 : 2000);
   }
-  throw new Error(lastError || "The agent accepted the Web UI start request, but no browser preview is running yet.");
+  const waitedSec = Math.round((Date.now() - startedAt) / 1000);
+  throw new Error(
+    lastError
+      ? `Still no browser preview after ${waitedSec}s — last thing the agent said: ${lastError}. ` +
+        `A first web build can take longer than this; the dev server may still be compiling — check the runtime console.`
+      : `The agent accepted the Web UI start request, but no browser preview was serving after ${waitedSec}s.`,
+  );
 }
 
 async function probePreviewUrl(url: string): Promise<{ ok: true } | { ok: false; error: string }> {
