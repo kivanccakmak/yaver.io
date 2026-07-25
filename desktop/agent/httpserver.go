@@ -3231,6 +3231,28 @@ func projectListHasRunnableSignal(projectPath string) bool {
 	return false
 }
 
+func mergeLiveWorkspaceReposIntoProjects(projects []projectInfo) []projectInfo {
+	seen := map[string]bool{}
+	out := make([]projectInfo, 0, len(projects)+8)
+	add := func(path, branch string) {
+		path = filepath.Clean(strings.TrimSpace(path))
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		out = append(out, projectInfo{Path: path, Branch: branch})
+	}
+	for _, p := range projects {
+		add(p.Path, p.Branch)
+	}
+	for _, root := range projectDiscoveryRoots() {
+		for _, repo := range scanDirForRepos(root) {
+			add(repo.Path, repo.Branch)
+		}
+	}
+	return out
+}
+
 // handleProjects lists discovered projects on this machine.
 func (s *HTTPServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -3244,6 +3266,7 @@ func (s *HTTPServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 		discoverProjects()
 		projects = listDiscoveredProjects()
 	}
+	projects = mergeLiveWorkspaceReposIntoProjects(projects)
 	type projectResp struct {
 		Name           string   `json:"name"`
 		Path           string   `json:"path"`

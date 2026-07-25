@@ -27,6 +27,21 @@ interface Project {
   tags?: string[];
 }
 
+interface WorkspaceRepo {
+  name: string;
+  path: string;
+  branch?: string;
+  remote?: string;
+  lastCommit?: string;
+  dirty?: boolean;
+  stack?: {
+    type?: string;
+    frameworks?: string[];
+    services?: string[];
+    actions?: string[];
+  };
+}
+
 interface PreviewTarget {
   id: string;
   name: string;
@@ -103,6 +118,60 @@ function supportsRemoteRuntime(project: Project): boolean {
   return mode.includes("webrtc") || ["expo", "react-native", "flutter", "swift", "kotlin"].some((candidate) => frameworks.has(candidate));
 }
 
+function projectFromRepo(repo: WorkspaceRepo): Project {
+  const frameworks = repo.stack?.frameworks ?? [];
+  const services = repo.stack?.services ?? [];
+  const actions = repo.stack?.actions ?? [];
+  const stackType = repo.stack?.type;
+  const framework = stackType === "monorepo" ? "monorepo" : frameworks[0] || stackType || "repo";
+  const surfaces = new Set<string>();
+  const lower = new Set([stackType, ...frameworks, ...actions].filter(Boolean).map((v) => String(v).toLowerCase()));
+  if (lower.has("monorepo")) {
+    surfaces.add("web");
+    surfaces.add("mobile");
+    surfaces.add("backend");
+  }
+  if (["expo", "react-native", "flutter", "swift", "kotlin", "mobile"].some((v) => lower.has(v))) surfaces.add("mobile");
+  if (["next.js", "nextjs", "vite", "react", "web", "dev-server"].some((v) => lower.has(v))) surfaces.add("web");
+  if (["go", "python", "rust", "backend"].some((v) => lower.has(v))) surfaces.add("backend");
+  return {
+    name: repo.name || repo.path.split(/[\\/]/).filter(Boolean).pop() || repo.path,
+    path: repo.path,
+    branch: repo.branch,
+    framework,
+    frameworks,
+    stack: stackType,
+    stacks: [stackType, ...frameworks].filter(Boolean) as string[],
+    surfaces: Array.from(surfaces),
+    services,
+    hosting: services.filter((v) => ["cloudflare", "vercel", "netlify"].includes(v)),
+    role: stackType === "monorepo" ? "repo" : stackType || "repo",
+    executionMode: actions.includes("hot-reload") ? "native-webrtc" : actions.includes("dev-server") ? "web" : undefined,
+    primarySurface: surfaces.has("web") ? "web" : surfaces.has("mobile") ? "mobile" : stackType,
+    gitRemote: repo.remote,
+    tags: [stackType, ...frameworks, ...services, ...actions, repo.dirty ? "dirty" : undefined].filter(Boolean) as string[],
+  };
+}
+
+function mergeProjectInventory(projects: Project[], repos: WorkspaceRepo[]): Project[] {
+  const byPath = new Map<string, Project>();
+  for (const project of projects) {
+    if (project.path) byPath.set(project.path, project);
+  }
+  for (const repo of repos) {
+    if (!repo.path || byPath.has(repo.path)) continue;
+    byPath.set(repo.path, projectFromRepo(repo));
+  }
+  return Array.from(byPath.values()).sort((a, b) => {
+    const ap = `${a.name} ${a.path} ${a.gitRemote || ""}`.toLowerCase();
+    const bp = `${b.name} ${b.path} ${b.gitRemote || ""}`.toLowerCase();
+    const ay = ap.includes("yaver.io") || ap.includes("yaver-io/yaver");
+    const by = bp.includes("yaver.io") || bp.includes("yaver-io/yaver");
+    if (ay !== by) return ay ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 function previewPlatformForProject(project: Project): "web" | undefined {
   return supportsBrowserPreview(project) ? "web" : undefined;
 }
@@ -157,8 +226,11 @@ export default function ProjectsView({
     setLoading(true);
     setLoadError(null);
     try {
-      const list = await agentClient.listProjects();
-      setProjects(list);
+      const [list, repos] = await Promise.all([
+        agentClient.listProjects(),
+        agentClient.listWorkspaceRepos(),
+      ]);
+      setProjects(mergeProjectInventory(list, repos));
     } catch (error) {
       setProjects([]);
       const message = error instanceof Error ? error.message : "Failed to load projects";

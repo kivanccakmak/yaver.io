@@ -35,3 +35,36 @@ func TestProjectListHasRunnableSignalRejectsEmptyRoot(t *testing.T) {
 		t.Fatal("expected empty root to stay hidden from project list")
 	}
 }
+
+func TestMergeLiveWorkspaceReposIntoProjectsDedupes(t *testing.T) {
+	home := withHome(t)
+	ws := filepath.Join(home, "Workspace")
+	repo := mkRepo(t, ws, "yaver.io")
+	projects := []projectInfo{{Path: repo, Branch: "main"}}
+	got := mergeLiveWorkspaceReposIntoProjects(projects)
+	count := 0
+	for _, project := range got {
+		if project.Path == repo {
+			count++
+			if project.Branch != "main" {
+				t.Fatalf("existing project branch changed during merge: %+v", project)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected yaver.io repo to appear once, got %d in %+v", count, got)
+	}
+}
+
+func TestMergeLiveWorkspaceReposIntoProjectsAddsWorkspaceRepoRoots(t *testing.T) {
+	home := withHome(t)
+	ws := filepath.Join(home, "Workspace")
+	repo := mkRepo(t, ws, "yaver.io")
+	got := mergeLiveWorkspaceReposIntoProjects(nil)
+	for _, project := range got {
+		if project.Path == repo {
+			return
+		}
+	}
+	t.Fatalf("expected workspace repo root %q to be merged into /projects, got %+v", repo, got)
+}

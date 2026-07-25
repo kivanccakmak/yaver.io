@@ -4251,6 +4251,40 @@ export class AgentClient {
     return data.projects ?? [];
   }
 
+  async listWorkspaceRepos(): Promise<Array<{
+    name: string;
+    path: string;
+    branch?: string;
+    remote?: string;
+    lastCommit?: string;
+    dirty?: boolean;
+    stack?: {
+      type?: string;
+      frameworks?: string[];
+      services?: string[];
+      actions?: string[];
+    };
+  }>> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/repos/list`, { headers: this.authHeaders });
+    if (!res.ok) return [];
+    const data = await res.json().catch(() => []);
+    return Array.isArray(data) ? data as Array<{
+      name: string;
+      path: string;
+      branch?: string;
+      remote?: string;
+      lastCommit?: string;
+      dirty?: boolean;
+      stack?: {
+        type?: string;
+        frameworks?: string[];
+        services?: string[];
+        actions?: string[];
+      };
+    }> : [];
+  }
+
   /** Capability-filtered project list. Agent v1.99.75+ exposes
    *  `/projects/web` and `/projects/all` alongside the existing
    *  `/projects/mobile`. Each project carries `webCapable` and

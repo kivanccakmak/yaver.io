@@ -6,7 +6,6 @@ import {
   type RemoteRuntimeCapabilities,
   type RemoteRuntimeSession,
   type RemoteRuntimeTarget,
-  type TmuxSessionSummary,
 } from "@/lib/agent-client";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 
@@ -15,6 +14,23 @@ type Project = {
   path: string;
   framework?: string;
   executionMode?: string;
+  frameworks?: string[];
+  stack?: string;
+  surfaces?: string[];
+  tags?: string[];
+};
+
+type WorkspaceRepo = {
+  name: string;
+  path: string;
+  branch?: string;
+  remote?: string;
+  stack?: {
+    type?: string;
+    frameworks?: string[];
+    services?: string[];
+    actions?: string[];
+  };
 };
 
 export type RuntimeLabIntent = {
@@ -44,6 +60,48 @@ function projectMatches(project: Project, query?: string): boolean {
   const q = String(query || "").trim().toLowerCase();
   if (!q) return false;
   return project.name.toLowerCase().includes(q) || project.path.toLowerCase().includes(q);
+}
+
+function projectFromRepo(repo: WorkspaceRepo): Project {
+  const frameworks = repo.stack?.frameworks ?? [];
+  const actions = repo.stack?.actions ?? [];
+  const stackType = repo.stack?.type;
+  const lower = new Set([stackType, ...frameworks, ...actions].filter(Boolean).map((v) => String(v).toLowerCase()));
+  const surfaces = new Set<string>();
+  if (lower.has("monorepo")) {
+    surfaces.add("web");
+    surfaces.add("mobile");
+    surfaces.add("backend");
+  }
+  if (["expo", "react-native", "flutter", "swift", "kotlin", "mobile"].some((v) => lower.has(v))) surfaces.add("mobile");
+  if (["next.js", "nextjs", "vite", "react", "web", "dev-server"].some((v) => lower.has(v))) surfaces.add("web");
+  return {
+    name: repo.name || repo.path.split(/[\\/]/).filter(Boolean).pop() || repo.path,
+    path: repo.path,
+    framework: stackType === "monorepo" ? "monorepo" : frameworks[0] || stackType,
+    frameworks,
+    stack: stackType,
+    surfaces: Array.from(surfaces),
+    executionMode: actions.includes("hot-reload") ? "native-webrtc" : actions.includes("dev-server") ? "web" : undefined,
+    tags: [stackType, ...frameworks, ...actions].filter(Boolean) as string[],
+  };
+}
+
+function mergeProjectInventory(projects: Project[], repos: WorkspaceRepo[]): Project[] {
+  const byPath = new Map<string, Project>();
+  for (const project of projects) {
+    if (project.path) byPath.set(project.path, project);
+  }
+  for (const repo of repos) {
+    if (!repo.path || byPath.has(repo.path)) continue;
+    byPath.set(repo.path, projectFromRepo(repo));
+  }
+  return Array.from(byPath.values()).sort((a, b) => {
+    const ay = `${a.name} ${a.path}`.toLowerCase().includes("yaver.io");
+    const by = `${b.name} ${b.path}`.toLowerCase().includes("yaver.io");
+    if (ay !== by) return ay ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
 }
 
 function targetSort(a: RemoteRuntimeTarget, b: RemoteRuntimeTarget): number {
@@ -97,8 +155,6 @@ export default function RuntimeLabView({
   const [selectedPath, setSelectedPath] = useState("");
   const [caps, setCaps] = useState<RemoteRuntimeCapabilities | null>(null);
   const [session, setSession] = useState<RemoteRuntimeSession | null>(null);
-  const [tmuxSessions, setTmuxSessions] = useState<TmuxSessionSummary[]>([]);
-  const [selectedTmux, setSelectedTmux] = useState("");
   const [log, setLog] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -117,20 +173,14 @@ export default function RuntimeLabView({
     setLog((prev) => [...prev.slice(-160), `[${stamp}] ${line}`]);
   }, []);
 
-  const refreshTmux = useCallback(async () => {
-    try {
-      const rows = await agentClient.listTmuxSessions();
-      setTmuxSessions(rows);
-      if (!selectedTmux && rows[0]?.name) setSelectedTmux(rows[0].name);
-    } catch (err) {
-      appendLog(`tmux list failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }, [appendLog, selectedTmux]);
-
   const loadProjects = useCallback(async () => {
     setError(null);
     try {
-      const rows = await agentClient.listProjects();
+      const [projectRows, repoRows] = await Promise.all([
+        agentClient.listProjects(),
+        agentClient.listWorkspaceRepos(),
+      ]);
+      const rows = mergeProjectInventory(projectRows, repoRows);
       setProjects(rows);
       if (!selectedPath && rows[0]?.path) setSelectedPath(rows[0].path);
       appendLog(`projects loaded: ${rows.length}`);
@@ -141,8 +191,7 @@ export default function RuntimeLabView({
 
   useEffect(() => {
     void loadProjects();
-    void refreshTmux();
-  }, [loadProjects, refreshTmux]);
+  }, [loadProjects]);
 
   const loadCapabilities = useCallback(async (project: Project | null = selectedProject) => {
     if (!project) return;
@@ -198,12 +247,49 @@ export default function RuntimeLabView({
     setError(null);
     appendLog(`web ui ${selectedProject.name}`);
     try {
+      const framework = (selectedProject.framework || "").toLowerCase();
+      const staticBundleFramework = ["expo", "react-native"].includes(framework);
+      if (staticBundleFramework) {
+        setWebPreviewNote(`Building ${selectedProject.name} web bundle...`);
+        const built = await agentClient.buildWebJSBundle({
+          projectName: selectedProject.name,
+          projectPath: selectedProject.path,
+        });
+        if (!built.ok) throw new Error(built.error || "Could not build Web UI bundle.");
+        const signedUrl = agentClient.webBundlePreviewUrl(built.bundleUrl);
+        if (!signedUrl) throw new Error("No signed Web UI bundle URL is available.");
+        setWebPreviewUrl(signedUrl);
+        setWebPreviewNote(`Web UI bundle ready: ${built.fileCount} files.`);
+        appendLog(`web ui ready ${signedUrl}`);
+        return;
+      }
       const response = await agentClient.startDevServer({
         framework: selectedProject.framework || "",
         workDir: selectedProject.path,
         platform: "web",
         surface: "web-reload",
       });
+      if (response.mode === "static-bundle") {
+        if (response.bundleReady && response.bundleUrl) {
+          const signedUrl = agentClient.webBundlePreviewUrl(response.bundleUrl);
+          if (!signedUrl) throw new Error("No signed Web UI bundle URL is available.");
+          setWebPreviewUrl(signedUrl);
+          setWebPreviewNote(response.bundleHint || "Web UI bundle ready.");
+          appendLog(`web ui ready ${signedUrl}`);
+          return;
+        }
+        const built = await agentClient.buildWebJSBundle({
+          projectName: selectedProject.name,
+          projectPath: selectedProject.path,
+        });
+        if (!built.ok) throw new Error(built.error || "Could not build Web UI bundle.");
+        const signedUrl = agentClient.webBundlePreviewUrl(built.bundleUrl);
+        if (!signedUrl) throw new Error("No signed Web UI bundle URL is available.");
+        setWebPreviewUrl(signedUrl);
+        setWebPreviewNote(`Web UI bundle ready: ${built.fileCount} files.`);
+        appendLog(`web ui ready ${signedUrl}`);
+        return;
+      }
       const status = await agentClient.getDevServerStatus();
       const url =
         response.bundleUrl
@@ -250,75 +336,23 @@ export default function RuntimeLabView({
   }, [intent?.nonce, projects.length]);
 
   useEffect(() => {
-    if (!intent || intent.kind !== "tmux" || tmuxSessions.length === 0) return;
-    const q = String(intent.tmuxQuery || intent.projectQuery || "").toLowerCase();
-    const found = tmuxSessions.find((s) => s.name.toLowerCase().includes(q))
-      || tmuxSessions.find((s) => String(s.agentType || "").toLowerCase().includes(q))
-      || tmuxSessions[0];
-    if (found?.name) {
-      setSelectedTmux(found.name);
-      appendLog(`chat selected tmux ${found.name}`);
-      onOpenTmux?.(found.name);
-    }
-  }, [appendLog, intent, onOpenTmux, tmuxSessions]);
-
-  async function adoptTmux(row: TmuxSessionSummary, pane?: string) {
-    setBusy(true);
-    setError(null);
-    appendLog(`adopt tmux ${row.name}${pane ? ` ${pane}` : ""}`);
-    try {
-      const res = await agentClient.adoptTmuxSession(row.name, pane);
-      appendLog(`adopted ${res.session} as task ${res.taskId}`);
-      await refreshTmux();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not adopt tmux session.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function detachTmux(row: TmuxSessionSummary) {
-    if (!row.taskId) return;
-    setBusy(true);
-    appendLog(`detach tmux task ${row.taskId}`);
-    try {
-      await agentClient.detachTmuxTask(row.taskId);
-      appendLog(`detached ${row.name}; tmux kept running`);
-      await refreshTmux();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not detach tmux task.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function closeTmux(row: TmuxSessionSummary) {
-    if (!row.taskId) return;
-    const ok = window.confirm(`Close tmux "${row.name}"? This terminates the adopted pane/session. Detach keeps it running.`);
-    if (!ok) return;
-    setBusy(true);
-    appendLog(`close tmux task ${row.taskId}`);
-    try {
-      await agentClient.closeTmuxTask(row.taskId);
-      appendLog(`closed ${row.name}`);
-      await refreshTmux();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not close tmux task.");
-    } finally {
-      setBusy(false);
-    }
-  }
+    if (!intent || intent.kind !== "tmux") return;
+    const q = String(intent.tmuxQuery || intent.projectQuery || "").trim();
+    if (!q) return;
+    appendLog(`chat requested tmux ${q}`);
+    onOpenTmux?.(q);
+  }, [appendLog, intent, onOpenTmux]);
 
   return (
-    <div className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-4 text-[#1f2933] xl:grid-cols-[minmax(0,1fr)_360px]">
+    <div className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-4 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] xl:grid-cols-[minmax(0,1fr)_360px]">
       <div className="min-h-0 space-y-3 overflow-y-auto">
         <div className="flex flex-wrap items-end gap-2">
           <label className="min-w-[260px] flex-1">
-            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-[#5d6673]">Project</span>
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Project</span>
             <select
               value={selectedPath}
               onChange={(e) => { setSelectedPath(e.target.value); setCaps(null); setSession(null); setWebPreviewUrl(null); setWebPreviewNote(null); }}
-              className="w-full rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-sm text-[#1f2933]"
+              className="w-full rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec]"
             >
               {projects.map((p) => (
                 <option key={p.path} value={p.path}>{p.name} · {p.framework || "unknown"}</option>
@@ -332,13 +366,6 @@ export default function RuntimeLabView({
           >
             Load Targets
           </button>
-          <button
-            disabled={busy}
-            onClick={() => void refreshTmux()}
-            className="rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-xs font-semibold text-[#344054] disabled:opacity-40"
-          >
-            Refresh tmux
-          </button>
         </div>
 
         {error ? (
@@ -347,7 +374,7 @@ export default function RuntimeLabView({
 
         {caps ? (
           <div className="space-y-3">
-            <div className="text-xs text-[#667085]">
+            <div className="text-xs text-[#667085] dark:text-[#9aa3af]">
               {caps.executionMode} · {caps.primarySurface} · {caps.currentHostClass || "host unknown"}
             </div>
             {(() => {
@@ -361,11 +388,11 @@ export default function RuntimeLabView({
               const primaryTargets = caps.targets.filter(isPrimaryRuntimeTarget);
               const groupOrder: ReturnType<typeof runtimeTargetGroup>[] = ["browser", "simulator", "container", "device", "advanced"];
               const renderTarget = (target: RemoteRuntimeTarget, compact = false) => (
-                <div key={target.id} className={`rounded-md border p-3 ${target.enabled ? "border-[#d7dce3] bg-white" : "border-[#e1e5eb] bg-[#f8fafc]"}`}>
+                <div key={target.id} className={`rounded-md border p-3 ${target.enabled ? "border-[#d7dce3] bg-white dark:border-[#2a3039] dark:bg-[#161b22]" : "border-[#e1e5eb] bg-[#f8fafc] dark:border-[#252b33] dark:bg-[#121720]"}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <div className={`text-sm font-medium ${target.enabled ? "text-[#1f2933]" : "text-[#667085]"}`}>{target.label}</div>
-                      <div className="mt-1 text-xs text-[#667085]">
+                      <div className={`text-sm font-medium ${target.enabled ? "text-[#1f2933] dark:text-[#e6e8ec]" : "text-[#667085] dark:text-[#8b949e]"}`}>{target.label}</div>
+                      <div className="mt-1 text-xs text-[#667085] dark:text-[#9aa3af]">
                         {target.surface || "runtime"} · {target.id} · {target.requiredCli || "tools"}
                       </div>
                     </div>
@@ -386,7 +413,7 @@ export default function RuntimeLabView({
                 if (targets.length === 0) return null;
                 return (
                   <section key={group} className="space-y-2">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673]">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">
                       {runtimeGroupLabels[group]}
                     </div>
                     <div className="grid gap-2 md:grid-cols-2">
@@ -398,15 +425,15 @@ export default function RuntimeLabView({
               return (
                 <>
                   <section className="space-y-2">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673]">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">
                       Browser
                     </div>
                     <div className="grid gap-2 md:grid-cols-2">
-                      <div className="rounded-md border border-[#d7dce3] bg-white p-3">
+                      <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <div className="text-sm font-medium text-[#1f2933]">Web UI in browser</div>
-                            <div className="mt-1 text-xs text-[#667085]">
+                            <div className="text-sm font-medium text-[#1f2933] dark:text-[#e6e8ec]">Web UI in browser</div>
+                            <div className="mt-1 text-xs text-[#667085] dark:text-[#9aa3af]">
                               browser · direct iframe · dev server
                             </div>
                           </div>
@@ -418,7 +445,7 @@ export default function RuntimeLabView({
                             {webPreviewBusy ? "Opening..." : "Open"}
                           </button>
                         </div>
-                        {webPreviewNote ? <div className="mt-2 text-xs text-[#667085]">{webPreviewNote}</div> : null}
+                        {webPreviewNote ? <div className="mt-2 text-xs text-[#667085] dark:text-[#9aa3af]">{webPreviewNote}</div> : null}
                       </div>
                       {(groupedTargets.browser ?? []).map((target) => renderTarget(target))}
                     </div>
@@ -426,10 +453,10 @@ export default function RuntimeLabView({
                   {webPreviewUrl ? (
                     <section className="space-y-2">
                       <div className="flex items-center justify-between gap-3">
-                        <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673]">Web UI</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Web UI</div>
                         <button
                           onClick={() => setWebPreviewUrl(null)}
-                          className="rounded-md border border-[#d7dce3] bg-white px-2 py-1 text-[11px] text-[#475467]"
+                          className="rounded-md border border-[#d7dce3] bg-white px-2 py-1 text-[11px] text-[#475467] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#d7dce3]"
                         >
                           Close
                         </button>
@@ -451,21 +478,21 @@ export default function RuntimeLabView({
                     </div>
                   )}
                   {unavailableTargets.length ? (
-                    <div className="rounded-md border border-[#d7dce3] bg-[#f8fafc]">
+                    <div className="rounded-md border border-[#d7dce3] bg-[#f8fafc] dark:border-[#2a3039] dark:bg-[#121720]">
                       <button
                         type="button"
                         onClick={() => setShowAdvancedTargets((v) => !v)}
                         className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
                       >
-                        <span className="text-xs font-semibold uppercase tracking-wide text-[#5d6673]">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">
                           Unavailable targets
                         </span>
-                        <span className="text-xs text-[#667085]">
+                        <span className="text-xs text-[#667085] dark:text-[#9aa3af]">
                           {unavailableTargets.length} {showAdvancedTargets ? "hide" : "show"}
                         </span>
                       </button>
                       {showAdvancedTargets ? (
-                        <div className="grid gap-2 border-t border-[#d7dce3] p-3 md:grid-cols-2">
+                        <div className="grid gap-2 border-t border-[#d7dce3] p-3 dark:border-[#2a3039] md:grid-cols-2">
                           {unavailableTargets.map((target) => renderTarget(target, true))}
                         </div>
                       ) : null}
@@ -476,52 +503,31 @@ export default function RuntimeLabView({
             })()}
           </div>
         ) : (
-          <div className="rounded-md border border-[#d7dce3] bg-white p-4 text-sm text-[#667085]">
+          <div className="rounded-md border border-[#d7dce3] bg-white p-4 text-sm text-[#667085] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#9aa3af]">
             Load targets to boot watchOS, Wear OS, TV, phone, browser, and other runtime surfaces from this machine.
           </div>
         )}
 
         {session ? (
           <div className="space-y-2">
-            <div className="text-xs text-[#667085]">
-              session <span className="font-mono text-[#344054]">{session.id}</span> · {session.targetLabel} · {session.status}
+            <div className="text-xs text-[#667085] dark:text-[#9aa3af]">
+              session <span className="font-mono text-[#344054] dark:text-[#d7dce3]">{session.id}</span> · {session.targetLabel} · {session.status}
             </div>
             <RemoteRuntimeViewer session={session} onSessionChange={setSession} />
           </div>
         ) : null}
       </div>
 
-      <aside className="min-h-0 space-y-3 overflow-y-auto border-t border-[#d7dce3] pt-3 xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
-        <div>
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673]">Tmux Sessions</div>
-          <div className="space-y-2">
-            {tmuxSessions.length === 0 ? (
-              <div className="rounded-md border border-[#d7dce3] bg-white p-3 text-xs text-[#667085]">No tmux sessions reported.</div>
-            ) : tmuxSessions.map((row) => (
-              <div key={row.name} className={`rounded-md border p-3 ${selectedTmux === row.name ? "border-sky-500/40 bg-sky-50" : "border-[#d7dce3] bg-white"}`}>
-                <button onClick={() => setSelectedTmux(row.name)} className="block w-full text-left">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate font-mono text-sm text-[#1f2933]">{row.name}</span>
-                    <span className="text-[10px] uppercase tracking-wide text-[#667085]">{row.agentType || row.relationship || "tmux"}</span>
-                  </div>
-                  <pre className="mt-2 max-h-20 overflow-hidden whitespace-pre-wrap rounded bg-[#111318] p-2 text-[10px] leading-4 text-[#d5dae1]">{row.panePreview || "(no pane preview)"}</pre>
-                </button>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  <button onClick={() => onOpenTmux?.(row.name)} className="rounded bg-sky-500/15 px-2 py-1 text-[11px] font-semibold text-sky-700 dark:text-sky-200">Attach</button>
-                  <button onClick={() => void adoptTmux(row)} disabled={busy} className="rounded bg-violet-500/15 px-2 py-1 text-[11px] font-semibold text-violet-700 disabled:opacity-40 dark:text-violet-200">Adopt</button>
-                  {row.taskId ? (
-                    <>
-                      <button onClick={() => void detachTmux(row)} disabled={busy} className="rounded bg-emerald-500/15 px-2 py-1 text-[11px] font-semibold text-emerald-700 disabled:opacity-40 dark:text-emerald-200">Detach</button>
-                      <button onClick={() => void closeTmux(row)} disabled={busy} className="rounded bg-rose-500/15 px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-40 dark:text-rose-200">Close</button>
-                    </>
-                  ) : null}
-                </div>
-              </div>
-            ))}
+      <aside className="min-h-0 space-y-3 overflow-y-auto border-t border-[#d7dce3] pt-3 dark:border-[#2a3039] xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
+        <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Vibing</div>
+          <div className="text-sm font-medium text-[#1f2933] dark:text-[#e6e8ec]">Render lane activity</div>
+          <div className="mt-1 text-xs text-[#667085] dark:text-[#9aa3af]">
+            Browser bundles and WebRTC simulator sessions report here. Agent chats stay in the Vibing panel.
           </div>
         </div>
         <div>
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673]">Runtime Console</div>
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Runtime Console</div>
           <pre className="h-64 overflow-auto rounded-md border border-[#1f2933] bg-[#111318] p-3 text-[11px] leading-5 text-[#d5dae1]">
             {log.length ? log.join("\n") : "No runtime operations yet."}
           </pre>

@@ -42,3 +42,35 @@ Web UI can expose:
 - Search and category filters now use stack/surface metadata, not only the legacy single `framework` field.
 - Web dashboard render buttons now come from browser-vs-remote capability checks instead of the mobile execution mode label.
 - Runtime Lab groups browser, simulator, Android container, physical device, and advanced/unavailable targets so Flutter/RN do not show watch/TV/XR as the default path.
+
+## Follow-up Finding
+
+The first fix still depended too much on `/projects` being current. On a real
+Mac mini, `/repos/list` could see `~/Workspace/yaver.io` while `/projects`
+still returned only framework/app rows, so the dashboard kept hiding the repo
+root until the agent binary itself was updated.
+
+The browser render lane also reused the unsigned `/dev/web-bundle/` fallback in
+one path. That made the iframe fail with `dev bundle URL must be signed; mint
+via /dev/build-native or /dev/web-bundle/info` instead of routing Expo/RN
+through `POST /dev/build-native target=web-js-bundle` and using the signed URL
+from the response.
+
+Runtime Lab had a separate focus problem: it placed tmux sessions in the right
+rail, so a render-lane screen looked like an agent-session manager.
+
+## Follow-up Fix
+
+- Web dashboard now merges `/projects` with live `/repos/list` rows and pins
+  `yaver.io` repo roots first, so a Cloudflare web deploy can show the repo
+  immediately even before the Mac mini agent binary is reinstalled.
+- Mobile repo inventory now uses `/repos/list` directly for whole-repo cards.
+- Project Detail is render-lane first: Web UI, WebRTC targets, stack/platforms,
+  then git metadata. Backend/services/domains/deploy noise is gone from this
+  screen.
+- Expo/RN browser previews build a static web bundle and render the signed
+  `/dev/web-bundle/?...` URL. Flutter stays on its normal web dev-server lane.
+- Runtime Lab no longer renders tmux sessions in the side rail; the side rail is
+  render activity only, while chat/agent sessions stay in Vibing.
+- Dark mode now uses a real dark surface instead of hard-coded light gray cards
+  on a dark page.

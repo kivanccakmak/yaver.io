@@ -3042,11 +3042,10 @@ export class QuicClient {
 
   /** List repo-level projects (monorepo roots + standalone repos) so the
    *  mobile UI can offer full-stack vibe-coding scoped to /Workspace/<repo>
-   *  rather than a per-framework subdir. /projects/mobile returns mobile
+   *  rather than a per-framework subdir. /projects returns framework/app
    *  sub-apps only — for monorepos like yaver.io that means tasks always
    *  scope to mobile/ and never the Go agent / web / cli code.
-   *  Distinct from listRepos() (further below) which is the git status
-   *  enumerator over /repos/list.
+   *  Uses /repos/list directly so stale framework caches cannot hide repo roots.
    */
   async listWorkspaceRepos(): Promise<{
     repos: {
@@ -3070,32 +3069,48 @@ export class QuicClient {
     }[];
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/projects`, {
+    const res = await fetch(`${this.baseUrl}/repos/list`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to list repos: ${res.status}`);
     const data = await res.json();
-    const projects = Array.isArray(data.projects) ? data.projects : [];
+    const repos = Array.isArray(data) ? data : [];
     return {
-      repos: projects.map((p: any) => ({
-        name: p?.name ?? "",
-        path: p?.path ?? "",
-        branch: p?.branch,
-        framework: p?.framework,
-        frameworks: Array.isArray(p?.frameworks) ? p.frameworks : [],
-        stack: p?.stack,
-        stacks: Array.isArray(p?.stacks) ? p.stacks : [],
-        surfaces: Array.isArray(p?.surfaces) ? p.surfaces : [],
-        testSurfaces: Array.isArray(p?.testSurfaces) ? p.testSurfaces : [],
-        backend: p?.backend,
-        services: Array.isArray(p?.services) ? p.services : [],
-        hosting: Array.isArray(p?.hosting) ? p.hosting : [],
-        role: p?.role,
-        gitRemote: p?.gitRemote,
-        tags: Array.isArray(p?.tags) ? p.tags : [],
-        isMonorepo: !!p?.isMonorepo || p?.framework === "monorepo",
-        subframeworks: Array.isArray(p?.subframeworks) ? p.subframeworks : [],
-      })),
+      repos: repos.map((p: any) => {
+        const frameworks = Array.isArray(p?.stack?.frameworks) ? p.stack.frameworks : [];
+        const services = Array.isArray(p?.stack?.services) ? p.stack.services : [];
+        const actions = Array.isArray(p?.stack?.actions) ? p.stack.actions : [];
+        const stackType = typeof p?.stack?.type === "string" ? p.stack.type : undefined;
+        const framework = stackType === "monorepo" ? "monorepo" : frameworks[0] || stackType;
+        const surfaces = new Set<string>();
+        const lower = new Set([stackType, ...frameworks, ...actions].filter(Boolean).map((v) => String(v).toLowerCase()));
+        if (lower.has("monorepo")) {
+          surfaces.add("web");
+          surfaces.add("mobile");
+          surfaces.add("backend");
+        }
+        if (["expo", "react-native", "flutter", "swift", "kotlin", "mobile"].some((v) => lower.has(v))) surfaces.add("mobile");
+        if (["next.js", "nextjs", "vite", "react", "web", "dev-server"].some((v) => lower.has(v))) surfaces.add("web");
+        if (["go", "python", "rust", "backend"].some((v) => lower.has(v))) surfaces.add("backend");
+        return {
+          name: p?.name ?? "",
+          path: p?.path ?? "",
+          branch: p?.branch,
+          framework,
+          frameworks,
+          stack: stackType,
+          stacks: [stackType, ...frameworks].filter(Boolean),
+          surfaces: Array.from(surfaces),
+          testSurfaces: [],
+          services,
+          hosting: services.filter((v: string) => ["cloudflare", "vercel", "netlify"].includes(v)),
+          role: stackType === "monorepo" ? "repo" : stackType,
+          gitRemote: p?.remote,
+          tags: [stackType, ...frameworks, ...services, ...actions, p?.dirty ? "dirty" : undefined].filter(Boolean),
+          isMonorepo: stackType === "monorepo",
+          subframeworks: frameworks,
+        };
+      }),
     };
   }
 

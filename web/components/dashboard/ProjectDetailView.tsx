@@ -1,209 +1,397 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { agentClient } from "@/lib/agent-client";
+import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import { agentClient, type RemoteRuntimeCapabilities, type RemoteRuntimeSession, type RemoteRuntimeTarget } from "@/lib/agent-client";
 import EnvironmentSwitcher from "./EnvironmentSwitcher";
+import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 
-// One screen per project — everything scoped to a single directory:
-// env switcher, services, recent deploys, backend status, domains, data summary.
-// Opened from the Projects list (per-project card) and from Home quick actions.
+type ProjectSummary = {
+  name: string;
+  path: string;
+  branch?: string;
+  framework?: string;
+  frameworks?: string[];
+  stack?: string;
+  stacks?: string[];
+  surfaces?: string[];
+  testSurfaces?: string[];
+  backend?: string;
+  services?: string[];
+  hosting?: string[];
+  role?: string;
+  executionMode?: string;
+  primarySurface?: string;
+  gitRemote?: string;
+  tags?: string[];
+};
+
+type WorkspaceRepo = {
+  name: string;
+  path: string;
+  branch?: string;
+  remote?: string;
+  dirty?: boolean;
+  stack?: {
+    type?: string;
+    frameworks?: string[];
+    services?: string[];
+    actions?: string[];
+  };
+};
+
+function basename(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path;
+}
+
+function unique(values: Array<string | undefined>): string[] {
+  return Array.from(new Set(values.map((v) => String(v || "").trim()).filter(Boolean)));
+}
+
+function supportsWebUI(project: ProjectSummary | null): boolean {
+  const terms = unique([
+    project?.framework,
+    ...(project?.frameworks ?? []),
+    project?.stack,
+    ...(project?.stacks ?? []),
+    ...(project?.surfaces ?? []),
+    ...(project?.tags ?? []),
+  ]).map((v) => v.toLowerCase());
+  return terms.some((v) => ["web", "nextjs", "vite", "react", "expo", "react-native", "flutter"].includes(v));
+}
+
+function projectFromRepo(repo: WorkspaceRepo): ProjectSummary {
+  const frameworks = repo.stack?.frameworks ?? [];
+  const services = repo.stack?.services ?? [];
+  const actions = repo.stack?.actions ?? [];
+  const stackType = repo.stack?.type;
+  const lower = new Set([stackType, ...frameworks, ...actions].filter(Boolean).map((v) => String(v).toLowerCase()));
+  const surfaces = new Set<string>();
+  if (lower.has("monorepo")) {
+    surfaces.add("web");
+    surfaces.add("mobile");
+    surfaces.add("backend");
+  }
+  if (["expo", "react-native", "flutter", "swift", "kotlin", "mobile"].some((v) => lower.has(v))) surfaces.add("mobile");
+  if (["next.js", "nextjs", "vite", "react", "web", "dev-server"].some((v) => lower.has(v))) surfaces.add("web");
+  if (["go", "python", "rust", "backend"].some((v) => lower.has(v))) surfaces.add("backend");
+  return {
+    name: repo.name || basename(repo.path),
+    path: repo.path,
+    branch: repo.branch,
+    framework: stackType === "monorepo" ? "monorepo" : frameworks[0] || stackType,
+    frameworks,
+    stack: stackType,
+    stacks: [stackType, ...frameworks].filter(Boolean) as string[],
+    surfaces: Array.from(surfaces),
+    services,
+    hosting: services.filter((v) => ["cloudflare", "vercel", "netlify"].includes(v)),
+    role: stackType === "monorepo" ? "repo" : stackType || "repo",
+    executionMode: actions.includes("hot-reload") ? "native-webrtc" : actions.includes("dev-server") ? "web" : undefined,
+    primarySurface: surfaces.has("web") ? "web" : surfaces.has("mobile") ? "mobile" : stackType,
+    gitRemote: repo.remote,
+    tags: [stackType, ...frameworks, ...services, ...actions, repo.dirty ? "dirty" : undefined].filter(Boolean) as string[],
+  };
+}
+
+function targetGroup(target: RemoteRuntimeTarget): "browser" | "simulator" | "container" | "device" | "advanced" | "unavailable" {
+  if (!target.enabled) return "unavailable";
+  const id = String(target.id || "").toLowerCase();
+  const surface = String(target.surface || "").toLowerCase();
+  if (surface === "browser" || id === "browser-window") return "browser";
+  if (id.includes("redroid")) return "container";
+  if (id.includes("device")) return "device";
+  if (["phone", "tablet"].includes(surface) && (id.includes("simulator") || id.includes("emulator"))) return "simulator";
+  return "advanced";
+}
+
+const targetGroupLabels: Record<ReturnType<typeof targetGroup>, string> = {
+  browser: "Browser",
+  simulator: "Phone / tablet simulators",
+  container: "Android containers",
+  device: "Physical devices",
+  advanced: "Watch / TV / XR / car",
+  unavailable: "Unavailable",
+};
+
 export default function ProjectDetailView({ directory, onClose }: { directory: string; onClose: () => void }) {
-  const [status, setStatus] = useState<any>(null);
-  const [deploys, setDeploys] = useState<any[]>([]);
-  const [backups, setBackups] = useState<any[]>([]);
-  const [domains, setDomains] = useState<any[]>([]);
-  const [services, setServices] = useState<any[]>([]);
-  const [tables, setTables] = useState<any[]>([]);
-  const [actionMsg, setActionMsg] = useState<{ type: "ok" | "error"; text: string } | null>(null);
+  const [project, setProject] = useState<ProjectSummary | null>(null);
+  const [caps, setCaps] = useState<RemoteRuntimeCapabilities | null>(null);
+  const [session, setSession] = useState<RemoteRuntimeSession | null>(null);
+  const [webPreviewUrl, setWebPreviewUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
-  function showMsg(type: "ok" | "error", text: string) {
-    setActionMsg({ type, text });
-    setTimeout(() => setActionMsg(null), 5000);
-  }
-
-  function cleanErr(e: unknown, fallback: string): string {
-    const raw = typeof e === "string" ? e : (e as any)?.message;
-    return typeof raw === "string" && raw.trim() && raw.length <= 160 ? raw.trim() : fallback;
-  }
+  const slug = basename(directory);
+  const stackLabels = useMemo(() => unique([
+    project?.framework,
+    ...(project?.frameworks ?? []),
+    project?.stack,
+    ...(project?.stacks ?? []),
+    project?.backend,
+    ...(project?.services ?? []),
+    ...(project?.hosting ?? []),
+  ]), [project]);
+  const surfaceLabels = useMemo(() => unique([
+    ...(project?.surfaces ?? []),
+    ...(project?.testSurfaces ?? []),
+    project?.primarySurface,
+    project?.executionMode,
+  ]), [project]);
 
   useEffect(() => {
+    let mounted = true;
     (async () => {
       try {
-        const [st, d, b, dom, t] = await Promise.all([
-          agentClient.backendStatus(directory),
-          agentClient.deployList(directory),
-          agentClient.backupList(directory),
-          agentClient.domainList(),
-          agentClient.backendTables(directory).catch(() => ({ tables: [] })),
+        const [rows, repos] = await Promise.all([
+          agentClient.listProjects(),
+          agentClient.listWorkspaceRepos(),
         ]);
-        setStatus(st);
-        setDeploys(d.deploys || []);
-        setBackups(b.backups || []);
-        setDomains(dom.domains || []);
-        setTables(t.tables || []);
-      } catch {}
-      try {
-        const r = await fetch(`${(agentClient as any).baseUrl}/console/containers?all=1`, { headers: (agentClient as any).authHeaders });
-        const j = await r.json();
-        // Filter to this project's containers via docker-compose project label.
-        const slug = directory.split("/").pop();
-        setServices((j.containers || []).filter((c: any) => c.project === slug || c.project === "yaver-services"));
-      } catch {}
+        const found = rows.find((p) => p.path === directory) || rows.find((p) => basename(p.path) === slug);
+        const repo = repos.find((p) => p.path === directory) || repos.find((p) => basename(p.path) === slug);
+        if (mounted) setProject(found || (repo ? projectFromRepo(repo) : { name: slug, path: directory }));
+      } catch {
+        if (mounted) setProject({ name: slug, path: directory });
+      }
     })();
-  }, [directory]);
+    return () => { mounted = false; };
+  }, [directory, slug]);
 
-  const slug = directory.split("/").pop() || directory;
-
-  async function deploy() {
+  async function openWebUI() {
+    setBusy("web");
+    setMessage(null);
     try {
-      const p = await agentClient.deployPreview(directory);
-      if (!confirm(`Deploy ${slug}?\n\nBranch: ${p.branch || "?"}\n${p.dirty ? "⚠️ " + p.dirtyFiles?.length + " uncommitted\n" : ""}Active env: ${p.activeEnv}\n${p.warnings?.join("\n") || ""}`)) return;
-      const r = await agentClient.deployRun(directory);
-      if (r.error) showMsg("error", cleanErr(r.error, "Deploy failed. Check the agent logs and try again."));
-      else showMsg("ok", r.status || "Deploy started.");
-    } catch (e) {
-      showMsg("error", cleanErr(e, "Couldn't deploy — the agent may be unreachable."));
+      const framework = project?.framework || "";
+      const staticBundleFramework = ["expo", "react-native"].includes(framework.toLowerCase());
+      if (staticBundleFramework) {
+        setMessage(`Building ${project?.name || slug} web bundle...`);
+        const built = await agentClient.buildWebJSBundle({ projectName: project?.name || slug, projectPath: directory });
+        if (!built.ok) throw new Error(built.error || "Could not build Web UI bundle.");
+        const signedUrl = agentClient.webBundlePreviewUrl(built.bundleUrl);
+        if (!signedUrl) throw new Error("No signed Web UI bundle URL is available.");
+        setWebPreviewUrl(signedUrl);
+        setMessage(`Web UI bundle ready: ${built.fileCount} files.`);
+        return;
+      }
+      const response = await agentClient.startDevServer({
+        framework: project?.framework || "",
+        workDir: directory,
+        platform: "web",
+        surface: "web-reload",
+      });
+      if (response.mode === "static-bundle") {
+        if (response.bundleReady && response.bundleUrl) {
+          const signedUrl = agentClient.webBundlePreviewUrl(response.bundleUrl);
+          if (!signedUrl) throw new Error("No signed Web UI bundle URL is available.");
+          setWebPreviewUrl(signedUrl);
+          setMessage(response.bundleHint || "Web UI bundle ready.");
+          return;
+        }
+        const built = await agentClient.buildWebJSBundle({ projectName: project?.name || slug, projectPath: directory });
+        if (!built.ok) throw new Error(built.error || "Could not build Web UI bundle.");
+        const signedUrl = agentClient.webBundlePreviewUrl(built.bundleUrl);
+        if (!signedUrl) throw new Error("No signed Web UI bundle URL is available.");
+        setWebPreviewUrl(signedUrl);
+        setMessage(`Web UI bundle ready: ${built.fileCount} files.`);
+        return;
+      }
+      const status = await agentClient.getDevServerStatus();
+      const url =
+        response.bundleUrl
+          ? agentClient.webBundlePreviewUrl(response.bundleUrl)
+          : status?.webPort && status.webPort > 0
+          ? agentClient.devWebPreviewUrl
+          : agentClient.devPreviewUrl;
+      if (!url) throw new Error("No browser preview URL is available for this connection.");
+      setWebPreviewUrl(url);
+      setMessage(response.bundleHint || status?.servingLabel || "Web UI is running.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not open Web UI.");
+    } finally {
+      setBusy(null);
     }
   }
-  async function snapshot() {
+
+  async function loadRuntimeTargets() {
+    setBusy("targets");
+    setMessage(null);
+    setSession(null);
     try {
-      const r = await agentClient.backupCreate(directory);
-      if (r.error) showMsg("error", cleanErr(r.error, "Snapshot failed. Please try again."));
-      else showMsg("ok", "Snapshot created.");
-    } catch (e) {
-      showMsg("error", cleanErr(e, "Couldn't create snapshot — the agent may be unreachable."));
+      const next = await agentClient.getRemoteRuntimeCapabilities(directory, project?.framework || "");
+      setCaps({ ...next, targets: [...(next.targets || [])] });
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not load render targets.");
+    } finally {
+      setBusy(null);
     }
   }
+
+  async function openRuntimeTarget(target: RemoteRuntimeTarget) {
+    setBusy(target.id);
+    setMessage(null);
+    try {
+      const next = await agentClient.startRemoteRuntimeSession(directory, project?.framework || "", target.id, "direct-webrtc");
+      setSession(next);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not open runtime target.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const groupedTargets = useMemo(() => {
+    const groups: Record<string, RemoteRuntimeTarget[]> = {};
+    for (const target of caps?.targets ?? []) {
+      const group = targetGroup(target);
+      groups[group] = [...(groups[group] ?? []), target];
+    }
+    return groups;
+  }, [caps]);
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center gap-3">
-        <button onClick={onClose} className="text-sm text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300">← Projects</button>
-        <h2 className="text-xl font-semibold text-surface-100 flex-1 truncate font-mono">{slug}</h2>
-      </div>
-      <div className="text-xs text-surface-500 font-mono truncate">{directory}</div>
-
-      <EnvironmentSwitcher directory={directory} />
-
-      {/* Top-line status */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        <MiniCard label="Backend" value={status?.kind || "—"} sub={status?.running ? "running" : (status?.error || "offline")} tone={status?.running ? "ok" : "warn"} />
-        <MiniCard label="Services" value={`${services.filter(s => s.state === "running").length}`} sub={`${services.length} total`} />
-        <MiniCard label="Tables" value={`${tables.length}`} sub="in backend" />
-        <MiniCard label="Domains" value={`${domains.length}`} sub="via Caddy" />
-      </div>
-
-      {/* Action row */}
-      <div className="flex gap-2 flex-wrap">
-        <button onClick={deploy} className="px-3 py-2 text-sm rounded-lg bg-indigo-500 text-white hover:bg-indigo-400">🚀 Deploy</button>
-        <button onClick={snapshot} className="px-3 py-2 text-sm rounded-lg bg-surface-800 text-surface-200 hover:bg-surface-700">📸 Snapshot</button>
-        <a href={`/dashboard/${encodeURIComponent(directory)}`} className="px-3 py-2 text-sm rounded-lg bg-surface-800 text-surface-200 hover:bg-surface-700">🗄️ Dashboard</a>
-      </div>
-
-      {actionMsg && (
-        <div className={`text-sm rounded-lg border px-3 py-2 ${actionMsg.type === "ok" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300"}`}>
-          {actionMsg.text}
+    <div className="min-h-full bg-[#f2f4f7] p-4 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec]">
+      <div className="mb-4 flex items-center gap-3">
+        <button onClick={onClose} className="text-sm font-medium text-[#475467] hover:text-[#1f2933] dark:text-[#a7b0bc] dark:hover:text-white">← Projects</button>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate font-mono text-xl font-semibold text-[#1f2933] dark:text-[#e6e8ec]">{project?.name || slug}</h2>
+          <div className="truncate font-mono text-xs text-[#667085] dark:text-[#9aa3af]">{directory}</div>
         </div>
-      )}
+      </div>
 
-      <Section title="Services">
-        {services.length === 0 && <Empty text="No services" />}
-        {services.map((s) => (
-          <Row key={s.id}>
-            <Tag tone={s.state === "running" ? "ok" : "muted"}>{s.state}</Tag>
-            <span className="font-mono">{s.name}</span>
-            <span className="text-surface-500 text-xs flex-1 truncate">{s.image}</span>
-          </Row>
-        ))}
-      </Section>
-
-      <Section title="Recent deploys">
-        {deploys.length === 0 && <Empty text="No deployments" />}
-        {deploys.slice(0, 5).map((d) => (
-          <Row key={d.id}>
-            <Tag tone={d.status === "success" ? "ok" : "fail"}>{d.status}</Tag>
-            <span className="font-mono text-xs">{(d.commit || "").slice(0, 8)}</span>
-            <span className="flex-1 truncate text-xs">{d.message || "(no message)"}</span>
-            <span className="text-surface-500 text-xs">{d.duration}</span>
-          </Row>
-        ))}
-      </Section>
-
-      <Section title="Backups">
-        {backups.length === 0 && <Empty text="No backups" />}
-        {backups.slice(0, 5).map((b) => (
-          <Row key={b.id}>
-            <span className="font-mono text-xs text-surface-400">{b.id}</span>
-            <span className="text-xs text-surface-500">{b.backend}</span>
-            <span className="text-xs flex-1 truncate font-mono text-surface-500">{b.path}</span>
-            <button onClick={async () => {
-              if (!confirm("Restore this backup? This overwrites current backend data.")) return;
-              try {
-                const r = await agentClient.backupRestore(b.id, directory);
-                if ((r as any)?.error) showMsg("error", cleanErr((r as any).error, "Restore failed. Please try again."));
-                else showMsg("ok", "Backup restored.");
-              } catch (e) {
-                showMsg("error", cleanErr(e, "Couldn't restore — the agent may be unreachable."));
-              }
-            }} className="text-xs text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300">Restore</button>
-          </Row>
-        ))}
-      </Section>
-
-      <Section title="Domains">
-        {domains.length === 0 && <Empty text="No domain attached. Add one in Ops → Domains." />}
-        {domains.map((d) => (
-          <Row key={d.id}>
-            <span className="font-mono">{d.domain}</span>
-            <span className="text-surface-500">→</span>
-            <span className="font-mono text-xs text-surface-400 flex-1 truncate">{d.upstream}</span>
-          </Row>
-        ))}
-      </Section>
-
-      <Section title="Data overview">
-        {tables.length === 0 && <Empty text="No tables yet (or helper not installed)." />}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-          {tables.slice(0, 12).map((t) => (
-            <div key={t.name} className="bg-surface-900/50 border border-surface-800 rounded-lg p-2 text-xs">
-              <div className="font-mono truncate">{t.name}</div>
-              {t.rowCount != null && <div className="text-surface-500">{t.rowCount} rows</div>}
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <main className="space-y-3">
+          <section className="space-y-2">
+            <SectionLabel>Render</SectionLabel>
+            <div className="grid gap-2 md:grid-cols-2">
+              <ActionCard
+                title="Web UI in browser"
+                meta="browser · direct iframe · dev server"
+                disabled={!supportsWebUI(project) || busy !== null}
+                busy={busy === "web"}
+                onClick={openWebUI}
+              />
+              <ActionCard
+                title="Load simulator targets"
+                meta="WebRTC · simulator / browser / Redroid"
+                disabled={busy !== null}
+                busy={busy === "targets"}
+                onClick={loadRuntimeTargets}
+              />
             </div>
-          ))}
-        </div>
-      </Section>
+            {message ? <div className="rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-xs text-[#475467] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#c5ccd6]">{message}</div> : null}
+          </section>
+
+          <section className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+            <SectionLabel>Stack</SectionLabel>
+            <ChipRow values={stackLabels.length ? stackLabels : ["unknown"]} />
+            <SectionLabel className="mt-3">Platforms</SectionLabel>
+            <ChipRow values={surfaceLabels.length ? surfaceLabels : ["render targets not loaded"]} />
+          </section>
+
+          <section className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+            <div className="grid gap-3 md:grid-cols-3">
+              <Meta label="Git" value={project?.branch || "unknown"} sub={project?.gitRemote || "remote not detected"} />
+              <Meta label="Primary" value={project?.primarySurface || "unknown"} sub={project?.executionMode || "mode not detected"} />
+              <Meta label="Role" value={project?.role || "project"} sub={project?.backend || "backend not detected"} />
+            </div>
+          </section>
+
+          {caps ? (
+            <section className="space-y-4">
+              {(["browser", "simulator", "container", "device", "advanced", "unavailable"] as const).map((group) => {
+                const targets = groupedTargets[group] ?? [];
+                if (targets.length === 0) return null;
+                return (
+                  <div key={group} className="space-y-2">
+                    <SectionLabel>{targetGroupLabels[group]}</SectionLabel>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {targets.map((target) => (
+                        <div key={target.id} className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-[#1f2933] dark:text-[#e6e8ec]">{target.label}</div>
+                              <div className="mt-1 text-xs text-[#667085] dark:text-[#9aa3af]">{target.surface || "runtime"} · {target.id} · {target.requiredCli || "tools"}</div>
+                            </div>
+                            <button
+                              disabled={!target.enabled || busy !== null}
+                              onClick={() => void openRuntimeTarget(target)}
+                              className="rounded-md bg-[#1f2933] px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-35"
+                            >
+                              {busy === target.id ? "Opening..." : target.enabled ? "Open" : "Unavailable"}
+                            </button>
+                          </div>
+                          {target.reason ? <div className="mt-2 text-xs text-[#667085] dark:text-[#9aa3af]">{target.reason}</div> : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </section>
+          ) : null}
+
+          {webPreviewUrl ? (
+            <section className="space-y-2">
+              <div className="flex items-center justify-between">
+                <SectionLabel>Web UI</SectionLabel>
+                <button onClick={() => setWebPreviewUrl(null)} className="rounded-md border border-[#d7dce3] bg-white px-2 py-1 text-xs text-[#475467] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#d7dce3]">Close</button>
+              </div>
+              <iframe src={webPreviewUrl} title="Project Web UI preview" className="h-[560px] w-full rounded-md border border-[#d7dce3] bg-white dark:border-[#2a3039]" />
+            </section>
+          ) : null}
+
+          {session ? (
+            <section className="space-y-2">
+              <SectionLabel>{session.targetLabel || "Remote runtime"}</SectionLabel>
+              <RemoteRuntimeViewer session={session} onSessionChange={setSession} />
+            </section>
+          ) : null}
+        </main>
+
+        <aside className="space-y-3">
+          <section className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+            <SectionLabel>Environment</SectionLabel>
+            <EnvironmentSwitcher directory={directory} />
+          </section>
+        </aside>
+      </div>
     </div>
   );
 }
 
-function MiniCard({ label, value, sub, tone }: { label: string; value: string; sub: string; tone?: "ok" | "warn" }) {
-  const border = tone === "ok" ? "border-emerald-500/30" : tone === "warn" ? "border-amber-500/40" : "border-surface-800";
+function SectionLabel({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af] ${className}`}>{children}</div>;
+}
+
+function ChipRow({ values }: { values: string[] }) {
   return (
-    <div className={`bg-surface-900/50 border rounded-lg p-2 ${border}`}>
-      <div className="text-[10px] uppercase text-surface-500 font-semibold">{label}</div>
-      <div className="text-lg font-semibold text-surface-100 truncate">{value}</div>
-      <div className="text-[10px] text-surface-500">{sub}</div>
+    <div className="flex flex-wrap gap-1.5">
+      {values.map((value) => (
+        <span key={value} className="rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 text-xs font-medium text-[#344054] dark:border-[#2a3039] dark:bg-[#121720] dark:text-[#d7dce3]">{value}</span>
+      ))}
     </div>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Meta({ label, value, sub }: { label: string; value: string; sub: string }) {
   return (
     <div>
-      <h3 className="text-xs uppercase text-surface-500 font-semibold mb-2">{title}</h3>
-      <div className="space-y-1">{children}</div>
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">{label}</div>
+      <div className="truncate text-sm font-semibold text-[#1f2933] dark:text-[#e6e8ec]">{value}</div>
+      <div className="truncate text-xs text-[#667085] dark:text-[#9aa3af]">{sub}</div>
     </div>
   );
 }
-function Row({ children }: { children: React.ReactNode }) {
-  return <div className="flex items-center gap-2 bg-surface-900/50 border border-surface-800 rounded-lg p-2 text-sm">{children}</div>;
-}
-function Tag({ tone, children }: { tone: "ok" | "fail" | "muted"; children: React.ReactNode }) {
-  const cls = tone === "ok" ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
-    : tone === "fail" ? "bg-red-500/20 text-red-700 dark:text-red-300"
-    : "bg-surface-800 text-surface-400";
-  return <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-semibold ${cls}`}>{children}</span>;
-}
-function Empty({ text = "—" }: { text?: string }) {
-  return <div className="text-xs text-surface-500">{text}</div>;
+
+function ActionCard({ title, meta, disabled, busy, onClick }: { title: string; meta: string; disabled?: boolean; busy?: boolean; onClick: () => void }) {
+  return (
+    <button
+      disabled={disabled}
+      onClick={() => void onClick()}
+      className="rounded-md border border-[#d7dce3] bg-white p-3 text-left transition hover:border-[#aeb7c4] hover:bg-[#fbfcfd] disabled:cursor-not-allowed disabled:opacity-45 dark:border-[#2a3039] dark:bg-[#161b22] dark:hover:border-[#3a4350] dark:hover:bg-[#1b222b]"
+    >
+      <div className="text-sm font-semibold text-[#1f2933] dark:text-[#e6e8ec]">{busy ? "Working..." : title}</div>
+      <div className="mt-1 text-xs text-[#667085] dark:text-[#9aa3af]">{meta}</div>
+    </button>
+  );
 }
