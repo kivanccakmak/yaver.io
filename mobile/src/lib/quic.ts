@@ -65,6 +65,7 @@ import type { RemoteSandboxRequest, RemoteSandboxResponse } from "./llmRemote";
 import { decodeCloudWorkspaceRequiredError } from "./cloudWorkspaceRequired";
 import { classifyRunnerFetchOutcome, type CodingRunnersProbeState } from "./deviceStatusRunnerProbe";
 import { buildSendTaskRequestBody } from "./taskRequestBody";
+import { subscribeSse } from "./sseClient";
 export {
   CloudWorkspaceRequiredError,
   decodeCloudWorkspaceRequiredError,
@@ -2178,48 +2179,23 @@ export class QuicClient {
    */
   subscribeDevEvents(onEvent: (ev: { type: string; framework?: string; logLine?: string; message?: string; bundleUrl?: string; deepLink?: string; timestamp?: string }) => void): () => void {
     if (!this.isConnected) return () => {};
-    const controller = new AbortController();
+    let sub: { close(): void } | null = null;
     // Lowest-priority stream — first to be evicted when the host is busy.
-    const slot = this.acquireStreamSlot(STREAM_PRIORITY.devEvents, "dev/events", () => controller.abort());
-    (async () => {
-      try {
-        const res = await fetch(`${this.baseUrl}/dev/events`, {
-          headers: { ...this.authHeaders, Accept: "text/event-stream" },
-          signal: controller.signal,
-        });
-        if (!res.ok || !res.body) return;
-        const reader = (res.body as ReadableStream<Uint8Array>).getReader();
-        const decoder = new TextDecoder();
-        let buf = "";
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          let idx: number;
-          while ((idx = buf.indexOf("\n\n")) >= 0) {
-            const frame = buf.slice(0, idx);
-            buf = buf.slice(idx + 2);
-            const dataLines = frame
-              .split("\n")
-              .filter((l) => l.startsWith("data:"))
-              .map((l) => l.slice(5).trimStart());
-            if (dataLines.length === 0) continue;
-            try {
-              onEvent(JSON.parse(dataLines.join("\n")));
-            } catch {
-              // drop malformed frames
-            }
-          }
-        }
-      } catch {
-        // aborted or connection dropped — the caller re-subscribes on its own cadence
-      } finally {
-        this.releaseStreamSlot(slot);
-      }
-    })();
+    const slot = this.acquireStreamSlot(STREAM_PRIORITY.devEvents, "dev/events", () => sub?.close());
+    // XHR-based SSE (src/lib/sseClient.ts), NOT fetch().body.getReader():
+    // React Native exposes no streaming response body, so `res.body` is undefined
+    // and the old implementation returned immediately without reading a byte.
+    // Same defect fixed in app/(tabs)/apps.tsx and src/components/DevPreview.tsx —
+    // this was the third copy. One implementation now, for all three.
+    sub = subscribeSse({
+      url: `${this.baseUrl}/dev/events`,
+      headers: { ...this.authHeaders },
+      onEvent: (event: any) => onEvent(event),
+      onClose: () => this.releaseStreamSlot(slot),
+    });
     return () => {
       this.releaseStreamSlot(slot);
-      controller.abort();
+      sub?.close();
     };
   }
 

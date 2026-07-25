@@ -38,6 +38,7 @@ import { describeConnectionStatus } from "../../src/lib/connection";
 import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../../src/lib/nativeBuild";
 import { isActiveDevServerStatus } from "../../src/lib/devServerState";
 import { describePort, describeResources } from "../../src/lib/machineResources";
+import { subscribeSse, type SseSubscription } from "../../src/lib/sseClient";
 import { isWebServedStatus } from "../../src/lib/devLane";
 import { applyPreviewCapabilities, guardYaverSelfDevelopmentActions, isHermesMobileFramework } from "../../src/lib/mobileProjectActions";
 import { runtimeSurfaceClient } from "../../src/lib/runtimeSurfaceClient";
@@ -657,42 +658,39 @@ export default function AppsScreen() {
   // Gate on active (running OR building), the same predicate the status poll
   // uses, so a first web compile narrates itself.
   useEffect(() => {
-    if (!showWebView || !isActiveDevServerStatus(devStatus)) return;
-    const controller = new AbortController();
+    // Open the stream whenever the preview is open — do NOT gate it on
+    // devStatus. The status poll can lag, return null between agent restarts, or
+    // report a launching server as inactive; gating the stream on it meant the
+    // overlay had no information during precisely the phase that needs it. The
+    // stream itself is the better signal: its first frame proves the box is
+    // talking.
+    if (!showWebView) return;
     const baseUrl = (quicClient as any).baseUrl;
     if (!baseUrl) return;
 
-    const listen = async () => {
-      try {
-        const res = await fetch(`${baseUrl}/dev/events`, {
-          headers: (quicClient as any).authHeaders,
-          signal: controller.signal,
+    // XHR, not fetch().body.getReader().
+    //
+    // RN's fetch has NO streaming body — `res.body` is undefined, so the old code
+    // hit `if (!reader) return;` and never read a byte. Recorded on video
+    // 2026-07-25: "waiting for the first output from the box" for 50s straight
+    // while the agent was emitting log/phase/snapshot/ready frames every second.
+    // src/lib/sseClient.ts is now the only SSE implementation in the app.
+    const sub = subscribeSse({
+      url: `${baseUrl}/dev/events`,
+      headers: (quicClient as any).authHeaders,
+      onOpen: () => {
+        // Proof of contact, immediately — before any dev-server output exists.
+        setWebPreviewLastLogAt((prev) => prev ?? Date.now());
+      },
+      onError: (reason) => {
+        // A stream that cannot open is a fact the user needs; silence here is
+        // what made this bug invisible for a whole session.
+        setWebPreviewLogs((p) => {
+          const line = `[preview] log stream unavailable: ${reason}`;
+          return p[p.length - 1] === line ? p : [...p, line].slice(-40);
         });
-        const reader = res.body?.getReader();
-        if (!reader) return;
-        const decoder = new TextDecoder();
-        let sseBuffer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          // Buffer across chunk boundaries.
-          //
-          // A network read is NOT a line. An SSE frame can arrive split, e.g.
-          //   chunk 1: 'data: {"type":"log","log'
-          //   chunk 2: 'Line":"Compiling..."}\n\n'
-          // Splitting each chunk on "\n" in isolation dropped BOTH halves, so
-          // over the relay — where chunking is most aggressive — log events
-          // silently vanished and the overlay sat on "waiting for the first
-          // output from the box" while the agent was streaming fine.
-          // DevPreview.tsx already buffered; this path did not. Keep the
-          // trailing partial and prepend it to the next read.
-          sseBuffer += decoder.decode(value, { stream: true });
-          const lines = sseBuffer.split("\n");
-          sseBuffer = lines.pop() ?? "";
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              try {
-                const event = JSON.parse(line.slice(6));
+      },
+      onEvent: (event: any) => {
                 if (event.type === "reload" || event.type === "ready") {
                   setWebViewKey(k => k + 1);
                   setWebViewLoading(true);
@@ -740,16 +738,13 @@ export default function AppsScreen() {
                   setWebPreviewLogs((p) => [...p, ...lines].slice(-60));
                   setWebPreviewFailed(true);
                 }
-              } catch {}
-            }
-          }
-        }
-      } catch {}
-    };
-    listen();
-    return () => controller.abort();
-  // building included: the stream must open during the compile, not after it.
-  }, [showWebView, devStatus?.running, devStatus?.building]);
+      },
+    });
+    return () => sub.close();
+    // Deliberately depends ONLY on `showWebView`: re-subscribing on every
+    // devStatus change tore the stream down and up repeatedly (each poll), which
+    // is its own way to lose the frames we came for.
+  }, [showWebView]);
 
   // Tap project → if dev server running, always use Hermes push (fast, ~10s).
   // This keeps iPhone testing working from Linux, WSL, and remote hosts.
@@ -1504,24 +1499,20 @@ export default function AppsScreen() {
       "Content-Type": "application/json",
     };
 
-    const sseController = new AbortController();
-    const listenSSE = async () => {
-      try {
-        const res = await fetch(`${baseUrl}/dev/events`, {
-          headers: (quicClient as any).authHeaders,
-          signal: sseController.signal,
-        });
-        const reader = res.body?.getReader();
-        if (!reader) return;
-        const decoder = new TextDecoder();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const text = decoder.decode(value);
-          for (const line of text.split("\n")) {
-            if (!line.startsWith("data: ")) continue;
-            try {
-              const event = JSON.parse(line.slice(6));
+    // Hermes build progress over the shared XHR SSE client. This used to be a
+    // fetch().body.getReader() reader too — undefined in React Native — so the
+    // Hermes lane ALSO never showed a progress line: the bar moved on local
+    // guesses while the live tail under it stayed empty for every build.
+    // Held in a box, not a `let`: TS narrows a closure-assigned local back to
+    // `null` at the call sites below.
+    const buildSse: { current: SseSubscription | null } = { current: null };
+    const listenSSE = () => {
+      buildSse.current = subscribeSse({
+        url: `${baseUrl}/dev/events`,
+        headers: (quicClient as any).authHeaders,
+        onError: (reason) => setBundlerLine(`build log stream unavailable: ${reason}`),
+        onEvent: (event: any) => {
+            {
               // Two SSE shapes carry useful text:
               //  - event.message  → high-level phase from emitBuildProgress
               //                     ("Bundling with Expo for ios...")
@@ -1548,10 +1539,9 @@ export default function AppsScreen() {
                   else if (msg.includes("Bundle ready")) setBuildProgress(0.95);
                 }
               }
-            } catch {}
-          }
-        }
-      } catch {}
+            }
+        },
+      });
     };
     listenSSE();
 
@@ -1602,7 +1592,7 @@ export default function AppsScreen() {
     } catch (err: any) {
       // Reset loading state BEFORE the alert so a fast dismissal can't leave
       // the UI stuck in a half-built state and trigger a double-build.
-      sseController.abort();
+      buildSse.current?.close();
       setNativeLoading(false);
       setBuildProgress(0);
       setLoadingStatus("");
@@ -1660,7 +1650,7 @@ export default function AppsScreen() {
       Alert.alert(title, `${raw}${hint}`);
       return;
     }
-    sseController.abort();
+    buildSse.current?.close();
     setNativeLoading(false);
     setBuildProgress(0);
     setTimeout(() => setLoadingStatus(""), 2000);
@@ -2623,15 +2613,41 @@ export default function AppsScreen() {
             onBack={() => setShowWebView(false)}
             style={{ paddingTop: insets.top + 8 }}
             right={
+              /* Icons, not three words.
+                 "Full · Reload · Stop" as text next to a project title like
+                 "e-mobile (Elevathor)" left the bar visibly crammed on a 390pt
+                 phone — the labels collided with the title and with each other
+                 (reported 2026-07-25). Icons cut the right slot from ~150pt to
+                 ~96pt, give each control a real 44pt touch target, and let the
+                 title keep the space it needs. Accessibility labels carry the
+                 words for screen readers. */
               <View style={s.webViewHeaderActions}>
-                <Pressable onPress={() => setPreviewFullScreen(true)} hitSlop={8}>
-                  <Text style={{ color: c.accent, fontSize: 14, fontWeight: "600" }}>Full</Text>
+                <Pressable
+                  onPress={() => setPreviewFullScreen(true)}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Full screen"
+                  style={s.webViewHeaderBtn}
+                >
+                  <Ionicons name="expand-outline" size={20} color={c.accent} />
                 </Pressable>
-                <Pressable onPress={handleReload} hitSlop={8} style={{ marginLeft: 16 }}>
-                  <Text style={{ color: c.accent, fontSize: 14, fontWeight: "600" }}>Reload</Text>
+                <Pressable
+                  onPress={handleReload}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Reload preview"
+                  style={s.webViewHeaderBtn}
+                >
+                  <Ionicons name="refresh" size={21} color={c.accent} />
                 </Pressable>
-                <Pressable onPress={handleStop} hitSlop={8}>
-                  <Text style={{ color: c.error, fontSize: 14, fontWeight: "600", marginLeft: 16 }}>Stop</Text>
+                <Pressable
+                  onPress={handleStop}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Stop dev server"
+                  style={s.webViewHeaderBtn}
+                >
+                  <Ionicons name="stop-circle-outline" size={21} color={c.error} />
                 </Pressable>
               </View>
             }
@@ -3051,6 +3067,9 @@ const s = StyleSheet.create({
   webViewHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10, borderBottomWidth: 1 },
   webViewHeaderCenter: { flexDirection: "row", alignItems: "center", gap: 6 },
   webViewTitle: { fontSize: 15, fontWeight: "700" },
-  webViewHeaderActions: { flexDirection: "row", alignItems: "center" },
+  webViewHeaderActions: { flexDirection: "row", alignItems: "center", gap: 4 },
+  // 32pt box + hitSlop 10 ⇒ a 52pt touch target, comfortably past the 44pt
+  // minimum, while the visual footprint stays small enough for the title.
+  webViewHeaderBtn: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
   loadingBar: { height: 2, opacity: 0.6 },
 });

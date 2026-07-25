@@ -21,6 +21,7 @@ import { isActiveDevServerStatus } from "../lib/devServerState";
 import { mustUseNativePreview as mustUseNativePreviewLane } from "../lib/devLane";
 import { PREVIEW_READY_SCRIPT } from "../lib/previewReadyScript";
 import { setActivePreviewLane, subscribeBrowserShake } from "../lib/feedbackTrigger";
+import { subscribeSse } from "../lib/sseClient";
 import { useResponsiveLayout } from "../hooks/useResponsiveLayout";
 import { monoFamily } from "../theme/tokens";
 
@@ -188,34 +189,21 @@ export function DevPreview() {
   useEffect(() => {
     if (!status?.running && !status?.building) return;
 
-    const controller = new AbortController();
     const baseUrl = (quicClient as any).baseUrl;
     if (!baseUrl) return;
 
-    const listenSSE = async () => {
-      try {
-        const res = await fetch(`${baseUrl}/dev/events`, {
-          headers: (quicClient as any).authHeaders,
-          signal: controller.signal,
-        });
-        const reader = res.body?.getReader();
-        if (!reader) return;
-        const decoder = new TextDecoder();
-        let incomplete = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          // Accumulate across chunks to handle SSE frames split across TCP packets
-          const text = incomplete + decoder.decode(value, { stream: true });
-          const lines = text.split("\n");
-          // Last element may be an incomplete line — carry it over
-          incomplete = lines.pop() || "";
-
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              try {
-                const event = JSON.parse(line.slice(6));
+    // XHR-based SSE (src/lib/sseClient.ts). RN's fetch exposes no streaming
+    // body, so `res.body?.getReader()` was undefined here too and this stream
+    // never delivered a single frame — the same defect that left the other
+    // preview screen showing "waiting for the first output from the box" while
+    // the agent streamed happily. One implementation for the whole app now.
+    const sub = subscribeSse({
+      url: `${baseUrl}/dev/events`,
+      headers: (quicClient as any).authHeaders,
+      onOpen: () => setLastByteAt(Date.now()),
+      onError: (reason) => pushLog(`[preview] log stream unavailable: ${reason}`),
+      onEvent: (event: any) => {
+              {
                 // Yaver Protocol v1: structured progress + snapshots
                 // for Hermes/Metro/Expo Web. The mobile DevPreview
                 // banner shows a real percentage + currentFile while
@@ -237,7 +225,7 @@ export function DevPreview() {
                     updatedAt: Date.now(),
                   });
                   setLastByteAt(Date.now());
-                  continue;
+                  return; // (was `continue` inside the old while-loop)
                 }
                 if (event.type === "phase" && typeof event.topic === "string") {
                   setProgressState((prev) => {
@@ -256,7 +244,7 @@ export function DevPreview() {
                     };
                   });
                   setLastByteAt(Date.now());
-                  continue;
+                  return; // (was `continue` inside the old while-loop)
                 }
                 if (event.type === "snapshot") {
                   setLastByteAt(Date.now());
@@ -301,11 +289,11 @@ export function DevPreview() {
                       updatedAt: Date.now(),
                     });
                   }
-                  continue;
+                  return; // (was `continue` inside the old while-loop)
                 }
                 if (event.type === "heartbeat") {
                   setLastByteAt(Date.now());
-                  continue;
+                  return; // (was `continue` inside the old while-loop)
                 }
                 if (event.type === "reload" || event.type === "ready") {
                   if (!mustUseNativePreview) {
@@ -332,17 +320,11 @@ export function DevPreview() {
                   setPreviewFailed(true);
                   setLastByteAt(Date.now());
                 }
-              } catch {}
-            }
-          }
-        }
-      } catch {
-        // SSE disconnected — OK, we still have polling
-      }
-    };
-    listenSSE();
+              }
+      },
+    });
 
-    return () => controller.abort();
+    return () => sub.close();
   }, [status?.running, status?.building, status?.framework, status?.devMode]);
 
   const [nativeLoading, setNativeLoading] = useState(false);
