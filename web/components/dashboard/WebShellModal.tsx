@@ -71,6 +71,7 @@ function describeDiagnostic(d: ConnectAttemptDiagnostic): string {
 export default function WebShellModal({
   device,
   launch,
+  tmuxSession,
   isCurrentDeviceSelected,
   isCurrentDeviceConnected,
   onClose,
@@ -79,6 +80,7 @@ export default function WebShellModal({
 }: {
   device: Device;
   launch?: "claude" | "codex" | "opencode";
+  tmuxSession?: string;
   isCurrentDeviceSelected: boolean;
   isCurrentDeviceConnected: boolean;
   onClose: () => void;
@@ -124,7 +126,9 @@ export default function WebShellModal({
       : reach.label
         ? reach.label
         : "Could not reach the agent (direct, tunnel, or relay).";
-  const title = launch === "claude"
+  const title = tmuxSession
+    ? `tmux ${tmuxSession}`
+    : launch === "claude"
     ? "Claude"
     : launch === "codex"
       ? "Codex"
@@ -175,7 +179,7 @@ export default function WebShellModal({
         </div>
         <div className={`flex-1 overflow-hidden ${state === "ready" ? "bg-[#0b0d10]" : "bg-slate-50/70 dark:bg-transparent p-2"}`}>
           {state === "ready" ? (
-            <TerminalView launch={launch} />
+            <TerminalView launch={launch} tmuxSession={tmuxSession} />
           ) : state === "needs-reauth" ? (
             <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center text-slate-700 dark:text-surface-300">
               <div className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
