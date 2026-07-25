@@ -42,6 +42,7 @@ targets:
       # YaverStore won't compile here. Shared, not copied, so the surfaces don't
       # drift.
       - path: ../tvos/YaverTV/MachineRegistry.swift
+      - path: ../tvos/YaverTV/TokenStore.swift
       - path: ../tvos/YaverTV/YaverStore.swift
       - path: ../tvos/YaverTV/SessionClient.swift
       - path: ../tvos/YaverTV/YaverNativeCatalog.swift

@@ -32,6 +32,20 @@
 		<key>CFBundlePrimaryIcon</key>
 		<string>$(ASSETCATALOG_COMPILER_APPICON_NAME)</string>
 	</dict>
+	<!-- Native OAuth returns through yaver://oauth-callback, the same callback
+	     scheme as the phone. ASWebAuthenticationSession should intercept the
+	     redirect itself, but declaring the scheme makes the contract explicit
+	     to Launch Services, UI tests, and any future fallback path that receives
+	     the URL after the web session closes. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>yaver</string>
+			</array>
+		</dict>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<false/>
 	<key>UIApplicationSceneManifest</key>

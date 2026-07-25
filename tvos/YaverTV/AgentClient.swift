@@ -217,6 +217,15 @@ actor AgentClient {
     // frame hash → GET /vibing/preview/frames/{hash} for the bytes.
 
     struct WebPreviewStart: Decodable { let ok: Bool?; let port: Int?; let webUrl: String? }
+    struct DevServerEvent: Decodable {
+        let type: String?
+        let framework: String?
+        let logLine: String?
+        let message: String?
+        let timestamp: String?
+        let bundleUrl: String?
+        let deepLink: String?
+    }
     struct DevStartResult: Decodable {
         let ok: Bool?
         let mode: String?
@@ -272,6 +281,76 @@ actor AgentClient {
 
     func stopWebPreview(project: String) async {
         _ = try? await postJSON("/vibing/preview/stop", ["project": project])
+    }
+
+    /// Subscribe to `/dev/events` and parse the same SSE stream the phone and
+    /// web dashboard use for Metro/Expo/Flutter progress.
+    ///
+    /// This is intentionally LAN/relay HTTP, not Convex: startup logs can be
+    /// chatty, and sending every bundler line through the multi-tenant backend
+    /// would turn a local preview problem into a billable cloud log stream.
+    /// The agent already retains a bounded replay window, so late subscribers
+    /// still get the recent tail without another storage surface.
+    func subscribeDevEvents(
+        onEvent: @escaping @Sendable (DevServerEvent) -> Void,
+        onError: (@Sendable (String) -> Void)? = nil
+    ) -> Task<Void, Never> {
+        let endpoints = requestEndpoints(path: "/dev/events")
+        let token = self.token
+        let relayPassword = box.relayPassword
+        let urlSession = self.session
+        return Task {
+            var lastError = "dev event stream unavailable"
+            for endpoint in endpoints {
+                if Task.isCancelled { return }
+                var req = URLRequest(url: endpoint.url)
+                req.httpMethod = "GET"
+                req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+                if endpoint.relay, let relayPassword, !relayPassword.isEmpty {
+                    req.setValue(relayPassword, forHTTPHeaderField: "X-Relay-Password")
+                }
+                do {
+                    let (bytes, resp) = try await urlSession.bytes(for: req)
+                    guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                        lastError = "dev event stream returned HTTP \((resp as? HTTPURLResponse)?.statusCode ?? -1)"
+                        continue
+                    }
+                    var dataLines: [String] = []
+                    for try await line in bytes.lines {
+                        if Task.isCancelled { return }
+                        if line.isEmpty {
+                            emitDevEvent(dataLines, onEvent: onEvent)
+                            dataLines.removeAll(keepingCapacity: true)
+                            continue
+                        }
+                        if line.hasPrefix("data:") {
+                            dataLines.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
+                        }
+                    }
+                    emitDevEvent(dataLines, onEvent: onEvent)
+                    return
+                } catch {
+                    if Task.isCancelled { return }
+                    lastError = error.localizedDescription
+                    continue
+                }
+            }
+            onError?(lastError)
+        }
+    }
+
+    private nonisolated func emitDevEvent(
+        _ dataLines: [String],
+        onEvent: @escaping @Sendable (DevServerEvent) -> Void
+    ) {
+        guard !dataLines.isEmpty else { return }
+        let payload = dataLines.joined(separator: "\n")
+        guard let data = payload.data(using: .utf8),
+              let event = try? JSONDecoder().decode(DevServerEvent.self, from: data)
+        else { return }
+        onEvent(event)
     }
 
     /// Small POST helper for the JSON endpoints above.

@@ -10,10 +10,11 @@
 // `client=mobile` is what makes the web callback redirect to the `yaver://`
 // scheme instead of back into the web dashboard (web/app/api/auth/oauth/
 // [provider]/route.ts). ASWebAuthenticationSession intercepts that redirect
-// itself, so the app does not need to register the URL type or field a deep
-// link — the token comes back on the awaited call and cannot be lost to a
-// route-mount race. That is the same reason the phone moved to
-// openAuthSessionAsync.
+// itself, so the token comes back on the awaited call and cannot be lost to a
+// route-mount race. The visionOS app still declares the scheme in Info.plist:
+// that keeps the native callback contract visible to Launch Services, UI tests,
+// and any future fallback that receives the URL after the web session closes.
+// It is the same reason the phone moved to openAuthSessionAsync.
 //
 // NOT AVAILABLE ON tvOS, and that is a platform fact rather than an omission:
 // tvOS ships no browser and no ASWebAuthenticationSession, which is the whole

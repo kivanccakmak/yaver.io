@@ -18,6 +18,8 @@ struct VisionDashboardView: View {
     @State private var reloadingMode: String?
     @State private var showAddBox = false
     @State private var showSession = false
+    @State private var logTask: Task<Void, Never>?
+    @State private var devLog: [String] = []
 
     private let columns = [
         GridItem(.adaptive(minimum: 330, maximum: 520), spacing: 20, alignment: .top)
@@ -38,6 +40,8 @@ struct VisionDashboardView: View {
             .sheet(isPresented: $showSession) { VisionSessionView() }
         }
         .task(id: store.selectedBox?.id) { await refresh() }
+        .task(id: store.selectedBox?.id) { await startDevEventStream() }
+        .onDisappear { logTask?.cancel() }
     }
 
     // MARK: - Main
@@ -58,6 +62,7 @@ struct VisionDashboardView: View {
                     reloadPanel
                     runnersPanel
                     surfacesPanel
+                    logsPanel
                 }
             }
             .padding(32)
@@ -215,6 +220,25 @@ struct VisionDashboardView: View {
         }
     }
 
+    private var logsPanel: some View {
+        panel("Render Logs", systemImage: "text.alignleft") {
+            if devLog.isEmpty {
+                Text("Metro, Expo, Flutter, and web-preview logs appear here while the selected machine starts or reloads a project.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(Array(devLog.suffix(8).enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(logColor(for: line))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+        }
+    }
+
     private var noBoxView: some View {
         VStack(spacing: 18) {
             Image(systemName: "visionpro")
@@ -361,6 +385,43 @@ struct VisionDashboardView: View {
         } catch {
             notice = .error("Couldn't reach \(store.selectedBox?.name ?? "the machine"): \(error.localizedDescription)")
         }
+    }
+
+    private func startDevEventStream() async {
+        logTask?.cancel()
+        devLog = []
+        guard let client = store.client() else { return }
+        let stream = await client.subscribeDevEvents { ev in
+            let line = ev.logLine ?? ev.message
+            guard let line, !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            Task { @MainActor in appendLog(line) }
+        } onError: { message in
+            Task { @MainActor in appendLog("[stream] \(message)") }
+        }
+        logTask = stream
+        await stream.value
+    }
+
+    @MainActor
+    private func appendLog(_ line: String) {
+        devLog.append(line)
+        if devLog.count > 60 {
+            devLog.removeFirst(devLog.count - 60)
+        }
+    }
+
+    private func logColor(for line: String) -> Color {
+        let lower = line.lowercased()
+        if lower.contains("error") || lower.contains("failed") || lower.contains("exception") || lower.contains("cannot ") {
+            return .red
+        }
+        if lower.contains("warning") || lower.contains("warn") || lower.contains("deprecated") || lower.contains("expected version") {
+            return .orange
+        }
+        if lower.contains("ready") || lower.contains("listening") || lower.contains("bundled") || lower.contains("waiting on") {
+            return .blue
+        }
+        return .secondary
     }
 
     private func reload(mode: String) async {

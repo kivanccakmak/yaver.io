@@ -19,6 +19,8 @@ struct WebPreviewStreamView: View {
     @State private var error: String?
     @State private var started = false
     @State private var pollTask: Task<Void, Never>?
+    @State private var logTask: Task<Void, Never>?
+    @State private var logLines: [String] = []
     @State private var rebuilding = false
 
     var body: some View {
@@ -53,24 +55,51 @@ struct WebPreviewStreamView: View {
                 }
                 .padding(32)
                 Spacer()
+                if !logLines.isEmpty {
+                    logPanel
+                        .padding(.horizontal, 32)
+                        .padding(.bottom, 30)
+                }
             }
         }
         .onAppear { if !started { restart() } }
         .onDisappear {
             pollTask?.cancel()
+            logTask?.cancel()
             Task { await store.client()?.stopWebPreview(project: project.name) }
         }
+    }
+
+    private var logPanel: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("Agent activity", systemImage: "text.alignleft")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+            ForEach(Array(logLines.suffix(7).enumerated()), id: \.offset) { _, line in
+                Text(line)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(color(for: line))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: 960, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
     }
 
     private func restart() {
         error = nil
         started = true
+        logLines = []
         pollTask?.cancel()
+        logTask?.cancel()
         pollTask = Task { await run() }
     }
 
     private func run() async {
         guard let client = store.client() else { error = "No machine selected"; return }
+        startLogStream(client)
         do {
             status = "Starting \(project.name)…"
             let dev = try await client.startDevServer(for: project)
@@ -83,6 +112,28 @@ struct WebPreviewStreamView: View {
             await poll(client)
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    private func startLogStream(_ client: AgentClient) {
+        logTask?.cancel()
+        logTask = Task {
+            let stream = await client.subscribeDevEvents { ev in
+                let line = ev.logLine ?? ev.message
+                guard let line, !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                Task { @MainActor in appendLog(line) }
+            } onError: { message in
+                Task { @MainActor in appendLog("[stream] \(message)") }
+            }
+            await stream.value
+        }
+    }
+
+    @MainActor
+    private func appendLog(_ line: String) {
+        logLines.append(line)
+        if logLines.count > 50 {
+            logLines.removeFirst(logLines.count - 50)
         }
     }
 
@@ -102,6 +153,20 @@ struct WebPreviewStreamView: View {
             }
             try? await Task.sleep(nanoseconds: 700_000_000)
         }
+    }
+
+    private func color(for line: String) -> Color {
+        let lower = line.lowercased()
+        if lower.contains("error") || lower.contains("failed") || lower.contains("exception") || lower.contains("cannot ") {
+            return .red
+        }
+        if lower.contains("warning") || lower.contains("warn") || lower.contains("deprecated") || lower.contains("expected version") {
+            return .orange
+        }
+        if lower.contains("ready") || lower.contains("listening") || lower.contains("bundled") || lower.contains("waiting on") {
+            return .blue
+        }
+        return .secondary
     }
 
     /// URL for the headless browser running ON THE BOX, not for the Apple TV.
