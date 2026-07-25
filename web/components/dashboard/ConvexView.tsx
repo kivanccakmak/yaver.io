@@ -87,9 +87,17 @@ function StatusBar({
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-surface-800 bg-surface-900/50 p-3 text-sm">
       <div className={`w-2 h-2 rounded-full ${dotColor}`} />
       <span className="font-mono text-surface-300">{status.url}</span>
+      {/* See DataView: `error` must not be hidden by `running`. A backend that
+          is up and erroring is exactly the state a status line exists to
+          reveal, and the old ternary showed it only when already down. */}
       <span className="text-xs text-surface-500">
-        {status.running ? "online" : status.error || "offline"}
+        {status.running ? "online" : "offline"}
       </span>
+      {status.error && (
+        <span className="text-xs text-amber-400" title={status.error}>
+          {status.running ? "online, but: " : ""}{status.error}
+        </span>
+      )}
       <div className="flex-1" />
       <button onClick={installHelper} className="px-3 py-1.5 text-xs rounded-lg bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/30">
         Install yaver_admin.ts

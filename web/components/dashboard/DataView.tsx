@@ -58,7 +58,18 @@ function StatusBar({ status }: { status: { kind: string; url: string; running: b
       <span className="text-xs uppercase font-semibold text-indigo-400">{status.kind || "unknown"}</span>
       <span className="font-mono text-surface-300 truncate max-w-[50%]">{status.url}</span>
       {status.version && <span className="text-xs text-surface-500">v{status.version}</span>}
-      <span className="text-xs text-surface-500">{status.running ? "online" : (status.error || "offline")}</span>
+      {/* A service can be RUNNING and still be broken — the ternary used to
+          drop `error` entirely whenever running was true, so "up but failing"
+          rendered as a plain "online". That is the same false green the agent
+          was fixed for on 2026-07-25 (a Flutter dev server answering
+          `running: true, error: none` while its app could not compile). If
+          there is an error, say it, whatever `running` claims. */}
+      <span className="text-xs text-surface-500">{status.running ? "online" : "offline"}</span>
+      {status.error && (
+        <span className="text-xs text-amber-400" title={status.error}>
+          {status.running ? "online, but: " : ""}{status.error}
+        </span>
+      )}
       {status.hint && <div className="w-full text-xs text-amber-400">{status.hint}</div>}
     </div>
   );
