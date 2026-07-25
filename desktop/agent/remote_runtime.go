@@ -1549,7 +1549,12 @@ func (s *HTTPServer) ensureRemoteRuntimeManager() *RemoteRuntimeManager {
 		// Exclusivity needs a way to be LOST, or the machine looks full while
 		// idle: a closed tab / slept phone / timed-out test leaves a session
 		// holding a simulator with nobody watching. See remote_runtime_reaper.go.
-		s.remoteRuntimeMgr.StartRemoteRuntimeReaper(nil)
+		//
+		// The sweep runs as a CUSTODIAN WARDEN rather than its own goroutine, so
+		// what it does reaches the user's screen instead of only a launchd log —
+		// that visibility is the whole reason custodian.go exists. Same cadence,
+		// same ReapAbandonedSessions, one feed.
+		StartAgentCustodian(s.remoteRuntimeMgr, nil)
 	}
 	// Keep the dev-server pointer fresh even after lazy allocation — the
 	// devServerMgr on HTTPServer is itself lazy for some code paths, so a

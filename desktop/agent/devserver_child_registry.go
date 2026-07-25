@@ -196,6 +196,19 @@ func argvMatchesAll(argv, match string) bool {
 // any port is allocated, so the allocator sees the machine's real free ports
 // instead of yesterday's ghosts.
 func ReapOrphanedDevChildren() []string {
+	findings := reapOrphanedDevChildren(time.Now())
+	actions := make([]string, 0, len(findings))
+	for _, f := range findings {
+		log.Printf("[dev-children] %s", f.Action)
+		actions = append(actions, f.Action)
+	}
+	return actions
+}
+
+// reapOrphanedDevChildren is the one implementation, returning custodian
+// findings. The []string form above and the custodian warden both derive from
+// it — the same sweep cannot say two different things to two surfaces.
+func reapOrphanedDevChildren(now time.Time) []CustodianFinding {
 	devChildRegistryMu.Lock()
 	recs := loadDevChildren()
 	devChildRegistryMu.Unlock()
@@ -203,9 +216,10 @@ func ReapOrphanedDevChildren() []string {
 		return nil
 	}
 
-	var actions []string
+	var findings []CustodianFinding
 	var keep []devChildRecord
 	for _, r := range recs {
+		subject := fmt.Sprintf("pid %d · :%d", r.PID, r.Port)
 		argv := processArgv(r.PID)
 		if argv == "" {
 			continue // already gone; drop the record silently
@@ -213,23 +227,33 @@ func ReapOrphanedDevChildren() []string {
 		if !argvMatchesAll(argv, r.Match) {
 			// PID recycled — this is somebody else's process now. Dropping the
 			// record is the whole point of the guard: never kill on a number.
-			actions = append(actions, fmt.Sprintf("pid %d is no longer %s (argv does not match %q) — left alone", r.PID, r.Kind, r.Match))
+			findings = append(findings, CustodianFinding{
+				Warden: "dev-children", Subject: subject, Outcome: OutcomeSpared, At: now,
+				Problem: fmt.Sprintf("a stale record claims this PID is a %s, but the live process is something else", r.Kind),
+				Action:  fmt.Sprintf("pid %d is no longer %s (argv does not match %q) — left alone", r.PID, r.Kind, r.Match),
+			})
 			continue
 		}
 		if err := killProcessGroup(r.PID, "TERM"); err != nil {
-			actions = append(actions, fmt.Sprintf("could not stop orphaned %s pid %d on :%d — %v", r.Kind, r.PID, r.Port, err))
+			findings = append(findings, CustodianFinding{
+				Warden: "dev-children", Subject: subject, Outcome: OutcomeNeedsHuman, At: now,
+				Problem: fmt.Sprintf("an orphaned %s is still holding port %d and would not stop", r.Kind, r.Port),
+				Action:  fmt.Sprintf("could not stop orphaned %s pid %d on :%d — %v", r.Kind, r.PID, r.Port, err),
+				Remedy:  fmt.Sprintf("stop it by hand: kill -TERM -%d (the negative PID kills its whole process group)", r.PID),
+			})
 			keep = append(keep, r) // still ours; try again next start
 			continue
 		}
-		actions = append(actions, fmt.Sprintf("stopped orphaned %s (pid %d, port %d, %s) left by a previous agent — its port is free again", r.Kind, r.PID, r.Port, filepath.Base(r.WorkDir)))
+		findings = append(findings, CustodianFinding{
+			Warden: "dev-children", Subject: subject, Outcome: OutcomeFixed, At: now,
+			Problem: fmt.Sprintf("a %s left by a previous agent was still holding port %d, so this machine looked busier than it is", r.Kind, r.Port),
+			Action:  fmt.Sprintf("stopped orphaned %s (pid %d, port %d, %s) left by a previous agent — its port is free again", r.Kind, r.PID, r.Port, filepath.Base(r.WorkDir)),
+		})
 	}
 
 	devChildRegistryMu.Lock()
 	saveDevChildren(keep)
 	devChildRegistryMu.Unlock()
 
-	for _, a := range actions {
-		log.Printf("[dev-children] %s", a)
-	}
-	return actions
+	return findings
 }

@@ -956,6 +956,13 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// authenticated participant — seeing who else is driving is what stops two
 	// people fighting over one simulator.
 	mux.HandleFunc("/vibe/sessions", s.auth(s.handleVibeSessions))
+
+	// Housekeeping feed — the custodian's findings, on every surface. See
+	// custodian.go: a janitor nobody can see is indistinguishable from none.
+	mux.HandleFunc("/custodian/status", s.auth(s.handleCustodianStatus))
+	mux.HandleFunc("/custodian/events", s.auth(s.handleCustodianEvents))
+	mux.HandleFunc("/custodian/playbook", s.auth(s.handleCustodianPlaybook))
+	mux.HandleFunc("/custodian/sweep", s.auth(s.handleCustodianSweep))
 	mux.HandleFunc("/vibe/join", s.auth(s.handleVibeJoin))
 	mux.HandleFunc("/vibe/heartbeat", s.auth(s.handleVibeHeartbeat))
 	mux.HandleFunc("/vibe/role", s.auth(s.handleVibeRole))

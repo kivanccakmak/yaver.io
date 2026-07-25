@@ -741,6 +741,14 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 			if setter, ok := ds.(interface{ SetError(string) }); ok {
 				setter.SetError(annotated)
 			}
+			// Tell the custodian, not just the client that happened to be
+			// watching. A failure only a returned error knows about is invisible
+			// to every OTHER surface, and invisible to the automatic-repair lane
+			// — which is how the same npm/Metro/simulator failure gets rediscovered
+			// by hand every time. The playbook answers instantly when it
+			// recognises the text; anything it does not becomes evidence for a
+			// runner. See custodian_playbook.go.
+			ReportFailureToCustodian("dev-start", filepath.Base(opts.WorkDir), annotated)
 			m.mu.Lock()
 			if m.active != nil && m.active.server == ds {
 				m.active.cancel()
