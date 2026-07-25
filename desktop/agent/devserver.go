@@ -804,6 +804,41 @@ func (m *DevServerManager) Status() *DevServerStatus {
 
 	s := m.active.server.Status()
 	s.Kind = m.active.server.Kind()
+	// Fill the URL the client should load from the ONE method that every
+	// framework already implements correctly, instead of trusting each
+	// Status() to remember.
+	//
+	// It didn't: only ExpoDevServer.Status() set BundleURL, so /dev/status for
+	// Flutter / Vite / Next / React Native / SwiftWasm answered
+	// `"serving":true,"bundleUrl":""` — the inventory saying yes while the
+	// operation says nothing. The phone gates its WebView on bundleUrl, so it
+	// sat on "Waiting for the dev server to report its address…" forever with a
+	// perfectly healthy dev server on the other end (seen 2026-07-25 against a
+	// Mac mini running `flutter run -d web-server` on :9100).
+	//
+	// Deriving it here means a NEW framework cannot reintroduce the bug by
+	// omission — the only way to get it wrong is to return the wrong path from
+	// BundleURL, which is the method whose whole job that is.
+	if s.BundleURL == "" {
+		s.BundleURL = m.active.server.BundleURL("")
+	}
+	// A session that exists but hasn't bound yet is LAUNCHING — say so.
+	//
+	// It used to answer `running:false, building:absent`, which every client
+	// reads as "there is no dev server here" (mobile's isActiveDevServerStatus
+	// requires running||building). For the 30s–3min a cold Flutter/Vite web
+	// compile takes, the phone therefore: showed "Waiting for the dev server to
+	// report its address…" with no elapsed time, AND never opened the /dev/events
+	// log stream (it is gated on the same predicate) — so the one screen the user
+	// stares at during the longest wait was the one screen with no information,
+	// while the agent was streaming the whole log tail every 5s. Reported
+	// 2026-07-25 on build 469 against a Mac mini.
+	if !s.Running && !m.active.failed && s.Error == "" {
+		s.Building = true
+		if s.ServingLabel == "" {
+			s.ServingLabel = fmt.Sprintf("Starting %s preview…", m.active.server.Name())
+		}
+	}
 	s.TargetDeviceID = m.active.target.DeviceID
 	s.TargetDeviceName = m.active.target.DeviceName
 	s.TargetDeviceClass = m.active.target.DeviceClass
@@ -2259,6 +2294,20 @@ func (f *FlutterDevServer) Start(ctx context.Context, opts DevServerOpts) error 
 				log.Printf("[dev:flutter] web support added to %s", opts.WorkDir)
 			}
 		}
+		// Never hand Flutter a port somebody else already owns.
+		//
+		// 2026-07-25: an orphaned `flutter run -d web-server --web-port 9100`
+		// from ANOTHER project (23h old, left by an autorun session) still held
+		// 9100. The new preview's flutter died instantly with "Failed to bind web
+		// development server: Address already in use", but the readiness probe
+		// (a plain GET on :9100) was answered by the ORPHAN — so the agent
+		// reported `running:true, serving:true` and the phone was pointed at a
+		// different project's app. Probing a port proves a port is busy; it never
+		// proves the process behind it is ours.
+		if free, substituted := pickFreeDevPort(f.port, devPortProbeSpan); substituted {
+			log.Printf("[dev:flutter] port %d is already in use — serving on :%d instead (the client loads /dev/, so the port is an implementation detail)", f.port, free)
+			f.port = free
+		}
 		args = append(args, "--web-port", fmt.Sprintf("%d", f.port), "--web-hostname", "0.0.0.0")
 	}
 
@@ -2529,10 +2578,33 @@ func (f *FlutterDevServer) startProcessWithStdin(ctx context.Context, name strin
 			}
 			return fmt.Errorf("%s did not become ready within 180s", name)
 		case <-ticker.C:
+			// A bind failure is terminal — report it by name instead of
+			// letting the 180s deadline turn a five-word cause into a
+			// blank timeout. (Flutter keeps the process alive for a
+			// moment after printing this, so waiting on exitCh alone is
+			// not enough.)
+			if tail := logWriter.Tail(25); portBindFailure(tail) {
+				return fmt.Errorf("%s could not bind port %d — something else is already listening on it. "+
+					"Stop that process (lsof -nP -iTCP:%d) or start the preview again to get a free port.\n%s",
+					name, f.port, f.port, tail)
+			}
 			resp, err := http.Get(readyURL)
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode < 500 {
+					// Somebody is listening — but it must be US. A foreign
+					// process on this port answers identically, which is how a
+					// dead session got reported as `serving:true` while the user
+					// was shown another project's app. If our process has
+					// already exited, that 200 was not ours.
+					select {
+					case waitErr := <-exitCh:
+						tail := logWriter.Tail(25)
+						return fmt.Errorf("%s exited during startup while port %d answered — "+
+							"the port is owned by another process, not this preview: %v\n%s",
+							name, f.port, waitErr, tail)
+					default:
+					}
 					f.mu.Lock()
 					f.running = true
 					f.mu.Unlock()

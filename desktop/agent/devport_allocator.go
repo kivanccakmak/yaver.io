@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 )
 
@@ -12,15 +13,15 @@ import (
 //
 // Ranges (chosen to not collide with the typical dev ecosystem):
 //
-//   Metro    : 8081 + offset       — base 8081, range 8081..8090
-//   ExpoWeb  : 19006 + offset      — base 19006, range 19006..19015
+//	Metro    : 8081 + offset       — base 8081, range 8081..8090
+//	ExpoWeb  : 19006 + offset      — base 19006, range 19006..19015
 //
 // In single-user mode the allocator is unused; the legacy singleton
 // path keeps using 8081 / 19006. In multi-user mode each UserSession
 // reserves a slot on first dev-server start and holds it until the
 // session is stopped or evicted.
 type DevPortAllocator struct {
-	mu       sync.Mutex
+	mu        sync.Mutex
 	metroBase int
 	webBase   int
 	maxSlots  int
@@ -39,9 +40,9 @@ func NewDevPortAllocator() *DevPortAllocator {
 
 // DevPortPair holds the two ports allocated to one user session.
 type DevPortPair struct {
-	Slot     int
+	Slot      int
 	MetroPort int
-	WebPort  int
+	WebPort   int
 }
 
 // Reserve picks the lowest free slot, marks it owned by userID,
@@ -114,5 +115,71 @@ func portBusy(port int) bool {
 		return true
 	}
 	_ = l.Close()
+	return false
+}
+
+// ─── Dev-server port pre-flight ────────────────────────────────────────
+//
+// Why this exists (2026-07-25): the browser lane hard-coded :9100 for Flutter,
+// and an orphaned dev server from an unrelated project — 23 hours old, left by
+// an autorun run — still held it. The new preview's `flutter run` died with
+// "Failed to bind web development server: Address already in use", while the
+// agent's readiness probe (a plain GET on :9100) was happily answered by the
+// ORPHAN. Result: /dev/status said `running:true, serving:true` and the phone
+// was pointed at a DIFFERENT project's app.
+//
+// Two guards come out of that, and they belong together: pick a port nobody
+// holds, and treat "the port answers" as insufficient proof of readiness (see
+// startProcessWithStdin).
+
+// devPortProbeSpan is how many consecutive ports past the preferred one we are
+// willing to try. Wide enough for a handful of parallel previews, narrow enough
+// that a substituted port stays recognisable in logs.
+const devPortProbeSpan = 40
+
+// pickFreeDevPort returns the first port at or after `preferred` that nothing is
+// listening on, plus whether it had to move. When every port in the span is
+// busy it returns `preferred` unchanged (substituted=false) — the caller then
+// fails with the real bind error, which is more honest than silently landing on
+// a port outside the range we said we'd use.
+func pickFreeDevPort(preferred, span int) (int, bool) {
+	if preferred <= 0 {
+		return preferred, false
+	}
+	if !portBusy(preferred) {
+		return preferred, false
+	}
+	for p := preferred + 1; p <= preferred+span; p++ {
+		if p > 65535 {
+			break
+		}
+		if !portBusy(p) {
+			return p, true
+		}
+	}
+	return preferred, false
+}
+
+// portBindFailure reports whether a dev-server log tail contains a
+// port-already-bound failure. Framework-agnostic on purpose: Flutter/Dart,
+// Node/Vite/Next and Python servers all phrase it differently, and the whole
+// point is to name the cause instead of waiting out a 180s readiness deadline
+// that reports nothing.
+func portBindFailure(tail string) bool {
+	if tail == "" {
+		return false
+	}
+	lower := strings.ToLower(tail)
+	for _, needle := range []string{
+		"address already in use", // Dart/Flutter SocketException, Python
+		"eaddrinuse",             // Node (Vite, Next, Metro)
+		"failed to bind",         // Flutter's own summary line
+		"port is already in use",
+		"address in use",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
 	return false
 }
