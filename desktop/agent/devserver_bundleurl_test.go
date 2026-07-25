@@ -23,6 +23,7 @@ package main
 // devserver.go and re-running: 5 of the 6 registered frameworks fail.
 
 import (
+	"net"
 	"strings"
 	"testing"
 )
@@ -137,5 +138,69 @@ func TestFailedSessionIsNotReportedAsBuilding(t *testing.T) {
 	if status.Building {
 		t.Error("a failed session was reported as building — the UI would show " +
 			"'Starting…' forever instead of the failure and its cause")
+	}
+}
+
+// An Expo BROWSER preview must be told to load the web server, not Metro.
+//
+// Metro serves no page at `/`, so a browser preview pointed at /dev/ renders
+// nothing — measured on the mini 2026-07-25: `curl /dev/` on a healthy Expo
+// session returned no response at all while /dev/status looked perfect. The old
+// contract was a comment in Status() saying "clients that want the browser preview
+// read WebPort separately and route through /dev-web/*"; no client ever did, on any
+// surface. The agent now says where to go instead of documenting an inference.
+func TestExpoBrowserLaneReportsTheWebSiblingUrl(t *testing.T) {
+	expo := &ExpoDevServer{}
+	expo.PreStart("expo", 8081, t.TempDir())
+
+	mgr := &DevServerManager{}
+	mgr.active = &devServerSession{server: expo}
+
+	// No web sibling yet → Metro's path is the only thing we can offer.
+	if got := mgr.Status(); got.BundleURL != "/dev/" {
+		t.Errorf("without a web sibling bundleUrl = %q, want /dev/", got.BundleURL)
+	}
+
+	// Sibling running → the browser client must be pointed at it.
+	expo.webMu.Lock()
+	expo.webPort = 19006
+	expo.webMu.Unlock()
+
+	status := mgr.Status()
+	if status.WebPort != 19006 {
+		t.Errorf("webPort not reported: %d", status.WebPort)
+	}
+	if status.BundleURL != "/dev-web/" {
+		t.Errorf("bundleUrl = %q, want /dev-web/ — a browser preview pointed at Metro renders a blank "+
+			"page while every status field looks healthy", status.BundleURL)
+	}
+}
+
+// isPortInUse and portBusy must be the same answer. Two port checks that disagree
+// is how the Expo Web sibling picked a port something else already answered.
+func TestPortAvailabilityHasOneImplementation(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	if isPortInUse(port) != portBusy(port) {
+		t.Errorf("isPortInUse(%d)=%v but portBusy=%v — the sibling picker and the broker would disagree",
+			port, isPortInUse(port), portBusy(port))
+	}
+	if !isPortInUse(port) {
+		t.Errorf("a loopback listener on :%d was reported as free; the /dev-web/ proxy dials loopback, "+
+			"so that process would have served our users", port)
 	}
 }

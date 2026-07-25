@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -809,6 +808,33 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 		m.mu.Unlock()
 
 		log.Printf("[dev] %s ready on port %d", ds.Name(), ds.Port())
+
+		// BROWSER LANE for Expo: Metro alone serves no web page, so a preview
+		// pointed at /dev/ renders nothing. Start the `expo start --web` sibling
+		// automatically — the user asked for a browser preview, which is a request
+		// for a web server, not for Metro.
+		//
+		// This was previously only reachable via an explicit
+		// POST /dev/web-preview/start that no client called, so the Expo browser
+		// lane could never render. Idempotent (StartWebPreview returns the existing
+		// port), and failure is reported rather than swallowed: a browser lane with
+		// no web server must not look healthy.
+		if platform == "web" {
+			if _, isExpo := ds.(*ExpoDevServer); isExpo {
+				if webPort, werr := m.StartWebPreview(); werr != nil {
+					log.Printf("[dev:expo] browser lane requested but the web sibling failed to start: %v", werr)
+					m.emit(DevServerEvent{
+						Type:      "error",
+						Framework: ds.Name(),
+						Message: "Metro is running but the web preview server could not start, so there is " +
+							"nothing to render in a browser: " + werr.Error(),
+						Timestamp: time.Now().UTC().Format(time.RFC3339),
+					})
+				} else {
+					log.Printf("[dev:expo] browser lane: expo --web sibling on :%d (served at /dev-web/)", webPort)
+				}
+			}
+		}
 
 		m.emit(DevServerEvent{
 			Type:      "ready",
@@ -2146,6 +2172,20 @@ func (e *ExpoDevServer) Status() DevServerStatus {
 	// separately and route through /dev-web/*.
 	e.webMu.Lock()
 	s.WebPort = e.webPort
+	// When the Expo Web sibling is up, THAT is what a browser client must load —
+	// so say so in bundleUrl instead of leaving it pointed at Metro.
+	//
+	// The old contract was "clients that want the browser preview read WebPort
+	// separately and route through /dev-web/*". No client ever did: mobile and web
+	// both load bundleUrl, so an Expo browser preview fetched Metro's root, which
+	// serves no page — a blank screen with a healthy status behind it. Telling the
+	// client what to load beats documenting what it should have inferred.
+	//
+	// Hermes/native is unaffected: that lane uses /dev/build-native and the signed
+	// native-bundle URLs, never bundleUrl.
+	if e.webPort > 0 {
+		s.BundleURL = "/dev-web/"
+	}
 	e.webMu.Unlock()
 	return s
 }
@@ -2311,14 +2351,13 @@ func (e *ExpoDevServer) ExpoDeepLink(agentHost string) string {
 }
 
 // isPortInUse checks if a TCP port is already bound.
-func isPortInUse(port int) bool {
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		return true
-	}
-	ln.Close()
-	return false
-}
+// isPortInUse delegates to portBusy — the ONE port-availability check (see
+// devport_allocator.go). It used to be its own single wildcard bind, which misses
+// a loopback-only listener (Go sets SO_REUSEADDR, so the wildcard bind succeeds
+// next to one) — and the agent's proxy dials loopback, so that listener would have
+// received the traffic. Two checks that disagree is how the Expo Web sibling could
+// pick a port something else already answered.
+func isPortInUse(port int) bool { return portBusy(port) }
 
 func (e *ExpoDevServer) Reload() error {
 	// Metro auto-reloads on file change; this is a manual force.
