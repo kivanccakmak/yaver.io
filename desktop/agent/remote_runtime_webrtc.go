@@ -625,10 +625,40 @@ func (m *RemoteRuntimeManager) CaptureFrame(sessionID string) (RemoteRuntimeSess
 		return session, cached, nil
 	}
 	live.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	// ── Our own deadline must never masquerade as a tool crash ──────────────
+	//
+	// This budget used to be 8s and the error surfaced verbatim as
+	//
+	//   simctl screenshot: signal: killed
+	//
+	// which reads as "simctl died" — so the reader goes looking at Xcode, at
+	// CoreSimulator, at the device. It was OUR context killing it. Measured
+	// 2026-07-25 on the 8 GB Mac mini: four consecutive frame pulls SIGKILLed
+	// while the same box was building the guest app.
+	//
+	// The product already knew this could happen. ops_webrtc_doctor.go warns
+	// that "simctl screenshot took %.1fs — CoreSimulator is DEGRADED (healthy is
+	// <1s)". A 1s-healthy operation on a loaded box does not fit an 8s budget,
+	// and when it does not fit we said the wrong thing about why.
+	//
+	// So: a budget with headroom for a busy machine, and an error that names the
+	// deadline, the elapsed time, and where to look. `signal: killed` tells the
+	// user nothing they can act on; "we gave up after 20s while the box was busy"
+	// points at load, and at the doctor probe that measures it.
+	const frameCaptureBudget = 20 * time.Second
+	captureStart := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), frameCaptureBudget)
 	defer cancel()
 	payload, _, _, err := live.captureJPEGFrame(ctx)
 	if err != nil {
+		elapsed := time.Since(captureStart)
+		if ctx.Err() == context.DeadlineExceeded || strings.Contains(err.Error(), "signal: killed") {
+			return session, nil, fmt.Errorf(
+				"screen capture gave up after %.0fs (budget %.0fs) — the box is too busy to screenshot, not broken. "+
+					"A healthy simctl screenshot is <1s; run the webrtc doctor to measure CoreSimulator health, "+
+					"or wait for the current build to finish: %w",
+				elapsed.Seconds(), frameCaptureBudget.Seconds(), err)
+		}
 		return session, nil, err
 	}
 	updated, _ := m.Update(sessionID, func(current *RemoteRuntimeSession) {

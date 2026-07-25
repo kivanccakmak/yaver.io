@@ -82,9 +82,10 @@ func (m *RemoteRuntimeManager) StartRemoteRuntimeReaper(stop <-chan struct{}) {
 // waiting on wall-clock.
 func (m *RemoteRuntimeManager) ReapAbandonedSessions(now time.Time) []string {
 	type candidate struct {
-		id     string
-		status string
-		peers  int
+		id        string
+		status    string
+		peers     int
+		lastFrame time.Time
 	}
 
 	m.mu.RLock()
@@ -92,17 +93,43 @@ func (m *RemoteRuntimeManager) ReapAbandonedSessions(now time.Time) []string {
 	for id, sess := range m.sessions {
 		live := m.live[id]
 		peers := 0
+		var lastFrame time.Time
 		if live != nil {
 			live.mu.Lock()
 			peers = len(live.peers)
+			lastFrame = live.lastFrameAt
 			live.mu.Unlock()
 		}
-		cands = append(cands, candidate{id: id, status: sess.Status, peers: peers})
+		cands = append(cands, candidate{id: id, status: sess.Status, peers: peers, lastFrame: lastFrame})
 	}
 	m.mu.RUnlock()
 
 	var reaped []string
 	for _, c := range cands {
+		// ── A frame pull is a viewer, even with zero WebRTC peers ───────────
+		//
+		// peers counts WEBRTC peer connections. A client polling /frame over
+		// HTTP has none — and that is not an edge case, it is the shipped
+		// `relay-jpeg-poll` transport, the one a phone falls back to on
+		// cellular. CaptureFrame even marks those sessions
+		// Status="streaming", Note="Relay frame polling active."
+		//
+		// So the reaper was closing sessions that someone was actively
+		// WATCHING: measured 2026-07-25, a session died 4s after a successful
+		// 58 KB JPEG pull, and the next request answered "remote runtime
+		// session not found" mid-stream. The inventory (peer count) said nobody
+		// was there while the operation (frames leaving every 4s) said someone
+		// plainly was — and the exclusive simulator was yanked out from under
+		// them.
+		//
+		// Frames are the evidence that matters: no viewer means no one is
+		// pulling them.
+		if !c.lastFrame.IsZero() && now.Sub(c.lastFrame) < remoteRuntimeIdleGrace {
+			peerlessMu.Lock()
+			delete(peerlessSince, c.id)
+			peerlessMu.Unlock()
+			continue
+		}
 		if c.peers > 0 {
 			// Someone is watching. Never reap, and forget any earlier peerless
 			// mark so a reconnect resets the clock.

@@ -68,6 +68,32 @@ func TestReaperNeverTouchesAWatchedSession(t *testing.T) {
 	}
 }
 
+func TestReaperTreatsRecentFramePullAsAViewer(t *testing.T) {
+	m := newReaperTestManager()
+	m.sessions["s-frame"] = RemoteRuntimeSession{ID: "s-frame", Status: "streaming", TargetID: "ios-simulator"}
+	live := &remoteRuntimeLiveState{
+		sessionID:   "s-frame",
+		lastFrameAt: time.Now(),
+	}
+	released := false
+	live.releaseDevice = func() { released = true }
+	m.live["s-frame"] = live
+
+	t0 := live.lastFrameAt
+	m.ReapAbandonedSessions(t0) // old peerless mark starts here
+
+	// A relay-JPEG-poll viewer pulls a fresh frame but has zero WebRTC peers.
+	live.mu.Lock()
+	live.lastFrameAt = t0.Add(remoteRuntimeIdleGrace + 2*time.Second)
+	live.mu.Unlock()
+	if got := m.ReapAbandonedSessions(t0.Add(remoteRuntimeIdleGrace + 3*time.Second)); len(got) != 0 {
+		t.Fatalf("reaped an actively frame-polled session: %v", got)
+	}
+	if released {
+		t.Fatal("released a device while /frame polling was active")
+	}
+}
+
 // A terminal session has nothing coming — no grace needed.
 func TestReaperClosesTerminalSessionsImmediately(t *testing.T) {
 	for _, status := range []string{"attach-failed", "stopped", "closed"} {
