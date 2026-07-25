@@ -42,6 +42,14 @@ enum DevicePollStatus: String, Decodable {
 struct DevicePollResult: Decodable {
     let status: DevicePollStatus
     let token: String?
+    /// Set when the poll never got an answer (offline, DNS, 5xx, bad JSON).
+    ///
+    /// Without this, a transport failure was reported as `.pending` — which the
+    /// UI renders as "Waiting for approval…", i.e. "we're fine, YOU haven't
+    /// approved yet". A TV that cannot reach Convex at all showed exactly the
+    /// same screen as a TV waiting on the user, for as long as the user cared to
+    /// stare at it. Keep polling (it usually IS transient), but say so.
+    var unreachableReason: String? = nil
 }
 
 enum DeviceCodeError: Error, LocalizedError {
@@ -87,15 +95,20 @@ enum DeviceCodeAuth {
         var comps = URLComponents(url: Backend.convexSiteURL.appendingPathComponent("auth/device-code/poll"),
                                   resolvingAgainstBaseURL: false)!
         comps.queryItems = [URLQueryItem(name: "device_code", value: deviceCode)]
-        guard let url = comps.url else { return DevicePollResult(status: .pending, token: nil) }
+        guard let url = comps.url else {
+            return DevicePollResult(status: .pending, token: nil, unreachableReason: "bad poll URL")
+        }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                return DevicePollResult(status: .pending, token: nil)
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+                return DevicePollResult(status: .pending, token: nil,
+                                        unreachableReason: "server returned HTTP \(code)")
             }
             return try JSONDecoder().decode(DevicePollResult.self, from: data)
         } catch {
-            return DevicePollResult(status: .pending, token: nil)
+            return DevicePollResult(status: .pending, token: nil,
+                                    unreachableReason: error.localizedDescription)
         }
     }
 

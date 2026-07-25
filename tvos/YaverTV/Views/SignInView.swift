@@ -13,6 +13,7 @@
 // Mirrors mobile/app/tv-signin.tsx.
 
 import AuthenticationServices
+import Combine
 import SwiftUI
 import UIKit
 import CoreImage.CIFilterBuiltins
@@ -25,6 +26,14 @@ struct SignInView: View {
     @State private var approving = false      // approval seen; token arriving
     @State private var appleBusy = false
     @State private var pollTask: Task<Void, Never>?
+    /// Non-nil while polls are failing to reach the backend — surfaced verbatim
+    /// so "nothing is happening" is never indistinguishable from "the network is
+    /// down". Cleared by the first successful poll.
+    @State private var unreachable: String?
+    /// Drives the elapsed / expires-in line. A wait with no clock on it reads as
+    /// a hang.
+    @State private var now = Date()
+    @State private var waitingSince = Date()
 
     var body: some View {
         HStack(spacing: 56) {
@@ -68,12 +77,31 @@ struct SignInView: View {
                     Label("Approved — signing in…", systemImage: "checkmark.circle.fill")
                         .font(.system(size: 22, weight: .semibold))
                         .foregroundStyle(.green).padding(.top, 20)
-                } else if start != nil {
+                } else if let s = start {
                     // A quiet live indicator so the screen never looks frozen while
                     // it waits — the Netflix "waiting for you to enter the code" feel.
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text("Waiting for approval…").foregroundStyle(.secondary)
+                    //
+                    // It used to be JUST a spinner and "Waiting for approval…", with
+                    // no elapsed time, no expiry, and no distinction between "you
+                    // haven't approved yet" and "this TV can't reach Yaver". A user
+                    // whose approval silently went nowhere had nothing on screen to
+                    // tell them so — for the full 15 minutes until the code rotated.
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text(unreachable == nil
+                                 ? "Waiting for approval…"
+                                 : "Can't reach Yaver — retrying every 5s")
+                                .foregroundStyle(unreachable == nil ? .secondary : .orange)
+                        }
+                        Text(waitDetail(s))
+                            .font(.system(size: 15))
+                            .foregroundStyle(.secondary)
+                        if let unreachable {
+                            Text(unreachable)
+                                .font(.system(size: 15))
+                                .foregroundStyle(.orange)
+                        }
                     }
                     .font(.system(size: 18)).padding(.top, 20)
                 }
@@ -105,11 +133,31 @@ struct SignInView: View {
         .padding(64)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await begin() }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now = $0 }
         .onDisappear { pollTask?.cancel() }
     }
 
     private func stepText(_ s: String) -> some View {
         Text(s).font(.system(size: 22)).foregroundStyle(.secondary)
+    }
+
+    /// "1:42 elapsed · code expires in 13:18" — the two facts a waiting user
+    /// actually needs: that time is passing, and how long this code is good for.
+    private func waitDetail(_ s: DeviceCodeStart) -> String {
+        let elapsed = max(0, now.timeIntervalSince(waitingSince))
+        var line = "\(clock(elapsed)) elapsed"
+        let remaining = s.expiresAt / 1000 - now.timeIntervalSince1970
+        if remaining > 0 {
+            line += " · code expires in \(clock(remaining))"
+        } else {
+            line += " · code expired — generating a new one"
+        }
+        return line
+    }
+
+    private func clock(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     /// Native Apple sign-in. Trades the Apple ID already on this TV for a Yaver
@@ -142,9 +190,12 @@ struct SignInView: View {
     private func begin() async {
         error = nil
         expired = false
+        unreachable = nil
         do {
             let s = try await DeviceCodeAuth.start()
             start = s
+            waitingSince = Date()
+            now = Date()
             startPolling(s)
         } catch {
             self.error = error.localizedDescription
@@ -158,6 +209,7 @@ struct SignInView: View {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 if Task.isCancelled { return }
                 let r = await DeviceCodeAuth.poll(deviceCode: s.deviceCode)
+                unreachable = r.unreachableReason
                 switch r.status {
                 case .authorized:
                     approving = true
