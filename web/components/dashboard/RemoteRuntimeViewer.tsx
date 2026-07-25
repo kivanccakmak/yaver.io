@@ -50,6 +50,13 @@ export default function RemoteRuntimeViewer({
   const [viewerNote, setViewerNote] = useState("Negotiating WebRTC...");
   const [textInput, setTextInput] = useState("");
   const [connected, setConnected] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
+  const [iceState, setIceState] = useState("new");
+  const [iceGatheringState, setIceGatheringState] = useState("new");
+  const [dataState, setDataState] = useState("closed");
+  const [mediaState, setMediaState] = useState("waiting");
+  const [iceCandidateCount, setIceCandidateCount] = useState(0);
+  const [lastFrameAt, setLastFrameAt] = useState<number | null>(null);
   // Tracks which transport actually got picked (so the UI can show
   // "RTP H.264" or "JPEG-DC fallback" rather than guess).
   const [transport, setTransport] = useState<string>(session.frameTransport ?? "");
@@ -190,6 +197,12 @@ export default function RemoteRuntimeViewer({
       revokeJpeg();
       setConnected(false);
       setTransport(session.frameTransport ?? "");
+      setIceState("new");
+      setIceGatheringState("new");
+      setDataState("closed");
+      setMediaState("waiting");
+      setIceCandidateCount(0);
+      setLastFrameAt(null);
 
       // Relay-jpeg-poll mode bypasses WebRTC entirely: the viewer
       // GETs a JPEG every ~900 ms. Keeps working as a last resort
@@ -207,6 +220,8 @@ export default function RemoteRuntimeViewer({
             jpegUrlRef.current = url;
             if (imgRef.current) imgRef.current.src = url;
             setTransport("relay-jpeg-poll-v1");
+            setMediaState("jpeg");
+            setLastFrameAt(Date.now());
             setViewerNote("Relay frame polling active.");
           } catch (err) {
             if (!cancelled) setViewerNote(err instanceof Error ? err.message : String(err));
@@ -235,6 +250,8 @@ export default function RemoteRuntimeViewer({
       if (cancelled) return;
       const pc = new RTCPeerConnection({ iceServers });
       pcRef.current = pc;
+      setIceState(pc.iceConnectionState);
+      setIceGatheringState(pc.iceGatheringState);
 
       // Ensure the offer has an SCTP m-line. The agent creates the
       // "frames" and "events" channels from its side; without a local
@@ -257,12 +274,31 @@ export default function RemoteRuntimeViewer({
           // Autoplay policies: must be muted on Chrome to start
           // automatically. The viewer never plays audio anyway.
           videoRef.current.muted = true;
+          setMediaState("track");
+          videoRef.current.onloadedmetadata = () => {
+            setMediaState("metadata");
+            setLastFrameAt(Date.now());
+          };
+          videoRef.current.onplaying = () => {
+            setMediaState("playing");
+            setLastFrameAt(Date.now());
+          };
+          videoRef.current.ontimeupdate = () => setLastFrameAt(Date.now());
           void videoRef.current.play().catch(() => {
             /* user gesture required — handled by tap on the surface */
+            setMediaState("blocked");
           });
         }
       };
 
+      pc.oniceconnectionstatechange = () => {
+        if (cancelled) return;
+        setIceState(pc.iceConnectionState);
+      };
+      pc.onicegatheringstatechange = () => {
+        if (cancelled) return;
+        setIceGatheringState(pc.iceGatheringState);
+      };
       pc.onconnectionstatechange = () => {
         if (cancelled) return;
         const state = pc.connectionState;
@@ -283,6 +319,10 @@ export default function RemoteRuntimeViewer({
         const ch = event.channel;
         if (ch.label === "events") {
           eventsRef.current = ch;
+          setDataState(ch.readyState);
+          ch.onopen = () => setDataState(ch.readyState);
+          ch.onclose = () => setDataState(ch.readyState);
+          ch.onerror = () => setDataState(ch.readyState);
           ch.onmessage = (msg) => {
             try {
               const payload = JSON.parse(String(msg.data));
@@ -316,6 +356,10 @@ export default function RemoteRuntimeViewer({
         if (ch.label === "frames") {
           // Legacy JPEG-DC transport. Each message is one full JPEG.
           ch.binaryType = "arraybuffer";
+          setDataState(ch.readyState);
+          ch.onopen = () => setDataState(ch.readyState);
+          ch.onclose = () => setDataState(ch.readyState);
+          ch.onerror = () => setDataState(ch.readyState);
           ch.onmessage = (msg) => {
             if (cancelled) return;
             revokeJpeg();
@@ -323,6 +367,8 @@ export default function RemoteRuntimeViewer({
             const url = URL.createObjectURL(blob);
             jpegUrlRef.current = url;
             if (imgRef.current) imgRef.current.src = url;
+            setMediaState("jpeg");
+            setLastFrameAt(Date.now());
           };
         }
       };
@@ -333,11 +379,19 @@ export default function RemoteRuntimeViewer({
       // Without this wait we ship a candidate-less SDP and only connect
       // if the agent happens to discover us peer-reflexively.
       const offer = await pc.createOffer();
+      if (!hasVideoMLine(offer.sdp || "")) {
+        throw new Error("WebRTC offer has no video m-line; the browser viewer cannot receive the remote runtime stream.");
+      }
       await pc.setLocalDescription(offer);
       await waitForIce(pc);
       if (cancelled) return;
       const local = pc.localDescription;
       if (!local) throw new Error("Missing local WebRTC offer.");
+      const candidateCount = countIceCandidates(local.sdp || "");
+      setIceCandidateCount(candidateCount);
+      if (candidateCount === 0) {
+        setViewerNote("WebRTC offer has no ICE candidates yet; sending anyway, but this usually needs TURN/STUN or a browser network-permission fix.");
+      }
       const result = await agentClient.createRemoteRuntimeWebRTCAnswer(session.id, {
         type: local.type,
         sdp: local.sdp,
@@ -380,7 +434,7 @@ export default function RemoteRuntimeViewer({
       pcRef.current = null;
       eventsRef.current = null;
     };
-  }, [session.id, session.transportMode, session.frameTransport, session.deviceDims, onSessionChange, revokeJpeg, sendEvent]);
+  }, [session.id, session.transportMode, session.frameTransport, session.deviceDims, onSessionChange, revokeJpeg, retryNonce, sendEvent]);
 
   // --- derived state for the UI ------------------------------------------
   const transportLabel = useMemo(() => {
@@ -392,6 +446,12 @@ export default function RemoteRuntimeViewer({
   }, [transport]);
 
   const isRTP = transport.startsWith("webrtc-rtp-h264");
+  const frameAgeLabel = useMemo(() => {
+    if (!lastFrameAt) return "no media";
+    const ageMs = Date.now() - lastFrameAt;
+    if (ageMs < 1500) return "live media";
+    return `media ${Math.round(ageMs / 1000)}s ago`;
+  }, [lastFrameAt]);
 
   const aspectRatio = dims
     ? `${dims.width} / ${dims.height}`
@@ -400,15 +460,31 @@ export default function RemoteRuntimeViewer({
     : "9 / 19.5";
 
   return (
-    <div className="rounded-lg border border-surface-800 bg-surface-950/80 p-3 space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs text-surface-400">
+    <div className="space-y-3 rounded-lg border border-surface-800 bg-surface-950/80 p-3 sm:p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 text-xs text-surface-400">
           {session.targetLabel} · {session.deviceId || "attaching"} ·{" "}
-          {dims ? `${dims.width}×${dims.height}` : "—"} · {transportLabel}
+          {dims ? `${dims.width}×${dims.height}` : "—"} · {transportLabel} · ICE {iceState}/{iceGatheringState}
         </div>
-        <div className={`text-xs ${connected ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}`}>
-          {connected ? "Connected" : "Connecting"}
+        <div className="flex shrink-0 items-center gap-2">
+          <div className={`text-xs ${connected ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}`}>
+            {connected ? "Connected" : "Connecting"}
+          </div>
+          <button
+            onClick={() => setRetryNonce((n) => n + 1)}
+            className="px-2 py-1 rounded-md bg-surface-800 text-surface-200 text-xs hover:bg-surface-700"
+            title="Close this peer connection and renegotiate WebRTC"
+          >
+            Retry
+          </button>
         </div>
+      </div>
+
+      <div className="grid gap-2 text-[11px] sm:grid-cols-4">
+        <StatusPill label="Signaling" value={`${iceState}/${iceGatheringState}`} good={iceState === "connected" || iceState === "completed"} />
+        <StatusPill label="Data" value={dataState} good={dataState === "open"} />
+        <StatusPill label="Media" value={mediaState} good={["playing", "jpeg", "metadata"].includes(mediaState)} />
+        <StatusPill label="Frames" value={frameAgeLabel} good={frameAgeLabel === "live media"} />
       </div>
 
       {/* Surface — wraps both <video> and <img> so the pointer
@@ -416,8 +492,8 @@ export default function RemoteRuntimeViewer({
           painted the picture. We use display:contents-equivalent
           stacking so only one is visible at a time. */}
       <div
-        className="relative rounded-lg border border-surface-800 bg-black overflow-hidden mx-auto select-none touch-none"
-        style={{ aspectRatio, maxHeight: "70vh", maxWidth: "100%" }}
+        className="relative mx-auto w-full select-none overflow-hidden rounded-lg border border-surface-800 bg-black touch-none"
+        style={{ aspectRatio, maxHeight: "min(72vh, 760px)", maxWidth: "min(100%, 980px)" }}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
         onPointerCancel={() => {
@@ -446,19 +522,19 @@ export default function RemoteRuntimeViewer({
             isRTP ? "hidden" : "block"
           }`}
         />
-        {!connected && (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-surface-500 pointer-events-none">
+        {(!connected || !lastFrameAt) && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-surface-500" role="status" aria-live="polite">
             {viewerNote}
           </div>
         )}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <input
           value={textInput}
           onChange={(e) => setTextInput(e.target.value)}
           placeholder="Send text to focused field"
-          className="flex-1 rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs text-surface-100 outline-none"
+          className="min-w-[180px] flex-1 rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs text-surface-100 outline-none"
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               const payload = textInput.trim();
@@ -542,7 +618,18 @@ export default function RemoteRuntimeViewer({
         )}
       </div>
 
-      <div className="text-xs text-surface-500">{viewerNote}</div>
+      <div className="text-xs text-surface-500">
+        {viewerNote} · data {dataState} · media {mediaState} · ICE candidates {iceCandidateCount} · {frameAgeLabel}
+      </div>
+    </div>
+  );
+}
+
+function StatusPill({ label, value, good }: { label: string; value: string; good: boolean }) {
+  return (
+    <div className="rounded-md border border-surface-800 bg-surface-900 px-2.5 py-2">
+      <div className="font-semibold uppercase tracking-wide text-surface-500">{label}</div>
+      <div className={good ? "truncate text-emerald-700 dark:text-emerald-300" : "truncate text-surface-300"}>{value}</div>
     </div>
   );
 }
@@ -563,4 +650,12 @@ function waitForIce(pc: RTCPeerConnection): Promise<void> {
     pc.addEventListener("icegatheringstatechange", check);
     setTimeout(resolve, 2000);
   });
+}
+
+function hasVideoMLine(sdp: string): boolean {
+  return /^m=video\s/im.test(sdp);
+}
+
+function countIceCandidates(sdp: string): number {
+  return (sdp.match(/^a=candidate:/gim) || []).length;
 }

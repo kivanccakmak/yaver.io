@@ -567,6 +567,58 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 	return caps
 }
 
+func remoteRuntimeCapabilitiesForProjectCached(workDir, framework string, refresh bool) RemoteRuntimeCapabilities {
+	key := remoteRuntimeCapabilitiesCacheKey(workDir, framework)
+	now := time.Now()
+	if !refresh {
+		remoteRuntimeCapabilitiesCacheMu.Lock()
+		if entry, ok := remoteRuntimeCapabilitiesCache[key]; ok && now.Sub(entry.cachedAt) < remoteRuntimeCapabilitiesCacheTTL {
+			caps := cloneRemoteRuntimeCapabilities(entry.caps)
+			caps.Cached = true
+			caps.CachedAt = entry.cachedAt.UTC().Format(time.RFC3339)
+			remoteRuntimeCapabilitiesCacheMu.Unlock()
+			return caps
+		}
+		remoteRuntimeCapabilitiesCacheMu.Unlock()
+	}
+
+	start := time.Now()
+	caps := remoteRuntimeCapabilitiesForProject(workDir, framework)
+	caps.ProbeDurationMs = time.Since(start).Milliseconds()
+	caps.Cached = false
+	caps.CachedAt = now.UTC().Format(time.RFC3339)
+
+	remoteRuntimeCapabilitiesCacheMu.Lock()
+	remoteRuntimeCapabilitiesCache[key] = remoteRuntimeCapabilitiesCacheEntry{
+		caps:     cloneRemoteRuntimeCapabilities(caps),
+		cachedAt: now,
+	}
+	remoteRuntimeCapabilitiesCacheMu.Unlock()
+	return caps
+}
+
+func remoteRuntimeCapabilitiesCacheKey(workDir, framework string) string {
+	wd := strings.TrimSpace(workDir)
+	if abs, err := filepath.Abs(wd); err == nil {
+		wd = abs
+	}
+	return strings.ToLower(strings.TrimSpace(framework)) + "\x00" + filepath.Clean(wd)
+}
+
+func cloneRemoteRuntimeCapabilities(in RemoteRuntimeCapabilities) RemoteRuntimeCapabilities {
+	out := in
+	out.SupportedTransports = append([]string(nil), in.SupportedTransports...)
+	out.Targets = append([]RemoteRuntimeTarget(nil), in.Targets...)
+	out.RemoteBuilders = append([]RemoteBuilderSummary(nil), in.RemoteBuilders...)
+	return out
+}
+
+func resetRemoteRuntimeCapabilitiesCacheForTest() {
+	remoteRuntimeCapabilitiesCacheMu.Lock()
+	defer remoteRuntimeCapabilitiesCacheMu.Unlock()
+	remoteRuntimeCapabilitiesCache = map[string]remoteRuntimeCapabilitiesCacheEntry{}
+}
+
 // collectIOSBuilderSummaries reads the local registry and returns
 // the iOS-capable builders. Errors are swallowed: a missing or
 // corrupt file means "no builders paired", which is the right
@@ -1527,7 +1579,8 @@ func (s *HTTPServer) handleRemoteRuntimeCapabilities(w http.ResponseWriter, r *h
 		jsonError(w, http.StatusBadRequest, "workDir is required for project runtimes")
 		return
 	}
-	jsonReply(w, http.StatusOK, remoteRuntimeCapabilitiesForProject(workDir, framework))
+	refresh := r.URL.Query().Get("refresh") == "1" || strings.EqualFold(r.URL.Query().Get("refresh"), "true")
+	jsonReply(w, http.StatusOK, remoteRuntimeCapabilitiesForProjectCached(workDir, framework, refresh))
 }
 
 func (s *HTTPServer) handleRemoteRuntimeSessions(w http.ResponseWriter, r *http.Request) {

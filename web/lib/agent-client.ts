@@ -642,6 +642,9 @@ export interface RemoteRuntimeCapabilities {
   feedbackControlProtocol?: string;
   supportedTransports?: string[];
   currentHostClass?: string;
+  cached?: boolean;
+  cachedAt?: string;
+  probeDurationMs?: number;
   targets: RemoteRuntimeTarget[];
 }
 
@@ -4346,8 +4349,8 @@ export class AgentClient {
     const url = new URL(`${this.baseUrl}/remote-runtime/capabilities`);
     url.searchParams.set("workDir", workDir);
     url.searchParams.set("framework", framework);
-    const res = await fetch(url.toString(), { headers: this.authHeaders });
-    if (!res.ok) throw new Error(`Failed to load remote runtime capabilities: HTTP ${res.status}`);
+    const res = await this.fetchWithTimeout(url.toString(), { headers: this.authHeaders }, 90_000);
+    if (!res.ok) throw new Error(await responseErrorMessage(res, `Failed to load remote runtime capabilities: HTTP ${res.status}`));
     return res.json();
   }
 

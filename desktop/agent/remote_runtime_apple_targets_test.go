@@ -147,6 +147,8 @@ func TestCapabilitiesEnumeratesAllAppleSurfacesAndBadgesSurface(t *testing.T) {
 // /remote-runtime/capabilities?framework=swift lists ios/ipados/
 // watchos/tvos/visionos targets" acceptance criterion.
 func TestHandleRemoteRuntimeCapabilitiesReturnsAppleFanOut(t *testing.T) {
+	resetRemoteRuntimeCapabilitiesCacheForTest()
+	defer resetRemoteRuntimeCapabilitiesCacheForTest()
 	cleanup := setAppleRuntimeFamiliesForTest(map[string]bool{
 		"iOS": true, "watchOS": true, "tvOS": true, "visionOS": true,
 	})
@@ -158,7 +160,7 @@ func TestHandleRemoteRuntimeCapabilitiesReturnsAppleFanOut(t *testing.T) {
 
 	srv := &HTTPServer{}
 	req := httptest.NewRequest(http.MethodGet,
-		"/remote-runtime/capabilities?workDir=/tmp/swift-app&framework=swift", nil)
+		"/remote-runtime/capabilities?workDir=/tmp/swift-app&framework=swift&refresh=1", nil)
 	rec := httptest.NewRecorder()
 	srv.handleRemoteRuntimeCapabilities(rec, req)
 	if rec.Code != http.StatusOK {
@@ -187,6 +189,56 @@ func TestHandleRemoteRuntimeCapabilitiesReturnsAppleFanOut(t *testing.T) {
 		if tg.Surface != wantSurf {
 			t.Fatalf("target %q Surface=%q, want %q", id, tg.Surface, wantSurf)
 		}
+	}
+}
+
+func TestHandleRemoteRuntimeCapabilitiesCachesProbeResult(t *testing.T) {
+	resetRemoteRuntimeCapabilitiesCacheForTest()
+	defer resetRemoteRuntimeCapabilitiesCacheForTest()
+	cleanup := setAppleRuntimeFamiliesForTest(map[string]bool{
+		"iOS": true,
+	})
+	defer cleanup()
+	cleanupDevices := setAppleSimulatorDevicesForTest(map[string]bool{
+		"iPhone": true,
+	})
+	defer cleanupDevices()
+
+	srv := &HTTPServer{}
+	firstReq := httptest.NewRequest(http.MethodGet,
+		"/remote-runtime/capabilities?workDir=/tmp/yaver-cache-swift&framework=swift", nil)
+	firstRec := httptest.NewRecorder()
+	srv.handleRemoteRuntimeCapabilities(firstRec, firstReq)
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("first status = %d body=%s", firstRec.Code, firstRec.Body.String())
+	}
+	var first RemoteRuntimeCapabilities
+	if err := json.Unmarshal(firstRec.Body.Bytes(), &first); err != nil {
+		t.Fatalf("decode first: %v", err)
+	}
+	if first.Cached {
+		t.Fatal("first capabilities response should be a real probe, not cached")
+	}
+	if first.CachedAt == "" {
+		t.Fatal("first capabilities response should include cachedAt metadata")
+	}
+
+	secondReq := httptest.NewRequest(http.MethodGet,
+		"/remote-runtime/capabilities?workDir=/tmp/yaver-cache-swift&framework=swift", nil)
+	secondRec := httptest.NewRecorder()
+	srv.handleRemoteRuntimeCapabilities(secondRec, secondReq)
+	if secondRec.Code != http.StatusOK {
+		t.Fatalf("second status = %d body=%s", secondRec.Code, secondRec.Body.String())
+	}
+	var second RemoteRuntimeCapabilities
+	if err := json.Unmarshal(secondRec.Body.Bytes(), &second); err != nil {
+		t.Fatalf("decode second: %v", err)
+	}
+	if !second.Cached {
+		t.Fatal("second capabilities response should come from the agent cache")
+	}
+	if second.CachedAt != first.CachedAt {
+		t.Fatalf("cachedAt changed on cache hit: first=%q second=%q", first.CachedAt, second.CachedAt)
 	}
 }
 

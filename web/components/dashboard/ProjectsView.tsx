@@ -61,10 +61,11 @@ const FRAMEWORK_ICONS: Record<string, string> = {
   vite: "\u26A1",
 };
 
-const MOBILE_FRAMEWORKS = ["expo", "react-native", "flutter"];
-const WEB_FRAMEWORKS = ["nextjs", "vite", "react"];
-
 type Category = "all" | "mobile" | "web" | "other";
+
+function normalizeTerm(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, "-").replace(/\./g, "");
+}
 
 function projectTerms(project: Project): string[] {
   return [
@@ -87,35 +88,113 @@ function projectTerms(project: Project): string[] {
   ].filter(Boolean) as string[];
 }
 
-function getCategory(project: Project): "mobile" | "web" | "other" {
-  const framework = (project.framework || "").toLowerCase();
-  const surfaces = (project.surfaces ?? []).map((s) => s.toLowerCase());
-  const frameworks = (project.frameworks ?? []).map((s) => s.toLowerCase());
-  if (surfaces.some((s) => s.includes("mobile") || s.includes("ios") || s.includes("android")) || frameworks.some((fw) => MOBILE_FRAMEWORKS.includes(fw))) {
-    return "mobile";
+function projectTermSet(project: Project): Set<string> {
+  const terms = new Set<string>();
+  for (const raw of projectTerms(project)) {
+    const value = normalizeTerm(raw);
+    if (!value) continue;
+    terms.add(value);
+    for (const part of value.split(/[^a-z0-9]+/).filter(Boolean)) terms.add(part);
   }
-  if (surfaces.some((s) => s.includes("web")) || frameworks.some((fw) => WEB_FRAMEWORKS.includes(fw))) {
-    return "web";
-  }
-  if (!framework) return "other";
-  if (MOBILE_FRAMEWORKS.includes(framework)) return "mobile";
-  if (WEB_FRAMEWORKS.includes(framework)) return "web";
+  return terms;
+}
+
+function hasAnyTerm(terms: Set<string>, candidates: string[]): boolean {
+  return candidates.some((candidate) => terms.has(candidate) || Array.from(terms).some((term) => term.includes(candidate)));
+}
+
+function projectMatchesCategory(project: Project, category: Category): boolean {
+  if (category === "all") return true;
+  const terms = projectTermSet(project);
+  const mobile = hasAnyTerm(terms, [
+    "mobile",
+    "ios",
+    "android",
+    "expo",
+    "react-native",
+    "react-native-expo",
+    "flutter",
+    "swift",
+    "kotlin",
+    "testflight",
+    "playstore",
+    "iosnative",
+    "androidnative",
+  ]);
+  const web = hasAnyTerm(terms, [
+    "web",
+    "browser",
+    "webview",
+    "next",
+    "nextjs",
+    "vite",
+    "react",
+    "cloudflare",
+    "dev-server",
+  ]);
+  if (category === "mobile") return mobile;
+  if (category === "web") return web;
+  return !mobile && !web;
+}
+
+function displayCategory(project: Project): "mobile" | "web" | "other" {
+  if (projectMatchesCategory(project, "mobile")) return "mobile";
+  if (projectMatchesCategory(project, "web")) return "web";
   return "other";
 }
 
 function supportsBrowserPreview(project: Project): boolean {
-  const fw = (project.framework || "").toLowerCase();
-  const frameworks = new Set([fw, ...(project.frameworks ?? []).map((v) => v.toLowerCase())]);
-  const surfaces = (project.surfaces ?? []).map((s) => s.toLowerCase());
-  return surfaces.some((s) => s.includes("web")) ||
-    ["expo", "react-native", "flutter", "nextjs", "vite", "react"].some((candidate) => frameworks.has(candidate));
+  const terms = projectTermSet(project);
+  return hasAnyTerm(terms, ["web", "browser", "webview", "expo", "react-native", "flutter", "next", "nextjs", "vite", "react"]);
 }
 
 function supportsRemoteRuntime(project: Project): boolean {
-  const fw = (project.framework || "").toLowerCase();
-  const frameworks = new Set([fw, ...(project.frameworks ?? []).map((v) => v.toLowerCase())]);
-  const mode = (project.executionMode || "").toLowerCase();
-  return mode.includes("webrtc") || ["expo", "react-native", "flutter", "swift", "kotlin"].some((candidate) => frameworks.has(candidate));
+  const terms = projectTermSet(project);
+  return hasAnyTerm(terms, ["webrtc", "simulator", "emulator", "expo", "react-native", "flutter", "swift", "kotlin", "ios", "android"]);
+}
+
+function browserPreviewFrameworkForProject(project: Project): string {
+  const explicit = normalizeTerm(project.framework || "");
+  if (["next", "nextjs", "vite", "react", "expo", "react-native", "flutter"].includes(explicit)) {
+    return explicit === "next" ? "nextjs" : explicit;
+  }
+  const terms = projectTermSet(project);
+  if (["", "repo", "monorepo", "unknown"].includes(explicit)) {
+    if (hasAnyTerm(terms, ["next", "nextjs"])) return "nextjs";
+    if (hasAnyTerm(terms, ["vite"])) return "vite";
+    if (hasAnyTerm(terms, ["web", "browser"])) return "react";
+  }
+  if (hasAnyTerm(terms, ["expo"])) return "expo";
+  if (hasAnyTerm(terms, ["react-native"])) return "react-native";
+  if (hasAnyTerm(terms, ["flutter"])) return "flutter";
+  if (hasAnyTerm(terms, ["next", "nextjs"])) return "nextjs";
+  if (hasAnyTerm(terms, ["vite"])) return "vite";
+  if (hasAnyTerm(terms, ["react"])) return "react";
+  return project.framework || "";
+}
+
+function isMonorepoProject(project: Project): boolean {
+  return String(project.framework || project.stack || "").trim().toLowerCase() === "monorepo";
+}
+
+async function monorepoWebAppName(project: Project): Promise<string | undefined> {
+  if (!isMonorepoProject(project)) return undefined;
+  try {
+    const apps = await agentClient.getWorkspaceApps("web", project.path);
+    const app = apps.find((candidate) => candidate.exists && candidate.name === "web") ||
+      apps.find((candidate) => candidate.exists && candidate.kind === "web") ||
+      apps.find((candidate) => candidate.exists);
+    return app?.name;
+  } catch {
+    return undefined;
+  }
+}
+
+function surfaceLabel(value?: string): string {
+  const normalized = normalizeTerm(value || "");
+  if (normalized === "hermes") return "native bundle";
+  if (normalized === "rn-hermes") return "react native bundle";
+  return value || "";
 }
 
 function projectFromRepo(repo: WorkspaceRepo): Project {
@@ -163,13 +242,17 @@ function mergeProjectInventory(projects: Project[], repos: WorkspaceRepo[]): Pro
     byPath.set(repo.path, projectFromRepo(repo));
   }
   return Array.from(byPath.values()).sort((a, b) => {
-    const ap = `${a.name} ${a.path} ${a.gitRemote || ""}`.toLowerCase();
-    const bp = `${b.name} ${b.path} ${b.gitRemote || ""}`.toLowerCase();
-    const ay = ap.includes("yaver.io") || ap.includes("yaver-io/yaver");
-    const by = bp.includes("yaver.io") || bp.includes("yaver-io/yaver");
-    if (ay !== by) return ay ? -1 : 1;
-    return a.name.localeCompare(b.name);
+    return compareProjects(a, b);
   });
+}
+
+function compareProjects(a: Project, b: Project): number {
+  const ap = `${a.name} ${a.path} ${a.gitRemote || ""}`.toLowerCase();
+  const bp = `${b.name} ${b.path} ${b.gitRemote || ""}`.toLowerCase();
+  const ay = ap.includes("yaver.io") || ap.includes("yaver-io/yaver");
+  const by = bp.includes("yaver.io") || bp.includes("yaver-io/yaver");
+  if (ay !== by) return ay ? -1 : 1;
+  return a.name.localeCompare(b.name);
 }
 
 function previewPlatformForProject(project: Project): "web" | undefined {
@@ -276,8 +359,14 @@ export default function ProjectsView({
 
   async function startProject(project: Project) {
     try {
-      await agentClient.startDevServer({
-        framework: project.framework || "",
+      const app = await monorepoWebAppName(project);
+      await agentClient.startDevServer(app ? {
+        app,
+        root: project.path,
+        platform: "web",
+        surface: "web-reload",
+      } : {
+        framework: browserPreviewFrameworkForProject(project),
         workDir: project.path,
         platform: previewPlatformForProject(project),
         targetDeviceId: selectedPreviewTarget?.id,
@@ -386,7 +475,9 @@ export default function ProjectsView({
   const categories = useMemo(() => {
     const counts = { all: projects.length, mobile: 0, web: 0, other: 0 };
     for (const p of projects) {
-      counts[getCategory(p)]++;
+      if (projectMatchesCategory(p, "mobile")) counts.mobile++;
+      if (projectMatchesCategory(p, "web")) counts.web++;
+      if (projectMatchesCategory(p, "other")) counts.other++;
     }
     return counts;
   }, [projects]);
@@ -394,13 +485,13 @@ export default function ProjectsView({
   const filtered = useMemo(() => {
     let list = projects;
     if (filter !== "all") {
-      list = list.filter(p => getCategory(p) === filter);
+      list = list.filter(p => projectMatchesCategory(p, filter));
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(p => projectTerms(p).some((term) => term.toLowerCase().includes(q)));
     }
-    return list;
+    return [...list].sort(compareProjects);
   }, [projects, filter, search]);
 
   if (loading) {
@@ -551,7 +642,7 @@ export default function ProjectsView({
       ) : (
         <div className="space-y-2">
           {filtered.map((p) => {
-            const cat = getCategory(p);
+            const cat = displayCategory(p);
             const icon = FRAMEWORK_ICONS[p.framework || ""] || (cat === "mobile" ? "\uD83D\uDCF1" : cat === "web" ? "\uD83C\uDF10" : "\uD83D\uDCC1");
             const browserPreview = supportsBrowserPreview(p);
             const remoteRuntime = supportsRemoteRuntime(p);
@@ -576,7 +667,7 @@ export default function ProjectsView({
                   {p.primarySurface ? (
                     <div className="mt-1 flex items-center gap-1.5">
                       <span className="text-[10px] uppercase tracking-wide text-surface-600">
-                        Primary: {p.primarySurface}{p.executionMode ? ` · ${p.executionMode}` : ""}
+                        Primary: {surfaceLabel(p.primarySurface)}{p.executionMode ? ` · ${surfaceLabel(p.executionMode)}` : ""}
                       </span>
                       {p.primarySurface.toLowerCase() === "none" || /unsupported/i.test(p.executionMode || "") ? (
                         <span className="rounded bg-warning-soft text-warning-softFg text-[9px] font-semibold uppercase tracking-wider px-1.5 py-px">
@@ -588,6 +679,7 @@ export default function ProjectsView({
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); setEnvProject(p.path); }}
+                  aria-label={`Environment for ${p.name}`}
                   className="px-2 py-1 text-[10px] rounded-md text-surface-500 hover:text-brand hover:bg-surface-800/60 transition-colors"
                   title="Switch environment"
                 >
@@ -595,6 +687,7 @@ export default function ProjectsView({
                 </button>
                 <button
                   onClick={(e) => { e.stopPropagation(); gitSync(p); }}
+                  aria-label={`Sync ${p.name}`}
                   className="px-2.5 py-1 text-xs rounded-md text-surface-400 hover:text-surface-100 hover:bg-surface-800/60 transition-colors"
                 >
                   Sync
@@ -603,6 +696,7 @@ export default function ProjectsView({
                 {browserPreview ? (
                   <button
                     onClick={(e) => { e.stopPropagation(); startProject(p); }}
+                    aria-label={`Open Web UI for ${p.name}`}
                     className="px-3 py-1 text-xs rounded-md bg-brand-soft text-brand-softFg hover:bg-brand/15 transition-colors"
                     title="Open a browser/WebView preview"
                   >
@@ -612,6 +706,7 @@ export default function ProjectsView({
                 {remoteRuntime ? (
                   <button
                     onClick={(e) => { e.stopPropagation(); void openRemoteRuntime(p); }}
+                    aria-label={`Open Simulator (WebRTC) for ${p.name}`}
                     className="px-3 py-1 text-xs rounded-md bg-warning-soft text-warning-softFg hover:bg-warning/15 transition-colors"
                     title="Stream a native simulator with WebRTC"
                   >

@@ -62,6 +62,134 @@ function projectMatches(project: Project, query?: string): boolean {
   return project.name.toLowerCase().includes(q) || project.path.toLowerCase().includes(q);
 }
 
+function projectTerms(project: Project | null): Set<string> {
+  const terms = new Set<string>();
+  for (const raw of [
+    project?.name,
+    project?.path,
+    project?.framework,
+    ...(project?.frameworks ?? []),
+    project?.stack,
+    ...(project?.surfaces ?? []),
+    ...(project?.tags ?? []),
+    project?.executionMode,
+  ]) {
+    const value = String(raw || "").trim().toLowerCase().replace(/\s+/g, "-").replace(/\./g, "");
+    if (!value) continue;
+    terms.add(value);
+    for (const part of value.split(/[^a-z0-9]+/).filter(Boolean)) terms.add(part);
+  }
+  return terms;
+}
+
+function termsContain(terms: Set<string>, candidates: string[]): boolean {
+  const all = Array.from(terms);
+  return candidates.some((candidate) => terms.has(candidate) || all.some((term) => term.includes(candidate)));
+}
+
+function runtimeFrameworkForProject(project: Project | null): string {
+  const explicit = String(project?.framework || "").trim().toLowerCase();
+  if (["expo", "react-native", "flutter", "swift", "kotlin", "browser", "desktop"].includes(explicit)) return explicit;
+  const terms = projectTerms(project);
+  if (termsContain(terms, ["web", "browser", "next", "nextjs", "vite"])) return "browser";
+  if (termsContain(terms, ["flutter"])) return "flutter";
+  if (termsContain(terms, ["expo"])) return "expo";
+  if (termsContain(terms, ["react-native"])) return "react-native";
+  if (termsContain(terms, ["swift"])) return "swift";
+  if (termsContain(terms, ["kotlin"])) return "kotlin";
+  return explicit;
+}
+
+function browserPreviewFrameworkForProject(project: Project | null): string {
+  const explicit = String(project?.framework || "").trim().toLowerCase().replace(/\s+/g, "-").replace(/\./g, "");
+  if (["next", "nextjs", "vite", "react", "expo", "react-native", "flutter"].includes(explicit)) {
+    return explicit === "next" ? "nextjs" : explicit;
+  }
+  const terms = projectTerms(project);
+  if (["", "repo", "monorepo", "unknown"].includes(explicit)) {
+    if (termsContain(terms, ["next", "nextjs"])) return "nextjs";
+    if (termsContain(terms, ["vite"])) return "vite";
+    if (termsContain(terms, ["web", "browser"])) return "react";
+  }
+  if (termsContain(terms, ["expo"])) return "expo";
+  if (termsContain(terms, ["react-native"])) return "react-native";
+  if (termsContain(terms, ["flutter"])) return "flutter";
+  if (termsContain(terms, ["next", "nextjs"])) return "nextjs";
+  if (termsContain(terms, ["vite"])) return "vite";
+  if (termsContain(terms, ["react"])) return "react";
+  return project?.framework || "";
+}
+
+function isMonorepoProject(project: Project | null): boolean {
+  return String(project?.framework || project?.stack || "").trim().toLowerCase() === "monorepo";
+}
+
+async function monorepoWebAppName(project: Project | null): Promise<string | undefined> {
+  if (!project || !isMonorepoProject(project)) return undefined;
+  try {
+    const apps = await agentClient.getWorkspaceApps("web", project.path);
+    const app = apps.find((candidate) => candidate.exists && candidate.name === "web") ||
+      apps.find((candidate) => candidate.exists && candidate.kind === "web") ||
+      apps.find((candidate) => candidate.exists);
+    return app?.name;
+  } catch {
+    return undefined;
+  }
+}
+
+function signedBundlePreviewUrl(bundleUrl?: string): string | null {
+  if (!bundleUrl) return null;
+  try {
+    const parsed = new URL(bundleUrl, "http://agent.local");
+    if (!parsed.searchParams.has("sig") && !parsed.searchParams.has("signature") && !parsed.searchParams.has("token")) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return agentClient.webBundlePreviewUrl(bundleUrl);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForDevPreviewUrl(bundleUrl?: string): Promise<{ url: string; note: string }> {
+  const signedUrl = signedBundlePreviewUrl(bundleUrl);
+  if (signedUrl) return { url: signedUrl, note: "Web UI bundle ready." };
+  let lastError = "";
+  for (let i = 0; i < 16; i++) {
+    const status = await agentClient.getDevServerStatus();
+    if (status?.error) lastError = status.error;
+    if (status?.webPort && status.webPort > 0 && agentClient.devWebPreviewUrl) {
+      const probed = await probePreviewUrl(agentClient.devWebPreviewUrl);
+      if (probed.ok) return { url: agentClient.devWebPreviewUrl, note: status.servingLabel || "Web UI running in this dashboard." };
+      lastError = probed.error;
+    }
+    if ((status?.running || status?.serving || (status?.port ?? 0) > 0) && agentClient.devPreviewUrl) {
+      const probed = await probePreviewUrl(agentClient.devPreviewUrl);
+      if (probed.ok) return { url: agentClient.devPreviewUrl, note: status?.servingLabel || "Web UI running in this dashboard." };
+      lastError = probed.error;
+    }
+    await sleep(750);
+  }
+  throw new Error(lastError || "The agent accepted the Web UI start request, but no browser preview is running yet.");
+}
+
+async function probePreviewUrl(url: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(url, { headers: { Accept: "text/html,application/xhtml+xml" }, cache: "no-store" });
+    const text = await res.clone().text().catch(() => "");
+    if (!res.ok) return { ok: false, error: `Preview URL returned HTTP ${res.status}` };
+    if (/no dev server running|dev bundle URL must be signed/i.test(text)) {
+      return { ok: false, error: text.trim().slice(0, 180) || "Preview URL is not ready." };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Preview URL is not reachable yet." };
+  }
+}
+
 function projectFromRepo(repo: WorkspaceRepo): Project {
   const frameworks = repo.stack?.frameworks ?? [];
   const actions = repo.stack?.actions ?? [];
@@ -110,6 +238,10 @@ function targetSort(a: RemoteRuntimeTarget, b: RemoteRuntimeTarget): number {
   const bi = surfaceOrder.indexOf(String(b.surface || ""));
   if (ai !== bi) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
   return a.label.localeCompare(b.label);
+}
+
+function targetActionLabel(target: RemoteRuntimeTarget): string {
+  return `${target.enabled ? "Open" : "Unavailable"} ${target.label} (${target.id})`;
 }
 
 function isPrimaryRuntimeTarget(target: RemoteRuntimeTarget): boolean {
@@ -199,13 +331,14 @@ export default function RuntimeLabView({
     setError(null);
     setCaps(null);
     setSession(null);
-    appendLog(`capabilities ${project.name} ${project.framework || "unknown"}`);
+    const runtimeFramework = runtimeFrameworkForProject(project);
+    appendLog(`probing render targets for ${project.name} ${runtimeFramework || "unknown"}`);
     try {
-      const next = await agentClient.getRemoteRuntimeCapabilities(project.path, project.framework || "");
+      const next = await agentClient.getRemoteRuntimeCapabilities(project.path, runtimeFramework);
       next.targets = [...(next.targets || [])].sort(targetSort);
       setCaps(next);
       const primaryCount = next.targets.filter(isPrimaryRuntimeTarget).length;
-      appendLog(`targets: ${primaryCount} primary, ${Math.max(0, next.targets.length - primaryCount)} advanced/unavailable`);
+      appendLog(`targets: ${primaryCount} primary, ${Math.max(0, next.targets.length - primaryCount)} advanced/unavailable${next.cached ? " (cached)" : ""}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load runtime capabilities.");
     } finally {
@@ -221,7 +354,7 @@ export default function RuntimeLabView({
     try {
       const next = await agentClient.startRemoteRuntimeSession(
         selectedProject.path,
-        selectedProject.framework || "",
+        runtimeFrameworkForProject(selectedProject),
         targetId,
         "direct-webrtc",
       );
@@ -247,7 +380,7 @@ export default function RuntimeLabView({
     setError(null);
     appendLog(`web ui ${selectedProject.name}`);
     try {
-      const framework = (selectedProject.framework || "").toLowerCase();
+      const framework = browserPreviewFrameworkForProject(selectedProject);
       const staticBundleFramework = ["expo", "react-native"].includes(framework);
       if (staticBundleFramework) {
         setWebPreviewNote(`Building ${selectedProject.name} web bundle...`);
@@ -263,19 +396,24 @@ export default function RuntimeLabView({
         appendLog(`web ui ready ${signedUrl}`);
         return;
       }
-      const response = await agentClient.startDevServer({
-        framework: selectedProject.framework || "",
+      const app = await monorepoWebAppName(selectedProject);
+      const response = await agentClient.startDevServer(app ? {
+        app,
+        root: selectedProject.path,
+        platform: "web",
+        surface: "web-reload",
+      } : {
+        framework,
         workDir: selectedProject.path,
         platform: "web",
         surface: "web-reload",
       });
       if (response.mode === "static-bundle") {
-        if (response.bundleReady && response.bundleUrl) {
-          const signedUrl = agentClient.webBundlePreviewUrl(response.bundleUrl);
-          if (!signedUrl) throw new Error("No signed Web UI bundle URL is available.");
-          setWebPreviewUrl(signedUrl);
+        const existingSignedUrl = signedBundlePreviewUrl(response.bundleUrl);
+        if (response.bundleReady && existingSignedUrl) {
+          setWebPreviewUrl(existingSignedUrl);
           setWebPreviewNote(response.bundleHint || "Web UI bundle ready.");
-          appendLog(`web ui ready ${signedUrl}`);
+          appendLog(`web ui ready ${existingSignedUrl}`);
           return;
         }
         const built = await agentClient.buildWebJSBundle({
@@ -290,17 +428,10 @@ export default function RuntimeLabView({
         appendLog(`web ui ready ${signedUrl}`);
         return;
       }
-      const status = await agentClient.getDevServerStatus();
-      const url =
-        response.bundleUrl
-          ? agentClient.webBundlePreviewUrl(response.bundleUrl)
-          : status?.webPort && status.webPort > 0
-          ? agentClient.devWebPreviewUrl
-          : agentClient.devPreviewUrl;
-      if (!url) throw new Error("No browser preview URL is available for this connection.");
-      setWebPreviewUrl(url);
-      setWebPreviewNote(response.bundleHint || status?.servingLabel || "Web UI running in this dashboard.");
-      appendLog(`web ui ready ${url}`);
+      const preview = await waitForDevPreviewUrl(response.bundleUrl);
+      setWebPreviewUrl(preview.url);
+      setWebPreviewNote(response.bundleHint || preview.note);
+      appendLog(`web ui ready ${preview.url}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not open Web UI.";
       setWebPreviewNote(message);
@@ -319,7 +450,7 @@ export default function RuntimeLabView({
       await loadCapabilities(project);
       const wanted = targetIdFor(intent.surface, intent.platform);
       if (!wanted) return;
-      const nextCaps = await agentClient.getRemoteRuntimeCapabilities(project.path, project.framework || "");
+      const nextCaps = await agentClient.getRemoteRuntimeCapabilities(project.path, runtimeFrameworkForProject(project));
       const target = nextCaps.targets.find((t) => t.id === wanted);
       if (!target) {
         appendLog(`chat target not found: ${wanted}`);
@@ -344,7 +475,7 @@ export default function RuntimeLabView({
   }, [appendLog, intent, onOpenTmux]);
 
   return (
-    <div className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-4 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] xl:grid-cols-[minmax(0,1fr)_360px]">
+    <div className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-3 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] sm:p-4 xl:grid-cols-[minmax(0,1fr)_360px]">
       <div className="min-h-0 space-y-3 overflow-y-auto">
         <div className="flex flex-wrap items-end gap-2">
           <label className="min-w-[260px] flex-1">
@@ -364,7 +495,7 @@ export default function RuntimeLabView({
             onClick={() => void loadCapabilities()}
             className="rounded-md bg-[#1f2933] px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
           >
-            Load Targets
+            {busy ? "Loading targets..." : "Load Targets"}
           </button>
         </div>
 
@@ -375,7 +506,8 @@ export default function RuntimeLabView({
         {caps ? (
           <div className="space-y-3">
             <div className="text-xs text-[#667085] dark:text-[#9aa3af]">
-              {caps.executionMode} · {caps.primarySurface} · {caps.currentHostClass || "host unknown"}
+              {caps.framework} · {caps.executionMode} · {caps.primarySurface} · {caps.currentHostClass || "host unknown"}
+              {caps.cached ? " · cached" : caps.probeDurationMs ? ` · probed in ${Math.round(caps.probeDurationMs / 1000)}s` : ""}
             </div>
             {(() => {
               const enabledTargets = caps.targets.filter((target) => target.enabled);
@@ -389,8 +521,8 @@ export default function RuntimeLabView({
               const groupOrder: ReturnType<typeof runtimeTargetGroup>[] = ["browser", "simulator", "container", "device", "advanced"];
               const renderTarget = (target: RemoteRuntimeTarget, compact = false) => (
                 <div key={target.id} className={`rounded-md border p-3 ${target.enabled ? "border-[#d7dce3] bg-white dark:border-[#2a3039] dark:bg-[#161b22]" : "border-[#e1e5eb] bg-[#f8fafc] dark:border-[#252b33] dark:bg-[#121720]"}`}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
                       <div className={`text-sm font-medium ${target.enabled ? "text-[#1f2933] dark:text-[#e6e8ec]" : "text-[#667085] dark:text-[#8b949e]"}`}>{target.label}</div>
                       <div className="mt-1 text-xs text-[#667085] dark:text-[#9aa3af]">
                         {target.surface || "runtime"} · {target.id} · {target.requiredCli || "tools"}
@@ -399,6 +531,7 @@ export default function RuntimeLabView({
                     <button
                       disabled={!target.enabled || busy}
                       onClick={() => void createSession(target.id)}
+                      aria-label={targetActionLabel(target)}
                       className="rounded-md bg-amber-500/15 px-3 py-1.5 text-xs font-semibold text-amber-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-amber-200"
                     >
                       {target.enabled ? "Open" : "Unavailable"}
@@ -440,6 +573,7 @@ export default function RuntimeLabView({
                           <button
                             disabled={!selectedProject || webPreviewBusy}
                             onClick={() => void openWebUI()}
+                            aria-label="Open Web UI in browser"
                             className="rounded-md bg-sky-500/15 px-3 py-1.5 text-xs font-semibold text-sky-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-sky-200"
                           >
                             {webPreviewBusy ? "Opening..." : "Open"}
@@ -504,7 +638,7 @@ export default function RuntimeLabView({
           </div>
         ) : (
           <div className="rounded-md border border-[#d7dce3] bg-white p-4 text-sm text-[#667085] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#9aa3af]">
-            Load targets to boot watchOS, Wear OS, TV, phone, browser, and other runtime surfaces from this machine.
+            {busy ? "Probing browser, simulator, emulator, Redroid, and physical-device render lanes from this machine..." : "Load targets to boot watchOS, Wear OS, TV, phone, browser, and other runtime surfaces from this machine."}
           </div>
         )}
 
