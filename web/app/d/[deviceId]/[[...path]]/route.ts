@@ -145,6 +145,18 @@ function rewritePreviewBody(body: string, contentType: string, deviceId: string)
       /\b(src|href|action)=([\"'])\/(?!\/)([^\"']*)\2/gi,
       (_match, attr, quote, path) => `${attr}=${quote}${rewritePath(path)}${quote}`,
     );
+    out = out.replace(
+      /\b(src|href)=([\"'])(?![a-z][a-z0-9+.-]*:|#|\/)([^\"']*)\2/gi,
+      (match, attr, quote, path) => {
+        if (!/^(?:_next\/|favicon\.ico|manifest\.webmanifest|icon-\d+\.png|apple-touch-icon\.png)/i.test(path)) {
+          return match;
+        }
+        return `${attr}=${quote}${rewritePath(path)}${quote}`;
+      },
+    );
+    out = out
+      .replace(/([\"'])\/_next\//g, (_match, quote) => `${quote}${dPrefix}/dev/_next/`)
+      .replace(/\\\/_next\\\//g, `${dPrefix.replace(/\//g, "\\/")}\\/dev\\/_next\\/`);
     // Inject the path-rebase script right after <head ...> so it
     // executes before any framework bootstrap that reads
     // window.location.pathname. Falls back to prepending if there's
