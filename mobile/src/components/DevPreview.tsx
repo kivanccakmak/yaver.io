@@ -262,6 +262,30 @@ export function DevPreview() {
                   setLastByteAt(Date.now());
                   // Render fully from the snapshot's recent_log + progress
                   // so a reconnected client never feels behind.
+                  //
+                  // recentLogs was in that comment but never actually read, so a
+                  // client attaching after the interesting output — or to a
+                  // process gone quiet on a real failure ("Failed to bind web
+                  // development server: Address already in use") — showed an
+                  // empty log tail while the snapshot carried the whole thing
+                  // every 5s. Same gap fixed in app/(tabs)/apps.tsx; keep both
+                  // in step (they are the two browser-preview implementations).
+                  if (Array.isArray(event.snapshot?.recentLogs)) {
+                    const tail = (event.snapshot.recentLogs as unknown[])
+                      .map((l) => String(l).trimEnd())
+                      .filter(Boolean);
+                    if (tail.length) {
+                      setLastLogLine(tail[tail.length - 1]);
+                      // Merge, don't append: the same tail arrives on EVERY
+                      // snapshot (~5s), and pushLog only dedupes against the
+                      // immediately-previous line — so appending would fill the
+                      // panel with repeats of the same lines.
+                      setLogLines((prev) => {
+                        const fresh = tail.filter((ln) => !prev.includes(ln));
+                        return fresh.length ? [...prev, ...fresh].slice(-40) : prev;
+                      });
+                    }
+                  }
                   if (event.snapshot?.progress) {
                     const p = event.snapshot.progress;
                     setProgressState({

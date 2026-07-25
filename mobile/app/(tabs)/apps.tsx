@@ -703,6 +703,34 @@ export default function AppsScreen() {
                   setWebPreviewLastLogAt(Date.now());
                   const ln = String(event.message).trim();
                   if (ln) setWebPreviewLogs((p) => (p[p.length - 1] === ln ? p : [...p, ln].slice(-40)));
+                } else if (event.type === "snapshot" && Array.isArray(event.snapshot?.recentLogs)) {
+                  // The agent's periodic snapshot carries `recentLogs` — the
+                  // tail of what the subprocess has printed SO FAR. Without
+                  // this branch the overlay only ever saw live `log` frames, so
+                  // a client that attached after the interesting output (or to a
+                  // process that has gone quiet — e.g. a Flutter run wedged on
+                  // "Failed to bind web development server: Address already in
+                  // use") showed "waiting for the first output from the box"
+                  // while the box was streaming its whole log tail every 5s.
+                  // Observed 2026-07-25 against a Mac mini: heartbeat + snapshot
+                  // frames arriving fine, zero of them rendered.
+                  const tail = (event.snapshot.recentLogs as unknown[])
+                    .map((l) => String(l).trimEnd())
+                    .filter(Boolean);
+                  if (tail.length) {
+                    setWebPreviewLastLogAt(Date.now());
+                    // Merge rather than replace: live `log` frames may already
+                    // have delivered newer lines than this snapshot's tail.
+                    setWebPreviewLogs((p) => {
+                      const fresh = tail.filter((ln) => !p.includes(ln));
+                      return fresh.length ? [...p, ...fresh].slice(-40) : p;
+                    });
+                  }
+                } else if (event.type === "heartbeat") {
+                  // Proof of life even when nothing new is printed. It keeps
+                  // "last output Ns ago" honest instead of letting a healthy but
+                  // quiet compile read as a stall.
+                  setWebPreviewLastLogAt((prev) => prev ?? Date.now());
                 } else if (event.type === "error") {
                   // The agent packs the real tail into the message (newlines) —
                   // split it so the failure panel reads like a log, not one blob.
