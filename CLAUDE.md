@@ -245,6 +245,51 @@ changing those.
      sources and asserts the web surface covers the native one.
   4. **Prove the guard by breaking it.** Rename the method, watch the test fail,
      put it back. A parity test nobody has seen fail is a guess.
+- **Browser transport contract — one channel, industry-standard, additive only.**
+  The mobile app also runs as RN-web so Chromium/Playwright can drive the REAL
+  app (see the parity rule above). A browser cannot do what a phone does, and the
+  gap is absolute, not flaky: **no UDP** (so no LAN beacon) and **no raw QUIC**
+  (so no relay dial). On 2026-07-25 that produced "Transport pending · Agent
+  status unavailable" forever in Chromium while the same account showed
+  "Relay · 301ms" on a real iPhone — the app waiting on an event that could never
+  arrive, and calling it "pending".
+  1. **One lane, standard protocols.** Browser talks to the agent over plain
+     **HTTP/1.1+ to :18080** for every request/response API, and **SSE** for
+     server→client streams (the app already ships `sseClient` on XHR because RN
+     `fetch` cannot stream a body). WebSocket only where a channel is genuinely
+     bidirectional. No bespoke framing, no second protocol: if a native API
+     exists, the browser reaches the SAME endpoint.
+  2. **Convex is unchanged and shared.** Identity, device rows and peer discovery
+     already come from Convex over HTTPS, which browsers speak natively — that is
+     how the browser resolves WHICH host to dial without a beacon. Same routes,
+     same bearer token, same privacy contract; nothing Convex-side is
+     browser-specific.
+  3. **Security is the SAME boundary, never a weaker one.** Identical bearer
+     token, identical validation, identical `# yaver-managed` key rules. The
+     agent already echoes `Access-Control-Allow-Origin` for the caller and passes
+     preflight with `Authorization` — verified live 2026-07-25 — so **no server
+     relaxation is needed and none may be added**. Never widen CORS to `*` on an
+     authenticated agent route, never put a token in a URL or query string, never
+     let the browser path skip a check the native path performs. The relay stays
+     pass-through and authorizes nothing.
+  4. **Additive only — the phone channel is untouchable.** New code goes in a
+     `.web.ts` sibling or behind the capability table in
+     `mobile/src/lib/platformTransport.ts`. Never edit the native connect path to
+     accommodate a browser. If no native file changed, no native behaviour can
+     change — that is the property to preserve and to state in the commit.
+  5. **An impossible transport must SAY SO.** `explainNoTransport()` returns the
+     sentence to render instead of a spinner, and `null` while something is still
+     worth waiting for. A connect path that can report "waiting" with no possible
+     transport regenerates the original bug.
+  6. **Dual implementation implies a parity test.** Every `foo.ts`/`foo.web.ts`
+     pair gets one (`beaconParity.test.ts` is the model) — Metro picks between two
+     INDEPENDENT classes, so drift is invisible to `tsc` and crashes at runtime in
+     a timer. Prove it by breaking it.
+  7. **This is how Yaver gets developed: closed loop.** Browser channel → the
+     Playwright matrix (`e2e/tests/mobile-app-lane-matrix.spec.ts`) drives the
+     real app against a real box → PIXELS / NAMED / **SILENT**, where SILENT is
+     the only failing verdict. A change that cannot be observed end-to-end from
+     the app the user actually holds is not finished.
 - **Never WebView for third-party RN apps.** Use the Hermes-bundle native load
   path (`/dev/build-native` → ExpoReactNativeFactory). WebView is OK for plain
   web content (landing pages, docs).

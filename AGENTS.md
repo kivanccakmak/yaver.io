@@ -68,6 +68,32 @@ broken heartbeat, dropped SSE frames, and a dead shake gesture on one screen
 while the other was fine. Cross-surface parity is this same rule wearing a
 different hat.
 
+## Browser transport contract (RN-web / Selenium lane)
+
+The mobile app also runs as RN-web so a browser can drive the REAL app. A
+browser has **no UDP** (no LAN beacon) and **no raw QUIC** (no relay dial) — an
+absolute gap, not a flaky one. Rules, full version in [`CLAUDE.md`](CLAUDE.md):
+
+- **One lane, standard protocols**: HTTP to the agent for request/response, SSE
+  for server→client streams, WebSocket only when genuinely bidirectional. The
+  browser hits the SAME endpoints as native — no second protocol.
+- **Convex unchanged**: identity + device rows already arrive over HTTPS; that is
+  how the browser learns which host to dial without a beacon.
+- **Same security boundary, never weaker**: same bearer token, same checks. The
+  agent already echoes the caller's `Access-Control-Allow-Origin` and allows
+  `Authorization` — no server relaxation is needed, and none may be added. Never
+  CORS `*` on an authed agent route, never a token in a URL.
+- **Additive only**: `.web.ts` siblings or `platformTransport.ts` capability
+  checks. Never edit the native connect path for the browser. No native file
+  changed ⇒ no native behaviour changed.
+- **Impossible ⇒ say so**: `explainNoTransport()` instead of a spinner.
+- **Dual implementation ⇒ parity test** (`beaconParity.test.ts`), proven by
+  breaking it — Metro picks between two independent classes, so drift is
+  invisible to `tsc` and crashes at runtime.
+- **Closed loop is the method**: changes are verified through the real app via
+  `e2e/tests/mobile-app-lane-matrix.spec.ts` — PIXELS / NAMED / SILENT, and
+  SILENT is the only failing verdict.
+
 ## Hard safety rules (summarised from CLAUDE.md)
 
 - **Never push or commit without explicit user permission.**
