@@ -8,6 +8,7 @@
 // affordance and the QR is secondary (still rendered for the rare close scan).
 // After a token arrives, the user also enters the LAN box host (AddBoxView).
 
+import Combine
 import SwiftUI
 #if canImport(WatchKit)
 import WatchKit
@@ -25,6 +26,12 @@ struct SignInView: View {
     @State private var error: String?
     @State private var expired = false
     @State private var pollTask: Task<Void, Never>?
+    /// Non-nil while polls can't reach the backend — shown verbatim so "nothing
+    /// is happening" is never indistinguishable from "the watch is offline".
+    @State private var unreachable: String?
+    /// Drives the elapsed / expires-in line. A wait with no clock reads as a hang.
+    @State private var now = Date()
+    @State private var waitingSince = Date()
 
     var body: some View {
         ScrollView {
@@ -58,6 +65,22 @@ struct SignInView: View {
                         ProgressView()
                     }
 
+                    // Two facts a waiting user needs — that time is passing, and
+                    // how long this code lives — plus the one they can act on: we
+                    // can't reach Yaver. The screen used to show none of them for
+                    // the code's full 15-minute life. Ported from the tvOS fix.
+                    if let s = start, token == nil {
+                        Text(waitDetail(s))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    if let unreachable {
+                        Text("Can't reach Yaver — retrying every 5s\n\(unreachable)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.orange)
+                            .multilineTextAlignment(.center)
+                    }
                     if let error { Text(error).font(.footnote).foregroundStyle(.orange) }
                     if expired { Text("Code expired — refreshing…").font(.footnote).foregroundStyle(.secondary) }
                 } else {
@@ -68,15 +91,33 @@ struct SignInView: View {
             .padding(.horizontal, 6)
         }
         .task { if token == nil { await begin() } }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now = $0 }
         .onDisappear { pollTask?.cancel() }
+    }
+
+    /// "1:42 elapsed · expires in 13:18" — mirrors tvos SignInView.waitDetail.
+    private func waitDetail(_ s: DeviceCodeStart) -> String {
+        let elapsed = max(0, now.timeIntervalSince(waitingSince))
+        var line = "\(clock(elapsed)) elapsed"
+        let remaining = s.expiresAt / 1000 - now.timeIntervalSince1970
+        line += remaining > 0 ? " · expires in \(clock(remaining))" : " · expired — refreshing"
+        return line
+    }
+
+    private func clock(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     private func begin() async {
         error = nil
         expired = false
+        unreachable = nil
         do {
             let s = try await DeviceCodeAuth.start()
             start = s
+            waitingSince = Date()
+            now = Date()
             startPolling(s)
         } catch {
             self.error = error.localizedDescription
@@ -90,6 +131,7 @@ struct SignInView: View {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 if Task.isCancelled { return }
                 let r = await DeviceCodeAuth.poll(deviceCode: s.deviceCode)
+                unreachable = r.unreachableReason
                 switch r.status {
                 case .authorized:
                     if let t = r.token { token = t }   // proceed to AddBoxView

@@ -4,8 +4,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -15,8 +17,13 @@ import java.util.concurrent.TimeUnit
  * tvOS `Backend.swift`. Only needed when the watch runs WITHOUT a paired phone
  * (phone-paired mode holds no token; the phone is the brain-of-record).
  *
- *   POST /auth/device-code            → { user_code, verification_uri, device_code, interval, expires_in }
- *   GET  /auth/device-code/poll?device_code=...  → { status: "pending"|"approved", session_token? }
+ *   POST /auth/device-code                       → { userCode, deviceCode, expiresAt }
+ *   GET  /auth/device-code/poll?device_code=...   → { status: "pending"|"authorized"|"expired", token? }
+ *
+ * Those are the ACTUAL backend field names (camelCase, absolute expiry). This
+ * doc used to describe RFC 8628's snake_case names and so did the code, which is
+ * why standalone sign-in never once completed. Verified against
+ * backend/convex/deviceCode.ts on 2026-07-25.
  *
  * Flow on the watch: show the short [DeviceCode.userCode] + a QR of the
  * verification URI (SignInScreen), poll until approved, persist the returned
@@ -53,14 +60,38 @@ class Backend(
     sealed class PollResult {
         data class Approved(val sessionToken: String) : PollResult()
         object Pending : PollResult()
+        /** The code passed its 15-min TTL — the user needs a fresh one. */
+        object Expired : PollResult()
         data class Failed(val reason: String) : PollResult()
     }
 
-    /** Start the device-code flow. Returns the code to display + poll handle. */
+    /**
+     * Start the device-code flow. Returns the code to display + poll handle.
+     *
+     * WIRE FORMAT — this was wrong in every detail until 2026-07-25, so match the
+     * backend, not RFC 8628's field names:
+     *
+     *   POST /auth/device-code   JSON {machineName, platform, environment}
+     *        -> {"userCode":"ABCD-1234","deviceCode":"<40 hex>","expiresAt":<ms>}
+     *
+     * The old code sent a FORM body and read `user_code` / `device_code` /
+     * `expires_in` / `verification_uri` — none of which the backend sends
+     * (backend/convex/deviceCode.ts::createDeviceCode returns camelCase and an
+     * ABSOLUTE expiry, and never a verification URI). Every field came back
+     * empty, so the watch displayed a blank code and polled a blank handle
+     * forever. Cross-checked against the two surfaces that DO work:
+     * tvos/YaverTV/Backend.swift and mobile/src/lib/tvSignIn.ts.
+     */
     suspend fun requestDeviceCode(): DeviceCode = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("machineName", android.os.Build.MODEL ?: "Wear OS watch")
+            .put("platform", "wearos")
+            .put("environment", "watch")
+            .toString()
+            .toRequestBody("application/json".toMediaType())
         val request = Request.Builder()
             .url(convexOrigin.trimEnd('/') + "/auth/device-code")
-            .post(FormBody.Builder().add("client", "wear").build())
+            .post(body)
             .build()
         http.newCall(request).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
@@ -68,12 +99,29 @@ class Backend(
                 throw IllegalStateException("device-code request failed: ${resp.code}")
             }
             val obj = JSONObject(text)
+            val userCode = obj.optString("userCode")
+            val deviceCode = obj.optString("deviceCode")
+            if (userCode.isEmpty() || deviceCode.isEmpty()) {
+                // Fail loudly instead of showing a blank code and polling a blank
+                // handle until the deadline — that is precisely how this stayed
+                // broken without anyone seeing an error.
+                throw IllegalStateException("device-code response missing userCode/deviceCode: $text")
+            }
+            val expiresAtMs = obj.optLong("expiresAt", 0L)
+            val remainingSec = if (expiresAtMs > 0) {
+                ((expiresAtMs - System.currentTimeMillis()) / 1000L).toInt().coerceAtLeast(1)
+            } else {
+                900
+            }
             DeviceCode(
-                userCode = obj.optString("user_code"),
-                verificationUri = obj.optString("verification_uri"),
-                deviceCode = obj.optString("device_code"),
+                userCode = userCode,
+                // The backend returns no verification URI; every other surface
+                // builds the same one, and the QR below encodes it so the phone's
+                // camera lands in the in-app approver.
+                verificationUri = "https://yaver.io/auth/device?code=$userCode",
+                deviceCode = deviceCode,
                 intervalSeconds = obj.optInt("interval", 5),
-                expiresInSeconds = obj.optInt("expires_in", 900),
+                expiresInSeconds = remainingSec,
             )
         }
     }
@@ -88,14 +136,25 @@ class Backend(
                 val text = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) return@use PollResult.Failed("poll http ${resp.code}")
                 val obj = JSONObject(text)
+                // The backend says "authorized" and "token"
+                // (backend/convex/deviceCode.ts::pollDeviceCode). This used to
+                // look for "approved"/"session_token", so an APPROVED code fell
+                // into the `else` branch and was reported as still pending — the
+                // watch could never finish signing in, no matter how many times
+                // the user approved on their phone. "approved" is still accepted
+                // in case an older/self-hosted deployment answers that way.
                 when (obj.optString("status")) {
-                    "approved" -> {
-                        val token = obj.optString("session_token")
+                    "authorized", "approved" -> {
+                        val token = obj.optString("token").ifEmpty { obj.optString("session_token") }
                         if (token.isNotEmpty()) PollResult.Approved(token)
-                        else PollResult.Failed("approved without token")
+                        else PollResult.Failed("authorized without a token")
                     }
                     "pending" -> PollResult.Pending
-                    else -> PollResult.Pending
+                    "expired" -> PollResult.Expired
+                    // An unknown status is NOT pending. Reporting "pending" for a
+                    // state we don't understand is how the mismatch above stayed
+                    // invisible for so long; name it instead.
+                    else -> PollResult.Failed("unexpected poll status ${obj.optString("status")}")
                 }
             }
         } catch (e: Throwable) {
@@ -113,7 +172,14 @@ class Backend(
         while (System.currentTimeMillis() < deadline) {
             when (val r = pollOnce(code.deviceCode)) {
                 is PollResult.Approved -> return r.sessionToken
-                is PollResult.Failed -> return null
+                PollResult.Expired -> return null
+                // A transient poll failure is NOT the end of the flow. This used
+                // to `return null` on the first one, so a single Wi-Fi blip on a
+                // wrist — the most likely thing to happen during a 15-minute
+                // wait — aborted a sign-in the user was in the middle of
+                // approving, with no message. Keep polling until the code really
+                // expires; the deadline is the bound.
+                is PollResult.Failed -> delay(code.intervalSeconds * 1000L)
                 PollResult.Pending -> delay(code.intervalSeconds * 1000L)
             }
         }
