@@ -134,6 +134,13 @@ test.describe("webrtc stream closed loop", () => {
     });
     await shot("capabilities");
 
+    // Targets must RENDER. Without this the run could sail past a panel still
+    // showing "Load targets to boot …" and then pass on unrelated page text.
+    await expect(
+      page.getByRole("button", { name: /simulator|emulator|browser-window/i }).first(),
+      "Load Targets produced no target buttons",
+    ).toBeVisible({ timeout: 120_000 });
+
     const targetBtn = page
       .getByRole("button", { name: new RegExp(TARGET.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&"), "i") })
       .first();
@@ -158,7 +165,13 @@ test.describe("webrtc stream closed loop", () => {
     // THE assertion: pixels, or a failure that names itself.
     const video = page.locator("video").first();
     const imgFallback = page.locator("img[src^='blob:']").first();
-    const named = page.getByText(/attach-failed|failed|unavailable|error/i).first();
+    // PRECISE phrases only. A loose /failed|error/i matched log noise elsewhere on
+    // the page (a tmux preview, a console line) and short-circuited the run into a
+    // false pass — the test lying in the same direction as the bug it hunts. These
+    // are the strings the runtime viewer/session actually emits on failure.
+    const named = page
+      .getByText(/attach-failed|could not attach|no simulator matching|already claimed|runtime not installed|stream failed/i)
+      .first();
 
     const outcome = await Promise.race([
       video.waitFor({ state: "visible", timeout: 240_000 }).then(() => "video" as const).catch(() => "none" as const),
@@ -171,7 +184,14 @@ test.describe("webrtc stream closed loop", () => {
       const msg = ((await named.textContent()) || "").trim();
       testInfo.annotations.push({ type: "named-failure", description: msg.slice(0, 300) });
       expect(msg.length, "failure appeared with no text").toBeGreaterThan(0);
-      return; // honest failure = the product telling the truth; not a silent hang
+      // An honest, specific failure is the product telling the truth — recorded
+      // and allowed. But it is NOT a stream, so say so loudly in the report
+      // instead of letting a green tick imply pixels.
+      console.log(`[webrtc-live] NO STREAM — product reported: ${msg.slice(0, 200)}`);
+      if (process.env.E2E_REQUIRE_PIXELS === "1") {
+        throw new Error(`E2E_REQUIRE_PIXELS=1 and the product reported: ${msg.slice(0, 200)}`);
+      }
+      return;
     }
     expect(
       outcome,
