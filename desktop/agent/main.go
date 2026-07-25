@@ -2322,6 +2322,12 @@ func runServe(args []string) {
 	// insurance against a whole class of unfalsifiable outage.
 	log.Printf("[serve] starting — pid %d, version %s, args %v", os.Getpid(), version, args)
 
+	// Reap dev-server children a previous agent left running. Before any port is
+	// allocated, so the allocator sees the machine's real free ports instead of
+	// yesterday's ghosts holding 19006/19007/19008. See
+	// devserver_child_registry.go for the incident this exists for.
+	ReapOrphanedDevChildren()
+
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	httpPort := fs.Int("port", 18080, "HTTP server port")
 	quicPort := fs.Int("quic-port", 4433, "QUIC server port (legacy)")

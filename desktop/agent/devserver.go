@@ -1821,6 +1821,14 @@ func (b *baseDevServer) startProcess(ctx context.Context, name string, args []st
 		return fmt.Errorf("exec %s: %w", name, err)
 	}
 
+	// Write it down BEFORE anything else can go wrong: setProcGroup means this
+	// child survives us, so a record written late is a record that isn't there
+	// when the next agent needs to reap it. See devserver_child_registry.go.
+	RecordDevChild(devChildRecord{
+		PID: cmd.Process.Pid, Port: b.port, Kind: b.name,
+		Match: fmt.Sprintf("%s,%d", name, b.port), WorkDir: workDir,
+	})
+
 	b.mu.Lock()
 	b.cmd = cmd
 	b.startedAt = time.Now()
@@ -1831,7 +1839,12 @@ func (b *baseDevServer) startProcess(ctx context.Context, name string, args []st
 	// bubble up the tail of its output so the user sees a real error
 	// instead of a 120 s "did not become ready" spinner.
 	exitCh := make(chan error, 1)
-	go func() { exitCh <- cmd.Wait() }()
+	childPID := cmd.Process.Pid
+	go func() {
+		err := cmd.Wait()
+		ForgetDevChild(childPID) // exited on its own — nothing to reap next start
+		exitCh <- err
+	}()
 
 	// Wait for dev server to become ready (poll health/readiness)
 	deadline := time.After(120 * time.Second) // Expo web first build can take 2+ min
@@ -1881,6 +1894,14 @@ func (b *baseDevServer) startProcess(ctx context.Context, name string, args []st
 					}
 					b.mu.Lock()
 					b.running = true
+					// Clear any failure from an EARLIER start attempt. Without
+					// this, /dev/status answers `running:true` next to a fatal
+					// `npm install failed: ENOENT` from hours ago — observed on
+					// the Mac mini 2026-07-25, where the stale string made a
+					// healthy Next.js server read as broken to every client (and
+					// to me, mid-debug). An error that is no longer true is the
+					// same defect as a success that was never true.
+					b.err = ""
 					b.mu.Unlock()
 					return nil
 				}
@@ -2267,6 +2288,12 @@ func (e *ExpoDevServer) StartWebPreview(parent context.Context, workDir string) 
 		return 0, fmt.Errorf("expo --web failed to start: %w", err)
 	}
 
+	// Survives the agent (own process group) — so write it down now, not later.
+	RecordDevChild(devChildRecord{
+		PID: cmd.Process.Pid, Port: port, Kind: "expo-web",
+		Match: fmt.Sprintf("expo start,--web,%d", port), WorkDir: workDir,
+	})
+
 	e.webMu.Lock()
 	e.webCmd = cmd
 	e.webPort = port
@@ -2276,6 +2303,7 @@ func (e *ExpoDevServer) StartWebPreview(parent context.Context, workDir string) 
 	// Reap the child and clean up state when it exits on its own.
 	go func() {
 		cmd.Wait()
+		ForgetDevChild(cmd.Process.Pid)
 		e.webMu.Lock()
 		if e.webCmd == cmd {
 			e.webCmd = nil
