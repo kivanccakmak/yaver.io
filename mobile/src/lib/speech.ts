@@ -11,6 +11,37 @@
 import { Platform } from "react-native";
 import type { SpeechProvider, TtsProvider } from "./auth";
 
+/**
+ * fetchWithTimeout — every network call in this file goes through here.
+ *
+ * The STT/TTS audit (2026-07-25) found ZERO AbortControllers in this module: a
+ * cloud transcription on a stalled cellular connection hung the whole voice
+ * turn with no timeout, no error, and no fallback. The conversation core awaits
+ * the result, so the phone sat "listening" forever while the user could not
+ * tell slow-network from broken-app. Same unbounded-call class as the agent
+ * startup hangs — silence is the defect. Bound it, and surface a real error the
+ * caller can fall back on.
+ */
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit = {},
+  ms = 20000,
+): Promise<Response> {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    return await fetch(input, { ...init, signal: ctl.signal });
+  } catch (e: any) {
+    if (e?.name === "AbortError") {
+      throw new Error(`speech request timed out after ${ms}ms (${input.split("?")[0]})`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+
 // ── Types ────────────────────────────────────────────────────────────
 
 export interface TranscriptionResult {
@@ -224,7 +255,7 @@ async function transcribeWithOpenAICompat(
   formData.append("model", model || DEFAULT_STT_MODEL);
   formData.append("language", "en");
 
-  const response = await fetch(`${baseUrl}/audio/transcriptions`, {
+  const response = await fetchWithTimeout(`${baseUrl}/audio/transcriptions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
     body: formData,
@@ -249,7 +280,7 @@ async function transcribeWithDeepgram(
   const audioResponse = await fetch(audioUri);
   const audioBlob = await audioResponse.blob();
 
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     "https://api.deepgram.com/v1/listen?model=nova-3&language=en&smart_format=true",
     {
       method: "POST",
@@ -282,7 +313,7 @@ async function transcribeWithAssemblyAI(
   const audioResponse = await fetch(audioUri);
   const audioBlob = await audioResponse.blob();
 
-  const uploadRes = await fetch("https://api.assemblyai.com/v2/upload", {
+  const uploadRes = await fetchWithTimeout("https://api.assemblyai.com/v2/upload", {
     method: "POST",
     headers: { Authorization: apiKey },
     body: audioBlob,
@@ -295,7 +326,7 @@ async function transcribeWithAssemblyAI(
   const { upload_url } = await uploadRes.json();
 
   // Step 2: Create transcription
-  const transcriptRes = await fetch(
+  const transcriptRes = await fetchWithTimeout(
     "https://api.assemblyai.com/v2/transcript",
     {
       method: "POST",
@@ -322,7 +353,7 @@ async function transcribeWithAssemblyAI(
   const pollUrl = `https://api.assemblyai.com/v2/transcript/${id}`;
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 1000));
-    const pollRes = await fetch(pollUrl, {
+    const pollRes = await fetchWithTimeout(pollUrl, {
       headers: { Authorization: apiKey },
     });
     const pollData = await pollRes.json();
@@ -473,7 +504,7 @@ async function speakWithOpenAICompat(
   voice: string,
   label: string,
 ): Promise<void> {
-  const response = await fetch(`${baseUrl}/audio/speech`, {
+  const response = await fetchWithTimeout(`${baseUrl}/audio/speech`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
