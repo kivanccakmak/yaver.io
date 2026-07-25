@@ -59,7 +59,15 @@ async function ensureAgentBinary({ quiet = false } = {}) {
     const binaryPath = path.join(installDir, asset.binaryName);
     if (fs.existsSync(binaryPath)) {
       if (process.platform !== 'win32') fs.chmodSync(binaryPath, 0o755);
-      return binaryPath;
+      if (cachedBinaryRuns(binaryPath)) return binaryPath;
+      // Present but unusable: re-download rather than hand back a brick. The
+      // old code returned it on existence alone, so one interrupted download
+      // wedged that version forever — every later run found the file, returned
+      // it, and failed identically with nothing to point at.
+      if (!quiet) {
+        console.error(`[yaver] cached agent ${asset.version} is present but will not run — re-downloading`);
+      }
+      try { fs.rmSync(installDir, { recursive: true, force: true }); } catch (_) {}
     }
     return await downloadAndCacheAgent(asset, { quiet });
   } catch (err) {
@@ -78,6 +86,44 @@ async function ensureAgentBinary({ quiet = false } = {}) {
       return fallback;
     }
     throw err;
+  }
+}
+
+/** A cached agent binary is only usable if it actually RUNS.
+ *
+ *  `fs.existsSync` answers "is there a file here", which is a proxy for the
+ *  thing we need: "can this machine exec it and get a version back". The two
+ *  disagree in exactly the cases that matter — an interrupted download leaves a
+ *  truncated file, a killed extract leaves a 0-byte one, an unsigned or
+ *  quarantined binary on macOS exists and refuses to launch. Every one of those
+ *  passes existsSync and then dies at spawn with a bare exit code and nothing
+ *  said (observed 2026-07-25: a launchd agent flapping on status 78 because its
+ *  version dir held no binary — the operator sees "the daemon won't start" and
+ *  no reason anywhere).
+ *
+ *  So probe the operation: run `--version` with a short timeout. Cheap (single
+ *  exec, no network) and it turns a silent brick into a fall back onto the last
+ *  binary that demonstrably works. */
+function cachedBinaryRuns(binaryPath) {
+  try {
+    const st = fs.statSync(binaryPath);
+    // A real agent is tens of MB; anything tiny is a truncated download, and
+    // exec'ing it would just be a slower way to learn that.
+    if (!st.isFile() || st.size < 1024 * 1024) return false;
+  } catch (_) {
+    return false;
+  }
+  try {
+    const res = spawnSync(binaryPath, ['--version'], {
+      timeout: 10_000,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (res.error) return false;
+    if (res.status !== 0) return false;
+    return /\byaver\b/i.test(String(res.stdout || '') + String(res.stderr || ''));
+  } catch (_) {
+    return false;
   }
 }
 
@@ -102,6 +148,13 @@ function findHigherCachedThan(version) {
       if (process.platform !== 'win32') {
         try { fs.chmodSync(p, 0o755); } catch (_) {}
       }
+      // Verify before preferring it: a broken NEWER cache entry must not
+      // shadow a working older one. Skipping this is how "prefer newest"
+      // becomes "prefer whatever downloaded halfway".
+      if (!cachedBinaryRuns(p)) {
+        console.error(`[yaver] cached agent ${v} will not run (incomplete download?) — skipping it`);
+        continue;
+      }
       return { path: p, version: v };
     }
   }
@@ -125,6 +178,13 @@ function findMostRecentCachedAgent() {
     if (fs.existsSync(p)) {
       if (process.platform !== 'win32') {
         try { fs.chmodSync(p, 0o755); } catch (_) {}
+      }
+      // This is the offline/rate-limited fallback — the LAST thing standing
+      // between the user and "yaver does nothing". Returning a file that
+      // cannot exec here produces a bare failure with no network to blame.
+      if (!cachedBinaryRuns(p)) {
+        console.error(`[yaver] cached agent ${v} will not run (incomplete download?) — trying an older one`);
+        continue;
       }
       return p;
     }
