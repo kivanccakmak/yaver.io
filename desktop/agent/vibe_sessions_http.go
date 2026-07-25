@@ -75,7 +75,7 @@ func (s *HTTPServer) handleVibeSessions(w http.ResponseWriter, r *http.Request) 
 	// an unexplained port is exactly what a user needs to see when a start fails,
 	// and hiding it is how "no idea why 8081 is busy" happens.
 	unattributed := []VibeResourceView{}
-	for _, res := range resourcesForOwner("") {
+	for _, res := range AllHeldResources() {
 		if !claimed[res.Type+":"+res.Value] {
 			unattributed = append(unattributed, res)
 		}

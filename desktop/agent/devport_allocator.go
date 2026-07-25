@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 )
 
 // DevPortAllocator hands out (Metro, ExpoWeb) port pairs to user
@@ -117,13 +118,57 @@ func (a *DevPortAllocator) Snapshot() []DevPortPair {
 	return out
 }
 
+// portBusy reports whether this port is unusable for a dev server on this machine.
+//
+// Two probes, because neither alone is honest:
+//
+//  1. **Can anything be CONNECTED to?** Unambiguous evidence of occupation, and
+//     it is the question that actually matters: the agent's /dev/ proxy dials
+//     127.0.0.1:<port>, so a loopback listener would receive OUR users' traffic
+//     even if our dev server also managed to bind the wildcard. A "free" port
+//     whose loopback is answered by someone else is the false-green this whole
+//     file exists to prevent.
+//
+//  2. **Can the WILDCARD be bound, in each family?** Catches the reverse case
+//     measured on a Mac mini (2026-07-25): `node` held `*:8081` (IPv6 wildcard)
+//     while binding 127.0.0.1:8081 still SUCCEEDED, so a loopback-bind probe
+//     called Metro's port free when Metro could not possibly take it.
+//
+// Go's listeners set SO_REUSEADDR, which is precisely why a single bind test
+// cannot predict the outcome: a wildcard bind can succeed alongside a
+// specific-address listener and vice versa. Connect-then-bind covers both.
 func portBusy(port int) bool {
-	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return true
+	for _, addr := range []string{
+		fmt.Sprintf("127.0.0.1:%d", port),
+		fmt.Sprintf("[::1]:%d", port),
+	} {
+		if conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
+			_ = conn.Close()
+			return true
+		}
 	}
-	_ = l.Close()
+	for _, network := range []string{"tcp4", "tcp6"} {
+		l, err := net.Listen(network, fmt.Sprintf(":%d", port))
+		if err != nil {
+			// An unsupported family (IPv6 disabled) is not evidence of a listener.
+			if isUnsupportedNetwork(err) {
+				continue
+			}
+			return true
+		}
+		_ = l.Close()
+	}
 	return false
+}
+
+// isUnsupportedNetwork distinguishes "this host has no IPv6" from "somebody is
+// listening". Without it, a machine with IPv6 disabled would report every port
+// busy and no dev server could ever start.
+func isUnsupportedNetwork(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "address family not supported") ||
+		strings.Contains(msg, "protocol not supported") ||
+		strings.Contains(msg, "cannot assign requested address")
 }
 
 // ─── Dev-server port pre-flight ────────────────────────────────────────

@@ -142,6 +142,34 @@ func resourcesForOwner(owner string) []VibeResourceView {
 	return out
 }
 
+// AllHeldResources returns every claim on the machine, whoever owns it. The
+// report subtracts session-owned ones to compute "unattributed" — an unexplained
+// port is exactly what a user needs to see when a start fails, and computing it as
+// "claims whose owner is empty" reported nothing, because every claim has an
+// owner (just not always a live session's).
+func AllHeldResources() []VibeResourceView {
+	out := []VibeResourceView{}
+	for _, p := range DevPortSnapshot() {
+		out = append(out, VibeResourceView{
+			Type:  "port",
+			Kind:  p.Kind,
+			Value: fmt.Sprintf("%d", p.Port),
+			Label: fmt.Sprintf("%s on :%d", p.Kind, p.Port),
+			Since: p.Since.UTC().Format(time.RFC3339),
+		})
+	}
+	for _, c := range runtimeDeviceClaims.snapshot() {
+		out = append(out, VibeResourceView{
+			Type:  "device",
+			Kind:  c.Kind,
+			Value: c.Key,
+			Label: fmt.Sprintf("%s %s", c.Kind, shortDeviceID(c.Key)),
+			Since: c.Since.UTC().Format(time.RFC3339),
+		})
+	}
+	return out
+}
+
 // MachineResourceReport is the whole machine in one payload: every live vibe
 // session, its participants, and the resources it holds. One endpoint, one shape,
 // rendered identically by web / mobile / TV / watch.

@@ -588,8 +588,14 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 	// means a foreign listener (an orphan from another project, or on one real
 	// box a four-day-old freeswitch on :8081) gets reported as a healthy dev
 	// server. See devserver_ports.go for the full account.
+	// One owner tag for the claim AND the roll-up. They used to differ (claim →
+	// path tag, report → session tag), so a session's own port did not appear in
+	// its resources — and PruneEmpty then deleted the session as "empty" while its
+	// dev server was running. Verified live on the mini before this fix: the
+	// roster was blank while /dev/status happily reported a vibeSessionId.
+	claimOwner := m.claimOwnerTagFor(workDir)
 	brokeredPort, portSubstituted, releasePort := AcquireDevPort(
-		frameworkName, devPortOwner(m.OwnerUserID, workDir), defaultPort)
+		frameworkName, claimOwner, defaultPort)
 	m.preferredPort = defaultPort
 	m.portSubstituted = portSubstituted
 	if portSubstituted {
@@ -607,7 +613,7 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 		Port:            brokeredPort,
 		PreferredPort:   defaultPort,
 		PortSubstituted: portSubstituted,
-		Resources:       resourcesForOwner(devPortOwner(m.OwnerUserID, workDir)),
+		Resources:       resourcesForOwner(claimOwner),
 		Message: func() string {
 			if portSubstituted {
 				return fmt.Sprintf("Serving on :%d — :%d was already in use on this machine", brokeredPort, defaultPort)
@@ -949,13 +955,20 @@ func (m *DevServerManager) Status() *DevServerStatus {
 // the same roster entry the user sees; otherwise it falls back to the project
 // path, which is still enough to attribute a stray port.
 func (m *DevServerManager) resourceOwnerTag() string {
+	if m.active != nil {
+		return m.claimOwnerTagFor(m.active.server.Status().WorkDir)
+	}
+	return m.claimOwnerTagFor("")
+}
+
+// claimOwnerTagFor is THE owner tag for anything this manager claims: the vibe
+// session when there is one, else a path-derived label. Single function so a
+// claim and its later lookup can never be computed differently.
+func (m *DevServerManager) claimOwnerTagFor(workDir string) string {
 	if m.VibeSessionID != "" {
 		return vibeOwnerTag(m.VibeSessionID)
 	}
-	if m.active != nil {
-		return devPortOwner(m.OwnerUserID, m.active.server.Status().WorkDir)
-	}
-	return ""
+	return devPortOwner(m.OwnerUserID, workDir)
 }
 
 // releasePortLocked returns the active session's brokered port to the pool.

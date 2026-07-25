@@ -210,3 +210,59 @@ func TestPortBindFailureNamesEveryFrameworkPhrasing(t *testing.T) {
 		}
 	}
 }
+
+// portBusy has to predict OUR outcome, not just "did a bind succeed".
+//
+// Both cases below were measured on a Mac mini on 2026-07-25 and each defeated a
+// single-probe implementation:
+//
+//   - node held `*:8081` (IPv6 wildcard) and binding 127.0.0.1:8081 still
+//     SUCCEEDED → a loopback-bind probe called Metro's port free when Metro could
+//     not take it.
+//   - The mirror case: a loopback-only listener, where Go's SO_REUSEADDR lets the
+//     wildcard bind succeed → a wildcard-bind probe calls the port free, but the
+//     agent's /dev/ proxy dials 127.0.0.1 and would reach the SQUATTER instead of
+//     our dev server. Serving another process's app is worse than failing.
+func TestPortBusyDetectsBothListenerShapes(t *testing.T) {
+	t.Run("loopback-only listener (proxy would reach the squatter)", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		defer ln.Close()
+		port := ln.Addr().(*net.TCPAddr).Port
+		go func() { // accept, so the connect probe has something to reach
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				_ = c.Close()
+			}
+		}()
+		if !portBusy(port) {
+			t.Errorf("port %d has a loopback listener but portBusy said free — the /dev/ proxy dials "+
+				"127.0.0.1, so our users' traffic would land on that process", port)
+		}
+	})
+
+	t.Run("wildcard listener", func(t *testing.T) {
+		ln, err := net.Listen("tcp", ":0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		defer ln.Close()
+		port := ln.Addr().(*net.TCPAddr).Port
+		if !portBusy(port) {
+			t.Errorf("port %d has a wildcard listener but portBusy said free", port)
+		}
+	})
+
+	t.Run("genuinely free port", func(t *testing.T) {
+		port := unusedPort(t)
+		if portBusy(port) {
+			t.Errorf("port %d is free but portBusy said busy — every dev server would be pushed off "+
+				"its canonical port for no reason", port)
+		}
+	})
+}
