@@ -16,6 +16,9 @@ export type DeviceCodeInfo = null | {
   runtimeVersion: string | null;
   preferredProvider: string | null;
   isWsl: boolean;
+  claimed?: boolean;
+  approvedAt?: number | null;
+  claimedAt?: number | null;
   expiresAt: number;
   status?: "pending" | "authorized" | "expired";
 };
@@ -40,8 +43,9 @@ export default function DeviceCodeClient({
   const providerHint = (params.get("provider") || "").toLowerCase();
   const [deviceInfo, setDeviceInfo] = useState<DeviceCodeInfo>(initialDeviceInfo);
   const [code, setCode] = useState(prefillCode);
-  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">(
-    alreadyAuthorized || initialDeviceInfo?.status === "authorized" ? "success" : "idle"
+  const [status, setStatus] = useState<"idle" | "loading" | "approved" | "success" | "error">(
+    initialDeviceInfo?.status === "authorized" && initialDeviceInfo.claimed ? "success" :
+      alreadyAuthorized || initialDeviceInfo?.status === "authorized" ? "approved" : "idle"
   );
   const [errorMsg, setErrorMsg] = useState(
     initialDeviceInfo?.status === "expired"
@@ -161,9 +165,12 @@ export default function DeviceCodeClient({
         const data = await res.json();
         if (cancelled || !data) return;
         setDeviceInfo(data);
-        if (data.status === "authorized") {
+        if (data.status === "authorized" && data.claimed) {
           setStatus("success");
           setErrorMsg("");
+        } else if (data.status === "authorized") {
+          setStatus("approved");
+          setErrorMsg("Approved. Waiting for the TV to pick up the session...");
         } else if (data.status === "expired") {
           setStatus("error");
           setErrorMsg(expiredCodeMessage);
@@ -207,8 +214,8 @@ export default function DeviceCodeClient({
 
   useEffect(() => {
     if (alreadyAuthorized) {
-      setStatus("success");
-      setErrorMsg("");
+      setStatus("approved");
+      setErrorMsg("Approved. Waiting for the TV to pick up the session...");
     }
   }, [alreadyAuthorized]);
 
@@ -393,6 +400,24 @@ export default function DeviceCodeClient({
 
   if (status === "success") {
     return <DeviceAuthorizedSuccess machineName={deviceInfo?.machineName ?? null} />;
+  }
+
+  if (status === "approved") {
+    return (
+      <div className="flex min-h-[70vh] items-center justify-center px-6 py-20">
+        <div className="w-full max-w-md rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-5 py-5 text-center">
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300">
+            Approved
+          </div>
+          <p className="mt-3 text-sm leading-relaxed text-surface-200">
+            Waiting for {deviceInfo?.machineName || "the TV"} to pick up the session...
+          </p>
+          <p className="mt-2 text-xs text-surface-500">
+            Keep the TV sign-in screen open. This page will update when it claims the session.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   if (!token) {

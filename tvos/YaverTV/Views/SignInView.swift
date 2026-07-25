@@ -26,6 +26,7 @@ struct SignInView: View {
     @State private var approving = false      // approval seen; token arriving
     @State private var appleBusy = false
     @State private var pollTask: Task<Void, Never>?
+    @State private var fallbackPollTask: Task<Void, Never>?
     /// Non-nil while polls are failing to reach the backend — surfaced verbatim
     /// so "nothing is happening" is never indistinguishable from "the network is
     /// down". Cleared by the first successful poll.
@@ -42,18 +43,7 @@ struct SignInView: View {
                     .font(.system(size: 44, weight: .heavy))
                     .padding(.bottom, 12)
 
-                // Fast path first: no phone, no code, no typing.
-                SignInWithAppleButton(.signIn) { request in
-                    request.requestedScopes = [.fullName, .email]
-                } onCompletion: { result in
-                    Task { await handleApple(result) }
-                }
-                .signInWithAppleButtonStyle(.white)
-                .frame(height: 60)
-                .disabled(appleBusy)
-                .padding(.bottom, 6)
-
-                Text("Or use any other account:")
+                Text("Scan with the Yaver app:")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.secondary)
 
@@ -92,7 +82,7 @@ struct SignInView: View {
                             Text(unreachable == nil
                                  ? "Waiting for approval…"
                                  : "Can't reach Yaver — retrying every 5s")
-                                .foregroundStyle(unreachable == nil ? .secondary : .orange)
+                                .foregroundStyle(unreachable == nil ? Color.secondary : Color.orange)
                         }
                         Text(waitDetail(s))
                             .font(.system(size: 15))
@@ -114,6 +104,24 @@ struct SignInView: View {
                     .padding(.top, 16)
                 }
                 if expired { Text("Code expired — generating a new one…").foregroundStyle(.secondary).padding(.top, 8) }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Secondary sign-in")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.secondary)
+                    SignInWithAppleButton(.signIn) { request in
+                        request.requestedScopes = [.fullName, .email]
+                    } onCompletion: { result in
+                        Task { await handleApple(result) }
+                    }
+                    .signInWithAppleButtonStyle(.white)
+                    .frame(height: 52)
+                    .disabled(appleBusy)
+                    Text("Use this only for a Yaver account already linked to Apple. The QR works with every provider.")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 28)
             }
             .frame(maxWidth: 560, alignment: .leading)
 
@@ -134,7 +142,10 @@ struct SignInView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await begin() }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now = $0 }
-        .onDisappear { pollTask?.cancel() }
+        .onDisappear {
+            pollTask?.cancel()
+            fallbackPollTask?.cancel()
+        }
     }
 
     private func stepText(_ s: String) -> some View {
@@ -204,25 +215,48 @@ struct SignInView: View {
 
     private func startPolling(_ s: DeviceCodeStart) {
         pollTask?.cancel()
+        fallbackPollTask?.cancel()
         pollTask = Task {
+            while !Task.isCancelled {
+                if Task.isCancelled { return }
+                let r = await DeviceCodeAuth.waitEvent(deviceCode: s.deviceCode)
+                if await handlePollResult(r, for: s) { return }
+            }
+        }
+        fallbackPollTask = Task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 if Task.isCancelled { return }
                 let r = await DeviceCodeAuth.poll(deviceCode: s.deviceCode)
-                unreachable = r.unreachableReason
-                switch r.status {
-                case .authorized:
-                    approving = true
-                    if let token = r.token { store.signIn(token: token) }
-                    return
-                case .expired:
-                    expired = true
-                    await begin()
-                    return
-                case .pending:
-                    continue
-                }
+                if await handlePollResult(r, for: s) { return }
             }
+        }
+    }
+
+    private func handlePollResult(_ r: DevicePollResult, for s: DeviceCodeStart) async -> Bool {
+        unreachable = r.unreachableReason
+        switch r.status {
+        case .authorized:
+            if approving { return true }
+            approving = true
+            let claimed = r.token == nil
+                ? await DeviceCodeAuth.claim(deviceCode: s.deviceCode, claimHandle: r.claimHandle)
+                : r
+            if let token = claimed.token {
+                pollTask?.cancel()
+                fallbackPollTask?.cancel()
+                store.signIn(token: token)
+                return true
+            }
+            approving = false
+            unreachable = claimed.unreachableReason ?? "Approved, but this Apple TV could not pick up the session yet. Retrying..."
+            return false
+        case .expired:
+            expired = true
+            await begin()
+            return true
+        case .pending:
+            return false
         }
     }
 

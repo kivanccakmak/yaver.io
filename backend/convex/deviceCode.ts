@@ -36,6 +36,7 @@ export const createDeviceCode = mutation({
     runtimeVersion: v.optional(v.string()),
     preferredProvider: v.optional(v.string()),
     isWsl: v.optional(v.boolean()),
+    deviceId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Clean up expired codes lazily (delete up to 10)
@@ -75,6 +76,7 @@ export const createDeviceCode = mutation({
       runtimeVersion: args.runtimeVersion,
       preferredProvider: args.preferredProvider,
       isWsl: args.isWsl,
+      deviceId: args.deviceId,
       expiresAt: now + DEVICE_CODE_TTL_MS,
       createdAt: now,
     });
@@ -110,11 +112,89 @@ export const getDeviceCodeInfo = query({
       runtimeVersion: code.runtimeVersion ?? null,
       preferredProvider: code.preferredProvider ?? null,
       isWsl: code.isWsl ?? false,
+      deviceId: code.deviceId ?? null,
+      claimed: code.claimedAt !== undefined || (code.status === "authorized" && !code.pendingToken && !code.approvedUserId),
+      approvedAt: code.approvedAt ?? null,
+      claimedAt: code.claimedAt ?? null,
       expiresAt: code.expiresAt,
       createdAt: code.createdAt,
     };
   },
 });
+
+export const getDeviceCodeEvent = query({
+  args: { deviceCode: v.string() },
+  handler: async (ctx, args) => {
+    const code = await ctx.db
+      .query("deviceCodes")
+      .withIndex("by_deviceCode", (q) => q.eq("deviceCode", args.deviceCode))
+      .unique();
+
+    if (!code) return { status: "expired" as const };
+    if (code.expiresAt < Date.now()) return { status: "expired" as const, expiresAt: code.expiresAt };
+    if (code.status === "authorized") {
+      return {
+        status: "authorized" as const,
+        claimHandle: code.claimHandle ?? null,
+        claimed: code.claimedAt !== undefined || (!code.pendingToken && !code.approvedUserId),
+        expiresAt: code.expiresAt,
+      };
+    }
+    return { status: code.status as "pending" | "expired", expiresAt: code.expiresAt };
+  },
+});
+
+function isTVCode(code: {
+  platform?: string;
+  environment?: string;
+}): boolean {
+  const platform = (code.platform || "").toLowerCase();
+  const env = (code.environment || "").toLowerCase();
+  return env === "tv" || platform === "tvos" || platform === "androidtv" || platform === "android-tv";
+}
+
+async function mintTokenForAuthorizedCode(
+  ctx: MutationCtx,
+  code: {
+    _id: Id<"deviceCodes">;
+    userCode: string;
+    status: "pending" | "authorized" | "expired";
+    pendingToken?: string;
+    approvedUserId?: Id<"users">;
+    deviceId?: string;
+    platform?: string;
+    environment?: string;
+    claimedAt?: number;
+  },
+) {
+  if (code.status !== "authorized") return { status: "expired" as const };
+  if (code.claimedAt !== undefined) return { status: "expired" as const };
+
+  if (code.pendingToken) {
+    const token = code.pendingToken;
+    await ctx.db.patch(code._id, { pendingToken: undefined, claimedAt: Date.now() });
+    return { status: "authorized" as const, token };
+  }
+
+  if (!code.approvedUserId) return { status: "expired" as const };
+
+  const tokenBytes = new Uint8Array(32);
+  crypto.getRandomValues(tokenBytes);
+  const token = Array.from(tokenBytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const tokenHash = await sha256Hex(token);
+  await ctx.db.insert("sessions", {
+    tokenHash,
+    userId: code.approvedUserId,
+    deviceId: code.deviceId,
+    expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
+    createdAt: Date.now(),
+    scope: isTVCode(code) ? "tv" as const : "full" as const,
+  });
+  await ctx.db.patch(code._id, { claimedAt: Date.now() });
+  return { status: "authorized" as const, token };
+}
 
 /**
  * Poll for device code status. Called by CLI every 5 seconds.
@@ -137,16 +217,8 @@ export const pollDeviceCode = mutation({
       return { status: "expired" as const };
     }
 
-    if (code.status === "authorized" && code.pendingToken) {
-      // Return token and clear it (one-time retrieval)
-      const token = code.pendingToken;
-      await ctx.db.patch(code._id, { pendingToken: undefined });
-      return { status: "authorized" as const, token };
-    }
-
     if (code.status === "authorized") {
-      // Token already retrieved
-      return { status: "expired" as const };
+      return await mintTokenForAuthorizedCode(ctx, code);
     }
 
     return { status: "pending" as const };
@@ -188,30 +260,52 @@ export const authorizeDeviceCode = internalMutation({
       throw new Error("CODE_EXPIRED");
     }
 
-    // Generate session token
-    const tokenBytes = new Uint8Array(32);
-    crypto.getRandomValues(tokenBytes);
-    const token = Array.from(tokenBytes)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-    const tokenHash = await sha256Hex(token);
-    const expiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000; // 1 year
+    const attempts = (code.authorizeAttempts ?? 0) + 1;
+    if (attempts > 8) {
+      await ctx.db.patch(code._id, {
+        authorizeAttempts: attempts,
+        lastAuthorizeAttemptAt: Date.now(),
+      });
+      throw new Error("TOO_MANY_ATTEMPTS");
+    }
 
-    // Create session
-    await ctx.db.insert("sessions", {
-      tokenHash,
-      userId: args.userId,
-      expiresAt,
-      createdAt: Date.now(),
-    });
-
-    // Store raw token for CLI retrieval, mark as authorized
+    const claimHandle = randomHex(16);
     await ctx.db.patch(code._id, {
       status: "authorized",
-      pendingToken: token,
+      approvedUserId: args.userId,
+      approvedAt: Date.now(),
+      claimHandle,
+      authorizeAttempts: attempts,
+      lastAuthorizeAttemptAt: Date.now(),
     });
 
-    return { ok: true };
+    return { ok: true, claimHandle };
+  },
+});
+
+export const claimDeviceCode = mutation({
+  args: {
+    deviceCode: v.string(),
+    claimHandle: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const code = await ctx.db
+      .query("deviceCodes")
+      .withIndex("by_deviceCode", (q) => q.eq("deviceCode", args.deviceCode))
+      .unique();
+
+    if (!code) return { status: "expired" as const };
+    if (code.expiresAt < Date.now()) {
+      await ctx.db.patch(code._id, { status: "expired" });
+      return { status: "expired" as const };
+    }
+    if (code.claimHandle && args.claimHandle && code.claimHandle !== args.claimHandle) {
+      return { status: "pending" as const };
+    }
+    if (code.claimHandle && !args.claimHandle) {
+      return { status: "authorized" as const, claimRequired: true };
+    }
+    return await mintTokenForAuthorizedCode(ctx, code);
   },
 });
 

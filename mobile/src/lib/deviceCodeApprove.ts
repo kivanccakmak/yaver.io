@@ -30,6 +30,10 @@ export interface DeviceCodeInfo {
   platform?: string;
   arch?: string;
   shell?: string;
+  status?: "pending" | "authorized" | "expired";
+  claimed?: boolean;
+  approvedAt?: number | null;
+  claimedAt?: number | null;
   /** Unix ms when the code expires (codes are 15-min TTL). */
   expiresAt?: number;
   /** Some deployments echo the normalized code back. */

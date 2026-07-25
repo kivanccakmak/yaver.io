@@ -27,6 +27,8 @@ export type PollStatus = "pending" | "authorized" | "expired";
 export interface PollResult {
   status: PollStatus;
   token?: string;
+  claimHandle?: string | null;
+  claimRequired?: boolean;
 }
 
 /** The web/app deep link that routes a scanned QR into the phone approver. */
@@ -49,6 +51,36 @@ export async function createTVDeviceCode(machineName: string, platform: string):
   }
   const j = (await res.json()) as { userCode: string; deviceCode: string; expiresAt: number };
   return { ...j, verifyUrl: deviceVerifyUrl(j.userCode) };
+}
+
+export async function waitTVDeviceCodeEvent(deviceCode: string): Promise<PollResult> {
+  const res = await fetch(
+    `${getConvexSiteUrl()}/auth/device-code/events?device_code=${encodeURIComponent(deviceCode)}`,
+  );
+  if (!res.ok) return { status: "pending" };
+  const text = await res.text();
+  const dataLines = text
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trim())
+    .filter(Boolean);
+  const last = dataLines[dataLines.length - 1];
+  if (!last) return { status: "pending" };
+  try {
+    return JSON.parse(last) as PollResult;
+  } catch {
+    return { status: "pending" };
+  }
+}
+
+export async function claimTVDeviceCode(deviceCode: string, claimHandle?: string | null): Promise<PollResult> {
+  const res = await fetch(`${getConvexSiteUrl()}/auth/device-code/claim`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceCode, claimHandle: claimHandle || undefined }),
+  });
+  if (!res.ok) return { status: "pending" };
+  return (await res.json()) as PollResult;
 }
 
 export async function pollTVDeviceCode(deviceCode: string): Promise<PollResult> {

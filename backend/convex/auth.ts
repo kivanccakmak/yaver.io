@@ -575,9 +575,9 @@ export async function validateSessionInternal(
   };
   sessionId: Id<"sessions">;
   /** Auth scope: "full" = a normal owner login; "machine" = a managed box's
-   *  token (restricted from account-level/destructive ops). Undefined in the
-   *  row means "full" (backward-compatible). */
-  scope: "full" | "machine";
+   *  token; "tv" = a lean-back TV surface token. Undefined in the row means
+   *  "full" (backward-compatible). */
+  scope: "full" | "machine" | "tv";
 } | null> {
   let session = await ctx.db
     .query("sessions")

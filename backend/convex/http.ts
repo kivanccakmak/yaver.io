@@ -647,9 +647,10 @@ async function authenticateRequest(
   surveyCompleted: boolean;
   emailVerified: boolean;
   isOwner: boolean;
-  /** Auth scope. "machine" = a managed-box token, denied on account-level +
-   *  spend routes; "full"/undefined = a normal owner login. */
-  scope: "full" | "machine";
+  /** Auth scope. "machine" = a managed-box token, "tv" = a lean-back TV
+   *  surface token. Both are denied on account-level + spend routes;
+   *  "full"/undefined = a normal owner login. */
+  scope: "full" | "machine" | "tv";
 } | null> {
   const authHeader = request.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) return null;
@@ -680,7 +681,11 @@ async function authenticateRequest(
     // Owner flag drives owner-only hardware-cell visibility on every client
     // (web/mobile/daemon) without shipping any owner identity to the client.
     isOwner: (result as { isOwner?: boolean }).isOwner === true,
-    scope: (result as { scope?: "full" | "machine" }).scope === "machine" ? "machine" : "full",
+    scope: (result as { scope?: "full" | "machine" | "tv" }).scope === "machine"
+      ? "machine"
+      : (result as { scope?: "full" | "machine" | "tv" }).scope === "tv"
+        ? "tv"
+        : "full",
   };
 }
 
@@ -692,16 +697,23 @@ async function authenticateRequest(
  * Returns an error Response to return early, or null to proceed.
  */
 function requireFullScope(
-  auth: { scope: "full" | "machine" },
+  auth: { scope: "full" | "machine" | "tv" },
 ): Response | null {
   if (auth.scope === "machine") {
     return errorResponse(machineScopeDeniedMessage(), 403);
+  }
+  if (auth.scope === "tv") {
+    return errorResponse(tvScopeDeniedMessage(), 403);
   }
   return null;
 }
 
 export function machineScopeDeniedMessage(): string {
   return "This token is machine-scoped and cannot perform account-level operations.";
+}
+
+export function tvScopeDeniedMessage(): string {
+  return "This token is TV-scoped and cannot perform account-level operations.";
 }
 
 /**
@@ -820,6 +832,7 @@ for (const path of [
   "/auth/verify-totp", "/auth/providers", "/auth/oauth-link/start", "/auth/oauth-link/complete",
   "/auth/test/oauth-signin",
   "/auth/device-code/authorize", "/auth/device-code/broker",
+  "/auth/device-code/poll", "/auth/device-code/claim", "/auth/device-code/events",
   "/auth/passkey/register/start", "/auth/passkey/register/finish",
   "/auth/passkey/login/start", "/auth/passkey/login/finish",
   "/auth/passkey/signup/start", "/auth/passkey/signup/finish",
@@ -1964,6 +1977,8 @@ http.route({
   handler: httpAction(async (ctx, request) => {
     const body = await request.json();
     const { identityToken, fullName } = body;
+    const expectedNonce =
+      typeof body?.nonce === "string" ? body.nonce.trim() : "";
 
     if (!identityToken) {
       return errorResponse("Missing identityToken", 400);
@@ -1992,6 +2007,9 @@ http.route({
 
     if (!email || !sub) {
       return errorResponse("Token missing email or sub", 400);
+    }
+    if (expectedNonce && payload.nonce !== expectedNonce) {
+      return errorResponse("Apple identity token nonce mismatch", 401);
     }
     // Apple sets email_verified as string "true"/"false" or boolean.
     const emailVerifiedClaim = payload.email_verified;
@@ -5283,6 +5301,7 @@ http.route({
       runtimeVersion: typeof body?.runtimeVersion === "string" ? body.runtimeVersion : undefined,
       preferredProvider: typeof body?.preferredProvider === "string" ? body.preferredProvider : undefined,
       isWsl: typeof body?.isWsl === "boolean" ? body.isWsl : undefined,
+      deviceId: typeof body?.deviceId === "string" ? body.deviceId : undefined,
     });
     return jsonResponse(result);
   }),
@@ -5299,6 +5318,76 @@ http.route({
       return errorResponse("device_code required", 400);
     }
     const result = await ctx.runMutation(api.deviceCode.pollDeviceCode, { deviceCode });
+    return jsonResponse(result);
+  }),
+});
+
+/** GET /auth/device-code/events — SSE state stream for TV sign-in.
+ *  Emits non-secret state only. The TV claims the token separately through
+ *  /auth/device-code/claim, so an event stream never carries a bearer token. */
+http.route({
+  path: "/auth/device-code/events",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const deviceCode = url.searchParams.get("device_code");
+    if (!deviceCode) {
+      return errorResponse("device_code required", 400);
+    }
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        let last = "";
+        const started = Date.now();
+        const maxMs = 60_000;
+        const write = (event: string, data: unknown) => {
+          controller.enqueue(encoder.encode(`event: ${event}\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+        };
+
+        while (!request.signal.aborted && Date.now() - started < maxMs) {
+          const event = await ctx.runQuery(api.deviceCode.getDeviceCodeEvent, { deviceCode });
+          const serialized = JSON.stringify(event);
+          if (serialized !== last) {
+            last = serialized;
+            write("device-code", event);
+          }
+          const status = (event as { status?: string }).status;
+          if (status === "authorized" || status === "expired") break;
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+        controller.close();
+      },
+    });
+
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-store",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
+  }),
+});
+
+/** POST /auth/device-code/claim — one-time token claim for an authorized code. */
+http.route({
+  path: "/auth/device-code/claim",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const body = await request.json().catch(() => ({}));
+    const deviceCode = typeof body?.deviceCode === "string" ? body.deviceCode : "";
+    const claimHandle = typeof body?.claimHandle === "string" ? body.claimHandle : undefined;
+    if (!deviceCode) {
+      return errorResponse("deviceCode required", 400);
+    }
+    const result = await ctx.runMutation(api.deviceCode.claimDeviceCode, {
+      deviceCode,
+      claimHandle,
+    });
     return jsonResponse(result);
   }),
 });
@@ -5362,6 +5451,7 @@ http.route({
       if (e.message === "INVALID_CODE") return errorResponse("Invalid code", 404);
       if (e.message === "CODE_EXPIRED") return errorResponse("Code expired", 410);
       if (e.message === "CODE_ALREADY_USED") return errorResponse("Code already used", 409);
+      if (e.message === "TOO_MANY_ATTEMPTS") return errorResponse("Too many attempts", 429);
       return errorResponse("Failed to authorize", 500);
     }
   }),

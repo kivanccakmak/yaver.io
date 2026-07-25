@@ -88,6 +88,7 @@ export default function ApproveDeviceScreen() {
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [claimedByDevice, setClaimedByDevice] = useState(false);
   const [scanning, setScanning] = useState(false);
 
   // A normalized code is 9 chars (ABCD-1234). Look up the waiting
@@ -147,14 +148,27 @@ export default function ApproveDeviceScreen() {
       // A biometric subsystem error shouldn't hard-block a valid session.
     }
     const res = await approveDeviceCode(code, token ?? "");
-    setApproving(false);
     if (res.ok) {
+      const c9 = normalizeUserCode(code);
+      let claimed = false;
+      for (let i = 0; i < 12; i += 1) {
+        const latest = await fetchDeviceCodeInfo(c9);
+        if (latest) setInfo(latest);
+        if (latest?.claimed) {
+          claimed = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
       // Only now is the stash spent. Clearing it earlier (the old finishLogin
       // did, before navigating) meant a navigation lost to another redirect
       // destroyed the code with it — unrecoverable, TV stuck forever.
       await clearPendingDeviceCode();
+      setClaimedByDevice(claimed);
+      setApproving(false);
       setDone(true);
     } else {
+      setApproving(false);
       setError(res.error ?? "Couldn't authorize the machine.");
     }
   }, [approving, code, token, info?.machineName]);
@@ -173,11 +187,15 @@ export default function ApproveDeviceScreen() {
           <View style={[styles.checkCircle, { backgroundColor: c.success + "22", borderColor: c.success }]}>
             <Text style={[styles.checkMark, { color: c.success }]}>✓</Text>
           </View>
-          <Text style={[styles.title, { color: c.textPrimary }]}>Machine signed in</Text>
+          <Text style={[styles.title, { color: c.textPrimary }]}>
+            {claimedByDevice ? "Machine signed in" : "Sign-in approved"}
+          </Text>
           <Text style={[styles.subtitle, { color: c.textSecondary }]}>
-            {info?.machineName
+            {claimedByDevice && info?.machineName
               ? `${info.machineName} is authorized as ${user?.email ?? "your account"}. It'll come online in a few seconds.`
-              : "The machine is authorized. It'll come online in a few seconds."}
+              : claimedByDevice
+                ? "The machine is authorized. It'll come online in a few seconds."
+                : `${info?.machineName || "The device"} is approved. Keep its sign-in screen open while it picks up the session.`}
           </Text>
           <Pressable
             style={({ pressed }) => [styles.primaryBtn, { backgroundColor: c.accent }, pressed && { opacity: 0.85 }]}

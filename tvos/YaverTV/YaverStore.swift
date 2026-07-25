@@ -8,7 +8,7 @@ import SwiftUI
 
 @MainActor
 final class YaverStore: ObservableObject {
-    @AppStorage("yaver.tv.token") private var storedToken: String = ""
+    @AppStorage("yaver.tv.token") private var legacyStoredToken: String = ""
     @AppStorage("yaver.tv.boxes") private var storedBoxesJSON: String = "[]"
     @AppStorage("yaver.tv.selectedBox") private var selectedBoxId: String = ""
 
@@ -28,7 +28,15 @@ final class YaverStore: ObservableObject {
     var isAuthenticated: Bool { !token.isEmpty }
 
     init() {
-        token = storedToken
+        let keychainToken = TokenStore.load()
+        if !keychainToken.isEmpty {
+            token = keychainToken
+            if !legacyStoredToken.isEmpty { legacyStoredToken = "" }
+        } else if !legacyStoredToken.isEmpty {
+            token = legacyStoredToken
+            TokenStore.save(legacyStoredToken)
+            legacyStoredToken = ""
+        }
         boxes = (try? JSONDecoder().decode([BoxTarget].self, from: Data(storedBoxesJSON.utf8))) ?? []
         selectedBox = boxes.first(where: { $0.id == selectedBoxId }) ?? boxes.first
         refreshSessionOnLaunch()
@@ -38,7 +46,7 @@ final class YaverStore: ObservableObject {
     /// signed-in TV never re-prompts for OAuth. No-op when signed out. See
     /// Backend.refreshSession for the extend-only (no-rotation) rationale.
     private func refreshSessionOnLaunch() {
-        let current = storedToken
+        let current = token
         guard !current.isEmpty else { return }
         Task { [weak self] in
             let rotated = await DeviceCodeAuth.refreshSession(token: current)
@@ -49,19 +57,21 @@ final class YaverStore: ObservableObject {
                 // the user may have signed out/in while the refresh was in flight.
                 guard self.token == current else { return }
                 self.token = rotated
-                self.storedToken = rotated
+                TokenStore.save(rotated)
             }
         }
     }
 
     func signIn(token: String) {
         self.token = token
-        storedToken = token
+        legacyStoredToken = ""
+        TokenStore.save(token)
     }
 
     func signOut() {
         token = ""
-        storedToken = ""
+        legacyStoredToken = ""
+        TokenStore.clear()
         // Clear the machine list too. On a family Apple TV, leaving boxes behind
         // hands the next person the previous user's machine names and LAN IPs.
         boxes = []
@@ -109,13 +119,31 @@ final class YaverStore: ObservableObject {
     func healReachability() async {
         guard isAuthenticated, let box = selectedBox else { return }
         let list = (try? await MachineRegistry.fetch(token: token)) ?? []
+        let settings = try? await MachineRegistry.fetchSettings(token: token)
         guard let dev = list.first(where: { $0.deviceId == box.id }) else { return }
         let host = await MachineRegistry.firstReachable(dev.addressCandidates, port: dev.port, token: token)
         guard let host, !host.isEmpty, host != box.host else { return }
         let healed = BoxTarget(id: dev.deviceId, name: dev.displayName, host: host,
-                               port: dev.port, managed: dev.managed, machineId: dev.machineId)
+                               port: dev.port, managed: dev.managed, machineId: dev.machineId,
+                               relayBaseUrl: settings?.relayUrl, relayPassword: settings?.relayPassword)
         addBox(healed)
         select(healed)
+    }
+
+    /// Backfill relay metadata onto an already-selected/stored box. Older tvOS
+    /// builds persisted only the LAN host, so after upgrade the user could still
+    /// be stuck LAN-only until they re-picked the machine. This is idempotent and
+    /// only changes transport metadata, not the selected device.
+    func refreshSelectedRelaySettings() async {
+        guard isAuthenticated, let box = selectedBox else { return }
+        guard box.relayBaseUrl?.isEmpty != false || box.relayPassword?.isEmpty != false else { return }
+        guard let settings = try? await MachineRegistry.fetchSettings(token: token) else { return }
+        guard settings.relayUrl?.isEmpty == false || settings.relayPassword?.isEmpty == false else { return }
+        let updated = BoxTarget(id: box.id, name: box.name, host: box.host, port: box.port,
+                                managed: box.managed, machineId: box.machineId,
+                                relayBaseUrl: settings.relayUrl, relayPassword: settings.relayPassword)
+        addBox(updated)
+        select(updated)
     }
 
     // MARK: - Narrated auto-connect (Stream C)
@@ -170,6 +198,7 @@ final class YaverStore: ObservableObject {
             if selectedBox == nil { autoConnectStarted = false }
         }
         let list = (try? await MachineRegistry.fetch(token: token)) ?? []
+        let settings = try? await MachineRegistry.fetchSettings(token: token)
         if autoConnectCancelled { return }
         let nowMs = Date().timeIntervalSince1970 * 1000
         func isLive(_ d: RegisteredDevice) -> Bool {
@@ -191,7 +220,8 @@ final class YaverStore: ObservableObject {
         if autoConnectCancelled { return }
         guard let host, !host.isEmpty else { return }
         let box = BoxTarget(id: target.deviceId, name: target.displayName, host: host,
-                            port: target.port, managed: target.managed, machineId: target.machineId)
+                            port: target.port, managed: target.managed, machineId: target.machineId,
+                            relayBaseUrl: settings?.relayUrl, relayPassword: settings?.relayPassword)
         addBox(box)
         select(box)
     }

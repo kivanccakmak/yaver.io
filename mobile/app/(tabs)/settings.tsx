@@ -2245,7 +2245,7 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* Sign in another device (Apple TV / headless box) by scanning its QR */}
+        {/* Sign in a TV/headless device by scanning its QR inside Yaver. */}
         <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Devices</Text>
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
@@ -2254,9 +2254,9 @@ export default function SettingsScreen() {
               onPress={() => router.push("/approve-device")}
             >
               <View style={{ flex: 1 }}>
-                <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Sign in a device</Text>
+                <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Sign in a TV</Text>
                 <Text style={{ color: c.textMuted, fontSize: 11 }}>
-                  Scan the QR on an Apple TV or a headless box (or type its code) to sign it into your account
+                  Scan the QR on Apple TV or Google TV inside Yaver; also works for a headless box code
                 </Text>
               </View>
               <Text style={[styles.aboutValue, { color: c.accent }]}>Scan ›</Text>

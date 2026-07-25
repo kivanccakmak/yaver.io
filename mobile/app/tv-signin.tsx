@@ -15,7 +15,14 @@ import { Platform } from "react-native";
 
 import { useAuth } from "../src/context/AuthContext";
 import { useColors } from "../src/context/ThemeContext";
-import { createTVDeviceCode, pollTVDeviceCode, type DeviceCodeStart } from "../src/lib/tvSignIn";
+import {
+  claimTVDeviceCode,
+  createTVDeviceCode,
+  pollTVDeviceCode,
+  waitTVDeviceCodeEvent,
+  type DeviceCodeStart,
+  type PollResult,
+} from "../src/lib/tvSignIn";
 
 const POLL_MS = 5000;
 
@@ -24,7 +31,10 @@ export default function TVSignInScreen() {
   const { login, isAuthenticated } = useAuth();
   const [start, setStart] = useState<DeviceCodeStart | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [unreachable, setUnreachable] = useState<string | null>(null);
   const [status, setStatus] = useState<"pending" | "authorized" | "expired">("pending");
+  const [now, setNow] = useState(Date.now());
+  const claimedRef = useRef(false);
   const liveRef = useRef(true);
 
   const machineName = Platform.OS === "ios" ? "Apple TV" : "Google TV";
@@ -34,7 +44,11 @@ export default function TVSignInScreen() {
     setStatus("pending");
     try {
       const s = await createTVDeviceCode(machineName, Platform.OS === "ios" ? "tvos" : "androidtv");
-      if (liveRef.current) setStart(s);
+      if (liveRef.current) {
+        claimedRef.current = false;
+        setStart(s);
+        setUnreachable(null);
+      }
     } catch (e: any) {
       if (liveRef.current) setError(e?.message || "Couldn't start sign-in. Check your connection.");
     }
@@ -49,28 +63,72 @@ export default function TVSignInScreen() {
     };
   }, [begin]);
 
-  // Poll until approved (or expired → refresh).
+  const finishIfAuthorized = useCallback(async (r: PollResult, deviceCode: string) => {
+    if (!liveRef.current || claimedRef.current) return;
+    if (r.status === "authorized") {
+      claimedRef.current = true;
+      setStatus("authorized");
+      const claimed = r.token ? r : await claimTVDeviceCode(deviceCode, r.claimHandle);
+      if (claimed.status === "authorized" && claimed.token) {
+        await login(claimed.token);
+        router.replace("/tv-home");
+        return;
+      }
+      claimedRef.current = false;
+      setUnreachable("Approved, but this TV could not pick up the session yet. Retrying...");
+      return;
+    }
+    if (r.status === "expired") {
+      setStatus("expired");
+      begin();
+    }
+  }, [begin, login]);
+
+  // Event-listen first: the backend holds this request until the code changes,
+  // so approval can land immediately. Polling below is still the fallback.
+  useEffect(() => {
+    if (!start) return;
+    let cancelled = false;
+    (async () => {
+      while (!cancelled && liveRef.current && !claimedRef.current) {
+        try {
+          const r = await waitTVDeviceCodeEvent(start.deviceCode);
+          if (cancelled) return;
+          setUnreachable(null);
+          await finishIfAuthorized(r, start.deviceCode);
+          if (r.status === "authorized" || r.status === "expired") return;
+        } catch (e: any) {
+          if (!cancelled) setUnreachable(e?.message || "Can't reach Yaver. Retrying...");
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [start, finishIfAuthorized]);
+
+  // Poll until approved (or expired -> refresh). This is a backup for platforms
+  // that suspend the long request or lose a network transition.
   useEffect(() => {
     if (!start) return;
     const id = setInterval(async () => {
       try {
         const r = await pollTVDeviceCode(start.deviceCode);
         if (!liveRef.current) return;
-        if (r.status === "authorized" && r.token) {
+        setUnreachable(null);
+        await finishIfAuthorized(r, start.deviceCode);
+        if (r.status === "authorized" || r.status === "expired") {
           clearInterval(id);
-          await login(r.token);
-          router.replace("/tv-home");
-        } else if (r.status === "expired") {
-          clearInterval(id);
-          setStatus("expired");
-          begin(); // fetch a fresh code automatically
         }
-      } catch {
-        /* transient — keep polling */
+      } catch (e: any) {
+        setUnreachable(e?.message || "Can't reach Yaver. Retrying...");
       }
     }, POLL_MS);
     return () => clearInterval(id);
-  }, [start, login, begin]);
+  }, [start, finishIfAuthorized]);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (isAuthenticated) router.replace("/tv-home");
@@ -93,6 +151,11 @@ export default function TVSignInScreen() {
           ) : null}
 
           {error ? <Text style={[styles.error, { color: c.warn }]}>{error}</Text> : null}
+          {start ? (
+            <Text style={[styles.hint, { color: unreachable ? c.warn : c.textMuted }]}>
+              {unreachable || `Waiting for approval · ${formatClock(Math.max(0, now - (start.expiresAt - 15 * 60 * 1000)) / 1000)} elapsed · code expires in ${formatClock(Math.max(0, start.expiresAt - now) / 1000)}`}
+            </Text>
+          ) : null}
           {status === "expired" ? (
             <Text style={[styles.hint, { color: c.textMuted }]}>Code expired — generating a new one…</Text>
           ) : null}
@@ -108,6 +171,11 @@ export default function TVSignInScreen() {
       </View>
     </SafeAreaView>
   );
+}
+
+function formatClock(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
 const styles = StyleSheet.create({

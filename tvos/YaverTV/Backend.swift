@@ -42,6 +42,8 @@ enum DevicePollStatus: String, Decodable {
 struct DevicePollResult: Decodable {
     let status: DevicePollStatus
     let token: String?
+    let claimHandle: String?
+    let claimRequired: Bool?
     /// Set when the poll never got an answer (offline, DNS, 5xx, bad JSON).
     ///
     /// Without this, a transport failure was reported as `.pending` — which the
@@ -96,18 +98,72 @@ enum DeviceCodeAuth {
                                   resolvingAgainstBaseURL: false)!
         comps.queryItems = [URLQueryItem(name: "device_code", value: deviceCode)]
         guard let url = comps.url else {
-            return DevicePollResult(status: .pending, token: nil, unreachableReason: "bad poll URL")
+            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
+                                    unreachableReason: "bad poll URL")
         }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
-                return DevicePollResult(status: .pending, token: nil,
+                return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
                                         unreachableReason: "server returned HTTP \(code)")
             }
             return try JSONDecoder().decode(DevicePollResult.self, from: data)
         } catch {
-            return DevicePollResult(status: .pending, token: nil,
+            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
+                                    unreachableReason: error.localizedDescription)
+        }
+    }
+
+    /// Event-first wait. The backend keeps this request open until the code
+    /// changes (or times out), then closes it. We parse the last SSE data line.
+    static func waitEvent(deviceCode: String) async -> DevicePollResult {
+        var comps = URLComponents(url: Backend.convexSiteURL.appendingPathComponent("auth/device-code/events"),
+                                  resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "device_code", value: deviceCode)]
+        guard let url = comps.url else {
+            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil, unreachableReason: "bad events URL")
+        }
+        do {
+            let (data, resp) = try await URLSession.shared.data(from: url)
+            guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+                return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
+                                        unreachableReason: "server returned HTTP \(code)")
+            }
+            let text = String(data: data, encoding: .utf8) ?? ""
+            let payload = text
+                .split(whereSeparator: \.isNewline)
+                .filter { $0.hasPrefix("data:") }
+                .map { String($0.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces) }
+                .last
+            guard let payload, let body = payload.data(using: .utf8) else {
+                return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil)
+            }
+            return try JSONDecoder().decode(DevicePollResult.self, from: body)
+        } catch {
+            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
+                                    unreachableReason: error.localizedDescription)
+        }
+    }
+
+    static func claim(deviceCode: String, claimHandle: String?) async -> DevicePollResult {
+        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("auth/device-code/claim"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["deviceCode": deviceCode]
+        if let claimHandle, !claimHandle.isEmpty { body["claimHandle"] = claimHandle }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+                return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
+                                        unreachableReason: "server returned HTTP \(code)")
+            }
+            return try JSONDecoder().decode(DevicePollResult.self, from: data)
+        } catch {
+            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
                                     unreachableReason: error.localizedDescription)
         }
     }

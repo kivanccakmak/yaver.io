@@ -259,7 +259,7 @@ export default defineSchema({
     // (spend, provision, act on OTHER devices) must reject it. A rooted box then
     // can only hurt itself. Phase 0 only RECORDS the scope; enforcement lands in
     // later phases behind a flag after the box's real call-set is measured.
-    scope: v.optional(v.union(v.literal("full"), v.literal("machine"))),
+    scope: v.optional(v.union(v.literal("full"), v.literal("machine"), v.literal("tv"))),
     // Rotation grace: when a token is rotated (X-Yaver-Rotate-Token),
     // the immediately-previous tokenHash stays valid until this time
     // (~2 min). Token rotation is otherwise instant-and-permanent, so
@@ -1100,6 +1100,13 @@ export default defineSchema({
     runtimeVersion: v.optional(v.string()),
     preferredProvider: v.optional(v.string()),
     isWsl: v.optional(v.boolean()),
+    deviceId: v.optional(v.string()),
+    approvedUserId: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+    claimHandle: v.optional(v.string()),
+    claimedAt: v.optional(v.number()),
+    authorizeAttempts: v.optional(v.number()),
+    lastAuthorizeAttemptAt: v.optional(v.number()),
     pendingToken: v.optional(v.string()),
     expiresAt: v.number(),
     createdAt: v.number(),
