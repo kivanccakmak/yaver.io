@@ -102,6 +102,25 @@ func augmentAgentPATH() {
 	// only ever run last, so the user's existing tool choice wins.
 	parts := append(append([]string{}, existingOrder...), additions...)
 	_ = os.Setenv("PATH", strings.Join(parts, ":"))
+
+	// Same reasoning for the Android SDK location, which is NOT a PATH question:
+	// Gradle, avdmanager and the emulator find the SDK through ANDROID_HOME /
+	// ANDROID_SDK_ROOT. A launchd/systemd-started daemon inherits neither (the
+	// user set them in their shell profile), so an Android build failed with "SDK
+	// location not found" on a machine whose SDK the agent had just discovered.
+	//
+	// Set here, process-wide, so EVERY spawn path sees it — augmentEnv-based
+	// builds, the /exec endpoint, a runner's shell. Doing it only in augmentEnv
+	// left the exec path blind, which is precisely the kind of "fixed in one of
+	// two places" gap that keeps costing sessions. Never overrides an operator's
+	// own value.
+	for _, kv := range androidSDKEnvIfDiscovered() {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok || strings.TrimSpace(os.Getenv(name)) != "" {
+			continue
+		}
+		_ = os.Setenv(name, value)
+	}
 }
 
 func relayInfosFromConfig(servers []RelayServerConfig) ([]RelayServerInfo, map[string]string) {
