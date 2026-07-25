@@ -11,7 +11,7 @@ import {
 } from "@/lib/device-lifecycle";
 import WebShellModal from "@/components/dashboard/WebShellModal";
 import RemoteDesktopModal from "@/components/dashboard/RemoteDesktopModal";
-import { agentClient, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe } from "@/lib/agent-client";
+import { agentClient, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary } from "@/lib/agent-client";
 import { CONVEX_URL } from "@/lib/constants";
 import { fetchGuestHosts, acceptGuestInvitation, type GuestInvitation } from "@/lib/guests";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -840,6 +840,10 @@ export default function DashboardPage() {
   // instead of silently opening a WS against the wrong baseUrl.
   const [shellDevice, setShellDevice] = useState<Device | null>(null);
   const [shellTmuxSession, setShellTmuxSession] = useState<string | null>(null);
+  // Live tmux sessions for the sidebar "Vibing" list. One shared source with the
+  // Vibing tab (agentClient.listTmuxSessions), polled only while connected — a
+  // session list from a box we're not attached to would be fiction.
+  const [sidebarTmux, setSidebarTmux] = useState<TmuxSessionSummary[]>([]);
   const [remoteDesktopDevice, setRemoteDesktopDevice] = useState<Device | null>(null);
   const [activeTab, setActiveTab] = useState<"home" | "chat" | "projects" | "runtime" | "vibe" | "devices" | "git" | "todos" | "feedback" | "artifacts" | "builds" | "webview" | "preview" | "web-reload" | "health" | "quality" | "convex" | "data" | "switch" | "accounts" | "company-ai" | "companion" | "observ" | "ops" | "autoruns" | "extras" | "share" | "guests" | "collab" | "infra" | "connect" | "network" | "tools" | "security" | "storage" | "vault" | "apikeys" | "schedules" | "exec" | "phone" | "vibe-preview" | "domains" | "screenlog" | "settings" | "billing" | "stores" | "cloud" | "build" | "arm" | "appletv" | "packages" | "verbs">("devices");
   const [runtimeIntent, setRuntimeIntent] = useState<RuntimeLabIntent | null>(null);
@@ -995,6 +999,31 @@ export default function DashboardPage() {
   const probedForCurrentTabOpenRef = useRef(false);
 
   const isConnected = connState === "connected";
+
+  // Sidebar tmux list: refresh on connect and every 20s after. Errors degrade to
+  // an empty list (the section hides) — a stale roster that outlives the box is
+  // worse than no roster.
+  useEffect(() => {
+    if (!isConnected) {
+      setSidebarTmux([]);
+      return;
+    }
+    let cancelled = false;
+    const pull = async () => {
+      try {
+        const rows = await agentClient.listTmuxSessions();
+        if (!cancelled) setSidebarTmux(rows);
+      } catch {
+        if (!cancelled) setSidebarTmux([]);
+      }
+    };
+    void pull();
+    const t = setInterval(() => void pull(), 20_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [isConnected]);
 
   useEffect(() => {
     if (isLoading) return;
@@ -2418,7 +2447,7 @@ export default function DashboardPage() {
     { id: "network", label: "Mesh", icon: "\uD83D\uDD78\uFE0F" },
     { id: "chat", label: "Chat", icon: "\uD83D\uDCAC" },
     { id: "projects", label: "Projects", icon: "\uD83D\uDCC1" },
-    { id: "runtime", label: "Runtime", icon: "\u25A3" },
+    { id: "runtime", label: "Vibing", icon: "\u25A3" },
   ] as { id: typeof activeTab; label: string; icon: string; badge?: number }[]).filter(
     (t) =>
       isOwnerAccount || !OWNER_ONLY_TABS.has(t.id),
@@ -2481,7 +2510,7 @@ export default function DashboardPage() {
 	              { id: "network",  label: "Mesh",     icon: "🕸️" },
 	              { id: "chat",     label: "Chat",     icon: "💬" },
 	              { id: "projects", label: "Projects", icon: "📁" },
-	              { id: "runtime", label: "Runtime", icon: "▣" },
+	              { id: "runtime", label: "Vibing", icon: "▣" },
 	            ] as const).map((it) => (
               <button
                 key={it.id}
@@ -2500,6 +2529,49 @@ export default function DashboardPage() {
               </button>
             ))}
           </nav>
+
+          {/* Vibing (tmux) — every live session on the connected box, one click
+              from its terminal. Same data the Vibing tab shows; the sidebar is
+              the glanceable half. Hidden entirely when there are none or we are
+              not connected: an empty header is furniture. */}
+          {isConnected && sidebarTmux.length > 0 ? (
+            <div className="mb-3 shrink-0">
+              <div className="mb-1 flex items-center justify-between">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-surface-500">Vibing</p>
+                <button
+                  onClick={() => setActiveTab("runtime")}
+                  className="text-[10px] text-surface-500 hover:text-surface-300"
+                  title="Open the Vibing tab"
+                >
+                  see all &rarr;
+                </button>
+              </div>
+              <div className="max-h-40 space-y-1 overflow-y-auto">
+                {sidebarTmux.slice(0, 6).map((t) => (
+                  <button
+                    key={t.name}
+                    onClick={() => {
+                      if (connectedDevice) {
+                        setShellTmuxSession(t.name);
+                        setShellDevice(connectedDevice);
+                      }
+                    }}
+                    className="flex w-full items-center gap-2 rounded-md border border-surface-800 bg-surface-900/60 px-2 py-1.5 text-left transition-colors hover:border-brand/40"
+                    title={`Attach to tmux session ${t.name}`}
+                  >
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${t.attached ? "bg-success animate-live-pulse" : "bg-surface-600"}`} />
+                    <span className="truncate text-[11px] text-surface-200">{t.name}</span>
+                    <span className="ml-auto shrink-0 text-[9px] text-surface-500">
+                      {t.agentType ? t.agentType : `${t.windows ?? 1}w`}
+                    </span>
+                  </button>
+                ))}
+                {sidebarTmux.length > 6 ? (
+                  <p className="px-2 text-[9px] text-surface-500">+{sidebarTmux.length - 6} more in Vibing</p>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
 
           {/* Devices (lean) */}
           <div className="shrink-0">
