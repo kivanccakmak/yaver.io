@@ -29,7 +29,19 @@
  * support.
  */
 
-import { Platform } from "react-native";
+/**
+ * Web is detected by the presence of a DOM rather than by importing
+ * `Platform` from react-native. Two reasons, both load-bearing:
+ *
+ *   • it keeps this module importable from a plain `tsx` test — the harness the
+ *     rest of src/lib uses ("No RN, no jest") — so the capability contract is
+ *     actually verified rather than assumed;
+ *   • it cannot drift from reality: a DOM is exactly what makes UDP and raw
+ *     QUIC impossible, which is the property this table encodes.
+ *
+ * On a device there is no `document`, so this is false and every native
+ * transport stays enabled — the existing phone channel is untouched.
+ */
 
 export type TransportKind = "lan-beacon" | "direct-http" | "quic-relay" | "quic-direct";
 
@@ -41,7 +53,7 @@ export interface TransportCapability {
   reason?: string;
 }
 
-const isWeb = Platform.OS === "web";
+const isWeb = typeof document !== "undefined";
 
 /**
  * Browsers get exactly one lane: plain HTTP to the agent.

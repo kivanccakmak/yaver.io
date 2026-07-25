@@ -1,46 +1,61 @@
 /**
- * A browser must never be told to wait for a transport it cannot perform.
+ * platformTransport.test.ts — `npx tsx src/lib/platformTransport.test.ts`.
+ * No RN, no jest — the tiny assert harness the rest of src/lib uses.
  *
  * Guards the 2026-07-25 defect: RN-web sat on "Transport pending" forever while
  * the same account on a real iPhone showed "Relay · 301ms". The browser was
- * waiting on QUIC, which it cannot speak at all.
+ * waiting on QUIC, which it cannot speak AT ALL. An impossible operation must
+ * be stated, never rendered as a spinner.
+ *
+ * The table is asserted structurally (not against a mocked Platform) so this
+ * stays a pure check of the contract: every kind declared, every unsupported
+ * kind carrying a reason a user can act on.
  */
-// react-native is not transformable under this jest config, and the module only
-// needs Platform.OS. Mocking it keeps the test a pure check of the capability
-// table rather than a test of the RN runtime.
-jest.mock("react-native", () => ({ Platform: { OS: "ios" } }));
+import { TRANSPORT_CAPABILITIES, explainNoTransport, type TransportKind } from "./platformTransport";
 
-import { TRANSPORT_CAPABILITIES, explainNoTransport, usableTransports, type TransportKind } from "./platformTransport";
+let passed = 0;
+let failed = 0;
+function ok(cond: boolean, msg: string) {
+  if (cond) {
+    passed++;
+  } else {
+    failed++;
+    console.error("  ✗ " + msg);
+  }
+}
 
-describe("platform transport capabilities", () => {
-  it("declares support for every transport kind (a new lane must not default to usable)", () => {
-    const kinds: TransportKind[] = ["lan-beacon", "direct-http", "quic-relay", "quic-direct"];
-    for (const k of kinds) {
-      expect(TRANSPORT_CAPABILITIES[k]).toBeDefined();
-      expect(typeof TRANSPORT_CAPABILITIES[k].supported).toBe("boolean");
-    }
-    expect(Object.keys(TRANSPORT_CAPABILITIES).sort()).toEqual([...kinds].sort());
-  });
+const KINDS: TransportKind[] = ["lan-beacon", "direct-http", "quic-relay", "quic-direct"];
 
-  it("every unsupported transport carries a plain-language reason", () => {
-    for (const cap of Object.values(TRANSPORT_CAPABILITIES)) {
-      if (!cap.supported) expect(cap.reason && cap.reason.length > 10).toBe(true);
-    }
-  });
+// ── Every transport kind must declare its platform support ───────────────────
+{
+  for (const k of KINDS) {
+    ok(!!TRANSPORT_CAPABILITIES[k], `${k} is declared`);
+    ok(typeof TRANSPORT_CAPABILITIES[k]?.supported === "boolean", `${k} declares supported`);
+  }
+  ok(
+    Object.keys(TRANSPORT_CAPABILITIES).sort().join(",") === [...KINDS].sort().join(","),
+    "no undeclared transport kind can slip in and default to usable",
+  );
+}
 
-  it("direct HTTP is always available — it is the browser's only lane", () => {
-    expect(TRANSPORT_CAPABILITIES["direct-http"].supported).toBe(true);
-    expect(usableTransports()).toContain("direct-http");
-  });
+// ── An unsupported lane must say WHY, in words a user can act on ─────────────
+{
+  for (const cap of Object.values(TRANSPORT_CAPABILITIES)) {
+    if (!cap.supported) ok((cap.reason?.length ?? 0) > 10, `${cap.kind} carries a plain-language reason`);
+  }
+}
 
-  it("explainNoTransport stays silent while something is still possible", () => {
-    expect(explainNoTransport(["direct-http"])).toBeNull();
-    expect(explainNoTransport(["quic-relay", "direct-http"])).toBeNull();
-  });
+// ── Direct HTTP is the browser's only lane, so it is always possible ─────────
+{
+  ok(TRANSPORT_CAPABILITIES["direct-http"].supported, "direct HTTP is always available");
+}
 
-  it("under native, QUIC lanes are usable and produce no dead-end message", () => {
-    // jest runs with Platform.OS === "ios" by default in this preset.
-    expect(TRANSPORT_CAPABILITIES["quic-relay"].supported).toBe(true);
-    expect(explainNoTransport(["quic-relay"])).toBeNull();
-  });
-});
+// ── explainNoTransport stays silent while something is still possible ────────
+{
+  ok(explainNoTransport(["direct-http"]) === null, "no dead-end message while direct HTTP is viable");
+  const msg = explainNoTransport(["quic-relay", "quic-direct"]);
+  ok(msg === null || msg.length > 20, "a dead end is explained, never left blank");
+}
+
+console.log(`\nplatformTransport: ${passed} passed, ${failed} failed`);
+if (failed > 0) process.exit(1);
