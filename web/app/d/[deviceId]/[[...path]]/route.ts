@@ -5,7 +5,6 @@ import { CONVEX_URL } from "@/lib/constants";
 
 const FORWARDED_REQ_HEADERS = [
   "accept",
-  "accept-encoding",
   "accept-language",
   "cache-control",
   "content-type",
@@ -23,6 +22,7 @@ const BLOCKED_RESP_HEADERS = new Set([
   "content-length",
   "content-security-policy",
   "content-security-policy-report-only",
+  "content-encoding",
   "host",
   "set-cookie",
   "transfer-encoding",

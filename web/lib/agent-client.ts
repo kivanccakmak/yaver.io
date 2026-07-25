@@ -4841,6 +4841,21 @@ export class AgentClient {
     return `${this.baseUrl}/dev/web-bundle/`;
   }
 
+  webBundlePreviewUrl(agentBundleUrl?: string | null): string | null {
+    const base = this.devWebBundleUrl;
+    if (!base) return null;
+    if (!agentBundleUrl) return base;
+    try {
+      const parsed = new URL(agentBundleUrl, "http://agent.local");
+      if (!parsed.pathname.startsWith("/dev/web-bundle")) return base;
+      const suffix = parsed.pathname.replace(/^\/dev\/web-bundle\/?/, "");
+      const baseWithSuffix = suffix ? `${base.replace(/\/$/, "")}/${suffix}` : base;
+      return `${baseWithSuffix}${parsed.search}${parsed.hash}`;
+    } catch {
+      return base;
+    }
+  }
+
   /** Compile a static web bundle on the agent (target=web-js-bundle).
    *  Resolves to the agent's response when the build completes; rejects
    *  with the bundler tail on failure. The dashboard renders SSE
@@ -4938,6 +4953,7 @@ export class AgentClient {
      *  the iframe — see WebReloadView's failed→ready guard. */
     workDir?: string;
     buildDir?: string;
+    bundleUrl?: string;
   }> {
     if (!this.baseUrl) return { built: false };
     try {
@@ -4957,6 +4973,7 @@ export class AgentClient {
         caller: typeof body.caller === "string" ? body.caller : undefined,
         workDir: typeof body.workDir === "string" ? body.workDir : undefined,
         buildDir: typeof body.buildDir === "string" ? body.buildDir : undefined,
+        bundleUrl: typeof body.bundleUrl === "string" ? body.bundleUrl : undefined,
       };
     } catch {
       return { built: false };

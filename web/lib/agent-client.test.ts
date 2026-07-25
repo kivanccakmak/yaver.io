@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildCreateTaskBody } from "./agent-client";
+import { AgentClient, buildCreateTaskBody } from "./agent-client";
 
 test("web createTask body defaults allowLocalFallback to false", () => {
   const body = buildCreateTaskBody({
@@ -28,4 +28,17 @@ test("web createTask body can mark final Cloud Workspace handoff", () => {
     allowLocalFallback: true,
   });
   assert.equal(body.allowLocalFallback, true);
+});
+
+test("web bundle preview URL preserves agent-minted signature in relay mode", () => {
+  const client = new AgentClient() as any;
+  client.host = "ignored";
+  client.port = 1234;
+  client.deviceId = "device-1";
+  client._activeRelayUrl = "https://public.yaver.io";
+
+  assert.equal(
+    client.webBundlePreviewUrl("/dev/web-bundle/?sig=abc&exp=123"),
+    "/d/device-1/dev/web-bundle/?sig=abc&exp=123",
+  );
 });

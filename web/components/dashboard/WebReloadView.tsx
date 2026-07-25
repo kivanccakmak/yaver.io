@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { agentClient, type Runner, type TaskStatus, type WorkspaceAppView } from "@/lib/agent-client";
+import { previewProxyErrorMessage } from "@/lib/preview-proxy";
 import type { Device } from "@/lib/use-devices";
 import { WebAppSelector } from "./WebAppSelector";
 import { WebPreviewFrame, WEB_PREVIEW_VIEWPORTS, type ViewportId } from "./WebPreviewFrame";
@@ -98,6 +99,10 @@ export function WebReloadView({
   // authoritative; these flags drive the CTA state.
   const [webPreviewStarting, setWebPreviewStarting] = useState(false);
   const [webPreviewError, setWebPreviewError] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewProbeNonce, setPreviewProbeNonce] = useState(0);
+  const [autoRepairedOnce, setAutoRepairedOnce] = useState(false);
+  const [notRenderable, setNotRenderable] = useState<{ title: string; body: string } | null>(null);
   // Tick a counter while the Expo Web sibling is bundling so the
   // progress UI shows time elapsed. Reset on start, freeze on done.
   const [webPreviewElapsedSec, setWebPreviewElapsedSec] = useState(0);
@@ -123,6 +128,7 @@ export function WebReloadView({
   const [staticBundleOutput, setStaticBundleOutput] = useState<string | null>(null);
   const [staticBundleInfo, setStaticBundleInfo] = useState<{ size: number; fileCount: number } | null>(null);
   const [staticBundleWorkDir, setStaticBundleWorkDir] = useState<string | null>(null);
+  const [staticBundleUrl, setStaticBundleUrl] = useState<string | null>(null);
   const [staticBundleTransport, setStaticBundleTransport] = useState<{
     phase: string;
     pct: number;
@@ -156,14 +162,14 @@ export function WebReloadView({
   const taskStreamStopRef = useRef<(() => void) | null>(null);
   const taskPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Right-column layout. The first thing a user does on this tab is
-  // pick a project — so Projects starts expanded. Console + Vibing
-  // are tools you reach for after the iframe is up, so they fold
-  // away by default and the user expands them on demand. The whole
-  // column is drag-resizable on xl screens.
-  const [consoleExpanded, setConsoleExpanded] = useState(false);
+  // Right-column layout. Console starts expanded because build/start
+  // streams are the user's proof that the machine is working. Projects
+  // also starts expanded so selecting a target remains one click.
+  const [consoleExpanded, setConsoleExpanded] = useState(true);
   const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [vibingExpanded, setVibingExpanded] = useState(false);
+  const [devEventStreamState, setDevEventStreamState] = useState<"idle" | "opening" | "open" | "closed" | "error">("idle");
+  const [devEventLastAt, setDevEventLastAt] = useState<number | null>(null);
   // Viewport state lifted out of WebPreviewFrame so the picker can
   // render inline with the device-row header — saves ~40 px of
   // vertical space the iframe gets back. WebPreviewFrame is now in
@@ -412,6 +418,7 @@ export function WebReloadView({
     setStaticBundleTransport(null);
     setStaticBundleInfo(null);
     setStaticBundleWorkDir(null);
+    setStaticBundleUrl(null);
   }, []);
 
   useEffect(() => {
@@ -436,6 +443,7 @@ export function WebReloadView({
       const bundleWorkDir = (info.workDir || "").trim() || null;
       if (bundleWorkDir === selectedProjectPath && info.built) {
         setStaticBundleWorkDir(bundleWorkDir);
+        setStaticBundleUrl(agentClient.webBundlePreviewUrl(info.bundleUrl));
         setStaticBundleInfo({ size: info.size || 0, fileCount: info.fileCount || 0 });
         setStaticBundleError(null);
         setStaticBundleOutput(null);
@@ -457,23 +465,39 @@ export function WebReloadView({
   // SSE: live dev-server logs. Use fetch-based SSE so auth headers
   // survive relay/direct modes; browser EventSource drops them.
   useEffect(() => {
-    if (!isConnected) return;
+    if (!isConnected) {
+      setDevEventStreamState("idle");
+      setDevEventLastAt(null);
+      return;
+    }
     const url = agentClient.devEventsUrl;
-    if (!url) return;
+    if (!url) {
+      setDevEventStreamState("idle");
+      setDevEventLastAt(null);
+      return;
+    }
     const controller = new AbortController();
+    setDevEventStreamState("opening");
     (async () => {
       try {
         const res = await fetch(url, {
           headers: { ...agentClient.getAuthHeaders(), Accept: "text/event-stream" },
           signal: controller.signal,
         });
-        if (!res.ok || !res.body) return;
+        if (!res.ok || !res.body) {
+          setDevEventStreamState("error");
+          setLogs((prev) => [...prev.slice(-199), `[stream] /dev/events failed: HTTP ${res.status}`]);
+          return;
+        }
+        setDevEventStreamState("open");
+        setDevEventLastAt(Date.now());
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
+          setDevEventLastAt(Date.now());
           buffer += decoder.decode(value, { stream: true });
           let idx: number;
           while ((idx = buffer.indexOf("\n\n")) >= 0) {
@@ -487,8 +511,10 @@ export function WebReloadView({
             try {
               const data = JSON.parse(dataLines.join("\n"));
               if (data?.logLine) {
+                setDevEventLastAt(Date.now());
                 setLogs((prev) => [...prev.slice(-199), String(data.logLine)]);
               } else if (data?.message) {
+                setDevEventLastAt(Date.now());
                 setLogs((prev) => [...prev.slice(-199), `[${data.type || "event"}] ${data.message}`]);
               }
             } catch {
@@ -496,11 +522,18 @@ export function WebReloadView({
             }
           }
         }
+        setDevEventStreamState("closed");
       } catch {
-        // connection dropped or aborted; the effect re-subscribes on reconnect
+        if (!controller.signal.aborted) {
+          setDevEventStreamState("error");
+          setLogs((prev) => [...prev.slice(-199), "[stream] /dev/events dropped"]);
+        }
       }
     })();
-    return () => { controller.abort(); };
+    return () => {
+      controller.abort();
+      setDevEventStreamState("closed");
+    };
   }, [isConnected]);
 
   const stopActiveTaskStream = useCallback(() => {
@@ -574,6 +607,7 @@ export function WebReloadView({
         // otherwise kick off a build. Either way, no /dev/start dev
         // server is running — the iframe loads /dev/web-bundle/.
         if (response.bundleReady) {
+          setStaticBundleUrl(agentClient.webBundlePreviewUrl(response.bundleUrl));
           setStaticBundleState("ready");
         } else {
           await handleBuildStaticBundle();
@@ -738,6 +772,7 @@ export function WebReloadView({
     setStaticBundleTransport(null);
     setStaticBundleInfo(null);
     setStaticBundleWorkDir(null);
+    setStaticBundleUrl(null);
     staticBundleStartRef.current = Date.now();
     // selectedProject wins over activeProject — Expo static bundles don't
     // update devStatus.workDir, so activeProject stays on whatever was
@@ -746,9 +781,31 @@ export function WebReloadView({
     // the workspace manifest before honoring path).
     const projectName = selectedProject?.name || activeProject?.name || selectedApp || undefined;
     const projectPath = selectedProject?.path || activeProject?.path || selectedProjectPath || undefined;
+    const reconcileBuiltBundle = async (reason: string): Promise<boolean> => {
+      try {
+        const info = await agentClient.getWebBundleInfo();
+        const bundleWorkDir = (info.workDir || "").trim();
+        if (!info.built) return false;
+        if (projectPath && bundleWorkDir && bundleWorkDir !== projectPath) return false;
+        setStaticBundleInfo({ size: info.size || 0, fileCount: info.fileCount || 0 });
+        setStaticBundleWorkDir(bundleWorkDir || projectPath || null);
+        setStaticBundleUrl(agentClient.webBundlePreviewUrl(info.bundleUrl));
+        setStaticBundleError(null);
+        setStaticBundleOutput(null);
+        setStaticBundleState("ready");
+        setLogs((prev) => [
+          ...prev.slice(-199),
+          `[web-js-bundle] build response was lost (${reason}); /dev/web-bundle/info confirms the selected bundle is ready`,
+        ]);
+        return true;
+      } catch {
+        return false;
+      }
+    };
     try {
       const r = await agentClient.buildWebJSBundle({ projectName, projectPath });
       if (!r.ok) {
+        if (await reconcileBuiltBundle(r.error || "build returned not ok")) return;
         setStaticBundleState("failed");
         setStaticBundleError(r.error || "build failed");
         setStaticBundleOutput(r.output || null);
@@ -756,10 +813,13 @@ export function WebReloadView({
       }
       setStaticBundleInfo({ size: r.size, fileCount: r.fileCount });
       setStaticBundleWorkDir(projectPath || null);
+      setStaticBundleUrl(agentClient.webBundlePreviewUrl(r.bundleUrl));
       setStaticBundleState("ready");
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (await reconcileBuiltBundle(msg)) return;
       setStaticBundleState("failed");
-      setStaticBundleError(e instanceof Error ? e.message : String(e));
+      setStaticBundleError(msg);
     }
   }, [activeProject?.name, activeProject?.path, selectedApp, selectedProject?.name, selectedProject?.path, selectedProjectPath]);
 
@@ -795,6 +855,7 @@ export function WebReloadView({
       }
       setStaticBundleInfo({ size: info.size || 0, fileCount: info.fileCount || 0 });
       setStaticBundleWorkDir((info.workDir || "").trim() || null);
+      setStaticBundleUrl(agentClient.webBundlePreviewUrl(info.bundleUrl));
       setStaticBundleState("ready");
     };
     void tick();
@@ -1196,6 +1257,13 @@ export function WebReloadView({
 
   const previewUrl = agentClient.devPreviewUrl;
   const isRunning = !!devStatus?.running;
+  const effectivePreviewUrl =
+    staticBundleState === "ready" || staticBundleState === "building"
+      ? staticBundleUrl || agentClient.devWebBundleUrl
+      : devStatus?.webPort && devStatus.webPort > 0
+      ? agentClient.devWebPreviewUrl
+      : previewUrl;
+  const effectivePreviewRunning = staticBundleState === "ready" ? true : isRunning;
 
   // Auto-start the Expo Web sibling whenever the user lands on the Web
   // App tab and Metro is already running for an Expo/RN project but no
@@ -1225,14 +1293,15 @@ export function WebReloadView({
     !!selectedProject &&
     selectedProject.path !== devStatus.workDir;
 
-  // Preflight: fetch the preview URL from the parent page once so
+  // Preflight: fetch the exact iframe URL from the parent page once so
   // transport/auth failures surface as a readable dashboard error
-  // instead of a broken iframe.
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [autoRepairedOnce, setAutoRepairedOnce] = useState(false);
-  const [notRenderable, setNotRenderable] = useState<{ title: string; body: string } | null>(null);
+  // instead of a broken iframe. This must follow the same URL priority
+  // as the iframe itself: static web bundle -> Expo Web sibling -> live
+  // dev server. The incident shape was a false green: bundle status was
+  // "ready", but the actual /d/<device>/dev/web-bundle/ browser path
+  // returned {"error":"missing auth token"}.
   useEffect(() => {
-    if (!previewUrl || !isRunning) {
+    if (!effectivePreviewUrl || !effectivePreviewRunning || staticBundleState === "building") {
       setPreviewError(null);
       setNotRenderable(null);
       return;
@@ -1241,17 +1310,11 @@ export function WebReloadView({
     const ctrl = new AbortController();
     (async () => {
       try {
-        const res = await fetch(previewUrl, { method: "GET", signal: ctrl.signal, cache: "no-store", redirect: "manual" });
+        const res = await fetch(effectivePreviewUrl, { method: "GET", signal: ctrl.signal, cache: "no-store", redirect: "manual" });
         if (!alive) return;
         if (res.status === 401 || res.status === 403) {
           const text = await res.text().catch(() => "");
-          let msg = `HTTP ${res.status}`;
-          try {
-            const parsed = JSON.parse(text);
-            if (parsed?.error) msg = parsed.error;
-          } catch {
-            if (text) msg = text.slice(0, 200);
-          }
+          const msg = previewProxyErrorMessage(res.status, text);
           setPreviewError(msg);
           setNotRenderable(null);
           // Auto-repair once when we see invalid-relay-password the first
@@ -1267,7 +1330,7 @@ export function WebReloadView({
         // can't render in an iframe — show a CTA instead of a white box.
         const ct = res.headers.get("content-type") || "";
         const isHtml = /text\/html/i.test(ct);
-        if (!isHtml) {
+        if (!isHtml && staticBundleState !== "ready") {
           const fw = (devStatus?.framework || "").toLowerCase();
           const isMobile = fw === "expo" || fw === "react-native" || fw === "metro";
           const hasWebSibling = !!devStatus?.webPort && devStatus.webPort > 0;
@@ -1292,7 +1355,7 @@ export function WebReloadView({
     })();
     return () => { alive = false; ctrl.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewUrl, isRunning, devStatus?.framework]);
+  }, [effectivePreviewUrl, effectivePreviewRunning, staticBundleState, devStatus?.framework, previewProbeNonce]);
 
   return (
     <div className="flex h-full flex-col gap-3 p-3 md:p-4">
@@ -1577,11 +1640,7 @@ export function WebReloadView({
             // a rebuild, so showing a brief 404 underneath while the
             // rebuild completes is fine.
             url={
-              staticBundleState === "ready" || staticBundleState === "building"
-                ? agentClient.devWebBundleUrl
-                : devStatus?.webPort && devStatus.webPort > 0
-                ? agentClient.devWebPreviewUrl
-                : previewUrl
+              effectivePreviewUrl
             }
             onIframeLoad={
               staticBundleState === "ready"
@@ -1600,13 +1659,7 @@ export function WebReloadView({
             // exactly the static-bundle mode. Match the URL priority
             // chain we use for the iframe itself.
             onOpenInNewTab={(() => {
-              const url =
-                staticBundleState === "ready" || staticBundleState === "building"
-                  ? agentClient.devWebBundleUrl
-                  : devStatus?.webPort && devStatus.webPort > 0
-                  ? agentClient.devWebPreviewUrl
-                  : previewUrl;
-              return url ? () => window.open(url, "_blank") : undefined;
+              return effectivePreviewUrl ? () => window.open(effectivePreviewUrl, "_blank") : undefined;
             })()}
             connectionLabel={connectionLabel}
             // Suppress the "mobile-only" notice when the static
@@ -1649,6 +1702,16 @@ export function WebReloadView({
                     error: staticBundleError || undefined,
                     tail: staticBundleOutput || undefined,
                     onRetry: () => void handleBuildStaticBundle(),
+                  }
+                : null
+            }
+            previewFailure={
+              previewError
+                ? {
+                    label: "Preview transport failed",
+                    detail: previewError,
+                    onRetry: () => setPreviewProbeNonce((n) => n + 1),
+                    retryLabel: "Retry preview",
                   }
                 : null
             }
@@ -1795,6 +1858,24 @@ export function WebReloadView({
                 <span className="rounded bg-surface-800 px-1.5 py-0.5 text-[9px] normal-case tracking-normal text-surface-400">
                   {logs.length}
                 </span>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[9px] normal-case tracking-normal ${
+                    devEventStreamState === "open"
+                      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                      : devEventStreamState === "opening"
+                      ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                      : devEventStreamState === "error"
+                      ? "bg-red-500/15 text-red-700 dark:text-red-300"
+                      : "bg-surface-800 text-surface-500"
+                  }`}
+                >
+                  stream: {devEventStreamState}
+                </span>
+                {devEventLastAt ? (
+                  <span className="normal-case tracking-normal text-[9px] text-surface-500">
+                    last {Math.max(0, Math.floor((Date.now() - devEventLastAt) / 1000))}s ago
+                  </span>
+                ) : null}
               </span>
               <span className="text-surface-500">{consoleExpanded ? "▾" : "▸"}</span>
             </button>

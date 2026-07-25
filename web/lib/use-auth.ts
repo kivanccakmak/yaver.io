@@ -48,6 +48,21 @@ function getStoredToken(): string | null {
   return null;
 }
 
+export function yaverAuthTokenCookie(token: string, maxAgeSeconds = 60 * 60 * 24 * 30): string {
+  return `yaver_auth_token=${token}; path=/; max-age=${maxAgeSeconds}; secure; samesite=lax`;
+}
+
+function syncAuthTokenCookie(token: string) {
+  if (typeof document === "undefined") return;
+  document.cookie = yaverAuthTokenCookie(token);
+}
+
+function clearAuthTokenCookies() {
+  if (typeof document === "undefined") return;
+  document.cookie = "yaver_auth_token=; path=/; max-age=0; secure; samesite=lax";
+  document.cookie = "yaver_session=; path=/; max-age=0; secure; samesite=lax";
+}
+
 export function useAuth(): AuthState {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -56,8 +71,7 @@ export function useAuth(): AuthState {
 
   const logout = useCallback(() => {
     localStorage.removeItem("yaver_auth_token");
-    document.cookie = "yaver_auth_token=; path=/; max-age=0; secure; samesite=lax";
-    document.cookie = "yaver_session=; path=/; max-age=0; secure; samesite=lax";
+    clearAuthTokenCookies();
     setUser(null);
     setToken(null);
     window.location.href = "/";
@@ -85,6 +99,7 @@ export function useAuth(): AuthState {
           // the dashboard can say "your session expired" rather than
           // logging the user out with no explanation.
           localStorage.removeItem("yaver_auth_token");
+          clearAuthTokenCookies();
           if (!cancelled) {
             if (res.status === 401 || res.status === 403) setSessionExpired(true);
             setIsLoading(false);
@@ -104,6 +119,7 @@ export function useAuth(): AuthState {
           isOwner: raw.isOwner === true,
         };
         if (!cancelled) {
+          syncAuthTokenCookie(storedToken);
           setUser(mapped);
           setToken(storedToken);
         }
@@ -129,6 +145,7 @@ export function useAuth(): AuthState {
             // one. We don't opt in, so this stays undefined in practice.
             if (body?.token && typeof body.token === "string" && !cancelled) {
               localStorage.setItem("yaver_auth_token", body.token);
+              syncAuthTokenCookie(body.token);
               setToken(body.token);
             }
           })
@@ -136,6 +153,7 @@ export function useAuth(): AuthState {
       } catch {
         // Network error -- still set token so we can try offline
         if (!cancelled) {
+          syncAuthTokenCookie(storedToken);
           setToken(storedToken);
         }
       } finally {
