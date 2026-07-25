@@ -94,6 +94,24 @@ absolute gap, not a flaky one. Rules, full version in [`CLAUDE.md`](CLAUDE.md):
   `e2e/tests/mobile-app-lane-matrix.spec.ts` — PIXELS / NAMED / SILENT, and
   SILENT is the only failing verdict.
 
+## Never hot-swap an unsigned agent binary onto macOS
+
+`scp`-ing a local `go build` output over `~/.yaver/bin/.../yaver` takes the box
+OFFLINE: macOS kills the unsigned binary under launchd
+(`last exit reason = OS_REASON_CODESIGNING`), launchd reports
+`state = spawn scheduled` so it looks like it is starting, and the agent never
+answers. The user's phone disconnects and nothing in the serve log explains it.
+
+- Prefer the release path (`npm install -g yaver-cli@…`) — signed + notarized.
+- If you must hot-swap for a test, ad-hoc sign in the same breath:
+  `codesign --force -s - <binary>` then
+  `launchctl kickstart -k gui/$(id -u)/io.yaver.agent`.
+- `nohup … &` over SSH does not survive the session — let launchd own it.
+- Verify with `curl localhost:18080/info` → 200. A PID is inventory; the HTTP
+  answer is the operation.
+- A local build reports a STALE `--version`, so `/info.version` lies after a
+  hot-swap. Never diagnose from it.
+
 ## Hard safety rules (summarised from CLAUDE.md)
 
 - **Never push or commit without explicit user permission.**

@@ -101,6 +101,72 @@ func rewriteDevIndexBaseHrefHTML(html string) string {
 	return out
 }
 
+// devRouterBasePathScript is injected into every proxied HTML index, before any
+// app script runs.
+//
+// ── The bug it removes ──────────────────────────────────────────────────────
+//
+// The browser lane serves a guest app under a PATH PREFIX (/dev-web/, or
+// /d/<deviceId>/dev-web/ over the relay). Assets already resolve — the rewrite
+// below makes them relative. But a client-side router reads
+// window.location.pathname, sees "/dev-web/", matches no route, and renders its
+// own 404. Verified 2026-07-25 against sfmg and yaver.io, both of which mounted
+// successfully and then displayed
+//
+//	Unmatched Route / Page could not be found.
+//
+// A perfectly healthy dev server producing a screen that says the page does not
+// exist — and every layer above reported success, because the app really had
+// loaded. HTTP 200, bundle fetched, React mounted, wrong route.
+//
+// ── Why both halves are required ────────────────────────────────────────────
+//
+// Proven by experiment, both directions:
+//   - rewrite the path alone  → assets are relative to the document, so they
+//     resolve at the ROOT and 404. Blank screen. (Measured: #root children 0.)
+//   - pin the base alone      → assets fine, router still sees /dev-web/ and
+//     still renders Unmatched Route.
+//   - both                    → the real app. sfmg rendered
+//     "Todo · All · Active · Completed · Add your first todo above."
+//
+// ── Why the base is computed at RUNTIME ─────────────────────────────────────
+//
+// A hardcoded "/dev-web/" breaks over the relay, where the document lives at
+// /d/<deviceId>/dev-web/ — the same class of bug the comment above this file
+// records for "/dev/". Reading location.pathname at load time is transport
+// agnostic: localhost, LAN, relay, and any future prefix all work with no
+// knowledge of the transport.
+//
+// Idempotent and defensive: it runs once, does nothing when there is no proxy
+// prefix, and a throw inside it must never stop the page from loading.
+const devRouterBasePathScript = `<script>(function(){try{
+var p=location.pathname;
+var m=p.match(/^(.*\/dev(?:-web)?)(\/.*)?$/);
+if(!m){return;}
+var dir=m[1]+"/";
+if(!document.querySelector("base")){
+  var b=document.createElement("base");
+  b.href=dir;
+  (document.head||document.documentElement).insertBefore(b,(document.head||document.documentElement).firstChild);
+}
+var rest=(m[2]||"/");
+if(rest!==p){history.replaceState(null,"",rest+location.search+location.hash);}
+}catch(e){}})();</script>`
+
+// injectRouterBasePath places the script immediately after <head> so it runs
+// before the entry bundle. Returns the input unchanged when there is no head or
+// the script is already present.
+func injectRouterBasePath(html string) string {
+	if strings.Contains(html, "devRouterBase") || strings.Contains(html, `m.match(/^(.*\/dev`) {
+		return html
+	}
+	loc := devHeadOpenRe.FindStringIndex(html)
+	if loc == nil {
+		return html
+	}
+	return html[:loc[1]] + devRouterBasePathScript + html[loc[1]:]
+}
+
 // rewriteDevIndexBaseHref is the httputil.ReverseProxy ModifyResponse hook. It
 // rewrites the base href ONLY for HTML documents; every other content type
 // (JS, wasm, images, JSON) passes through untouched so a rewrite bug can never
@@ -148,7 +214,11 @@ func rewriteDevIndexBaseHref(resp *http.Response) error {
 		body = dec
 	}
 
-	rewritten := rewriteDevIndexBaseHrefHTML(string(body))
+	// Assets first (relative paths), THEN the router base-path script. Order
+	// matters only for readability — they touch different things — but both are
+	// required: assets alone leave the guest router on its 404 route, and the
+	// route rewrite alone breaks every relative asset. See injectRouterBasePath.
+	rewritten := injectRouterBasePath(rewriteDevIndexBaseHrefHTML(string(body)))
 	if rewritten == string(body) {
 		// Nothing changed — hand back the exact original bytes (still
 		// compressed if it was), so we never re-encode needlessly.

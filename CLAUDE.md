@@ -290,6 +290,32 @@ changing those.
      real app against a real box → PIXELS / NAMED / **SILENT**, where SILENT is
      the only failing verdict. A change that cannot be observed end-to-end from
      the app the user actually holds is not finished.
+- **NEVER `scp` a locally-built agent binary onto a macOS box.** macOS kills an
+  unsigned binary under launchd with `last exit reason = OS_REASON_CODESIGNING`,
+  and because launchd keeps "state = spawn scheduled" the box looks like it is
+  starting rather than failing — the agent simply never answers, the phone goes
+  offline, and nothing in `yaver serve`'s own log explains it (the process is
+  killed before it writes a line). Hit again 2026-07-25 while hot-swapping a
+  `go build` output onto the Mac mini to test a fix.
+  1. **Preferred: ship through the release path** (`npm install -g yaver-cli@…`
+     or the versioned `~/.yaver/bin/<version>/<platform>/` layout the installer
+     writes). That is the only path that yields a signed + notarized binary.
+  2. **If you MUST hot-swap for a test, ad-hoc sign it in the same breath:**
+     ```bash
+     codesign --force -s - ~/.yaver/bin/current/darwin-arm64/yaver
+     launchctl kickstart -k gui/$(id -u)/io.yaver.agent
+     ```
+     Unsigned is not "unsigned but runs" on macOS — it is *killed*.
+  3. **`nohup … &` over SSH does NOT survive the session.** Use
+     `launchctl kickstart -k gui/$(id -u)/io.yaver.agent` so launchd owns the
+     process; a hand-started agent dies with your shell and takes the user's
+     box offline without saying so.
+  4. **Verify by asking the agent, not by reading exit codes:** `curl -s -m 20
+     localhost:18080/info` must return 200. `pgrep` finding a PID is the
+     inventory; the HTTP answer is the operation.
+  5. A locally-built binary also reports a STALE `--version` (the real version is
+     injected at release time), so `/info.version` will lie about what is
+     running — never diagnose from it after a hot-swap.
 - **Never WebView for third-party RN apps.** Use the Hermes-bundle native load
   path (`/dev/build-native` → ExpoReactNativeFactory). WebView is OK for plain
   web content (landing pages, docs).
