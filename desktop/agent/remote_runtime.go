@@ -628,12 +628,32 @@ func setAppleRuntimeFamiliesForTest(fams map[string]bool) func() {
 	return func() { appleRuntimeFamiliesForCaps = prev }
 }
 
+var appleSimulatorDeviceAvailableForCaps = func(deviceType string) (bool, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := testkit.RankSimulators(ctx, deviceType); err != nil {
+		return false, err.Error()
+	}
+	return true, ""
+}
+
+func setAppleSimulatorDevicesForTest(devices map[string]bool) func() {
+	prev := appleSimulatorDeviceAvailableForCaps
+	appleSimulatorDeviceAvailableForCaps = func(deviceType string) (bool, string) {
+		if devices[deviceType] {
+			return true, ""
+		}
+		return false, fmt.Sprintf("no available simulator matching %q", deviceType)
+	}
+	return func() { appleSimulatorDeviceAvailableForCaps = prev }
+}
+
 // probeAppleSimTarget is the shared core for every Apple-runtime sim
 // probe. It applies the darwin / xcrun / xcode-select gate and then,
 // if all host prereqs pass, the per-runtime-family install gate. The
 // caller supplies id/surface/label/family so each thin probe is a
 // two-liner.
-func probeAppleSimTarget(id, surface, label, family string, families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
+func probeAppleSimTarget(id, surface, label, family, deviceType string, families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
 	target := RemoteRuntimeTarget{
 		ID:               id,
 		Label:            label,
@@ -673,28 +693,33 @@ func probeAppleSimTarget(id, surface, label, family string, families map[string]
 		target.Reason = family + " runtime not installed. Open Xcode > Settings > Components and install it."
 		return target
 	}
+	if ok, reason := appleSimulatorDeviceAvailableForCaps(deviceType); !ok {
+		target.Enabled = false
+		target.Reason = reason + ". Create or install a matching simulator in Xcode > Window > Devices and Simulators."
+		return target
+	}
 	target.Enabled = true
 	return target
 }
 
 func probeIOSSimulatorTarget(families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
-	return probeAppleSimTarget("ios-simulator", "phone", "iPhone Simulator over WebRTC", "iOS", families, familiesKnown)
+	return probeAppleSimTarget("ios-simulator", "phone", "iPhone Simulator over WebRTC", "iOS", "iPhone", families, familiesKnown)
 }
 
 func probeIPadSimulatorTarget(families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
-	return probeAppleSimTarget("ipados-simulator", "tablet", "iPad Simulator over WebRTC", "iOS", families, familiesKnown)
+	return probeAppleSimTarget("ipados-simulator", "tablet", "iPad Simulator over WebRTC", "iOS", "iPad", families, familiesKnown)
 }
 
 func probeWatchOSSimulatorTarget(families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
-	return probeAppleSimTarget("watchos-simulator", "watch", "Apple Watch Simulator over WebRTC", "watchOS", families, familiesKnown)
+	return probeAppleSimTarget("watchos-simulator", "watch", "Apple Watch Simulator over WebRTC", "watchOS", "Apple Watch", families, familiesKnown)
 }
 
 func probeTVOSSimulatorTarget(families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
-	return probeAppleSimTarget("tvos-simulator", "tv", "Apple TV Simulator over WebRTC", "tvOS", families, familiesKnown)
+	return probeAppleSimTarget("tvos-simulator", "tv", "Apple TV Simulator over WebRTC", "tvOS", "Apple TV", families, familiesKnown)
 }
 
 func probeVisionOSSimulatorTarget(families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
-	return probeAppleSimTarget("visionos-simulator", "vision", "Apple Vision Pro Simulator over WebRTC", "visionOS", families, familiesKnown)
+	return probeAppleSimTarget("visionos-simulator", "vision", "Apple Vision Pro Simulator over WebRTC", "visionOS", "Apple Vision", families, familiesKnown)
 }
 
 func probeAndroidEmulatorTarget() RemoteRuntimeTarget {

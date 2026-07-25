@@ -361,8 +361,9 @@ func (browserWindowTarget) CanEncodeRTPH264() bool { return false }
 func probeBrowserWindowTarget() RemoteRuntimeTarget {
 	target := RemoteRuntimeTarget{
 		ID:               "browser-window",
-		Label:            "Remote browser window",
+		Label:            "WebRTC over browser",
 		Platform:         "browser",
+		Surface:          "browser",
 		RuntimeHostClass: "any",
 		HostOS:           "any",
 		RequiredCLI:      "google-chrome / chromium / msedge",

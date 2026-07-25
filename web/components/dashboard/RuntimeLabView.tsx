@@ -54,6 +54,38 @@ function targetSort(a: RemoteRuntimeTarget, b: RemoteRuntimeTarget): number {
   return a.label.localeCompare(b.label);
 }
 
+function isPrimaryRuntimeTarget(target: RemoteRuntimeTarget): boolean {
+  if (!target.enabled) return false;
+  const id = String(target.id || "").toLowerCase();
+  const surface = String(target.surface || "").toLowerCase();
+  if (surface === "browser") return true;
+  if (["phone", "tablet"].includes(surface) && (id.includes("simulator") || id.includes("emulator"))) return true;
+  if (id === "browser-window") return true;
+  if (["ios-simulator", "ipados-simulator", "android-emulator"].includes(id)) return true;
+  return false;
+}
+
+function runtimeTargetGroup(target: RemoteRuntimeTarget): "browser" | "simulator" | "container" | "device" | "advanced" | "unavailable" {
+  if (!target.enabled) return "unavailable";
+  const id = String(target.id || "").toLowerCase();
+  const surface = String(target.surface || "").toLowerCase();
+  if (surface === "browser" || id === "browser-window") return "browser";
+  if (id.includes("redroid")) return "container";
+  if (id.includes("device")) return "device";
+  if (["phone", "tablet"].includes(surface) && (id.includes("simulator") || id.includes("emulator"))) return "simulator";
+  if (id.includes("simulator") || id.includes("emulator")) return "advanced";
+  return "advanced";
+}
+
+const runtimeGroupLabels: Record<ReturnType<typeof runtimeTargetGroup>, string> = {
+  browser: "Browser",
+  simulator: "Phone / tablet simulators",
+  container: "Android containers",
+  device: "Physical devices",
+  advanced: "Watch / TV / XR / car",
+  unavailable: "Unavailable",
+};
+
 export default function RuntimeLabView({
   intent,
   onOpenTmux,
@@ -70,6 +102,10 @@ export default function RuntimeLabView({
   const [log, setLog] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showAdvancedTargets, setShowAdvancedTargets] = useState(false);
+  const [webPreviewUrl, setWebPreviewUrl] = useState<string | null>(null);
+  const [webPreviewBusy, setWebPreviewBusy] = useState(false);
+  const [webPreviewNote, setWebPreviewNote] = useState<string | null>(null);
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.path === selectedPath) || null,
@@ -119,7 +155,8 @@ export default function RuntimeLabView({
       const next = await agentClient.getRemoteRuntimeCapabilities(project.path, project.framework || "");
       next.targets = [...(next.targets || [])].sort(targetSort);
       setCaps(next);
-      appendLog(`targets: ${next.targets.map((t) => `${t.id}${t.enabled ? "" : " disabled"}`).join(", ")}`);
+      const primaryCount = next.targets.filter(isPrimaryRuntimeTarget).length;
+      appendLog(`targets: ${primaryCount} primary, ${Math.max(0, next.targets.length - primaryCount)} advanced/unavailable`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load runtime capabilities.");
     } finally {
@@ -151,6 +188,40 @@ export default function RuntimeLabView({
       setError(err instanceof Error ? err.message : "Could not create runtime session.");
     } finally {
       setBusy(false);
+    }
+  }, [appendLog, selectedProject]);
+
+  const openWebUI = useCallback(async () => {
+    if (!selectedProject) return;
+    setWebPreviewBusy(true);
+    setWebPreviewNote(null);
+    setError(null);
+    appendLog(`web ui ${selectedProject.name}`);
+    try {
+      const response = await agentClient.startDevServer({
+        framework: selectedProject.framework || "",
+        workDir: selectedProject.path,
+        platform: "web",
+        surface: "web-reload",
+      });
+      const status = await agentClient.getDevServerStatus();
+      const url =
+        response.bundleUrl
+          ? agentClient.webBundlePreviewUrl(response.bundleUrl)
+          : status?.webPort && status.webPort > 0
+          ? agentClient.devWebPreviewUrl
+          : agentClient.devPreviewUrl;
+      if (!url) throw new Error("No browser preview URL is available for this connection.");
+      setWebPreviewUrl(url);
+      setWebPreviewNote(response.bundleHint || status?.servingLabel || "Web UI running in this dashboard.");
+      appendLog(`web ui ready ${url}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not open Web UI.";
+      setWebPreviewNote(message);
+      setError(message);
+      appendLog(`web ui failed: ${message}`);
+    } finally {
+      setWebPreviewBusy(false);
     }
   }, [appendLog, selectedProject]);
 
@@ -239,15 +310,15 @@ export default function RuntimeLabView({
   }
 
   return (
-    <div className="grid h-full min-h-0 gap-3 p-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+    <div className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-4 text-[#1f2933] xl:grid-cols-[minmax(0,1fr)_360px]">
       <div className="min-h-0 space-y-3 overflow-y-auto">
         <div className="flex flex-wrap items-end gap-2">
           <label className="min-w-[260px] flex-1">
-            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-surface-500">Project</span>
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-[#5d6673]">Project</span>
             <select
               value={selectedPath}
-              onChange={(e) => { setSelectedPath(e.target.value); setCaps(null); setSession(null); }}
-              className="w-full rounded-md border border-surface-800 bg-surface-950 px-3 py-2 text-sm text-surface-100"
+              onChange={(e) => { setSelectedPath(e.target.value); setCaps(null); setSession(null); setWebPreviewUrl(null); setWebPreviewNote(null); }}
+              className="w-full rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-sm text-[#1f2933]"
             >
               {projects.map((p) => (
                 <option key={p.path} value={p.path}>{p.name} · {p.framework || "unknown"}</option>
@@ -257,14 +328,14 @@ export default function RuntimeLabView({
           <button
             disabled={!selectedProject || busy}
             onClick={() => void loadCapabilities()}
-            className="rounded-md bg-surface-100 px-3 py-2 text-xs font-semibold text-surface-900 disabled:opacity-40"
+            className="rounded-md bg-[#1f2933] px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
           >
             Load Targets
           </button>
           <button
             disabled={busy}
             onClick={() => void refreshTmux()}
-            className="rounded-md border border-surface-700 px-3 py-2 text-xs font-semibold text-surface-200 disabled:opacity-40"
+            className="rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-xs font-semibold text-[#344054] disabled:opacity-40"
           >
             Refresh tmux
           </button>
@@ -275,17 +346,26 @@ export default function RuntimeLabView({
         ) : null}
 
         {caps ? (
-          <div className="space-y-2">
-            <div className="text-xs text-surface-500">
+          <div className="space-y-3">
+            <div className="text-xs text-[#667085]">
               {caps.executionMode} · {caps.primarySurface} · {caps.currentHostClass || "host unknown"}
             </div>
-            <div className="grid gap-2 md:grid-cols-2">
-              {caps.targets.map((target) => (
-                <div key={target.id} className="rounded-md border border-surface-800 bg-surface-900/60 p-3">
+            {(() => {
+              const enabledTargets = caps.targets.filter((target) => target.enabled);
+              const groupedTargets = enabledTargets.reduce<Record<string, RemoteRuntimeTarget[]>>((acc, target) => {
+                const group = runtimeTargetGroup(target);
+                acc[group] = [...(acc[group] ?? []), target];
+                return acc;
+              }, {});
+              const unavailableTargets = caps.targets.filter((target) => !target.enabled);
+              const primaryTargets = caps.targets.filter(isPrimaryRuntimeTarget);
+              const groupOrder: ReturnType<typeof runtimeTargetGroup>[] = ["browser", "simulator", "container", "device", "advanced"];
+              const renderTarget = (target: RemoteRuntimeTarget, compact = false) => (
+                <div key={target.id} className={`rounded-md border p-3 ${target.enabled ? "border-[#d7dce3] bg-white" : "border-[#e1e5eb] bg-[#f8fafc]"}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <div className="text-sm font-medium text-surface-100">{target.label}</div>
-                      <div className="mt-1 text-xs text-surface-500">
+                      <div className={`text-sm font-medium ${target.enabled ? "text-[#1f2933]" : "text-[#667085]"}`}>{target.label}</div>
+                      <div className="mt-1 text-xs text-[#667085]">
                         {target.surface || "runtime"} · {target.id} · {target.requiredCli || "tools"}
                       </div>
                     </div>
@@ -297,41 +377,134 @@ export default function RuntimeLabView({
                       {target.enabled ? "Open" : "Unavailable"}
                     </button>
                   </div>
-                  {target.reason ? <div className="mt-2 text-xs text-rose-700 dark:text-rose-300">{target.reason}</div> : null}
+                  {target.reason ? (
+                    <div className={`mt-2 text-xs ${compact ? "text-surface-500" : "text-rose-700 dark:text-rose-300"}`}>{target.reason}</div>
+                  ) : null}
                 </div>
-              ))}
-            </div>
+              );
+              const renderGroup = (group: ReturnType<typeof runtimeTargetGroup>, targets: RemoteRuntimeTarget[]) => {
+                if (targets.length === 0) return null;
+                return (
+                  <section key={group} className="space-y-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673]">
+                      {runtimeGroupLabels[group]}
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {targets.map((target) => renderTarget(target))}
+                    </div>
+                  </section>
+                );
+              };
+              return (
+                <>
+                  <section className="space-y-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673]">
+                      Browser
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <div className="rounded-md border border-[#d7dce3] bg-white p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium text-[#1f2933]">Web UI in browser</div>
+                            <div className="mt-1 text-xs text-[#667085]">
+                              browser · direct iframe · dev server
+                            </div>
+                          </div>
+                          <button
+                            disabled={!selectedProject || webPreviewBusy}
+                            onClick={() => void openWebUI()}
+                            className="rounded-md bg-sky-500/15 px-3 py-1.5 text-xs font-semibold text-sky-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-sky-200"
+                          >
+                            {webPreviewBusy ? "Opening..." : "Open"}
+                          </button>
+                        </div>
+                        {webPreviewNote ? <div className="mt-2 text-xs text-[#667085]">{webPreviewNote}</div> : null}
+                      </div>
+                      {(groupedTargets.browser ?? []).map((target) => renderTarget(target))}
+                    </div>
+                  </section>
+                  {webPreviewUrl ? (
+                    <section className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673]">Web UI</div>
+                        <button
+                          onClick={() => setWebPreviewUrl(null)}
+                          className="rounded-md border border-[#d7dce3] bg-white px-2 py-1 text-[11px] text-[#475467]"
+                        >
+                          Close
+                        </button>
+                      </div>
+                      <iframe
+                        src={webPreviewUrl}
+                        className="h-[520px] w-full rounded-md border border-[#d7dce3] bg-white"
+                        title="Project Web UI preview"
+                      />
+                    </section>
+                  ) : null}
+                  {primaryTargets.length === 0 && enabledTargets.length > 0 ? (
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {enabledTargets.map((target) => renderTarget(target))}
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {groupOrder.filter((group) => group !== "browser").map((group) => renderGroup(group, groupedTargets[group] ?? []))}
+                    </div>
+                  )}
+                  {unavailableTargets.length ? (
+                    <div className="rounded-md border border-[#d7dce3] bg-[#f8fafc]">
+                      <button
+                        type="button"
+                        onClick={() => setShowAdvancedTargets((v) => !v)}
+                        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
+                      >
+                        <span className="text-xs font-semibold uppercase tracking-wide text-[#5d6673]">
+                          Unavailable targets
+                        </span>
+                        <span className="text-xs text-[#667085]">
+                          {unavailableTargets.length} {showAdvancedTargets ? "hide" : "show"}
+                        </span>
+                      </button>
+                      {showAdvancedTargets ? (
+                        <div className="grid gap-2 border-t border-[#d7dce3] p-3 md:grid-cols-2">
+                          {unavailableTargets.map((target) => renderTarget(target, true))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </>
+              );
+            })()}
           </div>
         ) : (
-          <div className="rounded-md border border-surface-800 bg-surface-900/40 p-4 text-sm text-surface-500">
+          <div className="rounded-md border border-[#d7dce3] bg-white p-4 text-sm text-[#667085]">
             Load targets to boot watchOS, Wear OS, TV, phone, browser, and other runtime surfaces from this machine.
           </div>
         )}
 
         {session ? (
           <div className="space-y-2">
-            <div className="text-xs text-surface-500">
-              session <span className="font-mono text-surface-300">{session.id}</span> · {session.targetLabel} · {session.status}
+            <div className="text-xs text-[#667085]">
+              session <span className="font-mono text-[#344054]">{session.id}</span> · {session.targetLabel} · {session.status}
             </div>
             <RemoteRuntimeViewer session={session} onSessionChange={setSession} />
           </div>
         ) : null}
       </div>
 
-      <aside className="min-h-0 space-y-3 overflow-y-auto border-t border-surface-800 pt-3 xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
+      <aside className="min-h-0 space-y-3 overflow-y-auto border-t border-[#d7dce3] pt-3 xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
         <div>
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-surface-500">Tmux Sessions</div>
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673]">Tmux Sessions</div>
           <div className="space-y-2">
             {tmuxSessions.length === 0 ? (
-              <div className="rounded-md border border-surface-800 bg-surface-900/50 p-3 text-xs text-surface-500">No tmux sessions reported.</div>
+              <div className="rounded-md border border-[#d7dce3] bg-white p-3 text-xs text-[#667085]">No tmux sessions reported.</div>
             ) : tmuxSessions.map((row) => (
-              <div key={row.name} className={`rounded-md border p-3 ${selectedTmux === row.name ? "border-sky-500/40 bg-sky-500/10" : "border-surface-800 bg-surface-900/50"}`}>
+              <div key={row.name} className={`rounded-md border p-3 ${selectedTmux === row.name ? "border-sky-500/40 bg-sky-50" : "border-[#d7dce3] bg-white"}`}>
                 <button onClick={() => setSelectedTmux(row.name)} className="block w-full text-left">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate font-mono text-sm text-surface-100">{row.name}</span>
-                    <span className="text-[10px] uppercase tracking-wide text-surface-500">{row.agentType || row.relationship || "tmux"}</span>
+                    <span className="truncate font-mono text-sm text-[#1f2933]">{row.name}</span>
+                    <span className="text-[10px] uppercase tracking-wide text-[#667085]">{row.agentType || row.relationship || "tmux"}</span>
                   </div>
-                  <pre className="mt-2 max-h-20 overflow-hidden whitespace-pre-wrap rounded bg-black/30 p-2 text-[10px] leading-4 text-surface-400">{row.panePreview || "(no pane preview)"}</pre>
+                  <pre className="mt-2 max-h-20 overflow-hidden whitespace-pre-wrap rounded bg-[#111318] p-2 text-[10px] leading-4 text-[#d5dae1]">{row.panePreview || "(no pane preview)"}</pre>
                 </button>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   <button onClick={() => onOpenTmux?.(row.name)} className="rounded bg-sky-500/15 px-2 py-1 text-[11px] font-semibold text-sky-700 dark:text-sky-200">Attach</button>
@@ -348,8 +521,8 @@ export default function RuntimeLabView({
           </div>
         </div>
         <div>
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-surface-500">Runtime Console</div>
-          <pre className="h-64 overflow-auto rounded-md border border-surface-800 bg-black/50 p-3 text-[11px] leading-5 text-surface-300">
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673]">Runtime Console</div>
+          <pre className="h-64 overflow-auto rounded-md border border-[#1f2933] bg-[#111318] p-3 text-[11px] leading-5 text-[#d5dae1]">
             {log.length ? log.join("\n") : "No runtime operations yet."}
           </pre>
         </div>

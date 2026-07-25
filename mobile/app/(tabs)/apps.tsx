@@ -53,9 +53,20 @@ interface ProjectItem {
   path: string;
   branch?: string;
   framework?: string;
+  frameworks?: string[];
+  stack?: string;
+  stacks?: string[];
+  surfaces?: string[];
+  testSurfaces?: string[];
+  backend?: string;
+  services?: string[];
+  hosting?: string[];
+  role?: string;
   executionMode?: string;
   primarySurface?: string;
+  gitRemote?: string;
   tags?: string[];
+  isRepoRoot?: boolean;
 }
 
 // Repo-level entry — monorepo root or standalone repo. Surfaced in the
@@ -265,7 +276,66 @@ function devServerStepsFor(framework?: string): string {
   return "starting the web dev server";
 }
 
-function getProjectCategory(framework?: string): "mobile" | "web" | "other" {
+function repoToProject(repo: RepoItem): ProjectItem {
+  const frameworks = Array.from(new Set([repo.framework, ...(repo.subframeworks ?? [])].filter(Boolean) as string[]));
+  return {
+    name: repo.name,
+    path: repo.path,
+    branch: repo.branch,
+    framework: repo.framework || (repo.isMonorepo ? "monorepo" : undefined),
+    frameworks,
+    stack: repo.isMonorepo ? "monorepo" : repo.framework,
+    stacks: repo.isMonorepo ? ["monorepo", ...frameworks] : frameworks,
+    surfaces: repo.tags?.filter((t) => ["web", "mobile", "backend", "ios", "android"].includes(t.toLowerCase())),
+    gitRemote: repo.gitRemote,
+    tags: Array.from(new Set([...(repo.tags ?? []), ...(repo.isMonorepo ? ["repo", "monorepo"] : ["repo"])])),
+    isRepoRoot: true,
+  };
+}
+
+function mergeProjectRows(projectRows: ProjectItem[], repoRows: RepoItem[]): ProjectItem[] {
+  const byPath = new Map<string, ProjectItem>();
+  for (const row of repoRows.map(repoToProject)) {
+    byPath.set(row.path, row);
+  }
+  for (const row of projectRows) {
+    byPath.set(row.path, { ...byPath.get(row.path), ...row, isRepoRoot: byPath.get(row.path)?.isRepoRoot });
+  }
+  return Array.from(byPath.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function projectTerms(project: ProjectItem): string[] {
+  return [
+    project.name,
+    project.path,
+    project.branch,
+    project.framework,
+    ...(project.frameworks ?? []),
+    project.stack,
+    ...(project.stacks ?? []),
+    ...(project.surfaces ?? []),
+    ...(project.testSurfaces ?? []),
+    project.backend,
+    ...(project.services ?? []),
+    ...(project.hosting ?? []),
+    project.role,
+    project.primarySurface,
+    project.executionMode,
+    ...(project.tags ?? []),
+  ].filter(Boolean) as string[];
+}
+
+function getProjectCategory(projectOrFramework?: ProjectItem | string): "mobile" | "web" | "other" {
+  const project = typeof projectOrFramework === "string" ? undefined : projectOrFramework;
+  const framework = (typeof projectOrFramework === "string" ? projectOrFramework : projectOrFramework?.framework || "").toLowerCase();
+  const surfaces = (project?.surfaces ?? []).map((s) => s.toLowerCase());
+  const frameworks = (project?.frameworks ?? []).map((s) => s.toLowerCase());
+  if (surfaces.some((s) => s.includes("mobile") || s.includes("ios") || s.includes("android")) || frameworks.some((fw) => MOBILE_FRAMEWORKS.includes(fw) || SECOND_CLASS_MOBILE_FRAMEWORKS.includes(fw))) {
+    return "mobile";
+  }
+  if (surfaces.some((s) => s.includes("web")) || frameworks.some((fw) => WEB_FRAMEWORKS.includes(fw))) {
+    return "web";
+  }
   if (!framework) return "other";
   if (MOBILE_FRAMEWORKS.includes(framework) || SECOND_CLASS_MOBILE_FRAMEWORKS.includes(framework)) return "mobile";
   if (WEB_FRAMEWORKS.includes(framework)) return "web";
@@ -604,9 +674,9 @@ export default function AppsScreen() {
           quicClient.listWorkspaceRepos().catch(() => ({ repos: [] })),
         ]);
         if (!mounted) return;
-        setProjects(projectsData.projects);
+        setProjects(mergeProjectRows(projectsData.projects, reposData.repos));
         setProjectsDiscovering(!!projectsData.discovery?.discovering);
-        setRepos(reposData.repos);
+        setRepos([]);
       } catch {}
     };
 
@@ -2053,7 +2123,7 @@ export default function AppsScreen() {
         {(() => {
           const categories = new Map<string, number>();
           projects.forEach((p) => {
-            const cat = getProjectCategory(p.framework);
+            const cat = getProjectCategory(p);
             categories.set(cat, (categories.get(cat) || 0) + 1);
           });
           const categoryOrder = ["mobile", "web", "other"] as const;
@@ -2129,16 +2199,12 @@ export default function AppsScreen() {
             // Fuzzy search
             if (search.trim()) {
               const q = search.toLowerCase();
-              const match = p.name.toLowerCase().includes(q) ||
-                (p.branch?.toLowerCase().includes(q)) ||
-                p.path.toLowerCase().includes(q) ||
-                (p.framework?.toLowerCase().includes(q)) ||
-                (p.tags ?? []).some((t: string) => t.toLowerCase().includes(q));
+              const match = projectTerms(p).some((term) => term.toLowerCase().includes(q));
               if (!match) return false;
             }
             // Category filter
             if (activeFilter) {
-              return getProjectCategory(p.framework) === activeFilter;
+              return getProjectCategory(p) === activeFilter;
             }
             return true;
           })}

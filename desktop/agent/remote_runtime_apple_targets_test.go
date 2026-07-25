@@ -90,6 +90,10 @@ func TestCapabilitiesEnumeratesAllAppleSurfacesAndBadgesSurface(t *testing.T) {
 		"iOS": true, "visionOS": true,
 	})
 	defer cleanup()
+	cleanupDevices := setAppleSimulatorDevicesForTest(map[string]bool{
+		"iPhone": true, "iPad": true, "Apple Vision": true,
+	})
+	defer cleanupDevices()
 
 	caps := remoteRuntimeCapabilitiesForProject("/tmp/swift-app", "swift")
 	if !caps.RemoteRuntimeEligible {
@@ -147,6 +151,10 @@ func TestHandleRemoteRuntimeCapabilitiesReturnsAppleFanOut(t *testing.T) {
 		"iOS": true, "watchOS": true, "tvOS": true, "visionOS": true,
 	})
 	defer cleanup()
+	cleanupDevices := setAppleSimulatorDevicesForTest(map[string]bool{
+		"iPhone": true, "iPad": true, "Apple Watch": true, "Apple TV": true, "Apple Vision": true,
+	})
+	defer cleanupDevices()
 
 	srv := &HTTPServer{}
 	req := httptest.NewRequest(http.MethodGet,

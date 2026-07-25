@@ -3207,6 +3207,30 @@ func (s *HTTPServer) handleProjectsRefresh(w http.ResponseWriter, r *http.Reques
 	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "message": "discovery started"})
 }
 
+func projectListHasRunnableSignal(projectPath string) bool {
+	dirsToCheck := []string{projectPath}
+	if subs, err := os.ReadDir(projectPath); err == nil {
+		for _, sub := range subs {
+			if sub.IsDir() && !strings.HasPrefix(sub.Name(), ".") && sub.Name() != "node_modules" {
+				dirsToCheck = append(dirsToCheck, filepath.Join(projectPath, sub.Name()))
+			}
+		}
+	}
+	for _, dir := range dirsToCheck {
+		if fileExists(filepath.Join(dir, "package.json")) || fileExists(filepath.Join(dir, "pubspec.yaml")) ||
+			fileExists(filepath.Join(dir, "go.mod")) || fileExists(filepath.Join(dir, "Cargo.toml")) ||
+			fileExists(filepath.Join(dir, "Dockerfile")) || fileExists(filepath.Join(dir, "docker-compose.yml")) ||
+			fileExists(filepath.Join(dir, "docker-compose.yaml")) || fileExists(filepath.Join(dir, "pyproject.toml")) ||
+			fileExists(filepath.Join(dir, "requirements.txt")) || fileExists(filepath.Join(dir, "Makefile")) ||
+			fileExists(filepath.Join(dir, "Package.swift")) || fileExists(filepath.Join(dir, "yaver.workspace.yaml")) ||
+			fileExists(filepath.Join(dir, "yaver.workspace.yml")) || fileExists(filepath.Join(dir, "versions.json")) ||
+			hasAnyDeployScript(dir) || hasExtInDir(dir, ".xcodeproj") || isKotlinAndroidProject(dir) {
+			return true
+		}
+	}
+	return false
+}
+
 // handleProjects lists discovered projects on this machine.
 func (s *HTTPServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -3289,29 +3313,9 @@ func (s *HTTPServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 		if skip {
 			continue
 		}
-		// Only show projects that look deployable
-		// Check root AND immediate subdirs for build system files (monorepo support)
-		hasDeployable := false
-		dirsToCheck := []string{p.Path}
-		if subs, err := os.ReadDir(p.Path); err == nil {
-			for _, sub := range subs {
-				if sub.IsDir() && !strings.HasPrefix(sub.Name(), ".") && sub.Name() != "node_modules" {
-					dirsToCheck = append(dirsToCheck, filepath.Join(p.Path, sub.Name()))
-				}
-			}
-		}
-		for _, dir := range dirsToCheck {
-			if fileExists(filepath.Join(dir, "package.json")) || fileExists(filepath.Join(dir, "pubspec.yaml")) ||
-				fileExists(filepath.Join(dir, "go.mod")) || fileExists(filepath.Join(dir, "Cargo.toml")) ||
-				fileExists(filepath.Join(dir, "Dockerfile")) || fileExists(filepath.Join(dir, "docker-compose.yml")) ||
-				fileExists(filepath.Join(dir, "docker-compose.yaml")) || fileExists(filepath.Join(dir, "pyproject.toml")) ||
-				fileExists(filepath.Join(dir, "requirements.txt")) || fileExists(filepath.Join(dir, "Makefile")) ||
-				fileExists(filepath.Join(dir, "Package.swift")) || hasExtInDir(dir, ".xcodeproj") || isKotlinAndroidProject(dir) {
-				hasDeployable = true
-				break
-			}
-		}
-		if !hasDeployable {
+		// Only show projects that look runnable/deployable. Check root and
+		// immediate subdirs so monorepo roots remain visible.
+		if !projectListHasRunnableSignal(p.Path) {
 			continue
 		}
 		info := DetectProjectInfo(p.Path)

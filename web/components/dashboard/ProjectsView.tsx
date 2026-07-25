@@ -12,8 +12,18 @@ interface Project {
   path: string;
   branch?: string;
   framework?: string;
+  frameworks?: string[];
+  stack?: string;
+  stacks?: string[];
+  surfaces?: string[];
+  testSurfaces?: string[];
+  backend?: string;
+  services?: string[];
+  hosting?: string[];
+  role?: string;
   executionMode?: string;
   primarySurface?: string;
+  gitRemote?: string;
   tags?: string[];
 }
 
@@ -41,25 +51,60 @@ const WEB_FRAMEWORKS = ["nextjs", "vite", "react"];
 
 type Category = "all" | "mobile" | "web" | "other";
 
-function getCategory(framework?: string): "mobile" | "web" | "other" {
+function projectTerms(project: Project): string[] {
+  return [
+    project.name,
+    project.path,
+    project.branch,
+    project.framework,
+    ...(project.frameworks ?? []),
+    project.stack,
+    ...(project.stacks ?? []),
+    ...(project.surfaces ?? []),
+    ...(project.testSurfaces ?? []),
+    project.backend,
+    ...(project.services ?? []),
+    ...(project.hosting ?? []),
+    project.role,
+    project.primarySurface,
+    project.executionMode,
+    ...(project.tags ?? []),
+  ].filter(Boolean) as string[];
+}
+
+function getCategory(project: Project): "mobile" | "web" | "other" {
+  const framework = (project.framework || "").toLowerCase();
+  const surfaces = (project.surfaces ?? []).map((s) => s.toLowerCase());
+  const frameworks = (project.frameworks ?? []).map((s) => s.toLowerCase());
+  if (surfaces.some((s) => s.includes("mobile") || s.includes("ios") || s.includes("android")) || frameworks.some((fw) => MOBILE_FRAMEWORKS.includes(fw))) {
+    return "mobile";
+  }
+  if (surfaces.some((s) => s.includes("web")) || frameworks.some((fw) => WEB_FRAMEWORKS.includes(fw))) {
+    return "web";
+  }
   if (!framework) return "other";
   if (MOBILE_FRAMEWORKS.includes(framework)) return "mobile";
   if (WEB_FRAMEWORKS.includes(framework)) return "web";
   return "other";
 }
 
-function previewPlatformForProject(project: Project): "web" | undefined {
+function supportsBrowserPreview(project: Project): boolean {
   const fw = (project.framework || "").toLowerCase();
-  if (
-    fw.includes("expo") ||
-    fw.includes("react-native") ||
-    fw.includes("next") ||
-    fw.includes("vite") ||
-    fw === "react"
-  ) {
-    return "web";
-  }
-  return undefined;
+  const frameworks = new Set([fw, ...(project.frameworks ?? []).map((v) => v.toLowerCase())]);
+  const surfaces = (project.surfaces ?? []).map((s) => s.toLowerCase());
+  return surfaces.some((s) => s.includes("web")) ||
+    ["expo", "react-native", "flutter", "nextjs", "vite", "react"].some((candidate) => frameworks.has(candidate));
+}
+
+function supportsRemoteRuntime(project: Project): boolean {
+  const fw = (project.framework || "").toLowerCase();
+  const frameworks = new Set([fw, ...(project.frameworks ?? []).map((v) => v.toLowerCase())]);
+  const mode = (project.executionMode || "").toLowerCase();
+  return mode.includes("webrtc") || ["expo", "react-native", "flutter", "swift", "kotlin"].some((candidate) => frameworks.has(candidate));
+}
+
+function previewPlatformForProject(project: Project): "web" | undefined {
+  return supportsBrowserPreview(project) ? "web" : undefined;
 }
 
 export default function ProjectsView({
@@ -201,10 +246,9 @@ export default function ProjectsView({
     }
   }
 
-  async function createRemoteRuntimeSession(targetId: string) {
+  async function createRemoteRuntimeSession(targetId: string, transportMode: "direct-webrtc" | "relay-jpeg-poll" = "direct-webrtc") {
     if (!remoteProject) return;
     try {
-      const transportMode = agentClient.activeRelayUrl ? "relay-jpeg-poll" : "direct-webrtc";
       const session = await agentClient.startRemoteRuntimeSession(remoteProject.path, remoteProject.framework || "", targetId, transportMode);
       setRemoteSession(session);
       setRemoteSessionNote(session.note || `Remote runtime session ${session.id} created.`);
@@ -270,7 +314,7 @@ export default function ProjectsView({
   const categories = useMemo(() => {
     const counts = { all: projects.length, mobile: 0, web: 0, other: 0 };
     for (const p of projects) {
-      counts[getCategory(p.framework)]++;
+      counts[getCategory(p)]++;
     }
     return counts;
   }, [projects]);
@@ -278,16 +322,11 @@ export default function ProjectsView({
   const filtered = useMemo(() => {
     let list = projects;
     if (filter !== "all") {
-      list = list.filter(p => getCategory(p.framework) === filter);
+      list = list.filter(p => getCategory(p) === filter);
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
-      list = list.filter(p =>
-        p.name.toLowerCase().includes(q) ||
-        p.path.toLowerCase().includes(q) ||
-        (p.framework || "").toLowerCase().includes(q) ||
-        (p.tags ?? []).some(t => t.toLowerCase().includes(q))
-      );
+      list = list.filter(p => projectTerms(p).some((term) => term.toLowerCase().includes(q)));
     }
     return list;
   }, [projects, filter, search]);
@@ -440,8 +479,10 @@ export default function ProjectsView({
       ) : (
         <div className="space-y-2">
           {filtered.map((p) => {
-            const cat = getCategory(p.framework);
+            const cat = getCategory(p);
             const icon = FRAMEWORK_ICONS[p.framework || ""] || (cat === "mobile" ? "\uD83D\uDCF1" : cat === "web" ? "\uD83C\uDF10" : "\uD83D\uDCC1");
+            const browserPreview = supportsBrowserPreview(p);
+            const remoteRuntime = supportsRemoteRuntime(p);
             return (
               <div key={p.path} onClick={(e) => { if ((e.target as HTMLElement).tagName !== "BUTTON") setDetailPath(p.path); }} className="group rounded-lg border border-surface-800 bg-surface-900/50 p-3 flex items-center gap-3 hover:border-brand/40 transition-colors cursor-pointer">
                 <span className="text-lg">{icon}</span>
@@ -486,43 +527,34 @@ export default function ProjectsView({
                 >
                   Sync
                 </button>
-                {p.executionMode === "native-webrtc" ? (
+                <div className="flex items-center gap-2">
+                {browserPreview ? (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); startProject(p); }}
+                    className="px-3 py-1 text-xs rounded-md bg-brand-soft text-brand-softFg hover:bg-brand/15 transition-colors"
+                    title="Open a browser/WebView preview"
+                  >
+                    Web UI
+                  </button>
+                ) : null}
+                {remoteRuntime ? (
                   <button
                     onClick={(e) => { e.stopPropagation(); void openRemoteRuntime(p); }}
                     className="px-3 py-1 text-xs rounded-md bg-warning-soft text-warning-softFg hover:bg-warning/15 transition-colors"
+                    title="Stream a native simulator with WebRTC"
                   >
-                    Remote Runtime
+                    Simulator (WebRTC)
                   </button>
-                ) : p.executionMode === "rn-hermes" ? (
-                  <div className="flex items-center gap-2">
-                    {/* Hermes is the default (fast bytecode reload into the phone
-                        container, real device). */}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); startProject(p); }}
-                      className="px-3 py-1 text-xs font-medium rounded-md bg-brand text-brand-fg hover:bg-brand/90 active:scale-[0.97] transition-all"
-                      title="Hermes push — real device, camera & sensors, slower reload"
-                    >
-                      ⚡ Hermes
-                    </button>
-                    {/* WebRTC alternative: run the app in a remote simulator,
-                        streamed here. Metro Fast Refresh = instant iteration;
-                        hardware is simulated. */}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); void openRemoteRuntime(p); }}
-                      className="px-3 py-1 text-xs rounded-md bg-warning-soft text-warning-softFg hover:bg-warning/15 transition-colors"
-                      title="WebRTC — run in a remote simulator, instant Fast Refresh, simulated hardware"
-                    >
-                      Simulator (WebRTC)
-                    </button>
-                  </div>
-                ) : (
+                ) : null}
+                {!browserPreview && !remoteRuntime ? (
                   <button
                     onClick={(e) => { e.stopPropagation(); startProject(p); }}
                     className="px-3 py-1 text-xs rounded-md bg-brand-soft text-brand-softFg hover:bg-brand/15 transition-colors"
                   >
                     Start
                   </button>
-                )}
+                ) : null}
+                </div>
               </div>
             );
           })}
@@ -579,13 +611,24 @@ export default function ProjectsView({
                             {target.requiredCli || "runtime tools"} · host {target.hostOs || "unknown"} · runtime class {target.runtimeHostClass || "generic"}
                           </div>
                         </div>
-                        <button
-                          disabled={!target.enabled}
-                          onClick={() => void createRemoteRuntimeSession(target.id)}
-                          className={`px-3 py-1 text-xs rounded-md ${target.enabled ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20" : "bg-surface-800 text-surface-500 cursor-not-allowed"}`}
-                        >
-                          {target.enabled ? "Create Session" : "Unavailable"}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            disabled={!target.enabled}
+                            onClick={() => void createRemoteRuntimeSession(target.id, "direct-webrtc")}
+                            className={`px-3 py-1 text-xs rounded-md ${target.enabled ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20" : "bg-surface-800 text-surface-500 cursor-not-allowed"}`}
+                          >
+                            {target.enabled ? "Open WebRTC" : "Unavailable"}
+                          </button>
+                          {target.enabled && remoteCaps.supportedTransports?.includes("relay-jpeg-poll") ? (
+                            <button
+                              onClick={() => void createRemoteRuntimeSession(target.id, "relay-jpeg-poll")}
+                              className="px-3 py-1 text-xs rounded-md bg-surface-800 text-surface-300 hover:bg-surface-700"
+                              title="HTTP frame polling fallback for networks where ICE cannot connect"
+                            >
+                              Relay JPEG
+                            </button>
+                          ) : null}
+                        </div>
                       </div>
                       {target.reason ? <div className="mt-2 text-xs text-rose-700 dark:text-rose-300">{target.reason}</div> : null}
                     </div>

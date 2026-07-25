@@ -4225,7 +4225,25 @@ export class AgentClient {
 
   // ── Projects ───────────────────────────────────────────────────────
 
-  async listProjects(): Promise<{ name: string; path: string; branch?: string; framework?: string; executionMode?: string; primarySurface?: string; tags?: string[] }[]> {
+  async listProjects(): Promise<Array<{
+    name: string;
+    path: string;
+    branch?: string;
+    framework?: string;
+    frameworks?: string[];
+    stack?: string;
+    stacks?: string[];
+    surfaces?: string[];
+    testSurfaces?: string[];
+    backend?: string;
+    services?: string[];
+    hosting?: string[];
+    role?: string;
+    executionMode?: string;
+    primarySurface?: string;
+    gitRemote?: string;
+    tags?: string[];
+  }>> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/projects`, { headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
