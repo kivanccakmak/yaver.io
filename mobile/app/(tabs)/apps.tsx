@@ -15,7 +15,12 @@ import {
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { WebView } from "react-native-webview";
+// WebViewCompat, not react-native-webview directly: the real WebView has no web
+// build and throws "React Native WebView does not support this platform.", which
+// made the preview the ONE screen that could not render when Yaver's own app ran
+// as RN-web. The web sibling implements the same surface with an <iframe>.
+// Native resolves to the real WebView, unchanged. See WebViewCompat.web.tsx.
+import { WebView } from "../../src/components/WebViewCompat";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Platform } from "react-native";
@@ -137,6 +142,26 @@ function findProjectMatch(projects: ProjectItem[], query: string): ProjectItem |
 
 function isSecondClassMobileFramework(framework?: string): boolean {
   return framework === "flutter" || framework === "swift" || framework === "kotlin";
+}
+
+function previewLogColor(
+  line: string,
+  colors: { error: string; warn: string; success: string; info: string; textMuted: string; accent: string },
+): string {
+  const l = line.toLowerCase();
+  if (/\b(error|failed|failure|exception|fatal|crash|cannot|unable|denied|rejected|timed out|timeout)\b/.test(l) || /\bhttp\s*[45]\d\d\b/.test(l)) {
+    return colors.error;
+  }
+  if (/\b(warn|warning|deprecated|mismatch|expected version|recrawled|retry|stale)\b/.test(l)) {
+    return colors.warn;
+  }
+  if (/\b(ready|success|succeeded|compiled|done|listening|serving on|running|connected)\b/.test(l)) {
+    return colors.success;
+  }
+  if (/\b(starting|building|waiting|scanning|probe|progress|installing)\b/.test(l)) {
+    return colors.info || colors.accent;
+  }
+  return colors.textMuted;
 }
 
 // "carrotbet / mobile" → ["carrotbet", "mobile"]. The trailing "/ <subdir>"
@@ -585,6 +610,7 @@ export default function AppsScreen() {
   const webPreviewRetryRef = useRef(0);
   const webPreviewErroredRef = useRef(false);
   const webPreviewRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const webPreviewRenderWatchdogFiredRef = useRef(false);
   // True once the WebView paints REAL content (a flutter-view / non-empty DOM),
   // not just a 200 on index.html — keeps the progress overlay up so a Flutter
   // page that renders black while CanvasKit boots never shows as a blank void.
@@ -598,7 +624,13 @@ export default function AppsScreen() {
   const [previewFullScreen, setPreviewFullScreen] = useState(false);
   const [webPreviewLogs, setWebPreviewLogs] = useState<string[]>([]);
   const [webPreviewProbe, setWebPreviewProbe] = useState<PreviewProbeState | null>(null);
+  const webPreviewLogScrollRef = useRef<ScrollView>(null);
   useEffect(() => () => { if (webPreviewRetryTimer.current) clearTimeout(webPreviewRetryTimer.current); }, []);
+  useEffect(() => {
+    if (!showWebView || webPreviewLogs.length === 0) return;
+    const id = setTimeout(() => webPreviewLogScrollRef.current?.scrollToEnd({ animated: true }), 30);
+    return () => clearTimeout(id);
+  }, [showWebView, webPreviewLogs.length]);
   // Elapsed + last-output heartbeat.
   //
   // A spinner that never changes reads as HUNG, and a first web compile can
@@ -618,6 +650,7 @@ export default function AppsScreen() {
     setWebPreviewFailed(false);
     setWebPreviewLogs([]);
     setWebPreviewProbe(null);
+    webPreviewRenderWatchdogFiredRef.current = false;
     setWebPreviewStartedAt(Date.now());
     setWebPreviewLastLogAt(null);
   }, []);
@@ -700,8 +733,22 @@ export default function AppsScreen() {
           quicClient.listWorkspaceRepos().catch(() => ({ repos: [] })),
         ]);
         if (!mounted) return;
-        setProjects(mergeProjectRows(projectsData.projects, reposData.repos));
-        setProjectsDiscovering(!!projectsData.discovery?.discovering);
+        let projectRows = projectsData.projects;
+        // If the mobile-specific scanner is still walking or came back empty,
+        // fall back to the general project index. This is deliberately additive:
+        // /projects/mobile remains the best source for launch metadata, but the
+        // user must never stare at "No projects yet" when the agent can already
+        // list repos/projects through the generic index (observed in the
+        // Selenium/RN-web path on 2026-07-25).
+        if (projectRows.length === 0 || projectsData.discovery?.discovering) {
+          try {
+            const fallback = await quicClient.listProjectsDetailed();
+            projectRows = mergeProjectRows([...projectRows, ...(fallback.projects as ProjectItem[])], []);
+          } catch {}
+        }
+        const merged = mergeProjectRows(projectRows, reposData.repos);
+        setProjects(merged);
+        setProjectsDiscovering(!!projectsData.discovery?.discovering && merged.length === 0);
         setMobileDiscovery(projectsData.discovery ?? null);
         setRepos([]);
       } catch {}
@@ -1856,6 +1903,27 @@ export default function AppsScreen() {
     devStatus && reportedBundlePath
       ? quicClient.getDevServerBundleUrl(devWebLane || reportedBundlePath)
       : "";
+  const webPreviewServerLooksReady =
+    (devStatus ? isWebServedStatus(devStatus) : false) ||
+    webPreviewLogs.some((line) => /\b(listening|serving on|compiled|ready|running)\b/i.test(line));
+
+  useEffect(() => {
+    if (!showWebView || !bundleUrl || webPreviewContentLoaded || webPreviewFailed) return;
+    if (!webPreviewServerLooksReady || webPreviewRenderWatchdogFiredRef.current) return;
+    const id = setTimeout(() => {
+      if (webPreviewContentLoaded || webPreviewFailed || webPreviewRenderWatchdogFiredRef.current) return;
+      webPreviewRenderWatchdogFiredRef.current = true;
+      const probe = webPreviewProbe
+        ? `${webPreviewProbe.reason || "waiting"} · ${webPreviewProbe.mountId ? `#${webPreviewProbe.mountId} children ${webPreviewProbe.mountChildren ?? 0}` : `body children ${webPreviewProbe.bodyChildren ?? 0}`}`
+        : "no render probe message received";
+      let path = bundleUrl;
+      try { path = new URL(bundleUrl).pathname; } catch {}
+      setWebPreviewLogs((prev) => [...prev, `[preview] server is listening but the WebView did not render after 20s (${path}; ${probe})`].slice(-60));
+      setWebPreviewFailed(true);
+    }, 20000);
+    return () => clearTimeout(id);
+  }, [showWebView, bundleUrl, webPreviewContentLoaded, webPreviewFailed, webPreviewServerLooksReady, webPreviewProbe]);
+
   const visibleProjects = projects.filter((p) => {
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -2361,12 +2429,20 @@ export default function AppsScreen() {
                 title={projectsDiscovering ? "Scanning…" : "No projects yet"}
                 body={
                   projectsDiscovering
-                    ? `Looking through the home directory on ${activeDevice.name || "your machine"}.`
+                    ? `Looking through the home directory on ${activeDevice.name || "your machine"}.${scanDiagnosticLine ? ` ${scanDiagnosticLine}.` : ""}`
                     : `Yaver found nothing to build on ${activeDevice.name || "this machine"}.${scanDiagnosticLine ? ` ${scanDiagnosticLine}.` : ""}`
                 }
                 action={
                   projectsDiscovering
-                    ? undefined
+                    ? {
+                        label: "Restart scan",
+                        onPress: async () => {
+                          try {
+                            await quicClient.stopMobileProjectsScan().catch(() => undefined);
+                            await quicClient.refreshMobileProjects();
+                          } catch {}
+                        },
+                      }
                     : {
                         label: "Scan again",
                         onPress: async () => {
@@ -2812,20 +2888,42 @@ export default function AppsScreen() {
             }
           />
           )}
-          {/* Full-screen: a slim always-reachable exit. Without this the only
-              way back would be the OS gesture, and a preview you cannot leave
-              is worse than a header you cannot hide. */}
-          {previewFullScreen && (
-            <Pressable
-              onPress={() => setPreviewFullScreen(false)}
-              style={{ position: "absolute", top: insets.top + 4, right: 12, zIndex: 50,
-                       backgroundColor: "rgba(0,0,0,0.55)", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14 }}
-            >
-              <Text style={{ color: "#fff", fontSize: 12, fontWeight: "600" }}>Exit full screen</Text>
-            </Pressable>
-          )}
           {webViewLoading && !webPreviewContentLoaded && (
             <View style={[s.loadingBar, { backgroundColor: c.accent }]} />
+          )}
+          {(previewFullScreen || (bundleUrl && !webPreviewContentLoaded)) && (
+            <View style={[s.previewEscapeBar, { top: insets.top + 8 }]}>
+              <Pressable
+                onPress={() => setShowWebView(false)}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Back to projects"
+                style={s.previewEscapeBtn}
+              >
+                <Ionicons name="chevron-back" size={22} color="#fff" />
+                <Text style={s.previewEscapeText}>Back</Text>
+              </Pressable>
+              <View style={s.previewEscapeActions}>
+                <Pressable
+                  onPress={handleReload}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Reload preview"
+                  style={s.previewEscapeIconBtn}
+                >
+                  <Ionicons name="refresh" size={20} color={c.accent} />
+                </Pressable>
+                <Pressable
+                  onPress={handleStop}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Stop dev server"
+                  style={s.previewEscapeIconBtn}
+                >
+                  <Ionicons name="stop-circle-outline" size={21} color={c.error} />
+                </Pressable>
+              </View>
+            </View>
           )}
           <View style={{ flex: 1 }}>
             {/* An empty bundleUrl means devStatus has not reported yet. Mounting
@@ -2923,9 +3021,14 @@ export default function AppsScreen() {
                     <Text style={[s.previewSubtle, { color: c.textMuted }]}>
                       The {devStatus?.framework || "web"} server never served content. Recent output:
                     </Text>
-                    <ScrollView style={s.previewLogBox} contentContainerStyle={{ padding: 10 }}>
+                    <ScrollView
+                      ref={webPreviewLogScrollRef}
+                      style={s.previewLogBox}
+                      contentContainerStyle={{ padding: 10 }}
+                      onContentSizeChange={() => webPreviewLogScrollRef.current?.scrollToEnd({ animated: true })}
+                    >
                       {(webPreviewLogs.length ? webPreviewLogs : ["No output captured — the server may have exited immediately, or was never started."]).slice(-40).map((ln, i) => (
-                        <Text key={i} style={s.previewLogLine}>{ln}</Text>
+                        <Text key={i} style={[s.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
                       ))}
                     </ScrollView>
                     <View style={s.previewFailBtns}>
@@ -2965,10 +3068,24 @@ export default function AppsScreen() {
                       lastOutputAt={webPreviewLastLogAt}
                       now={previewNowTick}
                       lines={webPreviewLogs}
-                      maxLines={4}
+                      maxLines={2}
                       mutedColor={c.textMuted}
+                      warnColor={c.warn}
+                      lineColorFor={(line) => previewLogColor(line, c)}
                       stallHint="Stop and retry if this persists"
                     />
+                    {webPreviewLogs.length > 0 ? (
+                      <ScrollView
+                        ref={webPreviewLogScrollRef}
+                        style={s.previewLogBox}
+                        contentContainerStyle={{ padding: 10 }}
+                        onContentSizeChange={() => webPreviewLogScrollRef.current?.scrollToEnd({ animated: true })}
+                      >
+                        {webPreviewLogs.slice(-24).map((ln, i) => (
+                          <Text key={i} style={[s.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
+                        ))}
+                      </ScrollView>
+                    ) : null}
                     {/* WHERE it is being served, from the agent's own answer —
                         never inferred from the framework default. The agent
                         brokers ports (Metro's 8081 is routinely taken; on one box
@@ -3027,6 +3144,35 @@ const s = StyleSheet.create({
     borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, overflow: "hidden",
   },
   previewSubtle: { fontSize: 12, textAlign: "center", lineHeight: 17 },
+  previewEscapeBar: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    zIndex: 80,
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  previewEscapeBtn: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderRadius: 22,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(0,0,0,0.62)",
+  },
+  previewEscapeText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  previewEscapeActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+  previewEscapeIconBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.62)",
+  },
   previewLogBox: {
     maxHeight: 180, width: "100%", marginTop: 6, borderRadius: 10,
     backgroundColor: "#0a0a0f", borderWidth: 1, borderColor: "#333",
