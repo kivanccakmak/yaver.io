@@ -40,6 +40,7 @@ import { RuntimeTurnAnnouncerHost } from "../src/components/RuntimeTurnAnnouncer
 import YaverSplash from "../src/components/YaverSplash";
 import { AuthPushHost } from "../src/components/AuthPushHost";
 import { PairLinkHandler } from "../src/lib/pairLinkHandler";
+import { PendingDeviceApprovalHost } from "../src/lib/pendingDeviceApproval";
 import { ShareIntentReceiver } from "../src/lib/shareReceiver";
 import { registerNativeScreenRecorder } from "../src/lib/screenRecorder";
 import { startFeedbackShakeBridge } from "../src/lib/feedbackTrigger";
@@ -167,6 +168,7 @@ function InnerLayout() {
       <FeedbackOverlay />
       <RunningTasksPill />
       <PairLinkHandler />
+      <PendingDeviceApprovalHost />
       <ShareIntentReceiver />
       <ShareComposeModal />
       <DogfoodCaptureHost />

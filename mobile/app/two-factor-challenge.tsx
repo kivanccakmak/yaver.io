@@ -15,6 +15,7 @@ import { AppScreenHeader } from "../src/components/AppScreenHeader";
 import { useAuth } from "../src/context/AuthContext";
 import { useColors } from "../src/context/ThemeContext";
 import { verifyTotpChallenge } from "../src/lib/auth";
+import { resumePendingDeviceApproval } from "../src/lib/pendingDeviceApproval";
 
 // two-factor-challenge.tsx
 //
@@ -50,6 +51,9 @@ export default function TwoFactorChallengeScreen() {
     try {
       const result = await verifyTotpChallenge(pendingToken, entered);
       await login(result.token);
+      // Same contract as login.tsx / oauth-callback.tsx: a TV code stashed
+      // before sign-in gets resumed, never dropped.
+      if (await resumePendingDeviceApproval()) return;
       router.replace("/");
     } catch (e: unknown) {
       // The verify endpoint returns a clear "invalid code" message; surface

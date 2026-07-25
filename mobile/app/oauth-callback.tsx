@@ -3,6 +3,7 @@ import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
 import * as Linking from "expo-linking";
 import { useAuth } from "../src/context/AuthContext";
+import { resumePendingDeviceApproval } from "../src/lib/pendingDeviceApproval";
 
 // OAuth deep-link landing page.
 //
@@ -65,6 +66,13 @@ export default function OAuthCallbackScreen() {
       if (token) {
         try {
           await login(token);
+          // A device code stashed before sign-in (Apple TV / remote-box QR
+          // scanned while signed out) MUST be resumed here too. This screen —
+          // not login.tsx — is where a browser OAuth sign-in lands on iOS, and
+          // going straight home silently threw the code away: the phone ended up
+          // signed in while the TV waited on "Waiting for approval…" forever
+          // (2026-07-25, Convex showed the code row still `pending`).
+          if (await resumePendingDeviceApproval()) return;
           router.replace("/");
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);

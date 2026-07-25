@@ -25,11 +25,13 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { useAuth } from "../src/context/AuthContext";
 import { useColors } from "../src/context/ThemeContext";
-import { PENDING_DEVICE_CODE_KEY } from "../src/lib/auth";
+import {
+  clearPendingDeviceCode,
+  stashPendingDeviceCode,
+} from "../src/lib/pendingDeviceApproval";
 import DeviceCodeScanner from "../src/components/DeviceCodeScanner";
 import {
   approveDeviceCode,
@@ -41,7 +43,7 @@ import {
 
 export default function ApproveDeviceScreen() {
   const c = useColors();
-  const { token, user } = useAuth();
+  const { token, user, isLoading: authLoading } = useAuth();
   const params = useLocalSearchParams<{ code?: string; url?: string }>();
 
   // Seed the code from either ?code= or a full ?url= (the deep-link
@@ -57,22 +59,32 @@ export default function ApproveDeviceScreen() {
   // Signed out but arrived with a code (scanned an Apple TV QR while logged
   // out)? Don't sit here and fail — approveDeviceCode would run with an empty
   // token and the TV would stay stuck "Waiting for approval". Stash the code and
-  // send them to sign in; login.tsx returns here with the code afterward and
-  // the approval completes. This is the fix for the stuck-TV bug.
+  // send them to sign in; every sign-in path returns here with the code
+  // afterward (resumePendingDeviceApproval + PendingDeviceApprovalHost) and the
+  // approval completes.
+  //
+  // `authLoading` is the guard that matters as much as the stash: SecureStore
+  // hydration takes a tick, so a SIGNED-IN phone opening this screen from a cold
+  // universal link reads `user === null` on the first render. Acting then would
+  // eject a signed-in user to /login for no reason.
   useEffect(() => {
-    if (user) return;
+    if (authLoading || user) return;
     const c9 = normalizeUserCode(code);
     if (c9.length !== 9) return;
     let cancelled = false;
     (async () => {
-      await AsyncStorage.setItem(PENDING_DEVICE_CODE_KEY, c9);
+      await stashPendingDeviceCode(c9);
       if (!cancelled) router.replace("/login");
     })();
     return () => { cancelled = true; };
-  }, [user, code]);
+  }, [authLoading, user, code]);
 
   const [info, setInfo] = useState<DeviceCodeInfo | null>(null);
   const [loadingInfo, setLoadingInfo] = useState(false);
+  // The lookup came back empty for a well-formed code: the code expired (15-min
+  // server TTL) or was mistyped. Say so, instead of leaving an enabled Approve
+  // button that fails with a backend string.
+  const [unknownCode, setUnknownCode] = useState(false);
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -84,13 +96,17 @@ export default function ApproveDeviceScreen() {
     const c9 = normalizeUserCode(code);
     if (c9.length !== 9) {
       setInfo(null);
+      setUnknownCode(false);
       return;
     }
     let cancelled = false;
     setLoadingInfo(true);
+    setUnknownCode(false);
     fetchDeviceCodeInfo(c9)
       .then((res) => {
-        if (!cancelled) setInfo(res);
+        if (cancelled) return;
+        setInfo(res);
+        setUnknownCode(res === null);
       })
       .finally(() => {
         if (!cancelled) setLoadingInfo(false);
@@ -132,11 +148,21 @@ export default function ApproveDeviceScreen() {
     }
     const res = await approveDeviceCode(code, token ?? "");
     setApproving(false);
-    if (res.ok) setDone(true);
-    else setError(res.error ?? "Couldn't authorize the machine.");
+    if (res.ok) {
+      // Only now is the stash spent. Clearing it earlier (the old finishLogin
+      // did, before navigating) meant a navigation lost to another redirect
+      // destroyed the code with it — unrecoverable, TV stuck forever.
+      await clearPendingDeviceCode();
+      setDone(true);
+    } else {
+      setError(res.error ?? "Couldn't authorize the machine.");
+    }
   }, [approving, code, token, info?.machineName]);
 
+  // "Not now" is an explicit decision — drop the stash so the approver never
+  // re-opens itself on the next route change.
   const goHome = useCallback(() => {
+    void clearPendingDeviceCode();
     router.replace("/(tabs)/tasks");
   }, []);
 
@@ -165,6 +191,7 @@ export default function ApproveDeviceScreen() {
   }
 
   const codeReady = normalizeUserCode(code).length === 9;
+  const canApprove = codeReady && !!token && !unknownCode;
   const machineLabel = info?.machineName || "this machine";
 
   // Full-screen camera scanner — decodes the box's QR and drops the
@@ -197,6 +224,14 @@ export default function ApproveDeviceScreen() {
             <ActivityIndicator size="small" color={c.textMuted} />
             <Text style={[styles.infoText, { color: c.textMuted }]}>Looking up the machine…</Text>
           </View>
+        ) : unknownCode ? (
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.warn }]}>
+            <Text style={[styles.cardName, { color: c.warn }]}>That code is no longer valid</Text>
+            <Text style={[styles.cardMeta, { color: c.textSecondary }]}>
+              Sign-in codes last 15 minutes. Your TV has already replaced it — open Yaver on the TV
+              and scan the new code (or type it below).
+            </Text>
+          </View>
         ) : info ? (
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
             <Text style={[styles.cardName, { color: c.textPrimary }]}>{info.machineName || "Unknown machine"}</Text>
@@ -208,8 +243,10 @@ export default function ApproveDeviceScreen() {
           </View>
         ) : null}
 
-        {/* Manual code entry — used when arriving without a valid ?code= */}
-        {!initialCode ? (
+        {/* Manual code entry — shown when we arrived without a valid ?code=, and
+            also when the code we arrived with is dead (so the user has somewhere
+            to put the TV's new one instead of a dead end). */}
+        {!initialCode || unknownCode ? (
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
             <Text style={[styles.cardLabel, { color: c.textMuted }]}>CODE FROM YOUR MACHINE</Text>
             <TextInput
@@ -234,18 +271,22 @@ export default function ApproveDeviceScreen() {
 
         <Pressable
           onPress={() => void onApprove()}
-          disabled={!codeReady || approving || !token}
+          disabled={!canApprove || approving}
           style={({ pressed }) => [
             styles.primaryBtn,
-            { backgroundColor: !codeReady || !token ? c.border : c.accent },
+            { backgroundColor: canApprove ? c.accent : c.border },
             pressed && { opacity: 0.85 },
           ]}
         >
           {approving ? (
             <ActivityIndicator size="small" color="#000" />
           ) : (
-            <Text style={[styles.primaryBtnText, { color: !codeReady || !token ? c.textMuted : "#000" }]}>
-              {!token ? "Sign in on this phone first" : `Approve ${machineLabel}`}
+            <Text style={[styles.primaryBtnText, { color: canApprove ? "#000" : c.textMuted }]}>
+              {!token
+                ? "Sign in on this phone first"
+                : unknownCode
+                  ? "Enter the TV's current code"
+                  : `Approve ${machineLabel}`}
             </Text>
           )}
         </Pressable>

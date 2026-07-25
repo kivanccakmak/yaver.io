@@ -1,6 +1,7 @@
 import { Ionicons, FontAwesome } from "@expo/vector-icons";
 import * as AppleAuthentication from "expo-apple-authentication";
 import Constants from "expo-constants";
+import * as Crypto from "expo-crypto";
 import * as Linking from "expo-linking";
 import * as ExpoLinking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
@@ -44,8 +45,7 @@ import {
   passkeySignup,
 } from "../src/lib/passkey";
 
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { PENDING_DEVICE_CODE_KEY } from "../src/lib/auth";
+import { resumePendingDeviceApproval } from "../src/lib/pendingDeviceApproval";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -53,23 +53,26 @@ WebBrowser.maybeCompleteAuthSession();
 // if the user scanned a QR while signed out (the code was stashed before the
 // login round-trip). Otherwise go home. This is what stops the TV getting stuck
 // "Waiting for approval" after sign-in.
+//
+// Every `await login(...)` in the app must go through this (or call
+// resumePendingDeviceApproval itself) — src/lib/pendingDeviceCodeLoginPaths.test.ts
+// fails the build otherwise. That test exists because this screen was fixed on
+// 2026-07-15 while app/oauth-callback.tsx kept dropping the code, which is the
+// path a browser OAuth sign-in actually takes.
 async function finishLogin() {
-  try {
-    const code = await AsyncStorage.getItem(PENDING_DEVICE_CODE_KEY);
-    if (code) {
-      await AsyncStorage.removeItem(PENDING_DEVICE_CODE_KEY);
-      router.replace({ pathname: "/approve-device", params: { code } });
-      return;
-    }
-  } catch {
-    // fall through to home on any storage error
-  }
+  if (await resumePendingDeviceApproval()) return;
   router.replace("/");
 }
 
 const LEGACY_OAUTH_REDIRECT = "yaver:///oauth-callback";
 const YAVER_LOGIN_WORDMARK_DARK = require("../assets/branding/yaver-login-wordmark-dark.png");
 const YAVER_LOGIN_WORDMARK_LIGHT = require("../assets/branding/yaver-login-wordmark-light.png");
+
+function randomHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 function isOAuthCallbackUrl(url: string): boolean {
   return url.startsWith(OAUTH_REDIRECT) || url.startsWith(LEGACY_OAUTH_REDIRECT);
@@ -363,11 +366,17 @@ export default function LoginScreen() {
 
     setIsLoading(true);
     try {
+      const rawNonce = randomHex(Crypto.getRandomBytes(16));
+      const nonce = await Crypto.digestStringAsync(
+        Crypto.CryptoDigestAlgorithm.SHA256,
+        rawNonce,
+      );
       const credential = await AppleAuthentication.signInAsync({
         requestedScopes: [
           AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
           AppleAuthentication.AppleAuthenticationScope.EMAIL,
         ],
+        nonce,
       });
 
       if (!credential.identityToken) {
@@ -384,6 +393,7 @@ export default function LoginScreen() {
         body: JSON.stringify({
           identityToken: credential.identityToken,
           fullName,
+          nonce,
         }),
       });
 
