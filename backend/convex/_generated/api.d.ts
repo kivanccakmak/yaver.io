@@ -9,6 +9,7 @@
  */
 
 import type * as access from "../access.js";
+import type * as accessSigPolicy from "../accessSigPolicy.js";
 import type * as admin from "../admin.js";
 import type * as agentRescue from "../agentRescue.js";
 import type * as agentSync from "../agentSync.js";
@@ -104,6 +105,7 @@ import type * as trials from "../trials.js";
 import type * as unitEconomics from "../unitEconomics.js";
 import type * as userDomains from "../userDomains.js";
 import type * as userSettings from "../userSettings.js";
+import type * as wakeOnRequestPolicy from "../wakeOnRequestPolicy.js";
 import type * as wakeRuns from "../wakeRuns.js";
 import type * as whatsapp from "../whatsapp.js";
 
@@ -115,6 +117,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   access: typeof access;
+  accessSigPolicy: typeof accessSigPolicy;
   admin: typeof admin;
   agentRescue: typeof agentRescue;
   agentSync: typeof agentSync;
@@ -210,6 +213,7 @@ declare const fullApi: ApiFromModules<{
   unitEconomics: typeof unitEconomics;
   userDomains: typeof userDomains;
   userSettings: typeof userSettings;
+  wakeOnRequestPolicy: typeof wakeOnRequestPolicy;
   wakeRuns: typeof wakeRuns;
   whatsapp: typeof whatsapp;
 }>;

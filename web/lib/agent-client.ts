@@ -3779,6 +3779,37 @@ export class AgentClient {
     }
   }
 
+  private async tryRelayFallback(): Promise<boolean> {
+    if (!this.deviceId || this.relayServers.length === 0) return false;
+    for (const relay of this.relayServers) {
+      const relayDeviceUrl = `${relay.httpUrl}/d/${this.deviceId}`;
+      const headers: Record<string, string> = { ...this.authHeaders };
+      if (relay.password) headers["X-Relay-Password"] = relay.password;
+      const diag = await this.probeHealth(relayDeviceUrl, headers, 8000, "relay", relay.id);
+      if (diag.ok) {
+        this._activeRelayUrl = relay.httpUrl;
+        this.activeRelayPassword = relay.password || null;
+        this._activeTunnelUrl = null;
+        this.setConnectionState("connected");
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private async fetchAgentPath(path: string, init: RequestInit = {}): Promise<Response> {
+    const request = () => fetch(`${this.baseUrl}${path}`, init);
+    try {
+      return await request();
+    } catch (err) {
+      if (!this._activeRelayUrl && this.relayServers.length > 0) {
+        const switched = await this.tryRelayFallback();
+        if (switched) return request();
+      }
+      throw err;
+    }
+  }
+
   private async probeInfoAt(
     url: string,
     headers: Record<string, string>,
@@ -4536,7 +4567,7 @@ export class AgentClient {
   } | null> {
     this.assertConnected();
     try {
-      const res = await fetch(`${this.baseUrl}/dev/status`, { headers: this.authHeaders });
+      const res = await this.fetchAgentPath(`/dev/status`, { headers: this.authHeaders });
       if (!res.ok) {
         let body: any = null;
         try { body = await res.json(); } catch { body = null; }
@@ -4550,7 +4581,7 @@ export class AgentClient {
     } catch (err) {
       return {
         running: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: `${err instanceof Error ? err.message : String(err)} (${this.baseUrl || "no agent route"})`,
       };
     }
   }

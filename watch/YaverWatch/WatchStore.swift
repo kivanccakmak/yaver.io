@@ -9,6 +9,7 @@
 
 import Combine
 import Foundation
+import Security
 import SwiftUI
 
 @MainActor
@@ -18,7 +19,8 @@ final class WatchStore: ObservableObject {
     // Standalone-only: a session token (from device-code auth) the watch holds
     // when it must reach the agent WITHOUT the phone. Empty in the default
     // phone-paired topology — that's the whole point of paired mode.
-    @AppStorage("yaver.watch.token") private var storedToken: String = ""
+    // Legacy migration fallback only. New standalone tokens live in Keychain.
+    @AppStorage("yaver.watch.token") private var legacyStoredToken: String = ""
     @AppStorage("yaver.watch.box") private var storedBoxJSON: String = ""
     // User opt-in to "use without your phone" (mode B/C). Off by default so the
     // watch holds nothing sensitive unless the user asks.
@@ -55,7 +57,10 @@ final class WatchStore: ObservableObject {
     }
 
     init() {
-        token = storedToken
+        token = WatchCredentialStore.loadToken(legacyFallback: legacyStoredToken)
+        if !legacyStoredToken.isEmpty, !token.isEmpty {
+            legacyStoredToken = ""
+        }
         if !storedBoxJSON.isEmpty {
             box = try? JSONDecoder().decode(BoxTarget.self, from: Data(storedBoxJSON.utf8))
         }
@@ -75,7 +80,7 @@ final class WatchStore: ObservableObject {
     /// default phone-paired mode (no token held). Extend-only — see
     /// Backend.refreshSession for the no-rotation rationale.
     private func refreshStandaloneSessionOnLaunch() {
-        let current = storedToken
+        let current = token
         guard !current.isEmpty else { return }
         Task { [weak self] in
             let rotated = await DeviceCodeAuth.refreshSession(token: current)
@@ -85,7 +90,7 @@ final class WatchStore: ObservableObject {
                 // Only adopt if we're still on the same token (no sign-out/in raced us).
                 guard self.token == current else { return }
                 self.token = rotated
-                self.storedToken = rotated
+                WatchCredentialStore.saveToken(rotated)
             }
         }
     }
@@ -96,7 +101,8 @@ final class WatchStore: ObservableObject {
 
     func signInStandalone(token: String, box: BoxTarget) {
         self.token = token
-        storedToken = token
+        WatchCredentialStore.saveToken(token)
+        legacyStoredToken = ""
         self.box = box
         persistBox(box)
     }
@@ -132,7 +138,8 @@ final class WatchStore: ObservableObject {
 
     func signOutStandalone() {
         token = ""
-        storedToken = ""
+        WatchCredentialStore.clearToken()
+        legacyStoredToken = ""
         box = nil
         storedBoxJSON = ""
     }
@@ -316,5 +323,61 @@ final class WatchStore: ObservableObject {
         if let p = error as? PhoneSessionError { return p.errorDescription ?? "Your phone isn't reachable." }
         if let a = error as? AgentError { return a.message }
         return "I couldn't reach your box."
+    }
+}
+
+private enum WatchCredentialStore {
+    private static let service = "io.yaver.watch"
+    private static let tokenAccount = "standalone-session-token"
+
+    static func loadToken(legacyFallback: String) -> String {
+        if let token = read(account: tokenAccount), !token.isEmpty {
+            return token
+        }
+        let fallback = legacyFallback.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !fallback.isEmpty {
+            saveToken(fallback)
+        }
+        return fallback
+    }
+
+    static func saveToken(_ token: String) {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8), !trimmed.isEmpty else { return }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: tokenAccount,
+        ]
+        SecItemDelete(query as CFDictionary)
+        var add = query
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    static func clearToken() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: tokenAccount,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
+    private static func read(account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
     }
 }

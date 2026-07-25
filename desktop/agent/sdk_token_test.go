@@ -572,6 +572,66 @@ func TestPathAllowedByScopes(t *testing.T) {
 	}
 }
 
+func TestRequestAllowedByScopesSpatial(t *testing.T) {
+	tests := []struct {
+		method string
+		path   string
+		scopes []string
+		want   bool
+	}{
+		{http.MethodGet, "/tasks", []string{"spatial"}, true},
+		{http.MethodGet, "/tasks/abc", []string{"spatial"}, true},
+		{http.MethodPost, "/tasks", []string{"spatial"}, false},
+		{http.MethodGet, "/tmux/sessions", []string{"spatial"}, true},
+		{http.MethodPost, "/tmux/adopt", []string{"spatial"}, false},
+		{http.MethodGet, "/remote-runtime/sessions", []string{"spatial"}, true},
+		{http.MethodPost, "/remote-runtime/sessions/r1/control", []string{"spatial"}, true},
+		{http.MethodGet, "/vibing/preview/status", []string{"spatial"}, true},
+		{http.MethodPost, "/vibing/preview/snapshot", []string{"spatial"}, true},
+		{http.MethodGet, "/vibing/preview/frames/hash", []string{"spatial"}, true},
+		{http.MethodGet, "/voice/stream", []string{"spatial"}, true},
+		{http.MethodGet, "/ws/terminal", []string{"spatial"}, true},
+		{http.MethodPost, "/vault/list", []string{"spatial"}, false},
+		{http.MethodGet, "/voice/status", []string{"voice"}, true},
+	}
+
+	for _, tt := range tests {
+		got := requestAllowedByScopes(tt.method, tt.path, tt.scopes)
+		if got != tt.want {
+			t.Errorf("requestAllowedByScopes(%s, %q, %v) = %v, want %v", tt.method, tt.path, tt.scopes, got, tt.want)
+		}
+	}
+}
+
+func TestCompanionSessionAllowed(t *testing.T) {
+	tests := []struct {
+		method string
+		path   string
+		scope  string
+		want   bool
+	}{
+		{http.MethodGet, "/info", "watch", true},
+		{http.MethodPost, "/runner/session/turn", "watch", true},
+		{http.MethodGet, "/tasks", "watch", false},
+		{http.MethodPost, "/tasks", "watch", false},
+		{http.MethodGet, "/tasks", "vision", true},
+		{http.MethodGet, "/projects", "vision", true},
+		{http.MethodPost, "/tasks", "vision", false},
+		{http.MethodPost, "/ops", "tv", true},
+		{http.MethodGet, "/tmux/sessions", "spatial", true},
+		{http.MethodPost, "/vault/list", "spatial", false},
+		{http.MethodPost, "/agent/shutdown", "tv", false},
+		{http.MethodPost, "/tasks", "full", true},
+	}
+
+	for _, tt := range tests {
+		got := companionSessionAllowed(tt.method, tt.path, tt.scope)
+		if got != tt.want {
+			t.Errorf("companionSessionAllowed(%s, %q, %q) = %v, want %v", tt.method, tt.path, tt.scope, got, tt.want)
+		}
+	}
+}
+
 func TestClientIPExtraction(t *testing.T) {
 	// Standard request
 	r := &http.Request{RemoteAddr: "192.168.1.10:54321"}

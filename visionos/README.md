@@ -64,9 +64,17 @@ cd visionos && xcodegen generate
 
 # archive + upload to App Store Connect
 $(yaver vault env --project mobile)   # or: source ~/.appstoreconnect/yaver.env
-VISIONOS_MARKETING_VERSION=1.0.0 VISIONOS_BUILD_NUMBER=1 \
-  ./scripts/deploy-visionos.sh --upload
+./scripts/deploy-visionos.sh --upload
 ```
+
+The build number is chosen for you: `--upload` asks App Store Connect for the
+highest existing **VISION_OS** build and uses that + 1
+(`scripts/asc-next-build.sh` → `scripts/asc-max-build.py`). Do **not** copy the
+old `VISIONOS_BUILD_NUMBER=1` recipe — visionOS on ASC is already at a
+date-shaped `2607160313`, so `1` archives for minutes and is then rejected as a
+duplicate, burning a slot of the ~15-20/day TestFlight cap. Set
+`VISIONOS_BUILD_NUMBER` only to deliberately override, and it must exceed the
+current ASC max.
 
 Requires the visionOS platform component (`xcodebuild -downloadPlatform visionOS`
 — ~7 GB). Having the SDK listed in `xcodebuild -showsdks` is **not** enough; the

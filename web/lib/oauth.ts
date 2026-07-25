@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 export type OAuthProvider =
   | "google"
@@ -12,6 +13,8 @@ type ProviderConfig = {
   tokenUrl: string;
   userInfoUrl: string;
   emailUrl?: string;
+  jwksUrl?: string;
+  issuer?: string;
   clientId: string;
   clientSecret: string;
   scope: string;
@@ -53,6 +56,11 @@ function getProviderConfig(provider: OAuthProvider): ProviderConfig {
           "OAUTH_MICROSOFT_TOKEN_URL",
         ),
         userInfoUrl: envOr("https://graph.microsoft.com/v1.0/me", "OAUTH_MICROSOFT_USERINFO_URL"),
+        jwksUrl: envOr(
+          `https://login.microsoftonline.com/${process.env.OAUTH_MICROSOFT_TENANT_ID || "common"}/discovery/v2.0/keys`,
+          "OAUTH_MICROSOFT_JWKS_URL",
+        ),
+        issuer: process.env.OAUTH_MICROSOFT_ISSUER || undefined,
         clientId: process.env.OAUTH_MICROSOFT_CLIENT_ID || "",
         clientSecret: process.env.OAUTH_MICROSOFT_CLIENT_SECRET || "",
         scope: "openid email profile",
@@ -62,6 +70,8 @@ function getProviderConfig(provider: OAuthProvider): ProviderConfig {
         authUrl: envOr("https://appleid.apple.com/auth/authorize", "OAUTH_APPLE_AUTH_URL"),
         tokenUrl: envOr("https://appleid.apple.com/auth/token", "OAUTH_APPLE_TOKEN_URL"),
         userInfoUrl: "",
+        jwksUrl: envOr("https://appleid.apple.com/auth/keys", "OAUTH_APPLE_JWKS_URL"),
+        issuer: "https://appleid.apple.com",
         clientId: process.env.OAUTH_APPLE_CLIENT_ID || "",
         clientSecret: process.env.OAUTH_APPLE_CLIENT_SECRET || "",
         scope: "name email",
@@ -294,10 +304,30 @@ export type OAuthUserInfo = {
   username?: string;
 };
 
-function decodeJwtPayload(jwt: string): Record<string, unknown> {
-  const parts = jwt.split(".");
-  if (parts.length !== 3) throw new Error("Invalid JWT");
-  return JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8"));
+async function verifyProviderIdToken(
+  provider: OAuthProvider,
+  idToken: string,
+): Promise<Record<string, unknown>> {
+  const config = getProviderConfig(provider);
+  if (!config.jwksUrl) throw new Error(`${provider} JWKS URL is not configured`);
+  if (!config.clientId) throw new Error(`${provider} OAuth client ID is not configured`);
+
+  const { payload } = await jwtVerify(
+    idToken,
+    createRemoteJWKSet(new URL(config.jwksUrl)),
+    {
+      audience: config.clientId,
+      ...(config.issuer ? { issuer: config.issuer } : {}),
+    },
+  );
+  return payload as Record<string, unknown>;
+}
+
+function providerEmailVerified(provider: OAuthProvider, payload: Record<string, unknown>): boolean {
+  const claim = payload.email_verified ?? payload.verified_email;
+  if (claim === true || claim === "true") return true;
+  if (provider === "apple" && payload.is_private_email === true) return true;
+  return false;
 }
 
 export async function getUserInfo(
@@ -306,7 +336,10 @@ export async function getUserInfo(
 ): Promise<OAuthUserInfo> {
   if (provider === "apple") {
     if (!tokens.id_token) throw new Error("Apple did not return id_token");
-    const payload = decodeJwtPayload(tokens.id_token);
+    const payload = await verifyProviderIdToken(provider, tokens.id_token);
+    if (!providerEmailVerified(provider, payload)) {
+      throw new Error("Apple email is not verified");
+    }
     return {
       email: payload.email as string,
       name: undefined,
@@ -316,7 +349,7 @@ export async function getUserInfo(
 
   if (provider === "microsoft") {
     if (!tokens.id_token) throw new Error("Microsoft did not return id_token");
-    const payload = decodeJwtPayload(tokens.id_token);
+    const payload = await verifyProviderIdToken(provider, tokens.id_token);
     return {
       email: (payload.email || payload.preferred_username) as string,
       name: payload.name as string | undefined,
@@ -341,6 +374,9 @@ export async function getUserInfo(
   const data = await res.json();
 
   if (provider === "google") {
+    if (data.email_verified !== true && data.verified_email !== true) {
+      throw new Error("Google email is not verified");
+    }
     return {
       email: data.email,
       name: data.name,

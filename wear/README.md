@@ -28,12 +28,15 @@ watch adds no new backend.
 | Mode | Path | When |
 |---|---|---|
 | **A — phone-paired (DEFAULT)** | Wear Data Layer `MessageClient` → paired Android Yaver app → runner | Normal case. Watch holds no token; phone is brain-of-record. |
-| B — standalone LAN (secondary) | `POST http://<box>:18080/watch/turn`, `Authorization: Bearer <session-token>` | Phone absent; explicit "use without phone" opt-in. |
+| B — standalone direct/relay (secondary) | Direct box URL first, then relay proxy `/d/<deviceId>/runner/session/turn`, `Authorization: Bearer <session-token>` | Phone absent; explicit "use without phone" opt-in. |
 
 Standalone auth is the **RFC 8628 device-code flow** against Convex
 (`POST /auth/device-code`, poll `GET /auth/device-code/poll`) — identical in
 shape to `mobile/src/lib/tvSignIn.ts` and the tvOS `Backend.swift`. The watch
 shows a QR + short code; an already-signed-in browser/phone approves it.
+When standalone credentials include relay URL/password and a machine id, the
+watch now keeps the same direct-first / relay-fallback behavior as phone and
+tvOS. Older LAN-only stored credentials still work as before.
 
 ### Wear Data Layer paths + wire protocol v1 (JSON, UTF-8 bytes)
 
@@ -105,7 +108,7 @@ it) and listen on `/yaver/watch/turn`. Versions in the `build.gradle.kts` files
 | `PhoneBridge.kt` | `MessageClient` wrapper: send transcript/confirm/intent; node discovery via Capability/Node clients. |
 | `ReplyListenerService.kt` | `WearableListenerService` for `/yaver/watch/reply` → `WatchState` + haptic (wakes even when backgrounded). |
 | `WatchState.kt` | Process-wide in-memory UI state (`StateFlow`); maps replies → phase/line + haptic policy. |
-| `AgentClient.kt` | Standalone LAN `POST /watch/turn` (Bearer), OkHttp. |
+| `AgentClient.kt` / `SessionClient.kt` | Standalone HTTP clients. `SessionClient` uses direct-first / relay-fallback for live runtime turns. |
 | `Backend.kt` | Standalone device-code auth (create + poll). |
 | `Dictation.kt` | `RecognizerIntent` speech-to-text → transcript. |
 | `Haptics.kt` | `Vibrator` cues (click / success / failure). |

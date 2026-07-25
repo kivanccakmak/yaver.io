@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { v } from "convex/values";
 import { httpAction, internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import type { SessionScope } from "./auth";
 import { sha256Hex, randomHex } from "./auth";
 import { managedDeviceIdFor } from "./cloudMachines";
 import { createRemoteJWKSet, jwtVerify } from "jose";
@@ -647,10 +648,9 @@ async function authenticateRequest(
   surveyCompleted: boolean;
   emailVerified: boolean;
   isOwner: boolean;
-  /** Auth scope. "machine" = a managed-box token, "tv" = a lean-back TV
-   *  surface token. Both are denied on account-level + spend routes;
-   *  "full"/undefined = a normal owner login. */
-  scope: "full" | "machine" | "tv";
+  /** Auth scope. Non-full scopes are route-limited surface tokens and are
+   *  denied on account-level + spend routes. */
+  scope: SessionScope;
 } | null> {
   const authHeader = request.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) return null;
@@ -681,12 +681,21 @@ async function authenticateRequest(
     // Owner flag drives owner-only hardware-cell visibility on every client
     // (web/mobile/daemon) without shipping any owner identity to the client.
     isOwner: (result as { isOwner?: boolean }).isOwner === true,
-    scope: (result as { scope?: "full" | "machine" | "tv" }).scope === "machine"
-      ? "machine"
-      : (result as { scope?: "full" | "machine" | "tv" }).scope === "tv"
-        ? "tv"
-        : "full",
+    scope: normalizeSessionScope((result as { scope?: string }).scope),
   };
+}
+
+function normalizeSessionScope(scope: string | undefined): SessionScope {
+  switch (scope) {
+    case "machine":
+    case "tv":
+    case "watch":
+    case "vision":
+    case "spatial":
+      return scope;
+    default:
+      return "full";
+  }
 }
 
 /**
@@ -697,15 +706,17 @@ async function authenticateRequest(
  * Returns an error Response to return early, or null to proceed.
  */
 function requireFullScope(
-  auth: { scope: "full" | "machine" | "tv" },
+  auth: { scope: SessionScope },
 ): Response | null {
-  if (auth.scope === "machine") {
-    return errorResponse(machineScopeDeniedMessage(), 403);
-  }
-  if (auth.scope === "tv") {
-    return errorResponse(tvScopeDeniedMessage(), 403);
+  if (auth.scope !== "full") {
+    return errorResponse(scopedSessionDeniedMessage(auth.scope), 403);
   }
   return null;
+}
+
+export function scopedSessionDeniedMessage(scope: SessionScope): string {
+  if (scope === "machine") return machineScopeDeniedMessage();
+  return `${scopeLabel(scope)}-scoped tokens cannot perform account-level operations. Open Yaver on your phone or desktop to continue.`;
 }
 
 export function machineScopeDeniedMessage(): string {
@@ -714,6 +725,17 @@ export function machineScopeDeniedMessage(): string {
 
 export function tvScopeDeniedMessage(): string {
   return "This token is TV-scoped and cannot perform account-level operations.";
+}
+
+function scopeLabel(scope: SessionScope): string {
+  switch (scope) {
+    case "tv": return "TV";
+    case "watch": return "Watch";
+    case "vision": return "Vision";
+    case "spatial": return "Spatial";
+    case "machine": return "Machine";
+    default: return "Full";
+  }
 }
 
 /**
@@ -5470,6 +5492,8 @@ http.route({
   handler: httpAction(async (ctx, request) => {
     const user = await authenticateRequest(ctx, request);
     if (!user) return errorResponse("Unauthorized", 401);
+    const scopeDenied = requireFullScope(user);
+    if (scopeDenied) return scopeDenied;
     const authHeader = request.headers.get("Authorization")!;
     const token = authHeader.slice(7);
     const tokenHash = await sha256Hex(token);
@@ -7548,6 +7572,8 @@ http.route({
   handler: httpAction(async (ctx, request) => {
     const user = await authenticateRequest(ctx, request);
     if (!user) return errorResponse("Unauthorized", 401);
+    const scopeDenied = requireFullScope(user);
+    if (scopeDenied) return scopeDenied;
 
     const tokenBytes = new Uint8Array(32);
     crypto.getRandomValues(tokenBytes);

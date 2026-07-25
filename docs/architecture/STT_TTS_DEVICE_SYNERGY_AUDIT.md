@@ -111,16 +111,47 @@ subscription-only law. Phone speaks → text lands in the runner on the Mac mini
 dev box → the runner works → result streams back. It reuses `dispatchSessionTurn`
 so car and hands-free share one dispatch, not two.
 
-### S2 — Native surfaces (watch / Wear) do NOT inherit the RN voice core *(P1, parity gap)*
+### S2 — Native surfaces (watch / Wear) — RESOLVED, correct by design *(no gap)*
 
-`watch/YaverWatch/` is Swift; `wear/` is Kotlin. Neither can consume
-`mobile/src/lib/voice/`. Per the cross-surface-parity rule, any voice behavior
-there is a SEPARATE implementation that must be ported and kept in step by hand —
-and drift there would be invisible from the RN side. This audit did not find a
-watch/Wear STT path at all (only `SessionClient.swift` relay plumbing), so the
-open question is: **is voice on the watch intended, and if so where does its STT
-run** — on the watch, or dictated on the phone and relayed? That's a product
-decision to make explicit, not leave implied.
+Re-read on 2026-07-25 settles the open question: watch/Wear voice **is**
+intended, and it deliberately does NOT run the RN whisper core — it runs the
+**platform's native dictation**:
+
+- **watchOS** — `PhoneSession.swift:4`: *"the watch never talks to the runner
+  directly. It sends the transcript / … the phone runs the loop and replies."*
+  The watch captures via native WatchKit dictation and relays the transcript.
+- **Wear OS** — `AndroidManifest.xml:18`: *"Voice in: on-watch dictation
+  (RecognizerIntent / SpeechRecognizer)."* Native Android STT on-watch,
+  transcript relayed.
+
+This is the right call, not a gap: a watch has no room for a 31 MB whisper model
+and the OS ships good dictation. The endpointing / completeness-judge / dispatch
+logic still lives once — on the **phone**, which runs the loop for the watch —
+so there is no duplicated orchestrator to drift. The only thing NOT shared is
+STT *capture*, which is correctly platform-native on each watch. No port owed;
+this is now documented in both watch source files, so the intent is discoverable
+where an implementer looks.
+
+### S3 — `assistant.tsx` — RESOLVED: a distinct feature, and it shared F2 *(fixed)*
+
+`assistant.tsx` is the **on-device concierge** (push-to-talk → whisper → a
+deterministic ladder/brain → a safe *device* action → TTS), wired through
+`localAgent/useVoiceHelper.ts`. That is a *different* feature from the
+voice-*coding* surfaces (car/glass/vibe → `VoiceConversationCore` → a remote
+*runner*), so it is legitimately a separate path, not accidental drift — the two
+answer different questions ("do something on this phone" vs "tell my runner to
+code").
+
+But it shared **F2's defect**: `useVoiceHelper.startListening` caught every
+capture failure and surfaced *"I didn't catch that"* — including a whisper model
+that will never load, sending a user with a broken model to chase a
+non-existent mishearing. Milder than the coding path (push-to-talk, so no
+auto-loop) but the same mislabel. **Fixed** by routing its catch through the
+SAME `classifyCaptureFailure` the core now uses: a terminal cause
+(speech-model-failed / mic-permission-denied) is now spoken plainly; a transient
+miss keeps the graceful empty-turn. One shared diagnosis means the concierge and
+the coding core can never drift on wording — the anti-drift lesson from the two
+browser-preview implementations, applied to voice.
 
 ### S3 — `assistant.tsx` may not use the shared core *(P2, verify)*
 
@@ -134,13 +165,19 @@ browser-preview implementations.
 
 ## 4. Priorities
 
-1. **F1 — bound every cloud STT fetch** (AbortController + deadline + fallback).
-   This is the one that bites a real user on a real network, today, silently.
-2. **F2 — confirm/implement device→cloud STT fallback**, and replace the bare
-   `catch {}` with one that says which engine failed and what it fell back to.
-3. **S2 — decide watch/Wear voice** explicitly (native port, or phone-relayed),
-   and write it down.
-4. **S3 — confirm `assistant.tsx`** routes through the shared core.
+1. **F1 — bound every cloud STT fetch** *(DONE 2026-07-25)* — `fetchWithTimeout`
+   (AbortController, 20s) now wraps all six cloud STT/TTS calls in `speech.ts`.
+2. **F2 — capture failure now names its real cause** *(DONE 2026-07-25)* — a
+   shared `classifyCaptureFailure` maps the error to an accurate spoken line +
+   machine reason; a consecutive-failure streak enters a terminal `unavailable`
+   state instead of looping. Applied to BOTH voice paths (coding core +
+   concierge `useVoiceHelper`). **Still open as a product call:** whether a
+   device→cloud STT *fallback* should exist at all — the cloud providers are
+   file-based, not realtime, so wiring one is a feature, surfaced not smuggled.
+3. **S2 — watch/Wear voice: RESOLVED** — native platform dictation by design,
+   phone runs the loop; no port owed. Documented in-source.
+4. **S3 — `assistant.tsx`: RESOLVED** — a distinct concierge feature (not drift);
+   it shared F2 and is now fixed via the same shared classifier.
 
 F1 and F2 are the same lesson as the whole session: **an unbounded external call
 in a path the user is waiting on will hang silently, and silence is a defect.**

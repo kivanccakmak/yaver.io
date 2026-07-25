@@ -256,10 +256,17 @@ export default defineSchema({
     // "full" (a normal owner login — every existing session is unaffected).
     // "machine" = a managed-cloud box's token: it may heartbeat, report its own
     // state, and pull its OWN resources, but account-level + destructive ops
-    // (spend, provision, act on OTHER devices) must reject it. A rooted box then
-    // can only hurt itself. Phase 0 only RECORDS the scope; enforcement lands in
-    // later phases behind a flag after the box's real call-set is measured.
-    scope: v.optional(v.union(v.literal("full"), v.literal("machine"), v.literal("tv"))),
+    // (spend, provision, act on OTHER devices) must reject it. Companion scopes
+    // are constrained long-lived tokens for lean-back / tiny / headset surfaces.
+    // Undefined remains "full" for backwards compatibility.
+    scope: v.optional(v.union(
+      v.literal("full"),
+      v.literal("machine"),
+      v.literal("tv"),
+      v.literal("watch"),
+      v.literal("vision"),
+      v.literal("spatial"),
+    )),
     // Rotation grace: when a token is rotated (X-Yaver-Rotate-Token),
     // the immediately-previous tokenHash stays valid until this time
     // (~2 min). Token rotation is otherwise instant-and-permanent, so
@@ -2231,7 +2238,7 @@ export default defineSchema({
     tokenHash: v.string(),        // SHA-256 of the raw token
     userId: v.id("users"),        // owner — must match CLI user
     label: v.optional(v.string()), // human-readable label (e.g. "AcmeStore dev build")
-    scopes: v.optional(v.array(v.string())), // allowed scopes: "feedback","blackbox","voice","builds"
+    scopes: v.optional(v.array(v.string())), // allowed scopes: "feedback","blackbox","voice","builds","spatial"
     allowedCIDRs: v.optional(v.array(v.string())), // IP binding: "192.168.1.0/24"
     delegatedGuestUserId: v.optional(v.id("users")), // guest driving the host through Feedback SDK
     delegatedGuestScope: v.optional(v.string()), // currently "sdk-project"

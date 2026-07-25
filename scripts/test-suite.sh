@@ -1634,9 +1634,11 @@ run_oauth_mock_tests() {
         OAUTH_MICROSOFT_TENANT_ID="common" \
         OAUTH_MICROSOFT_TOKEN_URL="http://127.0.0.1:${mock_port}/microsoft/token" \
         OAUTH_MICROSOFT_USERINFO_URL="http://127.0.0.1:${mock_port}/microsoft/userinfo" \
+        OAUTH_MICROSOFT_JWKS_URL="http://127.0.0.1:${mock_port}/jwks" \
         OAUTH_APPLE_CLIENT_ID="com.yaver.web" \
         OAUTH_APPLE_CLIENT_SECRET="mock-apple-secret" \
         OAUTH_APPLE_TOKEN_URL="http://127.0.0.1:${mock_port}/apple/token" \
+        OAUTH_APPLE_JWKS_URL="http://127.0.0.1:${mock_port}/jwks" \
         OAUTH_GITHUB_CLIENT_ID="mock-github-client" \
         OAUTH_GITHUB_CLIENT_SECRET="mock-github-secret" \
         OAUTH_GITHUB_TOKEN_URL="http://127.0.0.1:${mock_port}/github/token" \

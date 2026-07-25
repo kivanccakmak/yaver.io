@@ -106,12 +106,14 @@ export async function sendVoiceCommand(text: string): Promise<void> {
   if (!config?.enabled) return;
 
   try {
+    const platformHeaders: Record<string, string> =
+      Platform.OS === "web" ? {} : { "X-Client-Platform": Platform.OS };
     await fetch(`${config.agentUrl}/tasks`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${config.authToken}`,
         'Content-Type': 'application/json',
-        'X-Client-Platform': Platform.OS,
+        ...platformHeaders,
       },
       body: JSON.stringify({ title: text }),
     });

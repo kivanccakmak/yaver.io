@@ -44,13 +44,15 @@ export type LaneStartupStatusProps = {
   mutedColor: string;
   /** Amber, used only when the lane has gone quiet. */
   warnColor?: string;
+  /** Optional syntax/severity color for each log line. */
+  lineColorFor?: (line: string) => string;
   /** Optional extra hint, e.g. what the user can do about a stall. */
   stallHint?: string;
 };
 
 export default function LaneStartupStatus({
   startedAt, lastOutputAt, now, lines, maxLines = 4,
-  mutedColor, warnColor = "#f59e0b", stallHint,
+  mutedColor, warnColor = "#f59e0b", lineColorFor, stallHint,
 }: LaneStartupStatusProps) {
   const progress = describeLaneProgress({ startedAt, lastOutputAt, now });
   if (!progress) return null;
@@ -71,7 +73,7 @@ export default function LaneStartupStatus({
               ellipsizeMode="tail"
               // Newest line full-strength, older ones fade — the eye lands on
               // what is happening NOW without the block turning into a wall.
-              style={[styles.line, { color: mutedColor, opacity: i === tail.length - 1 ? 1 : 0.45 }]}
+              style={[styles.line, { color: lineColorFor?.(ln) || mutedColor, opacity: i === tail.length - 1 ? 1 : 0.6 }]}
             >
               {ln}
             </Text>

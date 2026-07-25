@@ -16,7 +16,9 @@ import {
   View,
 } from "react-native";
 import { Stack, useRouter } from "expo-router";
+import { AppScreenHeader } from "../src/components/AppScreenHeader";
 import { useColors } from "../src/context/ThemeContext";
+import { useDevice } from "../src/context/DeviceContext";
 import {
   deleteMcpServer,
   listMcpServers,
@@ -24,10 +26,13 @@ import {
   testMcpServer,
   type McpServer,
 } from "../src/lib/mcpServers";
+import { quicClient } from "../src/lib/quic";
 
 export default function McpServersScreen() {
   const c = useColors();
   const router = useRouter();
+  const { connectionStatus, activeDevice } = useDevice() as any;
+  const agentReady = connectionStatus === "connected" && !!activeDevice && !!quicClient.baseUrl;
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,6 +49,12 @@ export default function McpServersScreen() {
 
   const load = useCallback(async () => {
     setError(null);
+    setLoading(true);
+    if (!agentReady) {
+      setServers([]);
+      setLoading(false);
+      return;
+    }
     try {
       setServers(await listMcpServers());
     } catch (e) {
@@ -51,7 +62,7 @@ export default function McpServersScreen() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [agentReady]);
 
   useEffect(() => {
     load();
@@ -166,24 +177,38 @@ export default function McpServersScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <Stack.Screen options={{ title: "MCP Servers", headerBackTitle: "Back" }} />
+      <AppScreenHeader
+        title="MCP Servers"
+        onBack={() => {
+          if (router.canGoBack()) router.back();
+          else router.navigate("/(tabs)/more" as any);
+        }}
+      />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView
           contentContainerStyle={{ padding: 16, gap: 12 }}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={load} tintColor={c.accent} />}
         >
           <Text style={{ color: c.textMuted, fontSize: 13, lineHeight: 18 }}>
-            Connect any remote MCP server — your own private ones or someone else's public ones. Their tools become
-            usable from Yaver, namespaced as <Text style={{ color: c.textPrimary }}>name__tool</Text>.
+            Register external MCP servers on the connected Yaver machine. The agent stores the registry, connects to
+            those servers, and exposes their tools as <Text style={{ color: c.textPrimary }}>name__tool</Text>.
           </Text>
 
-          {error && (
+          {!agentReady ? (
+            <View style={{ backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1, padding: 14, borderRadius: 12, gap: 6 }}>
+              <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "600" }}>Connect a Yaver machine first</Text>
+              <Text style={{ color: c.textMuted, fontSize: 13, lineHeight: 18 }}>
+                MCP servers are not stored on this phone. Pick or wake a remote box, then come back here to add servers to that agent.
+              </Text>
+            </View>
+          ) : error ? (
             <View style={{ backgroundColor: c.errorBg, padding: 12, borderRadius: 8 }}>
               <Text style={{ color: c.error, fontSize: 13 }}>{error}</Text>
             </View>
-          )}
+          ) : null}
 
           {/* form */}
-          {editing ? (
+          {!agentReady ? null : editing ? (
             <View style={{ backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1, borderRadius: 12, padding: 14, gap: 10 }}>
               <Text style={{ color: c.textPrimary, fontWeight: "600", fontSize: 15 }}>
                 {origName ? "Edit server" : "Add server"}
@@ -215,7 +240,7 @@ export default function McpServersScreen() {
           )}
 
           {/* list */}
-          {loading && servers.length === 0 ? (
+          {!agentReady ? null : loading && servers.length === 0 ? (
             <ActivityIndicator color={c.accent} style={{ marginTop: 24 }} />
           ) : servers.length === 0 ? (
             <Text style={{ color: c.textMuted, fontSize: 13, textAlign: "center", marginTop: 24 }}>

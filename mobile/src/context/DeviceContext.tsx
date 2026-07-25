@@ -430,6 +430,46 @@ function normalizedDeviceName(name: string | undefined): string {
     .replace(/\.local$/i, "");
 }
 
+function deviceSelectionHintFromURL(url: string | null | undefined): string {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    const params = parsed.searchParams;
+    return (
+      params.get("selectDevice") ||
+      params.get("deviceHint") ||
+      params.get("device") ||
+      params.get("deviceId") ||
+      ""
+    ).trim();
+  } catch {
+    const query = String(url).split("?")[1] || "";
+    const params = new URLSearchParams(query);
+    return (
+      params.get("selectDevice") ||
+      params.get("deviceHint") ||
+      params.get("device") ||
+      params.get("deviceId") ||
+      ""
+    ).trim();
+  }
+}
+
+function matchDeviceSelectionHint(devices: Device[], hint: string): Device | null {
+  const target = hint.trim();
+  if (!target) return null;
+  const lower = target.toLowerCase();
+  const normalized = normalizedDeviceName(target);
+  return devices.find((d) =>
+    d.id === target ||
+    d.hwid === target ||
+    normalizedDeviceName(d.name) === normalized ||
+    normalizedDeviceName(d.hostName) === normalized ||
+    normalizedDeviceName(d.name).includes(normalized) ||
+    String(d.alias || "").trim().toLowerCase() === lower
+  ) || null;
+}
+
 function deviceAliasKey(device: Pick<Device, "name" | "os" | "isGuest">): string | null {
   if (device.isGuest) return null;
   const normalizedName = normalizedDeviceName(device.name);
@@ -1564,6 +1604,35 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     },
     [RELAY_CACHE_KEY, token]
   );
+
+  const pendingDeepLinkDeviceHintRef = useRef<string | null>(null);
+  useEffect(() => {
+    const rememberHint = (url: string | null | undefined) => {
+      const hint = deviceSelectionHintFromURL(url);
+      if (!hint) return;
+      pendingDeepLinkDeviceHintRef.current = hint;
+      appLog("info", `[connect] deep-link requested device ${hint}`);
+      void refreshDevices();
+    };
+
+    Linking.getInitialURL().then(rememberHint).catch(() => {});
+    const sub = Linking.addEventListener("url", (event) => rememberHint(event.url));
+    return () => sub.remove();
+  }, [refreshDevices]);
+
+  useEffect(() => {
+    const hint = pendingDeepLinkDeviceHintRef.current;
+    if (!hint || !token || devices.length === 0) return;
+    const device = matchDeviceSelectionHint(devices, hint);
+    if (!device) return;
+    pendingDeepLinkDeviceHintRef.current = null;
+    userSelectedDeviceIdRef.current = device.id;
+    appLog("info", `[connect] deep-link selecting ${device.name}`);
+    void selectDevice(device).catch((e) => {
+      pendingDeepLinkDeviceHintRef.current = hint;
+      appLog("warn", `[connect] deep-link select failed for ${device.name}: ${e instanceof Error ? e.message : String(e)}`);
+    });
+  }, [devices, selectDevice, token]);
 
   const disconnect = useCallback(() => {
     // User-initiated "Stop": tear down every pooled per-device client,

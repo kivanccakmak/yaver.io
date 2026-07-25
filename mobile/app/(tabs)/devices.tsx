@@ -183,11 +183,13 @@ function buildDeviceRequestContext(
   token: string | null,
 ): { baseUrl: string; headers: Record<string, string> } | null {
   if (!token) return null;
+  const platformHeaders: Record<string, string> =
+    Platform.OS === "web" ? {} : { "X-Client-Platform": Platform.OS };
   const relay = quicClient.getRelayServers()[0];
   if (relay?.httpUrl) {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
-      "X-Client-Platform": Platform.OS,
+      ...platformHeaders,
     };
     if (relay.password) headers["X-Relay-Password"] = relay.password;
     return {
@@ -199,7 +201,7 @@ function buildDeviceRequestContext(
     baseUrl: `http://${device.host}:${device.port}`,
     headers: {
       Authorization: `Bearer ${token}`,
-      "X-Client-Platform": Platform.OS,
+      ...platformHeaders,
     },
   };
 }

@@ -49,13 +49,15 @@ const OLD = `function(doc){
   return !!(f || d);
 }`;
 
-const NEW = fs.readFileSync(
+const previewReadySource = fs.readFileSync(
   path.join(process.env.REPO, "mobile/src/lib/previewReadyScript.ts"), "utf8",
-).match(/export const PREVIEW_READY_PREDICATE = `([\s\S]*?)`;/)[1];
+);
+const NEW_PROBE = previewReadySource.match(/export const PREVIEW_PROBE_STATE_FUNCTION = `([\s\S]*?)`;/)[1];
+const NEW = previewReadySource.match(/export const PREVIEW_READY_PREDICATE = `([\s\S]*?)`;/)[1];
 
-const probe = async (page) => page.evaluate(({ oldSrc, newSrc }) => {
+const probe = async (page) => page.evaluate(({ oldSrc, probeSrc, newSrc }) => {
   const oldFn = new Function("return (" + oldSrc + ")")();
-  const newFn = new Function(newSrc + "; return yaverPreviewReady;")();
+  const newFn = new Function(probeSrc + ";" + newSrc + "; return yaverPreviewReady;")();
   const mount = document.getElementById("root");
   return {
     old: !!oldFn(document),
@@ -65,7 +67,7 @@ const probe = async (page) => page.evaluate(({ oldSrc, newSrc }) => {
     flutterMarker: !!document.querySelector("flutter-view,flt-glass-pane,flt-scene-host"),
     visibleText: (document.body?.innerText || "").trim().slice(0, 60),
   };
-}, { oldSrc: OLD, newSrc: NEW });
+}, { oldSrc: OLD, probeSrc: NEW_PROBE, newSrc: NEW });
 
 // `root` may be a directory to serve, or a live URL (e.g. a running Flutter
 // `web-server` dev server) to measure in place. The Flutter lane cannot be

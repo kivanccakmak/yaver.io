@@ -33,8 +33,10 @@ import (
 // connected mobile sessions — handy when there's only one paired
 // phone and the operator doesn't want to copy a UUID.
 type mobileInsertRequest struct {
-	App      string `json:"app"`
-	DeviceID string `json:"deviceId"`
+	App         string `json:"app"`
+	DeviceID    string `json:"deviceId"`
+	ProjectPath string `json:"projectPath"`
+	Lane        string `json:"lane"`
 }
 
 func (s *HTTPServer) handleMobileSessions(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +81,12 @@ func (s *HTTPServer) handleMobileInsert(w http.ResponseWriter, r *http.Request) 
 			"sentAt":   time.Now().UnixMilli(),
 		},
 	}
+	if path := strings.TrimSpace(req.ProjectPath); path != "" {
+		cmd.Data["projectPath"] = path
+	}
+	if lane := strings.TrimSpace(req.Lane); lane != "" {
+		cmd.Data["lane"] = lane
+	}
 
 	deviceID := strings.TrimSpace(req.DeviceID)
 	if deviceID == "" {
@@ -109,4 +117,3 @@ func (s *HTTPServer) handleMobileInsert(w http.ResponseWriter, r *http.Request) 
 		"target":   "device",
 	})
 }
-

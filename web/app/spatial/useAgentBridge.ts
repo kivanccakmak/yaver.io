@@ -5,7 +5,7 @@
  *
  * URL params (passed when the user opens the spatial link from desktop):
  *   ?agent=https://primary.tail-xyz.ts.net:18080
- *   &token=<bearer SDK token, scope feedback,voice>
+ *   &token=<legacy bearer SDK token>
  *
  * The bridge handles:
  *   - Polling /tasks for the active session list
@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CONVEX_URL } from "@/lib/constants";
 
 export type TaskStatus = "queued" | "running" | "review" | "completed" | "failed" | "stopped";
 
@@ -40,13 +41,129 @@ export interface BridgeConfig {
   pollMs?: number;
 }
 
+export interface SpatialPairingState {
+  status: "idle" | "creating" | "pending" | "authorized" | "expired" | "error";
+  agentUrl: string;
+  userCode: string;
+  verifyUrl: string;
+  error: string;
+}
+
 export function readBridgeFromURL(): BridgeConfig | null {
   if (typeof window === "undefined") return null;
   const url = new URL(window.location.href);
   const agentUrl = url.searchParams.get("agent");
   const token = url.searchParams.get("token");
   if (!agentUrl || !token) return null;
+  scrubSecretQueryParam("token");
   return { agentUrl: agentUrl.replace(/\/$/, ""), token };
+}
+
+export function readAgentURLFromURL(): string {
+  if (typeof window === "undefined") return "";
+  const url = new URL(window.location.href);
+  return (url.searchParams.get("agent") || "").replace(/\/$/, "");
+}
+
+export function useSpatialBridgeFromURL(): {
+  cfg: BridgeConfig | null;
+  pairing: SpatialPairingState;
+} {
+  const [cfg, setCfg] = useState<BridgeConfig | null>(() => readBridgeFromURL());
+  const [pairing, setPairing] = useState<SpatialPairingState>({
+    status: cfg ? "authorized" : "idle",
+    agentUrl: "",
+    userCode: "",
+    verifyUrl: "",
+    error: "",
+  });
+
+  useEffect(() => {
+    if (cfg) return;
+    const agentUrl = readAgentURLFromURL();
+    if (!agentUrl) {
+      setPairing((p) => ({ ...p, status: "idle", agentUrl: "", error: "" }));
+      return;
+    }
+
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const run = async () => {
+      try {
+        setPairing({ status: "creating", agentUrl, userCode: "", verifyUrl: "", error: "" });
+        const mint = await fetch(`${CONVEX_URL}/auth/device-code`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            machineName: "Yaver Spatial",
+            platform: detectSpatialPlatform(),
+            environment: "spatial",
+          }),
+        });
+        if (!mint.ok) throw new Error(`device-code ${mint.status}`);
+        const start = (await mint.json()) as { userCode: string; deviceCode: string; expiresAt: number };
+        if (cancelled) return;
+        const verifyUrl = `https://yaver.io/auth/device?code=${encodeURIComponent(start.userCode)}`;
+        setPairing({ status: "pending", agentUrl, userCode: start.userCode, verifyUrl, error: "" });
+
+        const poll = async () => {
+          if (cancelled) return;
+          try {
+            const res = await fetch(
+              `${CONVEX_URL}/auth/device-code/poll?device_code=${encodeURIComponent(start.deviceCode)}`,
+              { cache: "no-store" },
+            );
+            if (!res.ok) throw new Error(`poll ${res.status}`);
+            const body = (await res.json()) as { status: string; token?: string };
+            if (cancelled) return;
+            if (body.status === "authorized" && body.token) {
+              setCfg({ agentUrl, token: body.token });
+              setPairing((p) => ({ ...p, status: "authorized", error: "" }));
+              return;
+            }
+            if (body.status === "expired") {
+              setPairing((p) => ({ ...p, status: "expired", error: "Code expired. Reload to create a new code." }));
+              return;
+            }
+          } catch (e: any) {
+            if (!cancelled) setPairing((p) => ({ ...p, status: "error", error: e?.message ?? "poll failed" }));
+            return;
+          }
+          timer = window.setTimeout(poll, 2500);
+        };
+        timer = window.setTimeout(poll, 1000);
+      } catch (e: any) {
+        if (!cancelled) setPairing({ status: "error", agentUrl, userCode: "", verifyUrl: "", error: e?.message ?? "sign-in setup failed" });
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [cfg]);
+
+  return { cfg, pairing };
+}
+
+function scrubSecretQueryParam(name: string): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has(name)) return;
+  url.searchParams.delete(name);
+  const next = `${url.pathname}${url.search}${url.hash}`;
+  window.history.replaceState(window.history.state, document.title, next);
+}
+
+function detectSpatialPlatform(): string {
+  if (typeof navigator === "undefined") return "web-spatial";
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes("vision")) return "visionos";
+  if (ua.includes("quest")) return "quest";
+  if (ua.includes("android")) return "android-xr";
+  return "web-spatial";
 }
 
 export function useTasks(cfg: BridgeConfig | null): { tasks: Task[]; error: string } {

@@ -12,8 +12,8 @@
  * NOT served: Mentra Live / Even G1·G2 / Vuzix Z100 — those use
  * vendor text primitives via the mentra-miniapp Bun server.
  *
- * Open with: https://yaver.io/spatial?agent=<https://host:18080>&token=<sdk>
- * The desktop app's "Open in headset" button generates this URL.
+ * Open with: https://yaver.io/spatial?agent=<https://host:18080>
+ * The headset signs in via the same phone-approved device-code flow as TV/watch.
  *
  * Layout adapts by viewport class:
  *   - SMALL  (<= 800w):  HUD mode — session strip + 1 active pane + orb
@@ -21,9 +21,9 @@
  *   - LARGE  (>= 1600w): 3-pane tmux-like grid + ambient strip
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { readBridgeFromURL, useTasks, useTmuxSessions, useVoiceBridge, type Task, type BridgeConfig, type TmuxSessionInfo } from "./useAgentBridge";
+import { useSpatialBridgeFromURL, useTasks, useTmuxSessions, useVoiceBridge, type Task, type BridgeConfig, type TmuxSessionInfo, type SpatialPairingState } from "./useAgentBridge";
 import { useSurface } from "./lib/surfaceDetect";
 import { useSpatialShortcuts, SHORTCUT_HELP_ROWS } from "./lib/keyboardShortcuts";
 import { TmuxPane } from "./TmuxPane";
@@ -52,14 +52,14 @@ function useViewportClass(): ViewportClass {
 }
 
 export default function SpatialPage() {
-  const cfg = useMemo(readBridgeFromURL, []);
+  const { cfg, pairing } = useSpatialBridgeFromURL();
   const viewport = useViewportClass();
   const surface = useSurface();
   const { tasks, error: tasksErr } = useTasks(cfg);
   const voice = useVoiceBridge(cfg);
 
   if (!cfg) {
-    return <ConnectGuide />;
+    return <ConnectGuide pairing={pairing} />;
   }
 
   // Surface-specific tuning of the 2D layout. Quest Browser + Vision
@@ -445,20 +445,36 @@ function updateQuery(s: string): string {
   return u.pathname + "?" + u.searchParams.toString();
 }
 
-function ConnectGuide() {
+function ConnectGuide({ pairing }: { pairing: SpatialPairingState }) {
   return (
     <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
       <div style={{ ...cardStyle, maxWidth: 480, padding: 32 }}>
         <h1 style={{ fontSize: 20, margin: 0, marginBottom: 12 }}>Yaver Spatial</h1>
-        <p style={{ fontSize: 13, lineHeight: 1.5, color: "#9ca3af", marginBottom: 16 }}>
-          Open this page with a connection URL from your desktop:
-        </p>
-        <pre style={preStyle}>https://yaver.io/spatial?agent=&lt;url&gt;&amp;token=&lt;sdk&gt;</pre>
-        <p style={{ fontSize: 11, color: "#6b7280", marginTop: 16 }}>
-          Generate one via{" "}
-          <code style={codeStyle}>yaver sdk token --scope feedback,voice</code>
-          {" "}then paste the URL into Quest Browser, Vision Pro Safari, or any modern browser.
-        </p>
+        {pairing.status === "pending" || pairing.status === "creating" ? (
+          <>
+            <p style={{ fontSize: 13, lineHeight: 1.5, color: "#9ca3af", marginBottom: 16 }}>
+              Approve this spatial session on your phone or desktop.
+            </p>
+            <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 30, letterSpacing: 3, color: "#fff", marginBottom: 12 }}>
+              {pairing.userCode || "------"}
+            </div>
+            {pairing.verifyUrl && <pre style={preStyle}>{pairing.verifyUrl}</pre>}
+            <p style={{ fontSize: 11, color: "#6b7280", marginTop: 16 }}>
+              This headset receives a spatial-scoped token after approval.
+            </p>
+          </>
+        ) : (
+          <>
+            <p style={{ fontSize: 13, lineHeight: 1.5, color: "#9ca3af", marginBottom: 16 }}>
+              Open this page with an agent URL from your desktop:
+            </p>
+            <pre style={preStyle}>https://yaver.io/spatial?agent=&lt;url&gt;</pre>
+            <p style={{ fontSize: 11, color: "#6b7280", marginTop: 16 }}>
+              Quest Browser, Vision Pro Safari, Android XR browsers, and mobile WebViews can approve sign-in from a phone.
+            </p>
+          </>
+        )}
+        {pairing.error && <p style={{ fontSize: 12, color: "#fca5a5", marginTop: 16 }}>{pairing.error}</p>}
       </div>
     </div>
   );
@@ -743,11 +759,4 @@ const preStyle: React.CSSProperties = {
   margin: 0,
   whiteSpace: "pre-wrap",
   wordBreak: "break-all",
-};
-
-const codeStyle: React.CSSProperties = {
-  background: "rgba(0,0,0,0.4)",
-  padding: "1px 5px",
-  borderRadius: 3,
-  fontSize: 11,
 };

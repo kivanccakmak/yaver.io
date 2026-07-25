@@ -156,9 +156,9 @@ function DoctorRow({ c, s, p }: { c: ThemeColors; s: any; p: ProbeResult }) {
   return (
     <View style={s.row}>
       <Text style={[s.rowLabel, { color: c.textSecondary }]}>{p.label}</Text>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 1, justifyContent: "flex-end" }}>
+      <View style={s.doctorStatus}>
         <View style={[s.dot, { backgroundColor: color }]} />
-        <Text style={{ fontSize: 12.5, fontWeight: "600", color, flexShrink: 1, textAlign: "right" }}>
+        <Text style={[s.doctorStatusText, { color }]}>
           {p.detail}{p.ms != null ? ` · ${p.ms}ms` : ""}
         </Text>
       </View>
@@ -642,9 +642,11 @@ function makeStyles(c: ThemeColors) {
     section: { fontSize: 12, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.8, paddingHorizontal: 4, marginTop: 4 },
     subhead: { fontSize: 11, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.6, marginTop: 10, marginBottom: 4 },
     card: { borderWidth: 1, borderRadius: 14, padding: 16 },
-    row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 10 },
-    rowLabel: { fontSize: 13, fontWeight: "500" },
-    rowValue: { fontSize: 13, maxWidth: "62%", textAlign: "right" },
+    row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 14, paddingVertical: 10 },
+    rowLabel: { fontSize: 13, fontWeight: "500", flexShrink: 1 },
+    rowValue: { fontSize: 13, maxWidth: "62%", textAlign: "right", flexShrink: 1 },
+    doctorStatus: { maxWidth: "62%", alignItems: "flex-end", flexShrink: 1 },
+    doctorStatusText: { fontSize: 12.5, fontWeight: "600", lineHeight: 16, marginTop: 6, textAlign: "right" },
     divider: { height: StyleSheet.hairlineWidth, backgroundColor: "rgba(127,127,127,0.2)" },
     badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
     verdict: { borderRadius: 10, padding: 12, marginBottom: 6 },

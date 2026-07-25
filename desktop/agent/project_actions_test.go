@@ -110,3 +110,36 @@ func TestDetectProjectActions_ViteWithWranglerUsesCloudflare(t *testing.T) {
 		t.Fatal("did not expect vercel deploy action when wrangler.toml exists")
 	}
 }
+
+func TestDetectProjectActions_SwiftXcodegenProjectHasRuntimeActions(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "project.yml"), []byte(`
+name: TodoSwift
+targets:
+  TodoSwift:
+    platform: iOS
+    settings:
+      base:
+        INFOPLIST_KEY_CFBundleDisplayName: "Todo Swift"
+`), 0o644); err != nil {
+		t.Fatalf("write project.yml: %v", err)
+	}
+
+	actions := DetectProjectActions(dir)
+	hasRemoteRuntime := false
+	hasBuildIOS := false
+	for _, a := range actions {
+		if a.Framework == "swift" && a.Type == "remote-runtime" && a.Supported {
+			hasRemoteRuntime = true
+		}
+		if a.Framework == "swift" && a.Type == "build" && a.Platform == "testflight" && a.Supported {
+			hasBuildIOS = true
+		}
+	}
+	if !hasRemoteRuntime {
+		t.Fatalf("xcodegen Swift app has no remote-runtime action: %+v", actions)
+	}
+	if !hasBuildIOS {
+		t.Fatalf("xcodegen Swift app has no iOS build action: %+v", actions)
+	}
+}

@@ -59,7 +59,7 @@ class MainActivity : ComponentActivity() {
         // it's cheap to hold and ready as an instant fallback.
         if (StandaloneStore.isReady(this)) {
             sessionClient = SessionClient(
-                boxBaseUrl = StandaloneStore.boxUrl(this),
+                endpointConfig = StandaloneStore.endpointConfig(this),
                 bearerToken = StandaloneStore.token(this),
             )
             refreshStandaloneSessionOnLaunch()

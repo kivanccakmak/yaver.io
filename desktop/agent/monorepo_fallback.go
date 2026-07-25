@@ -51,6 +51,50 @@ var deprioritizedMonorepoSegments = map[string]bool{
 	"fixtures": true,
 }
 
+func canonicalMonorepoFramework(framework string) string {
+	switch strings.TrimSpace(strings.ToLower(framework)) {
+	case "expo", "expo-web":
+		return "expo"
+	case "rn", "react-native", "reactnative":
+		return "react-native"
+	case "flutter":
+		return "flutter"
+	case "vite":
+		return "vite"
+	case "next", "nextjs":
+		return "next"
+	case "ios", "iosnative", "ios-native", "swift", "swift-ios":
+		return "iosNative"
+	case "android", "androidnative", "android-native", "kotlin", "kotlin-android":
+		return "androidNative"
+	case "unity":
+		return "unity"
+	default:
+		return strings.TrimSpace(strings.ToLower(framework))
+	}
+}
+
+func devServerNameForDetectedFramework(framework string) string {
+	switch canonicalMonorepoFramework(framework) {
+	case "next":
+		return "nextjs"
+	case "expo":
+		return "expo"
+	case "react-native":
+		return "react-native"
+	case "flutter":
+		return "flutter"
+	case "vite":
+		return "vite"
+	default:
+		return ""
+	}
+}
+
+func detectedFrameworkMatchesRequested(detected, requested string) bool {
+	return canonicalMonorepoFramework(detected) == canonicalMonorepoFramework(requested)
+}
+
 func hasDeprioritizedSegment(rel string) bool {
 	for _, seg := range strings.Split(rel, string(filepath.Separator)) {
 		if deprioritizedMonorepoSegments[strings.ToLower(seg)] {
@@ -69,6 +113,79 @@ func monorepoSummaryForDir(dir string) (framework string, subFrameworks []string
 		return "", nil
 	}
 	return "monorepo", mr.Frameworks
+}
+
+// resolveExplicitFrameworkWorkDir refuses to run a requested framework from a
+// directory that does not actually contain that framework. This matters for
+// monorepos: a UI row can represent /repo/mobile, while older callers sometimes
+// send /repo plus framework=expo. Starting `expo` at /repo either fails with
+// irrelevant root-package errors or, worse, starts a sibling package.
+func resolveExplicitFrameworkWorkDir(framework, dir string) (DevServer, string, bool, error) {
+	framework = strings.TrimSpace(framework)
+	dir = strings.TrimSpace(dir)
+	if framework == "" || dir == "" {
+		return nil, "", false, nil
+	}
+	requestedDevServer := devServerNameForDetectedFramework(framework)
+	if requestedDevServer == "" {
+		return nil, "", false, nil
+	}
+	ds := getDevServerByName(requestedDevServer)
+	if ds == nil {
+		return nil, "", false, nil
+	}
+	if ds.Detect(dir) {
+		return ds, dir, true, nil
+	}
+
+	mr, err := DetectMonorepo(dir, DetectOpts{MaxDepth: 4})
+	if err != nil || mr == nil || len(mr.Projects) == 0 {
+		return nil, "", false, fmt.Errorf("%s was requested, but %s does not contain a %s project", framework, dir, canonicalMonorepoFramework(framework))
+	}
+	candidates := monorepoCandidatesForFramework(mr.Projects, framework)
+	for _, p := range candidates {
+		childDS := getDevServerByName(devServerNameForDetectedFramework(p.Framework))
+		if childDS != nil && childDS.Detect(p.Path) {
+			return childDS, p.Path, true, nil
+		}
+	}
+
+	names := make([]string, 0, len(mr.Projects))
+	for _, p := range mr.Projects {
+		names = append(names, fmt.Sprintf("%s (%s)", p.RelPath, p.Framework))
+	}
+	return nil, "", false, fmt.Errorf(
+		"%s was requested, but %s does not contain a %s project; found: %s",
+		framework, dir, canonicalMonorepoFramework(framework), strings.Join(names, ", "),
+	)
+}
+
+func monorepoCandidatesForFramework(projects []DetectedProject, framework string) []DetectedProject {
+	candidates := make([]DetectedProject, 0, len(projects))
+	for _, p := range projects {
+		if detectedFrameworkMatchesRequested(p.Framework, framework) {
+			candidates = append(candidates, p)
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		ni := preferredMonorepoAppNames[strings.ToLower(filepath.Base(candidates[i].RelPath))]
+		nj := preferredMonorepoAppNames[strings.ToLower(filepath.Base(candidates[j].RelPath))]
+		if ni != nj {
+			return ni
+		}
+		di := hasDeprioritizedSegment(candidates[i].RelPath)
+		dj := hasDeprioritizedSegment(candidates[j].RelPath)
+		if di != dj {
+			return !di
+		}
+		depthI := strings.Count(candidates[i].RelPath, string(filepath.Separator))
+		depthJ := strings.Count(candidates[j].RelPath, string(filepath.Separator))
+		if depthI != depthJ {
+			return depthI < depthJ
+		}
+		return candidates[i].RelPath < candidates[j].RelPath
+	})
+	return candidates
 }
 
 // monorepoFallbackDevServer attempts to pick a runnable sub-project when the

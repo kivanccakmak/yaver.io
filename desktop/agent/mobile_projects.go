@@ -579,6 +579,44 @@ func strongProjectMarker(framework string) bool {
 	}
 }
 
+// mobileLaunchableProjectRoot separates app roots from packages that merely
+// depend on Expo/React Native/Flutter. The Hot Reload list is for things a user
+// can run on a device; dependency-only packages, SDK fixtures, and generated
+// library folders should not inflate the mobile project count.
+func mobileLaunchableProjectRoot(dir, framework string) bool {
+	has := func(rel string) bool {
+		return projectFileExists(filepath.Join(dir, rel)) || fileExists(filepath.Join(dir, rel))
+	}
+	switch strings.ToLower(strings.TrimSpace(framework)) {
+	case "expo":
+		return has("app.json") ||
+			has("app.config.js") ||
+			has("app.config.ts") ||
+			has("ios/Podfile") ||
+			has("android/build.gradle") ||
+			has("android/build.gradle.kts")
+	case "react-native":
+		return has("app.json") ||
+			has("app.config.js") ||
+			has("app.config.ts") ||
+			has("metro.config.js") ||
+			has("metro.config.ts") ||
+			has("babel.config.js") ||
+			has("ios/Podfile") ||
+			has("android/build.gradle") ||
+			has("android/build.gradle.kts")
+	case "flutter":
+		return has("lib/main.dart") ||
+			has("ios/Runner/Info.plist") ||
+			has("android/app/build.gradle") ||
+			has("android/app/build.gradle.kts")
+	case "swift", "kotlin", "unity":
+		return true
+	default:
+		return false
+	}
+}
+
 // scanMobileProjects walks workspace roots looking for mobile projects.
 // Detects project roots from bounded marker-file inventory: Flutter,
 // Expo/RN, native iOS/Android, Unity, Next/Vite, Firebase, Supabase, and
@@ -703,6 +741,9 @@ func scanMobileProjectsWithDeadline(deadline time.Time) ([]MobileProject, mobile
 			mobileCapable := detected.MobileCapable
 
 			if framework == "" {
+				return nil
+			}
+			if mobileCapable && !mobileLaunchableProjectRoot(dir, framework) {
 				return nil
 			}
 			if seen[dir] {

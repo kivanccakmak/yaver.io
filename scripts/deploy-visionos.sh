@@ -155,6 +155,20 @@ fi
 : "${APP_STORE_KEY_ISSUER:?Set APP_STORE_KEY_ISSUER}"
 : "${APPLE_TEAM_ID:?Set APPLE_TEAM_ID}"
 
+# Build number. Without this, CURRENT_PROJECT_VERSION comes from project.yml,
+# where it is the literal "1" — and visionOS on ASC is already at a date-shaped
+# 2607160313, so an --upload run archives and is then REJECTED as a duplicate.
+# Bump from max(ASC, local) + 1 like deploy-testflight.sh. VISIONOS_BUILD_NUMBER
+# still wins when set explicitly.
+if [ -z "${VISIONOS_BUILD_NUMBER:-}" ]; then
+  # shellcheck source=scripts/asc-next-build.sh
+  . "$ROOT/scripts/asc-next-build.sh"
+  VISION_LOCAL_BUILD="$(sed -n 's/.*CURRENT_PROJECT_VERSION: *"\{0,1\}\([0-9][0-9]*\)"\{0,1\}.*/\1/p' "$VISION_DIR/project.yml" | head -1)"
+  VISIONOS_BUILD_NUMBER="$(asc_next_build VISION_OS "${VISION_LOCAL_BUILD:-0}")"
+  echo "visionOS build number: $VISIONOS_BUILD_NUMBER"
+  VERSION_ARGS+=("CURRENT_PROJECT_VERSION=$VISIONOS_BUILD_NUMBER")
+fi
+
 rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH"
 
 # AUTOMATIC signing on purpose. deploy-tvos.sh pins its profile BY NAME with

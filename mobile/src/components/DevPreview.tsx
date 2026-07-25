@@ -66,6 +66,26 @@ function devServerSteps(framework: string): string {
   return "starting the web dev server";
 }
 
+function previewLogColor(
+  line: string,
+  colors: { error: string; warn: string; success: string; info: string; textMuted: string; accent: string },
+): string {
+  const l = line.toLowerCase();
+  if (/\b(error|failed|failure|exception|fatal|crash|cannot|unable|denied|rejected|timed out|timeout)\b/.test(l) || /\bhttp\s*[45]\d\d\b/.test(l)) {
+    return colors.error;
+  }
+  if (/\b(warn|warning|deprecated|mismatch|expected version|recrawled|retry|stale)\b/.test(l)) {
+    return colors.warn;
+  }
+  if (/\b(ready|success|succeeded|compiled|done|listening|serving on|running|connected)\b/.test(l)) {
+    return colors.success;
+  }
+  if (/\b(starting|building|waiting|scanning|probe|progress|installing)\b/.test(l)) {
+    return colors.info || colors.accent;
+  }
+  return colors.textMuted;
+}
+
 function projectLabelFromStatus(status: DevServerStatus | null): string {
   const workDir = String(status?.workDir || "").trim();
   if (workDir) {
@@ -76,6 +96,17 @@ function projectLabelFromStatus(status: DevServerStatus | null): string {
   const framework = String(status?.framework || "").trim();
   return framework || "App";
 }
+
+type PreviewProbeState = {
+  href?: string;
+  reason?: string;
+  mountId?: string;
+  mountChildren?: number;
+  bodyChildren?: number;
+  bodyTextLen?: number;
+  visibleBoxCount?: number;
+  mediaCount?: number;
+};
 
 export function DevPreview() {
   const c = useColors();
@@ -97,6 +128,7 @@ export function DevPreview() {
   const [previewFailed, setPreviewFailed] = useState(false);
   // Rolling tail of dev-server log lines, for the starting + failure panels.
   const [logLines, setLogLines] = useState<string[]>([]);
+  const [previewProbe, setPreviewProbe] = useState<PreviewProbeState | null>(null);
   const pushLog = useCallback((line: string) => {
     const t = (line || "").trim();
     if (!t) return;
@@ -107,6 +139,13 @@ export function DevPreview() {
   const webErroredThisLoad = useRef(false);
   const wasRunning = useRef(false);
   const webViewRef = useRef<WebView>(null);
+  const previewLogScrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    if (!showPreview || logLines.length === 0) return;
+    const id = setTimeout(() => previewLogScrollRef.current?.scrollToEnd({ animated: true }), 30);
+    return () => clearTimeout(id);
+  }, [showPreview, logLines.length]);
 
   // Auto-retry the WebView while the framework's web server is still compiling
   // (agent returns 503 {status:"starting"} or refuses the connection). Up to
@@ -134,6 +173,7 @@ export function DevPreview() {
     setWebContentLoaded(false);
     setWebStarting(false);
     setLogLines([]);
+    setPreviewProbe(null);
   }, []);
 
   // Reset the retry budget whenever a fresh preview opens or the WebView loads.
@@ -869,7 +909,14 @@ export function DevPreview() {
                 onMessage={(e) => {
                   try {
                     const m = JSON.parse(e.nativeEvent.data);
-                    if (m && m.t === "yaver-rendered") {
+                    if (m && (m.t === "yaver-preview-probe" || m.t === "yaver-preview-timeout")) {
+                      setPreviewProbe((m.state || null) as PreviewProbeState | null);
+                      if (m.t === "yaver-preview-timeout") {
+                        pushLog(`[preview] render probe timed out: ${String(m.state?.reason || "unknown")}`);
+                        setPreviewFailed(true);
+                      }
+                    } else if (m && m.t === "yaver-rendered") {
+                      setPreviewProbe((m.state || null) as PreviewProbeState | null);
                       setWebContentLoaded(true);
                       setWebStarting(false);
                       setPreviewFailed(false);
@@ -892,9 +939,14 @@ export function DevPreview() {
                       <Text style={styles.previewSubtle}>
                         The {frameworkLabel} web server never started serving. Recent output:
                       </Text>
-                      <ScrollView style={styles.previewLogBox} contentContainerStyle={{ padding: 10 }}>
+                      <ScrollView
+                        ref={previewLogScrollRef}
+                        style={styles.previewLogBox}
+                        contentContainerStyle={{ padding: 10 }}
+                        onContentSizeChange={() => previewLogScrollRef.current?.scrollToEnd({ animated: true })}
+                      >
                         {(logLines.length ? logLines : [lastLogLine || "No output captured — the server may have exited immediately."]).slice(-40).map((ln, i) => (
-                          <Text key={i} style={styles.previewLogLine}>{ln}</Text>
+                          <Text key={i} style={[styles.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
                         ))}
                       </ScrollView>
                       <View style={styles.previewFailBtns}>
@@ -941,10 +993,20 @@ export function DevPreview() {
                             ? "First web compile can take up to a minute — retrying…"
                             : `Serving over ${(quicClient as any)._connectionMode === "relay" ? "relay" : "direct"} connection`}
                       </Text>
+                      {previewProbe ? (
+                        <Text style={styles.previewSubtle} numberOfLines={2}>
+                          probe {previewProbe.reason || "waiting"} · {previewProbe.mountId ? `#${previewProbe.mountId} children ${previewProbe.mountChildren ?? 0}` : `body children ${previewProbe.bodyChildren ?? 0}`}
+                        </Text>
+                      ) : null}
                       {logLines.length > 0 ? (
-                        <ScrollView style={styles.previewLogBox} contentContainerStyle={{ padding: 10 }}>
+                        <ScrollView
+                          ref={previewLogScrollRef}
+                          style={styles.previewLogBox}
+                          contentContainerStyle={{ padding: 10 }}
+                          onContentSizeChange={() => previewLogScrollRef.current?.scrollToEnd({ animated: true })}
+                        >
                           {logLines.slice(-40).map((ln, i) => (
-                            <Text key={i} style={styles.previewLogLine}>{ln}</Text>
+                            <Text key={i} style={[styles.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
                           ))}
                         </ScrollView>
                       ) : lastLogLine ? (
@@ -969,7 +1031,7 @@ export function useDevServerStatus() {
     let mounted = true;
     const poll = async () => {
       const s = await quicClient.getDevServerStatus();
-      if (mounted) setStatus(isActiveDevServerStatus(s) ? s : null);
+      if (mounted) setStatus(s && (isActiveDevServerStatus(s) || Boolean((s as DevServerStatus).error)) ? s : null);
     };
     poll();
     const interval = setInterval(poll, 5000);

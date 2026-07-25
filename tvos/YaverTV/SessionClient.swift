@@ -70,6 +70,10 @@ struct RuntimeTurnRow: Decodable, Identifiable {
 
     var id: String { itemId }
 
+    /// Runtime turns begin as raw speech/text and may mention a local path.
+    /// The TV is a shared-room surface, so redact before showing it.
+    var safeUtterance: String { redactHomePaths(utterance) }
+
     /// Whether the user can actually test this yet — see
     /// desktop/agent/runtime_queue.go. `delivered` means a device ACCEPTED the
     /// reload; only `verified` means it really loaded.
@@ -107,6 +111,11 @@ actor SessionClient {
     private let token: String
     private let box: BoxTarget
     private let session: URLSession
+
+    private struct Endpoint {
+        let url: URL
+        let relay: Bool
+    }
 
     init(token: String, box: BoxTarget) {
         self.token = token
@@ -151,25 +160,13 @@ actor SessionClient {
     /// verb: a missing list is an empty dashboard, not an error banner on
     /// someone's television.
     func runtimeTurns(limit: Int = 25) async -> [RuntimeTurnRow] {
-        guard let url = URL(string: "http://\(box.host):\(box.port)/ops") else { return [] }
         guard let body = try? JSONSerialization.data(withJSONObject: [
             "verb": "runtime_turns",
             "payload": ["limit": limit],
             "machine": "local",
         ]) else { return [] }
 
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-        req.httpBody = body
-
-        guard let (data, resp) = try? await self.session.data(for: req),
-              let http = resp as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode) else {
-            return []
-        }
+        guard let data = (try? await request("POST", path: "/ops", body: body, failure: "runtime turns failed"))?.data else { return [] }
         if let env = try? JSONDecoder().decode(RuntimeTurnListEnvelope.self, from: data),
            let items = env.initial?.items {
             return items
@@ -183,9 +180,6 @@ actor SessionClient {
     }
 
     private func runtimeTurn(text: String?, choice: String?, session: String?, waitMs: Int) async throws -> SessionTurnResult {
-        guard let url = URL(string: "http://\(box.host):\(box.port)/ops") else {
-            throw AgentError(message: "bad box host")
-        }
         var target: [String: Any] = [:]
         if let session, !session.isEmpty { target["session"] = session }
         var payload: [String: Any] = [
@@ -218,24 +212,7 @@ actor SessionClient {
             "machine": "local",
         ])
 
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-        req.httpBody = body
-
-        let (data, resp) = try await self.session.data(for: req)
-        guard let http = resp as? HTTPURLResponse else {
-            throw AgentError(message: "no response")
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = obj["error"] as? String {
-                throw AgentError(message: err)
-            }
-            throw AgentError(message: "runtime turn failed (\(http.statusCode))")
-        }
+        let data = try await request("POST", path: "/ops", body: body, failure: "runtime turn failed").data
         let envelope = try JSONDecoder().decode(RuntimeTurnOpsEnvelope.self, from: data)
         if envelope.ok == false {
             throw AgentError(message: envelope.error ?? "runtime turn failed")
@@ -259,33 +236,60 @@ actor SessionClient {
     }
 
     private func directTurn(text: String?, choice: String?, session: String?, waitMs: Int) async throws -> SessionTurnResult {
-        guard let url = URL(string: "http://\(box.host):\(box.port)/runner/session/turn") else {
-            throw AgentError(message: "bad box host")
-        }
         var body: [String: Any] = ["waitMs": waitMs]
         if let text { body["text"] = text }
         if let choice { body["choice"] = choice }
         if let session, !session.isEmpty { body["session"] = session }
 
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, resp) = try await self.session.data(for: req)
-        guard let http = resp as? HTTPURLResponse else {
-            throw AgentError(message: "no response")
-        }
         // 409 is the guards firing — decode the same as 200.
-        guard (200..<300).contains(http.statusCode) || http.statusCode == 409 else {
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = obj["error"] as? String {
-                throw AgentError(message: err)
+        let response = try await request("POST", path: "/runner/session/turn",
+                                         body: try JSONSerialization.data(withJSONObject: body),
+                                         failure: "session turn failed",
+                                         extraOK: [409])
+        return try JSONDecoder().decode(SessionTurnResult.self, from: response.data)
+    }
+
+    private func request(_ method: String, path: String, body: Data?, failure: String, extraOK: Set<Int> = []) async throws -> (data: Data, status: Int) {
+        let endpoints = requestEndpoints(path: path)
+        guard !endpoints.isEmpty else { throw AgentError(message: "bad box host") }
+
+        var lastError: Error = AgentError(message: failure)
+        for endpoint in endpoints {
+            var req = URLRequest(url: endpoint.url)
+            req.httpMethod = method
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+            if endpoint.relay, let pw = box.relayPassword, !pw.isEmpty {
+                req.setValue(pw, forHTTPHeaderField: "X-Relay-Password")
             }
-            throw AgentError(message: "session turn failed (\(http.statusCode))")
+            req.httpBody = body
+
+            do {
+                let (data, resp) = try await self.session.data(for: req)
+                guard let http = resp as? HTTPURLResponse else {
+                    throw AgentError(message: "no response")
+                }
+                if (200..<300).contains(http.statusCode) || extraOK.contains(http.statusCode) {
+                    return (data, http.statusCode)
+                }
+                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let err = obj["error"] as? String, !err.isEmpty {
+                    throw AgentError(message: err)
+                }
+                lastError = AgentError(message: "\(failure) (\(http.statusCode))")
+                continue
+            } catch let err as AgentError {
+                throw err
+            } catch {
+                lastError = error
+                continue
+            }
         }
-        return try JSONDecoder().decode(SessionTurnResult.self, from: data)
+        throw lastError
+    }
+
+    private func requestEndpoints(path rawPath: String) -> [Endpoint] {
+        box.requestEndpoints(path: rawPath).map { Endpoint(url: $0.url, relay: $0.relay) }
     }
 }

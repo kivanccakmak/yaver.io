@@ -112,7 +112,15 @@ async function inspect(page) {
 
 const results = [];
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ ...devices['iPhone 13'], extraHTTPHeaders: auth });
+// Record the session. A verdict line says WHAT happened; the video shows the
+// user what it looked like while it happened — the blank-then-mount moment is
+// the whole story of this evening and it does not survive a screenshot.
+const VIDEO_DIR = process.env.VIDEO_DIR || '/tmp/yaver-stream-videos';
+const ctx = await browser.newContext({
+  ...devices['iPhone 13'],
+  extraHTTPHeaders: auth,
+  recordVideo: { dir: VIDEO_DIR, size: { width: 390, height: 844 } },
+});
 const page = await ctx.newPage();
 const consoleErrors = [];
 page.on('pageerror', (e) => consoleErrors.push(String(e.message).slice(0, 140)));
@@ -143,7 +151,10 @@ for (const stack of STACKS) {
   }
 }
 
+// Videos are only flushed to disk when the context closes.
+await ctx.close();
 await browser.close();
+console.log(`videos: ${VIDEO_DIR}`);
 
 console.log('\n===== STREAM LOOP: mac mini → chromium =====');
 const w = Math.max(...results.map((r) => r.stack.length));

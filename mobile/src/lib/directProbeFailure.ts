@@ -42,7 +42,7 @@ export function describeDirectProbeFailure(e: any): string {
   if (/refused|ECONNREFUSED/i.test(msg)) {
     return "connection refused (host reachable, agent not listening on this port)";
   }
-  if (/unreachable|ENETUNREACH|EHOSTUNREACH/i.test(msg)) {
+  if (/unreachable|ENETUNREACH|EHOSTUNREACH|host is down/i.test(msg)) {
     return "network unreachable (no route from this phone to that address)";
   }
   // A bare "Network request failed" WITHOUT a timeout or refused signal is
@@ -74,9 +74,8 @@ export function isUnroutableFailure(e: any): boolean {
   // OS-blocked is a distinct category with a different remedy (config change).
   if (/-1022|App ?Transport ?Security|cleartext|CLEARTEXT/i.test(msg + code)) return false;
   // Genuine EHOSTUNREACH / ENETUNREACH.
-  if (/unreachable|ENETUNREACH|EHOSTUNREACH/i.test(msg)) return true;
+  if (/unreachable|ENETUNREACH|EHOSTUNREACH|host is down/i.test(msg)) return true;
   // RN's generic "Network request failed" — an instant reject, not a timeout.
   if (/Network request failed/i.test(msg)) return true;
   return false;
 }
-

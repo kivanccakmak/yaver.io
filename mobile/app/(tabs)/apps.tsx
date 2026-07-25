@@ -718,7 +718,7 @@ export default function AppsScreen() {
           quicClient.getDevServerStatus(),
           quicClient.getMobileWorkerPreviewSession(),
         ]);
-        if (mounted) setDevStatus(isActiveDevServerStatus(status) ? status : null);
+        if (mounted) setDevStatus(status && (isActiveDevServerStatus(status) || Boolean((status as DevServerStatus).error)) ? status : null);
         if (mounted) setWorkerSession(session);
       } catch {
         if (mounted) setDevStatus(null);
@@ -908,6 +908,30 @@ export default function AppsScreen() {
     // is its own way to lose the frames we came for.
   }, [showWebView]);
 
+  async function openRunningPreview() {
+    const fresh = await quicClient.getDevServerStatus();
+    if (fresh) setDevStatus(fresh);
+    if (!fresh || !isActiveDevServerStatus(fresh)) {
+      const known = fresh as DevServerStatus | null;
+      Alert.alert(
+        "Preview needs attention",
+        known?.error ||
+          known?.servingLabel ||
+          "The remote box does not currently have a browser preview ready. Start it again from Projects.",
+      );
+      return;
+    }
+    if (isHermesMobileFramework(fresh.framework)
+        && !isWebServedStatus({ platform: fresh.platform, devMode: fresh.devMode })) {
+      handleOpenNative(fresh.workDir!, fresh.framework);
+      return;
+    }
+    resetWebPreview();
+    setWebViewLoading(true);
+    setWebViewKey((k) => k + 1);
+    setShowWebView(true);
+  }
+
   // Tap project → if dev server running, always use Hermes push (fast, ~10s).
   // This keeps iPhone testing working from Linux, WSL, and remote hosts.
   // Xcode native build is available via "Install Native" action in the sheet.
@@ -919,18 +943,7 @@ export default function AppsScreen() {
     const projectPath = selectedProject?.path || "";
     const isRunning = !!projectPath && devStatus?.workDir === projectPath;
     if (isRunning) {
-      // Tapping the RUNNING project = SEE it. Open the browser preview for every
-      // stack (web-served or not) — except a Hermes RN bundle that loads natively
-      // into the container. No LAN flush: that path was removed entirely.
-      if (isHermesMobileFramework(devStatus?.framework)
-          && !isWebServedStatus({ platform: devStatus?.platform, devMode: devStatus?.devMode })) {
-        handleOpenNative(devStatus!.workDir!, devStatus?.framework);
-        return;
-      }
-      resetWebPreview();
-      setWebViewLoading(true);
-      setWebViewKey((k) => k + 1);
-      setShowWebView(true);
+      await openRunningPreview();
       return;
     }
 
@@ -1025,8 +1038,8 @@ export default function AppsScreen() {
   // tab, and publishes the app name on openAppBus. We replay the
   // exact same handleTapProject() flow a manual tap would run.
   useEffect(() => {
-    return openAppBus.subscribe((app) => {
-      handleTapProject(app).catch(() => {
+    return openAppBus.subscribe((intent) => {
+      handleTapProject(intent.projectPath || intent.app).catch(() => {
         // handleTapProject already surfaces its own errors via Alert.
       });
     });
@@ -2031,7 +2044,7 @@ export default function AppsScreen() {
             <View style={s.cardActions}>
               <Pressable
                 style={[s.actionBtn, s.openBtn, { flex: 1 }, devServerBusy && { opacity: 0.5 }]}
-                onPress={() => { resetWebPreview(); setWebViewLoading(true); setWebViewKey((k) => k + 1); setShowWebView(true); }}
+                onPress={() => { openRunningPreview().catch((e) => Alert.alert("Open in Yaver failed", e instanceof Error ? e.message : String(e))); }}
                 disabled={devServerBusy}
               >
                 {devServerBusy ? (
@@ -2237,6 +2250,7 @@ export default function AppsScreen() {
           <View style={[s.searchRow, { backgroundColor: c.bgInput, borderColor: isDark ? "transparent" : c.borderSubtle, borderWidth: isDark ? 0 : 1 }]}>
             <Ionicons name="search" size={16} color={c.textMuted} />
             <TextInput
+              testID="projects-search-input"
               style={[s.searchInput, { color: c.textPrimary }]}
               placeholder="Search projects..."
               placeholderTextColor={c.textMuted}
@@ -2274,6 +2288,7 @@ export default function AppsScreen() {
             <View style={s.filterWrap}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filterRow} contentContainerStyle={s.filterRowContent}>
               <Pressable
+                testID="projects-filter-all"
                 style={[
                   s.filterChip,
                   {
@@ -2294,6 +2309,7 @@ export default function AppsScreen() {
                   return (
                     <Pressable
                       key={cat}
+                      testID={`projects-filter-${cat}`}
                       style={[
                         s.filterChip,
                         {
@@ -2318,6 +2334,7 @@ export default function AppsScreen() {
         })()}
 
         <FlatList
+          testID="projects-list"
           // Tablets get a 2-col project grid (per the `projects` token);
           // phone stays single column. Repos list above keeps its own
           // 3/4-col `repos` token — they were sharing it before, which
@@ -2339,6 +2356,8 @@ export default function AppsScreen() {
 
             return (
               <Pressable
+                testID={`project-card-${item.name || item.path}`}
+                accessibilityLabel={`Project ${item.name || item.path}`}
                 style={[s.card, s.projectCard, { backgroundColor: c.bgCard, borderColor: c.borderSubtle },
                   !isDark && { shadowColor: c.shadowSm },
                   cols > 1 ? { flex: 1, maxWidth: `${100 / cols}%` } : null,
@@ -2932,9 +2951,19 @@ export default function AppsScreen() {
                 instead; treat an empty url as a bug, never as a value. */}
             {!bundleUrl ? (
               <View style={s.previewOverlay}>
+                {devStatus?.error ? (
+                  <>
+                    <Ionicons name="alert-circle-outline" size={36} color={c.error} />
+                    <Text style={[s.previewFailTitle, { color: c.error }]}>Preview route is unavailable</Text>
+                    <Text style={[s.previewSubtle, { color: c.textMuted }]}>
+                      {devStatus.error}
+                    </Text>
+                  </>
+                ) : (
                 <Text style={[s.previewSubtle, { color: c.textMuted }]}>
                   Waiting for the dev server to report its address…
                 </Text>
+                )}
               </View>
             ) : (
             <WebView

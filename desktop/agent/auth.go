@@ -181,6 +181,7 @@ type UserInfo struct {
 	Email    string `json:"email"`
 	FullName string `json:"fullName"`
 	Provider string `json:"provider"`
+	Scope    string `json:"scope,omitempty"`
 	// IsOwner is the server-computed ownerAllowlist flag. Gates owner-only
 	// experimental hardware-cell MCP tools (mcp_owner_gate.go).
 	IsOwner bool `json:"isOwner"`
@@ -219,6 +220,23 @@ func ValidateTokenUser(baseURL, token string) (string, error) {
 		return "", err
 	}
 	return info.UserID, nil
+}
+
+func ValidateTokenUserScope(baseURL, token string) (userID, scope string, err error) {
+	info, err := ValidateTokenInfo(baseURL, token)
+	if err != nil {
+		return "", "", err
+	}
+	return info.UserID, normalizeSessionScope(info.Scope), nil
+}
+
+func normalizeSessionScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "machine", "tv", "watch", "vision", "spatial":
+		return strings.ToLower(strings.TrimSpace(scope))
+	default:
+		return "full"
+	}
 }
 
 // SdkTokenInfo contains validation results for an SDK token.

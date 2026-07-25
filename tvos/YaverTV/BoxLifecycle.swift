@@ -254,7 +254,9 @@ final class BoxLifecycle: ObservableObject {
         }
     }
 
-    /// GET http://<host>:<port>/health — 200 + {ok:true} means the box is back.
+    /// GET /health — direct first, relay second. 200 + {ok:true} means the box
+    /// is back. This probe must use the same transport set as real commands;
+    /// otherwise a relay-reachable TV can show "asleep" while turns work.
     /// What a /health poll actually told us.
     ///
     /// `ok` is NOT "the box is usable" — it only means the agent process
@@ -268,28 +270,36 @@ final class BoxLifecycle: ObservableObject {
     }
 
     private func healthProbe(box: BoxTarget) async -> HealthProbe {
-        guard let url = URL(string: "http://\(box.host):\(box.port)/health") else {
+        let endpoints = box.requestEndpoints(path: "/health")
+        guard !endpoints.isEmpty else {
             return HealthProbe(answered: false, authExpired: false)
         }
-        do {
-            let (data, resp) = try await net.data(for: URLRequest(url: url))
-            guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
-                return HealthProbe(answered: false, authExpired: false)
+        for endpoint in endpoints {
+            do {
+                var req = URLRequest(url: endpoint.url)
+                if endpoint.relay, let pw = box.relayPassword, !pw.isEmpty {
+                    req.setValue(pw, forHTTPHeaderField: "X-Relay-Password")
+                }
+                let (data, resp) = try await net.data(for: req)
+                guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
+                    continue
+                }
+                guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return HealthProbe(answered: true, authExpired: false)  // 200, other body
+                }
+                let ok = (obj["ok"] as? Bool) ?? true
+                var expired = (obj["authExpired"] as? Bool) ?? false
+                if let lifecycle = obj["lifecycle"] as? [String: Any] {
+                    if let state = lifecycle["state"] as? String, state == "yaver-auth-expired" { expired = true }
+                    if let usable = lifecycle["usable"] as? Bool, usable == false { expired = true }
+                }
+                if let state = obj["lifecycleState"] as? String, state == "yaver-auth-expired" { expired = true }
+                return HealthProbe(answered: ok, authExpired: expired)
+            } catch {
+                continue
             }
-            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return HealthProbe(answered: true, authExpired: false)  // 200, other body
-            }
-            let ok = (obj["ok"] as? Bool) ?? true
-            var expired = (obj["authExpired"] as? Bool) ?? false
-            if let lifecycle = obj["lifecycle"] as? [String: Any] {
-                if let state = lifecycle["state"] as? String, state == "yaver-auth-expired" { expired = true }
-                if let usable = lifecycle["usable"] as? Bool, usable == false { expired = true }
-            }
-            if let state = obj["lifecycleState"] as? String, state == "yaver-auth-expired" { expired = true }
-            return HealthProbe(answered: ok, authExpired: expired)
-        } catch {
-            return HealthProbe(answered: false, authExpired: false)
         }
+        return HealthProbe(answered: false, authExpired: false)
     }
 
     // MARK: - Phase bookkeeping (monotonic — the bar only ever fills)

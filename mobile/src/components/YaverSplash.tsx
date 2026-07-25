@@ -36,7 +36,7 @@ const SPLASH_TAGLINE = "Remote AI Runtime";
 const TILE_ICONS = [
   "code-braces", "robot", "cloud-outline", "server-network", "console-line",
   "chip", "brain", "cellphone-link", "api", "database-outline", "source-branch",
-  "rocket-launch", "cog", "terminal", "access-point-network", "laptop",
+  "rocket-launch", "cog", "console-line", "access-point-network", "laptop",
   "function-variant", "cube-outline",
 ] as const;
 

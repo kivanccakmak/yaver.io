@@ -241,18 +241,24 @@ export default function TabLayout() {
       if (command === "open_app") {
         const app = typeof data.app === "string" ? data.app.trim() : "";
         if (!app) return;
+        const projectPath = typeof data.projectPath === "string" ? data.projectPath.trim() : "";
+        const lane = typeof data.lane === "string" ? data.lane.trim() : "";
         try {
           router.push("/(tabs)/apps");
         } catch {
           // older expo-router/no-navigator fallback — ignore.
         }
-        openAppBus.publish(app);
+        openAppBus.publish({
+          app,
+          ...(projectPath ? { projectPath } : {}),
+          ...(lane ? { lane } : {}),
+        });
         await quicClient.pushBlackBoxEvents(resolved.id, [{
           type: "state",
           level: "info",
           message: "preview_worker_open_app_received",
           timestamp: Date.now(),
-          metadata: { app },
+          metadata: { app, ...(projectPath ? { projectPath } : {}), ...(lane ? { lane } : {}) },
         }]);
         return;
       }

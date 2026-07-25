@@ -9,23 +9,31 @@
 // payload is a project name (no need to persist), and a missed
 // command should be silently lost rather than queued.
 
-type Listener = (app: string) => void;
+export type OpenAppIntent = {
+  app: string;
+  projectPath?: string;
+  lane?: "browser" | "hermes" | "webrtc" | string;
+};
 
-let pending: string | null = null;
+type Listener = (intent: OpenAppIntent) => void;
+
+let pending: OpenAppIntent | null = null;
 const listeners = new Set<Listener>();
 
 export const openAppBus = {
-  publish(app: string) {
-    const trimmed = app.trim();
+  publish(input: string | OpenAppIntent) {
+    const intent = typeof input === "string" ? { app: input } : input;
+    const trimmed = intent.app.trim();
     if (!trimmed) return;
+    const normalized = { ...intent, app: trimmed };
     if (listeners.size === 0) {
       // No subscriber yet — store so the next subscribe replays it.
-      pending = trimmed;
+      pending = normalized;
       return;
     }
     listeners.forEach((cb) => {
       try {
-        cb(trimmed);
+        cb(normalized);
       } catch {
         // ignore; one bad listener mustn't block others.
       }

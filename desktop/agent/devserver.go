@@ -525,7 +525,18 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 
 	var ds DevServer
 	if framework != "" {
-		ds = getDevServerByName(framework)
+		if resolvedDS, resolvedDir, ok, err := resolveExplicitFrameworkWorkDir(framework, workDir); err != nil {
+			return err
+		} else if ok {
+			ds = resolvedDS
+			workDir = resolvedDir
+			if canonical := devServerNameForDetectedFramework(framework); canonical != "" {
+				framework = canonical
+			}
+		}
+		if ds == nil {
+			ds = getDevServerByName(framework)
+		}
 		if ds == nil {
 			// Name lookup failed (name set at Start time) — fall back to auto-detection
 			ds = detectDevServer(workDir)
@@ -2265,8 +2276,25 @@ func (e *ExpoDevServer) StartWebPreview(parent context.Context, workDir string) 
 	e.webMu.Lock()
 	if e.webCmd != nil && e.webCmd.Process != nil && e.webPort > 0 {
 		port := e.webPort
-		e.webMu.Unlock()
-		return port, nil
+		pid := e.webCmd.Process.Pid
+		alive := isProcessAlive(pid)
+		listening := isPortInUse(port)
+		if alive && listening {
+			e.webMu.Unlock()
+			return port, nil
+		}
+		log.Printf("[dev:expo] stale web preview handle pid=%d port=%d alive=%v listening=%v — starting a fresh expo --web sibling",
+			pid, port, alive, listening)
+		e.webCmd = nil
+		e.webPort = 0
+		e.webCtx = nil
+	}
+	if e.webCtx != nil {
+		e.webCtx = nil
+	}
+	if e.webPort > 0 && !isPortInUse(e.webPort) {
+		log.Printf("[dev:expo] stale web preview port %d had no listener — clearing before restart", e.webPort)
+		e.webPort = 0
 	}
 	e.webMu.Unlock()
 

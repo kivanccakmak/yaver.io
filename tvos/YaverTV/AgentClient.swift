@@ -17,6 +17,11 @@ actor AgentClient {
     private let box: BoxTarget
     private let session: URLSession
 
+    private struct Endpoint {
+        let url: URL
+        let relay: Bool
+    }
+
     init(token: String, box: BoxTarget) {
         self.token = token
         self.box = box
@@ -191,34 +196,14 @@ actor AgentClient {
     /// The task queue on the box (GET /tasks). REST, not an ops verb — a glance
     /// list for the TV; the full task lifecycle stays on phone/web.
     func listTasks() async throws -> [TaskSummary] {
-        guard let url = URL(string: "http://\(box.host):\(box.port)/tasks") else {
-            throw AgentError(message: "bad box host")
-        }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-        let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse else { throw AgentError(message: "no response") }
-        guard (200..<300).contains(http.statusCode) else {
-            throw AgentError(message: "couldn't load tasks (\(http.statusCode))")
-        }
+        let data = try await request("GET", path: "/tasks", failure: "couldn't load tasks")
         return (try JSONDecoder().decode(TaskList.self, from: data)).tasks
     }
 
     /// Projects the box knows about (GET /projects → {projects:[…]} or a bare
     /// array). For the TV to browse and pick one to preview.
     func listProjects() async throws -> [ProjectSummary] {
-        guard let url = URL(string: "http://\(box.host):\(box.port)/projects") else {
-            throw AgentError(message: "bad box host")
-        }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-        let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse else { throw AgentError(message: "no response") }
-        guard (200..<300).contains(http.statusCode) else {
-            throw AgentError(message: "couldn't load projects (\(http.statusCode))")
-        }
+        let data = try await request("GET", path: "/projects", failure: "couldn't load projects")
         if let wrapped = try? JSONDecoder().decode(ProjectList.self, from: data) { return wrapped.projects }
         return (try? JSONDecoder().decode([ProjectSummary].self, from: data)) ?? []
     }
@@ -232,6 +217,30 @@ actor AgentClient {
     // frame hash → GET /vibing/preview/frames/{hash} for the bytes.
 
     struct WebPreviewStart: Decodable { let ok: Bool?; let port: Int?; let webUrl: String? }
+    struct DevStartResult: Decodable {
+        let ok: Bool?
+        let mode: String?
+        let running: Bool?
+        let framework: String?
+        let url: String?
+        let port: Int?
+    }
+
+    /// Start the selected project's web lane. `/dev/web-preview/start` only
+    /// starts an Expo web sibling for the active dev server; this is the call
+    /// that makes the selected project become active in the first place.
+    func startDevServer(for project: ProjectSummary) async throws -> DevStartResult {
+        var body: [String: Any] = [
+            "surface": "web-reload",
+            "caller": "web-ui",
+            "platform": "web",
+            "projectName": project.name,
+        ]
+        if let workDir = project.path, !workDir.isEmpty { body["workDir"] = workDir }
+        if let framework = project.framework, !framework.isEmpty { body["framework"] = framework }
+        let data = try await postJSON("/dev/start", body)
+        return (try? JSONDecoder().decode(DevStartResult.self, from: data)) ?? DevStartResult(ok: true, mode: nil, running: nil, framework: project.framework, url: nil, port: nil)
+    }
 
     /// Start capturing a project's web preview at the given viewport. Returns
     /// when the vibe session is up (first frame may lag a beat).
@@ -258,17 +267,7 @@ actor AgentClient {
 
     /// Fetch a captured frame's bytes by hash.
     func previewFrame(hash: String) async throws -> Data {
-        guard let url = URL(string: "http://\(box.host):\(box.port)/vibing/preview/frames/\(hash)") else {
-            throw AgentError(message: "bad box host")
-        }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-        let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw AgentError(message: "frame unavailable")
-        }
-        return data
+        try await request("GET", path: "/vibing/preview/frames/\(hash)", failure: "frame unavailable")
     }
 
     func stopWebPreview(project: String) async {
@@ -277,60 +276,22 @@ actor AgentClient {
 
     /// Small POST helper for the JSON endpoints above.
     private func postJSON(_ path: String, _ body: [String: Any]) async throws -> Data {
-        guard let url = URL(string: "http://\(box.host):\(box.port)\(path)") else {
-            throw AgentError(message: "bad box host")
-        }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse else { throw AgentError(message: "no response") }
-        guard (200..<300).contains(http.statusCode) else {
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = obj["error"] as? String { throw AgentError(message: err) }
-            throw AgentError(message: "\(path) failed (\(http.statusCode))")
-        }
-        return data
+        try await request("POST", path: path, jsonBody: body, failure: path)
     }
 
     /// A live redroid / Android screen frame (GET /droid/frame → PNG). Throws a
     /// readable message on 503 ("no android device attached") so the viewer can
     /// say so instead of showing nothing.
     func droidFrame(device: String? = nil) async throws -> Data {
-        var comps = URLComponents(string: "http://\(box.host):\(box.port)/droid/frame")!
-        if let device, !device.isEmpty { comps.queryItems = [URLQueryItem(name: "device", value: device)] }
-        guard let url = comps.url else { throw AgentError(message: "bad box host") }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-        let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse else { throw AgentError(message: "no response") }
-        guard (200..<300).contains(http.statusCode) else {
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = obj["error"] as? String {
-                throw AgentError(message: err)
-            }
-            throw AgentError(message: "no Android screen (\(http.statusCode))")
-        }
-        return data
+        let path = device?.isEmpty == false
+            ? "/droid/frame?device=\(device!.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? device!)"
+            : "/droid/frame"
+        return try await request("GET", path: path, failure: "no Android screen")
     }
 
     /// Feedback reports the box has collected (GET /feedback → a bare array).
     func listFeedback() async throws -> [FeedbackReport] {
-        guard let url = URL(string: "http://\(box.host):\(box.port)/feedback") else {
-            throw AgentError(message: "bad box host")
-        }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-        let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse else { throw AgentError(message: "no response") }
-        guard (200..<300).contains(http.statusCode) else {
-            throw AgentError(message: "couldn't load feedback (\(http.statusCode))")
-        }
+        let data = try await request("GET", path: "/feedback", failure: "couldn't load feedback")
         return (try? JSONDecoder().decode([FeedbackReport].self, from: data)) ?? []
     }
 
@@ -373,19 +334,52 @@ actor AgentClient {
     /// `UIImage(data:)`, which returns nil — so the tile showed no frame and no
     /// reason, forever. Check the status and carry the message out.
     func frameData() async throws -> Data {
-        guard let url = captureFrameURL() else { throw AgentError(message: "bad host") }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-        let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse else { throw AgentError(message: "no response") }
-        guard (200..<300).contains(http.statusCode) else {
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = obj["error"] as? String {
-                throw AgentError(message: err)
+        try await request("GET", path: "/capture/frame.jpg", failure: "capture frame unavailable")
+    }
+
+    private func request(_ method: String, path: String, jsonBody: [String: Any]? = nil, failure: String) async throws -> Data {
+        let endpoints = requestEndpoints(path: path)
+        guard !endpoints.isEmpty else { throw AgentError(message: "bad box host") }
+        let body = try jsonBody.map { try JSONSerialization.data(withJSONObject: $0) }
+
+        var lastError: Error = AgentError(message: failure)
+        for endpoint in endpoints {
+            var req = URLRequest(url: endpoint.url)
+            req.httpMethod = method
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+            if let body {
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.httpBody = body
             }
-            throw AgentError(message: "capture frame unavailable (\(http.statusCode))")
+            if endpoint.relay, let pw = box.relayPassword, !pw.isEmpty {
+                req.setValue(pw, forHTTPHeaderField: "X-Relay-Password")
+            }
+            do {
+                let (data, resp) = try await session.data(for: req)
+                guard let http = resp as? HTTPURLResponse else {
+                    throw AgentError(message: "no response")
+                }
+                if !(200..<300).contains(http.statusCode) {
+                    if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let err = obj["error"] as? String, !err.isEmpty {
+                        throw AgentError(message: err)
+                    }
+                    lastError = AgentError(message: "\(failure) (\(http.statusCode))")
+                    continue
+                }
+                return data
+            } catch let err as AgentError {
+                throw err
+            } catch {
+                lastError = error
+                continue
+            }
         }
-        return data
+        throw lastError
+    }
+
+    private func requestEndpoints(path rawPath: String) -> [Endpoint] {
+        box.requestEndpoints(path: rawPath).map { Endpoint(url: $0.url, relay: $0.relay) }
     }
 }

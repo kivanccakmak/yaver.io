@@ -21,6 +21,9 @@ func writeExpoProject(t *testing.T, parent, name string) string {
 	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(pkg), 0o644); err != nil {
 		t.Fatalf("write package.json: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "app.json"), []byte(`{"expo":{"name":"`+name+`"}}`), 0o644); err != nil {
+		t.Fatalf("write app.json: %v", err)
+	}
 	return dir
 }
 
@@ -168,6 +171,7 @@ func TestScanProjectMarkersAndGitMetadata(t *testing.T) {
 	write(filepath.Join(swift, "ios", "SwiftApp", "Info.plist"), `<plist><dict><key>CFBundleName</key><string>SwiftApp</string></dict></plist>`)
 	flutter := mustProject("flutter-app")
 	write(filepath.Join(flutter, "pubspec.yaml"), "name: flutter_app\n")
+	write(filepath.Join(flutter, "lib", "main.dart"), "void main() {}\n")
 
 	projects, stats := scanMobileProjectsWithDeadline(time.Now().Add(mobileScanTimeout))
 	if stats.TimedOut {
@@ -194,6 +198,49 @@ func TestScanProjectMarkersAndGitMetadata(t *testing.T) {
 		}
 		if strings.Contains(p.Remote, "token@") {
 			t.Fatalf("%s remote leaked credentials: %q", path, p.Remote)
+		}
+	}
+}
+
+func TestScanMobileProjects_IgnoresDependencyOnlyMobilePackages(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, "Workspace", "sdk-workspace")
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	expoPackage := filepath.Join(root, "packages", "expo-kit")
+	write(filepath.Join(expoPackage, "package.json"), `{"name":"expo-kit","dependencies":{"expo":"~54.0.0"}}`)
+	rnPackage := filepath.Join(root, "packages", "rn-kit")
+	write(filepath.Join(rnPackage, "package.json"), `{"name":"rn-kit","dependencies":{"react-native":"0.81.5"}}`)
+	flutterPackage := filepath.Join(root, "packages", "flutter-kit")
+	write(filepath.Join(flutterPackage, "pubspec.yaml"), "name: flutter_kit\n")
+
+	realApp := filepath.Join(root, "apps", "real-mobile")
+	write(filepath.Join(realApp, "package.json"), `{"name":"real-mobile","dependencies":{"expo":"~54.0.0","react-native":"0.81.5"}}`)
+	write(filepath.Join(realApp, "app.json"), `{"expo":{"name":"Real Mobile"}}`)
+
+	projects, stats := scanMobileProjectsWithDeadline(time.Now().Add(mobileScanTimeout))
+	if stats.TimedOut {
+		t.Fatal("scan timed out unexpectedly")
+	}
+	if findProjectByPath(projects, realApp) == nil {
+		t.Fatalf("launchable app was not discovered; got %+v", projects)
+	}
+	for _, path := range []string{expoPackage, rnPackage, flutterPackage} {
+		if p := findProjectByPath(projects, path); p != nil {
+			t.Fatalf("dependency-only package leaked into mobile projects: %+v", *p)
 		}
 	}
 }

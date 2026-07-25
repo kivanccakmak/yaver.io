@@ -122,7 +122,10 @@ func detectActionsInDir(dir, rel string) []ProjectAction {
 	}
 
 	// Swift (native iOS) — primary path is remote runtime over WebRTC.
-	if hasFile(dir, "Package.swift") || (hasFile(dir, "*.xcodeproj") || hasDir(dir, ".xcodeproj")) {
+	// Keep this aligned with scanMobileProjects: XcodeGen apps often ship only
+	// project.yml until the first generated build, so a discovered Swift card
+	// must still have operations before .xcodeproj exists.
+	if hasFile(dir, "Package.swift") || hasDir(dir, ".xcodeproj") || isXcodegenIOSProject(dir) {
 		actions = append(actions, ProjectAction{
 			Label: "Remote Runtime", Target: rel, Type: "remote-runtime",
 			Framework: "swift", Icon: "\U0001F4FA",

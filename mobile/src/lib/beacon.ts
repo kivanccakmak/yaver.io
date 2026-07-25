@@ -9,6 +9,8 @@
  * but are invisible to the user — silent roaming.
  */
 import { Platform } from "react-native";
+import Constants from "expo-constants";
+import * as ExpoCrypto from "expo-crypto";
 import dgram from "react-native-udp";
 import { appLog } from "./logger";
 
@@ -52,14 +54,23 @@ type LostCallback = (deviceId: string) => void;
 
 /** Compute the same token fingerprint as the CLI: first 8 hex chars of SHA256(userId). */
 async function computeFingerprint(userId: string): Promise<string> {
-  // Use SubtleCrypto (available in React Native via Hermes/JSC polyfill)
   const encoder = new TextEncoder();
   const data = encoder.encode(userId);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = new Uint8Array(hashBuffer);
-  return Array.from(hashArray.slice(0, 4))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle?.digest) {
+    const hashBuffer = await subtle.digest("SHA-256", data);
+    const hashArray = new Uint8Array(hashBuffer);
+    return Array.from(hashArray.slice(0, 4))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  const hex = await ExpoCrypto.digestStringAsync(
+    ExpoCrypto.CryptoDigestAlgorithm.SHA256,
+    userId,
+    { encoding: ExpoCrypto.CryptoEncoding.HEX },
+  );
+  return hex.slice(0, 8);
 }
 
 class BeaconListener {
@@ -74,8 +85,17 @@ class BeaconListener {
 
   /** Set the user ID to compute the auth fingerprint. */
   async setUserId(userId: string): Promise<void> {
-    this.fingerprint = await computeFingerprint(userId);
-    appLog("info", `[beacon] Fingerprint computed: ${this.fingerprint}`);
+    try {
+      this.fingerprint = await computeFingerprint(userId);
+      appLog("info", `[beacon] Fingerprint computed: ${this.fingerprint}`);
+    } catch (err) {
+      this.fingerprint = null;
+      appLog(
+        "warn",
+        `[beacon] LAN discovery disabled — no secure SHA-256 implementation is available in this runtime. ` +
+          `Authenticated HTTP/relay discovery still works. (${err})`,
+      );
+    }
   }
 
   /** Set known device IDs from Convex (for matching). Pass short IDs (first 8 chars). */
@@ -86,6 +106,14 @@ class BeaconListener {
   /** Start listening for beacons. */
   start(): void {
     if (this.running) return;
+    if (Platform.OS === "ios" && Constants.isDevice === false) {
+      appLog("info", "[beacon] UDP LAN discovery skipped on iOS Simulator; using authenticated HTTP/relay discovery.");
+      return;
+    }
+    if (!this.fingerprint) {
+      appLog("info", "[beacon] UDP LAN discovery skipped until a secure user fingerprint is available.");
+      return;
+    }
     this.running = true;
 
     try {

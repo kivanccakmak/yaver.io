@@ -1720,6 +1720,7 @@ func (s *HTTPServer) addOverlayListener(ip string) {
 
 type cachedTokenInfo struct {
 	userID               string
+	sessionScope         string
 	isSdk                bool
 	scopes               []string
 	allowedCIDRs         []string
@@ -1766,6 +1767,7 @@ var hostShareAllowedPrefixes = []string{
 var scopePathPrefixes = map[string][]string{
 	"feedback":     {"/feedback"},
 	"blackbox":     {"/blackbox/"},
+	"voice":        {"/voice/"},
 	"builds":       {"/builds"},
 	"testapp":      {"/test-app/"},
 	"health":       {"/health"},
@@ -1803,6 +1805,97 @@ func pathAllowedByScopes(path string, scopes []string) bool {
 		}
 	}
 	return false
+}
+
+func requestAllowedByScopes(method, path string, scopes []string) bool {
+	for _, scope := range scopes {
+		if scope == "spatial" && spatialSDKRequestAllowed(method, path) {
+			return true
+		}
+	}
+	return pathAllowedByScopes(path, scopes)
+}
+
+func spatialSDKRequestAllowed(method, path string) bool {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	switch {
+	case method == http.MethodGet && (path == "/health" || path == "/info" || path == "/tasks" || path == "/tmux/sessions"):
+		return true
+	case method == http.MethodGet && strings.HasPrefix(path, "/tasks/"):
+		return true
+	case method == http.MethodGet && strings.HasPrefix(path, "/remote-runtime/sessions"):
+		return true
+	case method == http.MethodPost && strings.HasPrefix(path, "/remote-runtime/sessions/"):
+		return true
+	case method == http.MethodGet && path == "/vibing/preview/status":
+		return true
+	case method == http.MethodPost && path == "/vibing/preview/snapshot":
+		return true
+	case method == http.MethodGet && strings.HasPrefix(path, "/vibing/preview/frames/"):
+		return true
+	case method == http.MethodGet && path == "/ws/terminal":
+		return true
+	case method == http.MethodGet && path == "/voice/stream":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCompanionSessionScope(scope string) bool {
+	switch normalizeSessionScope(scope) {
+	case "tv", "watch", "vision", "spatial":
+		return true
+	default:
+		return false
+	}
+}
+
+func companionSessionAllowed(method, path, scope string) bool {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	switch normalizeSessionScope(scope) {
+	case "watch":
+		switch {
+		case method == http.MethodGet && (path == "/health" || path == "/info" || path == "/agent/status"):
+			return true
+		case method == http.MethodPost && (path == "/runner/session/turn" || path == "/ops"):
+			return true
+		default:
+			return false
+		}
+	case "tv", "vision", "spatial":
+		switch {
+		case method == http.MethodGet && (path == "/health" || path == "/info" || path == "/agent/status" || path == "/agent/runners" || path == "/tasks" || path == "/projects" || path == "/tmux/sessions"):
+			return true
+		case method == http.MethodGet && strings.HasPrefix(path, "/tasks/"):
+			return true
+		case method == http.MethodPost && (path == "/ops" || path == "/runner/session/turn"):
+			return true
+		case method == http.MethodGet && strings.HasPrefix(path, "/remote-runtime/sessions"):
+			return true
+		case method == http.MethodPost && strings.HasPrefix(path, "/remote-runtime/sessions/"):
+			return true
+		default:
+			return false
+		}
+	default:
+		return true
+	}
+}
+
+func companionScopeDeniedMessage(scope string) string {
+	switch normalizeSessionScope(scope) {
+	case "watch":
+		return "watch-scoped token cannot access this endpoint"
+	case "tv":
+		return "TV-scoped token cannot access this endpoint"
+	case "vision":
+		return "vision-scoped token cannot access this endpoint"
+	case "spatial":
+		return "spatial-scoped token cannot access this endpoint"
+	default:
+		return "scoped token cannot access this endpoint"
+	}
 }
 
 func (s *HTTPServer) applyDelegatedGuestSDKHeaders(w http.ResponseWriter, r *http.Request, info *cachedTokenInfo) bool {
@@ -2381,6 +2474,10 @@ func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 				s.tokenCache.Delete(token)
 			} else {
 				if info.userID == s.ownerUserID {
+					if isCompanionSessionScope(info.sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, info.sessionScope) {
+						jsonError(w, http.StatusForbidden, companionScopeDeniedMessage(info.sessionScope))
+						return
+					}
 					next(w, r)
 					return
 				}
@@ -2410,13 +2507,13 @@ func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 
 		// Validate session token via Convex
 		log.Printf("[AUTH] %s %s — validating token against Convex...", r.Method, r.URL.Path)
-		uid, err := ValidateTokenUser(s.convexURL, token)
+		uid, sessionScope, err := ValidateTokenUserScope(s.convexURL, token)
 		if err != nil {
 			log.Printf("[AUTH] %s %s — token validation failed: %v", r.Method, r.URL.Path, err)
 			jsonError(w, http.StatusForbidden, "invalid token")
 			return
 		}
-		info := &cachedTokenInfo{userID: uid, isSdk: false, storedAt: time.Now()}
+		info := &cachedTokenInfo{userID: uid, sessionScope: sessionScope, isSdk: false, storedAt: time.Now()}
 		if uid != s.ownerUserID {
 			info.hostShare = s.resolveHostShareAccess(uid)
 			if info.hostShare == nil {
@@ -2443,6 +2540,10 @@ func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 			jsonError(w, http.StatusForbidden, "token belongs to a different user")
+			return
+		}
+		if isCompanionSessionScope(sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, sessionScope) {
+			jsonError(w, http.StatusForbidden, companionScopeDeniedMessage(sessionScope))
 			return
 		}
 		next(w, r)
@@ -2547,7 +2648,7 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 			}
 			if info.isSdk {
 				// Check scope
-				if !pathAllowedByScopes(r.URL.Path, info.scopes) {
+				if !requestAllowedByScopes(r.Method, r.URL.Path, info.scopes) {
 					jsonError(w, http.StatusForbidden, "SDK token scope does not allow this endpoint")
 					return
 				}
@@ -2564,6 +2665,10 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 				if !s.applyDelegatedGuestSDKHeaders(w, r, info) {
 					return
 				}
+			}
+			if info.userID == s.ownerUserID && isCompanionSessionScope(info.sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, info.sessionScope) {
+				jsonError(w, http.StatusForbidden, companionScopeDeniedMessage(info.sessionScope))
+				return
 			}
 			next(w, r)
 			return
@@ -2585,11 +2690,15 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		// Try session token first
-		uid, err := ValidateTokenUser(s.convexURL, token)
+		uid, sessionScope, err := ValidateTokenUserScope(s.convexURL, token)
 		if err == nil {
-			s.tokenCache.Store(token, &cachedTokenInfo{userID: uid, isSdk: false})
+			s.tokenCache.Store(token, &cachedTokenInfo{userID: uid, sessionScope: sessionScope, isSdk: false})
 			if uid != s.ownerUserID {
 				jsonError(w, http.StatusForbidden, "token belongs to a different user")
+				return
+			}
+			if isCompanionSessionScope(sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, sessionScope) {
+				jsonError(w, http.StatusForbidden, companionScopeDeniedMessage(sessionScope))
 				return
 			}
 			next(w, r)
@@ -2623,7 +2732,7 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		// Check scope
-		if !pathAllowedByScopes(r.URL.Path, sdkInfo.Scopes) {
+		if !requestAllowedByScopes(r.Method, r.URL.Path, sdkInfo.Scopes) {
 			jsonError(w, http.StatusForbidden, "SDK token scope does not allow this endpoint")
 			return
 		}
@@ -2723,7 +2832,7 @@ func (s *HTTPServer) authSDKOrGuest(next http.HandlerFunc) http.HandlerFunc {
 		if cached, ok := s.tokenCache.Load(token); ok {
 			info := cached.(*cachedTokenInfo)
 			if info.isSdk {
-				if !pathAllowedByScopes(r.URL.Path, info.scopes) {
+				if !requestAllowedByScopes(r.Method, r.URL.Path, info.scopes) {
 					jsonError(w, http.StatusForbidden, "SDK token scope does not allow this endpoint")
 					return
 				}
@@ -2742,6 +2851,10 @@ func (s *HTTPServer) authSDKOrGuest(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 			if info.userID == s.ownerUserID {
+				if isCompanionSessionScope(info.sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, info.sessionScope) {
+					jsonError(w, http.StatusForbidden, companionScopeDeniedMessage(info.sessionScope))
+					return
+				}
 				next(w, r)
 				return
 			}
@@ -2752,10 +2865,14 @@ func (s *HTTPServer) authSDKOrGuest(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		uid, err := ValidateTokenUser(s.convexURL, token)
+		uid, sessionScope, err := ValidateTokenUserScope(s.convexURL, token)
 		if err == nil {
-			s.tokenCache.Store(token, &cachedTokenInfo{userID: uid, isSdk: false, storedAt: time.Now()})
+			s.tokenCache.Store(token, &cachedTokenInfo{userID: uid, sessionScope: sessionScope, isSdk: false, storedAt: time.Now()})
 			if uid == s.ownerUserID {
+				if isCompanionSessionScope(sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, sessionScope) {
+					jsonError(w, http.StatusForbidden, companionScopeDeniedMessage(sessionScope))
+					return
+				}
 				next(w, r)
 				return
 			}
@@ -2790,7 +2907,7 @@ func (s *HTTPServer) authSDKOrGuest(next http.HandlerFunc) http.HandlerFunc {
 			jsonError(w, http.StatusForbidden, "token belongs to a different user")
 			return
 		}
-		if !pathAllowedByScopes(r.URL.Path, info.scopes) {
+		if !requestAllowedByScopes(r.Method, r.URL.Path, info.scopes) {
 			jsonError(w, http.StatusForbidden, "SDK token scope does not allow this endpoint")
 			return
 		}
@@ -2833,7 +2950,7 @@ func (s *HTTPServer) trackNewIP(token string, r *http.Request) {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Yaver-Caller, X-Relay-Password")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Yaver-Caller, X-Relay-Password, X-Client-Platform")
 		origin := r.Header.Get("Origin")
 		if origin == "" {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -8796,6 +8913,12 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		json.Unmarshal(call.Arguments, &args)
 		return mcpToolJSON(mcpDepsList(args.Directory, args.Manager))
+	case "mobile_project_actions_audit":
+		var args struct {
+			Directory string `json:"directory"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		return mcpToolJSON(mcpMobileProjectActionsAudit(args.Directory))
 	case "mobile_project_status":
 		var args struct {
 			DeviceID  string `json:"device_id"`

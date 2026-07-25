@@ -22,6 +22,7 @@ struct MachinePickerView: View {
     @State private var showAcceptCode = false
     @State private var leaveTarget: RegisteredDevice?   // non-nil ⇒ confirming
     @StateObject private var lifecycle = BoxLifecycle()
+    @State private var relaySettings: MachineRegistry.UserSettings?
 
     // Captured once per load so liveness is a pure comparison (no Date.now in the model).
     @State private var nowMs: Double = 0
@@ -81,6 +82,7 @@ struct MachinePickerView: View {
     private var list: some View {
         ScrollView {
             LazyVStack(spacing: 14) {
+                pickerHero
                 ForEach(sortedDevices) { d in
                     Button {
                         Task { await connect(d) }
@@ -103,6 +105,38 @@ struct MachinePickerView: View {
             }
             .padding(32)
         }
+    }
+
+    private var pickerHero: some View {
+        HStack(spacing: 22) {
+            Image(systemName: store.selectedBox == nil ? "antenna.radiowaves.left.and.right" : "checkmark.circle.fill")
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(store.selectedBox == nil ? .orange : .green)
+                .frame(width: 58, height: 58)
+                .background((store.selectedBox == nil ? Color.orange : Color.green).opacity(0.16),
+                            in: RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(store.selectedBox == nil ? "Choose where the TV connects" : "Connected to \(store.selectedBox?.name ?? "a machine")")
+                    .font(.system(size: 28, weight: .bold))
+                Text("Live machines connect immediately. Parked managed machines show Wake. Shared machines are labeled by host.")
+                    .font(.system(size: 17))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer()
+            Button {
+                Task { await load() }
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+                    .font(.system(size: 18, weight: .semibold))
+                    .padding(.horizontal, 20).padding(.vertical, 10)
+            }
+            .buttonStyle(.bordered)
+            .disabled(loading || connecting != nil)
+        }
+        .padding(26)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
     }
 
     // Reachable + fresh first; parked/managed next; stale/offline last.
@@ -148,6 +182,7 @@ struct MachinePickerView: View {
         error = nil
         do {
             let list = try await MachineRegistry.fetch(token: store.token)
+            relaySettings = try? await MachineRegistry.fetchSettings(token: store.token)
             nowMs = Date().timeIntervalSince1970 * 1000
             devices = list
         } catch {
@@ -213,7 +248,9 @@ struct MachinePickerView: View {
 
     private func boxTarget(for d: RegisteredDevice, host: String) -> BoxTarget {
         BoxTarget(id: d.deviceId, name: d.displayName, host: host, port: d.port,
-                  managed: d.managed, machineId: d.machineId)
+                  managed: d.managed, machineId: d.machineId,
+                  relayBaseUrl: relaySettings?.relayUrl,
+                  relayPassword: relaySettings?.relayPassword)
     }
 }
 
@@ -285,6 +322,7 @@ private struct MachineRow: View {
     var body: some View {
         HStack(spacing: 20) {
             Image(systemName: platformIcon).font(.system(size: 30)).frame(width: 44)
+                .foregroundStyle(selected ? .green : .primary)
             VStack(alignment: .leading, spacing: 4) {
                 Text(device.displayName).font(.system(size: 26, weight: .semibold))
                 // A shared box is someone else's machine. Saying so on the row —
@@ -302,7 +340,12 @@ private struct MachineRow: View {
             if connecting {
                 ProgressView()
             } else {
-                statusBadge
+                HStack(spacing: 10) {
+                    if device.shared {
+                        badge("Shared", .purple)
+                    }
+                    statusBadge
+                }
             }
         }
         .padding(.horizontal, 28).padding(.vertical, 20)

@@ -100,6 +100,11 @@ private func dockerish(_ ip: String) -> Bool { ip.hasPrefix("172.17.") || ip.has
 enum MachineRegistry {
     struct DeviceList: Decodable { let devices: [RegisteredDevice] }
     struct GuestList: Decodable { let guests: [HostGuest] }
+    struct UserSettingsEnvelope: Decodable { let settings: UserSettings? }
+    struct UserSettings: Decodable {
+        let relayUrl: String?
+        let relayPassword: String?
+    }
 
     /// One guest on the HOST side of sharing (`GET /guests/list`).
     struct HostGuest: Decodable, Identifiable, Equatable {
@@ -150,6 +155,28 @@ enum MachineRegistry {
             throw AgentError(message: "Couldn't load your machines (\(http.statusCode)).")
         }
         return (try JSONDecoder().decode(DeviceList.self, from: data)).devices
+    }
+
+    /// GET /settings — per-user transport metadata. Mirrors mobile's
+    /// DeviceContext load: `/devices/list` is the inventory, `/settings` carries
+    /// the user's relay URL/password. Keeping the password out of every device
+    /// row avoids widening the device list payload, while still letting thin
+    /// clients build a relay fallback for the selected machine.
+    static func fetchSettings(token: String) async throws -> UserSettings {
+        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("settings"))
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+        req.timeoutInterval = 12
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw AgentError(message: "no response from Yaver") }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw AgentError(message: "Your TV session expired — sign in again.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw AgentError(message: "Couldn't load relay settings (\(http.statusCode)).")
+        }
+        return (try? JSONDecoder().decode(UserSettingsEnvelope.self, from: data).settings)
+            ?? UserSettings(relayUrl: nil, relayPassword: nil)
     }
 
     /// GET /guests/list — who this account has shared with. The host-side TV

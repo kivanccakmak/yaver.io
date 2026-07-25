@@ -23,6 +23,7 @@ struct DashboardView: View {
                             emptyBoxPrompt
                         }
                     } else {
+                        selectedMachinePanel
                         wakePanel
 
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 24)], spacing: 24) {
@@ -84,14 +85,15 @@ struct DashboardView: View {
             .sheet(isPresented: $showUpdateAgent) { UpdateAgentView() }
             .sheet(isPresented: $showSharedGuests) { SharedGuestsView(token: store.token) }
             .task(id: store.selectedBox?.id) {
+                await store.refreshSelectedRelaySettings()
                 guard let box = store.selectedBox else { return }
                 lifecycle.refreshReachability(box)
                 // Seamless connectivity self-heal (tvOS analog of mobile's relay
-                // self-heal): if the box isn't answering at its cached host and it
-                // isn't a parkable managed box (which has its own Wake path),
-                // re-resolve a fresh reachable address once and re-probe. The task
-                // id is the deviceId, which a host swap doesn't change, so this
-                // can't loop.
+                // self-heal): if the box isn't answering over direct/relay and
+                // it isn't a parkable managed box (which has its own Wake path),
+                // re-resolve a fresh reachable address once and re-probe. The
+                // task id is the deviceId, which a host swap doesn't change, so
+                // this can't loop.
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
                 if lifecycle.reachable == false, !(box.managed ?? false) {
                     await store.healReachability()
@@ -144,9 +146,45 @@ struct DashboardView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Yaver").font(.system(size: 48, weight: .heavy))
-            Text(store.selectedBox.map { "Remote runtime on \($0.name) · \($0.host)" } ?? "No box selected")
+            Text(store.selectedBox.map { "Remote runtime on \($0.name)" } ?? "No box selected")
                 .font(.system(size: 20)).foregroundStyle(.secondary)
         }
+    }
+
+    private var selectedMachinePanel: some View {
+        HStack(spacing: 22) {
+            Image(systemName: "server.rack")
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(.green)
+                .frame(width: 54, height: 54)
+                .background(.green.opacity(0.16), in: RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(store.selectedBox?.name ?? "Selected machine")
+                    .font(.system(size: 26, weight: .bold))
+                Text(machineDetail)
+                    .font(.system(size: 17))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Button { showPicker = true } label: {
+                Label("Switch", systemImage: "rectangle.2.swap")
+                    .font(.system(size: 19, weight: .semibold))
+                    .padding(.horizontal, 22).padding(.vertical, 10)
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private var machineDetail: String {
+        guard let box = store.selectedBox else { return "No machine selected" }
+        var parts = [box.host]
+        if box.wakeable { parts.append("wakeable") }
+        if box.relayBaseUrl?.isEmpty == false { parts.append("relay fallback") }
+        return parts.joined(separator: " · ")
     }
 
     private var emptyBoxPrompt: some View {

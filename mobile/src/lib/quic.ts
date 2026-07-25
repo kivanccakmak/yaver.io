@@ -1707,7 +1707,7 @@ export class QuicClient {
       for (const relay of this.relayServers) {
         const headers: Record<string, string> = {
           Authorization: `Bearer ${this.token}`,
-          "X-Client-Platform": Platform.OS,
+          ...this.clientPlatformHeaders(),
         };
         if (relay.password) {
           headers["X-Relay-Password"] = relay.password;
@@ -1719,7 +1719,7 @@ export class QuicClient {
     for (const tunnel of this.effectiveTunnelServers) {
       const headers: Record<string, string> = {
         Authorization: `Bearer ${this.token}`,
-        "X-Client-Platform": Platform.OS,
+        ...this.clientPlatformHeaders(),
       };
       if (tunnel.cfAccessClientId) {
         headers["CF-Access-Client-Id"] = tunnel.cfAccessClientId;
@@ -1732,14 +1732,14 @@ export class QuicClient {
     if (lanInfo) {
       push(`http://${lanInfo.ip}:${lanInfo.port}`, {
         Authorization: `Bearer ${this.token}`,
-        "X-Client-Platform": Platform.OS,
+        ...this.clientPlatformHeaders(),
       });
     }
 
     if (this.host && this.port) {
       push(`http://${this.host}:${this.port}`, {
         Authorization: `Bearer ${this.token}`,
-        "X-Client-Platform": Platform.OS,
+        ...this.clientPlatformHeaders(),
       });
     }
 
@@ -1838,6 +1838,21 @@ export class QuicClient {
    */
   async connect(host: string, port: number, token: string, deviceId: string, lanIps?: string[], sessionTunnels?: TunnelServer[], connectionPreferences?: ConnectionPreference[]): Promise<void> {
     void this.hydrateTtsTaskMode(); // apply the persisted "TTS mode" flag to tasks created this session
+    if (this._connectingInProgress && this.deviceId === deviceId) {
+      // Join the in-flight same-device attempt. Do not call primeTarget()
+      // here: it rewrites host/port before attemptConnect() notices another
+      // race is already running. That exact ordering let an auto-connect
+      // resume overwrite a freshly-won Tailscale path with a stale LAN IP,
+      // so the UI was "Connected" while Apps polling hit 192.168.x and found
+      // no projects. Token updates are safe and useful; transport coordinates
+      // belong to the race already in progress.
+      this.token = token;
+      await this.waitForConnectingAttempt(15000);
+      if (this._connectionState !== "connected") {
+        throw new Error(this._lastTransportError || "Could not reach agent (direct, tunnel, or via relay)");
+      }
+      return;
+    }
     this.primeTarget(host, port, token, deviceId, lanIps, sessionTunnels, connectionPreferences);
     this.activeRelayUrl = null;
     this.activeRelayPassword = null;
@@ -1855,6 +1870,13 @@ export class QuicClient {
     // so the caller can show the real reason and stop the reconnect chatter.
     if (this._connectionState !== "connected") {
       throw new Error(this._lastTransportError || "Could not reach agent (direct, tunnel, or via relay)");
+    }
+  }
+
+  private async waitForConnectingAttempt(timeoutMs: number): Promise<void> {
+    const started = Date.now();
+    while (this._connectingInProgress && Date.now() - started < timeoutMs) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
 
@@ -3029,7 +3051,7 @@ export class QuicClient {
     };
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/projects`, {
+    const res = await this.fetchAgentPath(`/projects`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to list projects: ${res.status}`);
@@ -3139,10 +3161,14 @@ export class QuicClient {
       discovering?: boolean;
       partiallyReady?: boolean;
       lastCompletedAt?: string;
+      scanMs?: number;
+      timedOut?: boolean;
+      permDenied?: number;
+      scanError?: string;
     };
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/projects/mobile`, {
+    const res = await this.fetchAgentPath(`/projects/mobile`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to list mobile projects: ${res.status}`);
@@ -3180,6 +3206,10 @@ export class QuicClient {
         discovering: !!data.scanning,
         partiallyReady: !!data.scanning && projects.length > 0,
         lastCompletedAt: data.scannedAt,
+        scanMs: typeof data.scanMs === "number" ? data.scanMs : undefined,
+        timedOut: !!data.timedOut,
+        permDenied: typeof data.permDenied === "number" ? data.permDenied : undefined,
+        scanError: typeof data.scanError === "string" ? data.scanError : undefined,
       },
     };
   }
@@ -3209,6 +3239,17 @@ export class QuicClient {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to refresh mobile projects: ${res.status}`);
+    return res.json();
+  }
+
+  /** Stop a stuck mobile-project scan. The next refresh starts a fresh bounded scan. */
+  async stopMobileProjectsScan(): Promise<{ ok?: boolean; message?: string }> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/projects/mobile`, {
+      method: "DELETE",
+      headers: this.authHeaders,
+    });
+    if (!res.ok) throw new Error(`Failed to stop mobile project scan: ${res.status}`);
     return res.json();
   }
 
@@ -6100,10 +6141,19 @@ export class QuicClient {
 
   // ── Private helpers ────────────────────────────────────────────────
 
+  private clientPlatformHeaders(): Record<string, string> {
+    // Browser/RN-web is used by the Selenium harness and talks to already
+    // installed agents in the field. Older agents and relays did not include
+    // X-Client-Platform in their CORS allowlist, so sending it from a browser
+    // makes the preflight fail before /health reaches the agent. Native mobile
+    // has no browser CORS preflight and keeps sending the platform marker.
+    return Platform.OS === "web" ? {} : { "X-Client-Platform": Platform.OS };
+  }
+
   private get authHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.token}`,
-      'X-Client-Platform': Platform.OS, // 'ios' or 'android'
+      ...this.clientPlatformHeaders(),
     };
     if (this.activeRelayUrl && this.activeRelayPassword) {
       headers['X-Relay-Password'] = this.activeRelayPassword;
@@ -7316,6 +7366,20 @@ export class QuicClient {
     return false;
   }
 
+  private async fetchAgentPath(path: string, init: RequestInit = {}): Promise<Response> {
+    const request = () => fetch(`${this.baseUrl}${path}`, init);
+    try {
+      return await request();
+    } catch (err) {
+      if (this._connectionMode === "direct" && this.relayServers.length > 0) {
+        appLog("warn", `[transport] direct ${path} failed — trying relay fallback before surfacing the error`);
+        const switched = await this.tryRelayFallback();
+        if (switched) return request();
+      }
+      throw err;
+    }
+  }
+
   /** Ping each relay server's /health to track availability. */
   private async checkRelayHealth(): Promise<void> {
     const client = { timeout: 8000 };
@@ -7345,12 +7409,24 @@ export class QuicClient {
   async getDevServerStatus(): Promise<DevServerStatus | null> {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
-      const res = await fetch(`${this.baseUrl}/dev/status`, {
+      const res = await this.fetchAgentPath(`/dev/status`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return null;
       return await res.json();
-    } catch { return null; }
+    } catch (err) {
+      return {
+        framework: "",
+        running: false,
+        serving: false,
+        servingLabel: "Agent route is unreachable",
+        stopActionLabel: "Stop Serving",
+        port: 0,
+        bundleUrl: "",
+        error: err instanceof Error ? err.message : String(err),
+        hotReload: false,
+      };
+    }
   }
 
   /** Get the persisted dev preview target from the agent. */
@@ -9378,7 +9454,7 @@ export class QuicClient {
             headers: {
               Authorization: `Bearer ${userBearer}`,
               "Content-Type": "application/json",
-              "X-Client-Platform": Platform.OS,
+              ...this.clientPlatformHeaders(),
             },
             body,
           },
@@ -9438,7 +9514,7 @@ export class QuicClient {
             headers: {
               Authorization: `Bearer ${this.token}`,
               "Content-Type": "application/json",
-              "X-Client-Platform": Platform.OS,
+              ...this.clientPlatformHeaders(),
             },
             body,
           },
@@ -9483,7 +9559,7 @@ export class QuicClient {
           method: "POST",
           headers: {
             Authorization: `Bearer ${userBearer}`,
-            "X-Client-Platform": Platform.OS,
+            ...this.clientPlatformHeaders(),
           },
         }, 12000);
         if (res.ok) {
@@ -9559,7 +9635,7 @@ export class QuicClient {
     const userBearer = this.token;
     const baseHeaders: Record<string, string> = {
       Authorization: `Bearer ${userBearer}`,
-      "X-Client-Platform": Platform.OS,
+      ...this.clientPlatformHeaders(),
     };
 
     const targets: Array<{ url: string; headers: Record<string, string>; label: string }> = [];
@@ -9670,7 +9746,7 @@ export class QuicClient {
     const baseHeaders: Record<string, string> = {
       Authorization: `Bearer ${userBearer}`,
       "Content-Type": "application/json",
-      "X-Client-Platform": Platform.OS,
+      ...this.clientPlatformHeaders(),
     };
 
     // Relay first — works through arbitrary NATs. Most reliable for

@@ -92,7 +92,7 @@ func TestMobileInsertBroadcasts(t *testing.T) {
 	sess := s.blackboxMgr.GetOrCreateSession("dev-1", "ios", "yaver-mobile")
 	ch := sess.SubscribeCommands()
 
-	body := bytes.NewReader([]byte(`{"app":"sfmg"}`))
+	body := bytes.NewReader([]byte(`{"app":"sfmg","projectPath":"/Users/test/Workspace/sfmg","lane":"browser"}`))
 	req := httptest.NewRequest(http.MethodPost, "/mobile/insert", body)
 	rr := httptest.NewRecorder()
 	s.handleMobileInsert(rr, req)
@@ -107,6 +107,12 @@ func TestMobileInsertBroadcasts(t *testing.T) {
 		}
 		if app, _ := cmd.Data["app"].(string); app != "sfmg" {
 			t.Fatalf("data.app: got %v", cmd.Data["app"])
+		}
+		if path, _ := cmd.Data["projectPath"].(string); path != "/Users/test/Workspace/sfmg" {
+			t.Fatalf("data.projectPath: got %v", cmd.Data["projectPath"])
+		}
+		if lane, _ := cmd.Data["lane"].(string); lane != "browser" {
+			t.Fatalf("data.lane: got %v", cmd.Data["lane"])
 		}
 	default:
 		t.Fatal("expected command on the subscribed channel")

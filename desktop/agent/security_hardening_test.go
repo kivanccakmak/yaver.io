@@ -41,6 +41,9 @@ func TestSecurityCORSAllowsFirstPartyAndNoOriginClients(t *testing.T) {
 	if got := resp.Header().Get("Access-Control-Allow-Origin"); got != "https://dashboard.yaver.io" {
 		t.Fatalf("expected echoed first-party origin, got %q", got)
 	}
+	if got := resp.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "X-Client-Platform") {
+		t.Fatalf("expected platform header to be allowed for RN-web/Selenium clients, got %q", got)
+	}
 
 	req = httptest.NewRequest(http.MethodGet, "/health", nil)
 	resp = httptest.NewRecorder()

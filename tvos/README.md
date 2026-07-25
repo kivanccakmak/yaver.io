@@ -14,10 +14,14 @@ Yaver agent over the **same** surfaces everything else uses:
 - **Auth:** RFC 8628 device-code flow against Convex (`POST /auth/device-code`,
   `GET /auth/device-code/poll`) — identical to `mobile/src/lib/tvSignIn.ts` and `yaver auth`.
   The TV shows a QR + short code; an already-signed-in phone approves it.
-- **Control:** `POST http://<box>:18080/ops` with `{ "verb": ..., "payload": ..., "machine": "local" }`
-  and `Authorization: Bearer <session-token>` — identical to `mobile/src/lib/appletvClient.ts`.
-  The tvOS app calls `info`, `status`, `runner`, `voice`, `reload`, plus the existing
-  `appletv_*` / `capture_*` verbs.
+- **Control:** direct LAN first, relay fallback when account settings provide relay
+  metadata for the selected machine. Ops calls use `POST /ops` with
+  `{ "verb": ..., "payload": ..., "machine": "local" }`
+  and `Authorization: Bearer <session-token>` — identical in spirit to
+  `mobile/src/lib/appletvClient.ts`. The same fallback is used for `/projects`, `/tasks`,
+  `/feedback`, `/runner/session/turn`, `/droid/frame`, `/capture/frame.jpg`, and
+  `/vibing/preview/*`, plus `/health`, so the picker does not say "connected" while the
+  actual surface is LAN-only.
 
 No new backend, no new agent code. The agent already serves every verb this app calls.
 
@@ -27,13 +31,24 @@ Shipped slice = the surfaces that are genuinely a 10-foot experience:
 
 1. **Runtime control room** — machine status, dev-server status, Claude/Codex agent sessions,
    STT/TTS readiness, QR-based OAuth handoff, and hot-reload/Hermes-push controls
-   (`info`, `status`, `runner`, `runner_auth`, `voice`, `reload`).
-2. **Apple TV remote** — D-pad / transport / now-playing card (`appletv_*` verbs).
-3. **Capture / now-playing** view of the home capture card (`capture_*`).
+   (`info`, `status`, `runner`, `runner_auth`, `voice`, `reload`). Its Live Room band follows
+   the shared `runtime_turns` queue so commands started from phone, watch, car, Android
+   remote, or TV are visible on the television.
+2. **Machine picker + wake** — account machines from `GET /devices/list`, selected-machine
+   status, live-first auto-connect, shared-machine labels, and managed-box Wake.
+3. **Projects + preview** — project list from `/projects`; web projects start through
+   `POST /dev/start` and are captured headlessly through `/vibing/preview/*`; Android/RN
+   previews watch the redroid frame stream.
+4. **Live session** — `runtime_turn` when available, with `/runner/session/turn` fallback,
+   so the TV can drive an existing Codex/Claude session and render the pane/options.
+5. **Tasks and feedback** — glanceable task/session status and SDK feedback reports.
+6. **Apple TV remote** — D-pad / transport / now-playing card (`appletv_*` verbs).
+7. **Capture / now-playing** view of the home capture card (`capture_*`).
 
-Dense code authoring, raw logs, and text editing are intentionally **not** on tvOS. The Apple TV
-is the wall display/control surface while coding continues from MacBook terminal, Claude Code,
-Codex, phone, or web. tvOS can trigger reloads and show whether the remote runtime is alive.
+Dense code editing is still intentionally **not** on tvOS. The Apple TV is the wall
+display/control surface while coding continues from MacBook terminal, Claude Code, Codex,
+phone, or web. It can drive short prompts, choose session options, trigger reloads, and show
+what the remote runtime is doing.
 
 ## QR auth handoff
 
@@ -53,26 +68,47 @@ phone-mediated handoff shape.
 
 ## Transport note
 
-This scaffold targets a box reachable on the **same LAN** (the common case: an Apple TV and a
-Raspberry Pi running `yaver serve` on the home network). Enter or discover the box host once;
-the bearer token from device-code auth authorizes `/ops`. Relay (QUIC) fallback for off-LAN
-boxes is a documented follow-up — the mobile app's `quicClient.callOpsOnDevice` is the
-reference; tvOS would need a Swift QUIC client or a relay HTTP shim.
+This app connects direct-first: LAN host/port when available, then the relay HTTP proxy for
+machines selected from the account registry. tvOS loads the user's relay URL/password from
+`GET /settings`, attaches it to the cached `BoxTarget`, and uses the same endpoint builder for
+ops, REST, stream frames, runtime turns, and health probes. tvOS still does not embed a Swift
+QUIC client; the fallback is the same HTTPS relay proxy shape used by browser-friendly
+endpoints. Manual "type an address" entries remain LAN-only because they have no account
+relay row.
 
 ## Creating the Xcode target (one-time)
 
-The repo intentionally does **not** check in an `.xcodeproj` (generated, churny). To build:
+The repo intentionally does **not** check in an `.xcodeproj` (generated, churny) — it is
+generated from `tvos/project.yml` by XcodeGen. Do **not** hand-build the target in Xcode;
+edit `project.yml` instead.
 
-1. Xcode → New Project → **tvOS App**, SwiftUI lifecycle, name `YaverTV`,
-   bundle id `io.yaver.tv`, team `5SJZ4KA39A` (same as the iOS app).
-2. Delete the generated `ContentView.swift` / `App.swift`; add every file under
-   `tvos/YaverTV/` to the target (drag the folder in, "Create groups").
-3. Set `Info.plist` to the one in `tvos/YaverTV/Info.plist` (or merge its keys).
-4. Build & run on the tvOS Simulator or a real Apple TV.
-5. Sign-in: scan the QR with the Yaver phone app, approve — the TV gets a 1-year session.
+```bash
+cd tvos && xcodegen generate     # ALWAYS run this before a build or deploy
+```
 
-Submission mirrors the iOS path (App Store Connect, same team/API key). The current staged
-tvOS version has build `4`, export compliance set, and a 1920x1080 Apple TV screenshot uploaded.
+Because the `.xcodeproj` is gitignored and generated, a local one goes stale **silently**:
+it keeps compiling whatever file list it was generated with, so a Swift file added by another
+commit produces "cannot find X in scope" against code that is plainly on disk. Regenerating is
+the fix, and it is cheap — make it reflexive.
+
+Build & run on the tvOS Simulator or a real Apple TV. Sign-in: scan the QR with the Yaver
+phone app, approve — the TV gets a 1-year session.
+
+Submission mirrors the iOS path (App Store Connect, same team/API key), and the bundle id is
+`io.yaver.mobile` — the **same** as the iPhone app, on purpose, so Apple treats TV/iOS/visionOS
+as one Universal Purchase app record with separate per-platform build streams.
+
+```bash
+$(yaver vault env --project mobile)   # or: source ~/.appstoreconnect/yaver.env
+./scripts/deploy-tvos.sh --upload
+```
+
+The build number is chosen for you: `--upload` asks App Store Connect for the highest existing
+**TV_OS** build and uses that + 1 (`scripts/asc-next-build.sh` → `scripts/asc-max-build.py`).
+`project.yml` pins `CURRENT_PROJECT_VERSION: "1"`, which is why this lookup matters — without
+it every upload archives for minutes and is then rejected as a duplicate, burning a slot of the
+~15-20/day TestFlight cap. Set `TVOS_BUILD_NUMBER` only to deliberately override, and it must
+exceed the current ASC max.
 
 ## File map
 

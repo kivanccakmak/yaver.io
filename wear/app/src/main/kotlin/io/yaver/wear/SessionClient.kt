@@ -40,9 +40,13 @@ import java.util.concurrent.TimeUnit
  */
 class SessionClient(
     /** e.g. "http://192.168.1.50:18080" — host:port of the box on the LAN. */
-    private val boxBaseUrl: String,
+    private val endpointConfig: StandaloneEndpointConfig,
     private val bearerToken: String,
 ) {
+    constructor(boxBaseUrl: String, bearerToken: String) : this(
+        StandaloneEndpointConfig(boxBaseUrl = boxBaseUrl),
+        bearerToken,
+    )
 
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
@@ -95,36 +99,53 @@ class SessionClient(
                 if (choice != null) put("choice", choice)
             }.toString().toRequestBody(JSON)
 
+            post("/runner/session/turn", body, extraOk = setOf(409))?.let { mapSessionResponse(it) }
+                ?: WatchProtocol.Reply.Error("I couldn't reach your box.", boxUnreachable = true)
+        } catch (e: IllegalStateException) {
+            WatchProtocol.Reply.Error(e.message ?: "That didn't work.")
+        } catch (e: Throwable) {
+            // Connection refused / timeout — the box is unreachable (likely a
+            // self-parked managed box). Flag it so the wrist offers "Wake".
+            WatchProtocol.Reply.Error(e.message ?: "I couldn't reach your box.", boxUnreachable = true)
+        }
+    }
+
+    private fun post(path: String, body: okhttp3.RequestBody, extraOk: Set<Int> = emptySet()): String? {
+        var lastUnreachable = true
+        for (endpoint in endpointConfig.endpoints(path)) {
             val request = Request.Builder()
-                .url(boxBaseUrl.trimEnd('/') + "/runner/session/turn")
+                .url(endpoint.url)
                 .header("Authorization", "Bearer $bearerToken")
+                .header("X-Yaver-Surface", "watch")
+                .apply {
+                    if (endpoint.relay && endpointConfig.relayPassword.isNotEmpty()) {
+                        header("X-Relay-Password", endpointConfig.relayPassword)
+                    }
+                }
                 .post(body)
                 .build()
 
-            http.newCall(request).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
-                // 409 is the guards firing — the body still carries
-                // awaitingChoice + options + pane, so decode it the same as 200.
-                if (!resp.isSuccessful && resp.code != 409) {
-                    val err = try {
-                        JSONObject(text).optString("error", "")
-                    } catch (_: Throwable) { "" }
-                    return@use WatchProtocol.Reply.Error(
-                        if (err.isNotEmpty()) err
-                        else when (resp.code) {
-                            401 -> "Sign in again."
-                            in 500..599 -> "Your box hit an error."
-                            else -> "I couldn't reach your box."
-                        }
-                    )
+            try {
+                http.newCall(request).execute().use { resp ->
+                    val text = resp.body?.string().orEmpty()
+                    if (resp.isSuccessful || extraOk.contains(resp.code)) return text
+                    val err = try { JSONObject(text).optString("error", "") } catch (_: Throwable) { "" }
+                    if (err.isNotEmpty()) {
+                        throw IllegalStateException(err)
+                    }
+                    if (resp.code in 400..499) {
+                        throw IllegalStateException(if (resp.code == 401) "Sign in again." else "I couldn't reach your box.")
+                    }
+                    lastUnreachable = false
                 }
-                mapSessionResponse(text)
+            } catch (e: IllegalStateException) {
+                throw e
+            } catch (_: Throwable) {
+                lastUnreachable = true
             }
-        } catch (_: Throwable) {
-            // Connection refused / timeout — the box is unreachable (likely a
-            // self-parked managed box). Flag it so the wrist offers "Wake".
-            WatchProtocol.Reply.Error("I couldn't reach your box.", boxUnreachable = true)
         }
+        if (lastUnreachable) return null
+        throw IllegalStateException("Your box hit an error.")
     }
 
     /** Map the session endpoint's JSON response → WatchProtocol.Reply. */

@@ -29,7 +29,7 @@ function ok(cond: boolean, msg: string) {
 const methodsOf = (file: string): string[] =>
   [...readFileSync(join(__dirname, file), "utf8").matchAll(/^ {2}([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/gm)]
     .map((m) => m[1])
-    .filter((n) => n !== "constructor")
+    .filter((n) => n !== "constructor" && !["if", "for", "while", "switch", "catch"].includes(n))
     .sort();
 
 {

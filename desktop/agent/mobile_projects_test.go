@@ -355,6 +355,7 @@ func TestScanMobileProjects_DiscoversNestedFrameworksInsideYaverRepo(t *testing.
 
 	flutterDir := filepath.Join(repo, "tests", "fixtures", "native-flutter-app")
 	writeManifestFile(t, filepath.Join(flutterDir, "pubspec.yaml"), "name: yaver_native_flutter_app\n")
+	writeManifestFile(t, filepath.Join(flutterDir, "lib", "main.dart"), "void main() {}\n")
 
 	swiftDir := filepath.Join(repo, "tests", "fixtures", "native-ios-swift")
 	writeManifestFile(t, filepath.Join(swiftDir, "Package.swift"), "// swift-tools-version:5.9\n")
@@ -675,6 +676,7 @@ func TestScanMobileProjects_DiscoversStandaloneTodoRepos(t *testing.T) {
 	flutter := filepath.Join(workspace, "yaver-todo-flutter")
 	mustMkdirAllMobileScan(t, filepath.Join(flutter, ".git"))
 	writeManifestFile(t, filepath.Join(flutter, "pubspec.yaml"), "name: yaver_todo_flutter\n")
+	writeManifestFile(t, filepath.Join(flutter, "lib", "main.dart"), "void main() {}\n")
 
 	swift := filepath.Join(workspace, "yaver-todo-swift")
 	mustMkdirAllMobileScan(t, filepath.Join(swift, ".git"))

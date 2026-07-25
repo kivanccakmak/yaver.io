@@ -100,6 +100,20 @@ APPLE_TEAM_ID="${APPLE_TEAM_ID:?APPLE_TEAM_ID unset}"
 TVOS_PROVISIONING_PROFILE_SPECIFIER="${TVOS_PROVISIONING_PROFILE_SPECIFIER-Yaver TVOS_APP_STORE profile}"
 TVOS_CODE_SIGN_IDENTITY="${TVOS_CODE_SIGN_IDENTITY:-Apple Distribution}"
 
+# Build number. Without this, CURRENT_PROJECT_VERSION comes from project.yml,
+# where it is the literal "1" — so an --upload run archives for minutes and is
+# then REJECTED as a duplicate build number, burning a slot of the ~15-20/day
+# TestFlight cap. Bump from max(ASC, local) + 1 like deploy-testflight.sh.
+# TVOS_BUILD_NUMBER still wins when set explicitly.
+if [ -z "$BUILD_NUMBER" ]; then
+  # shellcheck source=scripts/asc-next-build.sh
+  . "$ROOT/scripts/asc-next-build.sh"
+  TVOS_LOCAL_BUILD="$(sed -n 's/.*CURRENT_PROJECT_VERSION: *"\{0,1\}\([0-9][0-9]*\)"\{0,1\}.*/\1/p' "$TVOS_DIR/project.yml" | head -1)"
+  BUILD_NUMBER="$(asc_next_build TV_OS "${TVOS_LOCAL_BUILD:-0}")"
+  echo "tvOS build number: $BUILD_NUMBER"
+  EXTRA_SETTINGS+=(CURRENT_PROJECT_VERSION="$BUILD_NUMBER")
+fi
+
 ls -la "$ARCHIVE_PATH" "$EXPORT_PATH" "$DERIVED_DATA_PATH" 2>/dev/null || true
 rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH"
 

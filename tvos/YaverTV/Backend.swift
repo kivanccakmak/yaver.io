@@ -19,7 +19,11 @@ enum Backend {
     /// This frontend's surface, sent as X-Yaver-Surface on every request so the
     /// agent can adapt per surface (tv vs watch vs car vs vision). See the Go
     /// agent's surface.go.
-    static let surface = "tv"
+    static var surface: String {
+        let configured = Bundle.main.object(forInfoDictionaryKey: "YaverNativeSurface") as? String
+        let trimmed = configured?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "tv" : trimmed
+    }
 }
 
 struct DeviceCodeStart: Decodable {

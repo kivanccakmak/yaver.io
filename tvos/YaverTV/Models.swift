@@ -395,4 +395,26 @@ struct BoxTarget: Codable, Identifiable, Equatable {
         }
         return out
     }
+
+    func requestEndpoints(path rawPath: String) -> [(url: URL, relay: Bool)] {
+        let path = rawPath.hasPrefix("/") ? rawPath : "/\(rawPath)"
+        var out: [(url: URL, relay: Bool)] = []
+        if !host.isEmpty, let lan = URL(string: "http://\(host):\(port)\(path)") {
+            out.append((lan, false))
+        }
+        if let base = relayBaseUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !base.isEmpty, !id.isEmpty {
+            let trimmed = base.hasSuffix("/") ? String(base.dropLast()) : base
+            let relayPath = "\(trimmed)/d/\(id)\(path)"
+            if var comps = URLComponents(string: relayPath) {
+                if let pw = relayPassword, !pw.isEmpty {
+                    var items = comps.queryItems ?? []
+                    items.append(URLQueryItem(name: "__rp", value: pw))
+                    comps.queryItems = items
+                }
+                if let relay = comps.url { out.append((relay, true)) }
+            }
+        }
+        return out
+    }
 }

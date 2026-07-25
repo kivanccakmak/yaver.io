@@ -20,6 +20,10 @@ export type DeviceAgentContext = {
   headers: Record<string, string>;
 };
 
+function clientPlatformHeaders(): Record<string, string> {
+  return Platform.OS === "web" ? {} : { "X-Client-Platform": Platform.OS };
+}
+
 /** Returns the base URL + headers to reach `device`'s agent, or null when we
  *  have no token or no usable route (no relay and no host). Callers append the
  *  agent path, e.g. `fetch(`${ctx.baseUrl}/mesh/up`, { headers: ctx.headers })`. */
@@ -32,7 +36,7 @@ export function deviceAgentContext(
   if (relay?.httpUrl) {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
-      "X-Client-Platform": Platform.OS,
+      ...clientPlatformHeaders(),
     };
     if (relay.password) headers["X-Relay-Password"] = relay.password;
     return {
@@ -45,7 +49,7 @@ export function deviceAgentContext(
     baseUrl: `http://${device.host}:${device.port || 18080}`,
     headers: {
       Authorization: `Bearer ${token}`,
-      "X-Client-Platform": Platform.OS,
+      ...clientPlatformHeaders(),
     },
   };
 }

@@ -55,5 +55,7 @@
 	     here is what stops every upload from asking again. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>YaverNativeSurface</key>
+	<string>vision</string>
 </dict>
 </plist>

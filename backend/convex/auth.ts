@@ -27,6 +27,8 @@ type OAuthProvider =
   // hosted OAuth providers.
   | "oidc";
 
+export type SessionScope = "full" | "machine" | "tv" | "watch" | "vision" | "spatial";
+
 // ── Helpers ──────────────────────────────────────────────────────────
 
 /** SHA-256 hex digest of a string. Works in Convex runtime (Web Crypto). */
@@ -574,10 +576,10 @@ export async function validateSessionInternal(
     platformRole?: "admin";
   };
   sessionId: Id<"sessions">;
-  /** Auth scope: "full" = a normal owner login; "machine" = a managed box's
-   *  token; "tv" = a lean-back TV surface token. Undefined in the row means
-   *  "full" (backward-compatible). */
-  scope: "full" | "machine" | "tv";
+  /** Auth scope: "full" = a normal owner login; companion scopes are
+   *  route-limited surface tokens. Undefined in the row means "full"
+   *  (backward-compatible). */
+  scope: SessionScope;
 } | null> {
   let session = await ctx.db
     .query("sessions")
@@ -1827,6 +1829,7 @@ export const createSdkToken = mutation({
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.sessionTokenHash);
     if (!session) throw new Error("Unauthorized");
+    if (session.scope && session.scope !== "full") throw new Error("Full session required");
 
     const existing = await ctx.db
       .query("sdkTokens")

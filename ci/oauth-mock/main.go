@@ -1,10 +1,15 @@
 package main
 
 import (
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"strconv"
@@ -12,7 +17,17 @@ import (
 	"time"
 )
 
+const mockKeyID = "oauth-mock-rs256"
+
+var signingKey *rsa.PrivateKey
+
 func main() {
+	var err error
+	signingKey, err = rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		log.Fatalf("generate signing key: %v", err)
+	}
+
 	port := os.Getenv("PORT")
 	if strings.TrimSpace(port) == "" {
 		port = "4010"
@@ -21,6 +36,19 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		pub := signingKey.Public().(*rsa.PublicKey)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"keys": []map[string]any{{
+				"kty": "RSA",
+				"use": "sig",
+				"kid": mockKeyID,
+				"alg": "RS256",
+				"n":   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+				"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
+			}},
+		})
 	})
 
 	mux.HandleFunc("/google/token", func(w http.ResponseWriter, r *http.Request) {
@@ -45,10 +73,12 @@ func main() {
 	mux.HandleFunc("/microsoft/token", func(w http.ResponseWriter, r *http.Request) {
 		suffix := requestSuffix(r, "microsoft")
 		identity := providerIdentity("microsoft", suffix)
+		audience := formValueOrDefault(r, "client_id", "mock-microsoft-client")
 		writeJSON(w, http.StatusOK, map[string]any{
 			"access_token": providerToken("microsoft", suffix),
 			"token_type":   "Bearer",
-			"id_token": jwt(map[string]any{
+			"id_token": signedJWT(map[string]any{
+				"aud":                audience,
 				"sub":                identity.ID,
 				"oid":                identity.ID,
 				"email":              identity.Email,
@@ -70,12 +100,13 @@ func main() {
 	mux.HandleFunc("/apple/token", func(w http.ResponseWriter, r *http.Request) {
 		suffix := requestSuffix(r, "apple")
 		identity := providerIdentity("apple", suffix)
+		audience := formValueOrDefault(r, "client_id", "com.yaver.web")
 		writeJSON(w, http.StatusOK, map[string]any{
 			"access_token": providerToken("apple", suffix),
 			"token_type":   "Bearer",
-			"id_token": jwt(map[string]any{
+			"id_token": signedJWT(map[string]any{
 				"iss":              "https://appleid.apple.com",
-				"aud":              "com.yaver.web",
+				"aud":              audience,
 				"sub":              identity.ID,
 				"email":            identity.Email,
 				"email_verified":   true,
@@ -132,11 +163,24 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
 
-func jwt(claims map[string]any) string {
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+func signedJWT(claims map[string]any) string {
+	now := time.Now().Unix()
+	if _, ok := claims["iat"]; !ok {
+		claims["iat"] = now
+	}
+	if _, ok := claims["exp"]; !ok {
+		claims["exp"] = now + 300
+	}
+	header := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"alg":"RS256","typ":"JWT","kid":%q}`, mockKeyID)))
 	body, _ := json.Marshal(claims)
 	payload := base64.RawURLEncoding.EncodeToString(body)
-	return fmt.Sprintf("%s.%s.", header, payload)
+	input := fmt.Sprintf("%s.%s", header, payload)
+	sum := sha256.Sum256([]byte(input))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, signingKey, crypto.SHA256, sum[:])
+	if err != nil {
+		panic(err)
+	}
+	return fmt.Sprintf("%s.%s", input, base64.RawURLEncoding.EncodeToString(sig))
 }
 
 type identityFixture struct {
@@ -149,6 +193,15 @@ type identityFixture struct {
 func requestSuffix(r *http.Request, provider string) string {
 	_ = r.ParseForm()
 	return normalizeSuffix(extractSuffix(r.Form.Get("code"), provider))
+}
+
+func formValueOrDefault(r *http.Request, key, fallback string) string {
+	_ = r.ParseForm()
+	value := strings.TrimSpace(r.Form.Get(key))
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func bearerSuffix(r *http.Request, provider string) string {

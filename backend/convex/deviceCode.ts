@@ -144,13 +144,35 @@ export const getDeviceCodeEvent = query({
   },
 });
 
-function isTVCode(code: {
+export type SessionScope = "full" | "machine" | "tv" | "watch" | "vision" | "spatial";
+
+export function companionSessionScopeForDeviceCode(code: {
   platform?: string;
   environment?: string;
-}): boolean {
+}): Exclude<SessionScope, "machine"> {
   const platform = (code.platform || "").toLowerCase();
   const env = (code.environment || "").toLowerCase();
-  return env === "tv" || platform === "tvos" || platform === "androidtv" || platform === "android-tv";
+  if (env === "watch" || platform === "watchos" || platform === "wearos" || platform === "wear-os" || platform === "wear") {
+    return "watch";
+  }
+  if (
+    env === "vision" ||
+    env === "xr" ||
+    env === "ar" ||
+    env === "vr" ||
+    env === "spatial" ||
+    platform === "visionos" ||
+    platform === "androidxr" ||
+    platform === "android-xr" ||
+    platform === "quest" ||
+    platform === "meta-quest"
+  ) {
+    return env === "spatial" ? "spatial" : "vision";
+  }
+  if (env === "tv" || platform === "tvos" || platform === "androidtv" || platform === "android-tv") {
+    return "tv";
+  }
+  return "full";
 }
 
 async function mintTokenForAuthorizedCode(
@@ -190,7 +212,7 @@ async function mintTokenForAuthorizedCode(
     deviceId: code.deviceId,
     expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
     createdAt: Date.now(),
-    scope: isTVCode(code) ? "tv" as const : "full" as const,
+    scope: companionSessionScopeForDeviceCode(code),
   });
   await ctx.db.patch(code._id, { claimedAt: Date.now() });
   return { status: "authorized" as const, token };

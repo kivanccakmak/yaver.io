@@ -72,11 +72,11 @@ struct WebPreviewStreamView: View {
     private func run() async {
         guard let client = store.client() else { error = "No machine selected"; return }
         do {
-            status = "Booting the web server…"
-            let server = try await client.startWebServer()
-            // Prefer the server's own URL; fall back to a conventional dev port.
-            let target = server.webUrl.map { "http://\(store.selectedBox?.host ?? "127.0.0.1"):\(server.port ?? 0)\($0)" }
-                ?? "http://127.0.0.1:3000"
+            status = "Starting \(project.name)…"
+            let dev = try await client.startDevServer(for: project)
+            status = "Booting the browser lane…"
+            let server = try await maybeStartExpoWebSibling(client)
+            let target = captureTarget(dev: dev, server: server)
             status = "Capturing at \(form.rawValue) size…"
             try await client.startWebPreview(project: project.name, targetUrl: target,
                                               width: form.width, height: form.height)
@@ -104,12 +104,42 @@ struct WebPreviewStreamView: View {
         }
     }
 
+    /// URL for the headless browser running ON THE BOX, not for the Apple TV.
+    ///
+    /// `/dev-web/` is proxied through the local agent and intentionally needs no
+    /// bearer header, so Chromium can load it directly. The previous URL mixed
+    /// the TV-visible LAN host with the sibling process port and kept the
+    /// `/dev-web/` path, which points at nothing.
+    private func maybeStartExpoWebSibling(_ client: AgentClient) async throws -> AgentClient.WebPreviewStart? {
+        let fw = (project.framework ?? "").lowercased()
+        guard fw == "expo" || fw == "react-native" || fw == "reactnative" || fw == "rn" else {
+            return nil
+        }
+        return try await client.startWebServer()
+    }
+
+    private func captureTarget(dev: AgentClient.DevStartResult, server: AgentClient.WebPreviewStart?) -> String {
+        if let webUrl = server?.webUrl, webUrl.hasPrefix("/") {
+            return "http://127.0.0.1:\(Backend.agentPort)\(webUrl)"
+        }
+        if let webUrl = server?.webUrl, webUrl.hasPrefix("http://") || webUrl.hasPrefix("https://") {
+            return webUrl
+        }
+        if let url = dev.url, url.hasPrefix("http://") || url.hasPrefix("https://") {
+            return url
+        }
+        if let port = dev.port ?? server?.port, port > 0 {
+            return "http://127.0.0.1:\(port)"
+        }
+        return "http://127.0.0.1:3000"
+    }
+
     private func rebuild() async {
         guard let client = store.client() else { return }
         rebuilding = true
         defer { rebuilding = false }
         do {
-            _ = try await client.call("reload", ["mode": "dev"])
+            _ = try await client.reload(mode: "dev", workDir: project.path)
         } catch {
             self.error = error.localizedDescription
         }

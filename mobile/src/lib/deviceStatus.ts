@@ -252,11 +252,13 @@ export async function probeMobileDeviceStatus(
   let relayAttempts = 0;
   let passwordedRelayAttempts = 0;
   if (token && device.id) {
+    const platformHeaders: Record<string, string> =
+      Platform.OS === "web" ? {} : { "X-Client-Platform": Platform.OS };
     for (const relay of quicClient.getRelayServers()) {
       relayAttempts += 1;
       const headers: Record<string, string> = {
         Authorization: `Bearer ${token}`,
-        "X-Client-Platform": Platform.OS,
+        ...platformHeaders,
       };
       if (relay.password) {
         headers["X-Relay-Password"] = relay.password;

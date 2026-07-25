@@ -17,6 +17,7 @@ import {
   normalizeBillingProduct,
   productForSubscriptionPlan,
   promptFreeMetadataBodyDeniedReason,
+  scopedSessionDeniedMessage,
   unsupportedProviderResourceDeniedMessage,
   validateCustomerAutoParkRequest,
   yaverManagedMachineMutationDeniedReason,
@@ -227,6 +228,14 @@ test("machine-scoped tokens remain denied on account-level cloud operations", ()
   assert.equal(
     machineScopeDeniedMessage(),
     "This token is machine-scoped and cannot perform account-level operations.",
+  );
+  assert.equal(
+    scopedSessionDeniedMessage("watch"),
+    "Watch-scoped tokens cannot perform account-level operations. Open Yaver on your phone or desktop to continue.",
+  );
+  assert.equal(
+    scopedSessionDeniedMessage("vision"),
+    "Vision-scoped tokens cannot perform account-level operations. Open Yaver on your phone or desktop to continue.",
   );
 });
 

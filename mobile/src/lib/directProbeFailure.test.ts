@@ -61,6 +61,11 @@ check(
   describeDirectProbeFailure(new Error("EHOSTUNREACH: no route to host")),
   "network unreachable",
 );
+check(
+  "iOS Host is down is distinct from timeout",
+  describeDirectProbeFailure(new Error('Could not connect to the server. UserInfo={_kCFStreamErrorCodeKey=64, NSLocalizedDescription=Could not connect to the server., _kCFStreamErrorDomainKey=1, message="Host is down"}')),
+  "network unreachable",
+);
 
 // --- The classifier must not over-claim ------------------------------------
 // An unknown error is NOT blocked; treating it as blocked would make the
@@ -100,6 +105,10 @@ if (isUnroutableFailure(new Error("socket hang up"))) {
 if (!isUnroutableFailure(new Error("EHOSTUNREACH"))) {
   failures++;
   console.error("FAIL genuine EHOSTUNREACH must be flagged unroutable");
+}
+if (!isUnroutableFailure(new Error("Host is down"))) {
+  failures++;
+  console.error("FAIL iOS 'Host is down' must be flagged unroutable");
 }
 
 if (failures > 0) {

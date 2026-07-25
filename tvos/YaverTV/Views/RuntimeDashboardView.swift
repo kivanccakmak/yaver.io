@@ -13,6 +13,7 @@ struct RuntimeDashboardView: View {
     @State private var status: AgentStatus?
     @State private var voice: VoiceRuntimeStatus?
     @State private var runners: RunnerSessions?
+    @State private var runtimeTurns: [RuntimeTurnRow] = []
     @State private var platformMatrix: PlatformMatrixReport?
     @State private var authSession: RunnerAuthSession?
     @State private var gitAuthSession: GitAuthSession?
@@ -27,6 +28,37 @@ struct RuntimeDashboardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 34) {
                 header
+
+                RuntimeCard(icon: "rectangle.connected.to.line.below", title: "Live Room", wide: true) {
+                    HStack(alignment: .top, spacing: 24) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Phone, watch, car, Android remote, and TV all point at the same runtime.")
+                                .font(.system(size: 19))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                            RuntimeRow("Machine", store.selectedBox?.name ?? "Not selected")
+                            RuntimeRow("Preview", status?.devServer?.running == true ? "Running" : "Waiting")
+                            RuntimeRow("Sessions", "\(runners?.count ?? runners?.sessions?.count ?? 0)")
+                        }
+                        .frame(width: 500, alignment: .leading)
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Latest commands")
+                                .font(.system(size: 20, weight: .bold))
+                            if runtimeTurns.isEmpty {
+                                Text("Start a voice turn from your phone, watch, car, or remote. The TV follows it here.")
+                                    .font(.system(size: 18))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            } else {
+                                ForEach(runtimeTurns.prefix(4)) { row in
+                                    RuntimeTurnTile(row: row)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
 
                 HStack(alignment: .top, spacing: 24) {
                     RuntimeCard(icon: "desktopcomputer", title: "Machine") {
@@ -257,7 +289,7 @@ struct RuntimeDashboardView: View {
     }
 
     private func refresh() async {
-        guard let client = store.client() else {
+        guard let box = store.selectedBox, let client = store.client() else {
             notice = "No runtime machine selected"
             return
         }
@@ -272,6 +304,7 @@ struct RuntimeDashboardView: View {
         async let nextVoice = client.voiceStatus()
         async let nextRunners = client.runnerSessions()
         async let nextPlatformMatrix = client.platformMatrix()
+        async let nextRuntimeTurns = SessionClient(token: store.token, box: box).runtimeTurns(limit: 8)
 
         var coreError: String?
         do {
@@ -287,6 +320,7 @@ struct RuntimeDashboardView: View {
         voice = (try? await nextVoice) ?? voice
         runners = (try? await nextRunners) ?? runners
         platformMatrix = (try? await nextPlatformMatrix)?.matrix ?? platformMatrix
+        runtimeTurns = await nextRuntimeTurns
         notice = coreError
     }
 
@@ -518,6 +552,47 @@ private struct SurfaceStatusTile: View {
             return .orange
         default:
             return .secondary
+        }
+    }
+}
+
+private struct RuntimeTurnTile: View {
+    let row: RuntimeTurnRow
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Circle()
+                .fill(color)
+                .frame(width: 12, height: 12)
+                .padding(.top, 8)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(row.safeUtterance)
+                    .font(.system(size: 18, weight: .semibold))
+                    .lineLimit(1)
+                Text([row.state, row.testSummary].compactMap { $0 }.joined(separator: " · "))
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var color: Color {
+        switch row.state {
+        case "ready_to_test", "ready_to_deploy", "done":
+            return .green
+        case "needs_input":
+            return .orange
+        case "failed":
+            return .red
+        case "captured":
+            return .blue
+        default:
+            return .yellow
         }
     }
 }

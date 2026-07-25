@@ -6,7 +6,11 @@ import { useDevices } from "@/lib/use-devices";
 import { PasskeysCard } from "./PasskeyEnrollPrompt";
 import YaverAgentSettings from "./YaverAgentSettings";
 import McpServersCard from "./McpServersCard";
+import BillingView from "./BillingView";
+import GitSettingsCard from "./GitSettingsCard";
+import { ManagedCloudPanel } from "./ManagedCloudPanel";
 import { agentClient } from "@/lib/agent-client";
+import { HIDE_PAID_UI } from "@/lib/launchFlags";
 import pkg from "../../package.json";
 
 const WEB_VERSION = (pkg as { version?: string }).version ?? "unknown";
@@ -551,6 +555,20 @@ export default function SettingsView({ user, onLogout }: SettingsViewProps) {
           );
         })()}
       </div>
+
+      <GitSettingsCard devices={ownedDevices} />
+
+      {!HIDE_PAID_UI ? (
+        <>
+          <div className="mb-6">
+            <BillingView token={token} />
+          </div>
+
+          <div className="mb-6">
+            <ManagedCloudPanel token={token} standalone />
+          </div>
+        </>
+      ) : null}
 
       <div className="card mb-6">
         <h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-surface-400">

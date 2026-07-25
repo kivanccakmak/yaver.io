@@ -13,6 +13,7 @@ import { useCallback, useRef, useState } from "react";
 
 import { useDevice, type Device, type DeviceState } from "../../context/DeviceContext";
 import { startRealtimeTranscribe, speakText } from "../speech";
+import { classifyCaptureFailure } from "../voice/conversationCore";
 import {
   buildLadderState,
   dispatchAction,
@@ -155,7 +156,18 @@ export function useVoiceHelper(opts: { localTier?: ModelTier } = {}): UseVoiceHe
       recRef.current = await startRealtimeTranscribe(() => {});
     } catch (e: any) {
       setListening(false);
-      await runTurn(""); // surface a graceful "I didn't catch that"
+      // F2 (STT audit): don't blame the mic for a model/permission failure.
+      // A transient miss stays graceful ("I didn't catch that" via an empty
+      // turn); a terminal cause — whisper won't load, mic permission denied —
+      // is spoken plainly so the user isn't sent chasing a problem that isn't
+      // there. classifyCaptureFailure is the ONE shared diagnosis (also used by
+      // the voice-coding core) so the two paths can never drift on wording.
+      const { spoken, reason } = classifyCaptureFailure(e);
+      if (reason === "speech-model-failed" || reason === "mic-permission-denied") {
+        await speakText(spoken, { provider: "device" }).catch(() => {});
+        return;
+      }
+      await runTurn(""); // transient: surface a graceful "I didn't catch that"
     }
   }, [runTurn]);
 
