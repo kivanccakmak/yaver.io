@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -53,6 +54,20 @@ func (d *AndroidEmuDriver) Boot(ctx context.Context) (string, error) {
 			return "", fmt.Errorf("no AVDs configured — run `avdmanager create avd ...`")
 		}
 		d.AVD = first[0]
+	}
+
+	// PROBE THE AVD BEFORE SPAWNING.
+	//
+	// An AVD whose system image was never downloaded (or was removed) makes the
+	// emulator PANIC instantly — "Cannot find AVD system path" — and since the
+	// panic goes to the emulator's own stderr, the caller then sat in the adb wait
+	// and reported `no adb device online after 2m0s`. Two minutes to say nothing
+	// useful, and it names the wrong thing: adb was fine, the image is absent.
+	// Measured on a Mac mini 2026-07-25 whose Pixel_4_API_32 referenced
+	// system-images/android-32/google_apis_playstore/arm64-v8a with the
+	// system-images directory completely empty.
+	if missing, remedy := avdSystemImageMissing(d.AVD); missing {
+		return "", fmt.Errorf("%s", remedy)
 	}
 
 	// Spawn the emulator in the background and wait for adb to see it.
@@ -267,4 +282,57 @@ func (d *AndroidEmuDriver) Swipe(ctx context.Context, deviceID string, x1, y1, x
 	}
 	_, err := runCtx(ctx, "adb", args...)
 	return err
+}
+
+// avdSystemImageMissing reports whether the AVD's system image is absent, plus a
+// remedy naming the exact sdkmanager package to install.
+//
+// Reads the AVD's own config.ini (image.sysdir.1) and checks that directory under
+// every plausible SDK root. Cheap: two stats and a small file read, versus a
+// two-minute wait that blames adb.
+func avdSystemImageMissing(avd string) (bool, string) {
+	if strings.TrimSpace(avd) == "" {
+		return false, ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, ""
+	}
+	cfg := filepath.Join(home, ".android", "avd", avd+".avd", "config.ini")
+	data, err := os.ReadFile(cfg)
+	if err != nil {
+		return false, "" // no config to read — let the emulator speak for itself
+	}
+	sysdir := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok && strings.TrimSpace(k) == "image.sysdir.1" {
+			sysdir = strings.TrimSpace(v)
+			break
+		}
+	}
+	if sysdir == "" {
+		return false, ""
+	}
+	roots := []string{
+		strings.TrimSpace(os.Getenv("ANDROID_SDK_ROOT")),
+		strings.TrimSpace(os.Getenv("ANDROID_HOME")),
+		filepath.Join(home, "Library", "Android", "sdk"),
+		filepath.Join(home, "Android", "Sdk"),
+	}
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(root, sysdir)); err == nil && info.IsDir() {
+			return false, "" // present
+		}
+	}
+	// "system-images/android-32/google_apis_playstore/arm64-v8a/" →
+	// "system-images;android-32;google_apis_playstore;arm64-v8a"
+	pkg := strings.ReplaceAll(strings.Trim(sysdir, "/"), "/", ";")
+	return true, fmt.Sprintf(
+		"AVD %q needs the system image %q, which is not installed on this machine. "+
+			"Install it with: sdkmanager %q   (then the Android lane works without any further setup). "+
+			"Nothing is wrong with adb or the emulator binary.",
+		avd, sysdir, pkg)
 }
