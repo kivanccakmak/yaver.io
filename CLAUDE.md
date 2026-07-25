@@ -57,6 +57,19 @@ changing those.
   broken heartbeat, dropped SSE frames, and a dead shake gesture in `apps.tsx`
   while `DevPreview.tsx` was fine. Cross-surface parity (below) is the same
   rule wearing a different hat.
+  **The UI is part of the product you must harden.** A user who cannot see what
+  the box is doing feels the same way an operator does staring at a silent
+  `serve` — unsure whether it is working or hung, and that uncertainty IS a
+  defect. Every wait the product imposes must narrate itself: what is running,
+  where (the command + directory), how long it has been going, when it last
+  made progress, and — when something is wrong — what to do about it, in plain
+  language, on the surface the user is actually looking at. A spinner with no
+  elapsed time, a preview that sits blank while the box compiles, a "connecting"
+  that never says why: each is the customer-facing shape of "the inventory says
+  yes while the operation says no". Fix the silence in the UI with the same
+  seriousness as the silence in a log. This session's heartbeat line
+  ("2:14 elapsed · last output 3s ago"), the streamed compile logs, and the
+  named-cause error panels are that rule in practice.
 - **Every incident must leave the product harder than it found it.** When you
   debug a real failure — yours, a user's, or a past session's — fixing the
   immediate symptom is only half the job. Before you call it done, ask: *"what
