@@ -1464,6 +1464,10 @@ func launchAppOnRuntimeTarget(ctx context.Context, session RemoteRuntimeSession,
 func (s *HTTPServer) ensureRemoteRuntimeManager() *RemoteRuntimeManager {
 	if s.remoteRuntimeMgr == nil {
 		s.remoteRuntimeMgr = NewRemoteRuntimeManager()
+		// Exclusivity needs a way to be LOST, or the machine looks full while
+		// idle: a closed tab / slept phone / timed-out test leaves a session
+		// holding a simulator with nobody watching. See remote_runtime_reaper.go.
+		s.remoteRuntimeMgr.StartRemoteRuntimeReaper(nil)
 	}
 	// Keep the dev-server pointer fresh even after lazy allocation — the
 	// devServerMgr on HTTPServer is itself lazy for some code paths, so a

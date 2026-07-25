@@ -119,12 +119,16 @@ test.describe("webrtc stream closed loop", () => {
     await shot("project-picked");
 
     // Load capabilities, then start the requested target.
-    const loadBtn = page.getByRole("button", { name: /capabilit/i }).first();
+    // The button is literally "Load Targets" — /capabilit/i matched the helper
+    // paragraph, never the control, so the click never happened and the log never
+    // got its targets line. Read from the live DOM, not from what the code calls it.
+    const loadBtn = page.getByRole("button", { name: /load targets|capabilit/i }).first();
     if (await loadBtn.isVisible().catch(() => false)) {
       await loadBtn.click();
     }
     // RuntimeLabView logs "targets: …" into its event pane — the user-visible
     // narration this spec also validates.
+    // RuntimeLabView's event pane timestamps each line ("[5:06:29 PM] targets: …").
     await expect(page.getByText(/targets:/i).first(), "capability probe never answered").toBeVisible({
       timeout: 120_000,
     });
