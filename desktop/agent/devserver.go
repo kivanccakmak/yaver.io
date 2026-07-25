@@ -645,8 +645,12 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 			// something the mobile client can render as a failure
 			// (red banner + View Logs + Retry) instead of silently
 			// disappearing into "no dev server running".
+			// Name the fix, don't just forward the dump. `No file or variants
+			// found for asset: .env.` is a complete diagnosis to whoever wrote the
+			// pubspec and total noise to whoever is holding the phone.
+			annotated := annotateDevStartError(ds.Name(), opts.WorkDir, err)
 			if setter, ok := ds.(interface{ SetError(string) }); ok {
-				setter.SetError(err.Error())
+				setter.SetError(annotated)
 			}
 			m.mu.Lock()
 			if m.active != nil && m.active.server == ds {
@@ -657,7 +661,7 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 			m.emit(DevServerEvent{
 				Type:      "error",
 				Framework: ds.Name(),
-				Message:   fmt.Sprintf("Failed to start %s: %v", ds.Name(), err),
+				Message:   fmt.Sprintf("Failed to start %s: %s", ds.Name(), annotated),
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			})
 			return
