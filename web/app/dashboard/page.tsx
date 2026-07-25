@@ -2377,6 +2377,7 @@ export default function DashboardPage() {
   const onTaskCreated = () => { setActiveTab("chat"); agentClient.listTasks().then(setTasks).catch(() => {}); };
   const handleSelectPreviewTarget = async (deviceId: string | null) => {
     const target = deviceId ? devices.find((d) => d.id === deviceId) || null : null;
+    const previous = previewTargetId;
     setPreviewTargetId(deviceId);
     try {
       await agentClient.setDevServerTarget({
@@ -2384,7 +2385,21 @@ export default function DashboardPage() {
         targetDeviceName: target?.name,
         targetDeviceClass: target?.deviceClass,
       });
-    } catch {}
+    } catch (err: any) {
+      // OPTIMISTIC UI + SWALLOWED ERROR = the dashboard claiming a setting the
+      // agent never received. The picker moved to the new target, the POST
+      // failed, nothing was said, and every later preview went to the OLD
+      // device while the UI insisted otherwise — an unfalsifiable state, since
+      // the only evidence was on a box the user was not looking at.
+      //
+      // Optimism is fine; optimism without rollback is a lie. Put the picker
+      // back where the agent actually is and name the failure.
+      setPreviewTargetId(previous);
+      setConnectError(
+        `Could not point previews at ${target?.name || "that device"}: ${err?.message || "the agent did not accept the change"}. ` +
+        `Still targeting ${previous ? (devices.find((d) => d.id === previous)?.name || "the previous device") : "this machine"}.`,
+      );
+    }
   };
 
   // ── Conditional renders (NO hooks below this point) ─────────────
