@@ -59,6 +59,7 @@ export function TaskHeader({
 }: TaskHeaderProps) {
   const c = useColors();
   const palette = statusPalette(c, status);
+  const tmuxLabel = [tmuxSession, tmuxSessionId].filter(Boolean).join(" · ");
 
   // Pulsing dot for in-flight statuses. Single property (opacity),
   // single element — under X6 budget.
@@ -170,6 +171,17 @@ export function TaskHeader({
           <Text style={[styles.statusText, { color: palette.fg }]}>
             {status.toUpperCase()}
           </Text>
+          {tmuxLabel ? (
+            <>
+              <Text style={[styles.metaDot, { color: c.textTertiary }]}>·</Text>
+              <View style={styles.inlineTmux}>
+                <Ionicons name="terminal-outline" size={10} color={c.textTertiary} />
+                <Text style={[styles.deviceText, styles.inlineTmuxText, { color: c.textSecondary }]} numberOfLines={1}>
+                  tmux {tmuxLabel}
+                </Text>
+              </View>
+            </>
+          ) : null}
           {deviceName ? (
             <>
               <Text style={[styles.metaDot, { color: c.textTertiary }]}>·</Text>
@@ -201,58 +213,31 @@ export function TaskHeader({
           running this task" without forcing the user to expand
           Agent context. Replaces the redundant ThinkingBubble pill
           that used to render the same info inside the chat. */}
-      {runnerLabel || tmuxSession || tmuxSessionId ? (
+      {runnerLabel ? (
         <View style={styles.chipRow}>
-          {runnerLabel ? (
-            <View
-              style={[
-                styles.runnerChip,
-                {
-                  backgroundColor: c.surfaceElevated,
-                  borderColor: c.border,
-                },
-              ]}
+          <View
+            style={[
+              styles.runnerChip,
+              {
+                backgroundColor: c.surfaceElevated,
+                borderColor: c.border,
+              },
+            ]}
+          >
+            <View style={[styles.runnerChipDot, { backgroundColor: palette.dot }]} />
+            <Text
+              style={[styles.runnerChipText, { color: c.textPrimary }]}
+              numberOfLines={1}
             >
-              <View style={[styles.runnerChipDot, { backgroundColor: palette.dot }]} />
-              <Text
-                style={[styles.runnerChipText, { color: c.textPrimary }]}
-                numberOfLines={1}
-              >
-                {runnerLabel}
-                {modelLabel ? (
-                  <Text style={{ color: c.textTertiary }}>
-                    {"  ·  "}
-                    {modelLabel}
-                  </Text>
-                ) : null}
-              </Text>
-            </View>
-          ) : null}
-          {tmuxSession || tmuxSessionId ? (
-            <View
-              style={[
-                styles.runnerChip,
-                {
-                  backgroundColor: c.surfaceElevated,
-                  borderColor: c.border,
-                },
-              ]}
-            >
-              <Ionicons name="terminal-outline" size={11} color={c.textTertiary} />
-              <Text
-                style={[styles.runnerChipText, styles.tmuxChipText, { color: c.textSecondary }]}
-                numberOfLines={1}
-              >
-                {tmuxSession || "tmux"}
-                {tmuxSessionId ? (
-                  <Text style={{ color: c.textTertiary }}>
-                    {"  ·  "}
-                    {tmuxSessionId}
-                  </Text>
-                ) : null}
-              </Text>
-            </View>
-          ) : null}
+              {runnerLabel}
+              {modelLabel ? (
+                <Text style={{ color: c.textTertiary }}>
+                  {"  ·  "}
+                  {modelLabel}
+                </Text>
+              ) : null}
+            </Text>
+          </View>
         </View>
       ) : null}
     </View>
@@ -380,6 +365,16 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     flexShrink: 1,
   },
+  inlineTmux: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    minWidth: 0,
+    maxWidth: "46%",
+  },
+  inlineTmuxText: {
+    fontFamily: "Menlo",
+  },
   logsBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -415,8 +410,5 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     letterSpacing: 0.2,
     flexShrink: 1,
-  },
-  tmuxChipText: {
-    fontFamily: "Menlo",
   },
 });

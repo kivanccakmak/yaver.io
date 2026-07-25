@@ -828,6 +828,7 @@ export interface RemoteRuntimeTarget {
   reason?: string;
   hostOs?: string;
   requiredCli?: string;
+  surface?: string;
 }
 
 export interface RemoteRuntimeCapabilities {
@@ -2999,7 +3000,25 @@ export class QuicClient {
 
   /** List discovered projects on the machine, with discovery-state metadata. */
   async listProjectsDetailed(): Promise<{
-    projects: { name: string; path: string; branch?: string; framework?: string; executionMode?: string; primarySurface?: string; gitRemote?: string; tags?: string[] }[];
+    projects: {
+      name: string;
+      path: string;
+      branch?: string;
+      framework?: string;
+      frameworks?: string[];
+      stack?: string;
+      stacks?: string[];
+      surfaces?: string[];
+      testSurfaces?: string[];
+      backend?: string;
+      services?: string[];
+      hosting?: string[];
+      role?: string;
+      executionMode?: string;
+      primarySurface?: string;
+      gitRemote?: string;
+      tags?: string[];
+    }[];
     discovery?: {
       status?: "idle" | "discovering" | "partial" | "ready";
       discovering?: boolean;
@@ -3030,7 +3049,25 @@ export class QuicClient {
    *  enumerator over /repos/list.
    */
   async listWorkspaceRepos(): Promise<{
-    repos: { name: string; path: string; branch?: string; framework?: string; gitRemote?: string; tags?: string[]; isMonorepo?: boolean; subframeworks?: string[] }[];
+    repos: {
+      name: string;
+      path: string;
+      branch?: string;
+      framework?: string;
+      frameworks?: string[];
+      stack?: string;
+      stacks?: string[];
+      surfaces?: string[];
+      testSurfaces?: string[];
+      backend?: string;
+      services?: string[];
+      hosting?: string[];
+      role?: string;
+      gitRemote?: string;
+      tags?: string[];
+      isMonorepo?: boolean;
+      subframeworks?: string[];
+    }[];
   }> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/projects`, {
@@ -3045,6 +3082,15 @@ export class QuicClient {
         path: p?.path ?? "",
         branch: p?.branch,
         framework: p?.framework,
+        frameworks: Array.isArray(p?.frameworks) ? p.frameworks : [],
+        stack: p?.stack,
+        stacks: Array.isArray(p?.stacks) ? p.stacks : [],
+        surfaces: Array.isArray(p?.surfaces) ? p.surfaces : [],
+        testSurfaces: Array.isArray(p?.testSurfaces) ? p.testSurfaces : [],
+        backend: p?.backend,
+        services: Array.isArray(p?.services) ? p.services : [],
+        hosting: Array.isArray(p?.hosting) ? p.hosting : [],
+        role: p?.role,
         gitRemote: p?.gitRemote,
         tags: Array.isArray(p?.tags) ? p.tags : [],
         isMonorepo: !!p?.isMonorepo || p?.framework === "monorepo",
@@ -3055,7 +3101,24 @@ export class QuicClient {
 
   /** List mobile-capable projects discovered by the agent's framework-aware scanner. */
   async listMobileProjectsDetailed(): Promise<{
-    projects: { name: string; path: string; branch?: string; framework?: string; executionMode?: string; primarySurface?: string; tags?: string[] }[];
+    projects: {
+      name: string;
+      path: string;
+      branch?: string;
+      framework?: string;
+      frameworks?: string[];
+      stack?: string;
+      stacks?: string[];
+      surfaces?: string[];
+      testSurfaces?: string[];
+      backend?: string;
+      services?: string[];
+      hosting?: string[];
+      role?: string;
+      executionMode?: string;
+      primarySurface?: string;
+      tags?: string[];
+    }[];
     discovery?: {
       status?: "idle" | "discovering" | "partial" | "ready";
       discovering?: boolean;
@@ -3083,6 +3146,15 @@ export class QuicClient {
           path: p?.path ?? "",
           branch: p?.branch,
           framework,
+          frameworks: Array.isArray(p?.frameworks) ? p.frameworks : [],
+          stack: typeof p?.stack === "string" ? p.stack : undefined,
+          stacks: Array.isArray(p?.stacks) ? p.stacks : [],
+          surfaces: Array.isArray(p?.surfaces) ? p.surfaces : [],
+          testSurfaces: Array.isArray(p?.testSurfaces) ? p.testSurfaces : [],
+          backend: typeof p?.backend === "string" ? p.backend : undefined,
+          services: Array.isArray(p?.services) ? p.services : [],
+          hosting: Array.isArray(p?.hosting) ? p.hosting : [],
+          role: typeof p?.role === "string" ? p.role : undefined,
           executionMode: p?.executionMode,
           primarySurface: p?.primarySurface,
           tags: Array.from(tags),
@@ -3098,7 +3170,7 @@ export class QuicClient {
   }
 
   /** List discovered projects on the machine. */
-  async listProjects(): Promise<{ name: string; path: string; branch?: string; framework?: string; executionMode?: string; primarySurface?: string; gitRemote?: string; tags?: string[] }[]> {
+  async listProjects(): Promise<{ name: string; path: string; branch?: string; framework?: string; frameworks?: string[]; stack?: string; stacks?: string[]; surfaces?: string[]; testSurfaces?: string[]; backend?: string; services?: string[]; hosting?: string[]; role?: string; executionMode?: string; primarySurface?: string; gitRemote?: string; tags?: string[] }[]> {
     const data = await this.listProjectsDetailed();
     return data.projects;
   }

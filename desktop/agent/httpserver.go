@@ -3225,6 +3225,15 @@ func (s *HTTPServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 		Path           string   `json:"path"`
 		Branch         string   `json:"branch,omitempty"`
 		Framework      string   `json:"framework,omitempty"`
+		Frameworks     []string `json:"frameworks,omitempty"`
+		Stack          string   `json:"stack,omitempty"`
+		Stacks         []string `json:"stacks,omitempty"`
+		Surfaces       []string `json:"surfaces,omitempty"`
+		TestSurfaces   []string `json:"testSurfaces,omitempty"`
+		Backend        string   `json:"backend,omitempty"`
+		Services       []string `json:"services,omitempty"`
+		Hosting        []string `json:"hosting,omitempty"`
+		Role           string   `json:"role,omitempty"`
 		ExecutionMode  string   `json:"executionMode,omitempty"`
 		PrimarySurface string   `json:"primarySurface,omitempty"`
 		GitRemote      string   `json:"gitRemote,omitempty"`
@@ -3306,6 +3315,7 @@ func (s *HTTPServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		info := DetectProjectInfo(p.Path)
+		stack, _ := stackDetectCached(p.Path)
 		// Derive tags from actions — covers monorepos (mobile/ + web/ + backend/)
 		actions := DetectProjectActions(p.Path)
 		tagSet := map[string]bool{}
@@ -3334,6 +3344,11 @@ func (s *HTTPServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 		for _, t := range DetectProjectTags(p.Path) {
 			tagSet[t] = true
 		}
+		if stack != nil {
+			for _, t := range stack.Tags {
+				tagSet[t] = true
+			}
+		}
 		tags := make([]string, 0, len(tagSet))
 		for t := range tagSet {
 			tags = append(tags, t)
@@ -3345,6 +3360,9 @@ func (s *HTTPServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 		framework := info.Framework
 		isMonorepo := false
 		var subframeworks []string
+		if framework == "" && stack != nil {
+			framework = firstNonEmptyStackString(stack.Framework, stack.Stack)
+		}
 		if framework == "" {
 			if mfw, subs := monorepoSummaryForDir(p.Path); mfw != "" {
 				framework = mfw
@@ -3359,12 +3377,34 @@ func (s *HTTPServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		var frameworks, stacks, surfaces, testSurfaces, services, hosting []string
+		var stackLabel, backend, role string
+		if stack != nil {
+			frameworks = stack.Frameworks
+			stackLabel = stack.Stack
+			stacks = stack.Stacks
+			surfaces = stack.Surfaces
+			testSurfaces = stack.TestSurfaces
+			backend = stack.Backend
+			services = stack.Services
+			hosting = stack.Hosting
+			role = stack.Role
+		}
 
 		result = append(result, projectResp{
 			Name:           name,
 			Path:           p.Path,
 			Branch:         p.Branch,
 			Framework:      framework,
+			Frameworks:     frameworks,
+			Stack:          stackLabel,
+			Stacks:         stacks,
+			Surfaces:       surfaces,
+			TestSurfaces:   testSurfaces,
+			Backend:        backend,
+			Services:       services,
+			Hosting:        hosting,
+			Role:           role,
 			ExecutionMode:  string(executionModeForFramework(framework)),
 			PrimarySurface: primarySurfaceForFramework(framework),
 			GitRemote:      info.GitRemote,
