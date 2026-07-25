@@ -33,7 +33,7 @@ const HAS_LIVE_TARGET = !!(process.env.YAVER_TEST_TOKEN && LIVE_DEVICE);
 test.describe("live remote rendering from the web dashboard", () => {
   test.skip(!HAS_LIVE_TARGET, "set YAVER_TEST_TOKEN + E2E_LIVE_DEVICE to run against a real box");
   // A cold Flutter/Expo web compile on a real machine legitimately takes minutes.
-  test.setTimeout(6 * 60_000);
+  test.setTimeout(Number(process.env.E2E_LIVE_TIMEOUT_MS || 10 * 60_000));
 
   test("connects to the box, opens Runtime, and gets a live surface", async ({ page }, testInfo) => {
     const steps: string[] = [];
@@ -52,6 +52,20 @@ test.describe("live remote rendering from the web dashboard", () => {
       if (m.type() === "error") consoleErrors.push(m.text().slice(0, 200));
     });
     page.on("pageerror", (e) => consoleErrors.push(`pageerror: ${String(e).slice(0, 200)}`));
+
+    // Record WHICH request failed, not just that something did. "401" alone sent
+    // an investigation guessing at relay endpoints; "401 on
+    // https://relay…/d/<id>/dev/status" names the hop.
+    const failedRequests: string[] = [];
+    page.on("response", (res) => {
+      const st = res.status();
+      if (st < 400) return;
+      const u = res.url();
+      // Skip noise from third-party/analytics; keep anything on our own hops.
+      if (!/yaver|relay|convex|:18080|\/d\//i.test(u)) return;
+      const entry = `${st} ${u.replace(/([?&](token|__rp)=)[^&]+/g, "$1<redacted>").slice(0, 160)}`;
+      if (!failedRequests.includes(entry)) failedRequests.push(entry);
+    });
 
     // Click the first VISIBLE + enabled match.
     //
@@ -109,6 +123,55 @@ test.describe("live remote rendering from the web dashboard", () => {
     await clickVisible(/^Projects$/, "the Projects tab");
     await step("projects-tab");
 
+    // The Projects tab gates on an explicit connection: "Connect a device to use
+    // Projects". Discovered from the live dashboard — a spec that skipped this
+    // waited for project rows that could never appear, which is a test that fails
+    // for the wrong reason and teaches nothing.
+    const gate = page.getByText(/Connect a device to use Projects/i).first();
+    if (await gate.isVisible().catch(() => false)) {
+      // Connect to OUR box. Two paths, because the device cards reorder between
+      // loads (they are sorted by last-signal time) and a positional guess picks
+      // the wrong machine — which then "works" and validates nothing:
+      //   1. the card that contains BOTH the device name and a Connect button
+      //      (.last() = innermost matching container, the card itself);
+      //   2. the sidebar chip, which also selects the device.
+      const card = page
+        .locator("div")
+        .filter({ hasText: deviceRe })
+        .filter({ has: page.getByRole("button", { name: /^Connect$/ }) })
+        .last();
+
+      let connected = false;
+      if (await card.isVisible().catch(() => false)) {
+        const btn = card.getByRole("button", { name: /^Connect$/ }).first();
+        if (await btn.isVisible().catch(() => false)) {
+          await btn.click();
+          connected = true;
+        }
+      }
+      if (!connected) {
+        await clickVisible(deviceRe, `a connect control for /${LIVE_DEVICE}/i`);
+      }
+      await step("connect-clicked");
+
+      // The gate must actually clear. If it does not, the connection failed and
+      // the page should say why — reporting the page text makes the reason part
+      // of the artifact instead of a mystery.
+      const cleared = await gate
+        .waitFor({ state: "hidden", timeout: 120_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!cleared) {
+        const body = (await page.locator("body").innerText()).slice(0, 1200);
+        throw new Error(
+          `clicked Connect for /${LIVE_DEVICE}/i but the Projects gate never cleared.\n` +
+            `Failed requests:\n  ${failedRequests.slice(0, 12).join("\n  ") || "(none)"}\n` +
+            `Console: ${consoleErrors.slice(0, 6).join(" | ") || "(none)"}\nPage said:\n${body}`,
+        );
+      }
+      await step("connected");
+    }
+
     // The project list comes from the BOX, so its arrival is itself a
     // connectivity assertion — an empty list here is the "No projects yet" lie
     // this product has shipped before.
@@ -160,7 +223,7 @@ test.describe("live remote rendering from the web dashboard", () => {
       // The lane may already be streaming (the modal starts a session on open).
       // Only fail if there is ALSO no surface and no message — i.e. silence.
       const anySurface = await page
-        .locator("video, img[src^='blob:'], canvas")
+        .locator("video, img[src^='blob:'], canvas, iframe")
         .first()
         .isVisible()
         .catch(() => false);
@@ -172,16 +235,29 @@ test.describe("live remote rendering from the web dashboard", () => {
 
     // 5. A live surface within the budget, or a NAMED failure. Both are
     //    acceptable outcomes for this assertion; silence is not.
-    const surface = page.locator("video, img[src^='blob:'], canvas").first();
+    // Every shape a live remote surface can take on this dashboard:
+    //   <video srcObject>      WebRTC RTP (RemoteRuntimeViewer)
+    //   <img src="blob:">      JPEG-over-datachannel fallback
+    //   <canvas>               frame painters
+    //   <iframe>               the BROWSER lane (WebPreviewFrame / PreviewPane)
+    // The iframe was missing at first, so a working Flutter/Expo browser preview
+    // registered as "no surface" — a test that lies in the same direction as the
+    // bug it hunts.
+    const surface = page.locator("video, img[src^='blob:'], canvas, iframe").first();
     const errorText = page.getByText(/failed|unavailable|error|not installed|could not/i).first();
 
+    // Budget: a cold simulator boot + native build is MINUTES on a real machine
+    // (simctl alone takes ~17s per call on the box under test). A 150s budget
+    // failed work that was progressing perfectly well, which would have sent the
+    // next person hunting a phantom.
+    const surfaceBudget = Number(process.env.E2E_SURFACE_BUDGET_MS || 300_000);
     const outcome = await Promise.race([
       surface
-        .waitFor({ state: "visible", timeout: 150_000 })
+        .waitFor({ state: "visible", timeout: surfaceBudget })
         .then(() => "surface" as const)
         .catch(() => "timeout" as const),
       errorText
-        .waitFor({ state: "visible", timeout: 150_000 })
+        .waitFor({ state: "visible", timeout: surfaceBudget })
         .then(() => "named-error" as const)
         .catch(() => "timeout" as const),
     ]);
@@ -199,7 +275,8 @@ test.describe("live remote rendering from the web dashboard", () => {
     expect(
       outcome,
       `no live surface and no named failure within the budget — this is the silent hang the ` +
-        `spec exists to catch. Console errors: ${consoleErrors.slice(0, 5).join(" | ") || "(none)"}`,
+        `spec exists to catch.\nFailed requests:\n  ${failedRequests.slice(0, 12).join("\n  ") || "(none)"}` +
+        `\nConsole: ${consoleErrors.slice(0, 5).join(" | ") || "(none)"}`,
     ).toBe("surface");
 
     // If it is a <video>, insist on actual pixels: a visible element with
