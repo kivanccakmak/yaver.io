@@ -2943,9 +2943,50 @@ type NextDevServer struct {
 func (n *NextDevServer) Name() string { return "nextjs" }
 
 func (n *NextDevServer) Detect(workDir string) bool {
-	for _, name := range []string{"next.config.ts", "next.config.js", "next.config.mjs"} {
+	for _, name := range []string{"next.config.ts", "next.config.js", "next.config.mjs", "next.config.cjs"} {
 		if _, err := os.Stat(filepath.Join(workDir, name)); err == nil {
 			return true
+		}
+	}
+	// A Next.js app does NOT need a next.config file — `create-next-app` with
+	// default settings ships none. Requiring one classified such a project as
+	// generic "react", which has no dev server at all, so its browser lane
+	// answered 404 through the proxy and its WebRTC lane said "react projects use
+	// webview, not WebRTC" — two dead ends for an ordinary Next app
+	// (yaver-todo-web, 2026-07-25). The package manifest is the authority: a
+	// `next` dependency or a `next dev` script IS a Next project.
+	return packageJSONDeclaresNext(workDir)
+}
+
+// packageJSONDeclaresNext reports whether package.json names next as a dependency
+// or drives it from a script.
+func packageJSONDeclaresNext(workDir string) bool {
+	data, err := os.ReadFile(filepath.Join(workDir, "package.json"))
+	if err != nil {
+		return false
+	}
+	var pkg struct {
+		Dependencies    map[string]string `json:"dependencies"`
+		DevDependencies map[string]string `json:"devDependencies"`
+		Scripts         map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return false
+	}
+	if _, ok := pkg.Dependencies["next"]; ok {
+		return true
+	}
+	if _, ok := pkg.DevDependencies["next"]; ok {
+		return true
+	}
+	for _, script := range pkg.Scripts {
+		fields := strings.Fields(script)
+		for i, f := range fields {
+			// "next dev", "npx next dev", "cross-env … next dev" — the token
+			// pair is what matters, not the prefix.
+			if f == "next" && i+1 < len(fields) && (fields[i+1] == "dev" || fields[i+1] == "start") {
+				return true
+			}
 		}
 	}
 	return false
