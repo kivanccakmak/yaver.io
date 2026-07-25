@@ -54,12 +54,27 @@ type RemoteRuntimeCapabilities struct {
 	SupportedTransports     []string              `json:"supportedTransports,omitempty"`
 	CurrentHostClass        string                `json:"currentHostClass,omitempty"`
 	Targets                 []RemoteRuntimeTarget `json:"targets"`
+	Cached                  bool                  `json:"cached,omitempty"`
+	CachedAt                string                `json:"cachedAt,omitempty"`
+	ProbeDurationMs         int64                 `json:"probeDurationMs,omitempty"`
 	// RemoteBuilders is the list of paired builders the dashboard
 	// can dispatch to. Populated for Swift / iOS sessions on
 	// non-darwin hosts; empty everywhere else. Each entry is the
 	// public-safe subset of the on-disk registry (no token).
 	RemoteBuilders []RemoteBuilderSummary `json:"remoteBuilders,omitempty"`
 }
+
+type remoteRuntimeCapabilitiesCacheEntry struct {
+	caps     RemoteRuntimeCapabilities
+	cachedAt time.Time
+}
+
+var (
+	remoteRuntimeCapabilitiesCacheMu sync.Mutex
+	remoteRuntimeCapabilitiesCache   = map[string]remoteRuntimeCapabilitiesCacheEntry{}
+)
+
+const remoteRuntimeCapabilitiesCacheTTL = 2 * time.Minute
 
 // RemoteBuilderSummary is the public-safe view of a paired builder.
 // Tokens, hostnames, and any other infra-sensitive field stay on
@@ -814,7 +829,22 @@ func (m *RemoteRuntimeManager) Create(workDir, framework, targetID, transportMod
 
 	caps := remoteRuntimeCapabilitiesForProject(workDir, framework)
 	if !caps.RemoteRuntimeEligible {
-		return RemoteRuntimeSession{}, fmt.Errorf("%s projects use %s, not WebRTC remote runtime", framework, caps.PrimarySurface)
+		// Name the way FORWARD, not just the refusal.
+		//
+		// "monorepo projects use none, not WebRTC remote runtime" is accurate and
+		// leaves the user nowhere: a monorepo is a container, and the runnable
+		// things are inside it (talos/mobile, talos/cloud, …). Same for a repo
+		// whose lane is simply a different one. Measured on the mini 2026-07-25,
+		// where talos and yaver-todo-web each dead-ended on a sentence that
+		// described the problem and not the next step.
+		if subs := runnableSubProjects(workDir); len(subs) > 0 {
+			return RemoteRuntimeSession{}, fmt.Errorf(
+				"%s is a container, not a runnable app — its WebRTC lane lives in the sub-projects. "+
+					"Pick one of: %s", filepath.Base(workDir), strings.Join(subs, ", "))
+		}
+		return RemoteRuntimeSession{}, fmt.Errorf(
+			"%s projects use %s, not the WebRTC remote runtime — open it with %s instead",
+			framework, caps.PrimarySurface, caps.PrimarySurface)
 	}
 	var selected *RemoteRuntimeTarget
 	for i := range caps.Targets {
@@ -1800,4 +1830,37 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// runnableSubProjects lists the immediate sub-directories of a container repo that
+// are themselves startable projects, so a refusal can point at them instead of
+// leaving the user at a dead end.
+//
+// Deliberately ONE level deep and capped: the point is to hand the user a short,
+// clickable set of next steps, not to walk a monorepo (which on a big tree is both
+// slow and unreadable). Sorted for a stable message.
+func runnableSubProjects(workDir string) []string {
+	entries, err := os.ReadDir(workDir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "node_modules" {
+			continue
+		}
+		sub := filepath.Join(workDir, e.Name())
+		for _, marker := range []string{"package.json", "pubspec.yaml", "Package.swift", "build.gradle", "build.gradle.kts"} {
+			if _, err := os.Stat(filepath.Join(sub, marker)); err == nil {
+				out = append(out, e.Name())
+				break
+			}
+		}
+	}
+	sort.Strings(out)
+	const maxNamed = 8
+	if len(out) > maxNamed {
+		out = append(out[:maxNamed], fmt.Sprintf("… and %d more", len(out)-maxNamed))
+	}
+	return out
 }

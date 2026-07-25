@@ -308,9 +308,11 @@ func detectFramework(dir string) string {
 	}{
 		{"next.config.ts", "nextjs"},
 		{"next.config.js", "nextjs"},
+		{"next.config.mjs", "nextjs"},
+		{"next.config.cjs", "nextjs"},
 		{"vite.config.ts", "vite"},
 		{"vite.config.js", "vite"},
-		{"package.json", ""}, // check for expo below
+		{"package.json", ""}, // check for expo/next/react below
 	}
 
 	for _, c := range checks {
@@ -325,6 +327,19 @@ func detectFramework(dir string) string {
 				}
 				if strings.Contains(string(data), `"react-native"`) {
 					return "react-native"
+				}
+				// Next BEFORE plain react, and from the manifest — a Next app
+				// needs no next.config (create-next-app ships none), and calling
+				// it "react" left it with no dev server at all: the browser lane
+				// 404'd and the WebRTC lane answered "react projects use webview".
+				// One project, two dead ends, both from a missing optional file.
+				//
+				// This classifier and NextDevServer.Detect must agree: the /projects
+				// list is what the UI sends back to /dev/start, so a disagreement
+				// here means the UI asks for a framework the dev server cannot
+				// start. Same manifest rule in both places.
+				if packageJSONDeclaresNext(dir) {
+					return "nextjs"
 				}
 				if strings.Contains(string(data), `"react"`) {
 					return "react"
