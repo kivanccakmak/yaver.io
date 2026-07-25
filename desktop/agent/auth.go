@@ -1845,7 +1845,17 @@ func SendHeartbeat(baseURL, token, deviceID string, runners []RunnerInfo, instal
 	// Sent ONLY when something actually changed: connStatusForHeartbeat
 	// returns nil otherwise and the field is omitted, so a stable device costs
 	// exactly what it cost before this existed. See conn_status.go.
-	if cs := connStatusForHeartbeat(context.Background()); cs != nil {
+	//
+	// Bounded from OUTSIDE the probe, and the beat proceeds without it on
+	// timeout. connStatus is ADVISORY — a hint about tailnet/mesh topology — and
+	// advisory work must never sit in the critical path of the operation it
+	// annotates. On 2026-07-25 a wedged `tailscale status` subprocess held this
+	// call for 40 minutes and the agent therefore never heartbeated at all: the
+	// box looked offline all day BECAUSE of a nice-to-have annotation. The inner
+	// exec now has its own deadline+WaitDelay (tailscale_peers.go), but this
+	// outer bound is the guarantee that no future probe added to
+	// currentConnStatus can re-create the wedge.
+	if cs := connStatusForHeartbeatBounded(3 * time.Second); cs != nil {
 		payload["connStatus"] = cs
 	}
 	// Real, PROBED deploy capability — the honest counterpart to the line

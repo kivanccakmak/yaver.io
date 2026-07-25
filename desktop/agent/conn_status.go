@@ -25,6 +25,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
@@ -114,4 +115,28 @@ func connStatusForHeartbeat(ctx context.Context) map[string]interface{} {
 		out["nat"] = cur.NATClass
 	}
 	return out
+}
+
+// connStatusForHeartbeatBounded runs connStatusForHeartbeat with a wall-clock
+// deadline and degrades to nil when it cannot answer in time.
+//
+// The goroutine is deliberately abandoned on timeout rather than joined: it may
+// be stuck in a subprocess wait (the exact incident this guards against), and a
+// heartbeat that blocks on joining it is a heartbeat that never goes out. The
+// abandoned goroutine writes to a buffered channel, so it leaks nothing when it
+// eventually returns.
+func connStatusForHeartbeatBounded(budget time.Duration) map[string]interface{} {
+	ch := make(chan map[string]interface{}, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
+		defer cancel()
+		ch <- connStatusForHeartbeat(ctx)
+	}()
+	select {
+	case cs := <-ch:
+		return cs
+	case <-time.After(budget + time.Second):
+		log.Printf("[heartbeat] connStatus probe did not answer within %s — beating without it (advisory data must never block the beat)", budget)
+		return nil
+	}
 }

@@ -153,7 +153,18 @@ func tailscaleStatus(ctx context.Context) (*tailscaleStatusJSON, error) {
 	}
 	cctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, bin, "status", "--json").Output()
+	cmd := exec.CommandContext(cctx, bin, "status", "--json")
+	// WaitDelay is NOT optional here. CommandContext kills the process at the
+	// deadline, but .Output() reads stdout through a pipe — and if the killed
+	// process left a child holding the write end (a wedged tailscaled IPC helper
+	// does exactly this), Cmd.Wait blocks in awaitGoroutines until that
+	// grandchild exits. Measured on the Mac mini 2026-07-25: SendHeartbeat sat in
+	// this call for 40 MINUTES, so the agent never sent its initial heartbeat and
+	// the dashboard showed the box offline all day — the CLAUDE.md rule ("a
+	// context kill does not free you while a grandchild holds the pipe") caught
+	// in the wild, inside the very heartbeat that reports liveness.
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.Output()
 	if err != nil {
 		tsStatusCached, tsStatusErr, tsStatusAt = nil, err, time.Now()
 		return nil, err
