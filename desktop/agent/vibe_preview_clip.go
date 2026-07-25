@@ -94,7 +94,7 @@ func resolveClipSource(opts VibeClipStartOpts) (VibeClipSource, error) {
 			return VibeClipSourceSimIOS, nil
 		}
 	}
-	if _, err := exec.LookPath("adb"); err == nil {
+	if _, err := resolveAndroidTool("adb"); err == nil {
 		return VibeClipSourceSimAndroid, nil
 	}
 	return "", fmt.Errorf("no clip source available: install Xcode (for iOS) or platform-tools/adb (for Android), or pass --source explicitly")

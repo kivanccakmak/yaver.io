@@ -67,6 +67,54 @@ func androidSDKCandidateRoots() []string {
 	return roots
 }
 
+// resolveAndroidTool finds an Android SDK tool by NAME, checking the real SDK
+// layout before giving up on PATH.
+//
+// ── Why this exists ─────────────────────────────────────────────────────────
+//
+// 18 call sites used to do a bare exec.LookPath("adb"). PATH only. So a Mac
+// mini carrying a complete SDK — platform-tools/adb, an emulator binary, a
+// Pixel_4_API_32 AVD, an android-32 system image, 12 GB of it — reported
+// "adb not installed" for the single reason that ANDROID_HOME was unset and
+// platform-tools was not on PATH. Measured 2026-07-25.
+//
+// That is the inventory-vs-operation trap running backwards: the usual failure
+// is claiming a capability that is absent, and this one DENIES a capability
+// that is fully present. It is worse in one way — a false "not installed"
+// sends the user off to install something they already have, and no amount of
+// installing will ever put platform-tools on PATH.
+//
+// androidSDKCandidateRoots() already knew where to look. It simply was not
+// asked. Route every tool lookup through here.
+func resolveAndroidTool(name string) (string, error) {
+	// PATH first: an operator who deliberately put a specific adb ahead of the
+	// SDK's should keep winning.
+	if p, err := exec.LookPath(name); err == nil && strings.TrimSpace(p) != "" {
+		return p, nil
+	}
+	for _, root := range androidSDKCandidateRoots() {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		for _, rel := range [][]string{
+			{"platform-tools", name},
+			{"emulator", name},
+			{"cmdline-tools", "latest", "bin", name},
+			{"tools", "bin", name},
+		} {
+			cand := filepath.Join(append([]string{root}, rel...)...)
+			if st, err := os.Stat(cand); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+				return cand, nil
+			}
+		}
+	}
+	// Name WHERE we looked. "not found in PATH" sent people to reinstall an SDK
+	// they already had; the roots make the real problem (an unset ANDROID_HOME)
+	// visible in one line.
+	return "", fmt.Errorf("%s not found on PATH or in any Android SDK root (%s) — set ANDROID_HOME if your SDK lives elsewhere",
+		name, strings.Join(androidSDKCandidateRoots(), ", "))
+}
+
 func looksLikeAndroidSDKRoot(root string) bool {
 	root = strings.TrimSpace(root)
 	if root == "" {

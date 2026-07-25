@@ -133,7 +133,7 @@ func dispatchAutoLaunch(ctx context.Context, platform BuildPlatform, deviceID, a
 // installAPKOnAndroidDevice runs `adb install -r -t` against the first online
 // device returned by `adb devices`. Returns the device serial.
 func installAPKOnAndroidDevice(ctx context.Context, apkPath string) (string, error) {
-	if _, err := exec.LookPath("adb"); err != nil {
+	if _, err := resolveAndroidTool("adb"); err != nil {
 		return "", fmt.Errorf("adb not found — install Android platform-tools (brew install android-platform-tools) to enable native Android device install")
 	}
 	serial, err := detectAndroidDevice(ctx)
@@ -171,7 +171,7 @@ func launchAPKOnAndroidDevice(ctx context.Context, serial, apkPath string) error
 // detectAndroidDevice returns the first online "device" from `adb devices`.
 // Returns ("", nil) when no device is attached so callers can produce a friendly error.
 func detectAndroidDevice(ctx context.Context) (string, error) {
-	if _, err := exec.LookPath("adb"); err != nil {
+	if _, err := resolveAndroidTool("adb"); err != nil {
 		return "", fmt.Errorf("adb not found — install Android platform-tools")
 	}
 	out, err := exec.CommandContext(ctx, "adb", "devices").Output()

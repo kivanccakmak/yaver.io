@@ -17,7 +17,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/yaver-io/agent/testkit"
@@ -189,8 +188,8 @@ func RunDevelopFor(ctx context.Context, req DevelopForRequest) (DevelopForResult
 func currentHostCaps(ctx context.Context) HostCaps {
 	fams, _ := testkit.InstalledRuntimeFamilies(ctx)
 	adbAvail := false
-	if _, err := exec.LookPath("adb"); err == nil {
-		if _, err := exec.LookPath("emulator"); err == nil {
+	if _, err := resolveAndroidTool("adb"); err == nil {
+		if _, err := resolveAndroidTool("emulator"); err == nil {
 			adbAvail = true
 		}
 	}

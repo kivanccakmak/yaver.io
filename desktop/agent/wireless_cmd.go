@@ -320,7 +320,7 @@ func printWirelessDetectHints() {
 		fmt.Println("      'Connect via network' (one-time setup over cable).")
 		fmt.Println("    - The device must be unlocked and 'Trust This Computer' must be granted.")
 	}
-	if _, err := exec.LookPath("adb"); err != nil {
+	if _, err := resolveAndroidTool("adb"); err != nil {
 		fmt.Println("  Android: install platform-tools (adb missing). brew install android-platform-tools")
 	} else {
 		fmt.Println("  Android:")
@@ -621,7 +621,7 @@ func runWirelessSetupAndroid(args []string) {
 	pollSec := fs.Int("poll-seconds", 120, "how long to wait for the pairing service to appear in mDNS")
 	_ = fs.Parse(args)
 
-	if _, err := exec.LookPath("adb"); err != nil {
+	if _, err := resolveAndroidTool("adb"); err != nil {
 		fmt.Fprintln(os.Stderr, "adb not found — `brew install android-platform-tools` (macOS) or install platform-tools.")
 		os.Exit(2)
 	}

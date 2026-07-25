@@ -7317,7 +7317,7 @@ func runDoctor() {
 		warning("adb not found — install Android Studio / Android SDK for Android Emulator (M5)")
 	}
 	check("Android emulator")
-	if path, _ := osexec.LookPath("emulator"); path != "" {
+	if path, _ := resolveAndroidTool("emulator"); path != "" {
 		out, _ := osexec.Command(path, "-list-avds").Output()
 		avds := strings.TrimSpace(string(out))
 		if avds != "" {

@@ -131,7 +131,7 @@ func runWireDetect(args []string) {
 		} else if _, err := exec.LookPath("xcrun"); err != nil {
 			fmt.Println("  iOS: install Xcode command line tools (xcrun missing).")
 		}
-		if _, err := exec.LookPath("adb"); err != nil {
+		if _, err := resolveAndroidTool("adb"); err != nil {
 			fmt.Println("  Android: install platform-tools (adb missing). brew install android-platform-tools")
 		}
 		return
@@ -364,7 +364,7 @@ func listAndroidWirelessDevices(ctx context.Context) []wireDevice {
 // at the same `device:` qualifier, we keep only the IP:port form so the
 // UI doesn't show two rows for one tablet.
 func androidDevicesFromAdb(ctx context.Context, wireless bool) []wireDevice {
-	if _, err := exec.LookPath("adb"); err != nil {
+	if _, err := resolveAndroidTool("adb"); err != nil {
 		return nil
 	}
 	out, err := exec.CommandContext(ctx, "adb", "devices", "-l").Output()
@@ -462,7 +462,7 @@ type adbMdnsService struct {
 // same device usually has the real LAN IP, and repairAdbMdnsHost()
 // patches the pairing entry from that.
 func adbMdnsServices(ctx context.Context) []adbMdnsService {
-	if _, err := exec.LookPath("adb"); err != nil {
+	if _, err := resolveAndroidTool("adb"); err != nil {
 		return nil
 	}
 	out, err := exec.CommandContext(ctx, "adb", "mdns", "services").Output()
@@ -564,7 +564,7 @@ func enrichWireDevices(ctx context.Context, devs []wireDevice, parallel int) {
 // adbPair runs `adb pair <ip:port> <code>`. Returns combined output for
 // the caller to surface; non-nil error includes the exit failure.
 func adbPair(ctx context.Context, ipPort, code string) (string, error) {
-	if _, err := exec.LookPath("adb"); err != nil {
+	if _, err := resolveAndroidTool("adb"); err != nil {
 		return "", fmt.Errorf("adb not found")
 	}
 	out, err := exec.CommandContext(ctx, "adb", "pair", ipPort, code).CombinedOutput()
@@ -575,7 +575,7 @@ func adbPair(ctx context.Context, ipPort, code string) (string, error) {
 // the connect failed — its only signal is the stdout text. We treat any
 // "failed", "cannot", or "unauthorized" line as a real error.
 func adbConnect(ctx context.Context, ipPort string) (string, error) {
-	if _, err := exec.LookPath("adb"); err != nil {
+	if _, err := resolveAndroidTool("adb"); err != nil {
 		return "", fmt.Errorf("adb not found")
 	}
 	out, err := exec.CommandContext(ctx, "adb", "connect", ipPort).CombinedOutput()

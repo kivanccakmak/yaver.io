@@ -189,7 +189,7 @@ func appleSoCForProductType(pt string) string {
 // batch the queries into one `adb shell` invocation per call to keep
 // roundtrips down — over WiFi each round trip is ~150-250 ms.
 func enrichAndroidDeviceInfo(ctx context.Context, dev wireDevice) mobileDeviceInfo {
-	if _, err := exec.LookPath("adb"); err != nil {
+	if _, err := resolveAndroidTool("adb"); err != nil {
 		return mobileDeviceInfo{}
 	}
 	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)

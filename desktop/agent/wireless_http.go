@@ -69,7 +69,7 @@ func wireToolHint(wireless bool) string {
 		}
 	}
 	missingAdb := false
-	if _, err := exec.LookPath("adb"); err != nil {
+	if _, err := resolveAndroidTool("adb"); err != nil {
 		missingAdb = true
 	}
 	switch {

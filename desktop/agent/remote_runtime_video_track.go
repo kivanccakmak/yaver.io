@@ -261,7 +261,7 @@ func spawnXcrunRecordVideo(ctx context.Context, deviceID string) (*exec.Cmd, io.
 }
 
 func spawnAdbScreenrecord(ctx context.Context, deviceID string) (*exec.Cmd, io.ReadCloser, error) {
-	if _, err := exec.LookPath("adb"); err != nil {
+	if _, err := resolveAndroidTool("adb"); err != nil {
 		return nil, nil, fmt.Errorf("adb not on PATH — run `yaver install remote-runtime` to provision android-sdk")
 	}
 	args := []string{}

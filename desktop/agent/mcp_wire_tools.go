@@ -42,7 +42,7 @@ func mcpWireDetectHint(devices []wireDevice) string {
 	if _, err := exec.LookPath("xcrun"); err != nil {
 		hints = append(hints, "xcrun missing — iOS detection skipped (install Xcode CLI tools)")
 	}
-	if _, err := exec.LookPath("adb"); err != nil {
+	if _, err := resolveAndroidTool("adb"); err != nil {
 		hints = append(hints, "adb missing — Android detection skipped (brew install android-platform-tools)")
 	}
 	if len(devices) == 0 {

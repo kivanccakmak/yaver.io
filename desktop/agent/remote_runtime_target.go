@@ -282,7 +282,7 @@ func (androidTarget) SpawnCapture(ctx context.Context, deviceID string) (*exec.C
 }
 func (androidTarget) NewNALReader(r io.Reader) (nalSource, error) { return NewAnnexBReader(r), nil }
 func (androidTarget) CanEncodeRTPH264() bool {
-	_, err := exec.LookPath("adb")
+	_, err := resolveAndroidTool("adb")
 	return err == nil
 }
 
