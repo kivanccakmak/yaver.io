@@ -12,6 +12,7 @@ package main
 // IPs get used.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -24,9 +25,9 @@ import (
 // TailscaleStatus is the trimmed `tailscale status --json`
 // view we actually use.
 type TailscaleStatus struct {
-	Running     bool     `json:"running"`
-	BackendState string  `json:"backendState,omitempty"`
-	Self        *tailscaleSelf `json:"self,omitempty"`
+	Running      bool           `json:"running"`
+	BackendState string         `json:"backendState,omitempty"`
+	Self         *tailscaleSelf `json:"self,omitempty"`
 }
 
 type tailscaleSelf struct {
@@ -45,7 +46,23 @@ func DetectTailscale() *TailscaleStatus {
 	if err != nil {
 		return &TailscaleStatus{Running: false}
 	}
-	cmd := exec.Command(bin, "status", "--json")
+	// HARD timeout + WaitDelay. The comment above promised this is "safe to
+	// call on every startup without hanging" — it was not. `tailscale status`
+	// blocks indefinitely when the binary is present but tailscaled is
+	// unresponsive (updating, wedged, mid-relaunch). This runs in the agent's
+	// STARTUP path (recovery_transport.go -> DetectTailscale), so on a headless
+	// Mac mini it hung the whole boot AFTER token validation, before the HTTP
+	// server ever bound — the agent process stayed alive and served nothing,
+	// which read as "online but no transport answered" on the phone. Fourth
+	// unbounded subprocess in a critical path found this session; same fix.
+	// WaitDelay because killing the process does not free Output() while a
+	// child still holds the pipe. Tailscale detection is advisory (it only
+	// decides which recovery transports to advertise), so it must never be able
+	// to stop the agent from starting.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "status", "--json")
+	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.Output()
 	if err != nil {
 		return &TailscaleStatus{Running: false}
@@ -109,9 +126,9 @@ func tailscaleIPCandidates(httpPort int) []string {
 // + `yaver doctor` + the pairing QR generator all call. We
 // cache for 10s so a noisy client can't peg `tailscale status`.
 var (
-	tailscaleCache     *TailscaleStatus
-	tailscaleCacheAt   time.Time
-	tailscaleCacheTTL  = 10 * time.Second
+	tailscaleCache    *TailscaleStatus
+	tailscaleCacheAt  time.Time
+	tailscaleCacheTTL = 10 * time.Second
 )
 
 func (s *HTTPServer) handleTailscaleStatus(w http.ResponseWriter, r *http.Request) {

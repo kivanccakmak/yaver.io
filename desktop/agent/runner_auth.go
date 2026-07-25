@@ -518,6 +518,11 @@ func runClaudeAuthStatus() (claudeAuthStatusJSON, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := osexec.CommandContext(ctx, bin, "auth", "status", "--json")
+	// WaitDelay: a runner CLI (claude/codex/opencode) can spawn a child that
+	// inherits the pipe, so a context kill does NOT free Output() on its own.
+	// This runs at agent startup; without the delay a wedged runner CLI hangs
+	// the whole boot before the HTTP server binds (mac mini, 2026-07-25).
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Env = append(os.Environ(), "CI=1", "NO_COLOR=1", "TERM=dumb")
 	// Signed-out is exit 1 WITH a well-formed body, so the exit code carries no
 	// information the body doesn't. A parse hit means the CLI answered us;
@@ -646,6 +651,7 @@ func claudeMacKeychainHasCreds() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
 	cmd := osexec.CommandContext(ctx, "security", "find-generic-password", "-s", "Claude Code-credentials")
+	cmd.WaitDelay = time.Second
 	err := cmd.Run()
 	ok := err == nil
 	claudeMacKeychainCache.ok = ok
@@ -760,7 +766,9 @@ func codexLoginStatusOK() bool {
 	if bin := resolveRunnerBinary("codex"); bin != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
 		defer cancel()
-		ok = osexec.CommandContext(ctx, bin, "login", "status").Run() == nil
+		lc := osexec.CommandContext(ctx, bin, "login", "status")
+		lc.WaitDelay = time.Second
+		ok = lc.Run() == nil
 	}
 
 	codexLoginStatusCache.Lock()
