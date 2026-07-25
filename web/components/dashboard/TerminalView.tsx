@@ -29,7 +29,15 @@ const AGENT_LAUNCHERS: ReadonlyArray<{ id: string; label: string; command: strin
   },
 ];
 
-export default function TerminalView({ cwd, launch }: { cwd?: string; launch?: "claude" | "codex" | "opencode" }) {
+export default function TerminalView({
+  cwd,
+  launch,
+  tmuxSession,
+}: {
+  cwd?: string;
+  launch?: "claude" | "codex" | "opencode";
+  tmuxSession?: string;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const termRef = useRef<any>(null);
@@ -136,7 +144,7 @@ export default function TerminalView({ cwd, launch }: { cwd?: string; launch?: "
       const term = termRef.current;
       const fit = fitRef.current;
 
-      const url = await agentClient.terminalWsUrl(cwd, { launch });
+      const url = await agentClient.terminalWsUrl(cwd, { launch, tmuxSession });
       if (disposed) return;
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
@@ -226,7 +234,7 @@ export default function TerminalView({ cwd, launch }: { cwd?: string; launch?: "
       // reconnect attempts so scrollback survives. Component unmount
       // disposes via the second effect below.
     };
-  }, [cwd, launch, attempt]);
+  }, [cwd, launch, tmuxSession, attempt]);
 
   // Dispose the terminal only on full component unmount.
   useEffect(() => {
@@ -241,7 +249,11 @@ export default function TerminalView({ cwd, launch }: { cwd?: string; launch?: "
     <div className="flex h-full w-full flex-col bg-[#0b0d10] overflow-hidden">
       {/* One-tap agent launchers + optional dictation */}
       <div className="flex items-center gap-2 border-b border-white/10 px-2 py-1.5 overflow-x-auto">
-        {AGENT_LAUNCHERS.map((l) => {
+        {tmuxSession ? (
+          <span className="shrink-0 rounded border border-sky-400/40 bg-sky-500/15 px-2.5 py-1 font-mono text-xs text-sky-700 dark:text-sky-200">
+            tmux {tmuxSession}
+          </span>
+        ) : AGENT_LAUNCHERS.map((l) => {
           const active = runningRunner === l.id;
           return (
             <button
