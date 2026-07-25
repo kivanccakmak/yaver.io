@@ -2327,6 +2327,10 @@ func runServe(args []string) {
 	// yesterday's ghosts holding 19006/19007/19008. See
 	// devserver_child_registry.go for the incident this exists for.
 	ReapOrphanedDevChildren()
+	// Start housekeeping HERE, not inside a lazily-created subsystem: a janitor
+	// that only wakes when the user opens a stream never runs on the machines
+	// that need it. See custodian.go.
+	StartAgentCustodian(nil)
 
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	httpPort := fs.Int("port", 18080, "HTTP server port")

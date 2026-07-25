@@ -1554,7 +1554,7 @@ func (s *HTTPServer) ensureRemoteRuntimeManager() *RemoteRuntimeManager {
 		// what it does reaches the user's screen instead of only a launchd log —
 		// that visibility is the whole reason custodian.go exists. Same cadence,
 		// same ReapAbandonedSessions, one feed.
-		StartAgentCustodian(s.remoteRuntimeMgr, nil)
+		AttachRuntimeWarden(s.remoteRuntimeMgr)
 	}
 	// Keep the dev-server pointer fresh even after lazy allocation — the
 	// devServerMgr on HTTPServer is itself lazy for some code paths, so a

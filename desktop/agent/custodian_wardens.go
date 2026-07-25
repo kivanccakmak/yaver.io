@@ -70,15 +70,26 @@ func (w runtimeSessionWarden) Sweep(now time.Time) []CustodianFinding {
 // is what the UI subscribes to, and two custodians would mean two half-feeds.
 var agentCustodian = NewCustodian()
 
-// StartAgentCustodian registers the standard wardens and starts sweeping.
-// Called once from serve, after the runtime manager exists.
-func StartAgentCustodian(mgr *RemoteRuntimeManager, stop <-chan struct{}) *Custodian {
+// StartAgentCustodian registers the machine-level wardens and starts sweeping.
+// Called from serve BEFORE anything lazy: housekeeping that only begins once the
+// user happens to open a WebRTC stream is housekeeping that never runs on the
+// machines that need it most. (Observed exactly that on the Mac mini —
+// /custodian/status answered `wardens: null, sweeping: false` on a healthy
+// agent, because the only wiring lived inside ensureRemoteRuntimeManager.)
+func StartAgentCustodian(stop <-chan struct{}) *Custodian {
 	agentCustodian.Register(devChildWarden{})
-	if mgr != nil {
-		agentCustodian.Register(runtimeSessionWarden{mgr: mgr})
-	}
 	agentCustodian.Start(stop)
 	return agentCustodian
+}
+
+// AttachRuntimeWarden adds the streaming-session sweep once its manager exists.
+// Register starts a late warden immediately when the custodian is already
+// running, so arriving after Start is not the same as never sweeping.
+func AttachRuntimeWarden(mgr *RemoteRuntimeManager) {
+	if mgr == nil {
+		return
+	}
+	agentCustodian.Register(runtimeSessionWarden{mgr: mgr})
 }
 
 // ReportFailureToCustodian is the seam every failing operation calls instead of
