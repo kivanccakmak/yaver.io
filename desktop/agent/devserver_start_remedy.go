@@ -105,3 +105,71 @@ func annotateDevStartError(framework, workDir string, err error) string {
 	}
 	return msg + "\n\nWhat to do: " + remedy
 }
+
+// ─── compile failures on a HEALTHY dev server ────────────────────────────────
+
+// devBuildFailureLine reports whether a dev-server output line means "the app
+// itself cannot build".
+//
+// This is a different failure from "the dev server did not start": the server is
+// up, listening, and answering index.html — it simply has no app to serve. Every
+// surface therefore looked healthy while the user stared at a black screen. Seen
+// 2026-07-25 on a real Flutter project whose lock file pinned
+// font_awesome_flutter 10.12.0 against Flutter 3.44 (`IconData` became a final
+// class): readiness passed, the proxy returned 200, and nothing ever rendered.
+func devBuildFailureLine(line string) bool {
+	l := strings.ToLower(strings.TrimSpace(line))
+	if l == "" {
+		return false
+	}
+	for _, needle := range []string{
+		"failed to compile application",       // Flutter/Dart
+		"compilation failed",                  // dart2js / ddc, tsc --build
+		"failed to compile",                   // Vite/esbuild summary
+		"error: failed to compile",            // Next.js
+		"module build failed",                 // webpack/Metro
+		"bundling failed",                     // Metro
+		"unable to resolve module",            // Metro missing import
+		"the following build commands failed", // xcodebuild
+	} {
+		if strings.Contains(l, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// compileErrorLines picks the lines a human needs out of a log tail: the failure
+// summary plus the first concrete error above it.
+//
+// Handing over the whole tail buries the cause in stack noise; handing over only
+// the summary ("Failed to compile application.") names no reason at all. Both were
+// tried; this is the middle.
+func compileErrorLines(tail []string) []string {
+	out := []string{}
+	for _, line := range tail {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || trimmed == "^" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if strings.Contains(lower, "error:") || strings.Contains(lower, "error ") ||
+			devBuildFailureLine(trimmed) || strings.Contains(lower, "cannot find") {
+			out = append(out, trimmed)
+		}
+	}
+	if len(out) == 0 {
+		// Nothing matched our shapes — the raw tail beats saying nothing.
+		for _, line := range tail {
+			if t := strings.TrimSpace(line); t != "" {
+				out = append(out, t)
+			}
+		}
+	}
+	// Keep it to a readable panel: the summary line plus a handful of causes.
+	const maxLines = 6
+	if len(out) > maxLines {
+		out = out[len(out)-maxLines:]
+	}
+	return out
+}

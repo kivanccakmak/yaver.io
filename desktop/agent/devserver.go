@@ -1563,12 +1563,48 @@ func (m *DevServerManager) recordRecentLog(line string) {
 		return
 	}
 	m.recentLogMu.Lock()
-	defer m.recentLogMu.Unlock()
-	const max = 8
 	m.recentLogTail = append(m.recentLogTail, line)
-	if len(m.recentLogTail) > max {
-		m.recentLogTail = m.recentLogTail[len(m.recentLogTail)-max:]
+	if len(m.recentLogTail) > devRecentLogMax {
+		m.recentLogTail = m.recentLogTail[len(m.recentLogTail)-devRecentLogMax:]
 	}
+	tail := append([]string(nil), m.recentLogTail...)
+	m.recentLogMu.Unlock()
+
+	// A dev server can be perfectly HEALTHY and still be serving an app that
+	// cannot compile. Flutter's web-server keeps listening and answers
+	// index.html, so readiness passes, the proxy returns 200, and the phone shows
+	// a black screen forever. The only statement of the truth is in the output:
+	//
+	//   ../font_awesome_flutter-10.12.0/lib/src/icon_data.dart:104:36: Error: The
+	//   class 'IconData' can't be extended outside of its library …
+	//   Failed to compile application.
+	//
+	// Observed on a real project 2026-07-25, after two Yaver-side bugs had been
+	// fixed and the preview STILL showed nothing. Promote it to a first-class
+	// failure with the offending lines attached, so the surface the user is
+	// looking at says "your app failed to compile: <reason>" instead of nothing.
+	if devBuildFailureLine(line) {
+		m.emit(DevServerEvent{
+			Type:      "error",
+			Framework: m.frameworkNameForEvents(),
+			Message:   "The app failed to compile — the dev server is running but has nothing to serve:\n" + strings.Join(compileErrorLines(tail), "\n"),
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+}
+
+// devRecentLogMax bounds the replayed tail. Big enough to carry a Dart/TS
+// compile error with its context lines (the useful part is 5–10 lines), small
+// enough that a snapshot frame stays cheap on a relay.
+const devRecentLogMax = 24
+
+func (m *DevServerManager) frameworkNameForEvents() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.active != nil {
+		return m.active.server.Name()
+	}
+	return ""
 }
 
 // ─── Base Dev Server (shared logic) ────────────────────────────────────

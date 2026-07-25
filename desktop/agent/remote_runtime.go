@@ -402,7 +402,7 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 	// can be the streamed surface. The mobile sim → mobile client path is the
 	// default; the rest are there for the AR/VR/watch/car/tablet reach.
 	if rnSim {
-		rnAppleFams := appleRuntimeFamiliesForCaps()
+		rnAppleFams, rnAppleFamsKnown := appleRuntimeFamiliesForCaps()
 		caps.Targets = []RemoteRuntimeTarget{
 			// RN's WEB target, streamed from a headless tab on the box.
 			//
@@ -418,11 +418,11 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 			// exactly as they were; RN is the one stack with three honest
 			// choices, and only the user knows which they want.
 			probeBrowserWindowTarget(),
-			probeIOSSimulatorTarget(rnAppleFams),
-			probeIPadSimulatorTarget(rnAppleFams),
-			probeWatchOSSimulatorTarget(rnAppleFams),
-			probeTVOSSimulatorTarget(rnAppleFams),
-			probeVisionOSSimulatorTarget(rnAppleFams),
+			probeIOSSimulatorTarget(rnAppleFams, rnAppleFamsKnown),
+			probeIPadSimulatorTarget(rnAppleFams, rnAppleFamsKnown),
+			probeWatchOSSimulatorTarget(rnAppleFams, rnAppleFamsKnown),
+			probeTVOSSimulatorTarget(rnAppleFams, rnAppleFamsKnown),
+			probeVisionOSSimulatorTarget(rnAppleFams, rnAppleFamsKnown),
 			probeAndroidEmulatorTarget(),
 			probeAndroidWearTarget(),
 			probeAndroidTVTarget(),
@@ -437,7 +437,7 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 	// One probe per capabilities call — five `simctl list runtimes` shells
 	// would slow the picker load. Empty map on non-darwin hosts is fine:
 	// each Apple probe short-circuits on the macOS check first.
-	appleFams := appleRuntimeFamiliesForCaps()
+	appleFams, appleFamsKnown := appleRuntimeFamiliesForCaps()
 	switch mode {
 	case ExecutionModeNativeWebRTC:
 		switch strings.ToLower(strings.TrimSpace(framework)) {
@@ -460,8 +460,8 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 					probeBrowserWindowTarget(),
 					// Simulators still listed after it: on a Mac the user may
 					// legitimately prefer to see it in a real iOS shell.
-					probeIOSSimulatorTarget(appleFams),
-					probeIPadSimulatorTarget(appleFams),
+					probeIOSSimulatorTarget(appleFams, appleFamsKnown),
+					probeIPadSimulatorTarget(appleFams, appleFamsKnown),
 					probeIOSDeviceTarget(),
 				}
 				break
@@ -469,11 +469,11 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 			// iPhone default; then iPad/watchOS/tvOS/visionOS sims (each
 			// gated on its runtime being installed); physical iPhone last.
 			caps.Targets = []RemoteRuntimeTarget{
-				probeIOSSimulatorTarget(appleFams),
-				probeIPadSimulatorTarget(appleFams),
-				probeWatchOSSimulatorTarget(appleFams),
-				probeTVOSSimulatorTarget(appleFams),
-				probeVisionOSSimulatorTarget(appleFams),
+				probeIOSSimulatorTarget(appleFams, appleFamsKnown),
+				probeIPadSimulatorTarget(appleFams, appleFamsKnown),
+				probeWatchOSSimulatorTarget(appleFams, appleFamsKnown),
+				probeTVOSSimulatorTarget(appleFams, appleFamsKnown),
+				probeVisionOSSimulatorTarget(appleFams, appleFamsKnown),
 				probeIOSDeviceTarget(),
 			}
 		case "kotlin":
@@ -517,11 +517,11 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 				probeAndroidAutoTarget(),
 				probeRedroidTarget(),
 				probeAndroidDeviceTarget(),
-				probeIOSSimulatorTarget(appleFams),
-				probeIPadSimulatorTarget(appleFams),
-				probeWatchOSSimulatorTarget(appleFams),
-				probeTVOSSimulatorTarget(appleFams),
-				probeVisionOSSimulatorTarget(appleFams),
+				probeIOSSimulatorTarget(appleFams, appleFamsKnown),
+				probeIPadSimulatorTarget(appleFams, appleFamsKnown),
+				probeWatchOSSimulatorTarget(appleFams, appleFamsKnown),
+				probeTVOSSimulatorTarget(appleFams, appleFamsKnown),
+				probeVisionOSSimulatorTarget(appleFams, appleFamsKnown),
 				probeIOSDeviceTarget(),
 			}
 		case "browser":
@@ -592,11 +592,24 @@ func platformsContain(list []string, want string) bool {
 // `tvOS`, `visionOS`). Cached per call because we build all five Apple
 // probes from one map; overridable by tests via
 // setAppleRuntimeFamiliesForTest to avoid shelling to simctl.
-var appleRuntimeFamiliesForCaps = func() map[string]bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+// appleRuntimeFamiliesForCaps answers "which Apple simulator runtimes does this
+// machine have?" — and, crucially, whether the answer is KNOWN.
+//
+// It used to allow `xcrun simctl list runtimes` 4 seconds and treat a timeout as
+// "nothing installed". On a real Mac mini (2026-07-25) `xcrun simctl help` alone
+// took 17 SECONDS, so every Apple target reported "iOS runtime not installed.
+// Open Xcode > Settings > Components and install it." — while iOS 26.4 was
+// installed AND a device was booted on it. The product told the user to install
+// something they had, and the Swift/RN WebRTC lane looked unavailable on a machine
+// that could run it.
+//
+// Now: read the runtime bundles off disk first (instant, cannot hang on a busy
+// CoreSimulator), fall back to simctl with a realistic timeout, and report
+// "unknown" separately from "absent".
+var appleRuntimeFamiliesForCaps = func() (map[string]bool, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	fams, _ := testkit.InstalledRuntimeFamilies(ctx)
-	return fams
+	return testkit.InstalledRuntimeFamiliesDetermined(ctx)
 }
 
 // setAppleRuntimeFamiliesForTest swaps the appleRuntimeFamiliesForCaps
@@ -605,12 +618,12 @@ var appleRuntimeFamiliesForCaps = func() map[string]bool {
 // shelling to `xcrun simctl list runtimes`.
 func setAppleRuntimeFamiliesForTest(fams map[string]bool) func() {
 	prev := appleRuntimeFamiliesForCaps
-	appleRuntimeFamiliesForCaps = func() map[string]bool {
+	appleRuntimeFamiliesForCaps = func() (map[string]bool, bool) {
 		copy := map[string]bool{}
 		for k, v := range fams {
 			copy[k] = v
 		}
-		return copy
+		return copy, true
 	}
 	return func() { appleRuntimeFamiliesForCaps = prev }
 }
@@ -620,7 +633,7 @@ func setAppleRuntimeFamiliesForTest(fams map[string]bool) func() {
 // if all host prereqs pass, the per-runtime-family install gate. The
 // caller supplies id/surface/label/family so each thin probe is a
 // two-liner.
-func probeAppleSimTarget(id, surface, label, family string, families map[string]bool) RemoteRuntimeTarget {
+func probeAppleSimTarget(id, surface, label, family string, families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
 	target := RemoteRuntimeTarget{
 		ID:               id,
 		Label:            label,
@@ -647,6 +660,16 @@ func probeAppleSimTarget(id, surface, label, family string, families map[string]
 	}
 	if family != "" && !families[family] {
 		target.Enabled = false
+		if !familiesKnown {
+			// Do NOT claim it is missing when we could not find out. This exact
+			// conflation sent a user to Xcode > Components for a runtime that was
+			// already installed, because simctl was slow (17s on the box in
+			// question) rather than because anything was absent.
+			target.Reason = family + " runtime could not be confirmed: no runtime bundle on disk and " +
+				"`xcrun simctl` did not answer in time (it can take 15s+ when CoreSimulator is busy). " +
+				"Retry, or run `xcrun simctl list runtimes` on the host to see the real state."
+			return target
+		}
 		target.Reason = family + " runtime not installed. Open Xcode > Settings > Components and install it."
 		return target
 	}
@@ -654,24 +677,24 @@ func probeAppleSimTarget(id, surface, label, family string, families map[string]
 	return target
 }
 
-func probeIOSSimulatorTarget(families map[string]bool) RemoteRuntimeTarget {
-	return probeAppleSimTarget("ios-simulator", "phone", "iPhone Simulator over WebRTC", "iOS", families)
+func probeIOSSimulatorTarget(families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
+	return probeAppleSimTarget("ios-simulator", "phone", "iPhone Simulator over WebRTC", "iOS", families, familiesKnown)
 }
 
-func probeIPadSimulatorTarget(families map[string]bool) RemoteRuntimeTarget {
-	return probeAppleSimTarget("ipados-simulator", "tablet", "iPad Simulator over WebRTC", "iOS", families)
+func probeIPadSimulatorTarget(families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
+	return probeAppleSimTarget("ipados-simulator", "tablet", "iPad Simulator over WebRTC", "iOS", families, familiesKnown)
 }
 
-func probeWatchOSSimulatorTarget(families map[string]bool) RemoteRuntimeTarget {
-	return probeAppleSimTarget("watchos-simulator", "watch", "Apple Watch Simulator over WebRTC", "watchOS", families)
+func probeWatchOSSimulatorTarget(families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
+	return probeAppleSimTarget("watchos-simulator", "watch", "Apple Watch Simulator over WebRTC", "watchOS", families, familiesKnown)
 }
 
-func probeTVOSSimulatorTarget(families map[string]bool) RemoteRuntimeTarget {
-	return probeAppleSimTarget("tvos-simulator", "tv", "Apple TV Simulator over WebRTC", "tvOS", families)
+func probeTVOSSimulatorTarget(families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
+	return probeAppleSimTarget("tvos-simulator", "tv", "Apple TV Simulator over WebRTC", "tvOS", families, familiesKnown)
 }
 
-func probeVisionOSSimulatorTarget(families map[string]bool) RemoteRuntimeTarget {
-	return probeAppleSimTarget("visionos-simulator", "vision", "Apple Vision Pro Simulator over WebRTC", "visionOS", families)
+func probeVisionOSSimulatorTarget(families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
+	return probeAppleSimTarget("visionos-simulator", "vision", "Apple Vision Pro Simulator over WebRTC", "visionOS", families, familiesKnown)
 }
 
 func probeAndroidEmulatorTarget() RemoteRuntimeTarget {

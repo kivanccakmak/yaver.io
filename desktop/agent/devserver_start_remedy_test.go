@@ -100,3 +100,68 @@ func TestAnnotateDevStartErrorAppendsOnce(t *testing.T) {
 		t.Error("nil error should annotate to an empty string")
 	}
 }
+
+// A dev server can be healthy and still have nothing to serve. That case looked
+// identical to success on every surface: readiness passed, the proxy answered
+// index.html with 200, and the phone rendered black forever.
+//
+// Verbatim from a real project on 2026-07-25 (Flutter 3.44 + a lock file pinning
+// font_awesome_flutter 10.12.0, whose IconData subclassing broke when IconData
+// became a final class).
+func TestCompileFailureIsRecognisedAndExplained(t *testing.T) {
+	tail := []string{
+		"Waiting for connection from debug service on Web Server...",
+		"../../.pub-cache/hosted/pub.dev/font_awesome_flutter-10.12.0/lib/src/icon_data.dart:104:36: Error: The class 'IconData' can't be extended outside of its library because it's a final class.",
+		"class IconDataSharpRegular extends IconData {",
+		"^",
+		"Failed to compile application.",
+	}
+
+	if !devBuildFailureLine("Failed to compile application.") {
+		t.Error("the Flutter summary line was not recognised as a build failure — the preview would keep looking healthy")
+	}
+	for _, other := range []string{
+		"error: Failed to compile.",                         // Next.js
+		"Bundling failed 3721ms",                            // Metro
+		"Unable to resolve module ./missing from index.js",  // Metro
+		"The following build commands failed: CompileSwift", // xcodebuild
+	} {
+		if !devBuildFailureLine(other) {
+			t.Errorf("not recognised as a build failure: %q", other)
+		}
+	}
+	for _, healthy := range []string{
+		"Compiling lib/main.dart for the Web...",
+		"Waiting for connection from debug service on Web Server...",
+		"",
+	} {
+		if devBuildFailureLine(healthy) {
+			t.Errorf("healthy output misread as a build failure: %q", healthy)
+		}
+	}
+
+	lines := compileErrorLines(tail)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "font_awesome_flutter") {
+		t.Errorf("the explanation drops the offending package, which is the ONE thing the user must change:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Failed to compile application.") {
+		t.Errorf("the explanation drops the summary line:\n%s", joined)
+	}
+	for _, noise := range []string{"^", "Waiting for connection"} {
+		if strings.Contains(joined, noise) {
+			t.Errorf("noise line %q survived into the explanation:\n%s", noise, joined)
+		}
+	}
+	if len(lines) > 6 {
+		t.Errorf("explanation is %d lines — a failure panel nobody reads is a failure panel that does not work", len(lines))
+	}
+}
+
+func TestCompileErrorLinesFallsBackToTheRawTail(t *testing.T) {
+	tail := []string{"something inscrutable happened", "and then it stopped"}
+	got := compileErrorLines(tail)
+	if len(got) == 0 {
+		t.Fatal("an unrecognised tail produced NO explanation — saying nothing is the failure mode we are removing")
+	}
+}
