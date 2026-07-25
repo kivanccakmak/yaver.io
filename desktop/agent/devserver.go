@@ -2568,15 +2568,36 @@ func (f *FlutterDevServer) Start(ctx context.Context, opts DevServerOpts) error 
 		deviceID = "web-server"
 	}
 	if deviceID == "" {
-		// No explicit platform — pick a real mobile device for native hot
-		// reload, else fall back to web-server.
+		// NO PLATFORM ASKED FOR → WEB. This default is inverted from what it used
+		// to be, and the inversion is the fix.
+		//
+		// It used to detect a mobile device and run Flutter NATIVELY on it. That
+		// is right for someone typing `yaver dev` at a terminal and wrong for
+		// every preview surface, because a native Flutter run produces nothing
+		// the requesting surface can display: Flutter is DevServerKindWeb and can
+		// never load into the Yaver container (Hermes is RN-only). So the phone
+		// asked for a preview, the agent quietly started a native iOS build, and
+		// the card read `mode · native install · target · this device · Failed to
+		// compile application.` — a lane the user never chose, failing for
+		// reasons that had nothing to do with what they wanted (2026-07-25, the
+		// e-mobile Flutter recording).
+		//
+		// The default must be the lane that can ALWAYS be shown. Native Flutter
+		// hot reload is still available — it just has to be asked for by name
+		// (platform=ios / platform=android), which is exactly the request that
+		// carries the intent to use it.
+		log.Printf("[dev:flutter] no platform requested — serving -d web-server on :%d (the only Flutter lane a preview surface can display; pass platform=ios/android for native hot reload)", f.port)
+		deviceID = "web-server"
+	}
+	if preferredPlatform != "" {
+		// Explicit ios/android: honour it, and say so when there is nothing to
+		// run on rather than silently substituting a different lane.
 		detected := detectFlutterMobileDevice(ctx, preferredPlatform, opts.Target)
-		if detected != "" {
-			deviceID = detected
-		} else {
-			log.Printf("[dev:flutter] no mobile device found, falling back to web-server")
-			deviceID = "web-server"
+		if detected == "" {
+			return fmt.Errorf("no %s device or simulator is available for native Flutter hot reload on this machine — "+
+				"boot one, or use the browser preview (platform=web), which needs no device", preferredPlatform)
 		}
+		deviceID = detected
 	}
 
 	args := []string{"run", "-d", deviceID}

@@ -56,6 +56,19 @@ interface BannerPalette {
   label: string;
 }
 
+/**
+ * shortAgentVersion trims a build suffix for the banner chip: "1.99.363-custodian"
+ * → "1.99.363". The suffix is meaningful in a log and pure noise in a chip that
+ * shares a 320pt row with a status label and the Switch button — it was what
+ * pushed "agent v1.99.363-cu…" into the Switch chip. The full string stays
+ * available wherever there is room for it (device details).
+ */
+export function shortAgentVersion(version: string): string {
+  const v = (version || "").trim();
+  const dash = v.indexOf("-");
+  return dash > 0 ? v.slice(0, dash) : v;
+}
+
 export default function RemoteBoxBanner({ extra, onDeviceChange, disableTap }: RemoteBoxBannerProps) {
   const c = useColors();
   const { activeDevice, devices, connectionStatus, connectedDeviceIds, primaryDeviceId, secondaryDeviceId, deviceListError, everHadDevices, isLoadingDevices, refreshDevices, autoConnecting, autoConnectTarget, cancelAutoConnect } = useDevice();
@@ -76,9 +89,11 @@ export default function RemoteBoxBanner({ extra, onDeviceChange, disableTap }: R
   // The device row cannot be trusted for this (it said needsAuth=false while the
   // agent said needsAuth=true), so ask the agent itself and believe the agent.
   const [agentLifecycle, setAgentLifecycle] = useState<"bootstrap" | "yaver-auth-expired" | null>(null);
+  const [liveAgentVersion, setLiveAgentVersion] = useState<string | null>(null);
   useEffect(() => {
     if (!activeDevice) {
       setAgentLifecycle(null);
+      setLiveAgentVersion(null);
       return;
     }
     let cancelled = false;
@@ -90,6 +105,8 @@ export default function RemoteBoxBanner({ extra, onDeviceChange, disableTap }: R
       setAgentLifecycle(
         p.reachable ? (p.bootstrap ? "bootstrap" : p.authExpired ? "yaver-auth-expired" : null) : null,
       );
+      const version = typeof p.info?.version === "string" ? p.info.version.trim() : "";
+      setLiveAgentVersion(version || null);
     };
     void probe();
     const iv = setInterval(() => void probe(), 20_000);
@@ -202,6 +219,7 @@ export default function RemoteBoxBanner({ extra, onDeviceChange, disableTap }: R
       : activeDevice?.id === secondaryDeviceId
         ? "Secondary"
         : null;
+  const agentVersion = (liveAgentVersion || activeDevice?.agentVersion || "").trim().replace(/^v/i, "");
 
   const Wrapper: any = disableTap ? View : Pressable;
   const wrapperProps = disableTap ? {} : { onPress: () => setPickerVisible(true), hitSlop: 6 };
@@ -231,6 +249,13 @@ export default function RemoteBoxBanner({ extra, onDeviceChange, disableTap }: R
               {roleLabel ? (
                 <View style={[styles.inlineChip, styles.rolePill, { backgroundColor: c.bgInput, borderColor: c.borderSubtle }]}>
                   <Text style={[styles.roleText, { color: c.textSecondary }]}>{roleLabel}</Text>
+                </View>
+              ) : null}
+              {agentVersion && effective === "connected" ? (
+                <View style={[styles.inlineChip, styles.versionPill, { backgroundColor: c.bgInput, borderColor: c.borderSubtle }]}>
+                  <Text style={[styles.roleText, { color: c.textSecondary }]} numberOfLines={1}>
+                    v{shortAgentVersion(agentVersion)}
+                  </Text>
                 </View>
               ) : null}
               {/* When nothing is picked, the status label already says "No
@@ -369,6 +394,16 @@ const styles = StyleSheet.create({
   },
   rolePill: {
     flexShrink: 0,
+  },
+  versionPill: {
+    // The ONE element in this row that may shrink. It used to be flexShrink: 0
+    // like the others, so on a narrow phone it could not yield and slid under
+    // the Switch chip — "agent v1.99.363-cu" running straight into "Switch ›"
+    // with no gap (2026-07-25). Least important thing in the row, so it is the
+    // one that gives up width; minWidth 0 is what actually lets a flex child
+    // shrink below its content size in RN.
+    flexShrink: 1,
+    minWidth: 0,
   },
   roleText: {
     ...typography.caption,

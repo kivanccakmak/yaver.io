@@ -588,10 +588,18 @@ export function DevPreview() {
     // not a native/Hermes install. The agent signals this via devMode="web".
     : (String(status.devMode || "").toLowerCase() === "web" || String(status.platform || "").toLowerCase() === "web")
       ? "browser preview"
-      : (status.iosInstallMethod === "native"
-          ? "native install"
-          : frameworkLabel.toLowerCase() === "flutter"
-            ? "LAN app reload"
+      // Flutter is checked BEFORE the iOS install method, because
+      // iosInstallMethod is a global preference about how *native RN apps* get
+      // onto a phone and says nothing about a Flutter project. Reading it here
+      // labelled a Flutter preview "native install · this device" — a lane that
+      // cannot exist (Flutter is DevServerKindWeb and never loads into the Yaver
+      // container), on a card whose only other line was "Failed to compile
+      // application." The user was told they were doing something impossible and
+      // then shown an unexplained failure of it (2026-07-25 recording).
+      : frameworkLabel.toLowerCase() === "flutter"
+        ? "browser preview"
+        : (status.iosInstallMethod === "native"
+            ? "native install"
             : "Hermes bundle in Yaver");
   const targetLabel = status.targetDeviceName || "this device";
   const isBusy = !!status.building || nativeLoading;

@@ -5721,17 +5721,20 @@ export default function TasksScreen() {
                     if (taskModelId) {
                       return availableModels.find((m) => m.id === taskModelId)?.name || taskModelId;
                     }
-                    const explicit = isModelCompatibleWithRunnerId(selectedModel, selectedTask.runnerId)
-                      ? availableModels.find((m) => m.id === selectedModel)?.name
-                      : undefined;
-                    if (explicit) return explicit;
-                    const fallbackId = preferredDefaultModelForRunner(
-                      selectedTask.runnerId,
-                      activeDevice ?? {},
-                      user?.email,
-                    );
-                    if (!fallbackId) return undefined;
-                    return availableModels.find((m) => m.id === fallbackId)?.name || fallbackId;
+                    // NO FALLBACK. The header used to fill this in from the
+                    // picker's current selection, and failing that from
+                    // preferredDefaultModelForRunner — both GUESSES about a task
+                    // that already ran. On 2026-07-25 that printed
+                    // "OpenCode · Sonnet" for a task on the Mac mini, a pair that
+                    // has never existed there (opencode runs glm/zai; Sonnet is
+                    // Claude). A guessed label is indistinguishable from a fact
+                    // in the UI, and this one sent the user hunting a
+                    // misconfiguration that was never real.
+                    //
+                    // A task that does not carry its model gets the runner chip
+                    // alone. "I don't know which model" is a smaller, truer
+                    // statement than a confident wrong one.
+                    return undefined;
                   })()}
                   onBack={() => { setSelectedTask(null); setFollowUpText(""); }}
                   onOpenLogs={() => setShowLogs(true)}
