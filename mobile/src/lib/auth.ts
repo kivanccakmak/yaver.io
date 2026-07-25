@@ -1,4 +1,8 @@
-import * as SecureStore from "expo-secure-store";
+// Routed through the compat shim so the SAME 17 call sites work on native
+// (hardware-backed SecureStore, unchanged) and on web (localStorage), instead
+// of throwing "setValueWithKeyAsync is not a function" the moment a correct
+// sign-in tries to persist its token. See secureStoreCompat.ts.
+import * as SecureStore from "./secureStoreCompat";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getConvexSiteUrlSync, getWebBaseUrlSync } from "./backendConfig";
 import type { OptionalMoreToolId } from "./moreOptionalTools";

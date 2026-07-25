@@ -221,6 +221,30 @@ changing those.
   4. Cost-awareness is a product requirement, not just a house rule — it is the
      whole "lower dev opex" wedge. Cloud tool usage and deploys should report
      what they cost (`remote_cost`, `switch_cost` are the existing seams).
+- **A web/dev fix must NEVER regress the shipped native app.** The mobile app
+  also runs as RN-web (`expo start`, driven by Playwright at iPhone viewport) —
+  that is the only way to automate the REAL app instead of the web dashboard.
+  Making it work there is legitimate; doing so by weakening the native path is
+  not. The shape that is always safe:
+  1. **Branch on `Platform.OS === "web"`, or use a `.web.ts` file.** Never edit
+     the native path to accommodate the browser. `secureStoreCompat.ts` is the
+     model: web gets localStorage, native delegates to hardware-backed
+     `expo-secure-store` bit-for-bit unchanged.
+  2. **State the downgrade in the file, at the top.** localStorage is not the
+     Keychain. Whoever reads it next must not have to infer that.
+  3. **`.web.ts` stubs DRIFT, and drift crashes at RUNTIME.** A `foo.ts` /
+     `foo.web.ts` pair is two independent classes chosen by Metro's platform
+     extension, NOT two implementations of one interface — so a method added to
+     the native twin is invisible to `tsc` on web and throws
+     `x is not a function` in a timer, on the surface least likely to be tested.
+     This shipped twice on 2026-07-25: `ExpoSecureStore.setValueWithKeyAsync is
+     not a function` (correct login, exploded while storing the token) and
+     `beaconListener.getBootstrapDevices is not a function` (permanent
+     "Reconnecting (0/5)…"). Both read as broken products, not missing stubs.
+     **Every such pair needs a parity test** — `beaconParity.test.ts` reads both
+     sources and asserts the web surface covers the native one.
+  4. **Prove the guard by breaking it.** Rename the method, watch the test fail,
+     put it back. A parity test nobody has seen fail is a guess.
 - **Never WebView for third-party RN apps.** Use the Hermes-bundle native load
   path (`/dev/build-native` → ExpoReactNativeFactory). WebView is OK for plain
   web content (landing pages, docs).

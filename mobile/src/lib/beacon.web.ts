@@ -34,6 +34,22 @@ class BeaconListenerWeb {
   getDevices(): DiscoveredDevice[] {
     return [];
   }
+  /**
+   * Bootstrap (needs-auth) devices. Empty on web: LAN beacon discovery is UDP,
+   * which a browser cannot do at all.
+   *
+   * This method was MISSING from the web stub while the native twin had it, and
+   * DeviceContext calls it on an interval — so the browser build threw
+   * "beaconListener.getBootstrapDevices is not a function" every tick and never
+   * connected to a machine. TypeScript did not catch it because the two files
+   * are separate classes resolved by Metro's platform extension, not two
+   * implementations of one interface: drift here fails at RUNTIME, in a timer,
+   * on the surface least likely to be tested. beacon.parity.test.ts now asserts
+   * the surfaces match so the next divergence fails a test instead of a user.
+   */
+  getBootstrapDevices(): DiscoveredDevice[] {
+    return [];
+  }
   isLocal(_deviceId: string): boolean {
     return false;
   }
