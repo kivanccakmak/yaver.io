@@ -2385,6 +2385,10 @@ func (e *ExpoDevServer) Reload() error {
 // inside Yaver, not a WebView.
 type ReactNativeDevServer struct {
 	baseDevServer
+	// metroOnly is set when the Expo-web attempt failed and we fell back to plain
+	// `react-native start`. Metro serves no HTML, so the browser lane must not
+	// claim it can render this project.
+	metroOnly bool
 }
 
 func (rn *ReactNativeDevServer) Name() string { return "react-native" }
@@ -2424,8 +2428,15 @@ func (rn *ReactNativeDevServer) Start(ctx context.Context, opts DevServerOpts) e
 	readyURL := fmt.Sprintf("http://127.0.0.1:%d", rn.port)
 	err := rn.startProcess(ctx, "npx", args, opts.WorkDir, nil, readyURL)
 	if err != nil {
-		// Fallback: use Metro bundler directly
-		log.Printf("[dev] Expo CLI not available, falling back to Metro bundler")
+		// Fallback: plain Metro. NOTE what this costs — Metro is a BUNDLER, not a
+		// web server: it serves no HTML at `/`. A browser preview pointed here
+		// renders nothing, forever, with a healthy-looking status behind it (the
+		// same shape as the Expo-browser-lane bug). Record it so BundleURL can be
+		// honest instead of promising a page that does not exist.
+		log.Printf("[dev] Expo CLI not available, falling back to Metro bundler — this project has NO web target, so the browser lane cannot render it")
+		rn.mu.Lock()
+		rn.metroOnly = true
+		rn.mu.Unlock()
 		args = []string{"react-native", "start",
 			"--port", fmt.Sprintf("%d", rn.port),
 			"--host", "lan",
@@ -2436,7 +2447,34 @@ func (rn *ReactNativeDevServer) Start(ctx context.Context, opts DevServerOpts) e
 }
 
 func (rn *ReactNativeDevServer) BundleURL(platform string) string {
+	// Bare Metro has no HTML to serve. Returning "/dev/" anyway told every client
+	// "there is a page here" and produced a blank browser preview; an empty
+	// bundleUrl makes the client say "no web target" instead of rendering nothing.
+	rn.mu.Lock()
+	metroOnly := rn.metroOnly
+	rn.mu.Unlock()
+	if metroOnly {
+		return ""
+	}
 	return "/dev/"
+}
+
+// Status adds the reason a bare-RN project cannot be previewed in a browser, so
+// the surface the user is looking at can say it out loud.
+func (rn *ReactNativeDevServer) Status() DevServerStatus {
+	s := rn.baseDevServer.Status()
+	rn.mu.Lock()
+	metroOnly := rn.metroOnly
+	rn.mu.Unlock()
+	if metroOnly {
+		s.BundleURL = ""
+		if s.Error == "" {
+			s.Error = "This project runs on bare Metro (no Expo CLI, no web target), so there is no " +
+				"page to show in a browser. Use the Hermes lane for a real device, or add " +
+				"react-native-web + expo CLI to get a browser build."
+		}
+	}
+	return s
 }
 
 func (rn *ReactNativeDevServer) SupportsHotReload() bool { return true }

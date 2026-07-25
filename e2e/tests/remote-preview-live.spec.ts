@@ -53,65 +53,98 @@ test.describe("live remote rendering from the web dashboard", () => {
     });
     page.on("pageerror", (e) => consoleErrors.push(`pageerror: ${String(e).slice(0, 200)}`));
 
+    // Click the first VISIBLE + enabled match.
+    //
+    // The dashboard renders its nav twice (responsive), so `locator.first()` often
+    // resolves to the hidden copy and the click then waits out the whole test
+    // timeout — a test bug that reads exactly like a product hang.
+    const clickVisible = async (name: RegExp, what: string) => {
+      const all = page.getByRole("button", { name });
+      const count = await all.count();
+      for (let i = 0; i < count; i++) {
+        const b = all.nth(i);
+        if (!(await b.isVisible().catch(() => false))) continue;
+        if (await b.isDisabled().catch(() => false)) continue;
+        await b.click();
+        return true;
+      }
+      // Fall back to any visible element carrying the text (tabs are not always
+      // <button>).
+      const texts = page.getByText(name);
+      const tcount = await texts.count();
+      for (let i = 0; i < tcount; i++) {
+        const t = texts.nth(i);
+        if (await t.isVisible().catch(() => false)) {
+          await t.click();
+          return true;
+        }
+      }
+      throw new Error(`no visible, enabled control for ${what}`);
+    };
+
     await signIn(page);
     await step("dashboard-loaded");
     await expect(page).toHaveURL(/\/dashboard/);
 
-    // 1. The box must be visible AND reachable. "online" is not reachable — the
-    //    dashboard's own device row is the thing under test here.
-    const deviceMention = page.getByText(new RegExp(LIVE_DEVICE, "i")).first();
-    await expect(deviceMention, `the dashboard never showed a device matching /${LIVE_DEVICE}/i`)
-      .toBeVisible({ timeout: 60_000 });
+    // 1. The box must appear in the dashboard at all.
+    //
+    // Asserted against the rendered TEXT of the page rather than a located
+    // element: `getByText(...).first()` can resolve to a hidden duplicate (the
+    // responsive nav renders the device chip twice), and then toBeVisible fails
+    // while the name is plainly on screen — which is a test bug that reads exactly
+    // like a product bug.
+    const deviceRe = new RegExp(LIVE_DEVICE, "i");
+    await expect
+      .poll(async () => deviceRe.test(await page.locator("body").innerText()), {
+        timeout: 60_000,
+        message: `the dashboard never showed a device matching /${LIVE_DEVICE}/i`,
+      })
+      .toBe(true);
     await step("device-visible");
 
-    // 2. Runtime tab — the surface that owns remote rendering (RuntimeLabView →
-    //    RemoteRuntimeViewer, WebRTC with a JPEG data-channel fallback).
-    const runtimeTab = page.getByRole("button", { name: /^Runtime$/ }).first();
-    if (await runtimeTab.isVisible().catch(() => false)) {
-      await runtimeTab.click();
-    } else {
-      await page.getByText(/^Runtime$/).first().click();
-    }
-    await step("runtime-tab");
+    // 2. Projects — the surface that owns remote rendering. (Discovered from the
+    //    live dashboard rather than assumed: the sidebar has no "Runtime" entry;
+    //    ProjectsView is what mounts RemoteRuntimeViewer, and each project row
+    //    carries its own lane buttons.)
+    await clickVisible(/^Projects$/, "the Projects tab");
+    await step("projects-tab");
 
-    // 3. Pick the project, then ask the box what it can actually render. The
-    //    capability list is a probe of the HOST, so an honest answer here is half
-    //    the feature: a target that is disabled must say why.
-    const projectSelect = page.locator("select").first();
-    await expect(projectSelect, "Runtime tab never rendered a project picker").toBeVisible({
-      timeout: 30_000,
-    });
-    if (LIVE_PROJECT) {
-      const options = await projectSelect.locator("option").allTextContents();
-      const match = options.find((o) => o.toLowerCase().includes(LIVE_PROJECT.toLowerCase()));
-      if (match) await projectSelect.selectOption({ label: match });
-    }
-    await step("project-selected");
-
-    const loadCaps = page.getByRole("button", { name: /capabilit/i }).first();
-    await loadCaps.click();
-    await step("capabilities-requested");
-
-    // The log pane in RuntimeLabView echoes "targets: …". Its presence proves the
-    // dashboard actually reached the box; its content proves what the box offers.
-    const targetsLine = page.getByText(/targets:/i).first();
-    await expect(targetsLine, "the box never answered the capability probe").toBeVisible({
+    // The project list comes from the BOX, so its arrival is itself a
+    // connectivity assertion — an empty list here is the "No projects yet" lie
+    // this product has shipped before.
+    const projectRow = LIVE_PROJECT
+      ? page.getByText(new RegExp(LIVE_PROJECT, "i")).first()
+      : page.locator("button", { hasText: /Simulator \(WebRTC\)|^Start$|Hermes/ }).first();
+    await expect(projectRow, "the dashboard never listed projects from the box").toBeVisible({
       timeout: 90_000,
     });
-    const targets = (await targetsLine.textContent()) || "";
-    testInfo.annotations.push({ type: "targets", description: targets.slice(0, 400) });
-    await step("capabilities-answered");
+    await step("projects-listed");
 
-    // Every disabled target must carry a REASON. A disabled control with no
-    // explanation is the defect class this product keeps paying for — and on this
-    // very box a "not installed" reason was flat wrong for an installed runtime.
-    expect(targets, "capability answer was empty").not.toEqual("");
+    // 3. Open the WebRTC lane for that project. This is the button a user clicks:
+    //    "Simulator (WebRTC)" — run the app in a remote simulator, streamed here.
+    const hasWebrtc = await page
+      .getByRole("button", { name: /Simulator \(WebRTC\)/i })
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (hasWebrtc) {
+      await clickVisible(/Simulator \(WebRTC\)/i, "the WebRTC lane");
+      await step("webrtc-lane-opened");
+    } else {
+      // Web-served projects (Flutter/Vite/Next) have a plain Start; their remote
+      // rendering is the browser lane, which is equally valid to validate here.
+      const startBtn = page.getByRole("button", { name: /^Start$/ }).first();
+      await expect(startBtn, "neither a WebRTC nor a Start control was offered for any project")
+        .toBeVisible({ timeout: 30_000 });
+      await startBtn.click();
+      await step("browser-lane-started");
+    }
 
     // 4. Start a session on the first enabled target and prove a live surface
     //    appears. Either transport counts: <video srcObject> (RTP) or the <img>
     //    blob fallback (JPEG over the data channel). What must NOT happen is a
     //    spinner with nothing behind it.
-    const startButtons = page.getByRole("button", { name: /start|launch|open/i });
+    const startButtons = page.getByRole("button", { name: /start|launch|open|stream|connect/i });
     const startCount = await startButtons.count();
     let started = false;
     for (let i = 0; i < startCount && !started; i++) {
@@ -124,10 +157,17 @@ test.describe("live remote rendering from the web dashboard", () => {
     await step("session-start-clicked");
 
     if (!started) {
-      // Not a pass: report what the page offered so the reason is in the artifact
-      // rather than in someone's memory.
-      const body = (await page.locator("body").innerText()).slice(0, 1500);
-      throw new Error(`no enabled start control on the Runtime tab.\nPage said:\n${body}`);
+      // The lane may already be streaming (the modal starts a session on open).
+      // Only fail if there is ALSO no surface and no message — i.e. silence.
+      const anySurface = await page
+        .locator("video, img[src^='blob:'], canvas")
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (!anySurface) {
+        const body = (await page.locator("body").innerText()).slice(0, 1500);
+        throw new Error(`no start control and no surface after opening the lane.\nPage said:\n${body}`);
+      }
     }
 
     // 5. A live surface within the budget, or a NAMED failure. Both are

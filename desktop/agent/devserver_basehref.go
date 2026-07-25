@@ -45,10 +45,23 @@ var devAbsAssetRe = regexp.MustCompile(`(?i)\b(src|href)="/([^/"][^"]*)"`)
 // pass so its href is never touched.
 var devBaseTagRe = regexp.MustCompile(`(?i)<base\b[^>]*>`)
 
+// devHeadOpenRe finds the opening <head> so a missing base can be inserted right
+// after it — before any script the document might load.
+var devHeadOpenRe = regexp.MustCompile(`(?i)<head[^>]*>`)
+
 // rewriteDevIndexBaseHrefHTML rewrites a root <base href> to devProxyBaseHref.
 // Pure and content-only so it can be unit-tested without a live proxy.
 // Returns the input unchanged when there is nothing root-based to rewrite.
 func rewriteDevIndexBaseHrefHTML(html string) string {
+	// NOTE: no base tag is INSERTED when a document has none.
+	//
+	// Expo's live web index ships no base and loads its entry from a root-absolute
+	// path. Stripping that leading slash (below) is what fixes it; a `<base href=
+	// "./">` would NOT — with a document URL of /dev-web (no trailing slash), "./"
+	// resolves to "/" just as a missing base does. The trailing-slash redirect in
+	// handleDevWebProxy is the mechanism that closes that case, so inserting a base
+	// here would only add a second, weaker copy of the same guarantee and would
+	// alter documents that are already correct (see TestRewriteNoBaseIsNoOp).
 	// Only touch a base that points at root; never clobber an explicit base.
 	out := devBaseHrefRe.ReplaceAllStringFunc(html, func(m string) string {
 		// m is the whole <base ...> tag. Guard: if the captured href was

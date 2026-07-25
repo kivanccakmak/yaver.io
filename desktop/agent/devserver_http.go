@@ -2368,6 +2368,20 @@ func (s *HTTPServer) handleDevWebProxy(w http.ResponseWriter, r *http.Request) {
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		http.Error(w, "expo web unavailable", http.StatusBadGateway)
 	}
+	// Same HTML rewrite the /dev/ lane uses. Without it, Expo's live index loads
+	// its entry bundle from a ROOT-absolute path, which through this proxy resolves
+	// to the agent root and 404s — a blank page with no error, the exact shape of
+	// the Flutter base-href bug this rewriter was written for. One rewriter, both
+	// lanes.
+	proxy.ModifyResponse = rewriteDevIndexBaseHref
+
+	// Normalise /dev-web → /dev-web/ so relative asset URLs resolve INSIDE the
+	// lane. Without the trailing slash the browser resolves "node_modules/…"
+	// against /, i.e. the agent root.
+	if r.URL.Path == "/dev-web" {
+		http.Redirect(w, r, "/dev-web/"+queryTail(r), http.StatusTemporaryRedirect)
+		return
+	}
 	r.URL.Path = strings.TrimPrefix(r.URL.Path, "/dev-web")
 	if r.URL.Path == "" {
 		r.URL.Path = "/"
@@ -4480,4 +4494,12 @@ func (s *HTTPServer) proxyWebSocket(w http.ResponseWriter, r *http.Request, targ
 	go func() { io.Copy(clientConn, backendConn); done <- struct{}{} }()
 	go func() { io.Copy(backendConn, clientConn); done <- struct{}{} }()
 	<-done
+}
+
+// queryTail re-attaches the original query string to a redirect target.
+func queryTail(r *http.Request) string {
+	if r.URL.RawQuery == "" {
+		return ""
+	}
+	return "?" + r.URL.RawQuery
 }

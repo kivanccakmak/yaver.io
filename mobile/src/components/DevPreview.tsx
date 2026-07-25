@@ -570,7 +570,13 @@ export function DevPreview() {
 
   if (!status) return null;
 
-  const bundleUrl = quicClient.getDevServerBundleUrl(status.bundleUrl || "/dev/");
+  // Prefer the /dev-web/ lane when the agent runs an Expo Web sibling. An older
+  // agent (< 1.99.355) reports bundleUrl "/dev/" — Metro — even while the actual
+  // web app is on webPort behind /dev-web/, and Metro serves no page: blank
+  // preview, healthy status. Kept in step with app/(tabs)/apps.tsx; these two are
+  // the app's two browser-preview implementations and a fix in one is not a fix.
+  const devWebLane = (status as any)?.webPort ? "/dev-web/" : "";
+  const bundleUrl = quicClient.getDevServerBundleUrl(devWebLane || status.bundleUrl || "/dev/");
   const projectLabel = projectLabelFromStatus(status);
   const frameworkLabel = status.framework || "app";
   const portLabel = status.port ? `port ${status.port}` : null;

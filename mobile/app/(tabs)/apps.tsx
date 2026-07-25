@@ -725,6 +725,24 @@ export default function AppsScreen() {
                       return fresh.length ? [...p, ...fresh].slice(-40) : p;
                     });
                   }
+                } else if (event.type === "progress" || event.type === "phase") {
+                  // Structured progress (Yaver Protocol v1): the agent parses
+                  // Metro/Expo/Flutter output into {phase, pct, currentFile}.
+                  // DevPreview.tsx rendered these; this screen — the one the
+                  // Projects tab actually opens — did not, so a compile with exact
+                  // percentages still looked idle here. Fold it into the same log
+                  // tail so the wait narrates itself with real numbers.
+                  const phase = typeof event.phase === "string" ? event.phase.replace(/_/g, " ") : "";
+                  const pct = typeof event.pct === "number" ? ` ${Math.round(event.pct)}%` : "";
+                  const file =
+                    typeof event.currentFile === "string" && event.currentFile
+                      ? ` · ${String(event.currentFile).split("/").slice(-2).join("/")}`
+                      : "";
+                  const line = `${phase || "working"}${pct}${file}`.trim();
+                  if (line) {
+                    setWebPreviewLastLogAt(Date.now());
+                    setWebPreviewLogs((p) => (p[p.length - 1] === line ? p : [...p, line].slice(-40)));
+                  }
                 } else if (event.type === "heartbeat") {
                   // Proof of life even when nothing new is printed. It keeps
                   // "last output Ns ago" honest instead of letting a healthy but
@@ -1709,7 +1727,21 @@ export default function AppsScreen() {
     ]);
   }, []);
 
-  const bundleUrl = devStatus ? quicClient.getDevServerBundleUrl(devStatus.bundleUrl || "/dev/") : "";
+  // WHICH url the preview loads.
+  //
+  // The agent is the authority (bundleUrl), but two cases need help here:
+  //   • an OLDER agent (< 1.99.355) reports bundleUrl "/dev/" for Expo even while
+  //     it runs the web app on a sibling port proxied at /dev-web/. Loading /dev/
+  //     then hits METRO, which serves no page — a blank preview behind a healthy
+  //     status. If webPort is set, /dev-web/ is where the app actually is.
+  //   • an EMPTY bundleUrl now means "there is no web target" (bare Metro), which
+  //     must not be papered over with a "/dev/" default that renders nothing.
+  const devWebLane = (devStatus as any)?.webPort ? "/dev-web/" : "";
+  const reportedBundlePath = devStatus?.bundleUrl || devWebLane;
+  const bundleUrl =
+    devStatus && reportedBundlePath
+      ? quicClient.getDevServerBundleUrl(devWebLane || reportedBundlePath)
+      : "";
 
   if (!effectivelyConnected) {
     // Banner first (always actionable) so the user can tap Switch ›
