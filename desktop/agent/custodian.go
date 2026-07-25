@@ -132,6 +132,16 @@ type Custodian struct {
 
 	escMu sync.Mutex
 	esc   map[string][]time.Time // signature -> escalation timestamps
+
+	// started/stop let Register attach a warden AFTER Start. Without this, a
+	// warden registered later — the runtime warden appears only when the WebRTC
+	// manager is first used — is stored, listed in the snapshot, and NEVER
+	// SWEEPS. Found live on the Mac mini: /custodian/status answered
+	// `wardens: null, sweeping: false` on a healthy agent. A janitor that exists
+	// on the status page and nowhere else is worse than none, because the page
+	// claims the class is covered.
+	started bool
+	stop    <-chan struct{}
 }
 
 // NewCustodian builds an empty custodian. Register wardens, then Start.
@@ -151,7 +161,11 @@ func (c *Custodian) Register(w Warden) {
 	}
 	c.mu.Lock()
 	c.wardens = append(c.wardens, w)
+	startNow, stop := c.started, c.stop
 	c.mu.Unlock()
+	if startNow {
+		go c.runWarden(w, stop)
+	}
 }
 
 // Start runs every registered warden on its own cadence until stop closes. Each
@@ -159,9 +173,17 @@ func (c *Custodian) Register(w Warden) {
 // alternative (one loop over all wardens) means a 20 s simulator probe stops the
 // port janitor, which is how a janitor silently dies.
 func (c *Custodian) Start(stop <-chan struct{}) {
-	c.mu.RLock()
+	c.mu.Lock()
+	if c.started {
+		// Idempotent: serve starts the custodian and a lazily-created subsystem
+		// may call again. Starting twice would double every sweep.
+		c.mu.Unlock()
+		return
+	}
+	c.started = true
+	c.stop = stop
 	wardens := append([]Warden(nil), c.wardens...)
-	c.mu.RUnlock()
+	c.mu.Unlock()
 
 	for _, w := range wardens {
 		go c.runWarden(w, stop)

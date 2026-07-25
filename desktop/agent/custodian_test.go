@@ -172,3 +172,47 @@ func TestSummariseSweepAlwaysSaysSomething(t *testing.T) {
 		t.Fatalf("summary must count both lanes, got %q", got)
 	}
 }
+
+// TestCustodianStartsWardensRegisteredAfterStart — found live on the Mac mini
+// (2026-07-25): /custodian/status answered `wardens: null, sweeping: false` on a
+// running agent, because the custodian was only wired inside a LAZY subsystem
+// and any warden registered after Start was stored but never swept. A janitor
+// that appears on the status page and nowhere else is worse than none: the page
+// claims the class is covered.
+func TestCustodianStartsWardensRegisteredAfterStart(t *testing.T) {
+	c := NewCustodian()
+	stop := make(chan struct{})
+	defer close(stop)
+	c.Start(stop)
+
+	late := &fakeWarden{name: "late", every: 50 * time.Millisecond}
+	c.Register(late) // arrives AFTER Start, like the runtime warden does
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if late.sweeps > 0 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("a warden registered after Start never swept — it would show as watched while watching nothing")
+}
+
+// TestCustodianStartIsIdempotent — serve starts it and a lazy subsystem may call
+// again; a second Start would double every sweep.
+func TestCustodianStartIsIdempotent(t *testing.T) {
+	c := NewCustodian()
+	w := &fakeWarden{name: "w", every: 40 * time.Millisecond}
+	c.Register(w)
+	stop := make(chan struct{})
+	defer close(stop)
+	c.Start(stop)
+	c.Start(stop)
+	c.Start(stop)
+
+	time.Sleep(300 * time.Millisecond)
+	// Three tickers would give ~3x. Allow slack for scheduling, but not 2x.
+	if w.sweeps > 12 {
+		t.Fatalf("warden swept %d times in 300ms at a 40ms cadence — Start was not idempotent", w.sweeps)
+	}
+}
