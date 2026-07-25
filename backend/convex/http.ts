@@ -1459,20 +1459,34 @@ http.route({
     const notAllowed = requireEmailPasswordEmailAllowed(user.email);
     if (notAllowed) return notAllowed;
 
-    const existing = await ctx.runQuery(internal.auth.lookupEmailUser, {
-      email: user.email.toLowerCase().trim(),
-    });
-    if (existing?.passwordHash) {
-      return errorResponse("This account already has an email/password credential. Use change password.", 409);
-    }
-
+    // No 409 on an existing credential any more. It used to send the caller to
+    // /auth/change-password, which needs the OLD password — unobtainable for an
+    // account created through Apple/Microsoft/Google OAuth, so a signed-in user
+    // had no way to change their own password from inside the product. The
+    // mutation now treats a replace as a destructive action and gates it on 2FA
+    // instead of on prior knowledge; see auth.ts::setOwnPassword.
     const passwordHash = await hashPassword(password);
     try {
-      await ctx.runMutation(api.auth.setOwnPassword, { tokenHash, passwordHash });
-      return jsonResponse({ ok: true });
+      const out = await ctx.runMutation(api.auth.setOwnPassword, {
+        tokenHash,
+        passwordHash,
+        totp: typeof body?.totp === "string" ? body.totp : undefined,
+      });
+      return jsonResponse({ ok: true, replaced: (out as any)?.replaced === true });
     } catch (e: any) {
       const msg = e?.message || "";
       if (msg === "Unauthorized") return errorResponse("Unauthorized", 401);
+      // Surface the 2FA contract as its own status so a client can prompt for a
+      // code instead of showing a generic 400 the user cannot act on.
+      if (msg.includes("TOTP_REQUIRED")) {
+        return errorResponse("TOTP_REQUIRED: enter your two-factor code to replace an existing password", 428);
+      }
+      if (msg.includes("INVALID_TOTP")) {
+        return errorResponse("INVALID_TOTP: that two-factor code is not valid", 401);
+      }
+      if (msg.includes("TOTP_MISCONFIGURED")) {
+        return errorResponse("TOTP_MISCONFIGURED: two-factor is enabled on this account but has no seed — contact support", 409);
+      }
       return errorResponse(msg || "Failed to set password", 400);
     }
   }),

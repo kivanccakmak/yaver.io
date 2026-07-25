@@ -203,7 +203,9 @@ async function recordAuthSecurityEvent(
     | "merge_started"
     | "merge_completed"
     | "merge_cancelled"
-    | "merge_received",
+    | "merge_received"
+    | "password_set"
+    | "password_replaced",
   detailObj: Record<string, unknown>,
 ) {
   await ctx.db.insert("securityEvents", {
@@ -2086,19 +2088,58 @@ export const setOwnPassword = mutation({
   args: {
     tokenHash: v.string(),
     passwordHash: v.string(),
+    // TOTP code, required only when the account has 2FA enabled AND this call
+    // REPLACES an existing password (see the step-up reasoning below).
+    totp: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const result = await validateSessionInternal(ctx, args.tokenHash);
     if (!result) throw new Error("Unauthorized");
     const email = result.user.email?.trim().toLowerCase();
     if (!email) throw new Error("This account has no email address");
-    if (result.user.passwordHash) {
-      throw new Error("This account already has an email/password credential");
+
+    // ── Why a REPLACE is allowed at all ──────────────────────────────────────
+    //
+    // This used to throw "already has an email/password credential", which
+    // closed a loop with no exit: an account created through Apple/Microsoft/
+    // Google OAuth never knew a password, /auth/change-password demands the old
+    // one, and so the ONLY route left was a reset email. A signed-in user could
+    // not change their own password from inside the product.
+    //
+    // Requiring the old password only makes sense when the SESSION is weak
+    // evidence of identity. It is not: this caller completed a full OAuth
+    // handshake with Apple/Microsoft/Google, or already proved the current
+    // password. That is equal-or-stronger proof than retyping a secret.
+    //
+    // ── What replaces it as the security gate ────────────────────────────────
+    //
+    // Second factor, not prior knowledge. If the account has TOTP enabled, a
+    // replace demands a fresh code through the SAME requireFreshTotp used by
+    // unlink and account-merge — it fails CLOSED on a misconfigured 2FA account
+    // (enabled but seedless) per the 2026-07-13 audit, and consumes a recovery
+    // code when one is used.
+    //
+    // A first-time SET keeps no TOTP requirement: it grants no capability the
+    // session does not already have, and gating it would lock 2FA users out of
+    // ever adding a password. A REPLACE is different — it can dispossess
+    // whoever knew the old one — so it is treated as the destructive action it
+    // is, and audited either way.
+    const isReplace = !!result.user.passwordHash;
+    if (isReplace) {
+      await requireFreshTotp(ctx, result.user, args.totp);
     }
 
     await ctx.db.patch(result.user._id, { passwordHash: args.passwordHash });
     await ensureAuthIdentity(ctx, result.user._id, "email", email, email);
-    return { ok: true };
+    // Audited on BOTH paths: a silent credential change is indistinguishable
+    // from a stolen session doing the same thing.
+    await recordAuthSecurityEvent(
+      ctx,
+      result.user._id,
+      isReplace ? "password_replaced" : "password_set",
+      { email, viaSession: true, totpChecked: isReplace && !!result.user.totpEnabled },
+    );
+    return { ok: true, replaced: isReplace };
   },
 });
 

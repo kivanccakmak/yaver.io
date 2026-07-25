@@ -137,6 +137,11 @@ export default function SettingsView({ user, onLogout }: SettingsViewProps) {
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
   const [passwordBusy, setPasswordBusy] = useState(false);
+  // Second-factor code, revealed only when the backend asks for it (HTTP 428).
+  // Not shown up-front: most accounts have no TOTP, and an always-visible field
+  // reads as "you must have 2FA to do this", which is not true.
+  const [passwordTotp, setPasswordTotp] = useState("");
+  const [needsTotp, setNeedsTotp] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [linkingProvider, setLinkingProvider] = useState<string | null>(null);
@@ -393,16 +398,35 @@ export default function SettingsView({ user, onLogout }: SettingsViewProps) {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ password: newPassword }),
+        body: JSON.stringify({ password: newPassword, totp: passwordTotp.trim() || undefined }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setPasswordError(data?.error || "Could not set password.");
+        const err = String(data?.error || "");
+        // 428 = the backend wants a second factor before REPLACING a password.
+        // Reveal the field and say why, instead of showing a dead-end error.
+        if (res.status === 428 || err.includes("TOTP_REQUIRED")) {
+          setNeedsTotp(true);
+          setPasswordError("Enter your two-factor code to replace the existing password.");
+          return;
+        }
+        if (err.includes("INVALID_TOTP")) {
+          setNeedsTotp(true);
+          setPasswordError("That two-factor code is not valid — try the current one.");
+          return;
+        }
+        setPasswordError(err || "Could not set password.");
         return;
       }
       setNewPassword("");
       setConfirmNewPassword("");
-      setPasswordMessage("Email/password sign-in is now linked to this account.");
+      setPasswordTotp("");
+      setNeedsTotp(false);
+      setPasswordMessage(
+        data?.replaced
+          ? "Password changed. Email sign-in now uses the new password on this same account."
+          : "Email/password sign-in is now linked to this account.",
+      );
       await refreshIdentities(token);
     } catch {
       setPasswordError("Network error — try again.");
@@ -544,21 +568,29 @@ export default function SettingsView({ user, onLogout }: SettingsViewProps) {
             and an allowed-email list. Convex env stores only the gate and
             allowlist, never the raw password.
           </div>
-        ) : hasEmailPassword ? (
-          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-3 text-sm text-emerald-700 dark:text-emerald-300">
-            Email/password is linked to this account. Automated tests can sign
-            in with <span className="font-mono">{user?.email}</span> while the
-            deployment flag stays enabled.
-          </div>
         ) : (
+          /* One form for both cases. This branch used to be a DEAD END when a
+             password already existed: it printed "Email/password is linked" and
+             offered no control, so an Apple/Microsoft/Google account — which
+             never knew a password — had no way to change it from inside the
+             product. Reported 2026-07-25. */
           <div className="space-y-3">
-            <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-3 text-xs text-amber-700 dark:text-amber-200">
-              This adds an <span className="font-mono">email</span> sign-in
-              identity to your existing {user?.provider || "OAuth"} account. It
-              does not create a second Yaver user. Other users and runners
-              cannot fetch this credential; the server stores only a salted
-              hash.
-            </div>
+            {hasEmailPassword ? (
+              <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-3 text-xs text-emerald-700 dark:text-emerald-300">
+                Email sign-in is linked as <span className="font-mono">{user?.email}</span>.
+                You can change the password here — your {user?.provider || "OAuth"} session is
+                the proof of identity, so the old password is not required. If you have
+                two-factor enabled, you will be asked for a code.
+              </div>
+            ) : (
+              <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-3 text-xs text-amber-700 dark:text-amber-200">
+                This adds an <span className="font-mono">email</span> sign-in
+                identity to your existing {user?.provider || "OAuth"} account. It
+                does not create a second Yaver user. Other users and runners
+                cannot fetch this credential; the server stores only a salted
+                hash.
+              </div>
+            )}
             <input
               type="password"
               value={newPassword}
@@ -575,6 +607,17 @@ export default function SettingsView({ user, onLogout }: SettingsViewProps) {
               autoComplete="new-password"
               className="w-full rounded-lg border border-surface-700 bg-surface-900 px-4 py-3 text-sm text-surface-200 placeholder-surface-500 outline-none transition-colors focus:border-surface-500"
             />
+            {needsTotp ? (
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={passwordTotp}
+                onChange={(e) => setPasswordTotp(e.target.value)}
+                placeholder="Two-factor code (or a recovery code)"
+                className="w-full rounded-lg border border-amber-500/40 bg-surface-900 px-4 py-3 text-sm text-surface-200 placeholder-surface-500 outline-none transition-colors focus:border-amber-400"
+              />
+            ) : null}
             {passwordError ? <p className="text-xs text-red-400">{passwordError}</p> : null}
             {passwordMessage ? <p className="text-xs text-emerald-700 dark:text-emerald-300">{passwordMessage}</p> : null}
             <button
@@ -583,7 +626,11 @@ export default function SettingsView({ user, onLogout }: SettingsViewProps) {
               disabled={passwordBusy}
               className="w-full rounded-lg border border-surface-700 px-4 py-3 text-sm text-surface-300 transition-colors hover:bg-surface-800/50 hover:text-surface-50 disabled:opacity-50"
             >
-              {passwordBusy ? "Saving..." : "Enable email/password on this account"}
+              {passwordBusy
+                ? "Saving..."
+                : hasEmailPassword
+                  ? "Change password"
+                  : "Enable email/password on this account"}
             </button>
           </div>
         )}
