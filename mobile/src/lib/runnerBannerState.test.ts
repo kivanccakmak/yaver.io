@@ -12,18 +12,21 @@ function check(name: string, cond: boolean, detail?: string) {
   console.error(`FAIL ${name}${detail ? ` — ${detail}` : ""}`);
 }
 
-const baseStatus: AgentStatus = {
+// Cast rather than a full AgentStatus literal: deriveRunnerBannerState only
+// reads `runner`, and spelling out every required field (system, disk, git,
+// runnerProcesses…) would make the fixture noise, not signal.
+const baseStatus = {
   runner: {
     id: "claude",
     name: "Claude Code",
+    command: "claude",
     installed: true,
     ready: true,
     authConfigured: true,
-    models: [],
   },
   runningTasks: 0,
   status: "ok",
-};
+} as unknown as AgentStatus;
 
 const claudeReady: RunnerInfo = {
   id: "claude",
@@ -32,6 +35,7 @@ const claudeReady: RunnerInfo = {
   installed: true,
   ready: true,
   authConfigured: true,
+  isDefault: false,
   models: [],
 };
 
