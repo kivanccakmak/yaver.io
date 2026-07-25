@@ -71,6 +71,14 @@ func (a *DevPortAllocator) Reserve(userID string) (DevPortPair, error) {
 		if portBusy(metro) || portBusy(web) {
 			continue
 		}
+		// …and consult the broker, which knows about ports a session has
+		// RESERVED but not yet bound. Without this the two mechanisms disagree
+		// for exactly as long as a dev server takes to start: the OS still sees
+		// the port as free, so this slot looks available, and both sessions end
+		// up pointed at the same port. One source of truth or none.
+		if devPortHeld(metro) || devPortHeld(web) {
+			continue
+		}
 		a.taken[slot] = userID
 		return DevPortPair{
 			Slot:      slot,
@@ -132,33 +140,11 @@ func portBusy(port int) bool {
 // holds, and treat "the port answers" as insufficient proof of readiness (see
 // startProcessWithStdin).
 
-// devPortProbeSpan is how many consecutive ports past the preferred one we are
-// willing to try. Wide enough for a handful of parallel previews, narrow enough
-// that a substituted port stays recognisable in logs.
-const devPortProbeSpan = 40
-
-// pickFreeDevPort returns the first port at or after `preferred` that nothing is
-// listening on, plus whether it had to move. When every port in the span is
-// busy it returns `preferred` unchanged (substituted=false) — the caller then
-// fails with the real bind error, which is more honest than silently landing on
-// a port outside the range we said we'd use.
-func pickFreeDevPort(preferred, span int) (int, bool) {
-	if preferred <= 0 {
-		return preferred, false
-	}
-	if !portBusy(preferred) {
-		return preferred, false
-	}
-	for p := preferred + 1; p <= preferred+span; p++ {
-		if p > 65535 {
-			break
-		}
-		if !portBusy(p) {
-			return p, true
-		}
-	}
-	return preferred, false
-}
+// NOTE: port CHOICE now lives in devserver_ports.go (AcquireDevPort), which adds
+// the one thing a probe cannot do — remembering a port between choosing it and
+// binding it, so two concurrent starts can't pick the same "free" port. What
+// stays here is the OS-level primitive (portBusy) and the failure classifier
+// below, both of which the broker builds on.
 
 // portBindFailure reports whether a dev-server log tail contains a
 // port-already-bound failure. Framework-agnostic on purpose: Flutter/Dart,

@@ -10,6 +10,7 @@ import { getYaverCloudBaseUrl } from "@/lib/yaver-cloud";
 import { CONVEX_URL } from "@/lib/constants";
 import { decodeCloudWorkspaceRequiredError } from "@/lib/cloud-workspace-required";
 import webPkg from "../package.json";
+import type { MachineResourceReport, VibeParticipant, VibeSession } from "./machine-resources";
 
 // X-Yaver-Caller surface identifier sent on every agent request.
 // Format: "<surface>/<version>" — agent v1.99.71+ logs + threads it
@@ -624,6 +625,7 @@ export interface RemoteRuntimeTarget {
   reason?: string;
   hostOs?: string;
   requiredCli?: string;
+  surface?: string;
 }
 
 export interface RemoteRuntimeCapabilities {
@@ -670,6 +672,38 @@ export interface RemoteRuntimeSession {
     scale?: number;
     rotation?: "portrait" | "landscape";
   };
+}
+
+export interface TmuxPaneSummary {
+  sessionName?: string;
+  sessionId?: string;
+  windowIndex?: string;
+  windowName?: string;
+  paneIndex?: string;
+  paneId?: string;
+  pid?: number;
+  agent?: string;
+  agentConfirmed?: boolean;
+  taskId?: string;
+  preview?: string;
+}
+
+export interface TmuxSessionSummary {
+  name: string;
+  id?: string;
+  windows?: number;
+  created?: string;
+  attached?: boolean;
+  relationship?: "adopted" | "forked-by-yaver" | "unrelated" | string;
+  agentType?: string;
+  mainPid?: number;
+  windowIndex?: string;
+  windowName?: string;
+  paneIndex?: string;
+  paneId?: string;
+  panePreview?: string;
+  taskId?: string;
+  panes?: TmuxPaneSummary[];
 }
 
 // Vault entries — mirrors VaultEntry / VaultEntrySummary in vault.go.
@@ -5205,6 +5239,74 @@ export class AgentClient {
   // P2P against the connected agent — never Convex. Status/detection flow
   // straight from the box that runs the crons/services.
 
+  // ─── Co-vibe: who is on this machine, in which session, with what role ────
+  //
+  // One report endpoint (desktop/agent/vibe_sessions_http.go) shared with mobile,
+  // so the dashboard and the phone never disagree about who is driving. Types
+  // live in lib/machine-resources.ts (mirror of mobile's machineResources.ts).
+
+  async getVibeSessions(): Promise<MachineResourceReport> {
+    const res = await this.agentFetch("/vibe/sessions");
+    const data = await res.json().catch(() => ({}));
+    return {
+      hostname: typeof data?.hostname === "string" ? data.hostname : undefined,
+      sessions: Array.isArray(data?.sessions) ? (data.sessions as VibeSession[]) : [],
+      unattributed: Array.isArray(data?.unattributed) ? data.unattributed : [],
+      generatedAt: typeof data?.generatedAt === "string" ? data.generatedAt : undefined,
+    };
+  }
+
+  /** Take a seat in a session (creates it for `workDir` when no id is given). */
+  async joinVibeSession(input: { sessionId?: string; workDir?: string; framework?: string; displayName?: string }): Promise<{
+    ok: boolean;
+    participant?: VibeParticipant;
+    session?: VibeSession;
+    heartbeatSeconds?: number;
+    error?: string;
+  }> {
+    const res = await this.agentFetch("/vibe/join", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, ...data };
+  }
+
+  async vibeHeartbeat(sessionId: string, participantId: string): Promise<boolean> {
+    const res = await this.agentFetch("/vibe/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, participantId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return res.ok && data?.alive !== false;
+  }
+
+  /**
+   * Owner-only: grant or revoke drive rights. The AGENT decides whether the
+   * caller may do this — the button being visible is never the permission.
+   */
+  async setVibeRole(sessionId: string, participantId: string, role: "viewer" | "driver"): Promise<{ ok: boolean; error?: string }> {
+    const res = await this.agentFetch("/vibe/role", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, participantId, role }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true };
+  }
+
+  async leaveVibeSession(sessionId: string, participantId: string): Promise<void> {
+    await this.agentFetch("/vibe/leave", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, participantId }),
+    }).catch(() => undefined);
+  }
+
   async companionListProjects(): Promise<CompanionProjectSummary[]> {
     const res = await this.agentFetch("/companion/list");
     const data = await res.json().catch(() => ({}));
@@ -6170,11 +6272,64 @@ export class AgentClient {
     const token = await this.issueBrowserSession("/ws/logs");
     return this.appendRelayPwToWs(`${this.baseUrl.replace(/^http/, "ws")}/ws/logs?id=${encodeURIComponent(id)}&browser_session=${encodeURIComponent(token)}`);
   }
-  async terminalWsUrl(cwd?: string, opts?: { launch?: "claude" | "codex" | "opencode" }): Promise<string> {
+  async terminalWsUrl(
+    cwd?: string,
+    opts?: { launch?: "claude" | "codex" | "opencode"; tmuxSession?: string },
+  ): Promise<string> {
+    if (opts?.tmuxSession) {
+      const token = await this.issueBrowserSession("/ws/runner");
+      const q = new URLSearchParams({
+        browser_session: token,
+        name: opts.tmuxSession,
+      });
+      return this.appendRelayPwToWs(`${this.baseUrl.replace(/^http/, "ws")}/ws/runner?${q.toString()}`);
+    }
     const token = await this.issueBrowserSession("/ws/terminal");
     const c = cwd ? `&cwd=${encodeURIComponent(cwd)}` : "";
     const launch = opts?.launch ? `&launch=${encodeURIComponent(opts.launch)}` : "";
     return this.appendRelayPwToWs(`${this.baseUrl.replace(/^http/, "ws")}/ws/terminal?browser_session=${encodeURIComponent(token)}${c}${launch}`);
+  }
+
+  async listTmuxSessions(): Promise<TmuxSessionSummary[]> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/tmux/sessions`, { headers: this.authHeaders });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Failed to list tmux sessions: HTTP ${res.status}`);
+    return Array.isArray(data?.sessions) ? data.sessions : [];
+  }
+
+  async adoptTmuxSession(session: string, pane?: string): Promise<{ taskId: string; session: string; pane?: string }> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/tmux/adopt`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ session, ...(pane ? { pane } : {}) }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Failed to adopt tmux session: HTTP ${res.status}`);
+    return data;
+  }
+
+  async detachTmuxTask(taskId: string): Promise<void> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/tmux/detach`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ taskId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Failed to detach tmux task: HTTP ${res.status}`);
+  }
+
+  async closeTmuxTask(taskId: string): Promise<void> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/tmux/close`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ taskId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Failed to close tmux task: HTTP ${res.status}`);
   }
 
   private appendRelayPwToWs(url: string): string {

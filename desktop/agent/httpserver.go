@@ -36,9 +36,14 @@ type HTTPServer struct {
 	port        int
 	token       string
 	ownerUserID string
-	deviceID    string
-	convexURL   string
-	hostname    string
+
+	// Co-vibe: who is on this machine, in which session, with what role.
+	// Lazily built (vibeRegistry()) so a machine nobody shares pays nothing.
+	vibeSessions *VibeSessionRegistry
+	vibeOnce     sync.Once
+	deviceID     string
+	convexURL    string
+	hostname     string
 	// operatorMode marks this box as part of a Yaver-operated public compute
 	// fleet (yaver serve --operator). Drives the host-share reaper every cycle
 	// so tenant slices are scrubbed promptly. Also disables the paired-token
@@ -747,7 +752,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/rd/policy", s.auth(s.handleRemoteDesktopPolicy))
 	mux.HandleFunc("/rd/stream", s.auth(s.handleRemoteDesktopStream))
 	mux.HandleFunc("/rd/frame.jpg", s.auth(s.handleRemoteDesktopFrame))
-	mux.HandleFunc("/rd/input", s.auth(s.handleRemoteDesktopInput))
+	mux.HandleFunc("/rd/input", s.auth(s.vibeDriverOnly(s.handleRemoteDesktopInput)))
 
 	// Personal Agent Gateway — resumable human gates (gateway_gate.go). The
 	// broker suspends on an irreducible human factor (captcha / push / code),
@@ -946,17 +951,26 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 
 	// Dev server (reverse proxy to local Metro/Vite/Flutter dev server)
 	mux.HandleFunc("/dev/status", s.authSDKOrGuest(s.handleDevServerStatus))
+
+	// Co-vibe (vibe_sessions_http.go): one report + four verbs. Readable by any
+	// authenticated participant — seeing who else is driving is what stops two
+	// people fighting over one simulator.
+	mux.HandleFunc("/vibe/sessions", s.auth(s.handleVibeSessions))
+	mux.HandleFunc("/vibe/join", s.auth(s.handleVibeJoin))
+	mux.HandleFunc("/vibe/heartbeat", s.auth(s.handleVibeHeartbeat))
+	mux.HandleFunc("/vibe/role", s.auth(s.handleVibeRole))
+	mux.HandleFunc("/vibe/leave", s.auth(s.handleVibeLeave))
 	mux.HandleFunc("/dev/target", s.authSDKOrGuest(s.handleDevServerTarget))
-	mux.HandleFunc("/dev/start", s.auth(s.handleDevServerStart))
-	mux.HandleFunc("/dev/stop", s.auth(s.handleDevServerStop))
-	mux.HandleFunc("/dev/reload", s.authSDKOrGuest(s.handleDevServerReload))
-	mux.HandleFunc("/dev/reload-app", s.authSDKOrGuest(s.handleReloadApp))
+	mux.HandleFunc("/dev/start", s.auth(s.vibeDriverOnly(s.handleDevServerStart)))
+	mux.HandleFunc("/dev/stop", s.auth(s.vibeDriverOnly(s.handleDevServerStop)))
+	mux.HandleFunc("/dev/reload", s.authSDKOrGuest(s.vibeDriverOnly(s.handleDevServerReload)))
+	mux.HandleFunc("/dev/reload-app", s.authSDKOrGuest(s.vibeDriverOnly(s.handleReloadApp)))
 	mux.HandleFunc("/dev/native-fingerprint", s.authSDKOrGuest(s.handleNativeFingerprintGet))
 	mux.HandleFunc("/dev/native-fingerprint/refresh", s.authSDKOrGuest(s.handleNativeFingerprintRefresh))
 	mux.HandleFunc("/dev/events", s.authSDKOrGuest(s.handleDevServerEvents))
 	mux.HandleFunc("/dev/compatibility", s.authSDKOrGuest(s.handleDevServerCompatibility))
 	mux.HandleFunc("/dev/builds", s.auth(s.handleDevServerBuilds))
-	mux.HandleFunc("/dev/build-native", s.authSDKOrGuest(s.handleBuildNativeBundle))
+	mux.HandleFunc("/dev/build-native", s.authSDKOrGuest(s.vibeDriverOnly(s.handleBuildNativeBundle)))
 	mux.HandleFunc("/dev/native-bundle", s.handleServeNativeBundle) // No auth — serves compiled bundle
 	mux.HandleFunc("/dev/native-assets", s.handleServeNativeAssets) // No auth — serves compiled assets
 	// Web build target outputs (target=web-js-bundle / web-hermes-wasm).
@@ -1020,8 +1034,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/projects/web", s.auth(s.handleProjectsByCapability))
 	mux.HandleFunc("/projects/all", s.auth(s.handleProjectsByCapability))
 	mux.HandleFunc("/remote-runtime/capabilities", s.auth(s.handleRemoteRuntimeCapabilities))
-	mux.HandleFunc("/remote-runtime/sessions", s.auth(s.handleRemoteRuntimeSessions))
-	mux.HandleFunc("/remote-runtime/sessions/", s.auth(s.handleRemoteRuntimeSessionRoute))
+	mux.HandleFunc("/remote-runtime/sessions", s.auth(s.vibeDriverOnly(s.handleRemoteRuntimeSessions)))
+	mux.HandleFunc("/remote-runtime/sessions/", s.auth(s.vibeDriverOnly(s.handleRemoteRuntimeSessionRoute)))
 	// Monorepo detection — desktop/agent/monorepo_detect.go
 	mux.HandleFunc("/projects/monorepo", s.auth(s.handleMonorepoDetect))
 	mux.HandleFunc("/projects/switch", s.auth(s.handleProjectSwitch))

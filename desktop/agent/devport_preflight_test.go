@@ -1,66 +1,192 @@
 package main
 
-// devport_preflight_test.go — the port pre-flight and bind-failure classifier.
+// devport_preflight_test.go — the dev-server port broker and the bind-failure
+// classifier: the two things that let one machine host many previews honestly.
 //
-// Incident these encode (2026-07-25, Mac mini / e-mobile Flutter preview):
-// an orphaned `flutter run -d web-server --web-port 9100` from an unrelated
-// project still held :9100. The new preview's flutter died with "Failed to bind
-// web development server: Address already in use", the readiness probe was
-// answered BY THE ORPHAN, and /dev/status reported running:true, serving:true —
-// pointing the phone at a different project's app for 23 hours' worth of
-// leftover state.
+// Incidents these encode, both from one Mac mini on 2026-07-25:
+//
+//   • An orphaned `flutter run -d web-server --web-port 9100` from an unrelated
+//     project (23h old) still held :9100. The new preview died with "Address
+//     already in use" while the readiness probe was answered BY THE ORPHAN, so
+//     /dev/status reported running:true, serving:true and pointed the phone at a
+//     different project's app.
+//   • `freeswitch` had held :8081 — Metro's canonical port — for four days. Any
+//     RN/Expo preview on that box would have been reported healthy while serving
+//     from a telephony daemon.
+//
+// The broker's third job has no incident yet because it is a race, not a state:
+// two concurrent starts probing the same "free" port both win. That is what
+// TestBrokerNeverHandsTheSamePortToTwoCallers pins down.
 
 import (
 	"fmt"
 	"net"
+	"sync"
 	"testing"
 )
 
-func TestPickFreeDevPortLeavesAFreePortAlone(t *testing.T) {
-	// Find a port nothing holds, then assert we don't move off it.
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
+// unusedPort returns a port nothing is listening on (bind, note it, release).
+// Named to avoid colliding with oauth_wizard.go's freePort().
+func unusedPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	port := probe.Addr().(*net.TCPAddr).Port
-	probe.Close() // now free
+	p := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	return p
+}
 
-	got, substituted := pickFreeDevPort(port, devPortProbeSpan)
-	if substituted {
-		t.Errorf("free port %d was substituted for %d — a free port must be used as-is", port, got)
-	}
-	if got != port {
-		t.Errorf("pickFreeDevPort(%d) = %d, want %d", port, got, port)
+func TestBrokerKeepsAFreePreferredPort(t *testing.T) {
+	want := unusedPort(t)
+	got, substituted, release := AcquireDevPort("flutter", "/work/app", want)
+	defer release()
+	if substituted || got != want {
+		t.Errorf("AcquireDevPort(%d) = %d (substituted=%v) — a free port must be used as-is", want, got, substituted)
 	}
 }
 
-func TestPickFreeDevPortSkipsAnOccupiedPort(t *testing.T) {
-	// Stand in for the orphaned dev server: hold the preferred port.
-	orphan, err := net.Listen("tcp", "127.0.0.1:0")
+func TestBrokerSkipsAPortHeldByAnotherProcess(t *testing.T) {
+	// Stand in for the orphaned dev server / freeswitch.
+	squatter, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer orphan.Close()
-	held := orphan.Addr().(*net.TCPAddr).Port
+	defer squatter.Close()
+	held := squatter.Addr().(*net.TCPAddr).Port
 
-	got, substituted := pickFreeDevPort(held, devPortProbeSpan)
+	got, substituted, release := AcquireDevPort("metro", "u1:/work/app", held)
+	defer release()
 	if !substituted {
-		t.Fatalf("port %d is held by another listener but pickFreeDevPort kept it — "+
-			"the dev server would die on bind while the probe answered from the wrong process", held)
+		t.Fatalf(":%d is held by a foreign listener but the broker handed it out — "+
+			"the dev server would die on bind while the readiness probe was answered by the squatter", held)
 	}
 	if got == held {
 		t.Fatalf("substituted but returned the same port %d", got)
 	}
-	if got <= held || got > held+devPortProbeSpan {
-		t.Errorf("substituted port %d is outside the announced span (%d..%d)", got, held+1, held+devPortProbeSpan)
-	}
-	// The replacement must actually be bindable — otherwise we've only moved
-	// the failure.
+	// The replacement must actually be bindable, or we only moved the failure.
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", got))
 	if err != nil {
 		t.Fatalf("substituted port %d is not bindable: %v", got, err)
 	}
 	ln.Close()
+}
+
+// The race a probe alone cannot close: choosing a port and binding it are not
+// atomic, so the winner must be recorded at choice time.
+func TestBrokerNeverHandsTheSamePortToTwoCallers(t *testing.T) {
+	start := unusedPort(t)
+
+	const callers = 12
+	var wg sync.WaitGroup
+	ports := make([]int, callers)
+	releases := make([]func(), callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			p, _, release := AcquireDevPort("metro", fmt.Sprintf("u%d:/work/p%d", i, i), start)
+			ports[i] = p
+			releases[i] = release
+		}(i)
+	}
+	wg.Wait()
+	defer func() {
+		for _, r := range releases {
+			if r != nil {
+				r()
+			}
+		}
+	}()
+
+	seen := map[int]int{}
+	for i, p := range ports {
+		if prev, dup := seen[p]; dup {
+			t.Fatalf("callers %d and %d were both given :%d — two dev servers would fight over it "+
+				"and one would die with a bind error the user never asked for", prev, i, p)
+		}
+		seen[p] = i
+	}
+	if len(seen) != callers {
+		t.Errorf("expected %d distinct ports, got %d", callers, len(seen))
+	}
+}
+
+func TestBrokerReleaseReturnsThePortToThePool(t *testing.T) {
+	want := unusedPort(t)
+
+	first, _, release := AcquireDevPort("vite", "/work/a", want)
+	if first != want {
+		t.Fatalf("setup: wanted %d, got %d", want, first)
+	}
+	// While held, the next caller asking for the same port must be moved along.
+	second, substituted, release2 := AcquireDevPort("vite", "/work/b", want)
+	defer release2()
+	if !substituted || second == first {
+		t.Fatalf("a held reservation was handed out twice (:%d)", first)
+	}
+
+	release()
+	release() // idempotent — a double stop must not corrupt the pool
+
+	third, _, release3 := AcquireDevPort("vite", "/work/c", want)
+	defer release3()
+	if third != want {
+		t.Errorf("after release, :%d should be available again, got :%d — leaked reservations "+
+			"shrink the machine's usable range until the agent restarts", want, third)
+	}
+}
+
+func TestBrokerSnapshotAttributesEveryHeldPort(t *testing.T) {
+	p := unusedPort(t)
+	got, _, release := AcquireDevPort("flutter", "abcd1234:/work/e-mobile", p)
+	defer release()
+
+	var found *devPortReservation
+	for _, r := range DevPortSnapshot() {
+		if r.Port == got {
+			rr := r
+			found = &rr
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf(":%d is reserved but absent from the snapshot — a user asking "+
+			"\"why is my preview on %d?\" has no way to find out", got, got)
+	}
+	if found.Kind != "flutter" || found.Owner != "abcd1234:/work/e-mobile" {
+		t.Errorf("snapshot lost the attribution: kind=%q owner=%q", found.Kind, found.Owner)
+	}
+	if found.Since.IsZero() {
+		t.Error("snapshot has no reservation timestamp")
+	}
+}
+
+// The multi-user slot allocator and the broker must not disagree during the
+// window between reserving a port and binding it.
+func TestSlotAllocatorSkipsPortsTheBrokerHolds(t *testing.T) {
+	base := unusedPort(t)
+	alloc := &DevPortAllocator{
+		metroBase: base,
+		webBase:   base + 100,
+		maxSlots:  4,
+		taken:     map[int]string{},
+	}
+
+	// A single-user session (or another user's) reserves slot 0's metro port
+	// first — reserved, not yet bound, so the OS still sees it as free.
+	_, _, release := AcquireDevPort("metro", "owner:/work/owner-app", base)
+	defer release()
+
+	pair, err := alloc.Reserve("user-2")
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	if pair.MetroPort == base {
+		t.Errorf("slot allocator handed out :%d while the broker holds it — both sessions "+
+			"would point at the same port, and only one would survive the bind", base)
+	}
 }
 
 func TestPortBindFailureNamesEveryFrameworkPhrasing(t *testing.T) {
@@ -72,7 +198,7 @@ func TestPortBindFailureNamesEveryFrameworkPhrasing(t *testing.T) {
 		want bool
 	}{
 		{"flutter/dart (the observed failure)", real, true},
-		{"node/vite/next", "Error: listen EADDRINUSE: address already in use :::5173", true},
+		{"node/vite/next/metro", "Error: listen EADDRINUSE: address already in use :::5173", true},
 		{"generic", "port is already in use", true},
 		{"empty tail", "", false},
 		{"healthy compile output", "Compiling lib/main.dart for the Web...\nBuilt build/web", false},

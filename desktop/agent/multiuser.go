@@ -58,8 +58,8 @@ type MultiUserManager struct {
 	maxUsers int                     // Max concurrent users (0 = unlimited)
 
 	// Shared resources (GPU services accessible by all users)
-	sharedOllamaURL       string // http://localhost:11434
-	sharedPersonaPlexURL  string // http://localhost:8765
+	sharedOllamaURL      string // http://localhost:11434
+	sharedPersonaPlexURL string // http://localhost:8765
 
 	// portAlloc hands out unique (Metro, ExpoWeb) port pairs to user
 	// sessions so they don't collide on the canonical 8081 / 19006.
@@ -214,6 +214,9 @@ func (m *MultiUserManager) EnsureDevServerMgr(userID string) (*DevServerManager,
 		return nil, DevPortPair{}, err
 	}
 	session.devServerMgr = NewDevServerManager()
+	// Label this user's port reservations so a shared machine can answer
+	// "who holds :8083?" without shelling out to lsof.
+	session.devServerMgr.OwnerUserID = userID
 	session.devPorts = pair
 	log.Printf("[multiuser] DevServerManager allocated for %s (slot=%d, metro=%d, web=%d)",
 		userID[:min(8, len(userID))], pair.Slot, pair.MetroPort, pair.WebPort)

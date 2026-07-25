@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
@@ -30,6 +31,16 @@ type IOSSimDriver struct {
 	DeviceType string // e.g. "iPhone 15" — optional substring when no UDID is set
 	BundleID   string // app bundle id, e.g. "io.yaver.mobile"
 	AppPath    string // path to .app bundle
+
+	// Chooser, when set, picks which of the ranked candidate UDIDs to use.
+	// Return ok=false to reject them all.
+	//
+	// This exists so the agent can enforce EXCLUSIVITY (one session per
+	// simulator) without testkit having to know what a session is. Ranking —
+	// "which simulator is the best fit" — stays here; arbitration — "who already
+	// has it" — belongs to the caller. Without a Chooser the behaviour is
+	// unchanged: best-ranked candidate wins.
+	Chooser func(candidates []string) (string, bool)
 }
 
 // Available returns nil if simctl appears usable on the current host.
@@ -56,10 +67,18 @@ func (d *IOSSimDriver) Boot(ctx context.Context) (string, error) {
 	}
 	udid := d.UDID
 	if udid == "" {
-		var err error
-		udid, err = pickSimulator(ctx, d.DeviceType)
+		candidates, err := RankSimulators(ctx, d.DeviceType)
 		if err != nil {
 			return "", err
+		}
+		if d.Chooser != nil {
+			chosen, ok := d.Chooser(candidates)
+			if !ok {
+				return "", fmt.Errorf("no simulator matching %q is available — every candidate is already in use by another session", d.DeviceType)
+			}
+			udid = chosen
+		} else {
+			udid = candidates[0]
 		}
 	}
 	// Boot is idempotent — simctl errors on already-booted devices, so
@@ -112,25 +131,55 @@ func (d *IOSSimDriver) Shutdown(ctx context.Context, udid string) error {
 // devices, then iPhone/iPad, then any available Apple simulator. That keeps
 // headless Mac builders usable even when only visionOS/watch/tv runtimes are
 // installed.
-func pickSimulator(ctx context.Context, deviceType string) (string, error) {
+// RankSimulators returns every available simulator UDID matching deviceType,
+// best fit first. Callers that need exclusivity walk the list; callers that just
+// want "a" simulator take element 0.
+func RankSimulators(ctx context.Context, deviceType string) ([]string, error) {
 	out, err := runCtx(ctx, "xcrun", "simctl", "list", "devices", "available")
 	if err != nil {
-		return "", fmt.Errorf("simctl list devices: %w", err)
+		return nil, fmt.Errorf("simctl list devices: %w", err)
 	}
-	udid, ok := pickSimulatorFromList(out, deviceType)
-	if !ok {
-		return "", fmt.Errorf("no available simulator matching %q", deviceType)
+	ranked := rankSimulatorsFromList(out, deviceType)
+	if len(ranked) == 0 {
+		return nil, fmt.Errorf("no available simulator matching %q", deviceType)
 	}
-	return udid, nil
+	return ranked, nil
 }
 
+func pickSimulator(ctx context.Context, deviceType string) (string, error) {
+	ranked, err := RankSimulators(ctx, deviceType)
+	if err != nil {
+		return "", err
+	}
+	return ranked[0], nil
+}
+
+// pickSimulatorFromList returns the single best candidate (compatibility
+// wrapper — one ranking implementation, not two).
 func pickSimulatorFromList(out, deviceType string) (string, bool) {
+	ranked := rankSimulatorsFromList(out, deviceType)
+	if len(ranked) == 0 {
+		return "", false
+	}
+	return ranked[0], true
+}
+
+// rankSimulatorsFromList returns every matching simulator UDID, best fit first.
+//
+// A ranked LIST (rather than one winner) is what makes exclusive assignment
+// possible: an already-booted simulator scores +100 because reusing it is fast,
+// but if another session already holds it the caller must be able to fall to the
+// next candidate. When only a winner was returned, every session on the machine
+// picked the same booted device — two people vibing two projects drove one
+// simulator, the second install replacing the first's app, with nothing said.
+func rankSimulatorsFromList(out, deviceType string) []string {
 	type candidate struct {
 		udid  string
 		score int
 	}
 	want := strings.ToLower(strings.TrimSpace(deviceType))
-	best := candidate{score: -1}
+	var found []candidate
+	seen := map[string]bool{}
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -142,14 +191,19 @@ func pickSimulatorFromList(out, deviceType string) (string, bool) {
 		}
 		// Find the first "(<UUID>)" segment.
 		open := strings.Index(line, "(")
-		close := strings.Index(line, ")")
-		if open < 0 || close <= open {
+		closeIdx := strings.Index(line, ")")
+		if open < 0 || closeIdx <= open {
 			continue
 		}
-		udid := strings.TrimSpace(line[open+1 : close])
-		if udid == "" || strings.Contains(udid, " ") {
+		udid := strings.TrimSpace(line[open+1 : closeIdx])
+		if udid == "" || strings.Contains(udid, " ") || seen[udid] {
 			continue
 		}
+		// Unavailable devices can't be booted at all — never rank them.
+		if strings.Contains(lower, "(unavailable") {
+			continue
+		}
+		seen[udid] = true
 		score := 10
 		switch {
 		case strings.Contains(lower, "iphone"):
@@ -164,19 +218,16 @@ func pickSimulatorFromList(out, deviceType string) (string, bool) {
 			score = 15
 		}
 		if strings.Contains(lower, "(booted)") {
-			score += 100
+			score += 100 // already warm — seconds instead of a cold boot
 		}
-		if want != "" {
-			score += 1000
-		}
-		if score > best.score {
-			best = candidate{udid: udid, score: score}
-		}
+		found = append(found, candidate{udid: udid, score: score})
 	}
-	if best.udid == "" {
-		return "", false
+	sort.SliceStable(found, func(i, j int) bool { return found[i].score > found[j].score })
+	udids := make([]string, 0, len(found))
+	for _, c := range found {
+		udids = append(udids, c.udid)
 	}
-	return best.udid, true
+	return udids
 }
 
 // runCtx is a tiny wrapper that returns combined output + error.

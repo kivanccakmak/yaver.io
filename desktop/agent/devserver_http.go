@@ -1017,6 +1017,9 @@ func (s *HTTPServer) ensureDevServerForProject(workDir, framework, platform stri
 	if status := mgr.Status(); status != nil && status.Running && status.WorkDir == workDir {
 		return nil
 	}
+	if sess := s.vibeRegistry().EnsureSession(s.ownerUserID, workDir, framework); sess != nil {
+		mgr.VibeSessionID = sess.ID
+	}
 	if err := mgr.Start(framework, workDir, platform, 0, DevServerTarget{}); err != nil {
 		return err
 	}
@@ -1676,6 +1679,17 @@ func (s *HTTPServer) handleDevServerStart(w http.ResponseWriter, r *http.Request
 	}
 	if strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID")) == "" {
 		s.maybePullBeforeHotReloadBuild(req.WorkDir)
+	}
+
+	// Every started dev server IS a piece of work someone can join, so give it a
+	// vibe session up front. Two consequences, both wanted:
+	//   • the port and any claimed device roll up to ONE roster entry, which is how
+	//     "who holds :8083 / the simulator?" gets an answer;
+	//   • a second person opening the same project joins THIS session instead of
+	//     creating a parallel one that would silently fight over both.
+	// Solo work is simply a session with one seat — no extra concept.
+	if sess := s.vibeRegistry().EnsureSession(s.ownerUserID, req.WorkDir, req.Framework); sess != nil {
+		mgr.VibeSessionID = sess.ID
 	}
 
 	if err := mgr.Start(req.Framework, req.WorkDir, req.Platform, req.Port, DevServerTarget{

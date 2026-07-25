@@ -38,14 +38,13 @@ import ExtrasView from "@/components/dashboard/ExtrasView";
 import ShareView from "@/components/dashboard/ShareView";
 import GuestsStatusView from "@/components/dashboard/GuestsStatusView";
 import FeedbackWorkQueueView from "@/components/dashboard/FeedbackWorkQueueView";
-import ProjectArtifactsView from "@/components/dashboard/ProjectArtifactsView";
 import CollabView from "@/components/dashboard/CollabView";
+import CoVibeCard from "@/components/dashboard/CoVibeCard";
 import InfraView from "@/components/dashboard/InfraView";
 import ConnectivityView from "@/components/dashboard/ConnectivityView";
 import NetworkView from "@/components/dashboard/NetworkView";
 import ToolsView from "@/components/dashboard/ToolsView";
 import TwoFactorView from "@/components/dashboard/TwoFactorView";
-import VaultView from "@/components/dashboard/VaultView";
 import APIKeysView from "@/components/dashboard/APIKeysView";
 import StorageView from "@/components/dashboard/StorageView";
 import ArmCellView from "@/components/dashboard/ArmCellView";
@@ -53,7 +52,6 @@ import AppleTVCellView from "@/components/dashboard/AppleTVCellView";
 import SchedulesView from "@/components/dashboard/SchedulesView";
 import PackagesView from "@/components/dashboard/PackagesView";
 import PhoneProjectsView from "@/components/dashboard/PhoneProjectsView";
-import VibePreviewView from "@/components/dashboard/VibePreviewView";
 import ExecView from "@/components/dashboard/ExecView";
 import DomainsView from "@/components/dashboard/DomainsView";
 import CompanyAIOptionsView from "@/components/dashboard/CompanyAIOptionsView";
@@ -62,13 +60,11 @@ import VibeCodingView, { AssistantMarkdown } from "@/components/dashboard/VibeCo
 import { capStreamText } from "@/lib/streamBuffer";
 import PendingClaimsSection from "@/components/dashboard/PendingClaimsSection";
 import WebviewView from "@/components/dashboard/WebviewView";
-import GitView from "@/components/dashboard/GitView";
+import RuntimeLabView, { type RuntimeLabIntent } from "@/components/dashboard/RuntimeLabView";
 import DevicesView, { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice, RUNNER_WHITELIST_SET, OPENCODE_PROVIDER_CATALOGUE } from "@/components/dashboard/DevicesView";
-import BillingView from "@/components/dashboard/BillingView";
-import StoresView from "@/components/dashboard/StoresView";
-import { ManagedCloudPanel } from "@/components/dashboard/ManagedCloudPanel";
 import { CapabilityShelf } from "@/components/dashboard/CapabilityShelf";
 import { HIDE_PAID_UI } from "@/lib/launchFlags";
+import { parseDashboardChatIntent } from "@/lib/dashboard-chat-intent";
 import {
   activationBlockReason,
   activateTaskPlacement,
@@ -741,7 +737,7 @@ function DeviceConnectCard({
 // collab, company-ai, infra) and the self-gating preview tabs (vibe, webview,
 // preview, web-reload) are intentionally excluded.
 const CONNECTION_REQUIRED_TABS = new Set<string>([
-  "chat", "projects", "vault", "storage", "ops", "git", "data", "convex",
+  "chat", "projects", "runtime", "storage", "ops", "data", "convex",
   "schedules", "apikeys", "exec", "companion", "builds", "quality", "observ",
   "screenlog", "extras", "accounts", "switch", "tools", "phone", "health",
   "todos", "arm", "appletv", "verbs", "autoruns",
@@ -843,8 +839,10 @@ export default function DashboardPage() {
   // pointed at it; if not it offers a "Connect & open shell" affordance
   // instead of silently opening a WS against the wrong baseUrl.
   const [shellDevice, setShellDevice] = useState<Device | null>(null);
+  const [shellTmuxSession, setShellTmuxSession] = useState<string | null>(null);
   const [remoteDesktopDevice, setRemoteDesktopDevice] = useState<Device | null>(null);
-  const [activeTab, setActiveTab] = useState<"home" | "chat" | "projects" | "vibe" | "devices" | "git" | "todos" | "feedback" | "artifacts" | "builds" | "webview" | "preview" | "web-reload" | "health" | "quality" | "convex" | "data" | "switch" | "accounts" | "company-ai" | "companion" | "observ" | "ops" | "autoruns" | "extras" | "share" | "guests" | "collab" | "infra" | "connect" | "network" | "tools" | "security" | "storage" | "vault" | "apikeys" | "schedules" | "exec" | "phone" | "vibe-preview" | "domains" | "screenlog" | "settings" | "billing" | "stores" | "cloud" | "build" | "arm" | "appletv" | "packages" | "verbs">("devices");
+  const [activeTab, setActiveTab] = useState<"home" | "chat" | "projects" | "runtime" | "vibe" | "devices" | "git" | "todos" | "feedback" | "artifacts" | "builds" | "webview" | "preview" | "web-reload" | "health" | "quality" | "convex" | "data" | "switch" | "accounts" | "company-ai" | "companion" | "observ" | "ops" | "autoruns" | "extras" | "share" | "guests" | "collab" | "infra" | "connect" | "network" | "tools" | "security" | "storage" | "vault" | "apikeys" | "schedules" | "exec" | "phone" | "vibe-preview" | "domains" | "screenlog" | "settings" | "billing" | "stores" | "cloud" | "build" | "arm" | "appletv" | "packages" | "verbs">("devices");
+  const [runtimeIntent, setRuntimeIntent] = useState<RuntimeLabIntent | null>(null);
   const [autoStart2faSetup, setAutoStart2faSetup] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [todoCount, setTodoCount] = useState(0);
@@ -871,7 +869,10 @@ export default function DashboardPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
-    if (params.get("tab") === "security") setActiveTab("security");
+    const tab = params.get("tab");
+    if (tab && ["security", "runtime", "webview", "preview", "web-reload", "projects", "chat", "devices"].includes(tab)) {
+      setActiveTab(tab as typeof activeTab);
+    }
     if (params.get("setup2fa") === "1") setAutoStart2faSetup(true);
   }, []);
 
@@ -1941,9 +1942,65 @@ export default function DashboardPage() {
     } catch {}
   };
 
+  const handleDashboardChatIntent = (text: string): boolean => {
+    const intent = parseDashboardChatIntent(text);
+    if (!intent) return false;
+    setInput("");
+    setSending(false);
+    setChatMsgs((prev) => [
+      ...prev,
+      { role: "user", text },
+      { role: "assistant", text: intent.response },
+    ]);
+    if (intent.kind === "webview") {
+      if (intent.projectQuery) setPreferredSurfaceProjectPath(intent.projectQuery);
+      setPreferredWebviewMode("web");
+      setActiveTab("web-reload");
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set("tab", "web-reload");
+        window.history.replaceState(null, "", url.toString());
+      } catch {}
+      return true;
+    }
+    if (intent.kind === "runtime") {
+      setRuntimeIntent({
+        nonce: Date.now(),
+        kind: "runtime",
+        projectQuery: intent.projectQuery,
+        surface: intent.surface,
+        platform: intent.platform,
+      });
+      setActiveTab("runtime");
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set("tab", "runtime");
+        window.history.replaceState(null, "", url.toString());
+      } catch {}
+      return true;
+    }
+    if (intent.kind === "tmux") {
+      setRuntimeIntent({
+        nonce: Date.now(),
+        kind: "tmux",
+        projectQuery: intent.tmuxQuery,
+        tmuxQuery: intent.tmuxQuery,
+      });
+      setActiveTab("runtime");
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set("tab", "runtime");
+        window.history.replaceState(null, "", url.toString());
+      } catch {}
+      return true;
+    }
+    return false;
+  };
+
   const handleSend = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const text = input.trim(); if (!text || sending) return;
+    if (handleDashboardChatIntent(text)) return;
     // Task already running → enqueue the follow-up locally and clear
     // the input so the user can keep typing. Dispatch happens in the
     // effect below when activeTask.status leaves running/queued.
@@ -2358,53 +2415,13 @@ export default function DashboardPage() {
   const OWNER_ONLY_TABS = new Set(["arm", "appletv", "robot", "circuit", "printer"]);
   const tabs: { id: typeof activeTab; label: string; icon: string; badge?: number }[] = ([
     { id: "devices", label: "Devices", icon: "\uD83D\uDCBB" },
-    { id: "build", label: "Build", icon: "\uD83D\uDEE0\uFE0F" },
-    { id: "cloud", label: "Cloud", icon: "\u2601\uFE0F" },
+    { id: "network", label: "Mesh", icon: "\uD83D\uDD78\uFE0F" },
     { id: "chat", label: "Chat", icon: "\uD83D\uDCAC" },
     { id: "projects", label: "Projects", icon: "\uD83D\uDCC1" },
-    { id: "vibe", label: "Vibe", icon: "\u2328\uFE0F" },
-    { id: "feedback", label: "Feedback", icon: "\uD83D\uDCE5" },
-    { id: "artifacts", label: "Artifacts", icon: "\uD83D\uDCE6" },
-    { id: "todos", label: "Todos", icon: "\u2611\uFE0F", badge: todoCount },
-    { id: "webview", label: "Webview", icon: "\uD83D\uDCF1" },
-    { id: "health", label: "Health", icon: "\uD83D\uDCCA" },
-    { id: "quality", label: "Quality", icon: "\u2705" },
-    { id: "data", label: "Data", icon: "\uD83D\uDDC4\uFE0F" },
-    { id: "switch", label: "Switch", icon: "\uD83D\uDD04" },
-    { id: "accounts", label: "Accounts", icon: "\uD83D\uDD11" },
-    { id: "company-ai", label: "Company AI", icon: "AI" },
-    { id: "infra", label: "Infra", icon: "\uD83D\uDEE0\uFE0F" },
-    { id: "connect", label: "Connect", icon: "\uD83C\uDF10" },
-    { id: "network", label: "Mesh", icon: "\uD83D\uDD78\uFE0F" },
-    { id: "tools", label: "Tools", icon: "\uD83E\uDDE9" },
-    { id: "observ", label: "Observ", icon: "\uD83D\uDCCA" },
-    { id: "ops", label: "Ops", icon: "\uD83D\uDE80" },
-    { id: "autoruns", label: "Autoruns", icon: "\u267B\uFE0F" },
-    { id: "verbs", label: "Tools+", icon: "\uD83E\uDDF0" },
-    { id: "extras", label: "Extras", icon: "\u2699\uFE0F" },
-    { id: "share", label: "Share", icon: "\uD83D\uDCE3" },
-    { id: "guests", label: "Guests", icon: "\uD83D\uDC65" },
-    { id: "collab", label: "People", icon: "\uD83E\uDD1D" },
-    { id: "convex", label: "Convex", icon: "\u26A1" },
-    { id: "storage", label: "Storage", icon: "\uD83D\uDCC2" },
-    { id: "vault", label: "Vault", icon: "\uD83D\uDD12" },
-    { id: "apikeys", label: "Yaver Tokens", icon: "\uD83D\uDD11" },
-    { id: "schedules", label: "Schedules", icon: "\u23F0" },
-    { id: "packages", label: "Packages", icon: "\uD83D\uDCE6" },
-    { id: "phone", label: "Phone Backend", icon: "\u26A1" },
-    { id: "companion", label: "Companion", icon: "\u23F0" },
-    { id: "vibe-preview", label: "Vibe Preview", icon: "\uD83C\uDFAC" },
-    { id: "domains", label: "Domains", icon: "\uD83C\uDF10" },
-    { id: "exec", label: "Exec", icon: "\u2699\uFE0F" },
-    { id: "security", label: "Security", icon: "\uD83D\uDD10" },
-    { id: "screenlog", label: "Screen Monitor", icon: "\uD83C\uDFA5" },
-    { id: "arm", label: "Robot Arm", icon: "\uD83E\uDDBE" },
-    { id: "appletv", label: "Apple TV", icon: "\uD83D\uDCFA" },
+    { id: "runtime", label: "Runtime", icon: "\u25A3" },
   ] as { id: typeof activeTab; label: string; icon: string; badge?: number }[]).filter(
     (t) =>
-      (isOwnerAccount || !OWNER_ONLY_TABS.has(t.id)) &&
-      // HN-LAUNCH-HIDE-PAID: drop the paid managed-cloud + metered build tabs.
-      !(HIDE_PAID_UI && (t.id === "build" || t.id === "cloud")),
+      isOwnerAccount || !OWNER_ONLY_TABS.has(t.id),
   );
 
   return (
@@ -2459,27 +2476,13 @@ export default function DashboardPage() {
 
           {/* Nav */}
           <nav className="flex flex-col gap-[2px]">
-            {([
-              { id: "devices",  label: "Devices",  icon: "💻" },
-              { id: "build",    label: "Build",    icon: "🛠️" },
-              { id: "cloud",    label: "Cloud",    icon: "☁️" },
-              { id: "network",  label: "Mesh",     icon: "🕸️" },
-              { id: "chat",     label: "Chat",     icon: "💬" },
-              { id: "projects", label: "Projects", icon: "📁" },
-              { id: "git",      label: "Git",      icon: "⎇" },
-              { id: "feedback", label: "Feedback", icon: "📥" },
-              { id: "artifacts", label: "Artifacts", icon: "📦" },
-              { id: "webview",  label: "Webview", icon: "📱" },
-              { id: "vibe-preview", label: "Vibe Preview", icon: "🎬" },
-              { id: "guests",   label: "Guests",   icon: "👥" },
-              { id: "vault",    label: "Vault",    icon: "🔐" },
-              { id: "billing",  label: "Billing",  icon: "💳" },
-              { id: "stores",   label: "Publish",  icon: "🚀" },
-            ] as const)
-              // HN-LAUNCH-HIDE-PAID: drop the Billing tab from the nav so the
-              // launch reads as free + self-hosted. Flip HIDE_PAID_UI to restore.
-              .filter((it) => !(HIDE_PAID_UI && (it.id === "billing" || it.id === "cloud" || it.id === "build")))
-              .map((it) => (
+	            {([
+	              { id: "devices",  label: "Devices",  icon: "💻" },
+	              { id: "network",  label: "Mesh",     icon: "🕸️" },
+	              { id: "chat",     label: "Chat",     icon: "💬" },
+	              { id: "projects", label: "Projects", icon: "📁" },
+	              { id: "runtime", label: "Runtime", icon: "▣" },
+	            ] as const).map((it) => (
               <button
                 key={it.id}
                 onClick={() => setActiveTab(it.id)}
@@ -3038,7 +3041,7 @@ export default function DashboardPage() {
                           isConnecting={false}
                           token={token}
                           onAliasSaved={refreshDevices}
-                          onOpenShell={() => setShellDevice(d)}
+                          onOpenShell={() => { setShellTmuxSession(null); setShellDevice(d); }}
                           onOpenRemoteDesktop={() => setRemoteDesktopDevice(d)}
                           onConnect={() => connectToDevice(d)}
                           onTogglePrimary={!d.isGuest && token ? async () => {
@@ -3095,6 +3098,20 @@ export default function DashboardPage() {
             <div className="flex-1 overflow-y-auto p-6 max-w-6xl mx-auto w-full"><OverviewView user={user ?? undefined} onNavigate={(tab) => setActiveTab(tab as typeof activeTab)} /></div>
           ) : activeTab === "projects" ? (
             <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full"><ProjectsView onTaskCreated={onTaskCreated} mobileWorkers={mobileWorkers} selectedPreviewTarget={selectedPreviewTarget} onSelectPreviewTarget={handleSelectPreviewTarget} onReconnect={connectedDevice ? async () => { await connectToDevice(connectedDevice); } : undefined} onRepairRelay={token ? repairRelay : undefined} /></div>
+          ) : activeTab === "runtime" ? (
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <RuntimeLabView
+                intent={runtimeIntent}
+                onOpenTmux={(sessionName) => {
+                  if (!connectedDevice) {
+                    setConnectError("Connect to a device before attaching to tmux.");
+                    return;
+                  }
+                  setShellTmuxSession(sessionName);
+                  setShellDevice(connectedDevice);
+                }}
+              />
+            </div>
           ) : activeTab === "vibe" ? (
             <div className="flex-1 min-h-0 overflow-hidden">
               <VibeCodingView
@@ -3111,8 +3128,6 @@ export default function DashboardPage() {
             <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full"><TodosView onTaskCreated={onTaskCreated} /></div>
           ) : activeTab === "feedback" ? (
             <div className="flex-1 min-h-0 w-full max-w-5xl mx-auto"><FeedbackWorkQueueView token={token} agentConnected={connState === "connected"} /></div>
-          ) : activeTab === "artifacts" ? (
-            <div className="flex-1 min-h-0 w-full max-w-5xl mx-auto"><ProjectArtifactsView token={token} /></div>
           ) : activeTab === "builds" ? (
             <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full space-y-6">
               <BuildsView onTaskCreated={onTaskCreated} preferredProjectPath={preferredSurfaceProjectPath} />
@@ -3200,22 +3215,29 @@ export default function DashboardPage() {
             <div className="flex-1 overflow-y-auto p-6 max-w-6xl mx-auto w-full"><ExtrasView /></div>
           ) : activeTab === "share" ? (
             <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full"><ShareView /></div>
-          ) : activeTab === "billing" && !HIDE_PAID_UI ? (
-            // HN-LAUNCH-HIDE-PAID: billing tab is unreachable while paid UI is
-            // hidden (nav entry filtered out above). Branch + BillingView import
-            // retained so restoring is a one-flag flip.
-            <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full"><BillingView token={token} /></div>
-          ) : activeTab === "stores" ? (
-            <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full"><StoresView token={token} /></div>
           ) : activeTab === "build" && !HIDE_PAID_UI ? (
             <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full">
               <h2 className="text-lg font-semibold text-surface-100">Build your app</h2>
-              <p className="mt-1 text-xs text-surface-500">
-                Your terminal (Claude Code / Codex) writes the code; Yaver does the
-                infra. Turn on only the capabilities you need — see it on your phone,
-                add a backend or website, or publish to the stores. Pay fairly from
-                one prepaid balance, or run it yourself for free.
+              <p className="mt-1 max-w-2xl text-xs leading-5 text-surface-500">
+                Codex writes the code. Yaver handles the app plumbing one step at a time.
               </p>
+              <ol className="mt-4 grid gap-2 text-xs sm:grid-cols-3">
+                {[
+                  ["1", "Pick target", "Phone preview, backend, website, or stores."],
+                  ["2", "Fill fields", "Only the selected tool asks for input."],
+                  ["3", "Run it", "Watch status, logs, and outputs here."],
+                ].map(([n, title, body]) => (
+                  <li key={n} className="rounded-md border border-surface-800 bg-surface-900/70 p-3">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-surface-800 text-[10px] font-semibold text-surface-300">
+                        {n}
+                      </span>
+                      <span className="font-medium text-surface-200">{title}</span>
+                    </div>
+                    <p className="mt-2 leading-5 text-surface-500">{body}</p>
+                  </li>
+                ))}
+              </ol>
               <div className="mt-4">
                 <CapabilityShelf token={token} />
               </div>
@@ -3229,19 +3251,15 @@ export default function DashboardPage() {
                 <WebTestsPanel />
               </div>
             </div>
-          ) : activeTab === "cloud" && !HIDE_PAID_UI ? (
-            <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full">
-              <h2 className="text-lg font-semibold text-surface-100">Yaver Cloud</h2>
-              <p className="mt-1 text-xs text-surface-500">
-                Optional web-billed infrastructure: saved cloud workspaces,
-                private relay, and auto-stop. Self-hosted Yaver remains free.
-              </p>
-              <ManagedCloudPanel token={token} standalone />
-            </div>
           ) : activeTab === "guests" ? (
             <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full"><GuestsStatusView /></div>
           ) : activeTab === "collab" ? (
-            <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full"><CollabView /></div>
+            <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full space-y-6">
+              {/* Live co-vibe roster first: who is here NOW, and who may type.
+                  Sharing controls (below) are the "invite" half of the same story. */}
+              <CoVibeCard ownerUserId={user?.id} />
+              <CollabView />
+            </div>
           ) : activeTab === "convex" ? (
             <div className="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full"><ConvexView /></div>
           ) : activeTab === "security" ? (
@@ -3256,13 +3274,6 @@ export default function DashboardPage() {
             <div className="flex-1 min-h-0 w-full overflow-auto p-4"><ArmCellView devices={devices} token={token} /></div>
           ) : activeTab === "appletv" && isOwnerAccount ? (
             <div className="flex-1 min-h-0 w-full overflow-auto p-4"><AppleTVCellView devices={devices} token={token} /></div>
-          ) : activeTab === "vault" ? (
-            <div className="flex-1 min-h-0 w-full max-w-4xl mx-auto">
-              <VaultView
-                needsAuth={connectedDeviceNeedsRecovery}
-                onReconnect={connectedDevice ? async () => { await connectToDevice(connectedDevice); } : undefined}
-              />
-            </div>
           ) : activeTab === "apikeys" ? (
             <div className="flex-1 min-h-0 w-full max-w-4xl mx-auto"><APIKeysView /></div>
           ) : activeTab === "schedules" ? (
@@ -3273,8 +3284,6 @@ export default function DashboardPage() {
             <div className="flex-1 min-h-0 w-full max-w-6xl mx-auto overflow-auto p-4"><PhoneProjectsView /></div>
           ) : activeTab === "companion" ? (
             <div className="flex-1 min-h-0 w-full overflow-auto"><CompanionView /></div>
-          ) : activeTab === "vibe-preview" ? (
-            <div className="flex-1 min-h-0 w-full"><VibePreviewView /></div>
           ) : activeTab === "domains" ? (
             <div className="flex-1 min-h-0 w-full max-w-5xl mx-auto">
               {token && user?.id ? <DomainsView token={token} userId={user.id} /> :
@@ -3311,39 +3320,9 @@ export default function DashboardPage() {
                 onCloseWorkspace={disconnect}
                 activeWorkspaceDeviceId={connectedDevice?.id ?? null}
                 hiddenCount={hiddenIds.size}
-                onNavigateCloud={() => setActiveTab("cloud")}
+                onNavigateCloud={() => setActiveTab("settings")}
               />
             </div>
-          ) : activeTab === "git" ? (
-            <div className="flex-1 overflow-y-auto p-6 max-w-[1600px] mx-auto w-full"><GitView
-              devices={devices}
-              onOpenSurface={(surface, projectPath) => {
-                setPreferredSurfaceProjectPath(projectPath);
-                if (surface === "preview") {
-                  setPreferredWebviewMode("mobile");
-                  setActiveTab("webview");
-                  return;
-                }
-                if (surface === "web-reload") {
-                  setPreferredWebviewMode("web");
-                  setActiveTab("webview");
-                  return;
-                }
-                setActiveTab(surface);
-              }}
-              onVibePrompt={(projectPath, prompt) => {
-                // One-click rebase via Vibing: drop the pre-canned
-                // prompt into the chat composer, switch to Chat tab,
-                // and pin the project so the runner has the workdir.
-                // The user sees the prompt and can edit / Enter to
-                // send — nothing fires automatically.
-                setPreferredSurfaceProjectPath(projectPath);
-                setInput(prompt);
-                setActiveTab("chat");
-                // Defer focus until after the tab switch + render.
-                setTimeout(() => { inputRef.current?.focus(); }, 50);
-              }}
-            /></div>
           ) : (
             <>
               <div className="flex flex-1 min-h-0">
@@ -4061,6 +4040,7 @@ export default function DashboardPage() {
       {shellDevice ? (
         <WebShellModal
           device={shellDevice}
+          tmuxSession={shellTmuxSession || undefined}
           isCurrentDeviceSelected={Boolean(connectedDevice && connectedDevice.id === shellDevice.id)}
           isCurrentDeviceConnected={Boolean(connectedDevice && connectedDevice.id === shellDevice.id && connState === "connected")}
           onConnect={() => { void connectToDevice(shellDevice); }}
@@ -4073,7 +4053,7 @@ export default function DashboardPage() {
             // attention-needed devices on top.
             setActiveTab("devices");
           }}
-          onClose={() => setShellDevice(null)}
+          onClose={() => { setShellDevice(null); setShellTmuxSession(null); }}
         />
       ) : null}
       {/* Remote Desktop modal — live screen (MJPEG /rd/stream) + optional

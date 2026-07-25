@@ -100,7 +100,21 @@ func kvmAvailable() bool {
 }
 
 func firstOnlineEmulator(ctx context.Context) string {
+	if online := OnlineEmulators(ctx); len(online) > 0 {
+		return online[0]
+	}
+	return ""
+}
+
+// OnlineEmulators returns every booted emulator serial, in adb order.
+//
+// A LIST, not the first one: on a machine hosting several sessions each needs a
+// DIFFERENT emulator, and the caller can only arbitrate that if it can see the
+// alternatives. Returning just the first is why every session on a box ended up
+// driving one device (see desktop/agent/runtime_devices.go).
+func OnlineEmulators(ctx context.Context) []string {
 	out, _ := runCtx(ctx, "adb", "devices")
+	var serials []string
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "List of devices") {
@@ -108,10 +122,10 @@ func firstOnlineEmulator(ctx context.Context) string {
 		}
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && fields[1] == "device" && strings.HasPrefix(fields[0], "emulator-") {
-			return fields[0]
+			serials = append(serials, fields[0])
 		}
 	}
-	return ""
+	return serials
 }
 
 // Install installs the APK onto the booted device.

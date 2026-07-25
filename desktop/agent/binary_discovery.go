@@ -105,7 +105,44 @@ func commonInstallPrefixes() []string {
 	if pyDirs, err := filepath.Glob(filepath.Join(home, "Library", "Python", "*", "bin")); err == nil {
 		prefixes = append(prefixes, pyDirs...)
 	}
+
+	// Android SDK tool directories, from the SAME discovery the installer uses.
+	//
+	// The agent already knew how to FIND an Android SDK (androidSDKCandidateRoots)
+	// but never put its tool dirs on the daemon's PATH, so on a Mac with a normal
+	// Android Studio install the agent resolved `adb` (homebrew has one) while
+	// `emulator` and `avdmanager` came back MISSING — measured on a real mini,
+	// 2026-07-25, with ~/Library/Android/sdk/emulator/emulator present on disk.
+	// The Kotlin/Android lane then fails at "no emulator binary" on a machine that
+	// has one, which is the inventory-says-no/operation-says-yes bug inverted.
+	prefixes = append(prefixes, androidSDKToolDirs()...)
+
 	return prefixes
+}
+
+// androidSDKToolDirs returns the bin dirs of every Android SDK root that
+// actually exists on this machine. Existence-checked here (not by the caller) so
+// a machine with no SDK adds nothing.
+func androidSDKToolDirs() []string {
+	var dirs []string
+	for _, root := range androidSDKCandidateRoots() {
+		if root == "" || !looksLikeAndroidSDKRoot(root) {
+			continue
+		}
+		for _, rel := range [][]string{
+			{"platform-tools"},                 // adb
+			{"emulator"},                       // emulator
+			{"cmdline-tools", "latest", "bin"}, // avdmanager, sdkmanager
+			{"tools", "bin"},                   // legacy avdmanager
+			{"build-tools"},                    // aapt2/apksigner live in versioned subdirs; harmless if absent
+		} {
+			dir := filepath.Join(append([]string{root}, rel...)...)
+			if info, err := os.Stat(dir); err == nil && info.IsDir() {
+				dirs = append(dirs, dir)
+			}
+		}
+	}
+	return dirs
 }
 
 // guessManagerForPath turns an install directory into a rough

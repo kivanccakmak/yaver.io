@@ -156,6 +156,35 @@ type iosSimulatorTarget struct{ deviceType string }
 func (t iosSimulatorTarget) Attach(ctx context.Context) (string, error) {
 	return (&testkit.IOSSimDriver{DeviceType: t.deviceType}).Boot(ctx)
 }
+
+// AttachExclusive boots a simulator NO OTHER session is using and returns the
+// release for it. Implements exclusiveAttacher (remote_runtime_webrtc.go).
+//
+// Without this every session took the highest-ranked candidate, which scores
+// already-booted +100 — so all of them took the SAME device, and the second
+// install silently replaced the first's app while both video streams showed one
+// screen. Ranking stays in testkit; arbitration is ours (runtime_devices.go).
+func (t iosSimulatorTarget) AttachExclusive(ctx context.Context, owner string) (string, func(), error) {
+	var release func()
+	kind := "ios-simulator"
+	if t.deviceType != "" {
+		kind = strings.ToLower(t.deviceType) + "-simulator"
+	}
+	udid, err := (&testkit.IOSSimDriver{
+		DeviceType: t.deviceType,
+		Chooser:    ClaimAwareSimulatorChooser(kind, owner, &release),
+	}).Boot(ctx)
+	if err != nil {
+		if release != nil {
+			release()
+		}
+		return "", nil, err
+	}
+	if release == nil {
+		release = func() {}
+	}
+	return udid, release, nil
+}
 func (iosSimulatorTarget) Tap(ctx context.Context, deviceID string, x, y int) error {
 	if err := (&testkit.IOSSimDriver{}).Tap(ctx, deviceID, x, y); err == nil {
 		return nil
@@ -262,6 +291,29 @@ type androidEmulatorTarget struct{ androidTarget }
 
 func (androidEmulatorTarget) Attach(ctx context.Context) (string, error) {
 	return (&testkit.AndroidEmuDriver{}).Boot(ctx)
+}
+
+// AttachExclusive claims an online emulator nobody else holds. When every running
+// emulator is taken it boots a fresh one via the normal path and claims that —
+// two sessions on one machine each get their own device instead of fighting over
+// emulator-5554.
+func (androidEmulatorTarget) AttachExclusive(ctx context.Context, owner string) (string, func(), error) {
+	if serial, release, err := AcquireRuntimeDevice("android-emulator", owner, RankedAndroidEmulators(ctx)); err == nil {
+		return serial, release, nil
+	}
+	// Nothing free among the running ones — boot another and claim it.
+	serial, err := (&testkit.AndroidEmuDriver{}).Boot(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	release, ok := runtimeDeviceClaims.tryClaim(serial, "android-emulator", owner)
+	if !ok {
+		// Someone claimed it between boot and claim: report honestly rather than
+		// hand back a device another session believes is exclusively theirs.
+		holder, _ := RuntimeDeviceClaimedBy(serial)
+		return "", nil, fmt.Errorf("emulator %s was claimed by %s while it booted — try again", serial, holder)
+	}
+	return serial, release, nil
 }
 
 // androidDeviceTarget resolves an already-attached physical serial —

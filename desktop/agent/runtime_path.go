@@ -72,6 +72,12 @@ func augmentEnv(env []string) []string {
 	if !pathSet {
 		out = append(out, "PATH="+prepend+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
+	// Gradle and the Android tools locate the SDK through ANDROID_HOME /
+	// ANDROID_SDK_ROOT, not PATH. A launchd-started daemon inherits neither (the
+	// user set them in their shell profile), so an Android build failed with
+	// "SDK location not found" on a machine whose SDK the agent had just found.
+	// Only fill what is MISSING — never override an operator's explicit choice.
+	out = appendMissingEnv(out, androidSDKEnvIfDiscovered())
 	return out
 }
 
@@ -85,4 +91,36 @@ func lookPathWithRuntimes(name string) (string, error) {
 		}
 	}
 	return exec.LookPath(name)
+}
+
+// appendMissingEnv adds KEY=VALUE pairs only when KEY is absent from env.
+func appendMissingEnv(env []string, extras []string) []string {
+	if len(extras) == 0 {
+		return env
+	}
+	present := make(map[string]bool, len(env))
+	for _, kv := range env {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			present[kv[:i]] = true
+		}
+	}
+	for _, kv := range extras {
+		i := strings.IndexByte(kv, '=')
+		if i <= 0 || present[kv[:i]] {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return env
+}
+
+// androidSDKEnvIfDiscovered returns ANDROID_HOME/ANDROID_SDK_ROOT for the first
+// real SDK on this machine, or nothing when there is none to point at.
+func androidSDKEnvIfDiscovered() []string {
+	for _, root := range androidSDKCandidateRoots() {
+		if root != "" && looksLikeAndroidSDKRoot(root) {
+			return []string{"ANDROID_HOME=" + root, "ANDROID_SDK_ROOT=" + root}
+		}
+	}
+	return nil
 }

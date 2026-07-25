@@ -38,6 +38,10 @@ type remoteRuntimeLiveState struct {
 	targetID  string
 	platform  string
 	deviceID  string
+	// releaseDevice returns this session's exclusively-claimed simulator/emulator
+	// to the pool on close. Nil for targets that hold no device (browser, screen,
+	// physical hardware someone else plugged in).
+	releaseDevice func()
 
 	// peers is the active subscriber list. Phase-9 multi-viewer
 	// fan-out: every RTP-mode offer appends; JPEG-DC mode replaces.
@@ -97,9 +101,9 @@ type remoteRuntimeControlRequest struct {
 	Scale float64 `json:"scale,omitempty"`
 
 	// URL drives Action == "navigate".
-	URL string `json:"url,omitempty"`
-	Text  string  `json:"text,omitempty"`
-	Key   string  `json:"key,omitempty"`
+	URL  string `json:"url,omitempty"`
+	Text string `json:"text,omitempty"`
+	Key  string `json:"key,omitempty"`
 	// ClientID is the stable identifier of the surface making the
 	// call — used by the P5 control lease to enforce single-writer
 	// role split. Empty = anonymous (legacy web viewer). The lease
@@ -130,8 +134,15 @@ func (m *RemoteRuntimeManager) Attach(sessionID string) (RemoteRuntimeSession, e
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
+	var releaseDevice func()
 	if tgt, terr := runtimeTargetFor(session.TargetID); terr != nil {
 		err = terr
+	} else if ex, ok := tgt.(exclusiveAttacher); ok {
+		// Simulators and emulators are EXCLUSIVE: one session per device, or two
+		// people on one machine end up driving the same screen (the second
+		// install replaces the first's app and taps cross over). Claim it against
+		// the vibe session so the roster can show who has what.
+		deviceID, releaseDevice, err = ex.AttachExclusive(ctx, VibeOwnerForWorkDir(session.WorkDir))
 	} else {
 		// Boots an AVD/sim, or resolves an already-attached physical
 		// serial — see runtimeTarget impls.
@@ -147,6 +158,7 @@ func (m *RemoteRuntimeManager) Attach(sessionID string) (RemoteRuntimeSession, e
 
 	live.mu.Lock()
 	live.deviceID = deviceID
+	live.releaseDevice = releaseDevice
 	live.mu.Unlock()
 
 	// Probe the booted device's screen dims now (before signaling
@@ -168,9 +180,25 @@ func (m *RemoteRuntimeManager) Attach(sessionID string) (RemoteRuntimeSession, e
 	return updated, nil
 }
 
+// exclusiveAttacher is implemented by targets backed by a device that only ONE
+// session may hold (iOS/Apple simulators, Android emulators). Optional on
+// purpose: a browser window or a desktop screen has nothing to arbitrate.
+type exclusiveAttacher interface {
+	AttachExclusive(ctx context.Context, owner string) (deviceID string, release func(), err error)
+}
+
 func (m *RemoteRuntimeManager) CloseSession(sessionID string) {
 	live, ok := m.getLive(sessionID)
 	if ok {
+		// Give the device back BEFORE tearing down the peer: a leaked claim makes
+		// the machine look full to the next session for no reason.
+		live.mu.Lock()
+		release := live.releaseDevice
+		live.releaseDevice = nil
+		live.mu.Unlock()
+		if release != nil {
+			release()
+		}
 		live.closePeer()
 	}
 	m.Delete(sessionID)

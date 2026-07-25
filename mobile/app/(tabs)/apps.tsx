@@ -37,6 +37,7 @@ import { downloadArtifact } from "../../src/lib/builds";
 import { describeConnectionStatus } from "../../src/lib/connection";
 import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../../src/lib/nativeBuild";
 import { isActiveDevServerStatus } from "../../src/lib/devServerState";
+import { describePort, describeResources } from "../../src/lib/machineResources";
 import { isWebServedStatus } from "../../src/lib/devLane";
 import { applyPreviewCapabilities, guardYaverSelfDevelopmentActions, isHermesMobileFramework } from "../../src/lib/mobileProjectActions";
 import { runtimeSurfaceClient } from "../../src/lib/runtimeSurfaceClient";
@@ -2785,6 +2786,24 @@ export default function AppsScreen() {
                       mutedColor={c.textMuted}
                       stallHint="Stop and retry if this persists"
                     />
+                    {/* WHERE it is being served, from the agent's own answer —
+                        never inferred from the framework default. The agent
+                        brokers ports (Metro's 8081 is routinely taken; on one box
+                        by a four-day-old freeswitch), so a client that assumes
+                        the canonical port is wrong exactly when it matters. Also
+                        names the simulator/emulator this session claimed, so two
+                        people on one machine can see they are NOT sharing a
+                        device. Same formatter the web dashboard uses. */}
+                    {devStatus ? (() => {
+                      const portLine = describePort(devStatus as any);
+                      const held = describeResources((devStatus as any)?.resources);
+                      const line = [portLine, held].filter(Boolean).join(" · ");
+                      return line ? (
+                        <Text style={[s.previewSubtle, { color: c.textMuted, marginTop: 6 }]} numberOfLines={2}>
+                          {line}
+                        </Text>
+                      ) : null;
+                    })() : null}
                     {webPreviewLogs.length === 0 && bundlerLine ? (
                       <Text style={[s.previewSubtle, { color: c.textMuted }]} numberOfLines={1}>{bundlerLine}</Text>
                     ) : null}

@@ -66,28 +66,46 @@ type DevServerOpts struct {
 
 // DevServerStatus is the JSON-serializable status of a dev server.
 type DevServerStatus struct {
-	Framework         string        `json:"framework"`
-	Kind              DevServerKind `json:"kind,omitempty"`
-	Running           bool          `json:"running"`
-	Serving           bool          `json:"serving"`
-	ServingLabel      string        `json:"servingLabel,omitempty"`
-	StopActionLabel   string        `json:"stopActionLabel,omitempty"`
-	Building          bool          `json:"building,omitempty"` // true during native compilation (expo run:ios, etc.)
-	Port              int           `json:"port"`
-	BundleURL         string        `json:"bundleUrl"`
-	DirectURL         string        `json:"directUrl,omitempty"`
-	DeepLink          string        `json:"deepLink,omitempty"`
-	DevMode           string        `json:"devMode,omitempty"` // "dev-client", "web", "expo-go", "" (for non-Expo)
-	StartedAt         string        `json:"startedAt,omitempty"`
-	Error             string        `json:"error,omitempty"`
-	PID               int           `json:"pid,omitempty"`
-	WorkDir           string        `json:"workDir,omitempty"`
-	HotReload         bool          `json:"hotReload"`
-	TargetDeviceID    string        `json:"targetDeviceId,omitempty"`
-	TargetDeviceName  string        `json:"targetDeviceName,omitempty"`
-	TargetDeviceClass string        `json:"targetDeviceClass,omitempty"`
-	IOSInstallMethod  string        `json:"iosInstallMethod,omitempty"`
-	IOSInstallReason  string        `json:"iosInstallReason,omitempty"`
+	Framework       string        `json:"framework"`
+	Kind            DevServerKind `json:"kind,omitempty"`
+	Running         bool          `json:"running"`
+	Serving         bool          `json:"serving"`
+	ServingLabel    string        `json:"servingLabel,omitempty"`
+	StopActionLabel string        `json:"stopActionLabel,omitempty"`
+	Building        bool          `json:"building,omitempty"` // true during native compilation (expo run:ios, etc.)
+	Port            int           `json:"port"`
+	BundleURL       string        `json:"bundleUrl"`
+	// Resources this dev server holds — the port it ACTUALLY bound, plus any
+	// device it claimed. Same VibeResourceView shape as /vibe/sessions, so every
+	// client surface renders "flutter on :9100 · iPhone 15" with one formatter
+	// instead of each screen inventing its own.
+	//
+	// This is the client's answer to "which port am I on?": the preview always
+	// loads through the /dev/ proxy, so a substituted port needs no client change
+	// — but the user staring at a log line that says 9103 deserves to be told why.
+	Resources []VibeResourceView `json:"resources,omitempty"`
+	// PortSubstituted is true when the framework's canonical port was taken and
+	// Yaver bound a different one.
+	PortSubstituted bool `json:"portSubstituted,omitempty"`
+	// PreferredPort is what the framework would have used by default. Only set
+	// when it differs from Port.
+	PreferredPort int `json:"preferredPort,omitempty"`
+	// VibeSessionID ties this dev server to the co-vibe session holding it, so a
+	// client can fetch the roster for the project it is looking at.
+	VibeSessionID     string `json:"vibeSessionId,omitempty"`
+	DirectURL         string `json:"directUrl,omitempty"`
+	DeepLink          string `json:"deepLink,omitempty"`
+	DevMode           string `json:"devMode,omitempty"` // "dev-client", "web", "expo-go", "" (for non-Expo)
+	StartedAt         string `json:"startedAt,omitempty"`
+	Error             string `json:"error,omitempty"`
+	PID               int    `json:"pid,omitempty"`
+	WorkDir           string `json:"workDir,omitempty"`
+	HotReload         bool   `json:"hotReload"`
+	TargetDeviceID    string `json:"targetDeviceId,omitempty"`
+	TargetDeviceName  string `json:"targetDeviceName,omitempty"`
+	TargetDeviceClass string `json:"targetDeviceClass,omitempty"`
+	IOSInstallMethod  string `json:"iosInstallMethod,omitempty"`
+	IOSInstallReason  string `json:"iosInstallReason,omitempty"`
 	// WebPort is non-zero when a sibling Expo Web preview is running
 	// alongside Metro (--dev-client). Browser iframe routes through
 	// /dev-web/* to this port while /dev/index.bundle?platform=...
@@ -129,6 +147,16 @@ type DevServerEvent struct {
 	Message   string `json:"message,omitempty"`
 	LogLine   string `json:"logLine,omitempty"` // single build output line (type="log")
 	Timestamp string `json:"timestamp"`
+
+	// type="resources": what this session now holds — the port actually bound and
+	// any claimed device. Pushed the moment it is decided, so a live client learns
+	// its port from the stream instead of discovering it on the next poll (or
+	// worse, assuming the framework default and being wrong).
+	// (Port is declared once, below, and reused by both heartbeat and resources —
+	// two fields for one fact is how a client ends up reading the wrong one.)
+	Resources       []VibeResourceView `json:"resources,omitempty"`
+	PreferredPort   int                `json:"preferredPort,omitempty"`
+	PortSubstituted bool               `json:"portSubstituted,omitempty"`
 
 	// Heartbeat-only fields (type="heartbeat"). Emitted every 5s by
 	// DevServerManager.heartbeatLoop while a dev server is running.
@@ -250,6 +278,18 @@ type DevServerManager struct {
 	subs   []chan DevServerEvent
 	subsMu sync.Mutex
 	target DevServerTarget
+
+	// OwnerUserID labels this manager's port reservations so a shared machine
+	// can answer "who is on :8083?". Empty in single-user mode. Set by
+	// MultiUserManager.EnsureDevServerMgr.
+	OwnerUserID string
+
+	// VibeSessionID + the brokered-port facts, so /dev/status can tell the client
+	// exactly which port it got and whether that differs from the framework's
+	// default. Written under m.mu in Start.
+	VibeSessionID   string
+	preferredPort   int
+	portSubstituted bool
 
 	// history is a ring buffer of recent events. Subscribe() replays
 	// it into a new channel before adding to subs so a late SSE
@@ -433,6 +473,11 @@ type devServerSession struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	target DevServerTarget
+	// releasePort returns this session's brokered port to the pool. Always
+	// non-nil (a no-op when nothing was reserved) so callers never nil-check.
+	// A leaked reservation shrinks the machine's usable range until restart,
+	// which on a box meant to host many parallel previews is a real cost.
+	releasePort func()
 	// failed is true when ds.Start returned an error; we keep the
 	// session around so Status() still reports the failure. A
 	// subsequent Start() on the same framework clears it.
@@ -461,6 +506,7 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 	if m.active != nil {
 		m.active.server.Stop()
 		m.active.cancel()
+		m.releasePortLocked()
 		m.active = nil
 	}
 
@@ -535,7 +581,41 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 			defaultPort = 3000
 		}
 	}
-	ds.PreStart(frameworkName, defaultPort, workDir)
+	// Reserve a port nobody else holds — Yaver session or otherwise. Done HERE,
+	// once, for every framework: each lane used to hard-code its canonical port
+	// (Metro 8081, Expo Web 19006, Flutter 9100, Vite 5173, Next 3000) and then
+	// treat "something answers on it" as readiness, which on a shared machine
+	// means a foreign listener (an orphan from another project, or on one real
+	// box a four-day-old freeswitch on :8081) gets reported as a healthy dev
+	// server. See devserver_ports.go for the full account.
+	brokeredPort, portSubstituted, releasePort := AcquireDevPort(
+		frameworkName, devPortOwner(m.OwnerUserID, workDir), defaultPort)
+	m.preferredPort = defaultPort
+	m.portSubstituted = portSubstituted
+	if portSubstituted {
+		log.Printf("[dev] %s: :%d was unavailable, binding :%d instead (%s)",
+			frameworkName, defaultPort, brokeredPort, workDir)
+	}
+	ds.PreStart(frameworkName, brokeredPort, workDir)
+	// Tell every live client which port this session got, immediately. A client
+	// that has to infer the port from the framework default is a client that is
+	// wrong exactly when it matters (a substituted port), and a poll-only answer
+	// arrives seconds late.
+	m.emit(DevServerEvent{
+		Type:            "resources",
+		Framework:       frameworkName,
+		Port:            brokeredPort,
+		PreferredPort:   defaultPort,
+		PortSubstituted: portSubstituted,
+		Resources:       resourcesForOwner(devPortOwner(m.OwnerUserID, workDir)),
+		Message: func() string {
+			if portSubstituted {
+				return fmt.Sprintf("Serving on :%d — :%d was already in use on this machine", brokeredPort, defaultPort)
+			}
+			return fmt.Sprintf("Serving on :%d", brokeredPort)
+		}(),
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
 
 	// Snapshot the native fingerprint so /dev/reload can tell later whether a
 	// JS-only hot reload is actually enough. Cheap (stat + hash of <30 files).
@@ -578,8 +658,11 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 
 	ctx, cancel := context.WithCancel(context.Background())
 	opts := DevServerOpts{
-		WorkDir:  workDir,
-		Port:     port,
+		WorkDir: workDir,
+		// The brokered port, NOT the caller's raw `port` (which may be 0 and
+		// would send each framework back to its hard-coded canonical default,
+		// defeating the reservation above).
+		Port:     brokeredPort,
 		Platform: platform,
 		Target:   target,
 	}
@@ -594,10 +677,11 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 
 	// Set up the session immediately so Status() returns "starting"
 	m.active = &devServerSession{
-		server: ds,
-		ctx:    ctx,
-		cancel: cancel,
-		target: target,
+		server:      ds,
+		ctx:         ctx,
+		cancel:      cancel,
+		target:      target,
+		releasePort: releasePort,
 	}
 
 	// Emit starting event
@@ -656,6 +740,9 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 			if m.active != nil && m.active.server == ds {
 				m.active.cancel()
 				m.active.failed = true
+				// The process is dead; holding its port would shrink the pool
+				// for every other project on the machine.
+				m.releasePortLocked()
 			}
 			m.mu.Unlock()
 			m.emit(DevServerEvent{
@@ -745,6 +832,7 @@ func (m *DevServerManager) Stop() error {
 	m.stopHeartbeatLocked()
 	m.active.server.Stop()
 	m.active.cancel()
+	m.releasePortLocked()
 	m.active = nil
 	m.devTracker = nil
 	m.webTracker = nil
@@ -843,10 +931,41 @@ func (m *DevServerManager) Status() *DevServerStatus {
 			s.ServingLabel = fmt.Sprintf("Starting %s preview…", m.active.server.Name())
 		}
 	}
+	// One shape for "what does this session hold", shared with /vibe/sessions.
+	s.Resources = resourcesForOwner(m.resourceOwnerTag())
+	s.VibeSessionID = m.VibeSessionID
+	if m.portSubstituted && m.preferredPort > 0 && m.preferredPort != s.Port {
+		s.PortSubstituted = true
+		s.PreferredPort = m.preferredPort
+	}
 	s.TargetDeviceID = m.active.target.DeviceID
 	s.TargetDeviceName = m.active.target.DeviceName
 	s.TargetDeviceClass = m.active.target.DeviceClass
 	return &s
+}
+
+// resourceOwnerTag is how this manager labels everything it claims. When a vibe
+// session is attached the tag is the session's, so ports and devices roll up to
+// the same roster entry the user sees; otherwise it falls back to the project
+// path, which is still enough to attribute a stray port.
+func (m *DevServerManager) resourceOwnerTag() string {
+	if m.VibeSessionID != "" {
+		return vibeOwnerTag(m.VibeSessionID)
+	}
+	if m.active != nil {
+		return devPortOwner(m.OwnerUserID, m.active.server.Status().WorkDir)
+	}
+	return ""
+}
+
+// releasePortLocked returns the active session's brokered port to the pool.
+// Caller must hold m.mu. Safe to call repeatedly and with no active session.
+func (m *DevServerManager) releasePortLocked() {
+	if m.active == nil || m.active.releasePort == nil {
+		return
+	}
+	m.active.releasePort()
+	m.active.releasePort = nil
 }
 
 // PreferredTarget returns the persisted dev preview target.
@@ -1661,10 +1780,30 @@ func (b *baseDevServer) startProcess(ctx context.Context, name string, args []st
 			}
 			return fmt.Errorf("%s did not become ready within 120s", name)
 		case <-ticker.C:
+			// Terminal by nature — name it now rather than spend the whole
+			// readiness deadline and report a blank timeout.
+			if tail := logWriter.Tail(12); portBindFailure(tail) {
+				return fmt.Errorf("%s could not bind port %d — something else is already listening on it. "+
+					"Stop that process (lsof -nP -iTCP:%d) or start the preview again to get a free port.\n%s",
+					name, b.port, b.port, tail)
+			}
 			resp, err := http.Get(readyURL)
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode < 500 {
+					// Somebody is listening — but it has to be US. A foreign
+					// process on this port answers identically, which is how a
+					// four-day-old freeswitch on :8081 would have been reported
+					// as a healthy Metro. If our process has already exited,
+					// that response was never ours.
+					select {
+					case waitErr := <-exitCh:
+						tail := logWriter.Tail(12)
+						return fmt.Errorf("%s exited during startup while port %d answered — "+
+							"the port is owned by another process, not this dev server: %v\n%s",
+							name, b.port, waitErr, tail)
+					default:
+					}
 					b.mu.Lock()
 					b.running = true
 					b.mu.Unlock()
@@ -2298,20 +2437,10 @@ func (f *FlutterDevServer) Start(ctx context.Context, opts DevServerOpts) error 
 				log.Printf("[dev:flutter] web support added to %s", opts.WorkDir)
 			}
 		}
-		// Never hand Flutter a port somebody else already owns.
-		//
-		// 2026-07-25: an orphaned `flutter run -d web-server --web-port 9100`
-		// from ANOTHER project (23h old, left by an autorun session) still held
-		// 9100. The new preview's flutter died instantly with "Failed to bind web
-		// development server: Address already in use", but the readiness probe
-		// (a plain GET on :9100) was answered by the ORPHAN — so the agent
-		// reported `running:true, serving:true` and the phone was pointed at a
-		// different project's app. Probing a port proves a port is busy; it never
-		// proves the process behind it is ours.
-		if free, substituted := pickFreeDevPort(f.port, devPortProbeSpan); substituted {
-			log.Printf("[dev:flutter] port %d is already in use — serving on :%d instead (the client loads /dev/, so the port is an implementation detail)", f.port, free)
-			f.port = free
-		}
+		// Port choice is brokered centrally (devserver_ports.go) before Start is
+		// called, so by here f.port is already a port no other Yaver session
+		// holds. Readiness below still verifies the listener is OURS — a
+		// reservation stops Yaver colliding with itself, not the whole machine.
 		args = append(args, "--web-port", fmt.Sprintf("%d", f.port), "--web-hostname", "0.0.0.0")
 	}
 
