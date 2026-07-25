@@ -5300,6 +5300,42 @@ export class AgentClient {
   // so the dashboard and the phone never disagree about who is driving. Types
   // live in lib/machine-resources.ts (mirror of mobile's machineResources.ts).
 
+  /** Housekeeping feed from the agent's custodian (wardens + failure playbook).
+   *  See desktop/agent/custodian.go — the layer's whole point is being VISIBLE,
+   *  so a surface that cannot render it makes it worthless. */
+  async getCustodianStatus(): Promise<{
+    wardens: Array<{ name: string; everySec: number; lastSwept?: string; neverRun: boolean }>;
+    recent: Array<{
+      warden: string; subject: string; problem: string; action: string;
+      outcome: "fixed" | "spared" | "needs-human" | "needs-runner";
+      remedy?: string; at: string;
+    }>;
+    counts: Record<string, number>;
+    sweeping: boolean;
+  }> {
+    const res = await this.agentFetch("/custodian/status");
+    const d = await res.json().catch(() => ({}));
+    return {
+      wardens: Array.isArray(d?.wardens) ? d.wardens : [],
+      recent: Array.isArray(d?.recent) ? d.recent : [],
+      counts: d?.counts && typeof d.counts === "object" ? d.counts : {},
+      sweeping: !!d?.sweeping,
+    };
+  }
+
+  /** Run every warden now and return what they found. Synchronous by design:
+   *  the user pressed a button and is waiting for an answer, and "started" is
+   *  not an answer. */
+  async sweepCustodian(): Promise<{ swept: number; summary: string; findings: any[] }> {
+    const res = await this.agentFetch("/custodian/sweep", { method: "POST" });
+    const d = await res.json().catch(() => ({}));
+    return {
+      swept: typeof d?.swept === "number" ? d.swept : 0,
+      summary: typeof d?.summary === "string" ? d.summary : "",
+      findings: Array.isArray(d?.findings) ? d.findings : [],
+    };
+  }
+
   async getVibeSessions(): Promise<MachineResourceReport> {
     const res = await this.agentFetch("/vibe/sessions");
     const data = await res.json().catch(() => ({}));

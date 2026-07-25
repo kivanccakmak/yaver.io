@@ -40,6 +40,7 @@ import GuestsStatusView from "@/components/dashboard/GuestsStatusView";
 import FeedbackWorkQueueView from "@/components/dashboard/FeedbackWorkQueueView";
 import CollabView from "@/components/dashboard/CollabView";
 import CoVibeCard from "@/components/dashboard/CoVibeCard";
+import HousekeepingCard from "@/components/dashboard/HousekeepingCard";
 import InfraView from "@/components/dashboard/InfraView";
 import ConnectivityView from "@/components/dashboard/ConnectivityView";
 import NetworkView from "@/components/dashboard/NetworkView";
@@ -1586,6 +1587,27 @@ export default function DashboardPage() {
     if (!isConnected) return;
     const poll = async () => { try { setTodoCount(await agentClient.todoCount()); } catch {} };
     poll(); const iv = setInterval(poll, 30000); return () => clearInterval(iv);
+  }, [isConnected]);
+
+  // Keep agentInfo LIVE, not frozen at connect time.
+  //
+  // The sidebar pill renders agentInfo.version, which is genuinely fetched from
+  // the box — but only once, when the connection is established. Restart or
+  // upgrade the agent under an open tab and the pill keeps showing the version
+  // it learned minutes ago: on 2026-07-25 the dashboard read
+  // "v1.99.366-custodian-wired" while the Mac mini was serving 1.99.367.
+  //
+  // Not stale DATA from a bad source — a correct value that stopped being
+  // asked for. Which is the more insidious kind, because everything about it
+  // looks right. An agent restart is exactly when the version changes AND
+  // exactly when nothing re-asks, so the display is wrong precisely when it
+  // matters. 30s, same cadence as the other light polls; getInfo is cheap and
+  // already called on every connect.
+  useEffect(() => {
+    if (!isConnected) return;
+    const refreshInfo = async () => { try { setAgentInfo(await agentClient.getInfo()); } catch { /* keep the last known value rather than blanking the pill */ } };
+    const iv = setInterval(refreshInfo, 30000);
+    return () => clearInterval(iv);
   }, [isConnected]);
 
   // Load the agent's opencode.json provider state so the chat composer
@@ -3330,6 +3352,12 @@ export default function DashboardPage() {
               {/* Live co-vibe roster first: who is here NOW, and who may type.
                   Sharing controls (below) are the "invite" half of the same story. */}
               <CoVibeCard ownerUserId={user?.id} />
+              {/* What the machine is doing to itself, next to who is on it. The
+                  custodian's findings had no surface at all until now — a
+                  self-healing layer nobody can see is indistinguishable from
+                  none, and it is exactly what answers "why does this box say
+                  it is full when it is idle?". */}
+              <HousekeepingCard enabled={isConnected} />
               <CollabView />
             </div>
           ) : activeTab === "convex" ? (
