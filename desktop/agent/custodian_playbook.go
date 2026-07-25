@@ -232,6 +232,17 @@ var playbook = []PlaybookEntry{
 		Verb: "pod_install", Args: "--repo-update", AutoApply: true,
 	},
 	{
+		ID:    "dart-package-sdk-incompatible",
+		Match: regexp.MustCompile(`(?i)can't be extended outside of its library|can't be implemented outside|Error: The class '[^']+' can't be`),
+		Because: "a pub package compiled against an older Flutter SDK that still allowed subclassing a now-final " +
+			"class. The web server keeps listening and serving index.html, so the agent looks healthy while the " +
+			"app can never build — a blank preview with a green status (2026-07-25: font_awesome_flutter 10.12.0 " +
+			"extending IconData)",
+		Verb: "", AutoApply: false,
+		Remedy: "upgrade the offending package to a version built for this Flutter SDK (flutter pub upgrade <package>), " +
+			"or pin the SDK — the app cannot compile until one of the two moves",
+	},
+	{
 		ID:    "gradle-build-failed",
 		Match: regexp.MustCompile(`(?i)Gradle task assemble\w* failed|Execution failed for task ':`),
 		Because: "Gradle failures are too varied to table-drive — the cause is in the task output, which is " +

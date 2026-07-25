@@ -120,3 +120,20 @@ func TestPlaybookCatalogDropsPatterns(t *testing.T) {
 		}
 	}
 }
+
+// TestPlaybookRecognisesDartSdkIncompatibility — the failure that kept the
+// e-mobile Flutter preview blank all day, with a green status beside it.
+func TestPlaybookRecognisesDartSdkIncompatibility(t *testing.T) {
+	real := "../../.pub-cache/hosted/pub.dev/font_awesome_flutter-10.12.0/lib/src/icon_data.dart:116:34: " +
+		"Error: The class 'IconData' can't be extended outside of its library because it's a final class."
+	e, ok := MatchPlaybook(real)
+	if !ok || e.ID != "dart-package-sdk-incompatible" {
+		t.Fatalf("verbatim Dart SDK incompatibility not recognised (got %q, ok=%v)", e.ID, ok)
+	}
+	if e.AutoApply {
+		t.Fatal("upgrading a user's package version is not something to do unattended")
+	}
+	if !strings.Contains(e.Remedy, "pub upgrade") {
+		t.Fatalf("remedy must name the command, got %q", e.Remedy)
+	}
+}

@@ -1618,12 +1618,32 @@ func (m *DevServerManager) recordRecentLog(line string) {
 	// failure with the offending lines attached, so the surface the user is
 	// looking at says "your app failed to compile: <reason>" instead of nothing.
 	if devBuildFailureLine(line) {
+		detail := "The app failed to compile — the dev server is running but has nothing to serve:\n" + strings.Join(compileErrorLines(tail), "\n")
 		m.emit(DevServerEvent{
 			Type:      "error",
 			Framework: m.frameworkNameForEvents(),
-			Message:   "The app failed to compile — the dev server is running but has nothing to serve:\n" + strings.Join(compileErrorLines(tail), "\n"),
+			Message:   detail,
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 		})
+		// An EVENT alone is not enough. Events reach whoever is subscribed at
+		// that instant; every client that connects afterwards polls /dev/status
+		// and was told `running: true, error: none` — which is how a Flutter
+		// preview sat blank while the agent reported perfect health (2026-07-25,
+		// font_awesome_flutter vs a newer Flutter SDK: `The class IconData
+		// can't be extended outside of its library`). Persist it so the truth
+		// survives the moment it was discovered.
+		m.mu.RLock()
+		active := m.active
+		m.mu.RUnlock()
+		if active != nil {
+			if setter, ok := active.server.(interface{ SetCompileError(string) }); ok {
+				setter.SetCompileError(detail)
+			}
+		}
+		// The semi-deterministic lane gets it too: a compile failure in a
+		// dependency is exactly the shape the playbook + runner escalation exist
+		// for, and it must not depend on a human noticing a log line.
+		ReportFailureToCustodian("dev-compile", m.frameworkNameForEvents(), detail)
 	}
 }
 
@@ -1703,6 +1723,20 @@ func (b *baseDevServer) SetError(msg string) {
 	defer b.mu.Unlock()
 	b.err = msg
 	b.running = false
+}
+
+// SetCompileError records a BUILD failure while the process keeps serving.
+//
+// Distinct from SetError on purpose: `running` stays true because the statement
+// being made is different. SetError means "this dev server is not up".
+// SetCompileError means "it is up, listening and answering — and the app it is
+// supposed to serve cannot be built". Collapsing the two would either hide a
+// live server or claim a dead one, and the user's screen needs the third
+// answer: running, reachable, and serving nothing, with the reason attached.
+func (b *baseDevServer) SetCompileError(msg string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.err = msg
 }
 
 // PreStart sets the name, port, and workDir before the async Start goroutine.
