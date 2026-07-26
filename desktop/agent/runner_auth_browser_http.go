@@ -226,12 +226,118 @@ func watchRunnerCallbackPort(sess *runnerBrowserAuthSessionState, pid int) {
 	})
 }
 
+// runnerBrowserAuthTerminal reports whether a session status is final.
+// `account_not_eligible` IS terminal: the CLI printed a verbatim
+// entitlement rejection ("no active subscription" et al) and no retry,
+// code paste, or callback delivery can change the verdict — only a
+// different account can. Every guard that means "already ended" must use
+// this helper; the hand-rolled completed/failed/cancelled triples it
+// replaces were how account_not_eligible sessions kept accepting pastes
+// and got clobbered by process exit.
+func runnerBrowserAuthTerminal(status string) bool {
+	switch status {
+	case "completed", "failed", "cancelled", "account_not_eligible":
+		return true
+	}
+	return false
+}
+
+// applyRunnerBrowserAuthExit encodes the process-exit transition
+// (pure — pinned by runner_auth_browser_state_test.go). The rule that
+// was violated in production: a process exit NEVER downgrades a session
+// that already carries the account_not_eligible diagnosis. kimi prints
+// "Login failed: …subscription…" and then exits; overwriting that with
+// failed/"exit status 1" (or completed, on a zero exit) demoted the only
+// status that tells the user a retry cannot work.
+func applyRunnerBrowserAuthExit(state *runnerBrowserAuthSession, exitErr error, cancelled bool) {
+	state.CompletedAt = time.Now().UnixMilli()
+	if state.Status == "account_not_eligible" {
+		if exitErr != nil && strings.TrimSpace(state.Error) == "" {
+			state.Error = strings.TrimSpace(exitErr.Error())
+		}
+		return
+	}
+	switch {
+	case exitErr == nil:
+		state.Status = "completed"
+	case cancelled:
+		state.Status = "cancelled"
+		if state.Detail == "" {
+			state.Detail = "Authentication flow cancelled."
+		}
+	default:
+		state.Status = "failed"
+		state.Error = strings.TrimSpace(exitErr.Error())
+		if state.Detail == "" {
+			state.Detail = state.Error
+		}
+	}
+}
+
+// runnerBrowserAuthDeadline bounds the WHOLE session, not just its first
+// output. The silence watchdog (45s) catches a CLI that never speaks; this
+// catches the other eternal wait: a CLI that printed its URL and then sits
+// on a localhost callback that will never arrive (user closed the tab,
+// browser landed on an unreachable localhost, code never pasted). Before
+// this, such a session stayed "awaiting_browser" forever — it was only
+// reaped when a NEW sign-in for the same runner arrived.
+const runnerBrowserAuthDeadline = 15 * time.Minute
+
+// applyRunnerBrowserAuthDeadline fails an ACTIVE session that outlived the
+// deadline, with a remedy that names both recovery lanes. Terminal sessions
+// are never touched. Pure — pinned by runner_auth_browser_state_test.go.
+func applyRunnerBrowserAuthDeadline(state *runnerBrowserAuthSession) bool {
+	if runnerBrowserAuthTerminal(state.Status) {
+		return false
+	}
+	state.Status = "failed"
+	state.Error = fmt.Sprintf("No OAuth callback or code arrived within %d minutes — the sign-in never completed on the provider side. Restart the sign-in; if the browser DID finish but ended on a localhost page, paste that full callback URL (or the code) into the sign-in panel next time.", int(runnerBrowserAuthDeadline.Minutes()))
+	if state.Detail == "" {
+		state.Detail = state.Error
+	}
+	state.CompletedAt = time.Now().UnixMilli()
+	return true
+}
+
+func watchRunnerBrowserAuthDeadline(sess *runnerBrowserAuthSessionState) {
+	time.Sleep(runnerBrowserAuthDeadline)
+	changed := false
+	sess.update(func(state *runnerBrowserAuthSession) {
+		changed = applyRunnerBrowserAuthDeadline(state)
+	})
+	if !changed {
+		return
+	}
+	if sess.cancel != nil {
+		sess.cancel() // reap the orphaned CLI (and free its PKCE verifier)
+	}
+	snap := sess.snapshot()
+	log.Printf("[runner-auth-browser] %s session id=%s exceeded %s without completing — failing it with a remedy instead of waiting forever", snap.Runner, snap.ID, runnerBrowserAuthDeadline)
+	recordRunnerBrowserAuthOperation(snap)
+	recordRunnerBrowserAuthIncident(snap)
+}
+
+// applyRunnerBrowserAuthCancel flips an ACTIVE session to cancelled and
+// reports whether it changed anything. A session that already reached a
+// terminal state keeps it — a late × on the modal must not un-report a
+// completed sign-in, nor erase an entitlement verdict.
+func applyRunnerBrowserAuthCancel(state *runnerBrowserAuthSession) bool {
+	if runnerBrowserAuthTerminal(state.Status) {
+		return false
+	}
+	state.Status = "cancelled"
+	if state.Detail == "" {
+		state.Detail = "Authentication flow cancelled."
+	}
+	state.CompletedAt = time.Now().UnixMilli()
+	return true
+}
+
 func watchRunnerBrowserAuthSilence(sess *runnerBrowserAuthSessionState, runner string) {
 	const silenceBudget = 45 * time.Second
 	time.Sleep(silenceBudget)
 	sess.update(func(state *runnerBrowserAuthSession) {
-		if state.OpenURL != "" || state.Code != "" || state.Status == "completed" ||
-			state.Status == "cancelled" || state.Status == "failed" {
+		if state.OpenURL != "" || state.Code != "" || runnerBrowserAuthTerminal(state.Status) {
 			return // it spoke, or it already ended — nothing to report
 		}
 		state.Status = "failed"
@@ -553,6 +659,9 @@ func startRunnerBrowserAuthSession(runner string, tr tenantRuntime, onTerminal f
 	go scanRunnerBrowserAuthOutput(sess, stderr)
 	// A CLI that prints nothing must not leave the caller spinning forever.
 	go watchRunnerBrowserAuthSilence(sess, runner)
+	// …and a CLI that spoke but whose callback never arrives must not
+	// either — bound the whole session, not just its first output.
+	go watchRunnerBrowserAuthDeadline(sess)
 	// Find the loopback port the CLI will wait on, so a client can forward it
 	// and complete the flow from the user's own browser.
 	if cmd.Process != nil {
@@ -562,9 +671,8 @@ func startRunnerBrowserAuthSession(runner string, tr tenantRuntime, onTerminal f
 	go func() {
 		err := cmd.Wait()
 		sess.update(func(state *runnerBrowserAuthSession) {
-			state.CompletedAt = time.Now().UnixMilli()
-			if err == nil {
-				state.Status = "completed"
+			applyRunnerBrowserAuthExit(state, err, ctx.Err() == context.Canceled)
+			if state.Status == "completed" {
 				// Drop any stale auth-failure override for this runner
 				// — fresh OAuth just landed, future tasks should use
 				// the new token from the keychain/file. Without this,
@@ -576,17 +684,6 @@ func startRunnerBrowserAuthSession(runner string, tr tenantRuntime, onTerminal f
 				// freshly signed-in box with "Select login method".
 				if state.Runner == "claude" && !tr.Enabled {
 					ensureClaudeOnboardingForLocalHome()
-				}
-			} else if ctx.Err() == context.Canceled {
-				state.Status = "cancelled"
-				if state.Detail == "" {
-					state.Detail = "Authentication flow cancelled."
-				}
-			} else {
-				state.Status = "failed"
-				state.Error = strings.TrimSpace(err.Error())
-				if state.Detail == "" {
-					state.Detail = state.Error
 				}
 			}
 			refreshRunnerBrowserAuthSnapshot(state)
@@ -650,6 +747,29 @@ func recordRunnerBrowserAuthIncident(sess runnerBrowserAuthSession) {
 			Recoverable:     true,
 			CorrelationID:   sess.ID,
 			SuggestedAction: "Retry the browser auth flow or configure the runner with credentials directly.",
+			Metadata: map[string]interface{}{
+				"runner": sess.Runner,
+				"method": sess.Method,
+			},
+		})
+	case "account_not_eligible":
+		// The one terminal state where "try again" is a lie — surface it
+		// to the incident feed with the verbatim CLI rejection so every
+		// surface (custodian, phone, web) can render the real verdict.
+		GlobalIncidentStore().Append(IncidentEvent{
+			Timestamp:       sess.UpdatedAt,
+			Severity:        IncidentSeverityError,
+			Category:        "runner_auth",
+			Code:            "runner.browser_auth.account_not_eligible",
+			Source:          "runner-auth/browser",
+			Title:           "Runner account not eligible",
+			UserMessage:     firstNonEmptyBrowserAuth(sess.Detail, sess.Error, "The signed-in account has no eligible subscription for this runner."),
+			TechnicalInfo:   sess.Error,
+			OperationID:     sess.ID,
+			LogsAvailable:   false,
+			Recoverable:     false,
+			CorrelationID:   sess.ID,
+			SuggestedAction: "Sign in with an account that has an active subscription for this runner — retrying with the same account cannot succeed.",
 			Metadata: map[string]interface{}{
 				"runner": sess.Runner,
 				"method": sess.Method,
@@ -814,7 +934,7 @@ func (s *HTTPServer) handleRunnerBrowserAuthSubmitCode(w http.ResponseWriter, r 
 		jsonError(w, http.StatusConflict, "session has no stdin pipe")
 		return
 	}
-	if status == "completed" || status == "failed" || status == "cancelled" {
+	if runnerBrowserAuthTerminal(status) {
 		jsonError(w, http.StatusConflict, fmt.Sprintf("session already %s", status))
 		return
 	}
@@ -895,7 +1015,7 @@ func (s *HTTPServer) handleRunnerBrowserAuthSubmitCallback(w http.ResponseWriter
 	callbackPort := sess.CallbackPort
 	status := sess.Status
 	sess.mu.Unlock()
-	if status == "completed" || status == "failed" || status == "cancelled" {
+	if runnerBrowserAuthTerminal(status) {
 		jsonError(w, http.StatusConflict, fmt.Sprintf("session already %s", status))
 		return
 	}
@@ -983,16 +1103,15 @@ func (s *HTTPServer) handleRunnerBrowserAuthCancel(w http.ResponseWriter, r *htt
 	if sess.cancel != nil {
 		sess.cancel()
 	}
+	changed := false
 	sess.update(func(state *runnerBrowserAuthSession) {
-		state.Status = "cancelled"
-		if state.Detail == "" {
-			state.Detail = "Authentication flow cancelled."
-		}
-		state.CompletedAt = time.Now().UnixMilli()
+		changed = applyRunnerBrowserAuthCancel(state)
 	})
 	snap := sess.snapshot()
-	recordRunnerBrowserAuthOperation(snap)
-	recordRunnerBrowserAuthIncident(snap)
+	if changed {
+		recordRunnerBrowserAuthOperation(snap)
+		recordRunnerBrowserAuthIncident(snap)
+	}
 	jsonReply(w, http.StatusOK, map[string]any{
 		"ok":      true,
 		"session": snap,
