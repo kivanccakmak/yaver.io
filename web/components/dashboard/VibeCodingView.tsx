@@ -45,6 +45,7 @@ import {
   type PendingCloudDispatch,
 } from "@/lib/pending-cloud-dispatch";
 import { CloudWorkspaceRequiredError } from "@/lib/cloud-workspace-required";
+import { runnerAuthFlowKind } from "@/lib/runnerAuthFlow";
 import PreviewPane from "./PreviewPane";
 import { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice } from "./DevicesView";
 
@@ -407,6 +408,8 @@ export default function VibeCodingView({
   const [runnerAuthBusy, setRunnerAuthBusy] = useState(false);
   const [runnerAuthError, setRunnerAuthError] = useState<string | null>(null);
   const [runnerAuthCallbackUrl, setRunnerAuthCallbackUrl] = useState("");
+  const [runnerAuthCodeInput, setRunnerAuthCodeInput] = useState("");
+  const [runnerAuthCodeBusy, setRunnerAuthCodeBusy] = useState(false);
   const [runnerAuthCallbackBusy, setRunnerAuthCallbackBusy] = useState(false);
   const [runnerAuthSessionId, setRunnerAuthSessionId] = useState<string | null>(null);
   const [runnerAuthStatus, setRunnerAuthStatus] = useState<{
@@ -1483,6 +1486,31 @@ export default function VibeCodingView({
     }
   }
 
+  async function submitRunnerAuthCode() {
+    if (!runnerAuthSessionId || !runnerAuthStatus || runnerAuthCodeBusy) return;
+    const code = runnerAuthCodeInput.trim();
+    if (!code) return;
+    setRunnerAuthCodeBusy(true);
+    setRunnerAuthError(null);
+    try {
+      const session = await agentClient.submitRunnerBrowserAuthCode(runnerAuthSessionId, code);
+      setRunnerAuthStatus({
+        runner: session.runner,
+        status: session.status,
+        openUrl: session.openUrl,
+        callbackPort: session.callbackPort,
+        code: session.code,
+        detail: session.detail,
+        error: session.error,
+      });
+      setRunnerAuthCodeInput("");
+    } catch (error) {
+      setRunnerAuthError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunnerAuthCodeBusy(false);
+    }
+  }
+
   async function submitRunnerAuthCallback() {
     if (!runnerAuthSessionId || !runnerAuthStatus || runnerAuthCallbackBusy) return;
     const callbackUrl = runnerAuthCallbackUrl.trim();
@@ -1942,7 +1970,65 @@ export default function VibeCodingView({
                       <div className="mt-2">{runnerAuthStatus.status.replaceAll("_", " ")}</div>
                       {runnerAuthStatus.code ? <div className="mt-1 font-mono text-surface-200">Code: {runnerAuthStatus.code}</div> : null}
                       {runnerAuthStatus.detail ? <div className="mt-1 text-surface-400">{runnerAuthStatus.detail}</div> : null}
-                      {runnerAuthStatus.callbackPort && !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
+                      {runnerAuthStatus.openUrl && !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
+                        /* One-line, one-tap copy. The CLI's own "If the
+                           browser didn't open, visit: <url>" line wraps over
+                           six rows and is miserable to select by hand. */
+                        <div className="mt-3 flex items-center gap-2">
+                          <input
+                            readOnly
+                            value={runnerAuthStatus.openUrl}
+                            onFocus={(event) => event.target.select()}
+                            spellCheck={false}
+                            className="w-full truncate rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 font-mono text-[10px] text-surface-100 outline-none focus:border-sky-400/70"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => { void navigator.clipboard?.writeText(runnerAuthStatus.openUrl || ""); }}
+                            className="shrink-0 rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 text-[10px] font-semibold text-surface-200 hover:border-surface-600"
+                          >
+                            Copy URL
+                          </button>
+                        </div>
+                      ) : null}
+                      {runnerAuthFlowKind(runnerAuthStatus.openUrl) !== "localhost-callback" &&
+                      !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
+                        /* The claudeai flow ends on platform.claude.com with a
+                           CODE the CLI is waiting for on stdin — the localhost
+                           box below rightly rejects it, which is exactly how a
+                           pasted "token" failed here on 2026-07-27. Offer the
+                           right slot for the flow the URL describes. */
+                        <div className="mt-3 space-y-2">
+                          <div className="text-surface-500">
+                            Signed in and got a code? Paste it here — it goes straight to the CLI on the box.
+                          </div>
+                          <input
+                            value={runnerAuthCodeInput}
+                            onChange={(event) => { setRunnerAuthCodeInput(event.target.value); setRunnerAuthError(null); }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" && runnerAuthCodeInput.trim()) {
+                                event.preventDefault();
+                                void submitRunnerAuthCode();
+                              }
+                            }}
+                            placeholder="Paste the authentication code from Claude"
+                            spellCheck={false}
+                            autoComplete="off"
+                            className="w-full rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 font-mono text-[10px] text-surface-100 outline-none focus:border-sky-400/70"
+                          />
+                          <button
+                            type="button"
+                            disabled={runnerAuthCodeBusy || !runnerAuthCodeInput.trim()}
+                            onClick={() => void submitRunnerAuthCode()}
+                            className="rounded-lg border border-sky-400/30 bg-sky-400/10 px-3 py-1.5 text-[10px] font-semibold text-sky-800 hover:bg-sky-400/15 disabled:opacity-40 dark:text-sky-100"
+                          >
+                            {runnerAuthCodeBusy ? "Submitting..." : "Submit code"}
+                          </button>
+                        </div>
+                      ) : null}
+                      {runnerAuthStatus.callbackPort &&
+                      runnerAuthFlowKind(runnerAuthStatus.openUrl) !== "code-paste" &&
+                      !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
                         <div className="mt-3 space-y-2">
                           <div className="text-surface-500">
                             If the auth tab ends at localhost:{runnerAuthStatus.callbackPort}, paste that full address here.
