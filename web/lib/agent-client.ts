@@ -908,10 +908,10 @@ export interface RunnerBrowserAuthSession {
   id: string;
   runner: "claude" | "codex";
   method: string;
-  /** See mobile/src/lib/quic.ts — authorized_no_entitlement is a SUCCESSFUL
+  /** See mobile/src/lib/quic.ts — account_not_eligible is a SUCCESSFUL
    *  sign-in against an account with no active plan. Never render it as a
    *  login failure; the retry it implies is the one thing that already worked. */
-  status: "starting" | "awaiting_browser" | "completed" | "failed" | "cancelled" | "authorized_no_entitlement";
+  status: "starting" | "awaiting_browser" | "completed" | "failed" | "cancelled" | "account_not_eligible";
   openUrl?: string;
   code?: string;
   detail?: string;

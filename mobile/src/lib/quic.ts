@@ -1022,13 +1022,16 @@ export interface RunnerBrowserAuthSession {
   /** Mirrors the states emitted by the agent in
    *  desktop/agent/runner_auth_browser_http.go (starting →
    *  awaiting_browser → verifying → completed | cancelled | failed). */
-  /** `authorized_no_entitlement` means the OAuth handshake SUCCEEDED and the
-   *  account simply has no active plan for that runner yet (Kimi answers a good
-   *  device-code login with "unable to verify your membership benefits"). It is
-   *  deliberately NOT "failed": every step the user controls worked, so a
-   *  surface must say "signed in — membership not active" and point at the
-   *  account, never at the sign-in button they already used correctly. */
-  status: "starting" | "awaiting_browser" | "verifying" | "completed" | "failed" | "cancelled" | "authorized_no_entitlement";
+  /** `account_not_eligible` — the runner rejected the ACCOUNT, not the code.
+   *  Kimi answers a good device-code handshake with "unable to verify your
+   *  membership benefits"; codex device-auth can be disabled per workspace.
+   *
+   *  Deliberately does NOT claim the user was authorized: the CLI prints
+   *  "Waiting for authorization to complete..." and then this, so authorization
+   *  was never observed. Surfaces must quote the runner's own message and point
+   *  at the ACCOUNT (activate a plan, clear the waitlist) — never at the sign-in
+   *  button, because retrying the code is the one thing that cannot help. */
+  status: "starting" | "awaiting_browser" | "verifying" | "completed" | "failed" | "cancelled" | "account_not_eligible";
   method?: string;
   openUrl?: string;
   code?: string;
