@@ -1989,12 +1989,21 @@ export default function AppsScreen() {
     }
   }, [devStatus, handleFlushMobile, handleOpenNative]);
 
-  const handleReload = useCallback(async () => {
+  /** Fast/full reload split (agent 1.99.374+). Mirrors DevPreview.tsx —
+   *  the app's OTHER browser-preview implementation; a fix in one is not
+   *  a fix (cross-surface parity rule).
+   *  fast — cheapest refresh: Metro/Expo reload, Flutter "r", fresh web
+   *         bundle re-served. Sub-second.
+   *  full — Flutter "R" hot restart / forced web-bundle re-export (warm
+   *         cache) on the browser lane; Hermes rebuild + push on the
+   *         native lane. */
+  const handleReload = useCallback(async (kind: "fast" | "full" = "fast") => {
     const nativeHermes = isHermesMobileFramework(devStatus?.framework);
     if (!nativeHermes) {
       setWebViewLoading(true);
     }
-    const result = await quicClient.reloadDevServerDetailed({ mode: nativeHermes ? "bundle" : "dev" });
+    const mode = nativeHermes ? (kind === "full" ? "bundle" : "fast") : kind;
+    const result = await quicClient.reloadDevServerDetailed({ mode });
     if (!devReloadReachedTarget(result)) {
       setWebViewLoading(false);
       Alert.alert("Reload failed", describeDevReloadResult(result));
@@ -3006,14 +3015,26 @@ export default function AppsScreen() {
                 >
                   <Ionicons name="expand-outline" size={20} color={c.accent} />
                 </Pressable>
+                {/* Two reload icons — Fast (refresh) and Full (sync).
+                    Icons keep the bar uncrammed per the 2026-07-25 report;
+                    the fast/full words live in the accessibility labels. */}
                 <Pressable
-                  onPress={handleReload}
+                  onPress={() => void handleReload("fast")}
                   hitSlop={10}
                   accessibilityRole="button"
-                  accessibilityLabel="Reload preview"
+                  accessibilityLabel="Fast reload preview"
                   style={s.webViewHeaderBtn}
                 >
                   <Ionicons name="refresh" size={21} color={c.accent} />
+                </Pressable>
+                <Pressable
+                  onPress={() => void handleReload("full")}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Full reload preview"
+                  style={s.webViewHeaderBtn}
+                >
+                  <Ionicons name="sync" size={21} color={c.accent} />
                 </Pressable>
                 <Pressable
                   onPress={handleStop}
@@ -3054,13 +3075,22 @@ export default function AppsScreen() {
                   <Ionicons name={previewFullScreen ? "contract-outline" : "expand-outline"} size={20} color={c.accent} />
                 </Pressable>
                 <Pressable
-                  onPress={handleReload}
+                  onPress={() => void handleReload("fast")}
                   hitSlop={10}
                   accessibilityRole="button"
-                  accessibilityLabel="Reload preview"
+                  accessibilityLabel="Fast reload preview"
                   style={s.previewEscapeIconBtn}
                 >
                   <Ionicons name="refresh" size={20} color={c.accent} />
+                </Pressable>
+                <Pressable
+                  onPress={() => void handleReload("full")}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Full reload preview"
+                  style={s.previewEscapeIconBtn}
+                >
+                  <Ionicons name="sync" size={20} color={c.accent} />
                 </Pressable>
                 <Pressable
                   onPress={handleStop}
@@ -3348,7 +3378,7 @@ export default function AppsScreen() {
                       >
                         <Text style={[s.previewBtnText, { color: "#c084fc" }]}>Fix in Yaver</Text>
                       </Pressable>
-                      <Pressable onPress={handleReload} style={[s.previewBtn, { backgroundColor: "#1a1a2e" }]}>
+                      <Pressable onPress={() => void handleReload("full")} style={[s.previewBtn, { backgroundColor: "#1a1a2e" }]}>
                         <Text style={[s.previewBtnText, { color: "#818cf8" }]}>Restart</Text>
                       </Pressable>
                     </View>

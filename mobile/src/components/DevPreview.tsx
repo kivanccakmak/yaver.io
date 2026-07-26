@@ -591,7 +591,14 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
     setWebViewKey(k => k + 1);
   }, [mustUseNativePreview, handleRunInYaver, resetPreviewProgress]);
 
-  const handleReload = useCallback(async () => {
+  /** Fast/full reload split (agent 1.99.374+).
+   *  fast — the framework's cheapest refresh: Metro/Expo built-in reload,
+   *         Flutter "r" hot reload, fresh web bundle re-served. Sub-second.
+   *  full — framework-level restart: Flutter "R" hot restart / forced
+   *         web-bundle re-export (warm cache) on the browser lane; a full
+   *         Hermes bundle rebuild + push on the native lane.
+   *  Default stays "fast" so the primary button is the cheap one. */
+  const handleReload = useCallback(async (kind: "fast" | "full" = "fast") => {
     if (reloadLoading || nativeLoading) return;
     if (mustUseNativePreview && !bundleMounted) {
       await handleRunInYaver();
@@ -602,7 +609,13 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
       setLoading(true);
     }
     try {
-      const result = await quicClient.reloadDevServerDetailed({ mode: mustUseNativePreview ? "bundle" : "dev" });
+      // Native Hermes lane: full = rebuild + push ("bundle"); fast = the
+      // dev-server hot-reload broadcast. Browser lane: fast/full go to
+      // /dev/reload where Flutter maps them onto "r"/"R".
+      const mode = mustUseNativePreview
+        ? (kind === "full" ? "bundle" : "fast")
+        : kind;
+      const result = await quicClient.reloadDevServerDetailed({ mode });
       if (!devReloadReachedTarget(result)) {
         setLoading(false);
         Alert.alert("Reload Failed", describeDevReloadResult(result));
@@ -732,21 +745,36 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
               modal has its own Reload button in the header, so we
               don't need a third copy on the card. */}
           {bundleMounted ? (
-            <Pressable
-              style={({ pressed }) => [
-                styles.actionBtn,
-                styles.reloadBtn,
-                (isBusy || reloadLoading || pressed) && { opacity: pressed ? 0.85 : 0.55 },
-              ]}
-              onPress={handleReload}
-              disabled={isBusy || reloadLoading}
-            >
-              {reloadLoading ? (
-                <ActivityIndicator size="small" color="#22c55e" />
-              ) : (
-                <Text style={styles.reloadBtnText}>{"↻"} Reload</Text>
-              )}
-            </Pressable>
+            <>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.actionBtn,
+                  styles.reloadBtn,
+                  (isBusy || reloadLoading || pressed) && { opacity: pressed ? 0.85 : 0.55 },
+                ]}
+                onPress={() => void handleReload("fast")}
+                disabled={isBusy || reloadLoading}
+                accessibilityLabel="Fast Reload"
+              >
+                {reloadLoading ? (
+                  <ActivityIndicator size="small" color="#22c55e" />
+                ) : (
+                  <Text style={styles.reloadBtnText}>{"↻"} Fast Reload</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.actionBtn,
+                  styles.fullReloadBtn,
+                  (isBusy || reloadLoading || pressed) && { opacity: pressed ? 0.85 : 0.55 },
+                ]}
+                onPress={() => void handleReload("full")}
+                disabled={isBusy || reloadLoading}
+                accessibilityLabel="Full Reload"
+              >
+                <Text style={styles.fullReloadBtnText}>{"⟳"} Full Reload</Text>
+              </Pressable>
+            </>
           ) : null}
           <Pressable
             style={({ pressed }) => [
@@ -786,8 +814,11 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
               </View>
             </View>
             <View style={styles.headerRight}>
-              <Pressable onPress={handleReload} style={styles.headerBtn}>
-                <Text style={styles.headerBtnReload}>Reload</Text>
+              <Pressable onPress={() => void handleReload("fast")} style={styles.headerBtn} accessibilityLabel="Fast Reload">
+                <Text style={styles.headerBtnReload}>Fast</Text>
+              </Pressable>
+              <Pressable onPress={() => void handleReload("full")} style={styles.headerBtn} accessibilityLabel="Full Reload">
+                <Text style={styles.headerBtnReloadFull}>Full</Text>
               </Pressable>
               <Pressable onPress={handleStop} style={styles.headerBtn}>
                 <Text style={styles.headerBtnStop}>{status.stopActionLabel || "Stop Serving"}</Text>
@@ -904,14 +935,23 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
 
                   <View style={styles.nativeButtons}>
                     <Pressable
-                      onPress={handleReload}
+                      onPress={() => void handleReload("fast")}
                       disabled={reloadLoading || nativeLoading}
                       style={[styles.nativeBtn, { backgroundColor: "#1a2e1a", opacity: reloadLoading || nativeLoading ? 0.75 : 1 }]}
                     >
                       <Text style={[styles.nativeBtnText, { color: "#22c55e" }]}>
-                        {reloadLoading ? "Reloading…" : bundleMounted ? "Reload" : "Open first"}
+                        {reloadLoading ? "Reloading…" : bundleMounted ? "Fast Reload" : "Open first"}
                       </Text>
                     </Pressable>
+                    {bundleMounted ? (
+                      <Pressable
+                        onPress={() => void handleReload("full")}
+                        disabled={reloadLoading || nativeLoading}
+                        style={[styles.nativeBtn, { backgroundColor: "#1a1a2e", opacity: reloadLoading || nativeLoading ? 0.75 : 1 }]}
+                      >
+                        <Text style={[styles.nativeBtnText, { color: "#818cf8" }]}>Full Reload</Text>
+                      </Pressable>
+                    ) : null}
                     <Pressable onPress={handleStop} style={[styles.nativeBtn, { backgroundColor: "#2e1a1a" }]}>
                       <Text style={[styles.nativeBtnText, { color: "#ef4444" }]}>{status.stopActionLabel || "Stop Serving"}</Text>
                     </Pressable>
@@ -1033,7 +1073,7 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                         >
                           <Text style={[styles.previewBtnText, { color: "#c084fc" }]}>Fix in Yaver</Text>
                         </Pressable>
-                        <Pressable onPress={handleReload} style={[styles.previewBtn, { backgroundColor: "#1a1a2e" }]}>
+                        <Pressable onPress={() => void handleReload("full")} style={[styles.previewBtn, { backgroundColor: "#1a1a2e" }]}>
                           <Text style={[styles.previewBtnText, { color: "#818cf8" }]}>Restart</Text>
                         </Pressable>
                       </View>
@@ -1164,6 +1204,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   reloadBtnText: { color: "#22c55e", fontSize: 13, fontWeight: "600" },
+  fullReloadBtn: {
+    backgroundColor: "#818cf822",
+    flex: 1,
+    alignItems: "center",
+  },
+  fullReloadBtnText: { color: "#818cf8", fontSize: 13, fontWeight: "600" },
   stopBtn: { backgroundColor: "#ef444422", paddingHorizontal: 16, alignItems: "center" },
   stopBtnText: { color: "#ef4444", fontSize: 13, fontWeight: "600" },
 
@@ -1384,6 +1430,7 @@ const styles = StyleSheet.create({
   headerBtn: { padding: 6 },
   headerBtnClose: { fontSize: 15, fontWeight: "600", color: "#818cf8" },
   headerBtnReload: { fontSize: 13, fontWeight: "600", color: "#22c55e" },
+  headerBtnReloadFull: { fontSize: 13, fontWeight: "600", color: "#818cf8" },
   headerBtnStop: { fontSize: 13, fontWeight: "600", color: "#ef4444" },
   headerCenter: { alignItems: "center", flex: 1 },
   headerTitle: { fontSize: 15, fontWeight: "700", color: "#fff" },

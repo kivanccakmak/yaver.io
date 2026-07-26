@@ -278,7 +278,12 @@ export type DevReloadDevelopmentMode = "web-bundle" | "preview-worker" | "mobile
 
 export interface DevReloadResult {
   ok: boolean;
-  mode?: "dev" | "bundle";
+  /** "fast"/"full" are the agent-1.99.374+ reload contract; "dev"/"bundle" are the legacy lanes. */
+  mode?: "dev" | "bundle" | "fast" | "full";
+  /** Echoed by agent 1.99.374+: which fast/full lane the agent actually ran. */
+  reloadMode?: "fast" | "full";
+  /** True when a full reload also forced a web-bundle re-export (agent 1.99.374+). */
+  webBundleRebuildKicked?: boolean;
   transport?: DevReloadTransport;
   reloadTarget?: DevReloadTarget;
   developmentMode?: DevReloadDevelopmentMode;
@@ -8263,13 +8268,21 @@ export class QuicClient {
    * through to /dev/reload-app bundle mode so the user never sees a
    * "connection refused to 127.0.0.1:8081" Go error.
    */
-  async reloadDevServerDetailed(opts?: { mode?: "dev" | "bundle" }): Promise<DevReloadResult> {
+  async reloadDevServerDetailed(opts?: { mode?: "dev" | "bundle" | "fast" | "full" }): Promise<DevReloadResult> {
     const mode = opts?.mode ?? "bundle";
     try {
-      if (mode === "dev") {
+      if (mode === "dev" || mode === "fast" || mode === "full") {
+        // Fast/full contract (agent 1.99.374+): fast = the framework's
+        // cheapest refresh (Metro reload / Flutter "r" hot reload /
+        // fresh bundle re-served); full = framework-level restart
+        // (Flutter "R" hot restart, forced web-bundle re-export on the
+        // WARM persistent cache — never a cold start). Legacy "dev"
+        // maps to fast. Older agents ignore the unknown body field and
+        // behave exactly as before — backward compatible.
         const primary = await fetch(`${this.baseUrl}/dev/reload`, {
           method: "POST",
-          headers: this.authHeaders,
+          headers: { ...this.authHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: mode === "full" ? "full" : "fast" }),
         });
         const data = await primary.json().catch(() => ({}));
         if (primary.ok) return { ok: data.ok !== false, mode, ...data };
@@ -8292,7 +8305,7 @@ export class QuicClient {
     }
   }
 
-  async reloadDevServer(opts?: { mode?: "dev" | "bundle" }): Promise<boolean> {
+  async reloadDevServer(opts?: { mode?: "dev" | "bundle" | "fast" | "full" }): Promise<boolean> {
     const result = await this.reloadDevServerDetailed(opts);
     return devReloadReachedTarget(result);
   }
