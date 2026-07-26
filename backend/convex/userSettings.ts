@@ -27,7 +27,11 @@ const deployPreferencePatchValidator = v.object({
   play: v.optional(v.union(v.string(), v.null())),
 });
 
-async function relayEntitlementForUser(ctx: any, userId: any): Promise<{
+// Exported: devices.resolveDeviceSig reuses this so the relay's SIGNATURE
+// auth path learns the caller's entitlement too — before that, only the
+// password path resolved isPaid/plan and sig-authenticated callers were all
+// metered as free tier.
+export async function relayEntitlementForUser(ctx: any, userId: any): Promise<{
   plan: "free" | "relay-pro" | "cloud-workspace" | "owner-dev";
   isPaid: boolean;
 }> {

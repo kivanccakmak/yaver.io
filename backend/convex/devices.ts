@@ -9,6 +9,7 @@ import {
   listVisibleInfraGrantsForGuest,
 } from "./access";
 import { resolveSigReach } from "./accessSigPolicy";
+import { relayEntitlementForUser } from "./userSettings";
 import { recommendPlacement } from "./edgePlacement";
 import { isMachineWakeable } from "./cloudMachines";
 import {
@@ -2626,6 +2627,12 @@ export const resolveDeviceSig = internalQuery({
     });
     if (reach === "deny") return deny;
 
+    // The SIGNER's billing entitlement rides along so the relay can meter
+    // (or exempt) sig-authenticated traffic the same way it does password-
+    // authenticated traffic. Derived from the Convex-env owner allowlist +
+    // subscriptions table — nothing a client can write.
+    const entitlement = await relayEntitlementForUser(ctx, signer.userId);
+
     return {
       ok: true as const,
       // The CALLER's userId, deliberately: the relay keys its per-user rate
@@ -2634,6 +2641,8 @@ export const resolveDeviceSig = internalQuery({
       userId: String(signer.userId),
       signerPublicKey: signer.signPublicKey,
       viaGrant: reach === "access-graph",
+      plan: entitlement.plan,
+      isPaid: entitlement.isPaid,
     };
   },
 });

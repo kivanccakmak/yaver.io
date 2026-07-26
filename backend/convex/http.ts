@@ -5051,6 +5051,11 @@ http.route({
         userId: res.userId,
         signerPublicKey: res.signerPublicKey,
         viaGrant: res.viaGrant === true,
+        // Signer entitlement — lets the relay meter sig-authenticated
+        // traffic by plan (owner-dev = unmetered) instead of defaulting
+        // everyone to the free-tier cap. Not a secret: plan labels only.
+        plan: (res as any).plan ?? "free",
+        isPaid: (res as any).isPaid === true,
       });
     } catch {
       return jsonResponse({ ok: false, error: "internal error" }, 500);

@@ -530,11 +530,35 @@ func relayAccessCacheKey(action, deviceID, pw, token string) string {
 }
 
 func (s *RelayServer) relayAccessIsPaid(action, deviceID, pw, token string) bool {
+	isPaid, _ := s.relayAccessEntitlement(action, deviceID, pw, token)
+	return isPaid
+}
+
+// relayAccessEntitlement surfaces the Convex-verified (isPaid, plan) cached by
+// validateRelayAccessWithReason for this access key. Expired or absent reads
+// as unentitled — fail closed. The plan string is what grants the owner-dev
+// bandwidth exemption; it comes exclusively from Convex's verdict about the
+// AUTHENTICATED caller, never from anything the client sent.
+func (s *RelayServer) relayAccessEntitlement(action, deviceID, pw, token string) (bool, string) {
 	key := relayAccessCacheKey(strings.TrimSpace(action), strings.TrimSpace(deviceID), strings.TrimSpace(pw), strings.TrimSpace(token))
 	s.validatedPwMu.RLock()
 	meta, ok := s.validatedAccessMeta[key]
 	s.validatedPwMu.RUnlock()
-	return ok && time.Now().Before(meta.Expiry) && meta.IsPaid
+	if !ok || !time.Now().Before(meta.Expiry) {
+		return false, ""
+	}
+	return meta.IsPaid, meta.Plan
+}
+
+// planBandwidthExempt reports whether a Convex plan is exempt from the relay
+// bandwidth cap AND the per-user proxy rate limit. Only owner-dev (the
+// Convex-env owner allowlist) qualifies: the paid tiers buy a bigger
+// allowance, not the absence of one. Tamper-proofness rests on where the plan
+// comes from (ownerAllowlist env vars + subscriptions table, read through
+// authenticated /relay/validate and /relay/resolve-sig) — no client-writable
+// row or header participates.
+func planBandwidthExempt(plan string) bool {
+	return plan == "owner-dev"
 }
 
 // validateRelayAccessE is validateRelayAccess plus an honest reason.
@@ -704,9 +728,24 @@ func (s *RelayServer) validateAndResolveViaConvexE(pw, action, deviceID, token s
 // the signature itself (verifyDeviceSig). Authorization to actually DO
 // anything still happens at the agent; this only decides whether the relay
 // will carry the bytes.
-func (s *RelayServer) resolveSigViaConvex(signerDeviceID, targetDeviceID string) (string, string, bool, bool) {
+// sigResolution is Convex's verdict about a signer→target reach, including
+// the SIGNER's billing entitlement (plan/isPaid). Before the entitlement
+// rode along here, the signature path left every caller on the free-tier
+// bandwidth cap — the password path resolved isPaid but the (preferred) sig
+// path never did, so the owner's own phone was metered as an anonymous free
+// user. The plan is Convex's statement about the authenticated signer; the
+// relay never widens it from client input.
+type sigResolution struct {
+	UserID          string
+	SignerPublicKey string
+	ViaGrant        bool
+	IsPaid          bool
+	Plan            string
+}
+
+func (s *RelayServer) resolveSigViaConvex(signerDeviceID, targetDeviceID string) (sigResolution, bool) {
 	if s.convexURL == "" {
-		return "", "", false, false
+		return sigResolution{}, false
 	}
 	url := strings.TrimRight(s.convexURL, "/") + "/relay/resolve-sig"
 	body, _ := json.Marshal(map[string]string{
@@ -716,7 +755,7 @@ func (s *RelayServer) resolveSigViaConvex(signerDeviceID, targetDeviceID string)
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Post(url, "application/json", strings.NewReader(string(body)))
 	if err != nil {
-		return "", "", false, false
+		return sigResolution{}, false
 	}
 	defer resp.Body.Close()
 	var result struct {
@@ -724,11 +763,22 @@ func (s *RelayServer) resolveSigViaConvex(signerDeviceID, targetDeviceID string)
 		UserID          string `json:"userId"`
 		SignerPublicKey string `json:"signerPublicKey"`
 		ViaGrant        bool   `json:"viaGrant"`
+		IsPaid          bool   `json:"isPaid"`
+		Plan            string `json:"plan"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", "", false, false
+		return sigResolution{}, false
 	}
-	return result.UserID, result.SignerPublicKey, result.OK, result.ViaGrant
+	if !result.OK {
+		return sigResolution{}, false
+	}
+	return sigResolution{
+		UserID:          result.UserID,
+		SignerPublicKey: result.SignerPublicKey,
+		ViaGrant:        result.ViaGrant,
+		IsPaid:          result.IsPaid,
+		Plan:            result.Plan,
+	}, true
 }
 
 // sigFailReason names WHY a device-signature auth attempt failed. Every one of
@@ -776,42 +826,42 @@ func (s *RelayServer) noteSigFail(reason sigFailReason) {
 //
 // Every failure path is counted by reason (see sigFailReason) so the fallback
 // stays non-fatal WITHOUT being invisible.
-func (s *RelayServer) authorizeProxyViaSig(r *http.Request, targetDeviceID string) (string, bool, bool) {
+func (s *RelayServer) authorizeProxyViaSig(r *http.Request, targetDeviceID string) (sigResolution, bool) {
 	signerDeviceID := strings.TrimSpace(r.Header.Get("X-Yaver-Device"))
 	if signerDeviceID == "" {
 		s.noteSigFail(sigFailNoSigner)
-		return "", false, false
+		return sigResolution{}, false
 	}
 	var body []byte
 	if r.Body != nil {
 		b, err := readBodyForSignature(r, s.abuseGuard.cfg.MaxRequestBodyBytes)
 		if err != nil {
 			s.noteSigFail(sigFailBodyRead)
-			return "", false, false
+			return sigResolution{}, false
 		}
 		body = b
 		r.Body = io.NopCloser(bytes.NewReader(body)) // let the downstream proxy re-read it
 	}
-	userID, pubB64, ok, viaGrant := s.resolveSigViaConvex(signerDeviceID, targetDeviceID)
+	res, ok := s.resolveSigViaConvex(signerDeviceID, targetDeviceID)
 	if !ok {
 		s.noteSigFail(sigFailUnresolved)
-		return "", false, false
+		return sigResolution{}, false
 	}
-	pub := decodeSignPubKey(pubB64)
+	pub := decodeSignPubKey(res.SignerPublicKey)
 	if pub == nil {
 		s.noteSigFail(sigFailBadPubKey)
-		return "", false, false
+		return sigResolution{}, false
 	}
 	signed, ok := verifyDeviceSig(r, body, pub, s.sigNonces)
 	if !ok {
 		s.noteSigFail(sigFailBadSignature)
-		return "", false, false
+		return sigResolution{}, false
 	}
 	if !sigDeviceMatches(signed, signerDeviceID) {
 		s.noteSigFail(sigFailDeviceMismatch)
-		return "", false, false
+		return sigResolution{}, false
 	}
-	return userID, true, viaGrant
+	return res, true
 }
 
 func readBodyForSignature(r *http.Request, limit int64) ([]byte, error) {
@@ -1730,11 +1780,16 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	var userID string
 	var authed bool
 	var relayPaid bool
+	var relayPlan string
 	if hasDeviceSig(r) {
-		if uid, sigOK, viaGrant := s.authorizeProxyViaSig(r, deviceID); sigOK {
-			userID, authed = uid, true
+		if sig, sigOK := s.authorizeProxyViaSig(r, deviceID); sigOK {
+			userID, authed = sig.UserID, true
+			// The signer's Convex-verified entitlement rides along with the
+			// sig resolution — without it, sig-authenticated callers (the
+			// preferred path) were all metered as free tier.
+			relayPaid, relayPlan = sig.IsPaid, sig.Plan
 			s.authViaSig.Add(1)
-			if viaGrant {
+			if sig.ViaGrant {
 				s.authViaSigGrant.Add(1)
 			}
 		}
@@ -1778,7 +1833,7 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		userID = uid
-		relayPaid = s.relayAccessIsPaid("proxy", deviceID, relayPw, "")
+		relayPaid, relayPlan = s.relayAccessEntitlement("proxy", deviceID, relayPw, "")
 		s.authViaPw.Add(1)
 		s.abuseGuard.clearInvalidAuth(s.abuseGuard.clientIP(r))
 	}
@@ -1787,7 +1842,11 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// request, so this widens nothing.
 	setWebviewAuthCookie(w, r, deviceID, s.password)
 
-	if userID != "" && !s.abuseGuard.allow("proxy-user:"+userID, s.abuseGuard.cfg.ProxyPerUserPerMin, s.abuseGuard.cfg.ProxyBurstPerUser) {
+	// owner-dev (Convex owner allowlist) is exempt from the per-user rate
+	// limit and the bandwidth cap below. The verdict came from Convex about
+	// the AUTHENTICATED caller — nothing client-sent can claim it.
+	relayUnmetered := planBandwidthExempt(relayPlan)
+	if userID != "" && !relayUnmetered && !s.abuseGuard.allow("proxy-user:"+userID, s.abuseGuard.cfg.ProxyPerUserPerMin, s.abuseGuard.cfg.ProxyBurstPerUser) {
 		s.abuseGuard.logLimited("proxy-user", userID)
 		writeRelayError(w, http.StatusTooManyRequests, "free relay user rate limit exceeded")
 		return
@@ -1824,7 +1883,7 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if bytesRequested < 0 {
 		bytesRequested = 0
 	}
-	s.bandwidth.SetDevicePaid(deviceID, relayPaid)
+	s.bandwidth.SetDeviceTier(deviceID, relayPaid, relayUnmetered)
 
 	// Check bandwidth limit
 	if err := s.bandwidth.CheckAllowed(deviceID, bytesRequested); err != nil {

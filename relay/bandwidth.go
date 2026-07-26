@@ -51,6 +51,10 @@ type BandwidthConfig struct {
 type DeviceBandwidth struct {
 	DeviceID   string `json:"deviceId"`
 	IsPaid     bool   `json:"isPaid"`
+	// Unmetered exempts the device from the daily cap entirely (usage is
+	// still RECORDED for stats). Granted per-request from the caller's
+	// Convex-verified plan (owner-dev) — never from anything client-sent.
+	Unmetered  bool   `json:"unmetered,omitempty"`
 	BytesIn    int64  `json:"bytesIn"`    // today
 	BytesOut   int64  `json:"bytesOut"`   // today
 	ResetDate  string `json:"resetDate"`  // "2026-03-22"
@@ -125,6 +129,9 @@ func (bm *BandwidthManager) CheckAllowed(deviceID string, bytesRequested int64) 
 
 	if !exists {
 		// New device, always allow first request
+		return nil
+	}
+	if dev.Unmetered {
 		return nil
 	}
 
@@ -256,16 +263,28 @@ func (bm *BandwidthManager) GetStats() BandwidthStats {
 	return stats
 }
 
-// SetDevicePaid marks a device as paid tier.
+// SetDevicePaid marks a device as paid tier (metered — Relay Pro buys a
+// bigger allowance, not the absence of one).
 func (bm *BandwidthManager) SetDevicePaid(deviceID string, isPaid bool) {
+	bm.SetDeviceTier(deviceID, isPaid, false)
+}
+
+// SetDeviceTier applies the caller's Convex-verified entitlement for this
+// request: paid (bigger allowance) and/or unmetered (no cap — owner-dev
+// plan). Called per proxy request, so the flags always reflect the LATEST
+// authenticated caller; a free-tier guest hitting the same box re-meters it
+// for their own traffic.
+func (bm *BandwidthManager) SetDeviceTier(deviceID string, isPaid, unmetered bool) {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
 	if dev, ok := bm.devices[deviceID]; ok {
 		dev.IsPaid = isPaid
+		dev.Unmetered = unmetered
 	} else {
 		bm.devices[deviceID] = &DeviceBandwidth{
 			DeviceID:  deviceID,
 			IsPaid:    isPaid,
+			Unmetered: unmetered,
 			ResetDate: time.Now().Format("2006-01-02"),
 		}
 	}
@@ -289,6 +308,9 @@ func (bm *BandwidthManager) RemainingBytes(deviceID string) int64 {
 	bm.mu.RUnlock()
 	if !exists {
 		return 0 // unmetered: no record yet
+	}
+	if dev.Unmetered {
+		return 0 // unmetered by plan (owner-dev)
 	}
 
 	// A stale counter is about to be reset by the next RecordBytes/CheckAllowed;
