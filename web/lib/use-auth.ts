@@ -49,7 +49,15 @@ function getStoredToken(): string | null {
 }
 
 export function yaverAuthTokenCookie(token: string, maxAgeSeconds = 60 * 60 * 24 * 30): string {
-  return `yaver_auth_token=${token}; path=/; max-age=${maxAgeSeconds}; secure; samesite=lax`;
+  const secure = (() => {
+    if (typeof window === "undefined") return true;
+    const host = window.location.hostname;
+    if (window.location.protocol === "http:" && (host === "localhost" || host === "127.0.0.1" || host === "::1")) {
+      return false;
+    }
+    return true;
+  })();
+  return `yaver_auth_token=${token}; path=/; max-age=${maxAgeSeconds};${secure ? " secure;" : ""} samesite=lax`;
 }
 
 function syncAuthTokenCookie(token: string) {

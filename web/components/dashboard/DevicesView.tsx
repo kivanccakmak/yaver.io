@@ -5326,7 +5326,9 @@ function RunnerAuthModal({
   // Codex still uses the auto-completing device-auth flow and doesn't
   // need this field — it never renders for runner=codex.
   const [authCode, setAuthCode] = useState("");
+  const [callbackUrl, setCallbackUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [submittingCallback, setSubmittingCallback] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   // A dedicated AgentClient bound to *this* device. The shared singleton is
   // scoped to the active workspace (the "Open Workspace" flow) and may be
@@ -5405,6 +5407,23 @@ function RunnerAuthModal({
 
   const runnerLabel = runner === "codex" ? "OpenAI Codex" : runner === "claude" ? "Claude Code" : runner;
 
+  const submitCallbackUrl = async () => {
+    if (!session || submittingCallback) return;
+    const url = callbackUrl.trim();
+    if (!url) return;
+    setSubmittingCallback(true);
+    setSubmitError(null);
+    try {
+      const next = await clientRef.current!.submitRunnerBrowserAuthCallback(session.id, url);
+      setSession(next);
+      setCallbackUrl("");
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmittingCallback(false);
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
@@ -5475,6 +5494,50 @@ function RunnerAuthModal({
                 >
                   <span className="font-mono text-xl tracking-[0.2em] text-surface-100">{session.code}</span>
                   <span className="text-[10px] uppercase text-surface-500">{copied ? "copied" : "click to copy"}</span>
+                </button>
+              </div>
+            ) : null}
+
+            {session.callbackPort && !terminal ? (
+              <div className="space-y-2 rounded-lg border border-sky-500/30 bg-sky-500/5 p-3">
+                <div className="text-[10px] font-semibold uppercase tracking-widest text-sky-700 dark:text-sky-300">
+                  Deliver localhost callback
+                </div>
+                <p className="text-[10px] text-surface-500 leading-relaxed">
+                  If the auth tab ends at localhost:{session.callbackPort}, paste that full address here.
+                </p>
+                <input
+                  type="text"
+                  value={callbackUrl}
+                  onChange={(e) => { setCallbackUrl(e.target.value); setSubmitError(null); }}
+                  placeholder={`http://localhost:${session.callbackPort}/callback?...`}
+                  spellCheck={false}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  className="w-full rounded-md border border-surface-700 bg-surface-950 px-3 py-2 font-mono text-[11px] text-surface-100 placeholder-surface-600 outline-none focus:border-sky-400/60"
+                  onPaste={(e) => {
+                    const pasted = e.clipboardData.getData("text") || "";
+                    const cleaned = pasted.trim();
+                    if (cleaned !== pasted) {
+                      e.preventDefault();
+                      setCallbackUrl(cleaned);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && callbackUrl.trim()) {
+                      e.preventDefault();
+                      void submitCallbackUrl();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={submittingCallback || !callbackUrl.trim()}
+                  onClick={() => void submitCallbackUrl()}
+                  className="rounded-md border border-sky-400/40 bg-sky-500/15 px-3 py-1 text-[11px] font-medium text-sky-800 hover:bg-sky-500/25 disabled:opacity-50 dark:text-sky-100"
+                >
+                  {submittingCallback ? "Delivering..." : "Deliver callback"}
                 </button>
               </div>
             ) : null}

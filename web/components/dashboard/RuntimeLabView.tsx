@@ -1,13 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   agentClient,
   type RemoteRuntimeCapabilities,
   type RemoteRuntimeSession,
   type RemoteRuntimeTarget,
+  type Runner,
+  type RunnerBrowserAuthSession,
+  type TaskStatus,
+  type WorkspaceAppView,
 } from "@/lib/agent-client";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
+import { useAuth } from "@/lib/use-auth";
+import type { Device } from "@/lib/use-devices";
+import { usePrimaryRunnerByDevice } from "./DevicesView";
 
 type Project = {
   name: string;
@@ -18,6 +25,8 @@ type Project = {
   stack?: string;
   surfaces?: string[];
   tags?: string[];
+  monorepoRoot?: string;
+  monorepoApp?: string;
 };
 
 type WorkspaceRepo = {
@@ -31,6 +40,13 @@ type WorkspaceRepo = {
     services?: string[];
     actions?: string[];
   };
+};
+
+type MobilePreviewMode = "phone" | "tablet";
+
+const mobilePreviewDevices: Record<MobilePreviewMode, { label: string; width: number; height: number; radius: number }> = {
+  phone: { label: "Mobile", width: 393, height: 852, radius: 34 },
+  tablet: { label: "Tablet", width: 820, height: 1180, radius: 26 },
 };
 
 export type RuntimeLabIntent = {
@@ -100,6 +116,21 @@ function runtimeFrameworkForProject(project: Project | null): string {
   return explicit;
 }
 
+function isMobileRuntimeProject(project: Project | null): boolean {
+  const terms = projectTerms(project);
+  return termsContain(terms, [
+    "mobile",
+    "expo",
+    "react-native",
+    "react-native-expo",
+    "flutter",
+    "swift",
+    "kotlin",
+    "iosnative",
+    "androidnative",
+  ]);
+}
+
 function browserPreviewFrameworkForProject(project: Project | null): string {
   const explicit = String(project?.framework || "").trim().toLowerCase().replace(/\s+/g, "-").replace(/\./g, "");
   if (["next", "nextjs", "vite", "react", "expo", "react-native", "flutter"].includes(explicit)) {
@@ -135,6 +166,43 @@ async function monorepoWebAppName(project: Project | null): Promise<string | und
   } catch {
     return undefined;
   }
+}
+
+async function expandMonorepoProjects(rows: Project[]): Promise<Project[]> {
+  const expanded: Project[] = [];
+  const seen = new Set<string>();
+  for (const project of rows) {
+    const key = project.path;
+    if (key && !seen.has(key)) {
+      expanded.push(project);
+      seen.add(key);
+    }
+    if (!isMonorepoProject(project)) continue;
+    let apps: WorkspaceAppView[] = [];
+    try {
+      apps = await agentClient.getWorkspaceApps(["web", "mobile"], project.path);
+    } catch {
+      continue;
+    }
+    for (const app of apps) {
+      if (!app.exists) continue;
+      const appPath = app.absPath || app.path;
+      if (!appPath || seen.has(appPath)) continue;
+      seen.add(appPath);
+      expanded.push({
+        name: `${project.name} / ${app.name}`,
+        path: appPath,
+        framework: app.framework || app.stack || app.kind,
+        frameworks: app.framework ? [app.framework] : [],
+        stack: app.stack || app.kind,
+        surfaces: app.kind ? [app.kind] : undefined,
+        tags: [app.kind, app.framework, app.stack, app.name].filter(Boolean) as string[],
+        monorepoRoot: project.path,
+        monorepoApp: app.name,
+      });
+    }
+  }
+  return expanded;
 }
 
 function signedBundlePreviewUrl(bundleUrl?: string): string | null {
@@ -303,40 +371,101 @@ const runtimeGroupLabels: Record<ReturnType<typeof runtimeTargetGroup>, string> 
 export default function RuntimeLabView({
   intent,
   onOpenTmux,
+  connectedDevice,
 }: {
   intent?: RuntimeLabIntent | null;
   onOpenTmux?: (sessionName: string) => void;
+  connectedDevice?: Device | null;
 }) {
+  const { token } = useAuth();
+  const { primaryRunnerByDevice, primaryModelByDevice, setPrimaryRunner } = usePrimaryRunnerByDevice(token);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedPath, setSelectedPath] = useState("");
+  const [runners, setRunners] = useState<Runner[]>([]);
+  const [selectedRunner, setSelectedRunner] = useState("");
+  const [selectedModel, setSelectedModel] = useState("");
+  const [runnerAuthBusy, setRunnerAuthBusy] = useState(false);
+  const [runnerAuthStatus, setRunnerAuthStatus] = useState<RunnerBrowserAuthSession | null>(null);
+  const [runnerAuthError, setRunnerAuthError] = useState<string | null>(null);
+  const [runnerAuthCallbackUrl, setRunnerAuthCallbackUrl] = useState("");
+  const [runnerAuthCallbackBusy, setRunnerAuthCallbackBusy] = useState(false);
+  const [composer, setComposer] = useState("");
+  const [sending, setSending] = useState(false);
+  const taskStreamStopRef = useRef<(() => void) | null>(null);
+  const taskPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const runtimeConsoleRef = useRef<HTMLPreElement | null>(null);
+  const taskConsoleRef = useRef<HTMLPreElement | null>(null);
+  const [runtimeConsolePinned, setRuntimeConsolePinned] = useState(true);
+  const [taskConsolePinned, setTaskConsolePinned] = useState(true);
+  const [activeTaskStream, setActiveTaskStream] = useState<{
+    id: string;
+    title: string;
+    status: TaskStatus;
+    lines: string[];
+  } | null>(null);
   const [caps, setCaps] = useState<RemoteRuntimeCapabilities | null>(null);
   const [session, setSession] = useState<RemoteRuntimeSession | null>(null);
   const [log, setLog] = useState<string[]>([]);
+  const [devEventsUrl, setDevEventsUrl] = useState<string | null>(() => agentClient.devEventsUrl);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAdvancedTargets, setShowAdvancedTargets] = useState(false);
   const [webPreviewUrl, setWebPreviewUrl] = useState<string | null>(null);
   const [webPreviewBusy, setWebPreviewBusy] = useState(false);
   const [webPreviewNote, setWebPreviewNote] = useState<string | null>(null);
+  const [mobilePreviewMode, setMobilePreviewMode] = useState<MobilePreviewMode>("phone");
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.path === selectedPath) || null,
     [projects, selectedPath],
   );
+  const selectedProjectIsMobile = useMemo(() => isMobileRuntimeProject(selectedProject), [selectedProject]);
+  const mobilePreviewDevice = mobilePreviewDevices[mobilePreviewMode];
 
   const appendLog = useCallback((line: string) => {
     const stamp = new Date().toLocaleTimeString();
     setLog((prev) => [...prev.slice(-160), `[${stamp}] ${line}`]);
   }, []);
 
+  const scrollToBottom = useCallback((node: HTMLElement | null) => {
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, []);
+
+  const isNearBottom = useCallback((node: HTMLElement) => {
+    return node.scrollHeight - node.scrollTop - node.clientHeight < 36;
+  }, []);
+
+  useEffect(() => {
+    if (runtimeConsolePinned) scrollToBottom(runtimeConsoleRef.current);
+  }, [log, runtimeConsolePinned, scrollToBottom]);
+
+  useEffect(() => {
+    if (taskConsolePinned) scrollToBottom(taskConsoleRef.current);
+  }, [activeTaskStream?.lines, taskConsolePinned, scrollToBottom]);
+
+  useEffect(() => {
+    if (selectedProjectIsMobile) setMobilePreviewMode("phone");
+  }, [selectedPath, selectedProjectIsMobile]);
+
+  const stopActiveTaskStream = useCallback(() => {
+    taskStreamStopRef.current?.();
+    taskStreamStopRef.current = null;
+    if (taskPollRef.current) clearInterval(taskPollRef.current);
+    taskPollRef.current = null;
+  }, []);
+
+  useEffect(() => () => stopActiveTaskStream(), [stopActiveTaskStream]);
+
   const loadProjects = useCallback(async () => {
     setError(null);
     try {
-      const [projectRows, repoRows] = await Promise.all([
+      const [projectRows, repoRows, mobileRows] = await Promise.all([
         agentClient.listProjects(),
         agentClient.listWorkspaceRepos(),
+        agentClient.listProjectsByCapability("mobile").catch(() => []),
       ]);
-      const rows = mergeProjectInventory(projectRows, repoRows);
+      const rows = await expandMonorepoProjects(mergeProjectInventory([...(projectRows as Project[]), ...(mobileRows as Project[])], repoRows));
       setProjects(rows);
       if (!selectedPath && rows[0]?.path) setSelectedPath(rows[0].path);
       appendLog(`projects loaded: ${rows.length}`);
@@ -344,6 +473,176 @@ export default function RuntimeLabView({
       setError(err instanceof Error ? err.message : "Could not load projects.");
     }
   }, [appendLog, selectedPath]);
+
+  const refreshRunners = useCallback(async () => {
+    try {
+      const rows = (await agentClient.getRunners()).filter((runner) => {
+        if (!runner.installed) return false;
+        const id = String(runner.id || "").toLowerCase();
+        return !id.includes("aider") && !id.includes("ollama");
+      });
+      setRunners(rows);
+      const explicitRunner = connectedDevice?.id ? primaryRunnerByDevice[connectedDevice.id] : "";
+      const preferred =
+        rows.find((runner) => runner.id === explicitRunner) ||
+        rows.find((runner) => runner.active) ||
+        rows.find((runner) => runner.isDefault) ||
+        rows.find((runner) => runner.ready) ||
+        rows[0];
+      if (preferred && (!selectedRunner || !rows.some((runner) => runner.id === selectedRunner))) {
+        setSelectedRunner(preferred.id);
+      }
+    } catch {
+      setRunners([]);
+    }
+  }, [connectedDevice?.id, primaryRunnerByDevice, selectedRunner]);
+
+  useEffect(() => {
+    void refreshRunners();
+    const id = window.setInterval(() => void refreshRunners(), 5000);
+    return () => window.clearInterval(id);
+  }, [refreshRunners]);
+
+  const selectedRunnerRow = useMemo(
+    () => runners.find((runner) => runner.id === selectedRunner) || null,
+    [runners, selectedRunner],
+  );
+  const availableModels = selectedRunnerRow?.models || [];
+
+  useEffect(() => {
+    const explicitModel = connectedDevice?.id ? primaryModelByDevice[connectedDevice.id] : "";
+    if (explicitModel && availableModels.some((model) => model.id === explicitModel)) {
+      setSelectedModel(explicitModel);
+    } else if (!selectedModel || !availableModels.some((model) => model.id === selectedModel)) {
+      setSelectedModel(availableModels.find((model) => model.isDefault)?.id || availableModels[0]?.id || "");
+    }
+  }, [availableModels, connectedDevice?.id, primaryModelByDevice, selectedModel]);
+
+  useEffect(() => {
+    if (!runnerAuthStatus?.id || ["completed", "failed", "cancelled", "account_not_eligible"].includes(runnerAuthStatus.status)) return;
+    const id = window.setInterval(async () => {
+      try {
+        const next = await agentClient.getRunnerBrowserAuthStatus(runnerAuthStatus.id);
+        setRunnerAuthStatus(next);
+        if (["completed", "failed", "cancelled", "account_not_eligible"].includes(next.status)) {
+          setRunnerAuthBusy(false);
+          void refreshRunners();
+        }
+      } catch (err) {
+        setRunnerAuthError(err instanceof Error ? err.message : String(err));
+      }
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [refreshRunners, runnerAuthStatus?.id, runnerAuthStatus?.status]);
+
+  useEffect(() => {
+    const unsubscribe = agentClient.on("connectionState", () => setDevEventsUrl(agentClient.devEventsUrl));
+    setDevEventsUrl(agentClient.devEventsUrl);
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (!devEventsUrl) return;
+    const es = new EventSource(devEventsUrl);
+    es.onmessage = (msg) => {
+      try {
+        const ev = JSON.parse(msg.data);
+        if (ev.type === "log" && typeof ev.message === "string") appendLog(`dev: ${ev.message}`);
+        else if (ev.type === "phase" && ev.topic && ev.phase) appendLog(`${ev.topic}: ${ev.phase}`);
+        else if (ev.type === "progress" && ev.topic) appendLog(`${ev.topic}: ${Math.round((ev.pct || 0) * 100)}% ${ev.phase || ""}`.trim());
+        else if (ev.type === "ready") appendLog("dev server ready");
+        else if (ev.type === "error" && ev.error) appendLog(`dev error: ${ev.error}`);
+        else if (ev.type === "snapshot" && ev.snapshot?.recentLogs?.length) {
+          for (const line of ev.snapshot.recentLogs.slice(-3)) appendLog(`dev: ${line}`);
+        }
+      } catch {
+        if (msg.data) appendLog(`dev: ${String(msg.data).slice(0, 240)}`);
+      }
+    };
+    es.onerror = () => appendLog("dev events stream interrupted");
+    return () => es.close();
+  }, [appendLog, devEventsUrl]);
+
+  const startSelectedRunnerSignIn = useCallback(async () => {
+    if (!selectedRunnerRow || !["claude", "codex"].includes(selectedRunnerRow.id)) return;
+    setRunnerAuthBusy(true);
+    setRunnerAuthError(null);
+    setRunnerAuthCallbackUrl("");
+    try {
+      const session = await agentClient.startRunnerBrowserAuth(selectedRunnerRow.id);
+      setRunnerAuthStatus(session);
+      if (session.openUrl) window.open(session.openUrl, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setRunnerAuthBusy(false);
+      setRunnerAuthError(err instanceof Error ? err.message : String(err));
+    }
+  }, [selectedRunnerRow]);
+
+  const submitRunnerAuthCallback = useCallback(async () => {
+    const callbackUrl = runnerAuthCallbackUrl.trim();
+    if (!runnerAuthStatus?.id || !callbackUrl || runnerAuthCallbackBusy) return;
+    setRunnerAuthCallbackBusy(true);
+    setRunnerAuthError(null);
+    try {
+      const next = await agentClient.submitRunnerBrowserAuthCallback(runnerAuthStatus.id, callbackUrl);
+      setRunnerAuthStatus(next);
+      setRunnerAuthCallbackUrl("");
+      appendLog(`runner oauth callback delivered: ${runnerAuthStatus.runner}`);
+    } catch (err) {
+      setRunnerAuthError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRunnerAuthCallbackBusy(false);
+    }
+  }, [appendLog, runnerAuthCallbackBusy, runnerAuthCallbackUrl, runnerAuthStatus?.id, runnerAuthStatus?.runner]);
+
+  const saveRunnerChoice = useCallback(async () => {
+    if (!connectedDevice?.id || !selectedRunner) return;
+    await setPrimaryRunner(connectedDevice.id, selectedRunner, selectedModel || null);
+    appendLog(`runner set: ${selectedRunner}${selectedModel ? ` ${selectedModel}` : ""}`);
+  }, [appendLog, connectedDevice?.id, selectedModel, selectedRunner, setPrimaryRunner]);
+
+  const sendPrompt = useCallback(async () => {
+    const prompt = composer.trim();
+    if (!prompt || sending) return;
+    setSending(true);
+    try {
+      stopActiveTaskStream();
+      const task = await agentClient.createTask({
+        title: prompt.slice(0, 80),
+        description: prompt,
+        runner: selectedRunner || undefined,
+        model: selectedModel || undefined,
+        projectName: selectedProject?.name,
+        workDir: selectedProject?.path,
+      });
+      setActiveTaskStream({ id: task.id, title: task.title, status: task.status, lines: [] });
+      appendLog(`task ${task.id} started with ${selectedRunner || "default runner"}`);
+      taskStreamStopRef.current = agentClient.streamTaskOutput(task.id, (line) => {
+        const trimmed = String(line || "").trimEnd();
+        if (!trimmed) return;
+        setActiveTaskStream((prev) => {
+          if (!prev || prev.id !== task.id) return prev;
+          const lines = [...prev.lines, trimmed];
+          return { ...prev, status: "running", lines: lines.slice(-240) };
+        });
+      });
+      taskPollRef.current = setInterval(() => {
+        void agentClient.getTask(task.id).then((fresh) => {
+          setActiveTaskStream((prev) => {
+            if (!prev || prev.id !== task.id) return prev;
+            const lines = fresh.output?.length ? fresh.output : prev.lines;
+            return { ...prev, status: fresh.status, lines: lines.slice(-240) };
+          });
+          if (fresh.status !== "queued" && fresh.status !== "running") stopActiveTaskStream();
+        }).catch(() => {});
+      }, 2000);
+      setComposer("");
+    } catch (err) {
+      appendLog(`task failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSending(false);
+    }
+  }, [appendLog, composer, selectedModel, selectedProject, selectedRunner, sending, stopActiveTaskStream]);
 
   useEffect(() => {
     void loadProjects();
@@ -499,7 +798,7 @@ export default function RuntimeLabView({
   }, [appendLog, intent, onOpenTmux]);
 
   return (
-    <div className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-3 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] sm:p-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+    <div className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-3 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] sm:p-4 xl:grid-cols-[minmax(0,1fr)_420px]">
       <div className="min-h-0 space-y-3 overflow-y-auto">
         <div className="flex flex-wrap items-end gap-2">
           <label className="min-w-[260px] flex-1">
@@ -611,7 +910,33 @@ export default function RuntimeLabView({
                   {webPreviewUrl ? (
                     <section className="space-y-2">
                       <div className="flex items-center justify-between gap-3">
-                        <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Web UI</div>
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">
+                            {selectedProjectIsMobile ? "Mobile Web UI" : "Web UI"}
+                          </div>
+                          {selectedProjectIsMobile ? (
+                            <div className="inline-flex rounded-md border border-[#d7dce3] bg-white p-0.5 dark:border-[#2a3039] dark:bg-[#161b22]">
+                              {(Object.keys(mobilePreviewDevices) as MobilePreviewMode[]).map((mode) => {
+                                const device = mobilePreviewDevices[mode];
+                                const selected = mobilePreviewMode === mode;
+                                return (
+                                  <button
+                                    key={mode}
+                                    type="button"
+                                    onClick={() => setMobilePreviewMode(mode)}
+                                    className={`rounded px-2 py-1 text-[11px] font-medium ${
+                                      selected
+                                        ? "bg-[#1f2933] text-white dark:bg-[#e6e8ec] dark:text-[#101318]"
+                                        : "text-[#667085] hover:text-[#1f2933] dark:text-[#9aa3af] dark:hover:text-[#e6e8ec]"
+                                    }`}
+                                  >
+                                    {device.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                        </div>
                         <button
                           onClick={() => setWebPreviewUrl(null)}
                           className="rounded-md border border-[#d7dce3] bg-white px-2 py-1 text-[11px] text-[#475467] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#d7dce3]"
@@ -619,11 +944,41 @@ export default function RuntimeLabView({
                           Close
                         </button>
                       </div>
-                      <iframe
-                        src={webPreviewUrl}
-                        className="h-[520px] w-full rounded-md border border-[#d7dce3] bg-white"
-                        title="Project Web UI preview"
-                      />
+                      {selectedProjectIsMobile ? (
+                        <div className="flex min-h-[640px] w-full justify-center overflow-auto rounded-md border border-[#d7dce3] bg-[#0b0d11] p-4 dark:border-[#2a3039]">
+                          <div
+                            className="shrink-0 overflow-hidden bg-[#1f2933] p-[10px] shadow-2xl"
+                            style={{
+                              borderRadius: mobilePreviewDevice.radius,
+                              width: mobilePreviewDevice.width + 20,
+                              height: mobilePreviewDevice.height + 20,
+                            }}
+                          >
+                            <div
+                              className="overflow-hidden bg-black"
+                              style={{
+                                borderRadius: Math.max(0, mobilePreviewDevice.radius - 10),
+                                width: mobilePreviewDevice.width,
+                                height: mobilePreviewDevice.height,
+                              }}
+                            >
+                              <iframe
+                                src={webPreviewUrl}
+                                width={mobilePreviewDevice.width}
+                                height={mobilePreviewDevice.height}
+                                className="border-none bg-white"
+                                title={`${mobilePreviewDevice.label} Web UI preview`}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <iframe
+                          src={webPreviewUrl}
+                          className="h-[520px] w-full rounded-md border border-[#d7dce3] bg-white"
+                          title="Project Web UI preview"
+                        />
+                      )}
                     </section>
                   ) : null}
                   {primaryTargets.length === 0 && enabledTargets.length > 0 ? (
@@ -679,14 +1034,186 @@ export default function RuntimeLabView({
       <aside className="min-h-0 space-y-3 overflow-y-auto border-t border-[#d7dce3] pt-3 dark:border-[#2a3039] xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
         <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Vibing</div>
-          <div className="text-sm font-medium text-[#1f2933] dark:text-[#e6e8ec]">Render lane activity</div>
-          <div className="mt-1 text-xs text-[#667085] dark:text-[#9aa3af]">
-            Browser bundles and WebRTC simulator sessions report here. Agent chats stay in the Vibing panel.
+          <div className="text-sm font-medium text-[#1f2933] dark:text-[#e6e8ec]">Runner and chat</div>
+          <div className="mt-3 grid gap-2">
+            <label className="block">
+              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Runner</span>
+              <select
+                value={selectedRunner}
+                onChange={(event) => setSelectedRunner(event.target.value)}
+                className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
+              >
+                {runners.length === 0 ? <option value="">No runners detected</option> : null}
+                {runners.map((runner) => (
+                  <option key={runner.id} value={runner.id}>
+                    {runner.name}{runner.ready === false ? " (sign-in needed)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {availableModels.length > 0 ? (
+              <label className="block">
+                <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Model</span>
+                <select
+                  value={selectedModel}
+                  onChange={(event) => setSelectedModel(event.target.value)}
+                  className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
+                >
+                  {availableModels.map((model) => (
+                    <option key={model.id} value={model.id}>{model.name || model.id}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <button
+                disabled={!connectedDevice?.id || !selectedRunner}
+                onClick={() => void saveRunnerChoice()}
+                className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-700 disabled:opacity-40 dark:text-emerald-200"
+              >
+                Save for machine
+              </button>
+              {selectedRunnerRow?.supportsBrowserAuth && selectedRunnerRow.ready === false ? (
+                <button
+                  disabled={runnerAuthBusy}
+                  onClick={() => void startSelectedRunnerSignIn()}
+                  className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
+                >
+                  {runnerAuthBusy ? "Opening..." : "Remote OAuth"}
+                </button>
+              ) : null}
+            </div>
+            {runnerAuthStatus ? (
+              <div className="rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 text-[11px] text-[#475467] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]">
+                <div className="font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">OAuth status</div>
+                <div className="mt-1">{runnerAuthStatus.status.replaceAll("_", " ")}</div>
+                {runnerAuthStatus.callbackPort ? (
+                  <div className="mt-1 text-[#667085] dark:text-[#9aa3af]">
+                    Waiting on localhost:{runnerAuthStatus.callbackPort}. If the auth tab ends on a localhost callback page, paste its address below.
+                  </div>
+                ) : null}
+                {runnerAuthStatus.code ? <div className="mt-1 font-mono">Code: {runnerAuthStatus.code}</div> : null}
+                {runnerAuthStatus.openUrl ? (
+                  <a href={runnerAuthStatus.openUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-sky-700 underline dark:text-sky-300">
+                    Open auth page
+                  </a>
+                ) : null}
+                {runnerAuthStatus.detail ? <div className="mt-1">{runnerAuthStatus.detail}</div> : null}
+                {runnerAuthStatus.callbackPort && !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
+                  <div className="mt-2 space-y-1">
+                    <input
+                      value={runnerAuthCallbackUrl}
+                      onChange={(event) => setRunnerAuthCallbackUrl(event.target.value)}
+                      onPaste={(event) => {
+                        const pasted = event.clipboardData.getData("text") || "";
+                        const cleaned = pasted.trim();
+                        if (cleaned !== pasted) {
+                          event.preventDefault();
+                          setRunnerAuthCallbackUrl(cleaned);
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && runnerAuthCallbackUrl.trim()) {
+                          event.preventDefault();
+                          void submitRunnerAuthCallback();
+                        }
+                      }}
+                      placeholder={`http://localhost:${runnerAuthStatus.callbackPort}/callback?...`}
+                      spellCheck={false}
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 font-mono text-[11px] text-[#1f2933] outline-none focus:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
+                    />
+                    <button
+                      type="button"
+                      disabled={!runnerAuthCallbackUrl.trim() || runnerAuthCallbackBusy}
+                      onClick={() => void submitRunnerAuthCallback()}
+                      className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
+                    >
+                      {runnerAuthCallbackBusy ? "Delivering..." : "Deliver callback"}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {runnerAuthError ? <div className="text-[11px] text-rose-700 dark:text-rose-300">{runnerAuthError}</div> : null}
+          </div>
+        </div>
+
+        <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Chat</div>
+          {activeTaskStream ? (
+            <div className="mb-2">
+              <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">
+                <span>{activeTaskStream.status}</span>
+                <span className="truncate normal-case tracking-normal" title={activeTaskStream.title}>{activeTaskStream.title}</span>
+              </div>
+              <pre
+                ref={taskConsoleRef}
+                onScroll={(event) => setTaskConsolePinned(isNearBottom(event.currentTarget))}
+                className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[#1f2933] bg-[#111318] p-2 text-[11px] leading-5 text-[#d5dae1]"
+              >
+                {activeTaskStream.lines.length ? activeTaskStream.lines.join("\n") : "(waiting for runner output...)"}
+              </pre>
+              {!taskConsolePinned ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTaskConsolePinned(true);
+                    scrollToBottom(taskConsoleRef.current);
+                  }}
+                  className="mt-1 rounded border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-700 dark:text-sky-300"
+                >
+                  Follow task output
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="flex items-end gap-2">
+            <textarea
+              value={composer}
+              onChange={(event) => setComposer(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void sendPrompt();
+                }
+              }}
+              rows={6}
+              placeholder={selectedProject ? `Ask ${selectedRunner || "the runner"} to change ${selectedProject.name}` : "Pick a project, then send a vibing prompt"}
+              className="min-h-[132px] flex-1 resize-y rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] outline-none focus:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
+            />
+            <button
+              disabled={!composer.trim() || sending}
+              onClick={() => void sendPrompt()}
+              className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-700 disabled:opacity-40 dark:text-emerald-200"
+            >
+              {sending ? "..." : "Send"}
+            </button>
           </div>
         </div>
         <div>
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Runtime Console</div>
-          <pre className="h-64 overflow-auto rounded-md border border-[#1f2933] bg-[#111318] p-3 text-[11px] leading-5 text-[#d5dae1]">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Runtime Console</div>
+            {!runtimeConsolePinned ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setRuntimeConsolePinned(true);
+                  scrollToBottom(runtimeConsoleRef.current);
+                }}
+                className="rounded border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-700 dark:text-sky-300"
+              >
+                Follow logs
+              </button>
+            ) : null}
+          </div>
+          <pre
+            ref={runtimeConsoleRef}
+            onScroll={(event) => setRuntimeConsolePinned(isNearBottom(event.currentTarget))}
+            className="h-64 overflow-auto rounded-md border border-[#1f2933] bg-[#111318] p-3 text-[11px] leading-5 text-[#d5dae1]"
+          >
             {log.length ? log.join("\n") : "No runtime operations yet."}
           </pre>
         </div>

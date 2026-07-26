@@ -1034,6 +1034,7 @@ export interface RunnerBrowserAuthSession {
   status: "starting" | "awaiting_browser" | "verifying" | "completed" | "failed" | "cancelled" | "account_not_eligible";
   method?: string;
   openUrl?: string;
+  callbackPort?: number;
   code?: string;
   detail?: string;
   error?: string;

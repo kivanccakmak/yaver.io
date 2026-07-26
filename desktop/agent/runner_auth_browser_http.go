@@ -8,10 +8,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -831,6 +833,125 @@ func (s *HTTPServer) handleRunnerBrowserAuthSubmitCode(w http.ResponseWriter, r 
 		"ok":      true,
 		"session": snap,
 	})
+}
+
+// handleRunnerBrowserAuthSubmitCallback completes localhost-redirect runner
+// OAuth from a browser that is NOT on the runner machine.
+//
+// Some CLIs open a normal OAuth URL whose redirect_uri is
+// http://localhost:<ephemeral>/callback. If the user completes that URL on
+// their laptop while the CLI is running on a remote Linux box, the browser
+// lands on the laptop's localhost and the remote CLI never sees the code. The
+// user can paste that final localhost URL here; the agent validates that the
+// port is exactly the callback port this session observed, then replays the
+// request from the runner machine to its own loopback listener.
+//
+// Privacy: the callback URL contains an OAuth code. It is never logged,
+// persisted, or written to operation metadata. Only the URL shape and matched
+// port are validated.
+func (s *HTTPServer) handleRunnerBrowserAuthSubmitCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		jsonError(w, http.StatusBadRequest, "missing id")
+		return
+	}
+	var body struct {
+		CallbackURL string `json:"callback_url"`
+		CallbackUrl string `json:"callbackUrl"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	callbackURL := strings.TrimSpace(firstNonEmptyBrowserAuth(body.CallbackURL, body.CallbackUrl))
+	if callbackURL == "" {
+		jsonError(w, http.StatusBadRequest, "missing callback_url")
+		return
+	}
+	sess, ok := lookupRunnerBrowserAuthSession(id)
+	if !ok {
+		jsonError(w, http.StatusNotFound, "auth session not found")
+		return
+	}
+	if rejectScopedSubscriptionRunnerAuth(w, r, sess.Runner) {
+		return
+	}
+	sess.mu.Lock()
+	callbackPort := sess.CallbackPort
+	status := sess.Status
+	sess.mu.Unlock()
+	if status == "completed" || status == "failed" || status == "cancelled" {
+		jsonError(w, http.StatusConflict, fmt.Sprintf("session already %s", status))
+		return
+	}
+	targetURL, err := validateRunnerBrowserAuthCallbackURL(callbackURL, callbackPort)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "callback URL malformed")
+		return
+	}
+	client := &http.Client{
+		Timeout: 20 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, "callback did not reach the waiting runner on this machine: "+err.Error())
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+	_ = resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		jsonError(w, http.StatusBadGateway, fmt.Sprintf("runner callback returned HTTP %d", resp.StatusCode))
+		return
+	}
+	log.Printf("[runner-auth-browser] %s callback replayed for session id=%s on localhost:%d — waiting for CLI confirmation", sess.Runner, id, callbackPort)
+	sess.update(func(state *runnerBrowserAuthSession) {
+		if state.Status == "starting" || state.Status == "awaiting_browser" {
+			state.Status = "verifying"
+		}
+		state.Detail = "OAuth callback delivered to the remote runner; waiting for the CLI to confirm."
+	})
+	snap := sess.snapshot()
+	recordRunnerBrowserAuthOperation(snap)
+	jsonReply(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"session": snap,
+	})
+}
+
+func validateRunnerBrowserAuthCallbackURL(raw string, callbackPort int) (string, error) {
+	if callbackPort <= 0 {
+		return "", fmt.Errorf("the runner has not reported a localhost callback port yet — wait a moment, then try again")
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u == nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("paste the full localhost callback URL from the browser address bar")
+	}
+	if u.Scheme != "http" {
+		return "", fmt.Errorf("runner callback URL must be http://localhost")
+	}
+	host := strings.Trim(strings.ToLower(u.Hostname()), "[]")
+	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		return "", fmt.Errorf("runner callback URL must point to localhost, not %s", u.Hostname())
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port != callbackPort {
+		return "", fmt.Errorf("callback port mismatch: runner is waiting on localhost:%d", callbackPort)
+	}
+	u.Scheme = "http"
+	u.Host = "127.0.0.1:" + strconv.Itoa(callbackPort)
+	return u.String(), nil
 }
 
 func (s *HTTPServer) handleRunnerBrowserAuthCancel(w http.ResponseWriter, r *http.Request) {

@@ -406,14 +406,17 @@ export default function VibeCodingView({
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [runnerAuthBusy, setRunnerAuthBusy] = useState(false);
   const [runnerAuthError, setRunnerAuthError] = useState<string | null>(null);
+  const [runnerAuthCallbackUrl, setRunnerAuthCallbackUrl] = useState("");
+  const [runnerAuthCallbackBusy, setRunnerAuthCallbackBusy] = useState(false);
   const [runnerAuthSessionId, setRunnerAuthSessionId] = useState<string | null>(null);
   const [runnerAuthStatus, setRunnerAuthStatus] = useState<{
     runner: "claude" | "codex";
     // Mirrors agent-client's union. account_not_eligible = the OAuth
     // handshake worked and the ACCOUNT lacks an active plan; it must render as
     // "signed in, membership not active", never as a login failure.
-    status: "starting" | "awaiting_browser" | "completed" | "failed" | "cancelled" | "account_not_eligible";
+    status: "starting" | "awaiting_browser" | "verifying" | "completed" | "failed" | "cancelled" | "account_not_eligible";
     openUrl?: string;
+    callbackPort?: number;
     code?: string;
     detail?: string;
     error?: string;
@@ -762,6 +765,7 @@ export default function VibeCodingView({
           runner: session.runner,
           status: session.status,
           openUrl: session.openUrl,
+          callbackPort: session.callbackPort,
           code: session.code,
           detail: session.detail,
           error: session.error,
@@ -1453,6 +1457,7 @@ export default function VibeCodingView({
     }
     setRunnerAuthBusy(true);
     setRunnerAuthError(null);
+    setRunnerAuthCallbackUrl("");
     setRunnerAuthStatus({
       runner: selectedRunnerRow.id,
       status: "starting",
@@ -1464,6 +1469,7 @@ export default function VibeCodingView({
         runner: session.runner,
         status: session.status,
         openUrl: session.openUrl,
+        callbackPort: session.callbackPort,
         code: session.code,
         detail: session.detail,
         error: session.error,
@@ -1474,6 +1480,31 @@ export default function VibeCodingView({
     } catch (error) {
       setRunnerAuthBusy(false);
       setRunnerAuthError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function submitRunnerAuthCallback() {
+    if (!runnerAuthSessionId || !runnerAuthStatus || runnerAuthCallbackBusy) return;
+    const callbackUrl = runnerAuthCallbackUrl.trim();
+    if (!callbackUrl) return;
+    setRunnerAuthCallbackBusy(true);
+    setRunnerAuthError(null);
+    try {
+      const session = await agentClient.submitRunnerBrowserAuthCallback(runnerAuthSessionId, callbackUrl);
+      setRunnerAuthStatus({
+        runner: session.runner,
+        status: session.status,
+        openUrl: session.openUrl,
+        callbackPort: session.callbackPort,
+        code: session.code,
+        detail: session.detail,
+        error: session.error,
+      });
+      setRunnerAuthCallbackUrl("");
+    } catch (error) {
+      setRunnerAuthError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunnerAuthCallbackBusy(false);
     }
   }
 
@@ -1911,6 +1942,48 @@ export default function VibeCodingView({
                       <div className="mt-2">{runnerAuthStatus.status.replaceAll("_", " ")}</div>
                       {runnerAuthStatus.code ? <div className="mt-1 font-mono text-surface-200">Code: {runnerAuthStatus.code}</div> : null}
                       {runnerAuthStatus.detail ? <div className="mt-1 text-surface-400">{runnerAuthStatus.detail}</div> : null}
+                      {runnerAuthStatus.callbackPort && !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
+                        <div className="mt-3 space-y-2">
+                          <div className="text-surface-500">
+                            If the auth tab ends at localhost:{runnerAuthStatus.callbackPort}, paste that full address here.
+                          </div>
+                          <input
+                            value={runnerAuthCallbackUrl}
+                            onChange={(event) => {
+                              setRunnerAuthCallbackUrl(event.target.value);
+                              setRunnerAuthError(null);
+                            }}
+                            onPaste={(event) => {
+                              const pasted = event.clipboardData.getData("text") || "";
+                              const cleaned = pasted.trim();
+                              if (cleaned !== pasted) {
+                                event.preventDefault();
+                                setRunnerAuthCallbackUrl(cleaned);
+                              }
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" && runnerAuthCallbackUrl.trim()) {
+                                event.preventDefault();
+                                void submitRunnerAuthCallback();
+                              }
+                            }}
+                            placeholder={`http://localhost:${runnerAuthStatus.callbackPort}/callback?...`}
+                            spellCheck={false}
+                            autoComplete="off"
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            className="w-full rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 font-mono text-[10px] text-surface-100 outline-none focus:border-sky-400/70"
+                          />
+                          <button
+                            type="button"
+                            disabled={runnerAuthCallbackBusy || !runnerAuthCallbackUrl.trim()}
+                            onClick={() => void submitRunnerAuthCallback()}
+                            className="rounded-lg border border-sky-400/30 bg-sky-400/10 px-3 py-1.5 text-[10px] font-semibold text-sky-800 hover:bg-sky-400/15 disabled:opacity-40 dark:text-sky-100"
+                          >
+                            {runnerAuthCallbackBusy ? "Delivering..." : "Deliver callback"}
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                   {runnerAuthError ? (

@@ -13,3 +13,17 @@ test("auth token cookie is scoped for same-origin dashboard routes", () => {
     "yaver_auth_token=tok_123; path=/; max-age=123; secure; samesite=lax",
   );
 });
+
+test("auth token cookie is not Secure on localhost HTTP dev server", () => {
+  const prior = (globalThis as any).window;
+  (globalThis as any).window = { location: { protocol: "http:", hostname: "localhost" } };
+  try {
+    assert.equal(
+      yaverAuthTokenCookie("tok_123", 123),
+      "yaver_auth_token=tok_123; path=/; max-age=123; samesite=lax",
+    );
+  } finally {
+    if (prior === undefined) delete (globalThis as any).window;
+    else (globalThis as any).window = prior;
+  }
+});

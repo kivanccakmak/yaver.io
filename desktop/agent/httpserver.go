@@ -418,6 +418,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/runner-auth/browser/status", s.authSDK(s.handleRunnerBrowserAuthStatus))
 	mux.HandleFunc("/runner-auth/browser/cancel", s.authSDK(s.handleRunnerBrowserAuthCancel))
 	mux.HandleFunc("/runner-auth/browser/submit-code", s.authSDK(s.handleRunnerBrowserAuthSubmitCode))
+	mux.HandleFunc("/runner-auth/browser/submit-callback", s.authSDK(s.handleRunnerBrowserAuthSubmitCallback))
 	// Subscription-token transfer between user-owned devices. See the
 	// handler — yaver is a single-user wrapper, so the user's existing
 	// local Claude / Codex token gets *copied* to a remote box rather
@@ -1800,7 +1801,7 @@ var scopePathPrefixes = map[string][]string{
 	// runner-auth: lets the embedded Feedback SDK inspect runner state
 	// and complete either browser-style auth (codex / claude) or
 	// token-based setup (opencode) without a separate full-session UI.
-	"runner-auth": {"/runner-auth/browser/start", "/runner-auth/browser/status", "/runner-auth/browser/cancel", "/runner-auth/status", "/runner-auth/setup", "/agent/runners", "/agent/runner/switch"},
+	"runner-auth": {"/runner-auth/browser/start", "/runner-auth/browser/status", "/runner-auth/browser/cancel", "/runner-auth/browser/submit-code", "/runner-auth/browser/submit-callback", "/runner-auth/status", "/runner-auth/setup", "/agent/runners", "/agent/runner/switch"},
 }
 
 func pathAllowedByScopes(path string, scopes []string) bool {

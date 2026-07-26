@@ -911,8 +911,9 @@ export interface RunnerBrowserAuthSession {
   /** See mobile/src/lib/quic.ts — account_not_eligible is a SUCCESSFUL
    *  sign-in against an account with no active plan. Never render it as a
    *  login failure; the retry it implies is the one thing that already worked. */
-  status: "starting" | "awaiting_browser" | "completed" | "failed" | "cancelled" | "account_not_eligible";
+  status: "starting" | "awaiting_browser" | "verifying" | "completed" | "failed" | "cancelled" | "account_not_eligible";
   openUrl?: string;
+  callbackPort?: number;
   code?: string;
   detail?: string;
   authConfigured?: boolean;
@@ -2335,6 +2336,24 @@ export class AgentClient {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       throw new Error(data?.error || `submitRunnerBrowserAuthCode ${res.status}`);
+    }
+    return data.session as RunnerBrowserAuthSession;
+  }
+
+  async submitRunnerBrowserAuthCallback(sessionId: string, callbackUrl: string, target?: string): Promise<RunnerBrowserAuthSession> {
+    this.assertConnected();
+    const base = target
+      ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner-auth/browser/submit-callback`
+      : `${this.baseUrl}/runner-auth/browser/submit-callback`;
+    const url = `${base}?id=${encodeURIComponent(sessionId)}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ callback_url: callbackUrl }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || `submitRunnerBrowserAuthCallback ${res.status}`);
     }
     return data.session as RunnerBrowserAuthSession;
   }

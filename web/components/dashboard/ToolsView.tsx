@@ -90,7 +90,9 @@ export default function ToolsView({ devices = [] }: Props) {
   const [startingBrowserAuth, setStartingBrowserAuth] = useState<string | null>(null);
   const [browserAuthSession, setBrowserAuthSession] = useState<RunnerBrowserAuthSession | null>(null);
   const [browserAuthCode, setBrowserAuthCode] = useState("");
+  const [browserAuthCallbackUrl, setBrowserAuthCallbackUrl] = useState("");
   const [browserAuthSubmitting, setBrowserAuthSubmitting] = useState(false);
+  const [browserAuthCallbackSubmitting, setBrowserAuthCallbackSubmitting] = useState(false);
   const cancelStreamRef = useRef<(() => void) | null>(null);
 
   const peers = useMemo(
@@ -284,6 +286,7 @@ export default function ToolsView({ devices = [] }: Props) {
     setStartingBrowserAuth(runner);
     setBrowserAuthError(null);
     setBrowserAuthCode("");
+    setBrowserAuthCallbackUrl("");
     const res = await agentClient.runnerBrowserAuthStart({ runner }, target);
     setStartingBrowserAuth(null);
     if (!res.ok || !res.session) {
@@ -320,6 +323,23 @@ export default function ToolsView({ devices = [] }: Props) {
       setBrowserAuthError(err instanceof Error ? err.message : String(err));
     } finally {
       setBrowserAuthSubmitting(false);
+    }
+  }
+
+  async function submitBrowserAuthCallback() {
+    if (!browserAuthSession || browserAuthCallbackSubmitting) return;
+    const callbackUrl = browserAuthCallbackUrl.trim();
+    if (!callbackUrl) return;
+    setBrowserAuthCallbackSubmitting(true);
+    setBrowserAuthError(null);
+    try {
+      const next = await agentClient.submitRunnerBrowserAuthCallback(browserAuthSession.id, callbackUrl, target);
+      setBrowserAuthSession(next);
+      setBrowserAuthCallbackUrl("");
+    } catch (err) {
+      setBrowserAuthError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBrowserAuthCallbackSubmitting(false);
     }
   }
 
@@ -1044,6 +1064,53 @@ export default function ToolsView({ devices = [] }: Props) {
                     className="mt-3 rounded-lg border border-surface-700 px-3 py-2 text-xs font-semibold text-surface-300 hover:border-surface-600"
                   >
                     Copy code
+                  </button>
+                </div>
+              ) : null}
+
+              {browserAuthSession.callbackPort && browserAuthSession.status !== "completed" && browserAuthSession.status !== "failed" && browserAuthSession.status !== "cancelled" ? (
+                <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 p-4">
+                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700 dark:text-sky-300">
+                    Deliver localhost callback
+                  </div>
+                  <p className="mb-2 text-xs text-surface-500">
+                    If the auth tab ends at localhost:{browserAuthSession.callbackPort}, paste that full address here.
+                  </p>
+                  <input
+                    type="text"
+                    value={browserAuthCallbackUrl}
+                    onChange={(e) => {
+                      setBrowserAuthCallbackUrl(e.target.value);
+                      setBrowserAuthError(null);
+                    }}
+                    onPaste={(e) => {
+                      const pasted = e.clipboardData.getData("text") || "";
+                      const cleaned = pasted.trim();
+                      if (cleaned !== pasted) {
+                        e.preventDefault();
+                        setBrowserAuthCallbackUrl(cleaned);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && browserAuthCallbackUrl.trim()) {
+                        e.preventDefault();
+                        void submitBrowserAuthCallback();
+                      }
+                    }}
+                    placeholder={`http://localhost:${browserAuthSession.callbackPort}/callback?...`}
+                    spellCheck={false}
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    className="w-full rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 font-mono text-xs text-surface-100 placeholder-surface-600 outline-none focus:border-sky-400/70"
+                  />
+                  <button
+                    type="button"
+                    disabled={browserAuthCallbackSubmitting || !browserAuthCallbackUrl.trim()}
+                    onClick={() => void submitBrowserAuthCallback()}
+                    className="mt-3 rounded-lg bg-sky-500 px-3 py-2 text-xs font-semibold text-white hover:bg-sky-400 disabled:opacity-50"
+                  >
+                    {browserAuthCallbackSubmitting ? "Delivering..." : "Deliver callback"}
                   </button>
                 </div>
               ) : null}

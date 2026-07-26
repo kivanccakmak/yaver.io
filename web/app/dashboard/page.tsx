@@ -3289,6 +3289,7 @@ export default function DashboardPage() {
             <div className="flex-1 min-h-0 overflow-hidden">
               <RuntimeLabView
                 intent={runtimeIntent}
+                connectedDevice={connectedDevice}
                 onOpenTmux={(sessionName) => {
                   if (!connectedDevice) {
                     setConnectError("Connect to a device before attaching to tmux.");
