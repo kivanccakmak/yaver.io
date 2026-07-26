@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { agentClient, type RemoteRuntimeCapabilities, type RemoteRuntimeSession, type RemoteRuntimeTarget } from "@/lib/agent-client";
+import { agentClient, type RemoteRuntimeCapabilities, type RemoteRuntimeSession, type RemoteRuntimeTarget, type WorkspaceAppView } from "@/lib/agent-client";
 import EnvironmentSwitcher from "./EnvironmentSwitcher";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 
@@ -214,11 +214,79 @@ async function probePreviewUrl(url: string): Promise<{ ok: true } | { ok: false;
   }
 }
 
-function surfaceLabel(value?: string): string {
-  const normalized = String(value || "").trim().toLowerCase().replace(/\s+/g, "-").replace(/\./g, "");
-  if (normalized === "hermes") return "native bundle";
-  if (normalized === "rn-hermes") return "react native bundle";
-  return value || "";
+// ── Honest labels over raw detector enums ────────────────────────────────────
+// The agent reports machine enums (surfaces: "tv"/"vision", primarySurface:
+// "none", executionMode: "unsupported"). These used to be dumped verbatim as
+// capability chips, so prod rendered "tv, vision, none, unsupported" as if
+// they were features. Rules now: sentinel values ("none"/"unsupported"/
+// "unknown") NEVER render as chips, known enums get human labels, and a value
+// we cannot explain is shown as-is rather than hidden — an unrecognized
+// detector output is still information.
+const PLATFORM_CHIP_LABELS: Record<string, string> = {
+  mobile: "Mobile",
+  web: "Web",
+  browser: "Web",
+  backend: "Backend",
+  watch: "Watch",
+  tv: "TV",
+  car: "Car",
+  vision: "Vision / XR",
+  desktop: "Desktop",
+};
+
+const PLATFORM_CHIP_NOISE = new Set(["", "none", "unsupported", "unknown", "repo", "monorepo"]);
+
+function platformChips(project: ProjectSummary | null): string[] {
+  const chips: string[] = [];
+  for (const value of unique([...(project?.surfaces ?? []), ...(project?.testSurfaces ?? [])])) {
+    const key = value.toLowerCase();
+    if (PLATFORM_CHIP_NOISE.has(key)) continue;
+    chips.push(PLATFORM_CHIP_LABELS[key] ?? value);
+  }
+  return Array.from(new Set(chips));
+}
+
+function executionModeLabel(mode?: string): string | null {
+  switch (String(mode || "").trim().toLowerCase()) {
+    case "rn-hermes": return "React Native bundle (Hermes)";
+    case "web-webview": return "Web preview (dev server)";
+    case "native-webrtc": return "Native build, streamed over WebRTC";
+    case "web": return "Web dev server";
+    default: return null; // "unsupported" / unknown: say nothing rather than echo the enum
+  }
+}
+
+// Derive an honest primary target instead of echoing "none · unsupported".
+// Prefer the agent's primarySurface when it names a real lane; otherwise fall
+// back to what the platform chips imply; otherwise return null so the row can
+// explain itself instead of rendering a meaningless value.
+function primaryTargetLabel(project: ProjectSummary | null): string | null {
+  switch (String(project?.primarySurface || "").trim().toLowerCase()) {
+    case "hermes": return "Phone · native bundle";
+    case "webview": return "Browser · web view";
+    case "webrtc": return "Simulator · WebRTC stream";
+    case "web": return "Browser";
+    case "mobile": return "Phone";
+  }
+  const chips = platformChips(project);
+  if (chips.includes("Web")) return "Browser";
+  if (chips.includes("Mobile")) return "Phone";
+  return null;
+}
+
+// Role row: only render detector output that means something. "unknown ·
+// backend not detected" (observed on prod) told the user nothing — when the
+// backend is absent that is a fact worth one plain sentence, and when the role
+// itself is unknown the row is dropped entirely.
+function roleInfo(project: ProjectSummary | null): { value: string; sub: string } | null {
+  const role = String(project?.role || "").trim().toLowerCase();
+  const backend = String(project?.backend || "").trim();
+  if (!role || role === "unknown") {
+    return backend ? { value: "project", sub: backend } : null;
+  }
+  if (backend) return { value: project?.role || role, sub: backend };
+  const frontendish = ["web", "mobile", "frontend", "app"].some((v) => role.includes(v));
+  return { value: project?.role || role, sub: frontendish ? "No backend detected — frontend-only project" : "" };
 }
 
 function projectFromRepo(repo: WorkspaceRepo): ProjectSummary {
@@ -282,6 +350,7 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
   const [webPreviewUrl, setWebPreviewUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [workspaceApps, setWorkspaceApps] = useState<WorkspaceAppView[] | null>(null);
 
   const slug = basename(directory);
   const stackLabels = useMemo(() => unique([
@@ -292,13 +361,11 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
     project?.backend,
     ...(project?.services ?? []),
     ...(project?.hosting ?? []),
-  ]), [project]);
-  const surfaceLabels = useMemo(() => unique([
-    ...(project?.surfaces ?? []),
-    ...(project?.testSurfaces ?? []),
-    project?.primarySurface,
-    project?.executionMode,
-  ]), [project]);
+  ]).filter((v) => !PLATFORM_CHIP_NOISE.has(v.toLowerCase())), [project]);
+  const platformLabels = useMemo(() => platformChips(project), [project]);
+  const runsAs = executionModeLabel(project?.executionMode);
+  const primaryLabel = primaryTargetLabel(project);
+  const role = roleInfo(project);
 
   useEffect(() => {
     let mounted = true;
@@ -317,6 +384,23 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
     })();
     return () => { mounted = false; };
   }, [directory, slug]);
+
+  // Monorepo sub-apps for the Target step — the same /workspace/apps rows the
+  // dev-server start already resolves against, surfaced so the user can see
+  // WHICH app the browser lane will boot instead of guessing.
+  useEffect(() => {
+    let mounted = true;
+    if (!isMonorepoProject(project)) { setWorkspaceApps(null); return; }
+    (async () => {
+      try {
+        const apps = await agentClient.getWorkspaceApps(undefined, directory);
+        if (mounted) setWorkspaceApps(apps.filter((app) => app.exists));
+      } catch {
+        if (mounted) setWorkspaceApps(null);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [project, directory]);
 
   async function openWebUI() {
     setBusy("web");
@@ -407,6 +491,10 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
     return groups;
   }, [caps]);
 
+  const capsModeLabel = caps ? executionModeLabel(caps.executionMode) : null;
+  const step2Done = Boolean(caps || webPreviewUrl || session);
+  const step3Live = Boolean(webPreviewUrl || session);
+
   return (
     <div className="min-h-full bg-[#f2f4f7] p-4 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec]">
       <div className="mb-4 flex items-center gap-3">
@@ -418,105 +506,139 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
       </div>
 
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <main className="space-y-3">
-          <section className="space-y-2">
-            <SectionLabel>Render</SectionLabel>
-            <div className="grid gap-2 md:grid-cols-2">
-              <ActionCard
-                title="Web UI in browser"
-                meta="browser · direct iframe · dev server"
-                disabled={!supportsWebUI(project) || busy !== null}
-                busy={busy === "web"}
-                onClick={openWebUI}
-              />
-              <ActionCard
-                title="Load simulator targets"
-                meta="WebRTC · simulator / browser / Redroid"
-                disabled={busy !== null}
-                busy={busy === "targets"}
-                onClick={loadRuntimeTargets}
-              />
-            </div>
-            {message ? <div className="rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-xs text-[#475467] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#c5ccd6]">{message}</div> : null}
-            {busy === "targets" && !caps ? (
-              <div className="rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-xs text-[#475467] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#c5ccd6]">
-                Probing browser, simulator, emulator, Redroid, and physical-device render lanes from this machine...
+        <main>
+          <ol className="list-none">
+            {/* ── Step 1 · Stack — what this project is ──────────────────── */}
+            <WizardStep step={1} title="Stack" hint="what was detected in this repo" state={project ? "done" : "active"}>
+              <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+                <ChipRow values={stackLabels.length ? stackLabels : ["Stack not detected yet"]} />
+                {platformLabels.length > 0 ? (
+                  <>
+                    <SectionLabel className="mt-3">Platforms</SectionLabel>
+                    <ChipRow values={platformLabels} />
+                  </>
+                ) : null}
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  <Meta label="Git" value={project?.branch || "unknown"} sub={project?.gitRemote || "remote not detected"} />
+                  {primaryLabel ? (
+                    <Meta label="Primary target" value={primaryLabel} sub={runsAs || ""} />
+                  ) : (
+                    <Meta label="Primary target" value="Not detected yet" sub="Probing targets in step 2 will find one" muted />
+                  )}
+                  {role ? <Meta label="Role" value={role.value} sub={role.sub} /> : null}
+                </div>
+                {caps ? (
+                  <div className="mt-3 border-t border-[#eef1f5] pt-2 text-xs text-[#667085] dark:border-[#232a33] dark:text-[#9aa3af]">
+                    Agent probe: {[caps.framework, capsModeLabel, caps.currentHostClass].filter(Boolean).join(" · ")}
+                    {caps.cached ? " · cached" : caps.probeDurationMs ? ` · probed in ${Math.round(caps.probeDurationMs / 1000)}s` : ""}
+                    {caps.executionMode === "unsupported" ? " · no in-container lane — use a streamed target below" : ""}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </section>
+            </WizardStep>
 
-          <section className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
-            <SectionLabel>Stack</SectionLabel>
-            <ChipRow values={stackLabels.length ? stackLabels : ["unknown"]} />
-            <SectionLabel className="mt-3">Platforms</SectionLabel>
-            <ChipRow values={surfaceLabels.length ? surfaceLabels : ["render targets not loaded"]} />
-            {caps ? (
-              <div className="mt-3 text-xs text-[#667085] dark:text-[#9aa3af]">
-                {caps.framework} · {caps.executionMode} · {caps.primarySurface} · {caps.currentHostClass || "host unknown"}
-                {caps.cached ? " · cached" : caps.probeDurationMs ? ` · probed in ${Math.round(caps.probeDurationMs / 1000)}s` : ""}
-              </div>
-            ) : null}
-          </section>
-
-          <section className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
-            <div className="grid gap-3 md:grid-cols-3">
-              <Meta label="Git" value={project?.branch || "unknown"} sub={project?.gitRemote || "remote not detected"} />
-              <Meta label="Primary" value={surfaceLabel(project?.primarySurface) || "unknown"} sub={surfaceLabel(project?.executionMode) || "mode not detected"} />
-              <Meta label="Role" value={project?.role || "project"} sub={project?.backend || "backend not detected"} />
-            </div>
-          </section>
-
-          {caps ? (
-            <section className="space-y-4">
-              {(["browser", "simulator", "container", "device", "advanced", "unavailable"] as const).map((group) => {
-                const targets = groupedTargets[group] ?? [];
-                if (targets.length === 0) return null;
-                return (
-                  <div key={group} className="space-y-2">
-                    <SectionLabel>{targetGroupLabels[group]}</SectionLabel>
-                    <div className="grid gap-2 md:grid-cols-2">
-                      {targets.map((target) => (
-                        <div key={target.id} className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-medium text-[#1f2933] dark:text-[#e6e8ec]">{target.label}</div>
-                              <div className="mt-1 text-xs text-[#667085] dark:text-[#9aa3af]">{target.surface || "runtime"} · {target.id} · {target.requiredCli || "tools"}</div>
-                            </div>
-                            <button
-                              disabled={!target.enabled || busy !== null}
-                              onClick={() => void openRuntimeTarget(target)}
-                              aria-label={`${target.enabled ? "Open" : "Unavailable"} ${target.label} (${target.id})`}
-                              className="rounded-md bg-[#1f2933] px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-35"
-                            >
-                              {busy === target.id ? "Opening..." : target.enabled ? "Open" : "Unavailable"}
-                            </button>
-                          </div>
-                          {target.reason ? <div className="mt-2 text-xs text-[#667085] dark:text-[#9aa3af]">{target.reason}</div> : null}
+            {/* ── Step 2 · Target — where to run it ──────────────────────── */}
+            <WizardStep step={2} title="Target" hint="pick where this project should run" state={step2Done ? "done" : project ? "active" : "todo"}>
+              <div className="space-y-2">
+                <div className="grid gap-2 md:grid-cols-2">
+                  <ActionCard
+                    title="Web UI in browser"
+                    meta="browser · direct iframe · dev server"
+                    disabled={!supportsWebUI(project) || busy !== null}
+                    busy={busy === "web"}
+                    onClick={openWebUI}
+                  />
+                  <ActionCard
+                    title="Load simulator targets"
+                    meta="WebRTC · simulator / browser / Redroid"
+                    disabled={busy !== null}
+                    busy={busy === "targets"}
+                    onClick={loadRuntimeTargets}
+                  />
+                </div>
+                {workspaceApps && workspaceApps.length > 0 ? (
+                  <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+                    <SectionLabel>Monorepo apps</SectionLabel>
+                    <div className="space-y-1">
+                      {workspaceApps.map((app) => (
+                        <div key={app.name} className="flex items-baseline gap-2 text-xs">
+                          <span className="font-mono font-medium text-[#344054] dark:text-[#d7dce3]">{app.name}</span>
+                          <span className="text-[#667085] dark:text-[#9aa3af]">
+                            {[app.framework || app.stack, app.kind].filter(Boolean).join(" · ") || "app"}
+                          </span>
                         </div>
                       ))}
                     </div>
+                    <div className="mt-2 text-xs text-[#98a2b3] dark:text-[#6b7482]">The browser lane starts the web app; simulator targets pick per app.</div>
                   </div>
-                );
-              })}
-            </section>
-          ) : null}
-
-          {webPreviewUrl ? (
-            <section className="space-y-2">
-              <div className="flex items-center justify-between">
-                <SectionLabel>Web UI</SectionLabel>
-                <button onClick={() => setWebPreviewUrl(null)} className="rounded-md border border-[#d7dce3] bg-white px-2 py-1 text-xs text-[#475467] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#d7dce3]">Close</button>
+                ) : null}
+                {message ? <div className="rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-xs text-[#475467] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#c5ccd6]">{message}</div> : null}
+                {busy === "targets" && !caps ? (
+                  <div className="rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-xs text-[#475467] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#c5ccd6]">
+                    Probing browser, simulator, emulator, Redroid, and physical-device render lanes from this machine...
+                  </div>
+                ) : null}
+                {caps ? (
+                  <div className="space-y-4 pt-1">
+                    {(["browser", "simulator", "container", "device", "advanced", "unavailable"] as const).map((group) => {
+                      const targets = groupedTargets[group] ?? [];
+                      if (targets.length === 0) return null;
+                      return (
+                        <div key={group} className="space-y-2">
+                          <SectionLabel>{targetGroupLabels[group]}</SectionLabel>
+                          <div className="grid gap-2 md:grid-cols-2">
+                            {targets.map((target) => (
+                              <div key={target.id} className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="truncate text-sm font-medium text-[#1f2933] dark:text-[#e6e8ec]">{target.label}</div>
+                                    <div className="mt-1 text-xs text-[#667085] dark:text-[#9aa3af]">{target.surface || "runtime"} · {target.id} · {target.requiredCli || "tools"}</div>
+                                  </div>
+                                  <button
+                                    disabled={!target.enabled || busy !== null}
+                                    onClick={() => void openRuntimeTarget(target)}
+                                    aria-label={`${target.enabled ? "Open" : "Unavailable"} ${target.label} (${target.id})`}
+                                    className="rounded-md bg-[#1f2933] px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-35"
+                                  >
+                                    {busy === target.id ? "Opening..." : target.enabled ? "Open" : "Unavailable"}
+                                  </button>
+                                </div>
+                                {target.reason ? <div className="mt-2 text-xs text-[#667085] dark:text-[#9aa3af]">{target.reason}</div> : null}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </div>
-              <iframe src={webPreviewUrl} title="Project Web UI preview" className="h-[560px] w-full rounded-md border border-[#d7dce3] bg-white dark:border-[#2a3039]" />
-            </section>
-          ) : null}
+            </WizardStep>
 
-          {session ? (
-            <section className="space-y-2">
-              <SectionLabel>{session.targetLabel || "Remote runtime"}</SectionLabel>
-              <RemoteRuntimeViewer session={session} onSessionChange={setSession} />
-            </section>
-          ) : null}
+            {/* ── Step 3 · Render — watch it run ─────────────────────────── */}
+            <WizardStep step={3} title="Render" hint="the live preview" state={step3Live ? "active" : "todo"} isLast>
+              {webPreviewUrl ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <SectionLabel>Web UI</SectionLabel>
+                    <button onClick={() => setWebPreviewUrl(null)} className="rounded-md border border-[#d7dce3] bg-white px-2 py-1 text-xs text-[#475467] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#d7dce3]">Close</button>
+                  </div>
+                  <iframe src={webPreviewUrl} title="Project Web UI preview" className="h-[560px] w-full rounded-md border border-[#d7dce3] bg-white dark:border-[#2a3039]" />
+                </div>
+              ) : null}
+              {session ? (
+                <div className="space-y-2">
+                  <SectionLabel>{session.targetLabel || "Remote runtime"}</SectionLabel>
+                  <RemoteRuntimeViewer session={session} onSessionChange={setSession} />
+                </div>
+              ) : null}
+              {!webPreviewUrl && !session ? (
+                <div className="rounded-md border border-dashed border-[#c9d0da] px-3 py-4 text-xs text-[#98a2b3] dark:border-[#333b46] dark:text-[#6b7482]">
+                  Pick a target in step 2 — the preview renders here.
+                </div>
+              ) : null}
+            </WizardStep>
+          </ol>
         </main>
 
         <aside className="space-y-3">
@@ -527,6 +649,45 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
         </aside>
       </div>
     </div>
+  );
+}
+
+// ── Wizard rail ──────────────────────────────────────────────────────────────
+// The stack → target → render flow really is a sequence, so the numbered rail
+// encodes state, not decoration: a filled marker with an inline-SVG check means
+// the step has produced its output, an outlined marker is where the user is,
+// and a muted one is not reachable yet.
+function WizardStep({ step, title, hint, state, isLast, children }: {
+  step: number;
+  title: string;
+  hint: string;
+  state: "done" | "active" | "todo";
+  isLast?: boolean;
+  children: ReactNode;
+}) {
+  const marker = state === "done"
+    ? "border-[#1f2933] bg-[#1f2933] text-white dark:border-[#e6e8ec] dark:bg-[#e6e8ec] dark:text-[#101318]"
+    : state === "active"
+      ? "border-[#1f2933] bg-white text-[#1f2933] dark:border-[#e6e8ec] dark:bg-[#161b22] dark:text-[#e6e8ec]"
+      : "border-[#c9d0da] bg-white text-[#98a2b3] dark:border-[#333b46] dark:bg-[#161b22] dark:text-[#6b7482]";
+  return (
+    <li className={`relative pl-10 ${isLast ? "" : "pb-5"}`}>
+      {isLast ? null : <span aria-hidden className="absolute bottom-0 left-[13px] top-8 w-px bg-[#d7dce3] dark:bg-[#2a3039]" />}
+      <span aria-hidden className={`absolute left-0 top-0 flex h-7 w-7 items-center justify-center rounded-full border text-xs font-semibold ${marker}`}>
+        {state === "done" ? (
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+            <path d="M2.5 6.5l2.5 2.5 4.5-5.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ) : step}
+      </span>
+      <div className="mb-2 flex items-baseline gap-2 pt-1">
+        <h3 className="text-sm font-semibold text-[#1f2933] dark:text-[#e6e8ec]">
+          <span className="sr-only">Step {step}: </span>{title}
+        </h3>
+        <span className="text-xs text-[#98a2b3] dark:text-[#6b7482]">{hint}</span>
+      </div>
+      {children}
+    </li>
   );
 }
 
@@ -544,12 +705,12 @@ function ChipRow({ values }: { values: string[] }) {
   );
 }
 
-function Meta({ label, value, sub }: { label: string; value: string; sub: string }) {
+function Meta({ label, value, sub, muted }: { label: string; value: string; sub: string; muted?: boolean }) {
   return (
     <div>
       <div className="text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">{label}</div>
-      <div className="truncate text-sm font-semibold text-[#1f2933] dark:text-[#e6e8ec]">{value}</div>
-      <div className="truncate text-xs text-[#667085] dark:text-[#9aa3af]">{sub}</div>
+      <div className={`truncate text-sm ${muted ? "font-normal text-[#98a2b3] dark:text-[#6b7482]" : "font-semibold text-[#1f2933] dark:text-[#e6e8ec]"}`}>{value}</div>
+      {sub ? <div className="truncate text-xs text-[#667085] dark:text-[#9aa3af]">{sub}</div> : null}
     </div>
   );
 }
