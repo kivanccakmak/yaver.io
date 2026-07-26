@@ -7,6 +7,8 @@ build/
 out/
 .next/
 .yaver-build/
+.yaver-build-web/
+.yaver-build-web-hermes/
 .wrangler/
 .open-next/
 
