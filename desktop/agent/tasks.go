@@ -285,6 +285,27 @@ func runnerModelCompatible(runnerID, model string) bool {
 	return true
 }
 
+// effectiveModelFor picks the model to splice into a runner's argv:
+// the task's pinned model first, the runner's configured fallback second —
+// and NOTHING when the pick is incompatible with the runner being spawned.
+// Dropping beats failing here: with no --model the CLI uses its own
+// configured default (opencode.json / codex config), which is the only
+// value on the box that is actually known to work.
+func effectiveModelFor(runnerID, taskModel, runnerModel string) string {
+	m := strings.TrimSpace(taskModel)
+	if m == "" {
+		m = strings.TrimSpace(runnerModel)
+	}
+	if m == "" {
+		return ""
+	}
+	if !runnerModelCompatible(runnerID, m) {
+		log.Printf("[task] dropping model %q — incompatible with runner %q; the CLI's own default wins", m, runnerID)
+		return ""
+	}
+	return m
+}
+
 // cachedModels stores models fetched from Convex for the /agent/runners endpoint.
 var cachedModels []BackendModel
 
@@ -2619,10 +2640,12 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// "haiku", "gpt-5-codex"). Falls back to runner.Model when the task
 	// didn't pin one — without this, codex would inherit Codex CLI's own
 	// default (`o3-mini`) which fails on ChatGPT-account auth.
-	effectiveModel := task.Model
-	if effectiveModel == "" {
-		effectiveModel = runner.Model
-	}
+	// effectiveModelFor also re-applies the compatibility guard HERE, at the
+	// last gate before argv: creation guards task.Model, but the
+	// runner.Model fallback (boot-time global pref) bypassed it and spliced
+	// a stale codex model into `opencode run --model gpt-5.4` — every task
+	// on the box failed with "Model not found: gpt-5.4/".
+	effectiveModel := effectiveModelFor(runner.RunnerID, task.Model, runner.Model)
 	if effectiveModel != "" {
 		modelOverride := false
 		for i, a := range args {
