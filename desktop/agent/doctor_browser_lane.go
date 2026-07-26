@@ -44,20 +44,83 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+// browserLaneProbeStateJS — keep byte-identical to
+// mobile/src/lib/previewReadyScript.ts::PREVIEW_PROBE_STATE_FUNCTION.
+// The predicate below calls it, so the probe must define both, exactly as the
+// phone injects them.
+const browserLaneProbeStateJS = `function yaverPreviewProbeState(doc){
+  var out = {
+    hasBody:false,
+    href:"",
+    title:"",
+    bodyChildren:0,
+    bodyTextLen:0,
+    mountId:"",
+    mountChildren:-1,
+    mountTextLen:0,
+    visibleBoxCount:0,
+    mediaCount:0,
+    flutterMarker:false,
+    flutterBooting:false,
+    startingText:false,
+    reason:"document_not_ready"
+  };
+  try {
+    out.href = String((doc && doc.location && doc.location.href) || "");
+    out.title = String((doc && doc.title) || "");
+    var b = doc && doc.body;
+    if (!b) return out;
+    out.hasBody = true;
+    out.bodyChildren = b.children ? b.children.length : 0;
+    var bt = (b.innerText || "").trim();
+    out.bodyTextLen = bt.length;
+    out.startingText = bt.indexOf('"status":"starting"') >= 0 || bt.indexOf("did not become ready") >= 0;
+    out.flutterMarker = !!doc.querySelector("flutter-view,flt-glass-pane,flt-scene-host");
+    out.flutterBooting = !!(doc.getElementById("splash") || doc.querySelector('script[src*="flutter"]'));
+    var mount = doc.getElementById ? (doc.getElementById("root") || doc.getElementById("app")) : null;
+    if (mount) {
+      out.mountId = mount.id || "";
+      out.mountChildren = mount.children ? mount.children.length : 0;
+      out.mountTextLen = ((mount.innerText || "").trim()).length;
+      out.mediaCount = mount.querySelectorAll ? mount.querySelectorAll("canvas,svg,img,video,picture").length : 0;
+      var nodes = mount.querySelectorAll ? mount.querySelectorAll("*") : [];
+      for (var i = 0; i < nodes.length && out.visibleBoxCount < 20; i++) {
+        var el = nodes[i];
+        var tag = (el.tagName || "").toUpperCase();
+        if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT") continue;
+        var r = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+        if (!r || r.width < 2 || r.height < 2) continue;
+        var cs = doc.defaultView && doc.defaultView.getComputedStyle ? doc.defaultView.getComputedStyle(el) : null;
+        if (cs && (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0")) continue;
+        out.visibleBoxCount++;
+      }
+    }
+    if (out.startingText) out.reason = "agent_starting_response";
+    else if (out.flutterMarker) out.reason = "flutter_engine_attached";
+    else if (out.flutterBooting) out.reason = "flutter_booting";
+    else if (out.mountId && out.mountChildren <= 0) out.reason = "empty_mount";
+    else if (out.mountId && out.visibleBoxCount <= 1 && out.mountTextLen <= 0 && out.mediaCount <= 0) out.reason = "mount_without_visible_content";
+    else if (out.mountId) out.reason = "mount_has_visible_content";
+    else if (out.bodyChildren > 1 || out.bodyTextLen > 0) out.reason = "plain_body_content";
+    else out.reason = "empty_body";
+  } catch (e) {
+    out.reason = "probe_exception";
+  }
+  return out;
+}`
+
 // browserLaneReadyPredicateJS — keep byte-identical to
 // mobile/src/lib/previewReadyScript.ts::PREVIEW_READY_PREDICATE.
 const browserLaneReadyPredicateJS = `function yaverPreviewReady(doc){
   try {
-    var b = doc && doc.body;
-    if (!b) return false;
-    var bt = (b.innerText || '').trim();
+    var s = yaverPreviewProbeState(doc);
+    if (!s.hasBody) return false;
     // The agent answers a still-compiling dev server with a structured 503
     // carrying this JSON body (devserver.go). It is text in the DOM, so
     // without this guard the error page itself reads as "rendered".
-    if (bt.indexOf('"status":"starting"') >= 0) return false;
-    if (bt.indexOf('did not become ready') >= 0) return false;
+    if (s.startingText) return false;
     // 1. Flutter — the engine has attached. Unchanged from the original probe.
-    if (doc.querySelector('flutter-view,flt-glass-pane,flt-scene-host')) return true;
+    if (s.flutterMarker) return true;
     // 1b. Flutter is BOOTING: its bootstrap page is up but no engine marker yet.
     // Measured against a live "flutter run -d web-server" (e-mobile, 2026-07-24):
     // NOTE: this text is mirrored verbatim into a Go raw string
@@ -69,12 +132,16 @@ const browserLaneReadyPredicateJS = `function yaverPreviewReady(doc){
     // content — the failure looks like a loading state instead of a blank void,
     // and a Flutter app that never boots then sits on its splash forever with
     // the overlay already gone and no error shown.
-    if (doc.getElementById('splash') || doc.querySelector('script[src*="flutter"]')) return false;
+    if (s.flutterBooting) return false;
     // 2. SPA mount point: present is not the same as painted.
-    var mount = doc.getElementById ? (doc.getElementById('root') || doc.getElementById('app')) : null;
-    if (mount) return mount.children.length > 0;
+    // Backward-compatible contract: once React/Vue/etc. has committed a child
+    // into the known mount point, the app is rendered. The richer visible-box
+    // facts are posted as diagnostics only; using them as a hard gate can break
+    // valid apps whose first screen is a canvas, blank stage, or intentional
+    // dark splash.
+    if (s.mountId) return s.mountChildren > 0;
     // 3. Plain web: original heuristic, unchanged.
-    return b.children.length > 1 || bt.length > 0;
+    return s.bodyChildren > 1 || s.bodyTextLen > 0;
   } catch (e) { return false; }
 }`
 
@@ -217,7 +284,7 @@ func ProbeBrowserLane(ctx context.Context, previewURL string, wait time.Duration
 	for {
 		var ready bool
 		evalErr := chromedp.Run(runCtx, chromedp.Evaluate(
-			"(function(){"+browserLaneReadyPredicateJS+" return yaverPreviewReady(document);})()", &ready))
+			"(function(){"+browserLaneProbeStateJS+";"+browserLaneReadyPredicateJS+" return yaverPreviewReady(document);})()", &ready))
 		if evalErr == nil && ready {
 			res.Stage = BrowserLaneStageRendered
 			res.Detail = "the project painted real content in the browser lane"

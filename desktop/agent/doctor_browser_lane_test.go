@@ -23,19 +23,29 @@ func TestBrowserLaneReadyPredicateMatchesMobile(t *testing.T) {
 		t.Fatalf("cannot read %s: %v — the mobile predicate is the source of truth for this probe", tsPath, err)
 	}
 
-	re := regexp.MustCompile("(?s)export const PREVIEW_READY_PREDICATE = `(.*?)`;")
-	m := re.FindSubmatch(raw)
-	if m == nil {
-		t.Fatalf("could not find PREVIEW_READY_PREDICATE in %s — if it was renamed, update this test AND doctor_browser_lane.go together", tsPath)
-	}
-	mobile := strings.TrimSpace(string(m[1]))
-	goSide := strings.TrimSpace(browserLaneReadyPredicateJS)
+	for _, pair := range []struct {
+		tsConst string
+		goSide  string
+	}{
+		{"PREVIEW_READY_PREDICATE", browserLaneReadyPredicateJS},
+		// The predicate calls yaverPreviewProbeState, so the probe injects BOTH —
+		// each half can drift independently and each drift is its own false green.
+		{"PREVIEW_PROBE_STATE_FUNCTION", browserLaneProbeStateJS},
+	} {
+		re := regexp.MustCompile("(?s)export const " + pair.tsConst + " = `(.*?)`;")
+		m := re.FindSubmatch(raw)
+		if m == nil {
+			t.Fatalf("could not find %s in %s — if it was renamed, update this test AND doctor_browser_lane.go together", pair.tsConst, tsPath)
+		}
+		mobile := strings.TrimSpace(string(m[1]))
+		goSide := strings.TrimSpace(pair.goSide)
 
-	if mobile != goSide {
-		t.Fatalf("readiness predicate drifted between the phone and the doctor probe.\n"+
-			"They must be byte-identical or the probe can pass while the phone stays blank.\n\n"+
-			"--- mobile (%s) ---\n%s\n\n--- go (doctor_browser_lane.go) ---\n%s",
-			tsPath, mobile, goSide)
+		if mobile != goSide {
+			t.Fatalf("%s drifted between the phone and the doctor probe.\n"+
+				"They must be byte-identical or the probe can pass while the phone stays blank.\n\n"+
+				"--- mobile (%s) ---\n%s\n\n--- go (doctor_browser_lane.go) ---\n%s",
+				pair.tsConst, tsPath, mobile, goSide)
+		}
 	}
 }
 
@@ -45,22 +55,26 @@ func TestBrowserLaneReadyPredicateRejectsUnmountedExpoShell(t *testing.T) {
 	// Expo Web's real index.html body, verified by exporting sfmg and
 	// talos/mobile: noscript + div#root + script = 3 element children at
 	// document-end, BEFORE react mounts. The old predicate accepted this.
-	if !strings.Contains(browserLaneReadyPredicateJS, "getElementById") {
+	combined := browserLaneProbeStateJS + browserLaneReadyPredicateJS
+	if !strings.Contains(combined, "getElementById") {
 		t.Fatal("predicate no longer consults a mount point — an Expo shell with an empty #root will read as rendered again")
 	}
-	if !strings.Contains(browserLaneReadyPredicateJS, "mount.children.length > 0") {
+	if !strings.Contains(browserLaneReadyPredicateJS, "s.mountChildren > 0") {
 		t.Fatal("predicate must require the mount point to have CHILDREN; 'exists' is what produced the blank screen")
 	}
 	// Flutter's markers must stay ahead of the mount-point branch — that lane
 	// is owned elsewhere and its behavior must not change.
-	flutterAt := strings.Index(browserLaneReadyPredicateJS, "flutter-view")
-	mountAt := strings.Index(browserLaneReadyPredicateJS, "getElementById")
+	flutterAt := strings.Index(browserLaneReadyPredicateJS, "s.flutterMarker")
+	mountAt := strings.Index(browserLaneReadyPredicateJS, "s.mountId")
 	if flutterAt < 0 || mountAt < 0 || flutterAt > mountAt {
 		t.Fatal("the flutter marker check must come before the SPA mount check")
 	}
 	// The still-compiling 503 body must never read as rendered.
-	if !strings.Contains(browserLaneReadyPredicateJS, `"status":"starting"`) {
-		t.Fatal("predicate must reject the agent's structured 'starting' 503 body")
+	if !strings.Contains(browserLaneProbeStateJS, `"status":"starting"`) {
+		t.Fatal("probe state must reject the agent's structured 'starting' 503 body")
+	}
+	if !strings.Contains(browserLaneReadyPredicateJS, "s.startingText") {
+		t.Fatal("predicate must consult startingText so the 503 body never reads as rendered")
 	}
 }
 

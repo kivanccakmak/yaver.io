@@ -2261,6 +2261,14 @@ func (e *ExpoDevServer) Status() DevServerStatus {
 		s.BundleURL = "/dev-web/"
 	}
 	e.webMu.Unlock()
+	if s.WebPort == 0 {
+		// Direct browser lane: the main process IS the web server, so its port
+		// is the browser-preview port. BundleURL stays /dev/ — the proxy to the
+		// main port, with the base-href rewrite. See WebPort().
+		if wp := e.WebPort(); wp > 0 {
+			s.WebPort = wp
+		}
+	}
 	return s
 }
 
@@ -2273,6 +2281,19 @@ func (e *ExpoDevServer) Status() DevServerStatus {
 // calling; otherwise Expo Web is pointless on its own and the parent
 // DevServerManager has no way to route /dev-web/* for us.
 func (e *ExpoDevServer) StartWebPreview(parent context.Context, workDir string) (int, error) {
+	// Direct browser lane: the MAIN process is already `expo start --web` and
+	// serves the web target itself. Spawning a sibling here would be a second
+	// full web compile of the same project — the manager auto-calls this for
+	// every platform="web" start, and on a 4 GB box the redundant sibling
+	// fights the real one for RAM. The main port is the web preview.
+	if e.devMode == "web" {
+		e.mu.Lock()
+		running, port := e.running, e.port
+		e.mu.Unlock()
+		if running && port > 0 {
+			return port, nil
+		}
+	}
 	e.webMu.Lock()
 	if e.webCmd != nil && e.webCmd.Process != nil && e.webPort > 0 {
 		port := e.webPort
@@ -2425,13 +2446,29 @@ func (e *ExpoDevServer) StopWebPreview() error {
 	return nil
 }
 
-// WebPort returns the port the sibling Expo Web process is serving on,
-// or 0 when no web preview is active. Used by the HTTP proxy to route
-// /dev-web/* independently of Metro's Port().
+// WebPort returns the port serving the browser preview: the sibling Expo Web
+// process when one runs, the MAIN port when the main process itself is the web
+// server (devMode "web", i.e. `expo start --web` started directly), and 0 only
+// when nothing can serve a browser. The direct lane has no sibling by design —
+// leaving this 0 there made /dev/status read devMode "web" + webPort 0 as "the
+// preview exited" for every healthy direct preview (observed live against
+// agent 1.99.371: expo serving 200 on :8082 while status said exited), and
+// left /dev-web/ with nothing to route to.
 func (e *ExpoDevServer) WebPort() int {
 	e.webMu.Lock()
-	defer e.webMu.Unlock()
-	return e.webPort
+	sibling := e.webPort
+	e.webMu.Unlock()
+	if sibling > 0 {
+		return sibling
+	}
+	if e.devMode == "web" {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if e.running && e.port > 0 {
+			return e.port
+		}
+	}
+	return 0
 }
 
 // Stop overrides baseDevServer.Stop to also terminate any sibling
