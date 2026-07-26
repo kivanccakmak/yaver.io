@@ -1089,6 +1089,23 @@ func runTDDInstall(ctx context.Context, progress func(string)) error {
 
 func metaInstallPlan(name string) (installPlan, bool) {
 	switch name {
+	case "yarn", "pnpm", "bun", "bunx":
+		// The dev-server 412 preflight names these when a project's
+		// packageManager field needs them (devserver_http.go
+		// detectProjectPreparation). They ride the agent-managed Node
+		// runtime — sudo-free, streamed — so the 412's install button has
+		// a real recipe behind it. `bunx` ships with bun.
+		pkg := name
+		if name == "bunx" {
+			pkg = "bun"
+		}
+		return installPlan{
+			name:        name,
+			description: pkg + " — package manager/runner this project's manifest asks for",
+			runFunc: func(ctx context.Context, progress func(string)) error {
+				return installNodeBackedCLI(ctx, pkg, pkg, progress)
+			},
+		}, true
 	case "git":
 		return installPlan{
 			name:        "git",

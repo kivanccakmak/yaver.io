@@ -938,18 +938,40 @@ func ensureProjectPackageManager(prep projectPreparationStatus, extraOut io.Writ
 	return nil
 }
 
+// installableViaAgent reports whether POST /install/<tool> can actually
+// provision this tool: the agent-managed Node runtime (node/npm/npx), a
+// curated integration, or a meta plan. Only claim what the install route
+// will accept — advertising an endpoint that 404s is the 2026-07-26
+// "yaver lies" defect (see install_http.go).
+func installableViaAgent(tool string) bool {
+	switch tool {
+	case "node", "npm", "npx":
+		return true
+	}
+	if _, ok := lookupIntegration(tool); ok {
+		return true
+	}
+	if _, ok := metaInstallPlan(tool); ok {
+		return true
+	}
+	return false
+}
+
 // canInstallMissingTool reports whether every entry in missing maps to
-// an integration the phone can trigger via POST /install/<tool>. Used
-// by the pre-flight to decide whether to advertise a one-tap install.
+// an install the phone can trigger via POST /install/<tool>. Used by
+// the pre-flight to decide whether to advertise a one-tap install.
+//
+// History: this used to return true ONLY for node/npm/npx — but the 412
+// only fires when a NON-node tool is missing, so the intersection was
+// empty and `installable:true` could never reach a client. The mobile
+// install button was unreachable by construction. Pinned by
+// devserver_install_gate_test.go.
 func canInstallMissingTool(missing []string) bool {
 	if len(missing) == 0 {
 		return false
 	}
 	for _, t := range missing {
-		switch t {
-		case "node", "npm", "npx":
-			// All three come from the agent-managed Node runtime.
-		default:
+		if !installableViaAgent(t) {
 			return false
 		}
 	}
@@ -957,17 +979,35 @@ func canInstallMissingTool(missing []string) bool {
 }
 
 // installEndpointForTool returns the /install/<tool> path the phone
-// should POST to in order to provision every missing tool. Picks
+// should POST to in order to provision the missing tools. Picks
 // `mobile` whenever any of node/npm/npx is missing — the agent-managed
 // mobile install ships the Node runtime those tools come from and
-// verifies the embedded hermesc reload path too.
+// verifies the embedded hermesc reload path too. Otherwise it names the
+// first missing tool that has a real install recipe, and "" when none
+// does (so clients render "install manually" instead of a dead button).
 func installEndpointForTool(missing []string) string {
 	for _, t := range missing {
 		if t == "node" || t == "npm" || t == "npx" {
 			return "/install/mobile"
 		}
 	}
+	for _, t := range missing {
+		if installableViaAgent(t) {
+			return "/install/" + t
+		}
+	}
 	return ""
+}
+
+// devInstallHelpHint names the SPECIFIC fix for a 412. The old constant
+// hint said "POST /install/node" no matter which tool was missing — a
+// remedy naming the wrong fix costs whole sessions (errSecInternalComponent
+// rule). Pinned by devserver_install_gate_test.go.
+func devInstallHelpHint(missing []string, installable bool, endpoint string) string {
+	if installable && endpoint != "" {
+		return fmt.Sprintf("POST %s from any surface (sudo-free, streamed to /streams/install) and retry.", endpoint)
+	}
+	return fmt.Sprintf("The agent has no install recipe for: %s. Install manually on this machine (see GET /install/list for what the agent can provision), then retry.", strings.Join(missing, ", "))
 }
 
 func installProjectDependencies(workDir string, prep projectPreparationStatus) error {
@@ -1774,14 +1814,15 @@ func (s *HTTPServer) handleDevServerStart(w http.ResponseWriter, r *http.Request
 			// that we can't fix ourselves.
 			if len(prep.MissingTools) > 0 && !isOnlyNodeMissing(prep.MissingTools) {
 				installable := canInstallMissingTool(prep.MissingTools)
+				endpoint := installEndpointForTool(prep.MissingTools)
 				jsonReply(w, http.StatusPreconditionFailed, map[string]interface{}{
 					"error":           fmt.Sprintf("Cannot start dev server: %s missing on this machine.", strings.Join(prep.MissingTools, ", ")),
 					"missingTools":    prep.MissingTools,
 					"packageManager":  prep.PackageManager,
 					"hermesCompiler":  prep.HermesCompiler,
-					"installEndpoint": installEndpointForTool(prep.MissingTools),
+					"installEndpoint": endpoint,
 					"installable":     installable,
-					"helpHint":        "POST /install/node from the phone (sudo-free, ~/.yaver/runtimes/node) and retry.",
+					"helpHint":        devInstallHelpHint(prep.MissingTools, installable, endpoint),
 				})
 				return
 			}
