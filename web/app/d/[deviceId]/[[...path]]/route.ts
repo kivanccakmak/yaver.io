@@ -2,20 +2,7 @@ import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 
 import { CONVEX_URL } from "@/lib/constants";
-
-const FORWARDED_REQ_HEADERS = [
-  "accept",
-  "accept-language",
-  "cache-control",
-  "content-type",
-  "if-modified-since",
-  "if-none-match",
-  "origin",
-  "pragma",
-  "range",
-  "referer",
-  "user-agent",
-] as const;
+import { previewDeviceProxyHeaders } from "@/lib/preview-device-proxy";
 
 const BLOCKED_RESP_HEADERS = new Set([
   "connection",
@@ -93,18 +80,14 @@ async function proxyRelay(
   request: NextRequest,
   relayUrl: string,
   relayPassword: string,
+  authToken: string,
   deviceId: string,
   restPath: string,
 ) {
   const target = new URL(`${relayUrl}/d/${encodeURIComponent(deviceId)}/${restPath}`);
   target.search = request.nextUrl.search;
 
-  const headers = new Headers();
-  for (const name of FORWARDED_REQ_HEADERS) {
-    const value = request.headers.get(name);
-    if (value) headers.set(name, value);
-  }
-  headers.set("X-Relay-Password", relayPassword);
+  const headers = previewDeviceProxyHeaders(request.headers, authToken, relayPassword);
 
   return fetch(target, {
     method: request.method,
@@ -189,7 +172,7 @@ async function handle(request: NextRequest, context: { params: Promise<{ deviceI
   const restPath = path.join("/");
 
   let target = await loadRelayTarget(token);
-  let response = await proxyRelay(request, target.relayUrl, target.password, deviceId, restPath);
+  let response = await proxyRelay(request, target.relayUrl, target.password, token, deviceId, restPath);
 
   if (response.status === 401) {
     const body = await response.clone().text();
@@ -201,7 +184,7 @@ async function handle(request: NextRequest, context: { params: Promise<{ deviceI
     if (/relay password (missing|invalid|rejected|denied)/i.test(body)) {
       await repairRelayPassword(token);
       target = await loadRelayTarget(token);
-      response = await proxyRelay(request, target.relayUrl, target.password, deviceId, restPath);
+      response = await proxyRelay(request, target.relayUrl, target.password, token, deviceId, restPath);
     }
   }
 
