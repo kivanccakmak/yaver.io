@@ -1657,11 +1657,12 @@ export default function RuntimeLabView({
                     </a>
                   ) : null}
                   {runnerAuthStatus.detail ? <div className="mt-1">{runnerAuthStatus.detail}</div> : null}
-                  {runnerAuthFlowKind(runnerAuthStatus.openUrl) !== "localhost-callback" &&
+                  {runnerAuthStatus.runner === "claude" &&
+                  runnerAuthFlowKind(runnerAuthStatus.openUrl) !== "localhost-callback" &&
                   !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
                     <div className="mt-2 space-y-1">
                       <div className="text-[#667085] dark:text-[#9aa3af]">
-                        If Claude gives you an authentication code or token, paste it here. It is sent directly to the runner CLI on the machine.
+                        Claude Code code/token
                       </div>
                       <input
                         value={runnerAuthCodeInput}
@@ -1683,7 +1684,7 @@ export default function RuntimeLabView({
                             void submitRunnerAuthCode();
                           }
                         }}
-                        placeholder="Paste authentication code or token"
+                        placeholder="Paste Claude Code authentication code or token"
                         spellCheck={false}
                         autoComplete="off"
                         autoCorrect="off"
@@ -1696,7 +1697,7 @@ export default function RuntimeLabView({
                         onClick={() => void submitRunnerAuthCode()}
                         className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
                       >
-                        {runnerAuthCodeBusy ? "Submitting..." : "Submit code / token"}
+                        {runnerAuthCodeBusy ? "Submitting..." : "Submit Claude Code token"}
                       </button>
                     </div>
                   ) : null}

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -81,3 +82,40 @@ func TestHandleRunnerBrowserAuthSubmitCallbackReplaysToLocalRunner(t *testing.T)
 		t.Fatal("callback was not replayed to local runner listener")
 	}
 }
+
+func TestHandleRunnerBrowserAuthSubmitCodeRejectsCodex(t *testing.T) {
+	sessionID := "codex-test-submit-code"
+	runnerBrowserAuthSessions.Store(sessionID, &runnerBrowserAuthSessionState{
+		runnerBrowserAuthSession: runnerBrowserAuthSession{
+			ID:        sessionID,
+			Runner:    "codex",
+			Method:    "oauth",
+			Status:    "awaiting_browser",
+			StartedAt: time.Now().UnixMilli(),
+			UpdatedAt: time.Now().UnixMilli(),
+		},
+		stdin: nopWriteCloser{Writer: &bytes.Buffer{}},
+	})
+	defer runnerBrowserAuthSessions.Delete(sessionID)
+
+	body, _ := json.Marshal(map[string]string{
+		"code": "claude-code-token",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/runner-auth/browser/submit-code?id="+sessionID, bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	(&HTTPServer{}).handleRunnerBrowserAuthSubmitCode(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "only supported for Claude Code") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (n nopWriteCloser) Close() error { return nil }

@@ -5462,6 +5462,9 @@ function RunnerAuthModal({
         await client.connect(device.host, device.port, token, device.id, { tunnelUrls });
         const s = await client.startRunnerBrowserAuth(runner);
         setSession(s);
+        if (s.openUrl) {
+          window.open(s.openUrl, "_blank", "noopener,noreferrer");
+        }
       } catch (err) {
         setStartError(err instanceof Error ? err.message : String(err));
       }
@@ -5644,13 +5647,13 @@ function RunnerAuthModal({
             {runner === "claude" && session.openUrl && (
               <div className="space-y-2 rounded-lg border border-indigo-500/30 bg-indigo-500/5 p-3">
                 <div className="text-[10px] font-semibold uppercase tracking-widest text-indigo-700 dark:text-indigo-300">
-                  Paste the auth code from platform.claude.com
+                  Claude Code code/token
                 </div>
                 <input
                   type="text"
                   value={authCode}
                   onChange={(e) => { setAuthCode(e.target.value); setSubmitError(null); }}
-                  placeholder="EfaWvHCZ1pZWDZ3KZReKSnGdZDIpCn4viSCY4QLzSZ4bUYHV#…"
+                  placeholder="Paste Claude Code authentication code or token"
                   spellCheck={false}
                   autoComplete="off"
                   autoCorrect="off"
@@ -5695,7 +5698,7 @@ function RunnerAuthModal({
                     }}
                     className="shrink-0 rounded-md border border-indigo-400/40 bg-indigo-500/15 px-3 py-1 text-[11px] font-medium text-indigo-800 dark:text-indigo-100 hover:bg-indigo-500/25 disabled:opacity-50"
                   >
-                    {submitting ? "Submitting…" : "Submit code"}
+                    {submitting ? "Submitting…" : "Submit Claude Code token"}
                   </button>
                 </div>
                 {submitError ? (

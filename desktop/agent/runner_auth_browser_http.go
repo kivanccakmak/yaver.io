@@ -796,6 +796,10 @@ func (s *HTTPServer) handleRunnerBrowserAuthSubmitCode(w http.ResponseWriter, r 
 	if rejectScopedSubscriptionRunnerAuth(w, r, sess.Runner) {
 		return
 	}
+	if normalizeRunnerAuthName(sess.Runner) != "claude" {
+		jsonError(w, http.StatusBadRequest, "pasted authentication codes/tokens are only supported for Claude Code; use the browser callback/device flow for "+sess.Runner)
+		return
+	}
 	// Log that a code arrived (never the value — privacy contract above).
 	// Pairs with the terminal-status line so agent.log shows the full arc:
 	// spawn → captured URL → code received → exchange outcome. Its absence

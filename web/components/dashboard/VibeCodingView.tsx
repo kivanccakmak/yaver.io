@@ -2010,7 +2010,8 @@ export default function VibeCodingView({
                           </button>
                         </div>
                       ) : null}
-                      {runnerAuthFlowKind(runnerAuthStatus.openUrl) !== "localhost-callback" &&
+                      {runnerAuthStatus.runner === "claude" &&
+                      runnerAuthFlowKind(runnerAuthStatus.openUrl) !== "localhost-callback" &&
                       !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
                         /* The claudeai flow ends on platform.claude.com with a
                            CODE the CLI is waiting for on stdin — the localhost
@@ -2019,7 +2020,7 @@ export default function VibeCodingView({
                            right slot for the flow the URL describes. */
                         <div className="mt-3 space-y-2">
                           <div className="text-surface-500">
-                            Signed in and got a code? Paste it here — it goes straight to the CLI on the box.
+                            Claude Code code/token. It goes straight to the CLI on the box.
                           </div>
                           <input
                             value={runnerAuthCodeInput}
@@ -2030,7 +2031,7 @@ export default function VibeCodingView({
                                 void submitRunnerAuthCode();
                               }
                             }}
-                            placeholder="Paste the authentication code from Claude"
+                            placeholder="Paste Claude Code authentication code or token"
                             spellCheck={false}
                             autoComplete="off"
                             className="w-full rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 font-mono text-[10px] text-surface-100 outline-none focus:border-sky-400/70"
@@ -2041,7 +2042,7 @@ export default function VibeCodingView({
                             onClick={() => void submitRunnerAuthCode()}
                             className="rounded-lg border border-sky-400/30 bg-sky-400/10 px-3 py-1.5 text-[10px] font-semibold text-sky-800 hover:bg-sky-400/15 disabled:opacity-40 dark:text-sky-100"
                           >
-                            {runnerAuthCodeBusy ? "Submitting..." : "Submit code"}
+                            {runnerAuthCodeBusy ? "Submitting..." : "Submit Claude Code token"}
                           </button>
                         </div>
                       ) : null}
