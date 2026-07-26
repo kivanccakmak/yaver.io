@@ -5530,6 +5530,7 @@ function RunnerAuthModal({
   const [submitting, setSubmitting] = useState(false);
   const [submittingCallback, setSubmittingCallback] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const authRouteRef = useRef<{ client: AgentClient; target?: string; transient: boolean } | null>(null);
   // A dedicated AgentClient bound to *this* device. The shared singleton is
   // scoped to the active workspace (the "Open Workspace" flow) and may be
   // disconnected — or connected to a different machine — while the user is
@@ -5549,6 +5550,12 @@ function RunnerAuthModal({
   }
   const deviceName = device.name || device.id;
 
+  const currentAuthRoute = () => {
+    const route = authRouteRef.current;
+    if (route) return route;
+    return { client: clientRef.current!, transient: true };
+  };
+
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
@@ -5565,8 +5572,25 @@ function RunnerAuthModal({
               .filter(Boolean),
           ),
         );
-        await client.connect(device.host, device.port, token, device.id, { tunnelUrls });
-        const s = await client.startRunnerBrowserAuth(runner);
+        let s: RunnerBrowserAuthSession | null = null;
+        if (agentClient.isConnected) {
+          // Mobile's working path routes runner-auth through /peer/<target>.
+          // Use the same contract when the dashboard already has a live
+          // agent connection, so the OAuth runs on the selected Ubuntu box
+          // even if this browser is served from localhost on a Mac mini or
+          // from production yaver.io.
+          try {
+            authRouteRef.current = { client: agentClient, target: device.id, transient: false };
+            s = await agentClient.startRunnerBrowserAuth(runner, device.id);
+          } catch {
+            authRouteRef.current = null;
+          }
+        }
+        if (!s) {
+          await client.connect(device.host, device.port, token, device.id, { tunnelUrls });
+          authRouteRef.current = { client, transient: true };
+          s = await client.startRunnerBrowserAuth(runner);
+        }
         setSession(s);
         if (s.openUrl) {
           window.open(s.openUrl, "_blank", "noopener,noreferrer");
@@ -5576,9 +5600,12 @@ function RunnerAuthModal({
       }
     })();
     return () => {
-      try { client.disconnect(); } catch { /* tearing down anyway */ }
+      if (authRouteRef.current?.transient) {
+        try { authRouteRef.current.client.disconnect(); } catch { /* tearing down anyway */ }
+      }
+      authRouteRef.current = null;
     };
-  }, [runner, device.host, device.port, device.id, device.tunnelUrl, token]);
+  }, [runner, device.host, device.port, device.id, device.publicEndpoints, device.tunnelUrl, token]);
 
   useEffect(() => {
     if (!session) return;
@@ -5586,7 +5613,8 @@ function RunnerAuthModal({
     const client = clientRef.current!;
     const iv = setInterval(async () => {
       try {
-        const s = await client.getRunnerBrowserAuthStatus(session.id);
+        const route = currentAuthRoute();
+        const s = await route.client.getRunnerBrowserAuthStatus(session.id, route.target);
         setSession(s);
       } catch {
         // keep polling — transient fetch errors are fine
@@ -5617,7 +5645,8 @@ function RunnerAuthModal({
     setSubmittingCallback(true);
     setSubmitError(null);
     try {
-      const next = await clientRef.current!.submitRunnerBrowserAuthCallback(session.id, url);
+      const route = currentAuthRoute();
+      const next = await route.client.submitRunnerBrowserAuthCallback(session.id, url, route.target);
       setSession(next);
       setCallbackUrl("");
     } catch (err) {
@@ -5640,7 +5669,10 @@ function RunnerAuthModal({
           </div>
           <button
             onClick={async () => {
-              if (session && !terminal) { await clientRef.current?.cancelRunnerBrowserAuth(session.id).catch(() => {}); }
+              if (session && !terminal) {
+                const route = currentAuthRoute();
+                await route.client.cancelRunnerBrowserAuth(session.id, route.target).catch(() => {});
+              }
               onClose();
             }}
             className="text-surface-500 hover:text-surface-200 text-xl leading-none"
@@ -5790,7 +5822,8 @@ function RunnerAuthModal({
                       setSubmitting(true);
                       setSubmitError(null);
                       try {
-                        const next = await clientRef.current!.submitRunnerBrowserAuthCode(session.id, code);
+                        const route = currentAuthRoute();
+                        const next = await route.client.submitRunnerBrowserAuthCode(session.id, code, route.target);
                         setSession(next);
                         // Clear the input immediately — we want zero
                         // window-of-exposure inside the React state
