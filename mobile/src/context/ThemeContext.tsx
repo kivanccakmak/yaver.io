@@ -1,4 +1,3 @@
-import * as SecureStore from "expo-secure-store";
 import React, {
   createContext,
   useCallback,
@@ -12,6 +11,7 @@ import {
   LightColors,
   type ThemeColors,
 } from "../constants/colors";
+import * as SecureStore from "../lib/secureStoreCompat";
 
 const THEME_KEY = "yaver_theme";
 

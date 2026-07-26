@@ -25,7 +25,6 @@
  *     runner-driven task path. That's the Tasks-tab orchestration job.
  */
 
-import * as SecureStore from "expo-secure-store";
 import {
   YAVER_AGENT_TOOLS,
   dispatchYaverAgentTool,
@@ -33,6 +32,7 @@ import {
   type YaverAgentToolContext,
 } from "./yaverAgentTools";
 import type { YaverAgentProviderId } from "./quic";
+import * as SecureStore from "./secureStoreCompat";
 
 // ── Local persistence ─────────────────────────────────────────────────
 

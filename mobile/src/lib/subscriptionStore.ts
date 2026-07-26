@@ -11,8 +11,6 @@
 // Either way we only ever accept subscription tokens (sk-ant-oat-*); a metered
 // key is rejected by parseClaudeCredentials so the expensive path is impossible.
 
-import * as SecureStore from "expo-secure-store";
-
 import {
   parseClaudeCredentials,
   serializeClaudeCredentials,
@@ -26,6 +24,7 @@ import {
   type ClaudeOAuthEndpoints,
   type MessagesParams,
 } from "./claudeSubscription";
+import * as SecureStore from "./secureStoreCompat";
 
 const STORE_KEY = "yaver_claude_subscription_v1";
 
