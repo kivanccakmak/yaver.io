@@ -5057,6 +5057,18 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	// YAVER_MCP_PROFILE=full see everything. See mcp_core_profile.go.
 	tools = filterToCoreProfile(tools)
 
+	// Wedge allowlist: keep the surface pointed at remote-runtime mobile/UI
+	// development (connect → runner auth → project → vibe → render → build →
+	// ship). An allowlist, so a NEW family is out by default — the denylist
+	// above is what let the surface reach 1135 tools. See mcp_wedge_profile.go.
+	tools = filterToWedgeProfile(tools)
+
+	// Hard provider cap, last: a family filter cannot guarantee a COUNT, and
+	// z.ai/GLM rejects any request advertising more than 1000 tools. See
+	// applyMCPToolBudget — it names what it dropped rather than truncating
+	// silently.
+	tools = applyMCPToolBudget(tools, mcpToolBudget())
+
 	return map[string]interface{}{
 		"tools": tools,
 	}

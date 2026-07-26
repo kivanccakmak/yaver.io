@@ -54,7 +54,13 @@ type HTTPServer struct {
 	// relayOnly binds the direct HTTP/TLS listeners to loopback (127.0.0.1)
 	// instead of 0.0.0.0, so an operator box on a home/office LAN is reachable
 	// ONLY over the relay — never directly exposed to its LAN. Default false.
-	relayOnly      bool
+	relayOnly bool
+	// localMux is the agent's own route table, captured in Start(). Used only by
+	// handlePeerProxy to serve a self-targeted /peer/<thisDevice>/<path> call
+	// locally rather than erroring — a client that names this box is asking for
+	// work this box can do.
+	localMux *http.ServeMux
+
 	taskMgr        *TaskManager
 	execMgr        *ExecManager
 	scheduler      *Scheduler
@@ -330,6 +336,9 @@ func (s *HTTPServer) TriggerHeartbeat() {
 // Start starts the HTTP server and blocks until the context is cancelled.
 func (s *HTTPServer) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
+	// Kept so handlePeerProxy can serve a request whose peer target resolved to
+	// THIS machine, instead of refusing it. See peer_proxy_http.go.
+	s.localMux = mux
 	if s.finalizeMgr != nil {
 		s.finalizeMgr.Start(ctx)
 	}
