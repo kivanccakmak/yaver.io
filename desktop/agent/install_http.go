@@ -78,6 +78,46 @@ func (s *HTTPServer) handleInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Meta plans: the curated multi-step recipes (flutter, android-sdk,
+	// webrtc-stack, …). These lived in metaInstallPlan and were reachable
+	// from doctor remedies and sibling plans — but NOT from this route or
+	// the CLI, so the missing-toolchain remedy advertised an install the
+	// product then refused ("unknown tool: flutter"). Measured live
+	// 2026-07-26: e-mobile's 412 named the install, POST /install/flutter
+	// 404'd, `yaver install flutter` exited 2. A remedy that names a
+	// command the product rejects teaches the user Yaver lies.
+	if plan, ok := metaInstallPlan(tool); ok {
+		go func() {
+			// Flutter on linux/arm64 is a full git clone + precache; an SDK
+			// this size does not fit the registry path's 30-minute budget.
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+			defer cancel()
+			stream.Append("Starting install: " + tool)
+			err := runInstallPlan(ctx, plan, func(line string) { stream.Append(line) })
+			if err != nil {
+				stream.AppendEvent(map[string]interface{}{
+					"type":   "result",
+					"tool":   tool,
+					"status": "error",
+					"error":  err.Error(),
+				})
+				return
+			}
+			stream.AppendEvent(map[string]interface{}{
+				"type":   "result",
+				"tool":   tool,
+				"status": "ok",
+			})
+		}()
+		jsonReply(w, http.StatusAccepted, map[string]interface{}{
+			"ok":     true,
+			"tool":   tool,
+			"stream": streamName,
+			"source": "meta",
+		})
+		return
+	}
+
 	// Slow path: look up the tool in the public package registry and
 	// pick the best install step for the package managers we have.
 	// Runs inside a PTY so sudo prompts can be surfaced to the UI.

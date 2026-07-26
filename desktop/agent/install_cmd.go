@@ -542,6 +542,13 @@ func runInstall(args []string) {
 		}
 		plan, ok := lookupIntegration(target)
 		if !ok {
+			// The curated meta recipes (flutter, android-sdk, webrtc-stack, …)
+			// were only reachable from doctor remedies and sibling plans; the
+			// remedy text tells users to run `yaver install flutter`, so this
+			// command must accept what the remedy names.
+			plan, ok = metaInstallPlan(target)
+		}
+		if !ok {
 			fmt.Fprintf(os.Stderr, "unknown integration %q. Try `yaver install list`.\n", target)
 			os.Exit(2)
 		}
