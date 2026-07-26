@@ -1760,6 +1760,12 @@ func (b *baseDevServer) PreStart(name string, port int, workDir string) {
 		b.port = port
 	}
 	b.workDir = workDir
+	// A NEW start must not report the PREVIOUS session's failure. b.err was
+	// only cleared deep in the readiness loop (after the port answered), so
+	// every /dev/status poll between /dev/start and readiness served the old
+	// session's error — observed live 2026-07-26 as a one-poll flash of
+	// 'the browser preview exited' while a fresh sfmg start was building.
+	b.err = ""
 }
 
 func (b *baseDevServer) Status() DevServerStatus {

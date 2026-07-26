@@ -3065,6 +3065,17 @@ func (tm *TaskManager) startProcess(task *Task) error {
 					task.Status = TaskStatusFailed
 					log.Printf("[task %s] %s process failed: %v", task.ID, task.runner.Name, err)
 				}
+			} else if isEmptyRunnerReply(task.Output, task.ResultText) {
+				// Clean exit, zero content. A runner that says NOTHING did not
+				// succeed — observed 2026-07-26: opencode on zai glm-4.7 exits 0
+				// in seconds with no output, and the task landed in REVIEW as a
+				// silent card the user had to discover was empty. The no-output
+				// watchdog only covers RUNNING tasks; a fast clean exit beat it.
+				task.Status = TaskStatusFailed
+				task.ResultText = "The runner exited without producing any reply. " +
+					"This usually means the model silently refused the request — " +
+					"if this runner uses zai glm-4.7, switch it to glm-5.2 (Settings → Runner → Model), then retry."
+				log.Printf("[task %s] %s exited cleanly with EMPTY output — marking failed, not review", task.ID, task.runner.Name)
 			} else {
 				task.Status = taskSuccessStatus(task)
 				log.Printf("[task %s] %s process finished successfully (output_len=%d)", task.ID, task.runner.Name, len(task.Output))

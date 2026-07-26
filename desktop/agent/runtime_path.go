@@ -26,6 +26,12 @@ func runtimeBinDirs() []string {
 	candidates := []string{
 		filepath.Join(root, "node", "bin"),
 		filepath.Join(root, "android-sdk", "bin"),
+		// The Flutter SDK the agent itself installs (flutter_install.go →
+		// flutterRoot). Without this, POST /install/flutter reported success
+		// while every `flutter run` still failed with 'executable file not
+		// found in $PATH' — the installer put the SDK where the exec env
+		// never looked. Measured live 2026-07-26 on ubuntu-4gb-hel1-1.
+		filepath.Join(flutterRoot(), "bin"),
 	}
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		candidates = append(candidates,

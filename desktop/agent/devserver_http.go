@@ -1247,7 +1247,11 @@ func (s *HTTPServer) handleDevServerStatus(w http.ResponseWriter, r *http.Reques
 	// it is impossible, and it means the preview exited. Probe the real thing
 	// (CLAUDE.md: "probe the real capability, never the proxy") and say so, so
 	// clients can render a named failure with a Retry instead of a spinner.
-	if strings.EqualFold(status.DevMode, "web") && status.WebPort == 0 {
+	// A session that is still BUILDING has not "exited" — devMode is set
+	// before the process spawns and webPort follows readiness, so without
+	// the Building guard this asserted death about a server that had not
+	// started yet, for the entire first compile.
+	if strings.EqualFold(status.DevMode, "web") && status.WebPort == 0 && !status.Building {
 		status.Serving = false
 		status.ServingLabel = "Browser preview is not running"
 		if strings.TrimSpace(status.Error) == "" {
