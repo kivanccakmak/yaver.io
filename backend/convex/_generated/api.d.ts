@@ -15,6 +15,7 @@ import type * as agentRescue from "../agentRescue.js";
 import type * as agentSync from "../agentSync.js";
 import type * as aiModels from "../aiModels.js";
 import type * as aiRunners from "../aiRunners.js";
+import type * as aliasShadowing from "../aliasShadowing.js";
 import type * as auth from "../auth.js";
 import type * as authLogs from "../authLogs.js";
 import type * as authPasswordPolicy from "../authPasswordPolicy.js";
@@ -123,6 +124,7 @@ declare const fullApi: ApiFromModules<{
   agentSync: typeof agentSync;
   aiModels: typeof aiModels;
   aiRunners: typeof aiRunners;
+  aliasShadowing: typeof aliasShadowing;
   auth: typeof auth;
   authLogs: typeof authLogs;
   authPasswordPolicy: typeof authPasswordPolicy;
