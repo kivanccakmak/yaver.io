@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -541,6 +542,162 @@ func runClaudeAuthStatus() (claudeAuthStatusJSON, bool) {
 		return claudeAuthStatusJSON{}, false
 	}
 	return st, true
+}
+
+const claudeMacKeychainService = "Claude Code-credentials"
+
+// preflightClaudeMacKeychainForHeadlessLaunch proves the exact operation Claude
+// Code will need before we spawn it from a launchd/SSH-owned agent: reading the
+// subscription OAuth generic-password item from the user's login keychain.
+//
+// A hung `claude` with no stdout/stderr/socket/file writes was traced to
+// `security find-generic-password -s "Claude Code-credentials"` blocking before
+// Claude ever reached OAuth. Metadata checks are false greens here: the item can
+// exist while the non-GUI process cannot read its password. Probe with `-w`, and
+// if the operator has explicitly provided the login-keychain password locally,
+// repair only this item by setting its generic-password partition list.
+func preflightClaudeMacKeychainForHeadlessLaunch() error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	kc := claudeLoginKeychainPath()
+	if err := probeClaudeMacKeychainPassword(kc); err == nil {
+		return nil
+	}
+	if err := probeClaudeMacKeychainItem(kc); err != nil {
+		return nil
+	}
+	pw := claudeLoginKeychainPassword()
+	if pw == "" {
+		return fmt.Errorf(
+			"Claude Code is blocked before OAuth: macOS Keychain item %q is not readable from this headless agent. "+
+				"Add YAVER_LOGIN_PASSWORD to ~/.yaver/local-secrets.env on this Mac (chmod 600) or run `security unlock-keychain` + "+
+				"`security set-generic-password-partition-list -s %q -S apple-tool:,apple: ...` for %s, then retry",
+			claudeMacKeychainService, claudeMacKeychainService, kc,
+		)
+	}
+	if err := runSecurityQuiet(5*time.Second, "unlock-keychain", "-p", pw, kc); err != nil {
+		return fmt.Errorf("Claude Code cannot read its macOS Keychain credential: unlocking %s failed: %w", kc, err)
+	}
+	// No flags = do not auto-lock mid-run. This is the same headless
+	// reliability move as codesign, applied to Claude's generic-password item.
+	_ = runSecurityQuiet(5*time.Second, "set-keychain-settings", kc)
+	if err := runSecurityQuiet(10*time.Second,
+		"set-generic-password-partition-list",
+		"-s", claudeMacKeychainService,
+		"-S", "apple-tool:,apple:",
+		"-k", pw,
+		kc,
+	); err != nil {
+		return fmt.Errorf("Claude Code cannot read its macOS Keychain credential: setting partition list for %q failed: %w", claudeMacKeychainService, err)
+	}
+	if err := probeClaudeMacKeychainPassword(kc); err != nil {
+		return fmt.Errorf("Claude Code Keychain repair ran, but %q is still not readable headlessly from %s: %w", claudeMacKeychainService, kc, err)
+	}
+	invalidateClaudeAuthStatusCache()
+	return nil
+}
+
+func probeClaudeMacKeychainPassword(keychain string) error {
+	return runSecurityQuiet(5*time.Second, "find-generic-password", "-s", claudeMacKeychainService, "-w", keychain)
+}
+
+func probeClaudeMacKeychainItem(keychain string) error {
+	return runSecurityQuiet(5*time.Second, "find-generic-password", "-s", claudeMacKeychainService, keychain)
+}
+
+func runSecurityQuiet(timeout time.Duration, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := osexec.CommandContext(ctx, "security", args...)
+	cmd.WaitDelay = time.Second
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return fmt.Errorf("timed out after %s", timeout)
+	}
+	return err
+}
+
+func claudeLoginKeychainPath() string {
+	if v := strings.TrimSpace(os.Getenv("YAVER_LOGIN_KEYCHAIN_PATH")); v != "" {
+		return expandHomePath(v)
+	}
+	if v := strings.TrimSpace(localSecretsEnv()["YAVER_LOGIN_KEYCHAIN_PATH"]); v != "" {
+		return expandHomePath(v)
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		return filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+	}
+	return "login.keychain"
+}
+
+func claudeLoginKeychainPassword() string {
+	if v := os.Getenv("YAVER_LOGIN_PASSWORD"); v != "" {
+		return v
+	}
+	return localSecretsEnv()["YAVER_LOGIN_PASSWORD"]
+}
+
+func localSecretsEnv() map[string]string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".yaver", "local-secrets.env"))
+	if err != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		if k == "" || strings.ContainsAny(k, " \t") {
+			continue
+		}
+		out[k] = unquoteLocalSecret(strings.TrimSpace(v))
+	}
+	return out
+}
+
+func unquoteLocalSecret(v string) string {
+	if len(v) < 2 {
+		return v
+	}
+	q := v[0]
+	if (q != '\'' && q != '"') || v[len(v)-1] != q {
+		return v
+	}
+	v = v[1 : len(v)-1]
+	if q == '"' {
+		v = strings.ReplaceAll(v, `\"`, `"`)
+		v = strings.ReplaceAll(v, `\\`, `\`)
+	}
+	return v
+}
+
+func expandHomePath(path string) string {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
 }
 
 // extractFirstJSONObject slices out the outermost {...} so a stray banner or

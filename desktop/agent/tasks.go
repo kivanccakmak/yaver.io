@@ -2789,6 +2789,12 @@ func (tm *TaskManager) startProcess(task *Task) error {
 					return fmt.Errorf("tenant command: %w", err)
 				}
 			} else {
+				if normalizeRunnerID(runner.RunnerID) == "claude" {
+					if err := preflightClaudeMacKeychainForHeadlessLaunch(); err != nil {
+						cancel()
+						return fmt.Errorf("runner not ready: %w", err)
+					}
+				}
 				cmd = exec.CommandContext(ctx, runner.Command, args...)
 			}
 		}
