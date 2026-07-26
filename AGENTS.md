@@ -128,11 +128,12 @@ constraint if it does not.**
   (`ensureRunnerInstalledStream`, `installNodeBackedCLI`). Render a button, not a
   dead end, and stream stdout with bytes + elapsed — a 2 GB SDK behind a silent
   spinner is the same defect as a silent `serve`.
-- **Never offer an impossible install.** Flutter's Linux SDK is x64-only, so on
-  an aarch64 box there is nothing to install: name the constraint and the
-  alternative ("render on macOS or x64") instead of failing after a long
-  download. Probe whether a build exists for THIS os/arch before offering the
-  action.
+- **Resolve per os/arch; only claim impossible after checking.** Flutter ships no
+  Linux/arm64 *tarball*, but git-clone is its supported install there and
+  `flutter_install.go` already does it — so on the aarch64 box the honest answer
+  is "installable", not "render elsewhere". Wrong in either direction is a defect:
+  offering an install that 404s teaches the user Yaver lies; declaring impossible
+  what the product supports withholds a working capability.
 
 Applies to runners, SDKs, simulators, emulators, adb, keychains — any capability
 gap.

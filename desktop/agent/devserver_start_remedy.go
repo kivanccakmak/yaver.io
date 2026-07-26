@@ -84,8 +84,7 @@ func devStartRemedy(framework, workDir, tail string) string {
 			"(no pubspec.yaml). Pick the directory that holds pubspec.yaml.", framework, workDir)
 	case strings.Contains(lower, "executable file not found"),
 		strings.Contains(lower, "command not found"):
-		return fmt.Sprintf("the %s toolchain is not installed (or not on PATH) for the user the "+
-			"agent runs as. Install it on this machine, then start the preview again.", framework)
+		return missingToolchainRemedy(framework)
 	case strings.Contains(lower, "flutter pub get") && strings.Contains(lower, "failed"):
 		return fmt.Sprintf("`flutter pub get` failed in %s — resolve the dependency error it "+
 			"printed above before the preview can compile.", workDir)
@@ -172,4 +171,65 @@ func compileErrorLines(tail []string) []string {
 		out = out[len(out)-maxLines:]
 	}
 	return out
+}
+
+// ─── missing toolchain ───────────────────────────────────────────────────────
+
+// frameworkInstallTarget maps a dev-server framework to the `yaver install`
+// plan that provides its toolchain, or "" when Yaver has no installer for it.
+//
+// Deliberately a lookup against the REAL plan table (metaInstallPlan), not a
+// hand-written list: a plan that is added or removed there must not leave this
+// advice claiming an installer that no longer exists. Naming a command that
+// fails is worse than naming none.
+func frameworkInstallTarget(framework string) string {
+	switch strings.ToLower(strings.TrimSpace(framework)) {
+	case "flutter":
+		return "flutter"
+	case "expo", "react-native", "rn", "metro", "next", "nextjs", "vite", "node":
+		return "node"
+	}
+	return ""
+}
+
+// missingToolchainRemedy turns "executable file not found" into the specific
+// action available on THIS machine.
+//
+// CLAUDE.md, "a missing toolchain is a product requirement, not a user error":
+// state it → offer the fix if the fix exists → stream the fix → name the
+// constraint if it does not. The string this returns is what the phone and the
+// web preview panel render, so it is the whole difference between a user who
+// installs Flutter in one command and a user who sees a spinner.
+//
+// The previous version said "Install it on this machine, then start the preview
+// again" — vague in exactly the way the hard rule forbids, and wrong about the
+// product's own abilities: `yaver install flutter` has existed and been
+// arch-aware the whole time (flutter_install.go), including the git-clone path
+// for Linux ARM64 where Flutter publishes no tarball. The user was told to go
+// solve it themselves while the agent was holding a working installer.
+func missingToolchainRemedy(framework string) string {
+	label := strings.TrimSpace(framework)
+	if label == "" {
+		label = "project"
+	}
+	target := frameworkInstallTarget(framework)
+	if target == "" {
+		return fmt.Sprintf("the %s toolchain is not installed (or not on PATH) for the user the "+
+			"agent runs as, and Yaver has no installer for it. Install it on this machine, "+
+			"then start the preview again.", label)
+	}
+	// Validate against BOTH tables `yaver install <name>` consults, in the same
+	// order it does — an installer this string names must actually resolve.
+	_, okMeta := metaInstallPlan(target)
+	_, okIntegration := lookupIntegration(target)
+	if !okMeta && !okIntegration {
+		// The plan table changed under us. Say the honest thing rather than
+		// printing a command that would fail.
+		return fmt.Sprintf("the %s toolchain is not installed (or not on PATH) for the user the "+
+			"agent runs as. Install it on this machine, then start the preview again.", label)
+	}
+	return fmt.Sprintf("the %s toolchain is not installed (or not on PATH) for the user the "+
+		"agent runs as — Yaver can install it here: run `yaver install %s` on this machine "+
+		"(or use Install on the preview panel, which streams the download). Then start the "+
+		"preview again.", label, target)
 }

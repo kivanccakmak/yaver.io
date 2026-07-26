@@ -333,16 +333,17 @@ changing those.
      and elapsed time. A 2 GB SDK behind a silent spinner is the same defect as
      a silent `serve` — the user cannot tell fetching from hung. Extend the
      recipe table rather than special-casing per call site.
-  3. **SAY IMPOSSIBLE WHEN IT IS IMPOSSIBLE — never offer an install that cannot
-     work.** Flutter's official Linux SDK is published for **x64 only** (checked
-     against the release index: every stable build, incl. 3.44.8). On the
-     aarch64 Hetzner box there is nothing to install, so an "Install Flutter"
-     button there would fail after a long download and teach the user that Yaver
-     lies. The honest surface names the constraint AND the alternative: "Flutter
-     has no Linux/arm64 build — render this project on a macOS or x64 machine."
-     Probing the real capability (does a build exist for THIS os/arch?) before
-     offering the action is the same rule as "probe the operation, not the
-     inventory".
+  3. **RESOLVE PER OS/ARCH — and only claim impossible after checking.** The
+     trap is answering from the happy path. Flutter publishes **no Linux/arm64
+     tarball** (verified against `releases_linux.json`), so a naive installer
+     404s on an aarch64 box — but git-clone IS Flutter's supported install for
+     that platform, and `flutter_install.go` has done exactly that the whole
+     time. So the honest answer there is "yes, installable", not "render
+     elsewhere". Getting this backwards in EITHER direction is a defect:
+     offering an install that cannot work teaches the user Yaver lies, and
+     declaring impossible what the product already supports withholds a working
+     capability. Probe per-platform (`flutterStableTarball` → fall back to
+     clone), then state the specific truth for THIS machine.
   The generic shape for any capability gap: **state it → offer the fix if the fix
   exists → stream the fix → name the constraint if it does not.** Applies to
   runners, SDKs, simulators, emulators, `adb`, keychains and anything else a
