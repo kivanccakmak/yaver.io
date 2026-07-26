@@ -2046,6 +2046,9 @@ export default function AppsScreen() {
                 style={[s.actionBtn, s.openBtn, { flex: 1 }, devServerBusy && { opacity: 0.5 }]}
                 onPress={() => { openRunningPreview().catch((e) => Alert.alert("Open in Yaver failed", e instanceof Error ? e.message : String(e))); }}
                 disabled={devServerBusy}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${(runningProject || "preview").split(" / ")[0]} in Yaver`}
+                testID="projects-open-in-yaver"
               >
                 {devServerBusy ? (
                   <>

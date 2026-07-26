@@ -33,10 +33,16 @@ export default function TerminalView({
   cwd,
   launch,
   tmuxSession,
+  tmuxTaskId,
+  onCloseTerminal,
+  onTmuxClosed,
 }: {
   cwd?: string;
   launch?: "claude" | "codex" | "opencode";
   tmuxSession?: string;
+  tmuxTaskId?: string;
+  onCloseTerminal?: () => void;
+  onTmuxClosed?: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -48,6 +54,8 @@ export default function TerminalView({
   const [attempt, setAttempt] = useState(0);
   const [dictating, setDictating] = useState(false);
   const [runningRunner, setRunningRunner] = useState<string | null>(null);
+  const [closeBusy, setCloseBusy] = useState(false);
+  const [closeError, setCloseError] = useState<string>("");
   const [sttAvailable] = useState<boolean>(
     () => typeof window !== "undefined" && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition),
   );
@@ -67,6 +75,28 @@ export default function TerminalView({
     ws.send(new TextEncoder().encode(text));
     try { termRef.current?.focus(); } catch {}
   }, []);
+
+  const disconnectPty = useCallback(() => {
+    try { wsRef.current?.close(1000, "closed by user"); } catch {}
+    if (onCloseTerminal) onCloseTerminal();
+  }, [onCloseTerminal]);
+
+  const closeTmuxTask = useCallback(async () => {
+    if (!tmuxTaskId || closeBusy) return;
+    const ok = window.confirm(`Close tmux session ${tmuxSession || tmuxTaskId}? This stops the adopted pane on the connected machine.`);
+    if (!ok) return;
+    setCloseBusy(true);
+    setCloseError("");
+    try {
+      await agentClient.closeTmuxTask(tmuxTaskId);
+      try { wsRef.current?.close(1000, "tmux task closed"); } catch {}
+      if (onTmuxClosed) onTmuxClosed();
+    } catch (err: any) {
+      setCloseError(err?.message || "Failed to close tmux task");
+    } finally {
+      setCloseBusy(false);
+    }
+  }, [closeBusy, onTmuxClosed, tmuxSession, tmuxTaskId]);
 
   // Open/close toggle: tap an idle runner to launch it, tap the active one to
   // send `/exit`. Best-effort state — reset on (re)connect since the PTY is new.
@@ -279,6 +309,23 @@ export default function TerminalView({
         >
           ^C
         </button>
+        {tmuxSession ? (
+          <button
+            disabled={!tmuxTaskId || closeBusy}
+            onClick={closeTmuxTask}
+            title={tmuxTaskId ? "Stop the adopted tmux pane on the connected machine" : "This tmux session is not adopted by a Yaver task, so the dashboard will not guess which pane to close"}
+            className="shrink-0 rounded border border-rose-400/40 bg-rose-500/10 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-500/15 disabled:opacity-40 dark:text-rose-200"
+          >
+            {closeBusy ? "Closing..." : "Close tmux"}
+          </button>
+        ) : null}
+        <button
+          onClick={disconnectPty}
+          title="Close this browser PTY connection"
+          className="shrink-0 rounded border border-white/10 bg-white/5 px-2 py-1 text-xs text-gray-300 hover:bg-white/10"
+        >
+          Close PTY
+        </button>
         {sttAvailable ? (
           <button
             onClick={toggleDictation}
@@ -292,6 +339,9 @@ export default function TerminalView({
           >
             {dictating ? "● rec" : "🎙"}
           </button>
+        ) : null}
+        {closeError ? (
+          <span className="shrink-0 text-xs text-rose-300">{closeError}</span>
         ) : null}
       </div>
       <div className="relative flex-1 overflow-hidden">

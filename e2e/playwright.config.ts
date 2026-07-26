@@ -15,6 +15,8 @@ const convexURL =
   process.env.E2E_CONVEX_URL ||
   process.env.NEXT_PUBLIC_CONVEX_SITE_URL ||
   "https://perceptive-minnow-557.eu-west-1.convex.site";
+const recordAll = process.env.E2E_RECORD_ALL === "1";
+const testTimeout = Number(process.env.E2E_CELL_TIMEOUT_MS || 30_000);
 
 export default defineConfig({
   testDir: "./tests",
@@ -26,15 +28,15 @@ export default defineConfig({
     ["list"],
     ["html", { outputFolder: "playwright-report", open: "never" }],
   ],
-  timeout: 30_000,
+  timeout: testTimeout,
   expect: { timeout: 7_000 },
   globalSetup: require.resolve("./global-setup"),
   globalTeardown: require.resolve("./global-teardown"),
   use: {
     baseURL,
-    trace: "retain-on-failure",
-    screenshot: "only-on-failure",
-    video: "retain-on-failure",
+    trace: recordAll ? "on" : "retain-on-failure",
+    screenshot: recordAll ? "on" : "only-on-failure",
+    video: recordAll ? "on" : "retain-on-failure",
   },
   projects: [
     {

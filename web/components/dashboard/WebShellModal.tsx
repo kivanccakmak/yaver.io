@@ -72,20 +72,24 @@ export default function WebShellModal({
   device,
   launch,
   tmuxSession,
+  tmuxTaskId,
   isCurrentDeviceSelected,
   isCurrentDeviceConnected,
   onClose,
   onConnect,
   onOpenRescue,
+  onTmuxClosed,
 }: {
   device: Device;
   launch?: "claude" | "codex" | "opencode";
   tmuxSession?: string;
+  tmuxTaskId?: string;
   isCurrentDeviceSelected: boolean;
   isCurrentDeviceConnected: boolean;
   onClose: () => void;
   onConnect: () => void;
   onOpenRescue?: () => void;
+  onTmuxClosed?: () => void;
 }) {
   const [maximized, setMaximized] = useState(false);
   const connState = useAgentConnectionState();
@@ -179,7 +183,13 @@ export default function WebShellModal({
         </div>
         <div className={`flex-1 overflow-hidden ${state === "ready" ? "bg-[#0b0d10]" : "bg-slate-50/70 dark:bg-transparent p-2"}`}>
           {state === "ready" ? (
-            <TerminalView launch={launch} tmuxSession={tmuxSession} />
+            <TerminalView
+              launch={launch}
+              tmuxSession={tmuxSession}
+              tmuxTaskId={tmuxTaskId}
+              onCloseTerminal={onClose}
+              onTmuxClosed={onTmuxClosed}
+            />
           ) : state === "needs-reauth" ? (
             <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center text-slate-700 dark:text-surface-300">
               <div className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">

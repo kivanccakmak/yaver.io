@@ -27,6 +27,8 @@
  * SILENT (neither — the only failure).
  */
 import { chromium, devices } from '@playwright/test';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 
 const AGENT = process.env.AGENT_URL || 'http://127.0.0.1:18099';
 const TOKEN = (process.env.YAVER_AGENT_TOKEN || '').trim();
@@ -34,14 +36,48 @@ const BOOT_MS = Number(process.env.BOOT_BUDGET_MS || 240_000);
 const auth = { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Light lanes only, RN before Flutter as requested — RN is the fastest to boot
-// and the one whose render path was fixed most recently.
-const APPS = [
-  { name: 'sfmg (todo-rn)', workDir: '/Users/pokayoke/Workspace/sfmg', framework: 'expo', expect: /todo/i },
-  { name: 'talos/mobile', workDir: '/Users/pokayoke/Workspace/talos/mobile', framework: 'expo', expect: null },
-  { name: 'yaver.io/mobile', workDir: '/Users/pokayoke/Workspace/yaver.io/mobile', framework: 'expo', expect: null },
-  { name: 'e-mobile (flutter)', workDir: '/Users/pokayoke/Workspace/e-mobile', framework: 'flutter', expect: null },
-];
+function defaultWorkspaceRoot() {
+  if (process.env.WORKSPACE_ROOT) return process.env.WORKSPACE_ROOT;
+  if (process.env.HOME) return path.join(process.env.HOME, 'Workspace');
+  return path.resolve('..');
+}
+
+function parseAppsEnv() {
+  const raw = process.env.YAVER_LANE_APPS || '';
+  if (!raw.trim()) return null;
+  try {
+    return JSON.parse(raw).map((app) => ({
+      ...app,
+      expect: app.expect ? new RegExp(app.expect, 'i') : null,
+    }));
+  } catch (err) {
+    console.error(`YAVER_LANE_APPS must be JSON: ${err?.message || err}`);
+    process.exit(2);
+  }
+}
+
+function defaultApps() {
+  const ws = defaultWorkspaceRoot();
+  return [
+    { name: 'sfmg', workDir: path.join(ws, 'sfmg'), framework: 'expo', expect: /todo/i },
+    { name: 'talos/mobile', workDir: path.join(ws, 'talos', 'mobile'), framework: 'expo', expect: null },
+    { name: 'yaver.io/mobile', workDir: path.join(ws, 'yaver.io', 'mobile'), framework: 'expo', expect: null },
+    { name: 'e-mobile (flutter)', workDir: path.join(ws, 'e-mobile'), framework: 'flutter', expect: null },
+  ];
+}
+
+// Light lanes only: browser targets give DOM assertions. Native-only projects
+// belong in ios-simulator-loop.mjs, which can verify pixels but not DOM state.
+const APPS = (parseAppsEnv() || defaultApps()).filter((app) => {
+  const ok = existsSync(app.workDir);
+  if (!ok) console.log(`\nSKIP   ${app.name} — missing workDir ${app.workDir}`);
+  return ok;
+});
+
+if (APPS.length === 0) {
+  console.log('NAMED  no local browser-lane projects found; set WORKSPACE_ROOT or YAVER_LANE_APPS');
+  process.exit(0);
+}
 
 async function agent(path, init = {}) {
   const res = await fetch(`${AGENT}${path}`, { ...init, headers: { ...auth, ...(init.headers || {}) } });

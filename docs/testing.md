@@ -20,6 +20,7 @@ All run via `gh workflow run <name>.yml`. They use `secrets.HCLOUD_SSH_PRIVATE_K
 ## Local test entry point
 
 ```bash
+./scripts/test-macbook-local-all.sh         # local server + client + browser + iOS-sim lanes
 ./scripts/test-suite.sh                    # everything that runs on this Mac
 ./scripts/test-suite.sh --unit             # Go unit tests only (~30 s)
 ./scripts/test-suite.sh --lan              # localhost direct connect (~1 min)
@@ -31,6 +32,13 @@ All run via `gh workflow run <name>.yml`. They use `secrets.HCLOUD_SSH_PRIVATE_K
 ```
 
 No credentials needed for `--unit`, `--lan`, `--relay`. Remote modes need `REMOTE_SERVER_IP` + SSH key; either set as env vars or store in `.env.test` (gitignored).
+
+`test-macbook-local-all.sh` is the one-box dogfood harness: this Mac is both the
+remote side (agent/server/dev server) and the client side (browser and optional
+iOS Simulator). It is local-only: it does not provision cloud machines, deploy,
+publish, or upload TestFlight. Browser and simulator lanes require a running
+local agent plus `YAVER_AGENT_TOKEN`/`AGENT_URL`; logs are written under `/tmp`
+by default and redact common bearer-token/secret patterns.
 
 ## Per-component tests
 

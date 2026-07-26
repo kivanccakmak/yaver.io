@@ -27,14 +27,27 @@
  * suite exists to prevent.
  */
 import { writeFileSync } from 'fs';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 
 const AGENT = process.env.AGENT_URL || 'http://127.0.0.1:18099';
 const TOKEN = (process.env.YAVER_AGENT_TOKEN || '').trim();
-const WORKDIR = process.env.WORKDIR || '/Users/pokayoke/Workspace/sfmg';
+const DEFAULT_WORKDIR = process.env.WORKSPACE_ROOT
+  ? path.join(process.env.WORKSPACE_ROOT, 'sfmg')
+  : process.env.HOME
+    ? path.join(process.env.HOME, 'Workspace', 'sfmg')
+    : path.resolve('..', 'sfmg');
+const WORKDIR = process.env.WORKDIR || DEFAULT_WORKDIR;
 const FRAMEWORK = process.env.FRAMEWORK || 'expo';
 const TARGET = process.env.TARGET_ID || 'ios-simulator';
 const auth = { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+if (!existsSync(WORKDIR)) {
+  console.log(`NAMED   workDir does not exist: ${WORKDIR}`);
+  console.log('        set WORKDIR=/path/to/app or WORKSPACE_ROOT=/path/to/workspace');
+  process.exit(0);
+}
 
 async function api(path, init = {}) {
   const res = await fetch(`${AGENT}${path}`, { ...init, headers: { ...auth, ...(init.headers || {}) } });
