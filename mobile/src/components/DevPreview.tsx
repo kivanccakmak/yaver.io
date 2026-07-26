@@ -20,6 +20,7 @@ import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureT
 import { isActiveDevServerStatus } from "../lib/devServerState";
 import { mustUseNativePreview as mustUseNativePreviewLane } from "../lib/devLane";
 import { PREVIEW_READY_SCRIPT } from "../lib/previewReadyScript";
+import { detectCompileFailure } from "../lib/compileFailure";
 import { previewBundlePath } from "../lib/previewBundlePath";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../lib/previewPhase";
 import { setActivePreviewLane, subscribeBrowserShake } from "../lib/feedbackTrigger";
@@ -979,12 +980,28 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
               {!webContentLoaded && (
                 <View style={styles.previewOverlay}>
                   {previewFailed ? (
+                    (() => {
+                      /* Compile failures lead with a COMPACT card — shared
+                         detector with apps.tsx (compileFailure.ts): the
+                         agent's persisted status.error (offending lines +
+                         remedy) or the tail's compile lines, never a raw
+                         dump with the truth buried. Full output follows. */
+                      const compileCard = detectCompileFailure(status?.error, logLines);
+                      return (
                     <>
                       <Ionicons name="alert-circle-outline" size={40} color="#ef4444" />
-                      <Text style={styles.previewFailTitle}>Dev server didn't come up</Text>
-                      <Text style={styles.previewStepCmd}>{devServerSteps(frameworkLabel)}</Text>
+                      <Text style={styles.previewFailTitle}>
+                        {compileCard ? compileCard.title : "Dev server didn't come up"}
+                      </Text>
+                      {compileCard ? (
+                        <Text style={[styles.previewSubtle, { textAlign: "left" }]} selectable>
+                          {compileCard.detail}
+                        </Text>
+                      ) : (
+                        <Text style={styles.previewStepCmd}>{devServerSteps(frameworkLabel)}</Text>
+                      )}
                       <Text style={styles.previewSubtle}>
-                        The {frameworkLabel} web server never started serving. Recent output:
+                        {compileCard ? "Full output:" : `The ${frameworkLabel} web server never started serving. Recent output:`}
                       </Text>
                       <ScrollView
                         ref={previewLogScrollRef}
@@ -1021,6 +1038,8 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                         </Pressable>
                       </View>
                     </>
+                      );
+                    })()
                   ) : (
                     <>
                       <ActivityIndicator size="large" color="#22c55e" />

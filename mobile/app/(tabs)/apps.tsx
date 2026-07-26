@@ -44,6 +44,7 @@ import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureT
 import { isActiveDevServerStatus } from "../../src/lib/devServerState";
 import { connectionManager } from "../../src/lib/connectionManager";
 import { shouldPollDevStatus } from "../../src/lib/devStatusPolling";
+import { detectCompileFailure } from "../../src/lib/compileFailure";
 import { previewBundlePath } from "../../src/lib/previewBundlePath";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../../src/lib/previewPhase";
 import { describePort, describeResources } from "../../src/lib/machineResources";
@@ -3289,12 +3290,29 @@ export default function AppsScreen() {
             {bundleUrl && !webPreviewContentLoaded && (
               <View style={s.previewOverlay}>
                 {webPreviewFailed ? (
+                  (() => {
+                    /* Compile failures lead with a COMPACT card (remained.md
+                       P1): the agent already persisted the offending lines +
+                       remedy into status.error, or they sit in the tail —
+                       either way the user must read "your app failed to
+                       compile: <reason>", never a raw log dump with the
+                       truth buried in purple. Full output stays below. */
+                    const compileCard = detectCompileFailure(devStatus?.error, webPreviewLogs);
+                    return (
                   <>
                     <Ionicons name="alert-circle-outline" size={40} color={c.error} />
-                    <Text style={[s.previewFailTitle, { color: c.error }]}>Dev server didn't come up</Text>
-                    <Text style={s.previewStepCmd}>{devServerStepsFor(devStatus?.framework)}</Text>
+                    <Text style={[s.previewFailTitle, { color: c.error }]}>
+                      {compileCard ? compileCard.title : "Dev server didn't come up"}
+                    </Text>
+                    {compileCard ? (
+                      <Text style={[s.previewSubtle, { color: c.textPrimary, textAlign: "left" }]} selectable>
+                        {compileCard.detail}
+                      </Text>
+                    ) : (
+                      <Text style={s.previewStepCmd}>{devServerStepsFor(devStatus?.framework)}</Text>
+                    )}
                     <Text style={[s.previewSubtle, { color: c.textMuted }]}>
-                      The {devStatus?.framework || "web"} server never served content. Recent output:
+                      {compileCard ? "Full output:" : `The ${devStatus?.framework || "web"} server never served content. Recent output:`}
                     </Text>
                     <ScrollView
                       ref={webPreviewLogScrollRef}
@@ -3328,6 +3346,8 @@ export default function AppsScreen() {
                       </Pressable>
                     </View>
                   </>
+                    );
+                  })()
                 ) : (
                   <>
                     <ActivityIndicator size="large" color={c.accent} />
