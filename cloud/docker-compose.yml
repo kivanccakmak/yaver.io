@@ -34,20 +34,29 @@ services:
       # display a helpful message when a personal OAuth token hits this box.
       - YAVER_CLOUD_TENANT=1
       - YAVER_CLOUD_CHECKOUT_URL=${YAVER_CLOUD_CHECKOUT_URL:-https://yaver.io/pricing}
+      # The token travels as an ENVIRONMENT variable, expanded by the shell
+      # INSIDE the container ($$ defers compose interpolation). The previous
+      # form interpolated it into the container COMMAND at create time,
+      # which put the literal token in `ps` output / `docker inspect` on the
+      # host — a process-listing credential leak (found live 2026-07-27).
+      # /proc/<pid>/environ is owner-root-only; argv is world-readable.
+      - CLOUD_OWNER_TOKEN=${CLOUD_OWNER_TOKEN:?set CLOUD_OWNER_TOKEN in .env}
     volumes:
       - yaver-data:/root/.yaver
     command:
       - /bin/sh
       - -lc
       - |
+        umask 077
         mkdir -p /root/.yaver
         cat > /root/.yaver/config.json <<EOF
         {
-          "auth_token": "${CLOUD_OWNER_TOKEN:?set CLOUD_OWNER_TOKEN in .env}",
+          "auth_token": "$${CLOUD_OWNER_TOKEN}",
           "convex_site_url": "https://shocking-echidna-394.eu-west-1.convex.site",
           "device_id": "cloud-agent"
         }
         EOF
+        unset CLOUD_OWNER_TOKEN
         exec yaver serve --debug --no-tls --no-relay --no-quic --port 18080
     logging:
       driver: "json-file"
