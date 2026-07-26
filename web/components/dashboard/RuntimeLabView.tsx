@@ -13,6 +13,7 @@ import {
   type WorkspaceAppView,
 } from "@/lib/agent-client";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
+import { formatDevProgressLine } from "@/lib/devEventLine";
 import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
@@ -723,7 +724,9 @@ export default function RuntimeLabView({
         const ev = JSON.parse(msg.data);
         if (ev.type === "log" && typeof ev.message === "string") appendLog(`dev: ${ev.message}`);
         else if (ev.type === "phase" && ev.topic && ev.phase) appendLog(`${ev.topic}: ${ev.phase}`);
-        else if (ev.type === "progress" && ev.topic) appendLog(`${ev.topic}: ${Math.round((ev.pct || 0) * 100)}% ${ev.phase || ""}`.trim());
+        // Agent pct is already 0..100 (devserver.go Pct) — multiplying by
+        // 100 here printed "1575% streaming". formatDevProgressLine clamps.
+        else if (ev.type === "progress" && ev.topic) appendLog(formatDevProgressLine(ev.topic, ev.pct, ev.phase));
         else if (ev.type === "ready") appendLog("dev server ready");
         else if (ev.type === "error" && ev.error) appendLog(`dev error: ${ev.error}`);
         else if (ev.type === "snapshot" && ev.snapshot?.recentLogs?.length) {
