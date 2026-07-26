@@ -159,6 +159,13 @@
 	</array>
 	<key>RCTNewArchEnabled</key>
 	<true/>
+	<!-- The presence of this manifest flips the app into scene-based
+	     lifecycle. It MUST therefore declare BOTH roles: with only the CarPlay
+	     role (as shipped through build 474), the phone UI ran in an anonymous
+	     window scene with no delegate, so URL opens / NSUserActivity went to
+	     nobody and AppDelegate.application(_:open:options:) never fired —
+	     every yaver:// deep link app-wide was silently dropped. See
+	     YaverSceneDelegate.swift. -->
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UISceneConfigurations</key>
@@ -172,6 +179,15 @@
 					<string>Yaver CarPlay</string>
 					<key>UISceneDelegateClassName</key>
 					<string>$(PRODUCT_MODULE_NAME).YaverCarPlaySceneDelegate</string>
+				</dict>
+			</array>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Yaver App</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).YaverSceneDelegate</string>
 				</dict>
 			</array>
 		</dict>
