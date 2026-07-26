@@ -35,12 +35,20 @@ type runnerBrowserAuthStartRequest struct {
 }
 
 type runnerBrowserAuthSession struct {
-	ID             string `json:"id"`
-	Runner         string `json:"runner"`
-	TenantUserID   string `json:"tenantUserId,omitempty"`
-	Method         string `json:"method"`
-	Status         string `json:"status"`
-	OpenURL        string `json:"openUrl,omitempty"`
+	ID           string `json:"id"`
+	Runner       string `json:"runner"`
+	TenantUserID string `json:"tenantUserId,omitempty"`
+	Method       string `json:"method"`
+	Status       string `json:"status"`
+	OpenURL      string `json:"openUrl,omitempty"`
+	// CallbackPort is the loopback port the CLI is waiting on for its OAuth
+	// redirect. A client that binds the SAME port locally and forwards it here
+	// lets the user finish sign-in in their own browser on their own machine:
+	// redirect_uri is http://localhost:<this>, which is valid on both ends, and
+	// PKCE forbids rewriting it to anything else. 0 means "not found" — never a
+	// guess, because forwarding the wrong port sends the browser somewhere
+	// silent. See runner_auth_callback_port.go.
+	CallbackPort   int    `json:"callbackPort,omitempty"`
 	Code           string `json:"code,omitempty"`
 	Detail         string `json:"detail,omitempty"`
 	AuthConfigured bool   `json:"authConfigured"`
@@ -187,6 +195,26 @@ func watchInterceptedBrowserURL(sess *runnerBrowserAuthSessionState, interceptor
 			state.Detail = "Captured the sign-in link the CLI tried to open locally — finish it on this device."
 		}
 		log.Printf("[runner-auth-browser] %s captured openUrl via browser shim: %s", state.Runner, url)
+	})
+}
+
+// watchRunnerCallbackPort records the CLI's loopback callback port on the
+// session once it binds one.
+//
+// Polled rather than read once: the socket appears AFTER spawn, often behind a
+// keychain probe or a network round-trip, so an immediate check finds nothing
+// in every real case.
+func watchRunnerCallbackPort(sess *runnerBrowserAuthSessionState, pid int) {
+	port := waitForRunnerCallbackPort(context.Background(), pid, 45*time.Second)
+	if port <= 0 {
+		return
+	}
+	sess.update(func(state *runnerBrowserAuthSession) {
+		if state.CallbackPort != 0 {
+			return
+		}
+		state.CallbackPort = port
+		log.Printf("[runner-auth-browser] %s waiting for its OAuth callback on localhost:%d — a client forwarding that port can finish the sign-in from its own browser", state.Runner, port)
 	})
 }
 
@@ -516,6 +544,11 @@ func startRunnerBrowserAuthSession(runner string, tr tenantRuntime, onTerminal f
 	go scanRunnerBrowserAuthOutput(sess, stderr)
 	// A CLI that prints nothing must not leave the caller spinning forever.
 	go watchRunnerBrowserAuthSilence(sess, runner)
+	// Find the loopback port the CLI will wait on, so a client can forward it
+	// and complete the flow from the user's own browser.
+	if cmd.Process != nil {
+		go watchRunnerCallbackPort(sess, cmd.Process.Pid)
+	}
 	recordRunnerBrowserAuthOperation(sess.snapshot())
 	go func() {
 		err := cmd.Wait()
