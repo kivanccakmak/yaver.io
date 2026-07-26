@@ -30,7 +30,10 @@ func TestBuildFeedbackInstallPlan(t *testing.T) {
 
 	t.Run("auto-detects flutter", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "pubspec.yaml"), []byte("name: demo\n"), 0644)
+		// detectFramework deliberately refuses a bare pubspec.yaml (a plain
+		// Dart CLI/server is not a Flutter app — see classify.go), so the
+		// fixture must carry a real Flutter marker: the `sdk: flutter` dep.
+		os.WriteFile(filepath.Join(dir, "pubspec.yaml"), []byte("name: demo\ndependencies:\n  flutter:\n    sdk: flutter\n"), 0644)
 
 		plan, err := buildSDKInstallPlan(dir, "feedback", "")
 		if err != nil {
