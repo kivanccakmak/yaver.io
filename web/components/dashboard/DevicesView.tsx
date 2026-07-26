@@ -12,7 +12,7 @@ import { ManagedCloudSummary } from "@/components/dashboard/ManagedCloudPanel";
 import WakeProgress, { ParkedSummary } from "@/components/dashboard/WakeProgress";
 import { HIDE_PAID_UI } from "@/lib/launchFlags";
 import { CONVEX_URL } from "@/lib/constants";
-import { agentClient, AgentClient, requestAgentUpdateViaConvex, type AgentUpdateStatus, type RunnerBrowserAuthSession, type RunnerTestResult } from "@/lib/agent-client";
+import { agentClient, AgentClient, requestAgentUpdateViaConvex, type AgentUpdateStatus, type OpenCodeConfigSummary, type OpenCodeModelSummary, type OpenCodeProviderSummary, type RunnerBrowserAuthSession, type RunnerTestResult } from "@/lib/agent-client";
 import {
   lastSeenAgeMs,
   formatAgeShort,
@@ -56,6 +56,46 @@ function transportToneClasses(tone: TransportInfo["tone"]): string {
     case "rose":    return "border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-200";
     default:        return "border-slate-300 bg-white text-slate-600 dark:border-surface-700 dark:bg-surface-800/40 dark:text-surface-300";
   }
+}
+
+export type OpenCodeConfigSnapshot = {
+  deviceId: string;
+  model?: string;
+  provider?: string;
+  defaultAgent?: string;
+  buildModel?: string;
+  planModel?: string;
+  models?: OpenCodeModelSummary[];
+  providers?: Array<Omit<OpenCodeProviderSummary, "models"> & { models?: string[] }>;
+  agents?: NonNullable<OpenCodeConfigSummary["agents"]>;
+  diagnostics?: string[];
+  updatedAt: number;
+};
+
+export function openCodeSnapshotFromConfig(deviceId: string, cfg: OpenCodeConfigSummary): OpenCodeConfigSnapshot {
+  const model = String(cfg.model || cfg.buildModel || cfg.planModel || cfg.models?.find((m) => m.isDefault)?.id || "").trim();
+  const provider = String((model.includes("/") ? model.split("/")[0] : "") || cfg.providers?.find((p) => p.hasApiKey)?.id || "").trim();
+  return {
+    deviceId,
+    ...(model ? { model } : {}),
+    ...(provider ? { provider } : {}),
+    ...(cfg.defaultAgent ? { defaultAgent: cfg.defaultAgent } : {}),
+    ...(cfg.buildModel ? { buildModel: cfg.buildModel } : {}),
+    ...(cfg.planModel ? { planModel: cfg.planModel } : {}),
+    ...(cfg.models?.length ? { models: cfg.models } : {}),
+    ...(cfg.providers?.length ? {
+      providers: cfg.providers.map((p) => ({
+        id: p.id,
+        ...(p.name ? { name: p.name } : {}),
+        ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
+        ...(p.hasApiKey !== undefined ? { hasApiKey: p.hasApiKey } : {}),
+        ...(p.models?.length ? { models: p.models.map((m) => m.id) } : {}),
+      })),
+    } : {}),
+    ...(cfg.agents?.length ? { agents: cfg.agents } : {}),
+    ...(cfg.diagnostics?.length ? { diagnostics: cfg.diagnostics } : {}),
+    updatedAt: Date.now(),
+  };
 }
 
 function transportFor(device: Device): TransportInfo {
@@ -1963,6 +2003,7 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
   primaryModelByDevice: Record<string, string>;
   primaryModeByDevice: Record<string, string>;
   primaryProviderByDevice: Record<string, string>;
+  opencodeConfigByDevice: Record<string, OpenCodeConfigSnapshot>;
   setPrimaryRunner: (
     deviceId: string,
     runnerId: string | null,
@@ -1970,11 +2011,13 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
     mode?: string | null,
     provider?: string | null,
   ) => Promise<void>;
+  setOpenCodeConfigSnapshot: (snapshot: OpenCodeConfigSnapshot) => Promise<void>;
 } {
   const [runnerMap, setRunnerMap] = useState<Record<string, string>>({});
   const [modelMap, setModelMap] = useState<Record<string, string>>({});
   const [modeMap, setModeMap] = useState<Record<string, string>>({});
   const [providerMap, setProviderMap] = useState<Record<string, string>>({});
+  const [opencodeConfigMap, setOpenCodeConfigMap] = useState<Record<string, OpenCodeConfigSnapshot>>({});
   const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
@@ -2019,6 +2062,14 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
           setModelMap(models);
           setModeMap(modes);
           setProviderMap(providers);
+          const snapshots: Record<string, OpenCodeConfigSnapshot> = {};
+          const snapshotRows = Array.isArray(data?.settings?.opencodeConfigByDevice)
+            ? (data.settings.opencodeConfigByDevice as OpenCodeConfigSnapshot[])
+            : [];
+          for (const row of snapshotRows) {
+            if (row?.deviceId) snapshots[row.deviceId] = row;
+          }
+          setOpenCodeConfigMap(snapshots);
         }
       } catch {
         // best-effort — falls back to no per-device pref
@@ -2098,12 +2149,26 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
     [token, runnerMap, modelMap, modeMap, providerMap],
   );
 
+  const setOpenCodeConfigSnapshot = useCallback(async (snapshot: OpenCodeConfigSnapshot) => {
+    if (!token) return;
+    setOpenCodeConfigMap((prev) => ({ ...prev, [snapshot.deviceId]: snapshot }));
+    const res = await fetch(`${CONVEX_URL}/settings`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ opencodeConfigForDevice: snapshot }),
+    });
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    broadcastPrimaryRunnerChange();
+  }, [token]);
+
   return {
     primaryRunnerByDevice: runnerMap,
     primaryModelByDevice: modelMap,
     primaryModeByDevice: modeMap,
     primaryProviderByDevice: providerMap,
+    opencodeConfigByDevice: opencodeConfigMap,
     setPrimaryRunner,
+    setOpenCodeConfigSnapshot,
   };
 }
 
@@ -2121,31 +2186,45 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
  */
 function useLiveOpenCodeByDevice(
   devices: Device[],
-  runnerByDevice: Record<string, string>,
-  providerByDevice: Record<string, string>,
-  modelByDevice: Record<string, string>,
+  cachedByDevice: Record<string, OpenCodeConfigSnapshot>,
+  setSnapshot: (snapshot: OpenCodeConfigSnapshot) => Promise<void>,
   agentConnected: boolean,
 ): Record<string, { provider: string; model: string }> {
-  const [live, setLive] = useState<Record<string, { provider: string; model: string }>>({});
+  const [live, setLive] = useState<Record<string, { provider: string; model: string }>>(() => {
+    const seeded: Record<string, { provider: string; model: string }> = {};
+    for (const [deviceId, snap] of Object.entries(cachedByDevice)) {
+      if (snap.model || snap.provider) seeded[deviceId] = { provider: snap.provider || "", model: snap.model || "" };
+    }
+    return seeded;
+  });
   const fetchedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    setLive((prev) => {
+      const next = { ...prev };
+      for (const [deviceId, snap] of Object.entries(cachedByDevice)) {
+        if (!next[deviceId] && (snap.model || snap.provider)) {
+          next[deviceId] = { provider: snap.provider || "", model: snap.model || "" };
+        }
+      }
+      return next;
+    });
+  }, [cachedByDevice]);
 
   useEffect(() => {
     if (!agentConnected) return;
     let cancelled = false;
     (async () => {
       for (const d of devices) {
-        if (runnerByDevice[d.id] !== "opencode") continue;
-        if (providerByDevice[d.id] || modelByDevice[d.id]) continue;
         if (fetchedRef.current.has(d.id)) continue;
         fetchedRef.current.add(d.id);
         try {
           const cfg = await agentClient.openCodeConfig(d.id);
           if (cancelled) return;
-          const m = (cfg?.model || "").trim();
-          if (!m) continue;
-          const slash = m.indexOf("/");
-          const provider = slash > 0 ? m.slice(0, slash) : "";
-          setLive((prev) => ({ ...prev, [d.id]: { provider, model: m } }));
+          const snapshot = openCodeSnapshotFromConfig(d.id, cfg);
+          if (!snapshot.model && !snapshot.provider && !snapshot.models?.length && !snapshot.providers?.length) continue;
+          setLive((prev) => ({ ...prev, [d.id]: { provider: snapshot.provider || "", model: snapshot.model || "" } }));
+          void setSnapshot(snapshot).catch(() => {});
         } catch {
           // Device unreachable / opencode not installed — leave the
           // catalogue fallback in place. Allow a retry on next change.
@@ -2154,7 +2233,7 @@ function useLiveOpenCodeByDevice(
       }
     })();
     return () => { cancelled = true; };
-  }, [devices, runnerByDevice, providerByDevice, modelByDevice, agentConnected]);
+  }, [devices, setSnapshot, agentConnected]);
 
   return live;
 }
@@ -2171,6 +2250,7 @@ export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
   // ChatGPT-account Codex login ("not supported when using Codex with a
   // ChatGPT account").
   codex: "gpt-5.3-codex",
+  opencode: "zai-coding-plan/glm-4.7",
 };
 
 export function isKivancAccount(email: string | null | undefined): boolean {
@@ -2201,9 +2281,24 @@ export function preferredDefaultRunnerForDevice(
   availableRunnerIds: string[],
 ): string | null {
   if (availableRunnerIds.length === 0) return null;
+  const haystack = `${device.name || ""} ${device.hostName || ""}`.toLowerCase();
+  const platform = String(device.platform || "").trim().toLowerCase();
+  const isRemoteLinux =
+    platform === "linux" &&
+    (haystack.includes("hetzner") ||
+      haystack.includes("cloud") ||
+      haystack.includes("remote") ||
+      haystack.includes("ubuntu-") ||
+      haystack.includes("yaver-"));
+  if (isRemoteLinux && availableRunnerIds.includes("opencode")) {
+    return "opencode";
+  }
   if (isKivancAccount(signedInEmail)) {
     if (isKivancMacBook(device) && availableRunnerIds.includes("claude")) {
       return "claude";
+    }
+    if (!isKivancMacBook(device) && availableRunnerIds.includes("opencode")) {
+      return "opencode";
     }
     if (!isKivancMacBook(device) && availableRunnerIds.includes("codex")) {
       return "codex";
@@ -2869,7 +2964,7 @@ export default function DevicesView({
       ),
     [managedMachines, deviceIdSet],
   );
-  const { primaryRunnerByDevice, primaryModelByDevice, primaryProviderByDevice, setPrimaryRunner } = usePrimaryRunnerByDevice(token);
+  const { primaryRunnerByDevice, primaryModelByDevice, primaryProviderByDevice, opencodeConfigByDevice, setPrimaryRunner, setOpenCodeConfigSnapshot } = usePrimaryRunnerByDevice(token);
   // Phase C: which device (if any) has the recycle dialog open. The
   // dialog is a fixed overlay so it can render inline next to the
   // trigger button; the agent owns every safety guard.
@@ -2880,9 +2975,8 @@ export default function DevicesView({
   // instead of the static catalogue's first entry.
   const liveOpenCodeByDevice = useLiveOpenCodeByDevice(
     devices,
-    primaryRunnerByDevice,
-    primaryProviderByDevice,
-    primaryModelByDevice,
+    opencodeConfigByDevice,
+    setOpenCodeConfigSnapshot,
     agentConnectionState === "connected",
   );
   // Latest released agent version from GitHub. Drives the per-device

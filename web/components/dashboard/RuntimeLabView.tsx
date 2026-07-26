@@ -8,13 +8,14 @@ import {
   type RemoteRuntimeTarget,
   type Runner,
   type RunnerBrowserAuthSession,
+  type Task,
   type TaskStatus,
   type WorkspaceAppView,
 } from "@/lib/agent-client";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
-import { usePrimaryRunnerByDevice } from "./DevicesView";
+import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
 
 type Project = {
   name: string;
@@ -49,18 +50,14 @@ const mobilePreviewDevices: Record<MobilePreviewMode, { label: string; width: nu
   tablet: { label: "Tablet", width: 820, height: 1180, radius: 26 },
 };
 
-function RuntimePreviewLoadingSurface({
-  mobile,
-  device,
+function RuntimePreviewLoadingScreen({
   note,
   projectName,
 }: {
-  mobile: boolean;
-  device: { label: string; width: number; height: number; radius: number };
   note?: string | null;
   projectName?: string;
 }) {
-  const body = (
+  return (
     <div className="flex h-full flex-col bg-[#05070a] text-white">
       <div className="flex h-9 items-center justify-between px-5 text-[11px] font-semibold text-white/80">
         <span>9:41</span>
@@ -90,6 +87,20 @@ function RuntimePreviewLoadingSurface({
       </div>
     </div>
   );
+}
+
+function RuntimePreviewLoadingSurface({
+  mobile,
+  device,
+  note,
+  projectName,
+}: {
+  mobile: boolean;
+  device: { label: string; width: number; height: number; radius: number };
+  note?: string | null;
+  projectName?: string;
+}) {
+  const body = <RuntimePreviewLoadingScreen note={note} projectName={projectName} />;
 
   if (!mobile) {
     return (
@@ -297,6 +308,57 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function normalizeRunnerId(runnerId?: string | null): string {
+  const normalized = String(runnerId || "").trim().toLowerCase();
+  if (normalized === "claude-code") return "claude";
+  return normalized;
+}
+
+function isModelCompatibleWithRunner(modelId: string | null | undefined, runnerId: string | null | undefined): boolean {
+  const model = String(modelId || "").trim().toLowerCase();
+  const runner = normalizeRunnerId(runnerId);
+  if (!model || !runner) return false;
+  if (runner === "claude") return model.startsWith("claude-");
+  if (runner === "codex") return model.startsWith("gpt-") || model.startsWith("o") || model.includes("codex");
+  if (runner === "opencode") {
+    const [provider, modelName, ...extra] = model.split("/");
+    return Boolean(provider && modelName && extra.length === 0);
+  }
+  return true;
+}
+
+function safeModelForRunner(
+  runnerId: string | null | undefined,
+  selectedModel: string | null | undefined,
+  availableModels: Array<{ id: string; isDefault?: boolean }> | undefined,
+): string | undefined {
+  const runner = normalizeRunnerId(runnerId);
+  if (!runner || runner === "custom") return undefined;
+  const selected = String(selectedModel || "").trim();
+  if (selected && isModelCompatibleWithRunner(selected, runner) && (availableModels?.length ? availableModels.some((m) => m.id === selected) : true)) {
+    return selected;
+  }
+  const fallback =
+    availableModels?.find((model) => model.isDefault && isModelCompatibleWithRunner(model.id, runner))?.id ||
+    availableModels?.find((model) => isModelCompatibleWithRunner(model.id, runner))?.id;
+  return fallback || undefined;
+}
+
+function taskOutputLines(task: Pick<Task, "output" | "resultText" | "status"> | null | undefined, fallback: string[] = []): string[] {
+  const output = Array.isArray(task?.output)
+    ? task.output.flatMap((line) => String(line || "").split(/\r?\n/).map((part) => part.trimEnd()).filter(Boolean))
+    : [];
+  if (output.length) return output.slice(-240);
+  const result = String(task?.resultText || "").trim();
+  if (result) return result.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean).slice(-240);
+  if (fallback.length) return fallback.slice(-240);
+  const status = task?.status;
+  if (status && status !== "queued" && status !== "running") {
+    return [`No runner output was captured for this ${status} task.`];
+  }
+  return [];
+}
+
 async function waitForDevPreviewUrl(bundleUrl?: string): Promise<{ url: string; note: string }> {
   const signedUrl = signedBundlePreviewUrl(bundleUrl);
   if (signedUrl) return { url: signedUrl, note: "Web UI bundle ready." };
@@ -453,7 +515,7 @@ export default function RuntimeLabView({
   connectedDevice?: Device | null;
 }) {
   const { token } = useAuth();
-  const { primaryRunnerByDevice, primaryModelByDevice, setPrimaryRunner } = usePrimaryRunnerByDevice(token);
+  const { primaryRunnerByDevice, primaryModelByDevice, opencodeConfigByDevice, setPrimaryRunner, setOpenCodeConfigSnapshot } = usePrimaryRunnerByDevice(token);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedPath, setSelectedPath] = useState("");
   const [runners, setRunners] = useState<Runner[]>([]);
@@ -488,6 +550,8 @@ export default function RuntimeLabView({
   const [webPreviewUrl, setWebPreviewUrl] = useState<string | null>(null);
   const [webPreviewPanelOpen, setWebPreviewPanelOpen] = useState(false);
   const [runtimeControlsOpen, setRuntimeControlsOpen] = useState(false);
+  const [vibingSettingsOpen, setVibingSettingsOpen] = useState(false);
+  const [webPreviewFrameReady, setWebPreviewFrameReady] = useState(false);
   const [webPreviewBusy, setWebPreviewBusy] = useState(false);
   const [webPreviewNote, setWebPreviewNote] = useState<string | null>(null);
   const [mobilePreviewMode, setMobilePreviewMode] = useState<MobilePreviewMode>("phone");
@@ -584,16 +648,40 @@ export default function RuntimeLabView({
     () => runners.find((runner) => runner.id === selectedRunner) || null,
     [runners, selectedRunner],
   );
-  const availableModels = selectedRunnerRow?.models || [];
+  const opencodeSnapshot = connectedDevice?.id ? opencodeConfigByDevice[connectedDevice.id] : undefined;
+  const availableModels = useMemo(() => {
+    if (normalizeRunnerId(selectedRunner) === "opencode" && opencodeSnapshot?.models?.length) {
+      return opencodeSnapshot.models.map((model) => ({
+        id: model.id,
+        name: model.name || model.id,
+        provider: model.provider,
+        isDefault: model.isDefault,
+        source: model.source || "opencode-config",
+      }));
+    }
+    return selectedRunnerRow?.models || [];
+  }, [opencodeSnapshot?.models, selectedRunner, selectedRunnerRow?.models]);
 
   useEffect(() => {
-    const explicitModel = connectedDevice?.id ? primaryModelByDevice[connectedDevice.id] : "";
+    if (!connectedDevice?.id || normalizeRunnerId(selectedRunner) !== "opencode") return;
+    let cancelled = false;
+    void agentClient.openCodeConfig(connectedDevice.id).then((cfg) => {
+      if (cancelled) return;
+      const snapshot = openCodeSnapshotFromConfig(connectedDevice.id, cfg);
+      if (!snapshot.model && !snapshot.provider && !snapshot.models?.length && !snapshot.providers?.length) return;
+      void setOpenCodeConfigSnapshot(snapshot).catch(() => {});
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [connectedDevice?.id, selectedRunner, setOpenCodeConfigSnapshot]);
+
+  useEffect(() => {
+    const explicitModel = connectedDevice?.id ? primaryModelByDevice[connectedDevice.id] || opencodeSnapshot?.model || "" : "";
     if (explicitModel && availableModels.some((model) => model.id === explicitModel)) {
       setSelectedModel(explicitModel);
     } else if (!selectedModel || !availableModels.some((model) => model.id === selectedModel)) {
       setSelectedModel(availableModels.find((model) => model.isDefault)?.id || availableModels[0]?.id || "");
     }
-  }, [availableModels, connectedDevice?.id, primaryModelByDevice, selectedModel]);
+  }, [availableModels, connectedDevice?.id, opencodeSnapshot?.model, primaryModelByDevice, selectedModel]);
 
   useEffect(() => {
     if (!runnerAuthStatus?.id || ["completed", "failed", "cancelled", "account_not_eligible"].includes(runnerAuthStatus.status)) return;
@@ -674,7 +762,10 @@ export default function RuntimeLabView({
 
   const saveRunnerChoice = useCallback(async () => {
     if (!connectedDevice?.id || !selectedRunner) return;
-    await setPrimaryRunner(connectedDevice.id, selectedRunner, selectedModel || null);
+    const provider = normalizeRunnerId(selectedRunner) === "opencode" && selectedModel.includes("/")
+      ? selectedModel.split("/")[0]
+      : null;
+    await setPrimaryRunner(connectedDevice.id, selectedRunner, selectedModel || null, undefined, provider);
     appendLog(`runner set: ${selectedRunner}${selectedModel ? ` ${selectedModel}` : ""}`);
   }, [appendLog, connectedDevice?.id, selectedModel, selectedRunner, setPrimaryRunner]);
 
@@ -684,16 +775,20 @@ export default function RuntimeLabView({
     setSending(true);
     try {
       stopActiveTaskStream();
+      const effectiveModel = safeModelForRunner(selectedRunner, selectedModel, availableModels);
+      if (selectedModel && selectedRunner && effectiveModel !== selectedModel) {
+        appendLog(`model corrected for ${selectedRunner}: ${selectedModel} -> ${effectiveModel || "runner default"}`);
+      }
       const task = await agentClient.createTask({
         title: prompt.slice(0, 80),
         description: prompt,
         runner: selectedRunner || undefined,
-        model: selectedModel || undefined,
+        model: effectiveModel,
         projectName: selectedProject?.name,
         workDir: selectedProject?.path,
       });
-      setActiveTaskStream({ id: task.id, title: task.title, status: task.status, lines: [] });
-      appendLog(`task ${task.id} started with ${selectedRunner || "default runner"}`);
+      setActiveTaskStream({ id: task.id, title: task.title, status: task.status, lines: taskOutputLines(task) });
+      appendLog(`task ${task.id} started with ${selectedRunner || "default runner"}${effectiveModel ? ` ${effectiveModel}` : ""}`);
       taskStreamStopRef.current = agentClient.streamTaskOutput(task.id, (line) => {
         const trimmed = String(line || "").trimEnd();
         if (!trimmed) return;
@@ -707,8 +802,8 @@ export default function RuntimeLabView({
         void agentClient.getTask(task.id).then((fresh) => {
           setActiveTaskStream((prev) => {
             if (!prev || prev.id !== task.id) return prev;
-            const lines = fresh.output?.length ? fresh.output : prev.lines;
-            return { ...prev, status: fresh.status, lines: lines.slice(-240) };
+            const lines = taskOutputLines(fresh, prev.lines);
+            return { ...prev, status: fresh.status, lines };
           });
           if (fresh.status !== "queued" && fresh.status !== "running") stopActiveTaskStream();
         }).catch(() => {});
@@ -719,7 +814,7 @@ export default function RuntimeLabView({
     } finally {
       setSending(false);
     }
-  }, [appendLog, composer, selectedModel, selectedProject, selectedRunner, sending, stopActiveTaskStream]);
+  }, [appendLog, availableModels, composer, selectedModel, selectedProject, selectedRunner, sending, stopActiveTaskStream]);
 
   useEffect(() => {
     void loadProjects();
@@ -778,6 +873,7 @@ export default function RuntimeLabView({
     setWebPreviewPanelOpen(true);
     setRuntimeControlsOpen(false);
     setWebPreviewUrl(null);
+    setWebPreviewFrameReady(false);
     setWebPreviewBusy(true);
     setWebPreviewNote(null);
     setError(null);
@@ -849,8 +945,17 @@ export default function RuntimeLabView({
     setWebPreviewPanelOpen(false);
     setRuntimeControlsOpen(false);
     setWebPreviewUrl(null);
+    setWebPreviewFrameReady(false);
     setWebPreviewNote(null);
   }, []);
+
+  useEffect(() => {
+    if (!webPreviewUrl) {
+      setWebPreviewFrameReady(false);
+      return;
+    }
+    setWebPreviewFrameReady(false);
+  }, [webPreviewUrl]);
 
   useEffect(() => {
     if (!intent || intent.kind !== "runtime" || projects.length === 0) return;
@@ -1105,7 +1210,7 @@ export default function RuntimeLabView({
                             }}
                           >
                             <div
-                              className="overflow-hidden bg-black"
+                              className="relative overflow-hidden bg-black"
                               style={{
                                 borderRadius: Math.max(0, mobilePreviewDevice.radius - 10),
                                 width: mobilePreviewDevice.width,
@@ -1118,16 +1223,36 @@ export default function RuntimeLabView({
                                 height={mobilePreviewDevice.height}
                                 className="border-none bg-white"
                                 title={`${mobilePreviewDevice.label} Web UI preview`}
+                                onLoad={() => window.setTimeout(() => setWebPreviewFrameReady(true), 900)}
                               />
+                              {!webPreviewFrameReady ? (
+                                <div className="absolute inset-0">
+                                  <RuntimePreviewLoadingScreen
+                                    note={webPreviewNote || "Starting mobile web preview..."}
+                                    projectName={selectedProject?.name}
+                                  />
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         </div>
                       ) : (
-                        <iframe
-                          src={webPreviewUrl}
-                          className="h-[520px] w-full rounded-md border border-[#d7dce3] bg-white"
-                          title="Project Web UI preview"
-                        />
+                        <div className="relative h-[520px] w-full overflow-hidden rounded-md border border-[#d7dce3] bg-[#0b0d11]">
+                          <iframe
+                            src={webPreviewUrl}
+                            className="h-full w-full border-none bg-white"
+                            title="Project Web UI preview"
+                            onLoad={() => window.setTimeout(() => setWebPreviewFrameReady(true), 900)}
+                          />
+                          {!webPreviewFrameReady ? (
+                            <div className="absolute inset-0">
+                              <RuntimePreviewLoadingScreen
+                                note={webPreviewNote || "Starting web preview..."}
+                                projectName={selectedProject?.name}
+                              />
+                            </div>
+                          ) : null}
+                        </div>
                       )}
                     </section>
                   ) : null}
@@ -1210,117 +1335,8 @@ export default function RuntimeLabView({
         ) : null}
       </div>
 
-      <aside className="min-h-0 space-y-3 overflow-y-auto border-t border-[#d7dce3] pt-3 dark:border-[#2a3039] xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
-        <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
-          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Vibing</div>
-          <div className="text-sm font-medium text-[#1f2933] dark:text-[#e6e8ec]">Runner and chat</div>
-          <div className="mt-3 grid gap-2">
-            <label className="block">
-              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Runner</span>
-              <select
-                value={selectedRunner}
-                onChange={(event) => setSelectedRunner(event.target.value)}
-                className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
-              >
-                {runners.length === 0 ? <option value="">No runners detected</option> : null}
-                {runners.map((runner) => (
-                  <option key={runner.id} value={runner.id}>
-                    {runner.name}{runner.ready === false ? " (sign-in needed)" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {availableModels.length > 0 ? (
-              <label className="block">
-                <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Model</span>
-                <select
-                  value={selectedModel}
-                  onChange={(event) => setSelectedModel(event.target.value)}
-                  className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
-                >
-                  {availableModels.map((model) => (
-                    <option key={model.id} value={model.id}>{model.name || model.id}</option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            <div className="flex flex-wrap gap-2">
-              <button
-                disabled={!connectedDevice?.id || !selectedRunner}
-                onClick={() => void saveRunnerChoice()}
-                className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-700 disabled:opacity-40 dark:text-emerald-200"
-              >
-                Save for machine
-              </button>
-              {selectedRunnerRow?.supportsBrowserAuth && selectedRunnerRow.ready === false ? (
-                <button
-                  disabled={runnerAuthBusy}
-                  onClick={() => void startSelectedRunnerSignIn()}
-                  className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
-                >
-                  {runnerAuthBusy ? "Opening..." : "Remote OAuth"}
-                </button>
-              ) : null}
-            </div>
-            {runnerAuthStatus ? (
-              <div className="rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 text-[11px] text-[#475467] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]">
-                <div className="font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">OAuth status</div>
-                <div className="mt-1">{runnerAuthStatus.status.replaceAll("_", " ")}</div>
-                {runnerAuthStatus.callbackPort ? (
-                  <div className="mt-1 text-[#667085] dark:text-[#9aa3af]">
-                    Waiting on localhost:{runnerAuthStatus.callbackPort}. If the auth tab ends on a localhost callback page, paste its address below.
-                  </div>
-                ) : null}
-                {runnerAuthStatus.code ? <div className="mt-1 font-mono">Code: {runnerAuthStatus.code}</div> : null}
-                {runnerAuthStatus.openUrl ? (
-                  <a href={runnerAuthStatus.openUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-sky-700 underline dark:text-sky-300">
-                    Open auth page
-                  </a>
-                ) : null}
-                {runnerAuthStatus.detail ? <div className="mt-1">{runnerAuthStatus.detail}</div> : null}
-                {runnerAuthStatus.callbackPort && !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
-                  <div className="mt-2 space-y-1">
-                    <input
-                      value={runnerAuthCallbackUrl}
-                      onChange={(event) => setRunnerAuthCallbackUrl(event.target.value)}
-                      onPaste={(event) => {
-                        const pasted = event.clipboardData.getData("text") || "";
-                        const cleaned = pasted.trim();
-                        if (cleaned !== pasted) {
-                          event.preventDefault();
-                          setRunnerAuthCallbackUrl(cleaned);
-                        }
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" && runnerAuthCallbackUrl.trim()) {
-                          event.preventDefault();
-                          void submitRunnerAuthCallback();
-                        }
-                      }}
-                      placeholder={`http://localhost:${runnerAuthStatus.callbackPort}/callback?...`}
-                      spellCheck={false}
-                      autoComplete="off"
-                      autoCorrect="off"
-                      autoCapitalize="off"
-                      className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 font-mono text-[11px] text-[#1f2933] outline-none focus:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
-                    />
-                    <button
-                      type="button"
-                      disabled={!runnerAuthCallbackUrl.trim() || runnerAuthCallbackBusy}
-                      onClick={() => void submitRunnerAuthCallback()}
-                      className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
-                    >
-                      {runnerAuthCallbackBusy ? "Delivering..." : "Deliver callback"}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-            {runnerAuthError ? <div className="text-[11px] text-rose-700 dark:text-rose-300">{runnerAuthError}</div> : null}
-          </div>
-        </div>
-
-        <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+      <aside className="flex min-h-0 flex-col gap-3 overflow-y-auto border-t border-[#d7dce3] pt-3 dark:border-[#2a3039] xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
+        <div className="flex min-h-[320px] flex-1 flex-col rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Chat</div>
           {activeTaskStream ? (
             <div className="mb-2">
@@ -1331,7 +1347,7 @@ export default function RuntimeLabView({
               <pre
                 ref={taskConsoleRef}
                 onScroll={(event) => setTaskConsolePinned(isNearBottom(event.currentTarget))}
-                className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[#1f2933] bg-[#111318] p-2 text-[11px] leading-5 text-[#d5dae1]"
+                className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[#1f2933] bg-[#111318] p-2 text-[11px] leading-5 text-[#d5dae1]"
               >
                 {activeTaskStream.lines.length ? activeTaskStream.lines.join("\n") : "(waiting for runner output...)"}
               </pre>
@@ -1349,7 +1365,7 @@ export default function RuntimeLabView({
               ) : null}
             </div>
           ) : null}
-          <div className="flex items-end gap-2">
+          <div className="flex flex-1 items-end gap-2">
             <textarea
               value={composer}
               onChange={(event) => setComposer(event.target.value)}
@@ -1359,9 +1375,9 @@ export default function RuntimeLabView({
                   void sendPrompt();
                 }
               }}
-              rows={6}
+              rows={10}
               placeholder={selectedProject ? `Ask ${selectedRunner || "the runner"} to change ${selectedProject.name}` : "Pick a project, then send a vibing prompt"}
-              className="min-h-[132px] flex-1 resize-y rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] outline-none focus:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
+              className="min-h-[220px] flex-1 resize-y rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] outline-none focus:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
             />
             <button
               disabled={!composer.trim() || sending}
@@ -1395,6 +1411,160 @@ export default function RuntimeLabView({
           >
             {log.length ? log.join("\n") : "No runtime operations yet."}
           </pre>
+        </div>
+        <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+          <button
+            type="button"
+            onClick={() => setVibingSettingsOpen((open) => !open)}
+            className="flex w-full items-center justify-between gap-3 text-left"
+            aria-expanded={vibingSettingsOpen}
+          >
+            <div className="min-w-0">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Vibing</div>
+              <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#475467] dark:text-[#d7dce3]">
+                <span><span className="font-semibold text-[#1f2933] dark:text-[#e6e8ec]">Runner</span> {selectedRunnerRow?.name || selectedRunner || "none"}</span>
+                <span className="text-[#98a2b3]">/</span>
+                <span className="min-w-0 truncate"><span className="font-semibold text-[#1f2933] dark:text-[#e6e8ec]">Model</span> {safeModelForRunner(selectedRunner, selectedModel, availableModels) || selectedModel || "runner default"}</span>
+              </div>
+            </div>
+            <span className="shrink-0 text-xs font-semibold text-sky-700 dark:text-sky-300">
+              {vibingSettingsOpen ? "Hide" : "Settings"}
+            </span>
+          </button>
+          {vibingSettingsOpen || runnerAuthStatus || runnerAuthError ? (
+            <div className="mt-3 grid gap-2">
+              <label className="block">
+                <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Runner</span>
+                <select
+                  value={selectedRunner}
+                  onChange={(event) => setSelectedRunner(event.target.value)}
+                  className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
+                >
+                  {runners.length === 0 ? <option value="">No runners detected</option> : null}
+                  {runners.map((runner) => (
+                    <option key={runner.id} value={runner.id}>
+                      {runner.name}{runner.ready === false ? " (sign-in needed)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {availableModels.length > 0 ? (
+                <label className="block">
+                  <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Model</span>
+                  <select
+                    value={selectedModel}
+                    onChange={(event) => setSelectedModel(event.target.value)}
+                    className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
+                  >
+                    {availableModels.map((model) => (
+                      <option key={model.id} value={model.id}>{model.name || model.id}</option>
+                    ))}
+                  </select>
+                  {normalizeRunnerId(selectedRunner) === "opencode" ? (
+                    <div className="mt-2 rounded-md border border-cyan-500/20 bg-cyan-500/5 p-2 text-[10px] text-[#475467] dark:text-[#c7d2e1]">
+                      <div className="font-semibold uppercase tracking-wide text-cyan-700 dark:text-cyan-200">OpenCode config</div>
+                      <div className="mt-1 grid gap-1">
+                        <div>Provider: <span className="font-mono">{safeModelForRunner(selectedRunner, selectedModel, availableModels)?.split("/")[0] || opencodeSnapshot?.provider || "from opencode default"}</span></div>
+                        <div>Model: <span className="font-mono">{safeModelForRunner(selectedRunner, selectedModel, availableModels) || opencodeSnapshot?.model || "from opencode default"}</span></div>
+                        <div>Agent: <span className="font-mono">{opencodeSnapshot?.defaultAgent || "build"}</span></div>
+                        {opencodeSnapshot?.buildModel ? <div>Build model: <span className="font-mono">{opencodeSnapshot.buildModel}</span></div> : null}
+                        {opencodeSnapshot?.planModel ? <div>Plan model: <span className="font-mono">{opencodeSnapshot.planModel}</span></div> : null}
+                        {opencodeSnapshot?.providers?.length ? (
+                          <div>
+                            Auth: {opencodeSnapshot.providers.map((provider) => `${provider.id}${provider.hasApiKey ? " key" : ""}`).join(", ")}
+                          </div>
+                        ) : null}
+                        {opencodeSnapshot?.updatedAt ? (
+                          <div>Snapshot: {new Date(opencodeSnapshot.updatedAt).toLocaleTimeString()}</div>
+                        ) : null}
+                      </div>
+                      {opencodeSnapshot?.diagnostics?.length ? (
+                        <div className="mt-2 text-amber-700 dark:text-amber-200">
+                          {opencodeSnapshot.diagnostics.join(" ")}
+                        </div>
+                      ) : null}
+                      <div className="mt-2 text-[#667085] dark:text-[#9aa3af]">
+                        OpenCode uses provider/model IDs such as zai-coding-plan/glm-4.7. Unqualified Codex models are blocked before send.
+                      </div>
+                    </div>
+                  ) : null}
+                </label>
+              ) : null}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  disabled={!connectedDevice?.id || !selectedRunner}
+                  onClick={() => void saveRunnerChoice()}
+                  className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-700 disabled:opacity-40 dark:text-emerald-200"
+                >
+                  Save for machine
+                </button>
+                {selectedRunnerRow?.supportsBrowserAuth && selectedRunnerRow.ready === false ? (
+                  <button
+                    disabled={runnerAuthBusy}
+                    onClick={() => void startSelectedRunnerSignIn()}
+                    className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
+                  >
+                    {runnerAuthBusy ? "Opening..." : "Remote OAuth"}
+                  </button>
+                ) : null}
+              </div>
+              {runnerAuthStatus ? (
+                <div className="rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 text-[11px] text-[#475467] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]">
+                  <div className="font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">OAuth status</div>
+                  <div className="mt-1">{runnerAuthStatus.status.replaceAll("_", " ")}</div>
+                  {runnerAuthStatus.callbackPort ? (
+                    <div className="mt-1 text-[#667085] dark:text-[#9aa3af]">
+                      Waiting on localhost:{runnerAuthStatus.callbackPort}. If the auth tab ends on a localhost callback page, paste its address below.
+                    </div>
+                  ) : null}
+                  {runnerAuthStatus.code ? <div className="mt-1 font-mono">Code: {runnerAuthStatus.code}</div> : null}
+                  {runnerAuthStatus.openUrl ? (
+                    <a href={runnerAuthStatus.openUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-sky-700 underline dark:text-sky-300">
+                      Open auth page
+                    </a>
+                  ) : null}
+                  {runnerAuthStatus.detail ? <div className="mt-1">{runnerAuthStatus.detail}</div> : null}
+                  {runnerAuthStatus.callbackPort && !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
+                    <div className="mt-2 space-y-1">
+                      <input
+                        value={runnerAuthCallbackUrl}
+                        onChange={(event) => setRunnerAuthCallbackUrl(event.target.value)}
+                        onPaste={(event) => {
+                          const pasted = event.clipboardData.getData("text") || "";
+                          const cleaned = pasted.trim();
+                          if (cleaned !== pasted) {
+                            event.preventDefault();
+                            setRunnerAuthCallbackUrl(cleaned);
+                          }
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && runnerAuthCallbackUrl.trim()) {
+                            event.preventDefault();
+                            void submitRunnerAuthCallback();
+                          }
+                        }}
+                        placeholder={`http://localhost:${runnerAuthStatus.callbackPort}/callback?...`}
+                        spellCheck={false}
+                        autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 font-mono text-[11px] text-[#1f2933] outline-none focus:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
+                      />
+                      <button
+                        type="button"
+                        disabled={!runnerAuthCallbackUrl.trim() || runnerAuthCallbackBusy}
+                        onClick={() => void submitRunnerAuthCallback()}
+                        className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
+                      >
+                        {runnerAuthCallbackBusy ? "Delivering..." : "Deliver callback"}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {runnerAuthError ? <div className="text-[11px] text-rose-700 dark:text-rose-300">{runnerAuthError}</div> : null}
+            </div>
+          ) : null}
         </div>
       </aside>
     </div>

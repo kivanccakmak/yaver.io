@@ -947,6 +947,45 @@ export default defineSchema({
         }),
       ),
     ),
+    // Latest non-secret OpenCode config observed per device. This is a cache
+    // of ~/.config/opencode/opencode.json metadata so web/mobile can render
+    // the right provider/model immediately, then refresh from the live agent.
+    // Never store API keys here; only provider ids, model ids, mode/agent ids,
+    // diagnostics, and timestamps.
+    opencodeConfigByDevice: v.optional(
+      v.array(
+        v.object({
+          deviceId: v.string(),
+          model: v.optional(v.string()),
+          provider: v.optional(v.string()),
+          defaultAgent: v.optional(v.string()),
+          buildModel: v.optional(v.string()),
+          planModel: v.optional(v.string()),
+          models: v.optional(v.array(v.object({
+            id: v.string(),
+            name: v.optional(v.string()),
+            provider: v.optional(v.string()),
+            isDefault: v.optional(v.boolean()),
+            source: v.optional(v.string()),
+          }))),
+          providers: v.optional(v.array(v.object({
+            id: v.string(),
+            name: v.optional(v.string()),
+            baseUrl: v.optional(v.string()),
+            hasApiKey: v.optional(v.boolean()),
+            models: v.optional(v.array(v.string())),
+          }))),
+          agents: v.optional(v.array(v.object({
+            name: v.string(),
+            model: v.optional(v.string()),
+            description: v.optional(v.string()),
+            isBuiltin: v.optional(v.boolean()),
+          }))),
+          diagnostics: v.optional(v.array(v.string())),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
     // Per-subsystem managed: true|false toggle. true = use Yaver's
     // hosted infrastructure for that subsystem (managed relay,
     // managed analytics, managed storage, …). false = user hosts

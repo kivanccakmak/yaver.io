@@ -103,6 +103,7 @@ export default function LoginScreen() {
   const [emailError, setEmailError] = useState("");
   const [passkeyLoading, setPasskeyLoading] = useState(false);
   const [emailPasswordEnabled, setEmailPasswordEnabled] = useState(false);
+  const [wordmarkFailed, setWordmarkFailed] = useState(false);
   const passkeySupported = isPasskeySupported();
   const isTabletPortrait = isTablet && !isTabletLandscape;
   const loginWordmark = isDark ? YAVER_LOGIN_WORDMARK_LIGHT : YAVER_LOGIN_WORDMARK_DARK;
@@ -500,17 +501,32 @@ export default function LoginScreen() {
                 isTabletLandscape && styles.headerLandscape,
               ]}
             >
-              <Image
-                source={loginWordmark}
-                style={[
-                  styles.wordmark,
-                  isTabletPortrait && styles.wordmarkTabletPortrait,
-                  isTabletLandscape && styles.wordmarkTabletLandscape,
-                ]}
-                resizeMode="contain"
-                accessibilityRole="image"
-                accessibilityLabel="Yaver"
-              />
+              {Platform.OS === "web" || wordmarkFailed ? (
+                <Text
+                  accessibilityRole="header"
+                  style={[
+                    styles.webWordmark,
+                    { color: c.textPrimary },
+                    isTabletPortrait && styles.webWordmarkTabletPortrait,
+                    isTabletLandscape && styles.webWordmarkTabletLandscape,
+                  ]}
+                >
+                  Yaver
+                </Text>
+              ) : (
+                <Image
+                  source={loginWordmark}
+                  style={[
+                    styles.wordmark,
+                    isTabletPortrait && styles.wordmarkTabletPortrait,
+                    isTabletLandscape && styles.wordmarkTabletLandscape,
+                  ]}
+                  resizeMode="contain"
+                  accessibilityRole="image"
+                  accessibilityLabel="Yaver"
+                  onError={() => setWordmarkFailed(true)}
+                />
+              )}
               <Text
                 style={[
                   styles.subtitle,
@@ -901,6 +917,24 @@ const styles = StyleSheet.create({
     width: 360,
     height: 140,
     marginBottom: 12,
+  },
+  webWordmark: {
+    fontSize: 64,
+    lineHeight: 76,
+    fontWeight: "900",
+    marginBottom: 10,
+    textAlign: "center",
+  },
+  webWordmarkTabletPortrait: {
+    fontSize: 82,
+    lineHeight: 94,
+    marginBottom: 12,
+  },
+  webWordmarkTabletLandscape: {
+    fontSize: 92,
+    lineHeight: 104,
+    marginBottom: 14,
+    textAlign: "left",
   },
   subtitle: {
     fontSize: 15,

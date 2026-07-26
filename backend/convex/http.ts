@@ -4899,6 +4899,11 @@ http.route({
       // (= Claude Code on a Linux box that happens to have it
       // installed).
       primaryRunnerForDevice: body.primaryRunnerForDevice,
+      // Non-secret OpenCode config metadata cache. The live agent remains the
+      // source of truth; this just lets clients render provider/model/agent
+      // details immediately on startup. API keys are not accepted by the
+      // Convex validator and must stay on the machine.
+      opencodeConfigForDevice: body.opencodeConfigForDevice,
       // Per-subsystem managed toggle. Client sends only the
       // subsystem(s) it's changing; backend merges the patch into
       // the existing record so other subsystems' toggles are

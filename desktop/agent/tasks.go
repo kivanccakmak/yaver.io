@@ -278,9 +278,8 @@ func runnerModelCompatible(runnerID, model string) bool {
 	case "codex":
 		return strings.HasPrefix(m, "gpt") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4")
 	case "opencode":
-		// opencode accepts an enormous variety of provider-prefixed
-		// model strings; trust whatever the user picked.
-		return true
+		provider, modelName, ok := strings.Cut(m, "/")
+		return ok && strings.TrimSpace(provider) != "" && strings.TrimSpace(modelName) != ""
 	}
 	// Unknown runner → don't second-guess.
 	return true
@@ -1633,6 +1632,31 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 
 	if source == "" {
 		source = "mobile"
+	}
+	if model != "" && !runnerModelCompatible(taskRunner.RunnerID, model) {
+		if normalizeRunnerID(taskRunner.RunnerID) == "opencode" {
+			if cfg, err := loadOpenCodeConfigSummary(); err == nil {
+				replacement := strings.TrimSpace(cfg.Model)
+				if replacement == "" {
+					replacement = strings.TrimSpace(cfg.BuildModel)
+				}
+				if replacement == "" {
+					replacement = strings.TrimSpace(cfg.PlanModel)
+				}
+				for _, candidate := range cfg.Models {
+					if replacement == "" && candidate.IsDefault {
+						replacement = strings.TrimSpace(candidate.ID)
+					}
+				}
+				if replacement != "" && runnerModelCompatible(taskRunner.RunnerID, replacement) {
+					log.Printf("[task] model %q is incompatible with runner %q; using OpenCode config model %q", model, taskRunner.RunnerID, replacement)
+					model = replacement
+				}
+			}
+		}
+		if model != "" && !runnerModelCompatible(taskRunner.RunnerID, model) {
+			return nil, fmt.Errorf("model %q is not compatible with runner %q", model, taskRunner.RunnerID)
+		}
 	}
 	id := uuid.New().String()[:8]
 

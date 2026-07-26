@@ -72,6 +72,10 @@ export function isModelCompatibleWithRunnerId(
   if (!model || !runner) return false;
   if (runner === "claude") return model.startsWith("claude-");
   if (runner === "codex") return model.startsWith("gpt-") || model.startsWith("o") || model.includes("codex");
+  if (runner === "opencode") {
+    const [provider, modelName, ...extra] = model.split("/");
+    return Boolean(provider && modelName && extra.length === 0);
+  }
   return true;
 }
 

@@ -393,7 +393,7 @@ export interface OpenCodeConfigSummary {
   buildModel?: string;
   planModel?: string;
   providers?: OpenCodeProviderSummary[];
-  models?: Array<{ id: string; name?: string; provider?: string }>;
+  models?: Array<{ id: string; name?: string; provider?: string; isDefault?: boolean; source?: string }>;
   agents?: OpenCodeAgentSummary[];
   diagnostics?: string[];
 }

@@ -678,10 +678,40 @@ export interface UserSettings {
     mode?: string | null;
     provider?: string | null;
   };
+  opencodeConfigForDevice?: {
+    deviceId: string;
+    model?: string | null;
+    provider?: string | null;
+    defaultAgent?: string | null;
+    buildModel?: string | null;
+    planModel?: string | null;
+    models?: Array<{ id: string; name?: string; provider?: string; isDefault?: boolean; source?: string }>;
+    providers?: Array<{ id: string; name?: string; baseUrl?: string; hasApiKey?: boolean; models?: string[] }>;
+    agents?: Array<{ name: string; model?: string; description?: string; isBuiltin?: boolean }>;
+    diagnostics?: string[];
+    updatedAt?: number;
+  };
   /** Read-only: full per-device runner map populated by the server on
    * GET /settings. Clients should not write this directly — write via
    * primaryRunnerForDevice instead. */
   primaryRunnerByDevice?: Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }>;
+  /** Read-only non-secret OpenCode config cache, keyed by device. The live
+   *  agent's opencode.json remains source of truth; this lets mobile render
+   *  provider/model/mode before the relay refresh returns. API keys are never
+   *  present, only hasApiKey booleans. */
+  opencodeConfigByDevice?: Array<{
+    deviceId: string;
+    model?: string;
+    provider?: string;
+    defaultAgent?: string;
+    buildModel?: string;
+    planModel?: string;
+    models?: Array<{ id: string; name?: string; provider?: string; isDefault?: boolean; source?: string }>;
+    providers?: Array<{ id: string; name?: string; baseUrl?: string; hasApiKey?: boolean; models?: string[] }>;
+    agents?: Array<{ name: string; model?: string; description?: string; isBuiltin?: boolean }>;
+    diagnostics?: string[];
+    updatedAt: number;
+  }>;
 }
 
 // ── Local secret storage (iOS Keychain / Android SecureStore) ───────

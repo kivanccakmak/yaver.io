@@ -14,7 +14,7 @@ import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
-import { quicClient, RecoveryResult, RelayServer, TunnelServer } from "../lib/quic";
+import { quicClient, RecoveryResult, RelayServer, TunnelServer, type OpenCodeConfigSummary } from "../lib/quic";
 import { connectionManager } from "../lib/connectionManager";
 import { useAuth } from "./AuthContext";
 import { getConvexSiteUrl, getLocalSecret, getUserSettings, saveUserSettings, LOCAL_KEYS, UserSettingsUnavailableError } from "../lib/auth";
@@ -32,6 +32,33 @@ import { resolveSweepOutcome } from "../lib/autoConnectStatus";
 // default gave every box LESS time to answer than the one they reach by
 // tapping. Same ladder, same budget, both directions.
 const AUTO_CONNECT_PROBE_MS = 4000;
+
+function openCodeSnapshotFromConfig(deviceId: string, cfg: OpenCodeConfigSummary) {
+  const model = String(cfg.model || cfg.buildModel || cfg.planModel || cfg.models?.find((m) => m.isDefault)?.id || "").trim();
+  const provider = String((model.includes("/") ? model.split("/")[0] : "") || cfg.providers?.find((p) => p.hasApiKey)?.id || "").trim();
+  return {
+    deviceId,
+    ...(model ? { model } : {}),
+    ...(provider ? { provider } : {}),
+    ...(cfg.defaultAgent ? { defaultAgent: cfg.defaultAgent } : {}),
+    ...(cfg.buildModel ? { buildModel: cfg.buildModel } : {}),
+    ...(cfg.planModel ? { planModel: cfg.planModel } : {}),
+    ...(cfg.models?.length ? { models: cfg.models } : {}),
+    ...(cfg.providers?.length ? {
+      providers: cfg.providers.map((p) => ({
+        id: p.id,
+        ...(p.name ? { name: p.name } : {}),
+        ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
+        ...(p.hasApiKey !== undefined ? { hasApiKey: p.hasApiKey } : {}),
+        ...(p.models?.length ? { models: p.models.map((m) => m.id) } : {}),
+      })),
+    } : {}),
+    ...(cfg.agents?.length ? { agents: cfg.agents } : {}),
+    ...(cfg.diagnostics?.length ? { diagnostics: cfg.diagnostics } : {}),
+    updatedAt: Date.now(),
+  };
+}
+
 import { localBoxDeviceIfRunning } from "../lib/sandboxControl";
 import { LOCAL_BOX_DEVICE_ID } from "../lib/localBox";
 import {
@@ -2750,6 +2777,24 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
               providers[String(row.deviceId)] = String(row.provider);
             }
           }
+          const snapshots = Array.isArray(settings.opencodeConfigByDevice)
+            ? settings.opencodeConfigByDevice
+            : [];
+          for (const snap of snapshots) {
+            const deviceId = String(snap?.deviceId || "");
+            if (!deviceId || runners[deviceId] !== "opencode") continue;
+            const model =
+              String(snap.model || "").trim() ||
+              String(snap.buildModel || "").trim() ||
+              String(snap.planModel || "").trim() ||
+              String(snap.models?.find((m: any) => m?.isDefault)?.id || "").trim();
+            if (!models[deviceId] && model) models[deviceId] = model;
+            const provider =
+              String(snap.provider || "").trim() ||
+              (model.includes("/") ? model.split("/")[0] : "");
+            if (!providers[deviceId] && provider) providers[deviceId] = provider;
+            if (!modes[deviceId] && snap.defaultAgent) modes[deviceId] = String(snap.defaultAgent);
+          }
           setPrimaryRunnerByDeviceState(runners);
           setPrimaryModelByDeviceState(models);
           setPrimaryModeByDeviceState(modes);
@@ -2802,6 +2847,11 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           const target = activeDevice?.id === deviceId ? undefined : deviceId;
           const cfg = await quicClient.getOpenCodeConfig(target);
           if (cancelled) return;
+          if (cfg && token) {
+            void saveUserSettings(token, {
+              opencodeConfigForDevice: openCodeSnapshotFromConfig(deviceId, cfg),
+            }).catch(() => {});
+          }
           const m = (cfg?.model || "").trim();
           if (!m) continue;
           const slash = m.indexOf("/");
@@ -2822,7 +2872,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [primaryRunnerByDevice, primaryProviderByDevice, primaryModelByDevice, activeDevice?.id]);
+  }, [primaryRunnerByDevice, primaryProviderByDevice, primaryModelByDevice, activeDevice?.id, token]);
 
   // One-time relay onboarding alert after first login
   const onboardingChecked = useRef(false);

@@ -27,6 +27,165 @@ const deployPreferencePatchValidator = v.object({
   play: v.optional(v.union(v.string(), v.null())),
 });
 
+const openCodeConfigSnapshotPatchValidator = v.object({
+  deviceId: v.string(),
+  model: v.optional(v.union(v.string(), v.null())),
+  provider: v.optional(v.union(v.string(), v.null())),
+  defaultAgent: v.optional(v.union(v.string(), v.null())),
+  buildModel: v.optional(v.union(v.string(), v.null())),
+  planModel: v.optional(v.union(v.string(), v.null())),
+  models: v.optional(v.array(v.object({
+    id: v.string(),
+    name: v.optional(v.string()),
+    provider: v.optional(v.string()),
+    isDefault: v.optional(v.boolean()),
+    source: v.optional(v.string()),
+  }))),
+  providers: v.optional(v.array(v.object({
+    id: v.string(),
+    name: v.optional(v.string()),
+    baseUrl: v.optional(v.string()),
+    hasApiKey: v.optional(v.boolean()),
+    models: v.optional(v.array(v.string())),
+  }))),
+  agents: v.optional(v.array(v.object({
+    name: v.string(),
+    model: v.optional(v.string()),
+    description: v.optional(v.string()),
+    isBuiltin: v.optional(v.boolean()),
+  }))),
+  diagnostics: v.optional(v.array(v.string())),
+  updatedAt: v.optional(v.number()),
+});
+
+type OpenCodeConfigSnapshotPatch = {
+  deviceId: string;
+  model?: string | null;
+  provider?: string | null;
+  defaultAgent?: string | null;
+  buildModel?: string | null;
+  planModel?: string | null;
+  models?: Array<{ id: string; name?: string; provider?: string; isDefault?: boolean; source?: string }>;
+  providers?: Array<{ id: string; name?: string; baseUrl?: string; hasApiKey?: boolean; models?: string[] }>;
+  agents?: Array<{ name: string; model?: string; description?: string; isBuiltin?: boolean }>;
+  diagnostics?: string[];
+  updatedAt?: number;
+};
+
+type OpenCodeConfigSnapshotRow = {
+  deviceId: string;
+  model?: string;
+  provider?: string;
+  defaultAgent?: string;
+  buildModel?: string;
+  planModel?: string;
+  models?: Array<{ id: string; name?: string; provider?: string; isDefault?: boolean; source?: string }>;
+  providers?: Array<{ id: string; name?: string; baseUrl?: string; hasApiKey?: boolean; models?: string[] }>;
+  agents?: Array<{ name: string; model?: string; description?: string; isBuiltin?: boolean }>;
+  diagnostics?: string[];
+  updatedAt: number;
+};
+
+function sanitizeOpenCodeConfigSnapshot(payload: OpenCodeConfigSnapshotPatch): OpenCodeConfigSnapshotRow {
+  const row: OpenCodeConfigSnapshotRow = {
+    deviceId: payload.deviceId,
+    updatedAt: payload.updatedAt ?? Date.now(),
+  };
+  const copyString = (key: "model" | "provider" | "defaultAgent" | "buildModel" | "planModel") => {
+    const value = payload[key];
+    if (typeof value === "string" && value.trim()) row[key] = value.trim();
+  };
+  copyString("model");
+  copyString("provider");
+  copyString("defaultAgent");
+  copyString("buildModel");
+  copyString("planModel");
+  const models = (payload.models ?? [])
+    .map((m) => ({
+      id: String(m.id || "").trim(),
+      ...(m.name ? { name: String(m.name) } : {}),
+      ...(m.provider ? { provider: String(m.provider) } : {}),
+      ...(m.isDefault !== undefined ? { isDefault: !!m.isDefault } : {}),
+      ...(m.source ? { source: String(m.source) } : {}),
+    }))
+    .filter((m) => m.id)
+    .slice(0, 80);
+  if (models.length) row.models = models;
+  const providers = (payload.providers ?? [])
+    .map((p) => ({
+      id: String(p.id || "").trim(),
+      ...(p.name ? { name: String(p.name) } : {}),
+      ...(p.baseUrl ? { baseUrl: String(p.baseUrl) } : {}),
+      ...(p.hasApiKey !== undefined ? { hasApiKey: !!p.hasApiKey } : {}),
+      ...(p.models?.length ? { models: p.models.map((m) => String(m)).filter(Boolean).slice(0, 80) } : {}),
+    }))
+    .filter((p) => p.id)
+    .slice(0, 40);
+  if (providers.length) row.providers = providers;
+  const agents = (payload.agents ?? [])
+    .map((a) => ({
+      name: String(a.name || "").trim(),
+      ...(a.model ? { model: String(a.model) } : {}),
+      ...(a.description ? { description: String(a.description) } : {}),
+      ...(a.isBuiltin !== undefined ? { isBuiltin: !!a.isBuiltin } : {}),
+    }))
+    .filter((a) => a.name)
+    .slice(0, 80);
+  if (agents.length) row.agents = agents;
+  const diagnostics = (payload.diagnostics ?? []).map((d) => String(d).trim()).filter(Boolean).slice(0, 40);
+  if (diagnostics.length) row.diagnostics = diagnostics;
+  return row;
+}
+
+function mergeOpenCodeConfigSnapshot(
+  existing: OpenCodeConfigSnapshotRow[] | undefined,
+  payload: OpenCodeConfigSnapshotPatch,
+): OpenCodeConfigSnapshotRow[] | undefined {
+  const row = sanitizeOpenCodeConfigSnapshot(payload);
+  const filtered = (existing ?? []).filter((cur) => cur.deviceId !== row.deviceId);
+  const next = [...filtered, row];
+  return next.length > 0 ? next : undefined;
+}
+
+function seedOpenCodePrimaryRunnerRow(
+  rows: Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }> | undefined,
+  snapshot: OpenCodeConfigSnapshotPatch,
+): Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }> | undefined {
+  const current = rows ?? [];
+  const idx = current.findIndex((row) => row.deviceId === snapshot.deviceId);
+  if (idx < 0 || current[idx].runnerId !== "opencode") return rows;
+  const row = { ...current[idx] };
+  const model = typeof snapshot.model === "string" && snapshot.model.trim()
+    ? snapshot.model.trim()
+    : typeof snapshot.buildModel === "string" && snapshot.buildModel.trim()
+      ? snapshot.buildModel.trim()
+      : typeof snapshot.planModel === "string" && snapshot.planModel.trim()
+        ? snapshot.planModel.trim()
+        : snapshot.models?.find((m) => m.isDefault)?.id;
+  const provider = typeof snapshot.provider === "string" && snapshot.provider.trim()
+    ? snapshot.provider.trim()
+    : model && model.includes("/")
+      ? model.split("/")[0]
+      : undefined;
+  let changed = false;
+  if (!row.model && model) {
+    row.model = model;
+    changed = true;
+  }
+  if (!row.provider && provider) {
+    row.provider = provider;
+    changed = true;
+  }
+  if (!row.mode && typeof snapshot.defaultAgent === "string" && snapshot.defaultAgent.trim()) {
+    row.mode = snapshot.defaultAgent.trim();
+    changed = true;
+  }
+  if (!changed) return rows;
+  const next = current.slice();
+  next[idx] = row;
+  return next;
+}
+
 // Exported: devices.resolveDeviceSig reuses this so the relay's SIGNATURE
 // auth path learns the caller's entitlement too — before that, only the
 // password path resolved isPaid/plan and sig-authenticated callers were all
@@ -200,6 +359,7 @@ export const set = internalMutation({
         provider: v.optional(v.union(v.string(), v.null())),
       }),
     ),
+    opencodeConfigForDevice: v.optional(openCodeConfigSnapshotPatchValidator),
     // Per-subsystem managed: true (Yaver-hosted) | false (user-hosted)
     // | null (unset → use legacy default). Clients send only the
     // subsystem(s) they're changing; unspecified keys retain their
@@ -297,6 +457,18 @@ export const set = internalMutation({
       }
       patch.primaryRunnerByDevice = next.length > 0 ? next : undefined;
     }
+    if (args.opencodeConfigForDevice !== undefined) {
+      patch.opencodeConfigByDevice = mergeOpenCodeConfigSnapshot(
+        existing?.opencodeConfigByDevice as OpenCodeConfigSnapshotRow[] | undefined,
+        args.opencodeConfigForDevice as OpenCodeConfigSnapshotPatch,
+      );
+      const seeded = seedOpenCodePrimaryRunnerRow(
+        (patch.primaryRunnerByDevice as Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }> | undefined) ??
+          (existing?.primaryRunnerByDevice as Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }> | undefined),
+        args.opencodeConfigForDevice as OpenCodeConfigSnapshotPatch,
+      );
+      if (seeded !== undefined) patch.primaryRunnerByDevice = seeded;
+    }
     if (args.managed !== undefined) {
       patch.managed = mergeManagedPatch(
         existing?.managed as Record<string, boolean | undefined> | undefined,
@@ -353,6 +525,7 @@ export const setByToken = mutation({
         provider: v.optional(v.union(v.string(), v.null())),
       }),
     ),
+    opencodeConfigForDevice: v.optional(openCodeConfigSnapshotPatchValidator),
     managed: v.optional(managedPatchValidator),
     deployPreferences: v.optional(deployPreferencePatchValidator),
     // Which tab the mobile app opens on. Stored here so the choice follows the
@@ -448,6 +621,18 @@ export const setByToken = mutation({
         next = [...filtered, row];
       }
       patch.primaryRunnerByDevice = next.length > 0 ? next : undefined;
+    }
+    if (args.opencodeConfigForDevice !== undefined) {
+      patch.opencodeConfigByDevice = mergeOpenCodeConfigSnapshot(
+        existing?.opencodeConfigByDevice as OpenCodeConfigSnapshotRow[] | undefined,
+        args.opencodeConfigForDevice as OpenCodeConfigSnapshotPatch,
+      );
+      const seeded = seedOpenCodePrimaryRunnerRow(
+        (patch.primaryRunnerByDevice as Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }> | undefined) ??
+          (existing?.primaryRunnerByDevice as Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }> | undefined),
+        args.opencodeConfigForDevice as OpenCodeConfigSnapshotPatch,
+      );
+      if (seeded !== undefined) patch.primaryRunnerByDevice = seeded;
     }
     if (args.managed !== undefined) {
       patch.managed = mergeManagedPatch(
