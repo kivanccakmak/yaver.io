@@ -98,10 +98,40 @@ func (bm *BrowserManager) OpenInteractiveSession(id, profileDir string, width, h
 		height = 800
 	}
 
+	// ── Headless when there is no GUI session to draw into ──────────────────
+	//
+	// headless=false launches a WINDOWED Chrome. The agent normally runs under
+	// launchd (macOS) or systemd (Linux) with no user session attached, so that
+	// window has nowhere to appear: Chrome starts, never finishes bringing up
+	// its UI, and the DevTools dial times out. Measured on the Mac mini
+	// 2026-07-26 with Chrome installed and running:
+	//
+	//   launch interactive chrome: could not dial ws://127.0.0.1:.../devtools/
+	//   browser/...: context deadline exceeded
+	//
+	// which reads as "no Chrome" and sent me looking for a missing binary.
+	//
+	// For the remote-browser case a window is not wanted anyway: frames are
+	// captured through CDP (Page.captureScreenshot) and streamed to whichever
+	// device the user is holding, so nothing needs to be drawn on the host. The
+	// new headless mode is a real Chrome — same engine, same rendering — not the
+	// old stripped one.
+	//
+	// A caller that genuinely wants a visible window on a machine someone is
+	// sitting at can still ask for it; the default now matches where the agent
+	// actually lives.
+	headlessMode := "new"
+	if os.Getenv("YAVER_BROWSER_HEADED") == "1" {
+		headlessMode = "false"
+	}
 	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", false),
+		chromedp.Flag("headless", headlessMode),
 		chromedp.Flag("mute-audio", true),
 		chromedp.Flag("no-sandbox", true),
+		// Not evasion: a HUMAN drives this session from another device, so the
+		// automation hint would be factually wrong. Nothing here defeats a
+		// CAPTCHA — a challenge simply appears on the user's screen and they
+		// solve it, exactly as they would sitting at the machine.
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.WindowSize(width, height),
 	)
@@ -115,8 +145,12 @@ func (bm *BrowserManager) OpenInteractiveSession(id, profileDir string, width, h
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), allocOpts...)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
-	// Boot Chrome.
-	if err := chromedp.Run(browserCtx); err != nil {
+	// Boot Chrome. A cold first launch with a fresh profile can take a while —
+	// far longer than chromedp's default patience — so give it an explicit,
+	// generous budget rather than reporting a slow start as a missing browser.
+	bootCtx, bootCancel := context.WithTimeout(browserCtx, 60*time.Second)
+	defer bootCancel()
+	if err := chromedp.Run(bootCtx); err != nil {
 		browserCancel()
 		allocCancel()
 		return fmt.Errorf("launch interactive chrome: %w (install Chrome/Chromium or Playwright Chromium)", err)
