@@ -1625,6 +1625,39 @@ export default function TasksScreen() {
   const [showTmuxSessions, setShowTmuxSessions] = useState(false);
   // Long-press target for the per-session action sheet (close/kill).
   const [tmuxActionsFor, setTmuxActionsFor] = useState<string | null>(null);
+
+  // Killing a tmux session is destructive and irreversible, so it confirms —
+  // and both entry points (the visible bin on each card, and the long-press
+  // action sheet) call THIS, so the two can never drift into asking different
+  // questions or skipping the prompt on one surface.
+  const confirmCloseTmuxSession = useCallback(
+    (target: string) => {
+      if (!target) return;
+      Alert.alert(
+        "Kill session?",
+        `tmux-session-${target} and anything running inside it will be terminated. This cannot be undone.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Kill session",
+            style: "destructive",
+            onPress: async () => {
+              try {
+                await quicClient.closeTmuxSessions(target);
+                // Refresh so the killed session disappears rather than
+                // lingering as a card whose buttons all fail.
+                const sessions = await quicClient.listTmuxSessions();
+                setTmuxSessions(sessions);
+              } catch (e) {
+                Alert.alert("Could not kill session", e instanceof Error ? e.message : String(e));
+              }
+            },
+          },
+        ],
+      );
+    },
+    [quicClient],
+  );
   const [tmuxSessions, setTmuxSessions] = useState<TmuxSession[]>([]);
   const [isLoadingTmux, setIsLoadingTmux] = useState(false);
   const [isAdopting, setIsAdopting] = useState<string | null>(null); // session name being adopted
@@ -6367,28 +6400,9 @@ export default function TasksScreen() {
                   const target = tmuxActionsFor;
                   setTmuxActionsFor(null);
                   if (!target) return;
-                  Alert.alert(
-                    "Close session?",
-                    `tmux-session-${target} and anything running inside it will be terminated.`,
-                    [
-                      { text: "Cancel", style: "cancel" },
-                      {
-                        text: "Close session",
-                        style: "destructive",
-                        onPress: async () => {
-                          try {
-                            await quicClient.closeTmuxSessions(target);
-                            // Refresh the list so the closed session disappears
-                            // instead of lingering as a card that does nothing.
-                            const sessions = await quicClient.listTmuxSessions();
-                            setTmuxSessions(sessions);
-                          } catch (e) {
-                            Alert.alert("Could not close", e instanceof Error ? e.message : String(e));
-                          }
-                        },
-                      },
-                    ],
-                  );
+                  // Same handler the card's bin uses — one prompt, one
+                  // behaviour, so the two entry points cannot drift.
+                  confirmCloseTmuxSession(target);
                 }}
                 style={{ paddingVertical: 13, borderRadius: 10, backgroundColor: "#ef444422", alignItems: "center", marginBottom: 8 }}
               >
@@ -6475,8 +6489,23 @@ export default function TasksScreen() {
                               {session.windowName ? ` · ${session.windowName}` : ""}
                             </Text>
                             <Text style={{ color: c.textMuted, fontSize: 10, marginTop: 2 }}>
-                              long-press for actions
+                              tap the bin to kill · long-press for actions
                             </Text>
+                          </Pressable>
+                          {/* Kill the session. Previously this lived ONLY behind
+                              a long-press, which is an invisible affordance: the
+                              card said "long-press for actions" and a user who
+                              wanted to stop a runaway session had to already know
+                              the gesture. A destructive action still confirms —
+                              the tap opens the same yes/no as the long-press
+                              path, so nothing dies on a stray finger. */}
+                          <Pressable
+                            onPress={() => confirmCloseTmuxSession(session.id || session.name)}
+                            hitSlop={10}
+                            accessibilityLabel={`Kill tmux session ${session.id || session.name}`}
+                            style={{ padding: 6, marginRight: 4 }}
+                          >
+                            <Ionicons name="trash-outline" size={18} color={c.error} />
                           </Pressable>
                           {alreadyAdopted ? (
                             <View style={[s.statusBadge, { backgroundColor: "#8b5cf622" }]}>

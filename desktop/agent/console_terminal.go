@@ -227,6 +227,20 @@ func (s *HTTPServer) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 				} `json:"resize"`
 				Type     string `json:"type"`
 				Password string `json:"password"`
+				// Ping is the web terminal's 30s keepalive
+				// ({"ping":1,"t":<ms>}). It MUST be recognised here: this
+				// handler types any unrecognised text frame into the PTY, so
+				// on 2026-07-26 the keepalive was typed into a live Claude
+				// Code TUI and the user's screen showed
+				//
+				//   > /login {"ping":1,"t":1785067684755}
+				//
+				// i.e. the one command that fixes an expired login was
+				// corrupted by Yaver's own heartbeat. runner_pty.go had
+				// already learned this ("never inject into the TUI"); this
+				// twin had not — the same two-implementations drift the
+				// cross-surface rule exists to catch.
+				Ping *json.RawMessage `json:"ping"`
 			}
 			if json.Unmarshal(data, &ctl) == nil {
 				if ctl.Resize != nil && (ctl.Resize.Cols > 0 || ctl.Resize.Rows > 0) {
@@ -247,6 +261,14 @@ func (s *HTTPServer) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 				if ctl.Type == "terminate_session" {
 					ts.close(true)
 					return
+				}
+				if ctl.Ping != nil || ctl.Type == "ping" {
+					// Answer it. The client force-closes after 60s with no
+					// inbound data of ANY kind, so an unanswered keepalive
+					// made an IDLE-BUT-HEALTHY terminal disconnect itself —
+					// a second bug hidden behind the first.
+					_ = ts.writeWS(websocket.TextMessage, []byte(`{"pong":1}`))
+					continue
 				}
 			}
 			_ = ts.writeInput(data)
