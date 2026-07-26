@@ -1969,10 +1969,26 @@ export default function VibeCodingView({
                       <div className="font-semibold uppercase tracking-[0.14em] text-surface-500">Sign-in status</div>
                       <div className="mt-2">{runnerAuthStatus.status.replaceAll("_", " ")}</div>
                       {runnerAuthStatus.code ? <div className="mt-1 break-all font-mono text-surface-200">Code: {runnerAuthStatus.code}</div> : null}
-                      {/* break-all: the CLI prints the full auth URL into this
-                          line — one unbroken token otherwise sets the PANE's
-                          intrinsic width and the whole column bleeds off-screen. */}
-                      {runnerAuthStatus.detail ? <div className="mt-1 break-all text-surface-400">{runnerAuthStatus.detail}</div> : null}
+                      {/* The CLI prints "If the browser didn't open, visit:
+                          <url>" as ONE line. Split at the first URL so the
+                          prose reads normally and the URL sits on its own
+                          mono line (break-all so the unbroken token can't
+                          widen the pane). */}
+                      {runnerAuthStatus.detail ? (() => {
+                        const detail = runnerAuthStatus.detail || "";
+                        const urlAt = detail.indexOf("https://");
+                        if (urlAt <= 0) {
+                          return <div className="mt-1 break-all text-surface-400">{detail}</div>;
+                        }
+                        const prose = detail.slice(0, urlAt).trim();
+                        const url = detail.slice(urlAt).trim();
+                        return (
+                          <div className="mt-1 text-surface-400">
+                            <div>{prose}</div>
+                            <div className="mt-1 break-all font-mono text-surface-300">{url}</div>
+                          </div>
+                        );
+                      })() : null}
                       {runnerAuthStatus.openUrl && !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
                         /* One-line, one-tap copy. The CLI's own "If the
                            browser didn't open, visit: <url>" line wraps over
