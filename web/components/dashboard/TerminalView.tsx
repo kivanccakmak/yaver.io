@@ -34,6 +34,7 @@ export default function TerminalView({
   launch,
   tmuxSession,
   tmuxTaskId,
+  onRunnerNeedsAuth,
   onCloseTerminal,
   onTmuxClosed,
 }: {
@@ -41,6 +42,7 @@ export default function TerminalView({
   launch?: "claude" | "codex" | "opencode";
   tmuxSession?: string;
   tmuxTaskId?: string;
+  onRunnerNeedsAuth?: (runner: "claude" | "codex") => void;
   onCloseTerminal?: () => void;
   onTmuxClosed?: () => void;
 }) {
@@ -54,6 +56,8 @@ export default function TerminalView({
   const [attempt, setAttempt] = useState(0);
   const [dictating, setDictating] = useState(false);
   const [runningRunner, setRunningRunner] = useState<string | null>(null);
+  const [checkingRunner, setCheckingRunner] = useState<string | null>(null);
+  const [runnerLaunchError, setRunnerLaunchError] = useState<string>("");
   const [closeBusy, setCloseBusy] = useState(false);
   const [closeError, setCloseError] = useState<string>("");
   const [sttAvailable] = useState<boolean>(
@@ -101,17 +105,37 @@ export default function TerminalView({
   // Open/close toggle: tap an idle runner to launch it, tap the active one to
   // send `/exit`. Best-effort state — reset on (re)connect since the PTY is new.
   const toggleRunner = useCallback(
-    (l: { id: string; command: string }) => {
+    async (l: { id: string; label: string; command: string }) => {
       if (status !== "open") return;
       if (runningRunner === l.id) {
         sendToPty("/exit\n");
         setRunningRunner(null);
-      } else {
-        sendToPty(`${l.command}\n`);
-        setRunningRunner(l.id);
+        return;
       }
+      setRunnerLaunchError("");
+      if (l.id === "claude" || l.id === "codex") {
+        setCheckingRunner(l.id);
+        try {
+          const result = await agentClient.testRunner(l.id, { timeoutMs: 20_000 });
+          if (!result.ok) {
+            if (result.needsAuth && result.supportsBrowserAuth) {
+              onRunnerNeedsAuth?.(l.id);
+              return;
+            }
+            setRunnerLaunchError(result.error || `${l.label} did not pass its preflight.`);
+            return;
+          }
+        } catch (err) {
+          setRunnerLaunchError(err instanceof Error ? err.message : String(err));
+          return;
+        } finally {
+          setCheckingRunner(null);
+        }
+      }
+      sendToPty(`${l.command}\n`);
+      setRunningRunner(l.id);
     },
-    [status, runningRunner, sendToPty],
+    [onRunnerNeedsAuth, runningRunner, sendToPty, status],
   );
 
   // Optional browser dictation → typed at the prompt (no auto-Enter).
@@ -289,15 +313,15 @@ export default function TerminalView({
             <button
               key={l.id}
               title={active ? `Exit ${l.label} (sends /exit)` : l.hint}
-              disabled={status !== "open"}
-              onClick={() => toggleRunner(l)}
+              disabled={status !== "open" || checkingRunner === l.id}
+              onClick={() => { void toggleRunner(l); }}
               className={`shrink-0 rounded border px-2.5 py-1 text-xs font-semibold disabled:opacity-40 ${
                 active
                   ? "border-violet-400 bg-violet-500 text-white hover:bg-violet-600"
                   : "border-violet-400/50 bg-violet-500/15 text-violet-700 dark:text-violet-200 hover:bg-violet-500/25"
               }`}
             >
-              {active ? `■ ${l.label}` : `▷ ${l.label}`}
+              {checkingRunner === l.id ? `… ${l.label}` : active ? `■ ${l.label}` : `▷ ${l.label}`}
             </button>
           );
         })}
@@ -342,6 +366,11 @@ export default function TerminalView({
         ) : null}
         {closeError ? (
           <span className="shrink-0 text-xs text-rose-300">{closeError}</span>
+        ) : null}
+        {runnerLaunchError ? (
+          <span className="shrink-0 max-w-[22rem] truncate text-xs text-rose-300" title={runnerLaunchError}>
+            {runnerLaunchError}
+          </span>
         ) : null}
       </div>
       <div className="relative flex-1 overflow-hidden">

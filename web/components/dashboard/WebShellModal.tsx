@@ -78,6 +78,7 @@ export default function WebShellModal({
   onClose,
   onConnect,
   onOpenRescue,
+  onRunnerNeedsAuth,
   onTmuxClosed,
 }: {
   device: Device;
@@ -89,9 +90,15 @@ export default function WebShellModal({
   onClose: () => void;
   onConnect: () => void;
   onOpenRescue?: () => void;
+  onRunnerNeedsAuth?: (runner: "claude" | "codex") => void;
   onTmuxClosed?: () => void;
 }) {
   const [maximized, setMaximized] = useState(false);
+  const [launchGate, setLaunchGate] = useState<{
+    key: string;
+    state: "checking" | "allowed" | "blocked";
+    message?: string;
+  } | null>(null);
   const connState = useAgentConnectionState();
   const reach = useBrowserReach(device);
   const hasRelay = agentClient.configuredRelayServers.length > 0;
@@ -139,6 +146,52 @@ export default function WebShellModal({
       : launch === "opencode"
         ? "OpenCode"
         : "Shell";
+  const authSensitiveLaunch = launch === "claude" || launch === "codex";
+
+  useEffect(() => {
+    if (state !== "ready" || !authSensitiveLaunch) {
+      setLaunchGate(null);
+      return;
+    }
+    const key = `${device.id}:${launch}`;
+    if (launchGate?.key === key) return;
+    let cancelled = false;
+    setLaunchGate({ key, state: "checking" });
+    (async () => {
+      try {
+        const result = await agentClient.testRunner(launch, { timeoutMs: 20_000 });
+        if (cancelled) return;
+        if (result.ok) {
+          setLaunchGate({ key, state: "allowed" });
+          return;
+        }
+        if (result.needsAuth && result.supportsBrowserAuth) {
+          setLaunchGate({ key, state: "blocked", message: result.error || "Runner needs sign-in." });
+          onRunnerNeedsAuth?.(launch);
+          return;
+        }
+        setLaunchGate({
+          key,
+          state: "blocked",
+          message: result.error || `${launch} did not pass its preflight.`,
+        });
+      } catch (err) {
+        if (cancelled) return;
+        setLaunchGate({
+          key,
+          state: "blocked",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authSensitiveLaunch, device.id, launch, launchGate?.key, launchGate?.state, onRunnerNeedsAuth, state]);
+
+  const terminalLaunch = authSensitiveLaunch
+    ? launchGate?.state === "allowed" ? launch : undefined
+    : launch;
 
   return (
     <div
@@ -183,13 +236,35 @@ export default function WebShellModal({
         </div>
         <div className={`flex-1 overflow-hidden ${state === "ready" ? "bg-[#0b0d10]" : "bg-slate-50/70 dark:bg-transparent p-2"}`}>
           {state === "ready" ? (
-            <TerminalView
-              launch={launch}
-              tmuxSession={tmuxSession}
-              tmuxTaskId={tmuxTaskId}
-              onCloseTerminal={onClose}
-              onTmuxClosed={onTmuxClosed}
-            />
+            authSensitiveLaunch && launchGate?.state !== "allowed" ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-slate-700 dark:text-surface-300">
+                <div className="rounded-full border border-sky-300 bg-sky-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200">
+                  {launchGate?.state === "checking" ? "Checking runner auth" : "Runner needs attention"}
+                </div>
+                <p className="max-w-md text-[13px] leading-5">
+                  {launchGate?.state === "checking"
+                    ? `Checking whether ${title} is signed in on ${device.alias ? `@${device.alias}` : device.name} before opening the PTY.`
+                    : launchGate?.message || `${title} is not ready on this machine.`}
+                </p>
+                {launchGate?.state === "blocked" && authSensitiveLaunch ? (
+                  <button
+                    onClick={() => onRunnerNeedsAuth?.(launch)}
+                    className="rounded-md border border-indigo-300 bg-indigo-50 px-4 py-2 text-[12px] font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-200 dark:hover:bg-indigo-500/15"
+                  >
+                    Sign in to {title}
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <TerminalView
+                launch={terminalLaunch}
+                tmuxSession={tmuxSession}
+                tmuxTaskId={tmuxTaskId}
+                onRunnerNeedsAuth={onRunnerNeedsAuth}
+                onCloseTerminal={onClose}
+                onTmuxClosed={onTmuxClosed}
+              />
+            )
           ) : state === "needs-reauth" ? (
             <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center text-slate-700 dark:text-surface-300">
               <div className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">

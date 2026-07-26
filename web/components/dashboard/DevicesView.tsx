@@ -3995,6 +3995,7 @@ export default function DevicesView({
             onOpen?.(shellSession.device);
           }}
           onOpenRescue={() => setRescueOpenDeviceId(shellSession.device.id)}
+          onRunnerNeedsAuth={(runner) => setAuthModal({ device: shellSession.device, runner })}
           onClose={() => setShellSession(null)}
         />
       ) : null}
