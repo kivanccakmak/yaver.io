@@ -290,20 +290,20 @@ export default function DownloadPage() {
             Use from Claude Code, Codex, or opencode (MCP)
           </h2>
           <p className="mt-3 text-sm leading-6 text-surface-400">
-            Yaver ships an MCP server. No global install needed &mdash; <code>npx</code> pulls it on
-            first run. Register it once, then ask the agent to call <code>yaver_lazy_setup</code>; it
-            surfaces the sign-in link and pairs your phone from inside the chat.
+            Install the CLI directly, or use the MCP server from Claude Code, Codex, or opencode.
+            MCP needs no global install &mdash; <code>npx</code> pulls it on first run.
           </p>
           <div className="mt-5 space-y-2 rounded-xl bg-surface-950 p-4 font-mono text-[12px] text-surface-300">
+            <div className="text-surface-500"># direct CLI</div>
+            <div><span className="text-surface-500">$</span> <span className="select-all">npm install -g yaver-cli</span></div>
+            <div><span className="text-surface-500">$</span> <span className="select-all">yaver auth</span></div>
+            <div className="mt-2 text-surface-500"># or as MCP</div>
             <div className="text-surface-500"># Claude Code</div>
             <div><span className="text-surface-500">$</span> <span className="select-all">claude mcp add --scope user yaver -- npx -y yaver-cli yaver-mcp</span></div>
             <div className="mt-2 text-surface-500"># Codex</div>
             <div><span className="text-surface-500">$</span> <span className="select-all">codex mcp add yaver -- npx -y yaver-cli yaver-mcp</span></div>
             <div className="mt-2 text-surface-500"># opencode</div>
             <div><span className="text-surface-500">$</span> <span className="select-all">npx -y -p yaver-cli yaver mcp setup opencode</span></div>
-            <div className="mt-2 text-surface-500"># direct CLI</div>
-            <div><span className="text-surface-500">$</span> <span className="select-all">npm install -g yaver-cli</span></div>
-            <div><span className="text-surface-500">$</span> <span className="select-all">yaver auth</span></div>
           </div>
           <p className="mt-4 text-xs text-surface-500">
             Already installed globally? <code>yaver mcp setup claude-code</code> writes the same entry,

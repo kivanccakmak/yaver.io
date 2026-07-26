@@ -381,42 +381,50 @@ function setupText(client: string) {
   if (client === "claude_code") {
     return [
       "Claude Code setup:",
-      "1. Run:",
+      "1. Direct CLI:",
+      "   npm install -g yaver-cli",
+      "   yaver auth",
+      "2. Or as MCP:",
       "   claude mcp add --scope user yaver -- npx -y yaver-cli yaver-mcp",
-      "2. Start a new Claude Code session.",
-      "3. Ask Claude Code to call yaver_lazy_setup.",
-      "4. Complete the sign-in/device-code flow and pair your phone or dev machine.",
+      "3. Start a new Claude Code session.",
+      "4. Ask Claude Code to call yaver_lazy_setup.",
+      "5. Complete the sign-in/device-code flow and pair your phone or dev machine.",
     ].join("\n");
   }
   if (client === "opencode") {
     return [
       "OpenCode setup:",
-      "1. Run:",
-      "   npx -y -p yaver-cli yaver mcp setup opencode",
-      "",
-      "Direct CLI:",
+      "1. Direct CLI:",
       "   npm install -g yaver-cli",
       "   yaver auth",
-      "2. Restart OpenCode.",
-      "3. Ask the agent to call yaver_lazy_setup.",
+      "2. Or as MCP:",
+      "   npx -y -p yaver-cli yaver mcp setup opencode",
+      "3. Restart OpenCode.",
+      "4. Ask the agent to call yaver_lazy_setup.",
     ].join("\n");
   }
   if (client === "codex_cli") {
     return [
       "Codex CLI setup:",
-      "1. Run:",
+      "1. Direct CLI:",
+      "   npm install -g yaver-cli",
+      "   yaver auth",
+      "2. Or as MCP:",
       "   codex mcp add yaver -- npx -y yaver-cli yaver-mcp",
-      "2. Start a fresh Codex session.",
-      "3. Ask Codex to call yaver_lazy_setup.",
+      "3. Start a fresh Codex session.",
+      "4. Ask Codex to call yaver_lazy_setup.",
     ].join("\n");
   }
   return [
     "Codex Desktop setup:",
-    "1. Install the Yaver plugin from the Yaver plugin marketplace entry, or add the MCP server manually:",
+    "1. Direct CLI:",
+    "   npm install -g yaver-cli",
+    "   yaver auth",
+    "2. Or install the Yaver plugin from the Yaver plugin marketplace entry, or add the MCP server manually:",
     "   codex mcp add yaver -- npx -y yaver-cli yaver-mcp",
-    "2. Start a fresh Codex session so the MCP server loads.",
-    "3. Ask Codex to call yaver_lazy_setup.",
-    "4. Complete sign-in, pair your phone, then use Yaver's local MCP tools for reload/build/dev-loop workflows.",
+    "3. Start a fresh Codex session so the MCP server loads.",
+    "4. Ask Codex to call yaver_lazy_setup.",
+    "5. Complete sign-in, pair your phone, then use Yaver's local MCP tools for reload/build/dev-loop workflows.",
   ].join("\n");
 }
 

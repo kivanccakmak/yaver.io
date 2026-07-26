@@ -1296,9 +1296,18 @@ export default function HomePage() {
                 yaver_lazy_setup to sign in and pair the phone in-chat. */}
             <div className="w-full max-w-xl text-left">
               <p className="mb-2 text-center text-[11px] text-surface-500">
-                In Claude Code, Codex, or opencode? Register Yaver as an MCP server &mdash; no install needed, npx pulls it on first run:
+                Start with the CLI directly, or register Yaver as an MCP server in Claude Code, Codex, or opencode:
               </p>
               <div className="space-y-1.5 rounded-lg border border-surface-800 bg-surface-950 px-4 py-3 font-mono text-[12px] leading-relaxed">
+                <div className="text-surface-500"># direct CLI:</div>
+                <div className="text-surface-600">
+                  $ <span className="select-all break-all text-surface-200">npm install -g yaver-cli</span>
+                </div>
+                <div className="text-surface-600">
+                  $ <span className="select-all break-all text-surface-200">yaver auth</span>
+                </div>
+                <div className="my-1.5 h-px bg-surface-800/60" />
+                <div className="text-surface-500"># or as MCP:</div>
                 <div className="text-surface-600">
                   $ <span className="select-all break-all text-surface-200">claude mcp add --scope user yaver -- npx -y yaver-cli yaver-mcp</span>
                 </div>
@@ -1311,14 +1320,6 @@ export default function HomePage() {
                 <div className="my-1.5 h-px bg-surface-800/60" />
                 <div className="text-surface-500"># then, in the agent chat:</div>
                 <div className="select-all break-all text-emerald-300">call yaver_lazy_setup</div>
-                <div className="my-1.5 h-px bg-surface-800/60" />
-                <div className="text-surface-500"># or install the CLI directly:</div>
-                <div className="text-surface-600">
-                  $ <span className="select-all break-all text-surface-200">npm install -g yaver-cli</span>
-                </div>
-                <div className="text-surface-600">
-                  $ <span className="select-all break-all text-surface-200">yaver auth</span>
-                </div>
               </div>
               <p className="mt-2 text-center text-[11px] text-surface-600">
                 <code className="rounded bg-surface-900 px-1.5 py-0.5 text-surface-400">
@@ -1420,15 +1421,16 @@ export default function HomePage() {
                   Register Yaver as an MCP server — no global install needed, <code>npx</code> pulls it on first run. Then ask the agent to call <code>yaver_lazy_setup</code>; it surfaces the sign-in link for you to tap and pairs your phone from inside the chat.
                 </p>
                 <div className="mt-2 space-y-1.5 rounded bg-surface-900 p-2">
+                  <div className="text-[10px] text-surface-500"># direct CLI</div>
+                  <code className="block text-[11px] text-surface-200 select-all">npm install -g yaver-cli</code>
+                  <code className="block text-[11px] text-surface-200 select-all">yaver auth</code>
+                  <div className="pt-1 text-[10px] text-surface-500"># or as MCP</div>
                   <div className="text-[10px] text-surface-500"># Claude Code</div>
                   <code className="block text-[11px] text-surface-200 select-all">claude mcp add --scope user yaver -- npx -y yaver-cli yaver-mcp</code>
                   <div className="text-[10px] text-surface-500"># Codex</div>
                   <code className="block text-[11px] text-surface-200 select-all">codex mcp add yaver -- npx -y yaver-cli yaver-mcp</code>
                   <div className="text-[10px] text-surface-500"># opencode</div>
                   <code className="block text-[11px] text-surface-200 select-all">npx -y -p yaver-cli yaver mcp setup opencode</code>
-                  <div className="pt-1 text-[10px] text-surface-500"># direct CLI</div>
-                  <code className="block text-[11px] text-surface-200 select-all">npm install -g yaver-cli</code>
-                  <code className="block text-[11px] text-surface-200 select-all">yaver auth</code>
                 </div>
                 <p className="mt-2 text-[11px] leading-relaxed text-surface-500">
                   Full tool list and remote/HTTP setup: <Link href="/docs/mcp" className="underline hover:text-surface-300">MCP guide</Link>. Other agents (Cursor, Aider, …) can paste{" "}

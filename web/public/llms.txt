@@ -27,17 +27,20 @@ If the human you're orchestrating is not a developer — they just want to
 be able to hit "reload" from a Yaver surface and don't care about the CLI —
 take the short path:
 
-1. **Register Yaver MCP in the current coding agent**:
+1. **Direct CLI option**:
+   `npm install -g yaver-cli`
+   `yaver auth`
+2. **Or register Yaver MCP in the current coding agent**:
    - Claude Code:
      `claude mcp add --scope user yaver -- npx -y yaver-cli yaver-mcp`
    - Codex:
      `codex mcp add yaver -- npx -y yaver-cli yaver-mcp`
    - opencode: use `npx -y -p yaver-cli yaver mcp setup opencode`.
-2. **Restart/reload the coding agent session if it does not immediately
+3. **Restart/reload the coding agent session if it does not immediately
    show the new MCP tools.** The MCP config is user-scoped and persists
    after this one-time step. The `npx` command downloads Yaver on demand;
    no manual binary download is needed.
-3. **MCP call** `yaver_lazy_setup` — **not** raw `yaver auth`. The tool
+4. **MCP call** `yaver_lazy_setup` — **not** raw `yaver auth`. The tool
    is idempotent; call it repeatedly while the human works on their
    phone. It returns a structured plan:
    - `status`: `signed_in` | `waiting_sign_in` | `error`

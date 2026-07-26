@@ -49,11 +49,16 @@ Then grab the app and pair it with that machine:
 
 Open Yaver, pick a project from your dev box, preview it on your phone, shake to vibe-code — fix a bug, ship a small feature, or tweak a style — and a fresh bundle lands in seconds. One screen, real device, no extra hardware.
 
-## Use it from your coding agent
+## Install or use it from your coding agent
 
-Yaver ships an MCP server, so Claude Code, Codex, or opencode can drive your machine directly. You don't need a global install first — `npx` pulls the server on first run. Register it once, then ask the agent to call `yaver_lazy_setup`; it surfaces a sign-in link and pairs your device from inside the chat.
+Install the CLI directly, or register Yaver as an MCP server so Claude Code, Codex, or opencode can drive your machine from chat. MCP does not need a global install first — `npx` pulls the server on first run.
 
 ```bash
+# direct CLI
+npm install -g yaver-cli
+yaver auth
+
+# or as MCP
 # Claude Code
 claude mcp add --scope user yaver -- npx -y yaver-cli yaver-mcp
 
@@ -63,9 +68,8 @@ codex mcp add yaver -- npx -y yaver-cli yaver-mcp
 # opencode
 npx -y -p yaver-cli yaver mcp setup opencode
 
-# direct CLI
-npm install -g yaver-cli
-yaver auth
+# then, in the agent chat:
+call yaver_lazy_setup
 ```
 
 Already installed globally? `yaver mcp setup claude-code` (or `codex` / `opencode`) writes the same entry, and `yaver auth` auto-registers every installed runner on first sign-in. Yaver is published to the official MCP registry as `io.github.yaver-io/yaver`. Codex Desktop can also load the repo-local plugin in [`plugins/yaver`](plugins/yaver).
