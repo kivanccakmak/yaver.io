@@ -316,6 +316,37 @@ changing those.
   5. A locally-built binary also reports a STALE `--version` (the real version is
      injected at release time), so `/info.version` will lie about what is
      running — never diagnose from it after a hot-swap.
+- **A MISSING TOOLCHAIN IS A PRODUCT REQUIREMENT, NOT A USER ERROR.** When an
+  operation needs a tool the box does not have, the answer is never a bare
+  "executable file not found". Three obligations, in order:
+  1. **NAME IT, on the surface the user is looking at.** Measured 2026-07-26: the
+     agent correctly returned `exec flutter: executable file not found in $PATH`
+     for e-mobile on a Hetzner box, and the phone showed "Waiting for the dev
+     server to report its address…" — a spinner over a fact the agent had
+     already stated. A truthful agent plus a client that drops the truth is
+     still an unfalsifiable product.
+  2. **OFFER THE INSTALL when it is possible, and STREAM IT.** The agent already
+     has recipes (`ensureRunnerInstalledStream`, `installNodeBackedCLI` in
+     `install_cmd.go` — claude, codex, opencode, node, vercel, convex,
+     supabase). A missing tool should render as a button, not a dead end, and
+     the download must narrate itself: stdout streamed to the surface with bytes
+     and elapsed time. A 2 GB SDK behind a silent spinner is the same defect as
+     a silent `serve` — the user cannot tell fetching from hung. Extend the
+     recipe table rather than special-casing per call site.
+  3. **SAY IMPOSSIBLE WHEN IT IS IMPOSSIBLE — never offer an install that cannot
+     work.** Flutter's official Linux SDK is published for **x64 only** (checked
+     against the release index: every stable build, incl. 3.44.8). On the
+     aarch64 Hetzner box there is nothing to install, so an "Install Flutter"
+     button there would fail after a long download and teach the user that Yaver
+     lies. The honest surface names the constraint AND the alternative: "Flutter
+     has no Linux/arm64 build — render this project on a macOS or x64 machine."
+     Probing the real capability (does a build exist for THIS os/arch?) before
+     offering the action is the same rule as "probe the operation, not the
+     inventory".
+  The generic shape for any capability gap: **state it → offer the fix if the fix
+  exists → stream the fix → name the constraint if it does not.** Applies to
+  runners, SDKs, simulators, emulators, `adb`, keychains and anything else a
+  future lane needs.
 - **Never WebView for third-party RN apps.** Use the Hermes-bundle native load
   path (`/dev/build-native` → ExpoReactNativeFactory). WebView is OK for plain
   web content (landing pages, docs).

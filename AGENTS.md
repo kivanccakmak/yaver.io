@@ -112,6 +112,31 @@ answers. The user's phone disconnects and nothing in the serve log explains it.
 - A local build reports a STALE `--version`, so `/info.version` lies after a
   hot-swap. Never diagnose from it.
 
+## A missing toolchain is a product requirement, not a user error
+
+Never surface a bare "executable file not found". Full version in
+[`CLAUDE.md`](CLAUDE.md); the shape is:
+
+**state it → offer the fix if the fix exists → stream the fix → name the
+constraint if it does not.**
+
+- **State it on the surface the user is on.** 2026-07-26: the agent correctly
+  said `exec flutter: executable file not found in $PATH`, and the phone showed
+  "Waiting for the dev server to report its address…". A truthful agent plus a
+  client that drops the truth is still an unfalsifiable product.
+- **Offer + stream the install.** `install_cmd.go` already has recipes
+  (`ensureRunnerInstalledStream`, `installNodeBackedCLI`). Render a button, not a
+  dead end, and stream stdout with bytes + elapsed — a 2 GB SDK behind a silent
+  spinner is the same defect as a silent `serve`.
+- **Never offer an impossible install.** Flutter's Linux SDK is x64-only, so on
+  an aarch64 box there is nothing to install: name the constraint and the
+  alternative ("render on macOS or x64") instead of failing after a long
+  download. Probe whether a build exists for THIS os/arch before offering the
+  action.
+
+Applies to runners, SDKs, simulators, emulators, adb, keychains — any capability
+gap.
+
 ## Hard safety rules (summarised from CLAUDE.md)
 
 - **Never push or commit without explicit user permission.**
