@@ -11757,7 +11757,7 @@ func relayHandleWSProxiedRequest(ws *websocket.Conn, agentAddr string, client *h
 	defer resp.Body.Close()
 
 	maxRespSize := int64(10 << 20)
-	if strings.HasPrefix(req.Path, "/dev/") {
+	if isDevProxyPath(req.Path) {
 		maxRespSize = 200 << 20
 	}
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxRespSize))
@@ -11767,7 +11767,7 @@ func relayHandleWSProxiedRequest(ws *websocket.Conn, agentAddr string, client *h
 			headers[k] = v[0]
 		}
 	}
-	if strings.HasPrefix(req.Path, "/dev/") {
+	if isDevProxyPath(req.Path) {
 		stripFrameBlockingHeaders(headers)
 	}
 	_ = relaySendWSFrame(ws, relayWSTunnelFrame{

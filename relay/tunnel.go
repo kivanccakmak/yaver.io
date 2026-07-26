@@ -195,6 +195,12 @@ func (t *TunnelClient) register(ctx context.Context, conn quic.Connection) error
 // returns an HTML 504 page. Keep this list aligned with every slow
 // /dev/* handler in desktop/agent/devserver_http.go and build_web.go.
 func isLongDevRequest(path string) bool {
+	// /dev-web/ serves multi-MB static bundles (17MB entry bundles,
+	// CanvasKit) — over a slow link that legitimately exceeds the 60s
+	// default, and the resulting HTML 504 is unparseable client-side.
+	if strings.HasPrefix(path, "/dev-web/") {
+		return true
+	}
 	if !strings.HasPrefix(path, "/dev/") {
 		return false
 	}
@@ -321,9 +327,11 @@ func (t *TunnelClient) handleRequest(stream quic.Stream) {
 	}
 	defer resp.Body.Close()
 
-	// Dev server bundles can be large (RN bundles ~20MB, Flutter ~50MB+); raise limit for /dev/ paths
+	// Dev server bundles can be large (RN bundles ~20MB, Flutter ~50MB+);
+	// raise the limit for dev-proxy paths (/dev/ AND /dev-web/ — the web
+	// sibling proxy is where the biggest bundles actually live).
 	maxRespSize := int64(10 << 20) // 10MB default
-	if strings.HasPrefix(req.Path, "/dev/") {
+	if isDevProxyPath(req.Path) {
 		maxRespSize = 200 << 20 // 200MB for dev server
 	}
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxRespSize))
@@ -341,7 +349,7 @@ func (t *TunnelClient) handleRequest(stream quic.Stream) {
 	// iframe from rendering. Strip those headers narrowly on /dev/*
 	// only — other paths retain their production-grade security
 	// posture.
-	if strings.HasPrefix(req.Path, "/dev/") {
+	if isDevProxyPath(req.Path) {
 		stripFrameBlockingHeaders(headers)
 	}
 
