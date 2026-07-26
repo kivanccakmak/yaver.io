@@ -515,14 +515,19 @@ function deriveRunnerChipStates(
     const authVerified = typeof raw?.authVerified === "boolean" ? raw.authVerified : undefined;
     const needsVerifiedAuth = id === "claude" || id === "codex";
     if (raw?.installed === false) return { id, label, health: "not-installed", hint: "Not installed on this machine" };
-    if (raw?.authConfigured === true && authVerified === false && needsVerifiedAuth) {
+    if (
+      needsVerifiedAuth &&
+      raw &&
+      authVerified !== true &&
+      (raw?.authConfigured === true || normalizeRunnerReportedStatus(status) === "ready")
+    ) {
       return {
         id,
         label,
         health: "needs-auth",
-        hint: rawError || "credentials found, but the runner has not verified this login",
+        hint: rawError || "the latest heartbeat did not prove this runner login with the CLI",
         authSource,
-        authVerified,
+        authVerified: false,
       };
     }
     if (raw?.ready === true) return { id, label, health: "ready", hint: authSource || status || "signed in", authSource, authVerified };
