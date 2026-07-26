@@ -7,7 +7,8 @@
 // terminal. Progress streams live from /streams/install:<tool>.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { agentClient, type CapabilitySnapshot, type IncidentEvent, type InfraSummary, type MachineOnboardingProviderStatus, type OpenCodeConfigSummary, type RunnerAuthStatusRow, type RunnerBrowserAuthSession } from "@/lib/agent-client";
+import { agentClient, isRunnerBrowserAuthTerminal, type CapabilitySnapshot, type IncidentEvent, type InfraSummary, type MachineOnboardingProviderStatus, type OpenCodeConfigSummary, type RunnerAuthStatusRow, type RunnerBrowserAuthSession } from "@/lib/agent-client";
+import { runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
 import { CONVEX_URL } from "@/lib/constants";
 import type { Device } from "@/lib/use-devices";
 
@@ -237,7 +238,10 @@ export default function ToolsView({ devices = [] }: Props) {
 
   useEffect(() => {
     if (!browserAuthSession) return;
-    if (browserAuthSession.status === "completed" || browserAuthSession.status === "failed" || browserAuthSession.status === "cancelled") {
+    // account_not_eligible is terminal too — polling past it kept the
+    // amber "in progress" badge alive forever over a verdict that cannot
+    // change (2026-07 audit).
+    if (isRunnerBrowserAuthTerminal(browserAuthSession.status)) {
       void loadRunnerAuth();
       return;
     }
@@ -245,7 +249,7 @@ export default function ToolsView({ devices = [] }: Props) {
       const res = await agentClient.runnerBrowserAuthStatus(browserAuthSession.id, target);
       if (res.ok && res.session) {
         setBrowserAuthSession(res.session);
-        if (res.session.status === "completed" || res.session.status === "failed" || res.session.status === "cancelled") {
+        if (isRunnerBrowserAuthTerminal(res.session.status)) {
           void loadRunnerAuth();
         }
       }
@@ -1009,17 +1013,28 @@ export default function ToolsView({ devices = [] }: Props) {
                   <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold ${
                     browserAuthSession.status === "completed"
                       ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                      : browserAuthSession.status === "failed"
+                      : browserAuthSession.status === "failed" || browserAuthSession.status === "account_not_eligible"
                         ? "bg-red-500/15 text-red-700 dark:text-red-300"
                         : browserAuthSession.status === "cancelled"
                           ? "bg-surface-800 text-surface-400"
                           : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
                   }`}>
-                    {browserAuthSession.status.toUpperCase()}
+                    {browserAuthSession.status.replaceAll("_", " ").toUpperCase()}
                   </span>
                   <span className="text-xs text-surface-500">{browserAuthSession.method}</span>
                 </div>
                 <p className="mt-2 text-sm text-surface-300">{browserAuthSession.detail || "Waiting for the remote CLI to emit the auth link..."}</p>
+                {browserAuthSession.status === "account_not_eligible" ? (
+                  <p className="mt-2 text-sm text-red-700 dark:text-red-300">
+                    The sign-in itself worked — this account has no eligible subscription for the runner. Retrying with the same account cannot succeed; sign in with a different account.
+                  </p>
+                ) : null}
+                {!isRunnerBrowserAuthTerminal(browserAuthSession.status)
+                  ? (() => {
+                      const line = runnerAuthLivenessLine(Date.now(), browserAuthSession.startedAt, browserAuthSession.lastOutputAt);
+                      return line ? <p className="mt-2 text-xs text-surface-500">{line}</p> : null;
+                    })()
+                  : null}
                 {browserAuthSession.error ? (
                   <p className="mt-2 text-sm text-red-700 dark:text-red-300">{browserAuthSession.error}</p>
                 ) : null}

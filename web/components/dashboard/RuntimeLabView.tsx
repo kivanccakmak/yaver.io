@@ -12,9 +12,10 @@ import {
   type TaskStatus,
   type WorkspaceAppView,
 } from "@/lib/agent-client";
+import { isRunnerBrowserAuthTerminal } from "@/lib/agent-client";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 import { formatDevProgressLine } from "@/lib/devEventLine";
-import { runnerAuthFlowKind } from "@/lib/runnerAuthFlow";
+import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
 import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
@@ -1797,6 +1798,12 @@ export default function RuntimeLabView({
                 <div className="rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 text-[11px] text-[#475467] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]">
                   <div className="font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">OAuth status</div>
                   <div className="mt-1">{runnerAuthStatus.status.replaceAll("_", " ")}</div>
+                  {!isRunnerBrowserAuthTerminal(runnerAuthStatus.status)
+                    ? (() => {
+                        const line = runnerAuthLivenessLine(Date.now(), runnerAuthStatus.startedAt, runnerAuthStatus.lastOutputAt);
+                        return line ? <div className="mt-1 text-[#667085] dark:text-[#9aa3af]">{line}</div> : null;
+                      })()
+                    : null}
                   {runnerAuthStatus.callbackPort ? (
                     <div className="mt-1 text-[#667085] dark:text-[#9aa3af]">
                       Waiting on localhost:{runnerAuthStatus.callbackPort}. If the auth tab ends on a localhost callback page, paste its address below.
@@ -1804,14 +1811,41 @@ export default function RuntimeLabView({
                   ) : null}
                   {runnerAuthStatus.code ? <div className="mt-1 font-mono">Code: {runnerAuthStatus.code}</div> : null}
                   {runnerAuthStatus.openUrl ? (
-                    <a href={runnerAuthStatus.openUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-sky-700 underline dark:text-sky-300">
-                      Open auth page
-                    </a>
+                    <div className="mt-1 space-y-1">
+                      <a href={runnerAuthStatus.openUrl} target="_blank" rel="noreferrer" className="inline-block text-sky-700 underline dark:text-sky-300">
+                        Open auth page
+                      </a>
+                      {/* One-line, one-tap copy — this panel used to show only
+                          the link text, so the URL itself could not be copied
+                          to another browser/device at all. */}
+                      <div className="flex items-center gap-2">
+                        <input
+                          readOnly
+                          value={runnerAuthStatus.openUrl}
+                          onFocus={(event) => event.target.select()}
+                          spellCheck={false}
+                          className="w-full truncate rounded border border-[#d7dce3] bg-white px-2 py-1 font-mono text-[10px] text-[#475467] outline-none dark:border-[#2a3039] dark:bg-[#0b0e12] dark:text-[#d7dce3]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => { void navigator.clipboard?.writeText(runnerAuthStatus.openUrl || ""); }}
+                          className="shrink-0 rounded border border-[#d7dce3] px-2 py-1 text-[10px] font-semibold text-[#475467] dark:border-[#2a3039] dark:text-[#d7dce3]"
+                        >
+                          Copy URL
+                        </button>
+                      </div>
+                    </div>
                   ) : null}
                   {runnerAuthStatus.detail ? <div className="mt-1">{runnerAuthStatus.detail}</div> : null}
+                  {/* The 45s silence watchdog and the session deadline write
+                      their remedy into `error` — this panel dropped it, so
+                      the named fix never reached the surface (2026-07 audit). */}
+                  {runnerAuthStatus.error ? (
+                    <div className="mt-1 text-red-700 dark:text-red-300">{runnerAuthStatus.error}</div>
+                  ) : null}
                   {runnerAuthStatus.runner === "claude" &&
                   runnerAuthFlowKind(runnerAuthStatus.openUrl) !== "localhost-callback" &&
-                  !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
+                  !isRunnerBrowserAuthTerminal(runnerAuthStatus.status) ? (
                     <div className="mt-2 space-y-1">
                       <div className="text-[#667085] dark:text-[#9aa3af]">
                         Claude Code code/token
@@ -1853,7 +1887,7 @@ export default function RuntimeLabView({
                       </button>
                     </div>
                   ) : null}
-                  {runnerAuthStatus.callbackPort && !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
+                  {runnerAuthStatus.callbackPort && !isRunnerBrowserAuthTerminal(runnerAuthStatus.status) ? (
                     <div className="mt-2 space-y-1">
                       <div className="text-[#667085] dark:text-[#9aa3af]">
                         If the auth tab ends at localhost:{runnerAuthStatus.callbackPort}, paste that full address here.

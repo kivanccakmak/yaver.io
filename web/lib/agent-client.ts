@@ -925,6 +925,22 @@ export interface RunnerBrowserAuthSession {
   startedAt: number;
   updatedAt: number;
   completedAt?: number;
+  /** When the spawned CLI last wrote ANY output line (unix ms). Surfaces
+   *  render "CLI is alive — last output Ns ago" from it instead of an
+   *  undifferentiated spinner; the agent has carried it since the
+   *  remained.md P0 contract, the web type just never declared it. */
+  lastOutputAt?: number;
+}
+
+/** True when a runner browser-auth session can no longer change on its
+ *  own: completed, failed, cancelled, or account_not_eligible. The last
+ *  one is the easy one to get wrong — it is a SUCCESSFUL sign-in against
+ *  an account with no eligible plan, so polls must STOP (nothing further
+ *  will arrive) and the UI must render the verbatim verdict instead of
+ *  an in-progress spinner. Mirrors runnerBrowserAuthTerminal in the Go
+ *  agent (runner_auth_browser_http.go). */
+export function isRunnerBrowserAuthTerminal(status: RunnerBrowserAuthSession["status"] | string | undefined): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled" || status === "account_not_eligible";
 }
 
 /**

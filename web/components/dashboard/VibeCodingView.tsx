@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { capStreamText } from "@/lib/streamBuffer";
-import { agentClient, type AgentGraphRun, type ConnectionState, type GitCommitRow, type GitProviderStatusRow, type GitRemoteRepo, type GitStatusRow, type MachineInfo, type Runner, type Task } from "@/lib/agent-client";
+import { agentClient, isRunnerBrowserAuthTerminal, type AgentGraphRun, type ConnectionState, type GitCommitRow, type GitProviderStatusRow, type GitRemoteRepo, type GitStatusRow, type MachineInfo, type Runner, type Task } from "@/lib/agent-client";
 import type { Device } from "@/lib/use-devices";
 import { useAuth } from "@/lib/use-auth";
 import { detectAskBreadth, detectAskIntent } from "@/lib/ask-intent";
@@ -45,7 +45,7 @@ import {
   type PendingCloudDispatch,
 } from "@/lib/pending-cloud-dispatch";
 import { CloudWorkspaceRequiredError } from "@/lib/cloud-workspace-required";
-import { runnerAuthFlowKind } from "@/lib/runnerAuthFlow";
+import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
 import PreviewPane from "./PreviewPane";
 import { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice } from "./DevicesView";
 
@@ -423,6 +423,8 @@ export default function VibeCodingView({
     code?: string;
     detail?: string;
     error?: string;
+    startedAt?: number;
+    lastOutputAt?: number;
   } | null>(null);
 
   useEffect(() => {
@@ -772,6 +774,8 @@ export default function VibeCodingView({
           code: session.code,
           detail: session.detail,
           error: session.error,
+          startedAt: session.startedAt,
+          lastOutputAt: session.lastOutputAt,
         });
         if (session.status === "completed") {
           setRunnerAuthBusy(false);
@@ -782,6 +786,17 @@ export default function VibeCodingView({
             setRunnerAuthSessionId(null);
             setRunnerAuthStatus(null);
           }, 1500);
+        } else if (session.status === "account_not_eligible") {
+          // Terminal — the sign-in WORKED and the account has no eligible
+          // plan, so nothing further will ever arrive. Leaving the busy
+          // flag set here wedged the button on "Opening sign-in…" forever
+          // over a verdict a retry cannot change (2026-07 audit).
+          setRunnerAuthBusy(false);
+          setRunnerAuthError(
+            session.detail ||
+              session.error ||
+              "The signed-in account has no eligible subscription for this runner — sign in with a different account.",
+          );
         } else if (session.status === "failed" || session.status === "cancelled") {
           setRunnerAuthBusy(false);
           setRunnerAuthError(session.error || session.detail || "Sign-in did not complete.");
@@ -1968,6 +1983,12 @@ export default function VibeCodingView({
                     <div className="mt-3 min-w-0 overflow-hidden rounded-xl border border-surface-800 bg-surface-950/60 p-3 text-[10px] text-surface-300">
                       <div className="font-semibold uppercase tracking-[0.14em] text-surface-500">Sign-in status</div>
                       <div className="mt-2">{runnerAuthStatus.status.replaceAll("_", " ")}</div>
+                      {!isRunnerBrowserAuthTerminal(runnerAuthStatus.status)
+                        ? (() => {
+                            const line = runnerAuthLivenessLine(Date.now(), runnerAuthStatus.startedAt, runnerAuthStatus.lastOutputAt);
+                            return line ? <div className="mt-1 text-surface-500">{line}</div> : null;
+                          })()
+                        : null}
                       {runnerAuthStatus.code ? <div className="mt-1 break-all font-mono text-surface-200">Code: {runnerAuthStatus.code}</div> : null}
                       {/* The CLI prints "If the browser didn't open, visit:
                           <url>" as ONE line. Split at the first URL so the
@@ -1989,7 +2010,7 @@ export default function VibeCodingView({
                           </div>
                         );
                       })() : null}
-                      {runnerAuthStatus.openUrl && !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
+                      {runnerAuthStatus.openUrl && !isRunnerBrowserAuthTerminal(runnerAuthStatus.status) ? (
                         /* One-line, one-tap copy. The CLI's own "If the
                            browser didn't open, visit: <url>" line wraps over
                            six rows and is miserable to select by hand. */
@@ -2012,7 +2033,7 @@ export default function VibeCodingView({
                       ) : null}
                       {runnerAuthStatus.runner === "claude" &&
                       runnerAuthFlowKind(runnerAuthStatus.openUrl) !== "localhost-callback" &&
-                      !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
+                      !isRunnerBrowserAuthTerminal(runnerAuthStatus.status) ? (
                         /* The claudeai flow ends on platform.claude.com with a
                            CODE the CLI is waiting for on stdin — the localhost
                            box below rightly rejects it, which is exactly how a
@@ -2055,7 +2076,7 @@ export default function VibeCodingView({
                           bar URL is exactly what this box replays on the
                           box's loopback. Never hide it behind flow-kind. */}
                       {runnerAuthStatus.callbackPort &&
-                      !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
+                      !isRunnerBrowserAuthTerminal(runnerAuthStatus.status) ? (
                         <div className="mt-3 space-y-2">
                           <div className="text-surface-500">
                             If the auth tab ends at localhost:{runnerAuthStatus.callbackPort}, paste that full address here.

@@ -30,3 +30,27 @@ export function runnerAuthFlowKind(openUrl?: string | null): RunnerAuthFlowKind 
   }
   return "unknown";
 }
+
+// runnerAuthLivenessLine — the anti-spinner narration for a PENDING
+// browser-auth session. The agent stamps lastOutputAt on every line the
+// spawned CLI prints (remained.md P0 contract); mobile has rendered it
+// since 2026-07; the web panels showed an undifferentiated spinner. Every
+// wait must narrate itself: how long it has been going and when it last
+// made progress. Returns null when there is nothing truthful to say.
+export function runnerAuthLivenessLine(
+  now: number,
+  startedAt?: number,
+  lastOutputAt?: number,
+): string | null {
+  if (!startedAt || now < startedAt) return null;
+  const fmt = (ms: number): string => {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return `${s}s`;
+    return `${Math.floor(s / 60)}m ${s % 60}s`;
+  };
+  const started = `Started ${fmt(now - startedAt)} ago`;
+  if (lastOutputAt && lastOutputAt >= startedAt) {
+    return `${started} · CLI last output ${fmt(now - lastOutputAt)} ago`;
+  }
+  return `${started} · the CLI has printed nothing yet`;
+}

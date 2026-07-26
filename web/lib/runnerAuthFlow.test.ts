@@ -38,3 +38,25 @@ eq(
   "unknown",
   "hosted non-claude redirect → unknown (show both affordances)",
 );
+
+// ── runnerAuthLivenessLine — the anti-spinner narration ────────────────────
+
+import { runnerAuthLivenessLine } from "./runnerAuthFlow";
+
+const t0 = 1_000_000_000_000;
+eq(runnerAuthLivenessLine(t0, undefined, undefined), null, "no startedAt → nothing truthful to say");
+eq(
+  runnerAuthLivenessLine(t0 + 42_000, t0, undefined),
+  "Started 42s ago · the CLI has printed nothing yet",
+  "no output yet → says so instead of spinning",
+);
+eq(
+  runnerAuthLivenessLine(t0 + 134_000, t0, t0 + 131_000),
+  "Started 2m 14s ago · CLI last output 3s ago",
+  "live CLI → elapsed + last-output narration",
+);
+eq(
+  runnerAuthLivenessLine(t0, t0, t0 - 5_000),
+  "Started 0s ago · the CLI has printed nothing yet",
+  "stale lastOutputAt from an earlier session is ignored",
+);

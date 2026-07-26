@@ -12,7 +12,8 @@ import { ManagedCloudSummary } from "@/components/dashboard/ManagedCloudPanel";
 import WakeProgress, { ParkedSummary } from "@/components/dashboard/WakeProgress";
 import { HIDE_PAID_UI } from "@/lib/launchFlags";
 import { CONVEX_URL } from "@/lib/constants";
-import { agentClient, AgentClient, requestAgentUpdateViaConvex, type AgentUpdateStatus, type OpenCodeConfigSummary, type OpenCodeModelSummary, type OpenCodeProviderSummary, type RunnerBrowserAuthSession, type RunnerTestResult } from "@/lib/agent-client";
+import { agentClient, AgentClient, isRunnerBrowserAuthTerminal, requestAgentUpdateViaConvex, type AgentUpdateStatus, type OpenCodeConfigSummary, type OpenCodeModelSummary, type OpenCodeProviderSummary, type RunnerBrowserAuthSession, type RunnerTestResult } from "@/lib/agent-client";
+import { runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
 import {
   lastSeenAgeMs,
   formatAgeShort,
@@ -5538,6 +5539,17 @@ function RunnerAuthModal({
   const [session, setSession] = useState<RunnerBrowserAuthSession | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   const startedRef = useRef(false);
+  // sessionGone: the box no longer knows this session id. Two real causes,
+  // both observed live 2026-07-27: another surface started a fresh sign-in
+  // for the same runner (the agent reaps stale sessions on new spawn — the
+  // callback PORT changes, 40717 → 36543) or the agent restarted. Either
+  // way every URL/code/port this dialog shows belongs to a DEAD session,
+  // and a "Deliver callback" against it hits a dead listener. The old poll
+  // swallowed lookup errors forever ("transient fetch errors are fine"),
+  // so the dialog kept narrating the dead session as if it were live.
+  const [sessionGone, setSessionGone] = useState(false);
+  const [restartNonce, setRestartNonce] = useState(0);
+  const pollFailsRef = useRef(0);
   const [copied, setCopied] = useState(false);
   // Claude's modern OAuth flow returns a long token the user must
   // paste back into the CLI on the remote machine. We pipe that paste
@@ -5579,6 +5591,7 @@ function RunnerAuthModal({
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
+    pollFailsRef.current = 0;
     const client = clientRef.current!;
     (async () => {
       try {
@@ -5625,25 +5638,50 @@ function RunnerAuthModal({
       }
       authRouteRef.current = null;
     };
-  }, [runner, device.host, device.port, device.id, device.publicEndpoints, device.tunnelUrl, token]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runner, device.host, device.port, device.id, device.publicEndpoints, device.tunnelUrl, token, restartNonce]);
+
+  // Start the whole flow over with a FRESH session on the box. The agent
+  // reaps the previous session on the new spawn, so this is also the only
+  // correct recovery once sessionGone fired.
+  const restartSignIn = () => {
+    startedRef.current = false;
+    pollFailsRef.current = 0;
+    setSession(null);
+    setStartError(null);
+    setSubmitError(null);
+    setAuthCode("");
+    setCallbackUrl("");
+    setSessionGone(false);
+    setRestartNonce((n) => n + 1);
+  };
 
   useEffect(() => {
-    if (!session) return;
-    if (session.status === "completed" || session.status === "failed" || session.status === "cancelled") return;
+    if (!session || sessionGone) return;
+    if (isRunnerBrowserAuthTerminal(session.status)) return;
     const client = clientRef.current!;
     const iv = setInterval(async () => {
       try {
         const route = currentAuthRoute();
         const s = await route.client.getRunnerBrowserAuthStatus(session.id, route.target);
+        pollFailsRef.current = 0;
         setSession(s);
-      } catch {
-        // keep polling — transient fetch errors are fine
+      } catch (err) {
+        // Transient fetch errors are fine — but "auth session not found"
+        // means the box reaped/replaced this session (or restarted): the
+        // snapshot on screen, callback port included, is dead. Say so
+        // instead of narrating a ghost.
+        const msg = err instanceof Error ? err.message : String(err);
+        pollFailsRef.current += 1;
+        if (/auth session not found/i.test(msg) || pollFailsRef.current >= 8) {
+          setSessionGone(true);
+        }
       }
     }, 1500);
     return () => clearInterval(iv);
-  }, [session?.id, session?.status]);
+  }, [session?.id, session?.status, sessionGone]);
 
-  const terminal = session && ["completed", "failed", "cancelled"].includes(session.status);
+  const terminal = sessionGone || (session && isRunnerBrowserAuthTerminal(session.status));
 
   const copyCode = async () => {
     if (!session?.code) return;
@@ -5709,15 +5747,53 @@ function RunnerAuthModal({
           <div className="rounded-lg border border-surface-800 bg-surface-800/40 p-3 text-xs text-surface-400">
             Starting the sign-in flow on the remote machine…
           </div>
+        ) : sessionGone && session.status !== "completed" ? (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-800 dark:text-amber-200">
+            <div className="font-semibold mb-1">This sign-in session is no longer active on the box</div>
+            <div>
+              It was replaced by a newer sign-in (started from another surface or window) or the agent restarted.
+              The URL, code, and localhost port that were shown here belong to the dead session — delivering a callback to them goes nowhere.
+            </div>
+            <button
+              onClick={restartSignIn}
+              className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-500/20 dark:text-amber-200"
+            >
+              Start sign-in again
+            </button>
+          </div>
         ) : session.status === "completed" ? (
           <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 text-sm text-emerald-700 dark:text-emerald-200">
             <div className="font-semibold mb-1">✓ Signed in</div>
             <div className="text-xs text-emerald-700 dark:text-emerald-300/80">{session.detail || "Auth stored on the remote machine."}</div>
           </div>
+        ) : session.status === "account_not_eligible" ? (
+          /* Terminal, and previously INVISIBLE here: this status was not in
+             the terminal list, so the modal kept rendering the active
+             branch — which never shows detail/error — over an entitlement
+             verdict a retry cannot change (2026-07 audit). */
+          <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-700 dark:text-red-300">
+            <div className="font-semibold mb-1">Account not eligible</div>
+            <div>{session.detail || session.error || "The sign-in worked, but this account has no eligible subscription for this runner."}</div>
+            <div className="mt-1 text-red-700/80 dark:text-red-300/80">
+              Retrying with the same account cannot succeed — sign in with a different account.
+            </div>
+            <button
+              onClick={restartSignIn}
+              className="mt-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-500/20 dark:text-red-300"
+            >
+              Start again with a different account
+            </button>
+          </div>
         ) : session.status === "failed" || session.status === "cancelled" ? (
           <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-700 dark:text-red-300">
             <div className="font-semibold mb-1">{session.status === "cancelled" ? "Cancelled" : "Failed"}</div>
             <div>{session.error || session.detail || "The CLI exited before sign-in completed."}</div>
+            <button
+              onClick={restartSignIn}
+              className="mt-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-500/20 dark:text-red-300"
+            >
+              Try sign-in again
+            </button>
           </div>
         ) : (
           <div className="space-y-3">
@@ -5725,19 +5801,43 @@ function RunnerAuthModal({
               Complete sign-in from any browser — we triggered <code className="rounded bg-surface-800 px-1.5 py-0.5 font-mono text-surface-200">{runner === "codex" ? "codex login --device-auth" : "claude auth login --claudeai"}</code> on the remote machine.
             </p>
             {session.openUrl ? (
-              <a
-                href={session.openUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block truncate rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-3 py-2.5 text-sm font-medium text-indigo-700 dark:text-indigo-200 hover:bg-indigo-500/20"
-              >
-                ↗ {session.openUrl}
-              </a>
+              <div className="space-y-2">
+                <a
+                  href={session.openUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block truncate rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-3 py-2.5 text-sm font-medium text-indigo-700 dark:text-indigo-200 hover:bg-indigo-500/20"
+                >
+                  ↗ Open sign-in page
+                </a>
+                {/* One-line, one-tap copy — the truncated anchor above is
+                    unselectable by hand; parity with the other panels. */}
+                <div className="flex items-center gap-2">
+                  <input
+                    readOnly
+                    value={session.openUrl}
+                    onFocus={(event) => event.target.select()}
+                    spellCheck={false}
+                    className="w-full truncate rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 font-mono text-[10px] text-surface-200 outline-none focus:border-indigo-400/70"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => { void navigator.clipboard?.writeText(session.openUrl || ""); }}
+                    className="shrink-0 rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 text-[10px] font-semibold text-surface-300 hover:border-surface-600"
+                  >
+                    Copy URL
+                  </button>
+                </div>
+              </div>
             ) : (
               <div className="rounded-lg border border-surface-800 bg-surface-800/30 px-3 py-2.5 text-xs text-surface-500">
                 Waiting for the verification URL from the remote CLI…
               </div>
             )}
+            {(() => {
+              const line = runnerAuthLivenessLine(Date.now(), session.startedAt, session.lastOutputAt);
+              return line ? <div className="text-[10px] text-surface-500">{line}</div> : null;
+            })()}
             {session.code ? (
               <div>
                 <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-500">
