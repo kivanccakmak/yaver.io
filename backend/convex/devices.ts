@@ -9,6 +9,7 @@ import {
   listVisibleInfraGrantsForGuest,
 } from "./access";
 import { resolveSigReach } from "./accessSigPolicy";
+import { aliasCollisionOutcome } from "./aliasShadowing";
 import { relayEntitlementForUser } from "./userSettings";
 import { recommendPlacement } from "./edgePlacement";
 import { isMachineWakeable } from "./cloudMachines";
@@ -433,16 +434,6 @@ function mergeListedDevices(a: ListedDevice, b: ListedDevice): ListedDevice {
   };
 }
 
-function pickActiveListedDevice(a: ListedDevice, b: ListedDevice): ListedDevice | null {
-  const aDead = a.needsAuth && !a.isOnline;
-  const bDead = b.needsAuth && !b.isOnline;
-  const aLive = !a.needsAuth && a.isOnline;
-  const bLive = !b.needsAuth && b.isOnline;
-  if (aDead && bLive) return b;
-  if (bDead && aLive) return a;
-  return null;
-}
-
 function collapseListedDevices(devices: ListedDevice[]): ListedDevice[] {
   if (!Array.isArray(devices) || devices.length === 0) return [];
 
@@ -465,15 +456,27 @@ function collapseListedDevices(devices: ListedDevice[]): ListedDevice[] {
       byAlias.set(key, device);
       continue;
     }
-    const strongConflict =
-      (!!existing.hardwareId && !!device.hardwareId && existing.hardwareId !== device.hardwareId) ||
-      (!!existing.publicKey && !!device.publicKey && existing.publicKey !== device.publicKey);
-    if (strongConflict) {
-      const winner = pickActiveListedDevice(existing, device);
-      if (winner) {
-        byAlias.set(key, winner);
-        continue;
-      }
+    const outcome = aliasCollisionOutcome(
+      { hardwareId: existing.hardwareId, publicKey: existing.publicKey, online: existing.isOnline, needsAuth: existing.needsAuth },
+      { hardwareId: device.hardwareId, publicKey: device.publicKey, online: device.isOnline, needsAuth: device.needsAuth },
+    );
+    if (outcome === "keep-a") {
+      byAlias.set(key, existing);
+      continue;
+    }
+    if (outcome === "keep-b") {
+      byAlias.set(key, device);
+      continue;
+    }
+    if (outcome === "keep-both") {
+      // Two DIFFERENT machines behind one hostname (real agent + a service
+      // cell). Merging them made deviceId/name flip every heartbeat — the
+      // picker flip-flop. Re-key each by its own strong identity so both
+      // rows survive the collapse.
+      byAlias.delete(key);
+      byAlias.set(`${key}#${existing.hardwareId || existing.publicKey || existing.deviceId}`, existing);
+      byAlias.set(`${key}#${device.hardwareId || device.publicKey || device.deviceId}`, device);
+      continue;
     }
     byAlias.set(key, mergeListedDevices(existing, device));
   }

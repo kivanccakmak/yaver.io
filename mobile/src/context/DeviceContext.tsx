@@ -26,6 +26,7 @@ import { submitEncryptedPair } from "../lib/encryptedPair";
 import { probeMobileDeviceStatus, type MobileDeviceStatusProbe } from "../lib/deviceStatus";
 import { probeDeviceWithRepair } from "../lib/probeWithRepair";
 import { resolveSweepOutcome } from "../lib/autoConnectStatus";
+import { aliasCollisionOutcome } from "../lib/aliasShadowing";
 
 // Auto-connect probe budget. Matches the manual switch modal (4000ms) — the
 // automatic path used to run at 3000ms, so the path the user lands on by
@@ -742,27 +743,6 @@ function mergeDeviceEntries(existing: Device, incoming: Device): Device {
   };
 }
 
-// pickActiveOverStaleNeedsAuth returns whichever of the two device
-// records should "win" when they share an alias key (os + hostname)
-// but have differing hwid/publicKey. The strong signal "this is a
-// leftover registration, not a second physical machine" is
-// `needsAuth + offline` paired with `authenticated + online` on the
-// other side — that pattern only happens when the agent re-paired
-// (or was wiped + reinstalled) and the previous Convex row never
-// got cleaned up. Time-since-last-seen turned out to be a bad
-// secondary check because Convex back-dates `lastHeartbeat` from
-// the first sync, so a 1-hour-old leftover still showed up as a
-// duplicate. Hide it without the staleness gate.
-function pickActiveOverStaleNeedsAuth(a: Device, b: Device): Device | null {
-  const aDead = !!a.needsAuth && !a.online;
-  const bDead = !!b.needsAuth && !b.online;
-  const aLive = !a.needsAuth && a.online;
-  const bLive = !b.needsAuth && b.online;
-  if (aDead && bLive) return b;
-  if (bDead && aLive) return a;
-  return null;
-}
-
 function collapseAliasDevices(devices: Device[]): Device[] {
   const byIdentity = new Map<string, Device>();
   for (const device of devices) {
@@ -783,30 +763,29 @@ function collapseAliasDevices(devices: Device[]): Device[] {
       byAlias.set(alias, device);
       continue;
     }
-    // Same hostname + OS = same physical machine as far as the user
-    // is concerned, even if hwid/publicKey differ. That split
-    // happens naturally when the agent re-pairs (new config), when
-    // the same machine registers once via LAN and once via a VPN
-    // IP, or when a stale Convex row lingers after a wipe.
-    // Collapsing these into one card stops the picker showing
-    // "Kvancs-MacBook-Air.local" twice with different IPs.
-    //
-    // Two genuinely separate machines sharing a hostname is rare
-    // enough (users almost never rename their Mac) that we accept
-    // the edge case in exchange for a clean list. If it ever
-    // matters we can surface it via the strong-identity path
-    // behind a user flag.
-    const hasStrongIdentity =
-      (!!existing.hwid && !!device.hwid && existing.hwid !== device.hwid) ||
-      (!!existing.publicKey && !!device.publicKey && existing.publicKey !== device.publicKey);
-    if (hasStrongIdentity) {
-      // Prefer the authenticated + online record when the other
-      // side is a stale "needs auth" leftover.
-      const winner = pickActiveOverStaleNeedsAuth(existing, device);
-      if (winner) {
-        byAlias.set(alias, winner);
-        continue;
-      }
+    // Shared rule (aliasShadowing.ts, mirrored in backend/convex): same
+    // machine seen twice → merge; two DIFFERENT machines (strong
+    // hwid/publicKey conflict) with one dead → keep the live one; both
+    // viable → KEEP BOTH. Merging two real machines made deviceId/name
+    // flip every heartbeat — the 2026-07-26 picker flip-flop (real agent +
+    // circuit-sim cell sharing one hostname).
+    const outcome = aliasCollisionOutcome(
+      { hardwareId: existing.hwid, publicKey: existing.publicKey, online: !!existing.online, needsAuth: !!existing.needsAuth },
+      { hardwareId: device.hwid, publicKey: device.publicKey, online: !!device.online, needsAuth: !!device.needsAuth },
+    );
+    if (outcome === "keep-a") {
+      byAlias.set(alias, existing);
+      continue;
+    }
+    if (outcome === "keep-b") {
+      byAlias.set(alias, device);
+      continue;
+    }
+    if (outcome === "keep-both") {
+      byAlias.delete(alias);
+      byAlias.set(`${alias}#${existing.hwid || existing.publicKey || existing.id}`, existing);
+      byAlias.set(`${alias}#${device.hwid || device.publicKey || device.id}`, device);
+      continue;
     }
     byAlias.set(alias, mergeDeviceEntries(existing, device));
   }
