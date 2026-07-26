@@ -345,11 +345,17 @@ function safeModelForRunner(
   return fallback || undefined;
 }
 
-function taskOutputLines(task: Pick<Task, "output" | "resultText" | "status"> | null | undefined, fallback: string[] = []): string[] {
+function taskOutputLines(task: Pick<Task, "output" | "resultText" | "status" | "turns"> | null | undefined, fallback: string[] = []): string[] {
   const output = Array.isArray(task?.output)
     ? task.output.flatMap((line) => String(line || "").split(/\r?\n/).map((part) => part.trimEnd()).filter(Boolean))
     : [];
   if (output.length) return output.slice(-240);
+  const assistantTurns = Array.isArray(task?.turns)
+    ? task.turns
+        .filter((turn) => turn?.role === "assistant")
+        .flatMap((turn) => String(turn.content || "").split(/\r?\n/).map((part) => part.trimEnd()).filter(Boolean))
+    : [];
+  if (assistantTurns.length) return assistantTurns.slice(-240);
   const result = String(task?.resultText || "").trim();
   if (result) return result.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean).slice(-240);
   if (fallback.length) return fallback.slice(-240);

@@ -20,6 +20,38 @@ import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
 // failures we route the user through the normal Yaver web OAuth
 // flow rather than surfacing a confusing global "Reclaim" CTA.)
 
+function WebTabGlyph({ label, color }: { label: string; color: string }) {
+  if (label === "Tasks") {
+    return (
+      <View style={styles.drawnTasksIcon}>
+        {[0, 1, 2].map((row) => (
+          <View key={row} style={styles.drawnTaskRow}>
+            <View style={[styles.drawnTaskDot, { borderColor: color }]} />
+            <View style={[styles.drawnTaskLine, { backgroundColor: color }]} />
+          </View>
+        ))}
+      </View>
+    );
+  }
+  if (label === "Projects") {
+    return (
+      <View style={[styles.drawnFolderIcon, { borderColor: color }]}>
+        <View style={[styles.drawnFolderTab, { borderColor: color }]} />
+      </View>
+    );
+  }
+  if (label === "More") {
+    return (
+      <View style={styles.drawnMoreIcon}>
+        {[0, 1, 2].map((dot) => (
+          <View key={dot} style={[styles.drawnMoreDot, { backgroundColor: color }]} />
+        ))}
+      </View>
+    );
+  }
+  return <View style={[styles.drawnFallbackIcon, { borderColor: color }]} />;
+}
+
 function TabIcon({ label, focused, showGreenDot, rail }: { label: string; focused: boolean; showGreenDot?: boolean; rail?: boolean }) {
   const c = useColors();
   // One consistent line-icon family across the bar — outline when
@@ -40,6 +72,7 @@ function TabIcon({ label, focused, showGreenDot, rail }: { label: string; focuse
     Settings: { on: "settings", off: "settings-outline" },
   };
   const glyph = icons[label] ?? { on: "ellipse", off: "ellipse-outline" };
+  const iconColor = focused ? c.accent : c.tabInactive;
   // Expanded landscape rail: icon + label sit side-by-side in a wide
   // row with a subtle accent pill behind the active item — the desktop
   // navigator layout the `rail.expandedWidth` token was reserved for.
@@ -53,11 +86,15 @@ function TabIcon({ label, focused, showGreenDot, rail }: { label: string; focuse
       ]}
     >
       <View style={styles.iconSlot}>
-        <Ionicons
-          name={focused ? glyph.on : glyph.off}
-          size={24}
-          color={focused ? c.accent : c.tabInactive}
-        />
+        {Platform.OS === "web" ? (
+          <WebTabGlyph label={label} color={iconColor} />
+        ) : (
+          <Ionicons
+            name={focused ? glyph.on : glyph.off}
+            size={24}
+            color={iconColor}
+          />
+        )}
         {showGreenDot && (
           <View style={[styles.greenDot, { borderColor: c.bgTabBar }]} />
         )}
@@ -558,6 +595,33 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  drawnTasksIcon: { width: 24, gap: 4 },
+  drawnTaskRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+  drawnTaskDot: { width: 5, height: 5, borderRadius: 2.5, borderWidth: 1.5 },
+  drawnTaskLine: { height: 2, width: 15, borderRadius: 2 },
+  drawnFolderIcon: {
+    width: 24,
+    height: 17,
+    borderWidth: 2,
+    borderRadius: 3,
+    marginTop: 4,
+    position: "relative",
+  },
+  drawnFolderTab: {
+    position: "absolute",
+    left: -2,
+    top: -7,
+    width: 11,
+    height: 7,
+    borderTopWidth: 2,
+    borderLeftWidth: 2,
+    borderRightWidth: 2,
+    borderTopLeftRadius: 3,
+    borderTopRightRadius: 3,
+  },
+  drawnMoreIcon: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4 },
+  drawnMoreDot: { width: 5, height: 5, borderRadius: 2.5 },
+  drawnFallbackIcon: { width: 18, height: 18, borderWidth: 2, borderRadius: 4 },
   // numberOfLines={1} on the <Text> keeps the longest label ("Shortcuts")
   // on one line; 11pt + tight tracking guarantees it fits the ~78pt tab
   // slot on a 390pt iPhone (14 / 13 / 12) without ellipsizing or wrapping.
