@@ -346,10 +346,16 @@ func scanRunnerBrowserAuthOutput(sess *runnerBrowserAuthSessionState, reader io.
 						strings.Contains(lower, "not eligible") ||
 						strings.Contains(lower, "no active plan")
 					if entitlement {
-						state.Status = "authorized_no_entitlement"
+						// NOT "authorized". We never saw authorization confirmed —
+						// the CLI printed "Waiting for authorization to complete..."
+						// and then this. Claiming a successful sign-in would be the
+						// same fabrication this file exists to remove; the honest
+						// statement is that the ACCOUNT was rejected, quoting the
+						// CLI verbatim rather than paraphrasing it into a claim.
+						state.Status = "account_not_eligible"
 						state.Error = detail
-						state.Detail = "Signed in successfully, but this account has no active plan for " + state.Runner + " yet. Authorization worked — activate or wait for your membership, then reconnect. Nothing to retry here."
-						log.Printf("[runner-auth-browser] %s authorized but NOT entitled: %s", state.Runner, detail)
+						state.Detail = "Sign-in did not complete: " + state.Runner + " rejected the account, not the code. Verbatim: " + detail + " — retrying the sign-in will not change this; activate the plan (or clear the waitlist) on the account first."
+						log.Printf("[runner-auth-browser] %s rejected the ACCOUNT (not the device code): %s", state.Runner, detail)
 					} else {
 						state.Status = "failed"
 						state.Error = detail
