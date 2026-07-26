@@ -140,6 +140,44 @@ func (s *runnerBrowserAuthSessionState) update(fn func(*runnerBrowserAuthSession
 	s.runnerBrowserAuthSession.UpdatedAt = time.Now().UnixMilli()
 }
 
+// watchRunnerBrowserAuthSilence fails a session that produced NO usable output.
+//
+// ── Why this exists ─────────────────────────────────────────────────────────
+//
+// `claude auth login --claudeai` on a Mac with a GUI OPENS A BROWSER ON THAT
+// MACHINE and prints nothing to stdout. Measured on the Mac mini 2026-07-26:
+// 22s with CI=1 NO_COLOR=1 TERM=dumb produced zero bytes, and the process was
+// still blocked; under a PTY it emitted only a control character; with
+// BROWSER=echo, still nothing. There is no --device-auth for claude the way
+// there is for codex, so no stdout strategy can ever capture a URL from it.
+//
+// The reader above simply waited. Status stayed "starting", OpenURL stayed
+// empty, Error stayed empty — so the phone showed "Waiting for the verification
+// URL from the remote CLI…" with a spinner, indefinitely, over a flow the user
+// had every reason to think was working. That is the worst shape of this
+// defect: the operation was IMPOSSIBLE, and the product said nothing at all.
+//
+// A silence budget converts that into an answer. It does not make claude's
+// browser flow work — nothing here can — it makes the failure legible and
+// points at the paths that DO work headlessly.
+func watchRunnerBrowserAuthSilence(sess *runnerBrowserAuthSessionState, runner string) {
+	const silenceBudget = 45 * time.Second
+	time.Sleep(silenceBudget)
+	sess.update(func(state *runnerBrowserAuthSession) {
+		if state.OpenURL != "" || state.Code != "" || state.Status == "completed" ||
+			state.Status == "cancelled" || state.Status == "failed" {
+			return // it spoke, or it already ended — nothing to report
+		}
+		state.Status = "failed"
+		if strings.EqualFold(runner, "claude") {
+			state.Error = "Claude Code printed no verification URL in 45s. On a machine with a desktop it opens a browser THERE instead of printing a link, and it has no --device-auth flag, so this remote flow cannot capture one. Use `runner_auth_credentials_import` to copy an existing login from a machine you are signed in on, or run `claude auth login` in a terminal on that machine (a tmux session works)."
+		} else {
+			state.Error = fmt.Sprintf("%s printed no verification URL or code in 45s. The CLI may be waiting on an interactive prompt that a remote flow cannot answer — run its login once in a terminal on that machine, or import credentials from a machine already signed in.", runner)
+		}
+		log.Printf("[runner-auth-browser] %s produced no URL within %s — failing the session with a remedy instead of spinning", runner, silenceBudget)
+	})
+}
+
 func runnerBrowserAuthCommand(runner string, tr tenantRuntime) (method string, cmd *exec.Cmd, err error) {
 	switch normalizeRunnerAuthName(runner) {
 	case "codex":
@@ -148,12 +186,21 @@ func runnerBrowserAuthCommand(runner string, tr tenantRuntime) (method string, c
 			return "", nil, fmt.Errorf("codex CLI not found on this machine (looked in PATH, ~/.npm-global/bin, ~/.local/bin, ~/.bun/bin, /opt/homebrew/bin, /usr/local/bin, and the user login shell). Run `npm i -g @openai/codex` and try again.")
 		}
 		if tr.Enabled {
-			cmd, err = tr.command(context.Background(), tr.Home, bin, []string{"login", "--device-auth"}, append(tr.authEnv(), "CI=1", "NO_COLOR=1", "TERM=dumb"))
+			cmd, err = tr.command(context.Background(), tr.Home, bin, []string{"login"}, append(tr.authEnv(), "CI=1", "NO_COLOR=1", "TERM=dumb"))
 			if err != nil {
 				return "", nil, err
 			}
 		} else {
-			cmd = exec.Command(bin, "login", "--device-auth")
+			// NOT --device-auth. codex-cli removed that flag; 0.144.4 offers
+			// only --with-api-key / --with-access-token / --enable / --disable,
+			// and passing an unknown flag makes codex exit without ever printing
+			// a URL — which the reader above then waited on forever. This is why
+			// remote codex sign-in silently stopped working after a CLI upgrade:
+			// nothing in Yaver changed, the flag disappeared underneath it.
+			//
+			// Deliberately NOT falling back to --with-api-key: Yaver is
+			// subscription-only and must never take an API key.
+			cmd = exec.Command(bin, "login")
 			cmd.Env = append(cmd.Environ(), "CI=1", "NO_COLOR=1", "TERM=dumb")
 		}
 		return "device-auth", cmd, nil
@@ -333,6 +380,8 @@ func startRunnerBrowserAuthSession(runner string, tr tenantRuntime, onTerminal f
 	log.Printf("[runner-auth-browser] %s spawned: %s %v (id=%s)", runner, cmd.Path, cmd.Args[1:], sess.ID)
 	go scanRunnerBrowserAuthOutput(sess, stdout)
 	go scanRunnerBrowserAuthOutput(sess, stderr)
+	// A CLI that prints nothing must not leave the caller spinning forever.
+	go watchRunnerBrowserAuthSilence(sess, runner)
 	recordRunnerBrowserAuthOperation(sess.snapshot())
 	go func() {
 		err := cmd.Wait()
