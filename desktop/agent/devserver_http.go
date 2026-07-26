@@ -2498,6 +2498,35 @@ func (s *HTTPServer) handleDevServerProxy(w http.ResponseWriter, r *http.Request
 	proxy.ServeHTTP(w, r)
 }
 
+// handleDevServerRootWebSocketProxy bridges the one root-level WebSocket path
+// Flutter webdev opens after the browser-lane index rewrites the visible route
+// from /dev/ to /. The main /dev/ proxy cannot see that request anymore, but
+// without it Flutter's injected debug client throws a page error before the app
+// gets a chance to finish painting.
+//
+// Deliberately NOT a general root proxy: only upgrade requests to known Flutter
+// DWDS paths are forwarded, and only while a dev server is actually active.
+func (s *HTTPServer) handleDevServerRootWebSocketProxy(w http.ResponseWriter, r *http.Request) {
+	if !isFlutterRootDevWebSocketPath(r.URL.Path) || !isWebSocketUpgrade(r) {
+		http.NotFound(w, r)
+		return
+	}
+	if s.devServerMgr == nil {
+		http.Error(w, "dev server not available", http.StatusServiceUnavailable)
+		return
+	}
+	port := s.devServerMgr.DevServerPort()
+	if port == 0 {
+		http.Error(w, "no dev server running", http.StatusServiceUnavailable)
+		return
+	}
+	s.proxyWebSocket(w, r, fmt.Sprintf("127.0.0.1:%d", port))
+}
+
+func isFlutterRootDevWebSocketPath(path string) bool {
+	return path == "/$dwdsSseHandler" || strings.HasPrefix(path, "/$dwdsSseHandler/")
+}
+
 // withDeliveredTo merges a `deliveredTo` count into a JSON object body,
 // leaving every existing field intact. Used by handleReloadApp's bundle path
 // to attach the real listener count to the build response it forwards, so a

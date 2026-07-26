@@ -37,3 +37,11 @@ func TestCodexBuiltinDefaultModelMatchesCatalogue(t *testing.T) {
 		t.Fatalf("codex default model = %q, want gpt-5.4", got)
 	}
 }
+
+func TestLooksLikeAuthFailureDetectsRevokedClaudeOAuth(t *testing.T) {
+	output := "Failed to authenticate. API Error: 401 OAuth access token has been revoked."
+
+	if !looksLikeAuthFailure(output) {
+		t.Fatal("revoked Claude OAuth token must surface as needsAuth so the UI offers runner OAuth recovery")
+	}
+}

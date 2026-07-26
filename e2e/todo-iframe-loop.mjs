@@ -36,6 +36,15 @@ const BOOT_MS = Number(process.env.BOOT_BUDGET_MS || 240_000);
 const auth = { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+function previewUrl(previewPath) {
+  const url = new URL(`${AGENT}${previewPath || '/dev-web/'}`);
+  // Match the phone/WebView path. A browser context-level Authorization header
+  // leaks onto third-party font/API requests and turns normal Flutter web loads
+  // into CORS failures before the app can paint.
+  if (TOKEN) url.searchParams.set('token', TOKEN);
+  return url.toString();
+}
+
 function defaultWorkspaceRoot() {
   if (process.env.WORKSPACE_ROOT) return process.env.WORKSPACE_ROOT;
   if (process.env.HOME) return path.join(process.env.HOME, 'Workspace');
@@ -99,21 +108,29 @@ async function bringUpWebLane(app) {
   }
   const deadline = Date.now() + BOOT_MS;
   let lastErr = '';
+  let lastRefusal = '';
   while (Date.now() < deadline) {
     const st = (await agent('/dev/status')).json || {};
     if (st.error) lastErr = String(st.error);
-    if (st.webPort > 0) {
-      const probe = await fetch(`${AGENT}/dev-web/`, { headers: auth });
-      if (probe.status === 200) return { ok: true, webPort: st.webPort };
+    const bundleUrl = typeof st.bundleUrl === 'string' ? st.bundleUrl : '';
+    const previewPath = bundleUrl || (st.webPort > 0 ? '/dev-web/' : '');
+    if (previewPath) {
+      const probe = await fetch(`${AGENT}${previewPath}`, { headers: auth });
+      if (probe.status === 200) return { ok: true, webPort: st.webPort || st.port, previewPath };
+      const body = await probe.text().catch(() => '');
+      lastRefusal = `preview ${previewPath} returned HTTP ${probe.status}: ${body.slice(0, 150)}`;
+      if (probe.status >= 400 && probe.status < 500) {
+        return { ok: false, reason: lastRefusal };
+      }
     }
     await sleep(5000);
   }
-  return { ok: false, reason: lastErr || `no web port within ${Math.round(BOOT_MS / 1000)}s` };
+  return { ok: false, reason: lastErr || lastRefusal || `no preview URL within ${Math.round(BOOT_MS / 1000)}s` };
 }
 
 /** Look at it the way a user would: did anything actually mount and draw. */
-async function render(page) {
-  await page.goto(`${AGENT}/dev-web/`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+async function render(page, previewPath) {
+  await page.goto(previewUrl(previewPath), { waitUntil: 'domcontentloaded', timeout: 120_000 });
   const deadline = Date.now() + 90_000;
   let snap = { kids: 0, text: '', path: '' };
   while (Date.now() < deadline) {
@@ -121,10 +138,12 @@ async function render(page) {
       kids: (document.getElementById('root') || document.body)?.children.length ?? 0,
       text: (document.body?.innerText || '').trim().slice(0, 300),
       path: location.pathname,
+      flutterViews: document.querySelectorAll('flutter-view').length,
+      canvases: document.querySelectorAll('canvas').length,
     })).catch(() => null);
     if (s) {
       snap = s;
-      if (s.kids > 0 && s.text.length > 0) break;
+      if ((s.kids > 0 && s.text.length > 0) || s.flutterViews > 0 || s.canvases > 0) break;
     }
     await sleep(3000);
   }
@@ -135,7 +154,6 @@ const results = [];
 const browser = await chromium.launch();
 const ctx = await browser.newContext({
   ...devices['iPhone 13'],
-  extraHTTPHeaders: { Authorization: `Bearer ${TOKEN}` },
   recordVideo: { dir: process.env.VIDEO_DIR || '/tmp/yaver-todo-videos', size: { width: 390, height: 844 } },
 });
 
@@ -152,9 +170,9 @@ for (const app of APPS) {
     await page.close();
     continue;
   }
-  console.log(`  web lane :${up.webPort} — rendering in chromium`);
+  console.log(`  web lane :${up.webPort} ${up.previewPath || '/dev-web/'} — rendering in chromium`);
 
-  const seen = await render(page);
+  const seen = await render(page, up.previewPath);
   await page.screenshot({ path: `/tmp/todo-${app.name.replace(/[^a-z0-9]+/gi, '-')}.png` }).catch(() => {});
 
   const four04 = /Unmatched Route|could not be found/i.test(seen.text);
@@ -163,10 +181,13 @@ for (const app of APPS) {
     // instead of calling a mounted 404 a pass.
     results.push({ app: app.name, verdict: 'SILENT', detail: `mounted onto its own 404 at pathname=${seen.path} — base-path injection did not apply` });
     console.log(`  SILENT mounted onto a 404 (pathname=${seen.path})`);
-  } else if (seen.kids > 0 && seen.text) {
+  } else if ((seen.kids > 0 && seen.text) || seen.flutterViews > 0 || seen.canvases > 0) {
     const matched = !app.expect || app.expect.test(seen.text);
-    results.push({ app: app.name, verdict: 'PIXELS', detail: `${matched ? '' : '(content did not match expectation) '}#root=${seen.kids} "${seen.text.slice(0, 70)}"` });
-    console.log(`  PIXELS #root=${seen.kids} "${seen.text.slice(0, 70)}"`);
+    const visual = seen.flutterViews > 0 || seen.canvases > 0
+      ? `flutterViews=${seen.flutterViews || 0} canvas=${seen.canvases || 0}`
+      : `#root=${seen.kids}`;
+    results.push({ app: app.name, verdict: 'PIXELS', detail: `${matched ? '' : '(content did not match expectation) '}${visual} "${seen.text.slice(0, 70)}"` });
+    console.log(`  PIXELS ${visual} "${seen.text.slice(0, 70)}"`);
   } else {
     results.push({ app: app.name, verdict: 'SILENT', detail: errs[0] ? `first page error: ${errs[0]}` : 'served a shell, nothing mounted, nothing said' });
     console.log(`  SILENT ${errs[0] || 'nothing mounted and nothing said'}`);

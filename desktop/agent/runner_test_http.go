@@ -93,6 +93,8 @@ func looksLikeAuthFailure(text string) bool {
 		"openai_api_key",
 		"anthropic_api_key",
 		"expired token",
+		"token has been revoked",
+		"access token has been revoked",
 		"run `claude login`",
 		"run `codex login`",
 		"run claude login",

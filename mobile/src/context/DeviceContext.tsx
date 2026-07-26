@@ -1004,8 +1004,8 @@ const DeviceContext = createContext<DeviceState | undefined>(undefined);
 
 /** Fire-and-forget telemetry to Convex + in-app logger (best-effort, never throws). */
 function sendTelemetry(token: string | null, step: string, message: string, details?: string) {
-  const level = step.includes("fail") ? "error" : "info";
-  appLog(level as "info" | "error", `[${step}] ${message}${details ? " | " + details : ""}`);
+  const level = step.includes("fail") ? "warn" : "info";
+  appLog(level as "info" | "warn", `[${step}] ${message}${details ? " | " + details : ""}`);
   if (!_debugLogsEnabled) return;
   fetch(`${getConvexSiteUrl()}/mobile/log`, {
     method: "POST",
@@ -2472,6 +2472,8 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   connectedDeviceIdsRef.current = connectedDeviceIds;
   const activeDeviceRef = useRef<Device | null>(activeDevice);
   activeDeviceRef.current = activeDevice;
+  const unreachableSetRef = useRef<Set<string>>(unreachableSet);
+  unreachableSetRef.current = unreachableSet;
   const primaryDeviceIdRef = useRef<string | null>(primaryDeviceId);
   primaryDeviceIdRef.current = primaryDeviceId;
   const secondaryDeviceIdRef = useRef<string | null>(secondaryDeviceId);
@@ -3760,7 +3762,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           // bounded by selectDevice's own 20s timeout and the user can Cancel.
           // A box that is genuinely down is `online: false` here and skips this
           // entirely, so a dead machine still fails fast.
-          const lastResort = ordered.find(({ device }) => device.online);
+          const lastResort = ordered.find(({ device }) =>
+            device.online && !unreachableSetRef.current.has(device.id)
+          );
           if (lastResort && !isCancelled()) {
             const { device, role } = lastResort;
             appLog(

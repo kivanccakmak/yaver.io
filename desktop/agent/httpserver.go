@@ -983,12 +983,14 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// Web build target outputs (target=web-js-bundle / web-hermes-wasm).
 	// Registered before the catch-all /dev/ proxy so they don't get
 	// shadowed by the dev-server reverse proxy.
-	mux.HandleFunc("/dev/web-bundle/", s.handleServeWebBundle)              // No auth — serves built web bundle (static files)
-	mux.HandleFunc("/dev/hermes-wasm-runtime", s.handleServeHermesWasm)     // No auth — serves hermes.wasm for the runner page
-	mux.HandleFunc("/dev/web-bundle/info", s.auth(s.handleWebBundleInfo))   // Owner — returns metadata about the current bundle
-	mux.HandleFunc("/dev/web-bundle/ack", s.auth(s.handleWebBundleAck))     // Owner — iframe reports successful load
-	mux.HandleFunc("/dev/web-bundle/error", s.auth(s.handleWebBundleError)) // Owner — iframe reports JS error during init
-	mux.HandleFunc("/dev/", s.handleDevServerProxy)                         // No auth — serves proxied dev content for browser/webview preview surfaces
+	mux.HandleFunc("/dev/web-bundle/", s.handleServeWebBundle)               // No auth — serves built web bundle (static files)
+	mux.HandleFunc("/dev/hermes-wasm-runtime", s.handleServeHermesWasm)      // No auth — serves hermes.wasm for the runner page
+	mux.HandleFunc("/dev/web-bundle/info", s.auth(s.handleWebBundleInfo))    // Owner — returns metadata about the current bundle
+	mux.HandleFunc("/dev/web-bundle/ack", s.auth(s.handleWebBundleAck))      // Owner — iframe reports successful load
+	mux.HandleFunc("/dev/web-bundle/error", s.auth(s.handleWebBundleError))  // Owner — iframe reports JS error during init
+	mux.HandleFunc("/dev/", s.handleDevServerProxy)                          // No auth — serves proxied dev content for browser/webview preview surfaces
+	mux.HandleFunc("/$dwdsSseHandler", s.handleDevServerRootWebSocketProxy)  // No auth — Flutter webdev DWDS websocket after /dev/ route rewrite
+	mux.HandleFunc("/$dwdsSseHandler/", s.handleDevServerRootWebSocketProxy) // No auth — same, with any backend suffix
 	// Parallel Expo Web: sibling preview process so the Web Reload tab
 	// can render RN apps in a browser iframe without killing Metro's
 	// dev-client (which serves Hermes bundles to the phone via /dev/*).
