@@ -392,7 +392,11 @@ function setupText(client: string) {
     return [
       "OpenCode setup:",
       "1. Run:",
-      "   npm install -g yaver-cli && yaver mcp setup opencode",
+      "   npx -y -p yaver-cli yaver mcp setup opencode",
+      "",
+      "Direct CLI:",
+      "   npm install -g yaver-cli",
+      "   yaver auth",
       "2. Restart OpenCode.",
       "3. Ask the agent to call yaver_lazy_setup.",
     ].join("\n");

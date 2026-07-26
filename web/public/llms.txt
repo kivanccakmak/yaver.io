@@ -32,7 +32,7 @@ take the short path:
      `claude mcp add --scope user yaver -- npx -y yaver-cli yaver-mcp`
    - Codex:
      `codex mcp add yaver -- npx -y yaver-cli yaver-mcp`
-   - opencode: use `npm install -g yaver-cli && yaver mcp setup opencode`.
+   - opencode: use `npx -y -p yaver-cli yaver mcp setup opencode`.
 2. **Restart/reload the coding agent session if it does not immediately
    show the new MCP tools.** The MCP config is user-scoped and persists
    after this one-time step. The `npx` command downloads Yaver on demand;

@@ -423,7 +423,7 @@ func checkSystemdUnit(ctx context.Context, emit DiagEmit) {
 }
 
 func checkRuntimeDeps(ctx context.Context, emit DiagEmit) {
-	deps := []string{"git", "node", "docker", "claude", "codex", "opencode"}
+	deps := []string{"git", "grep", "rg", "node", "docker", "claude", "codex", "opencode"}
 	missing := []string{}
 	for _, d := range deps {
 		if _, err := exec.LookPath(d); err != nil {

@@ -78,9 +78,9 @@ func (a *activeInstallPty) suppressActive() bool {
 }
 
 var (
-	installPtyMu   sync.Mutex
-	installPtys    = map[string]*activeInstallPty{}
-	installPtyTTL  = 15 * time.Minute
+	installPtyMu  sync.Mutex
+	installPtys   = map[string]*activeInstallPty{}
+	installPtyTTL = 15 * time.Minute
 )
 
 func registerInstallPty(tool string, p *activeInstallPty) {
@@ -138,7 +138,7 @@ func runRegistryInstall(ctx context.Context, tool string, step *PackageRegistryS
 	cmd := exec.CommandContext(ctx, "bash", "-lc", step.Command)
 	// TERM=dumb so apt / brew don't try to draw spinners — we want
 	// flat text in the stream. Sudo still works fine without colour.
-	cmd.Env = append(cmd.Environ(), "TERM=dumb", "DEBIAN_FRONTEND=noninteractive")
+	cmd.Env = append(cmd.Environ(), "TERM=dumb", "DEBIAN_FRONTEND=noninteractive", "NEEDRESTART_MODE=a")
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {

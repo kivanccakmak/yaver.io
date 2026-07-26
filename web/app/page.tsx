@@ -1311,6 +1311,14 @@ export default function HomePage() {
                 <div className="my-1.5 h-px bg-surface-800/60" />
                 <div className="text-surface-500"># then, in the agent chat:</div>
                 <div className="select-all break-all text-emerald-300">call yaver_lazy_setup</div>
+                <div className="my-1.5 h-px bg-surface-800/60" />
+                <div className="text-surface-500"># or install the CLI directly:</div>
+                <div className="text-surface-600">
+                  $ <span className="select-all break-all text-surface-200">npm install -g yaver-cli</span>
+                </div>
+                <div className="text-surface-600">
+                  $ <span className="select-all break-all text-surface-200">yaver auth</span>
+                </div>
               </div>
               <p className="mt-2 text-center text-[11px] text-surface-600">
                 <code className="rounded bg-surface-900 px-1.5 py-0.5 text-surface-400">
@@ -1417,7 +1425,10 @@ export default function HomePage() {
                   <div className="text-[10px] text-surface-500"># Codex</div>
                   <code className="block text-[11px] text-surface-200 select-all">codex mcp add yaver -- npx -y yaver-cli yaver-mcp</code>
                   <div className="text-[10px] text-surface-500"># opencode</div>
-                  <code className="block text-[11px] text-surface-200 select-all">npm install -g yaver-cli && yaver mcp setup opencode</code>
+                  <code className="block text-[11px] text-surface-200 select-all">npx -y -p yaver-cli yaver mcp setup opencode</code>
+                  <div className="pt-1 text-[10px] text-surface-500"># direct CLI</div>
+                  <code className="block text-[11px] text-surface-200 select-all">npm install -g yaver-cli</code>
+                  <code className="block text-[11px] text-surface-200 select-all">yaver auth</code>
                 </div>
                 <p className="mt-2 text-[11px] leading-relaxed text-surface-500">
                   Full tool list and remote/HTTP setup: <Link href="/docs/mcp" className="underline hover:text-surface-300">MCP guide</Link>. Other agents (Cursor, Aider, …) can paste{" "}

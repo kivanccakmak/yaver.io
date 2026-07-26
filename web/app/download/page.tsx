@@ -300,7 +300,10 @@ export default function DownloadPage() {
             <div className="mt-2 text-surface-500"># Codex</div>
             <div><span className="text-surface-500">$</span> <span className="select-all">codex mcp add yaver -- npx -y yaver-cli yaver-mcp</span></div>
             <div className="mt-2 text-surface-500"># opencode</div>
-            <div><span className="text-surface-500">$</span> <span className="select-all">npm install -g yaver-cli && yaver mcp setup opencode</span></div>
+            <div><span className="text-surface-500">$</span> <span className="select-all">npx -y -p yaver-cli yaver mcp setup opencode</span></div>
+            <div className="mt-2 text-surface-500"># direct CLI</div>
+            <div><span className="text-surface-500">$</span> <span className="select-all">npm install -g yaver-cli</span></div>
+            <div><span className="text-surface-500">$</span> <span className="select-all">yaver auth</span></div>
           </div>
           <p className="mt-4 text-xs text-surface-500">
             Already installed globally? <code>yaver mcp setup claude-code</code> writes the same entry,

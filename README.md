@@ -61,7 +61,11 @@ claude mcp add --scope user yaver -- npx -y yaver-cli yaver-mcp
 codex mcp add yaver -- npx -y yaver-cli yaver-mcp
 
 # opencode
-npm install -g yaver-cli && yaver mcp setup opencode
+npx -y -p yaver-cli yaver mcp setup opencode
+
+# direct CLI
+npm install -g yaver-cli
+yaver auth
 ```
 
 Already installed globally? `yaver mcp setup claude-code` (or `codex` / `opencode`) writes the same entry, and `yaver auth` auto-registers every installed runner on first sign-in. Yaver is published to the official MCP registry as `io.github.yaver-io/yaver`. Codex Desktop can also load the repo-local plugin in [`plugins/yaver`](plugins/yaver).

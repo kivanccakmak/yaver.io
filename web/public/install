@@ -126,6 +126,60 @@ install_node_via_nvm() {
   warn "nvm installed. Re-open your shell or 'source ~/.nvm/nvm.sh' so 'node' works in new sessions."
 }
 
+install_ripgrep() {
+  if command -v rg >/dev/null 2>&1; then
+    ok "ripgrep $(rg --version 2>/dev/null | head -1) detected"
+    return
+  fi
+
+  local sudo=""
+  if [ "$(id -u)" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then
+      sudo="sudo"
+    else
+      warn "ripgrep not installed and sudo is missing — continuing without rg"
+      return
+    fi
+  fi
+
+  case "$PLATFORM" in
+    darwin)
+      if command -v brew >/dev/null 2>&1; then
+        info "Installing ripgrep via Homebrew"
+        brew install ripgrep >/dev/null
+      else
+        warn "Homebrew not found — continuing without rg"
+        return
+      fi
+      ;;
+    linux|wsl2)
+      if command -v apt-get >/dev/null 2>&1; then
+        info "Installing ripgrep via apt"
+        $sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get update -qq >/dev/null
+        $sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y -qq ripgrep >/dev/null
+      elif command -v dnf >/dev/null 2>&1; then
+        info "Installing ripgrep via dnf"
+        $sudo dnf install -y -q ripgrep >/dev/null
+      elif command -v yum >/dev/null 2>&1; then
+        info "Installing ripgrep via yum"
+        $sudo yum install -y -q ripgrep >/dev/null
+      elif command -v pacman >/dev/null 2>&1; then
+        info "Installing ripgrep via pacman"
+        $sudo pacman -S --noconfirm ripgrep >/dev/null
+      else
+        warn "No supported package manager for ripgrep — continuing without rg"
+        return
+      fi
+      ;;
+  esac
+
+  if command -v rg >/dev/null 2>&1; then
+    ok "ripgrep $(rg --version 2>/dev/null | head -1) installed"
+  else
+    warn "ripgrep install finished but rg is still not on PATH"
+  fi
+}
+
 if have_node_recent; then
   ok "Node $(node --version) detected — using system Node"
 else
@@ -145,6 +199,8 @@ else
   esac
   ok "Node $(node --version) installed"
 fi
+
+install_ripgrep
 
 # ─── yaver-cli install / upgrade ──────────────────────────────────────
 if command -v yaver >/dev/null 2>&1; then

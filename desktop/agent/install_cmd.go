@@ -138,7 +138,7 @@ var integrations = []installPlan{
 		description: "ripgrep — fast recursive search used by coding agents, Vim/Neovim configs, and terminal workflows",
 		macOS:       []string{"brew install ripgrep"},
 		linux: []linuxStep{
-			{"apt-get", "sudo apt-get install -y ripgrep"},
+			{"apt-get", "sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y ripgrep"},
 			{"dnf", "sudo dnf install -y ripgrep"},
 			{"pacman", "sudo pacman -S --noconfirm ripgrep"},
 		},

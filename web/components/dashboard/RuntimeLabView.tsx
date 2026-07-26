@@ -661,6 +661,15 @@ export default function RuntimeLabView({
     }
     return selectedRunnerRow?.models || [];
   }, [opencodeSnapshot?.models, selectedRunner, selectedRunnerRow?.models]);
+  const effectiveChatModel = safeModelForRunner(selectedRunner, selectedModel, availableModels) || selectedModel;
+  const selectedRunnerName = selectedRunnerRow?.name || selectedRunner || "Runner";
+  const chatStatusTone = activeTaskStream?.status === "failed"
+    ? "border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-200"
+    : activeTaskStream?.status === "completed"
+      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200"
+      : activeTaskStream
+        ? "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-200"
+        : "border-[#d7dce3] bg-[#f2f4f7] text-[#667085] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#9aa3af]";
 
   useEffect(() => {
     if (!connectedDevice?.id || normalizeRunnerId(selectedRunner) !== "opencode") return;
@@ -1336,61 +1345,115 @@ export default function RuntimeLabView({
       </div>
 
       <aside className="flex min-h-0 flex-col gap-3 overflow-y-auto border-t border-[#d7dce3] pt-3 dark:border-[#2a3039] xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
-        <div className="flex min-h-[320px] flex-1 flex-col rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Chat</div>
-          {activeTaskStream ? (
-            <div className="mb-2">
-              <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">
-                <span>{activeTaskStream.status}</span>
-                <span className="truncate normal-case tracking-normal" title={activeTaskStream.title}>{activeTaskStream.title}</span>
+        <div className="flex min-h-[420px] flex-1 flex-col overflow-hidden rounded-md border border-[#d7dce3] bg-white shadow-sm dark:border-[#2a3039] dark:bg-[#141820]">
+          <div className="border-b border-[#e4e7ec] px-4 py-3 dark:border-[#242b35]">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Chat</div>
+                <div className="mt-1 min-w-0 truncate text-sm font-semibold text-[#1f2933] dark:text-[#e6e8ec]">
+                  {selectedProject?.name || "No project selected"}
+                </div>
               </div>
-              <pre
-                ref={taskConsoleRef}
-                onScroll={(event) => setTaskConsolePinned(isNearBottom(event.currentTarget))}
-                className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[#1f2933] bg-[#111318] p-2 text-[11px] leading-5 text-[#d5dae1]"
-              >
-                {activeTaskStream.lines.length ? activeTaskStream.lines.join("\n") : "(waiting for runner output...)"}
-              </pre>
-              {!taskConsolePinned ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTaskConsolePinned(true);
-                    scrollToBottom(taskConsoleRef.current);
-                  }}
-                  className="mt-1 rounded border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-700 dark:text-sky-300"
-                >
-                  Follow task output
-                </button>
-              ) : null}
+              <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${chatStatusTone}`}>
+                {activeTaskStream?.status || "Ready"}
+              </span>
             </div>
-          ) : null}
-          <div className="flex flex-1 items-end gap-2">
-            <textarea
-              value={composer}
-              onChange={(event) => setComposer(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void sendPrompt();
-                }
-              }}
-              rows={10}
-              placeholder={selectedProject ? `Ask ${selectedRunner || "the runner"} to change ${selectedProject.name}` : "Pick a project, then send a vibing prompt"}
-              className="min-h-[220px] flex-1 resize-y rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] outline-none focus:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
-            />
-            <button
-              disabled={!composer.trim() || sending}
-              onClick={() => void sendPrompt()}
-              className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-700 disabled:opacity-40 dark:text-emerald-200"
-            >
-              {sending ? "..." : "Send"}
-            </button>
+            <div className="mt-3 flex min-w-0 flex-wrap gap-1.5 text-[11px] text-[#667085] dark:text-[#9aa3af]">
+              <span className="rounded-full border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 dark:border-[#2a3039] dark:bg-[#101318]">
+                {selectedRunnerName}
+              </span>
+              <span className="min-w-0 max-w-full truncate rounded-full border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 font-mono dark:border-[#2a3039] dark:bg-[#101318]">
+                {effectiveChatModel || "runner default"}
+              </span>
+            </div>
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col bg-[#f8fafc] dark:bg-[#0f1218]">
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          {activeTaskStream ? (
+                <div className="space-y-3">
+                  <div className="flex justify-end">
+                    <div className="max-w-[88%] rounded-2xl rounded-br-md bg-[#7c5cff] px-3 py-2 text-sm leading-5 text-white shadow-sm">
+                      {activeTaskStream.title}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl rounded-bl-md border border-[#e4e7ec] bg-white shadow-sm dark:border-[#242b35] dark:bg-[#171b23]">
+                    <div className="flex items-center justify-between gap-2 border-b border-[#eef1f5] px-3 py-2 dark:border-[#242b35]">
+                      <div className="min-w-0 truncate text-xs font-semibold text-[#344054] dark:text-[#d7dce3]">
+                        {selectedRunnerName}
+                      </div>
+                      <div className="shrink-0 text-[10px] uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">
+                        {activeTaskStream.status}
+                      </div>
+                    </div>
+                    <pre
+                      ref={taskConsoleRef}
+                      onScroll={(event) => setTaskConsolePinned(isNearBottom(event.currentTarget))}
+                      className="max-h-[360px] overflow-auto whitespace-pre-wrap break-words p-3 text-[11px] leading-5 text-[#344054] dark:text-[#d5dae1]"
+                    >
+                      {activeTaskStream.lines.length ? activeTaskStream.lines.join("\n") : "Waiting for runner output..."}
+                    </pre>
+                  </div>
+                  {!taskConsolePinned ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTaskConsolePinned(true);
+                        scrollToBottom(taskConsoleRef.current);
+                      }}
+                      className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-[10px] font-semibold text-sky-700 dark:text-sky-300"
+                    >
+                      Follow output
+                    </button>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="flex h-full min-h-[220px] items-center justify-center">
+                  <div className="max-w-[260px] text-center">
+                    <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full border border-[#d7dce3] bg-white text-sm font-black text-[#1f2933] shadow-sm dark:border-[#2a3039] dark:bg-[#171b23] dark:text-[#e6e8ec]">
+                      Y
+                    </div>
+                    <div className="mt-3 text-sm font-semibold text-[#344054] dark:text-[#d7dce3]">
+                      Ready for {selectedProject?.name || "a project"}
+                    </div>
+                    <div className="mt-1 text-xs leading-5 text-[#667085] dark:text-[#9aa3af]">
+                      {selectedRunner ? `${selectedRunnerName} will run the next task.` : "Select a runner below."}
+                    </div>
+                  </div>
+                </div>
+              )}
+              </div>
+            <div className="border-t border-[#e4e7ec] bg-white p-3 dark:border-[#242b35] dark:bg-[#141820]">
+              <div className="flex items-end gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 focus-within:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#101318]">
+                <textarea
+                  value={composer}
+                  onChange={(event) => setComposer(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void sendPrompt();
+                    }
+                  }}
+                  rows={3}
+                  placeholder={selectedProject ? `Ask ${selectedRunner || "the runner"} to change ${selectedProject.name}` : "Pick a project first"}
+                  className="max-h-40 min-h-[76px] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-5 text-[#1f2933] outline-none placeholder:text-[#98a2b3] dark:text-[#e6e8ec] dark:placeholder:text-[#667085]"
+                />
+                <button
+                  disabled={!composer.trim() || sending}
+                  onClick={() => void sendPrompt()}
+                  className="h-10 shrink-0 rounded-md bg-[#7c5cff] px-4 text-xs font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-[#d7dce3] disabled:text-[#98a2b3] dark:disabled:bg-[#242b35]"
+                >
+                  {sending ? "Sending" : "Send"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-        <div>
+        <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#141820]">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Runtime Console</div>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Runtime Console</div>
+              <div className="mt-0.5 text-[11px] text-[#667085] dark:text-[#9aa3af]">{log.length} events</div>
+            </div>
             {!runtimeConsolePinned ? (
               <button
                 type="button"
@@ -1398,7 +1461,7 @@ export default function RuntimeLabView({
                   setRuntimeConsolePinned(true);
                   scrollToBottom(runtimeConsoleRef.current);
                 }}
-                className="rounded border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-700 dark:text-sky-300"
+                className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-[10px] font-semibold text-sky-700 dark:text-sky-300"
               >
                 Follow logs
               </button>
@@ -1407,7 +1470,7 @@ export default function RuntimeLabView({
           <pre
             ref={runtimeConsoleRef}
             onScroll={(event) => setRuntimeConsolePinned(isNearBottom(event.currentTarget))}
-            className="h-64 overflow-auto rounded-md border border-[#1f2933] bg-[#111318] p-3 text-[11px] leading-5 text-[#d5dae1]"
+            className="h-52 overflow-auto rounded-md border border-[#1f2933] bg-[#0b0d11] p-3 text-[11px] leading-5 text-[#d5dae1]"
           >
             {log.length ? log.join("\n") : "No runtime operations yet."}
           </pre>
