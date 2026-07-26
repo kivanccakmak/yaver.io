@@ -272,6 +272,48 @@ export interface EnvironmentProfileApplyResult {
   removedGitHosts?: string[];
 }
 
+export type DevReloadTarget = "web-bundle-preview" | "preview-worker" | "sdk-listeners" | "none";
+export type DevReloadTransport = "web-bundle" | "blackbox";
+export type DevReloadDevelopmentMode = "web-bundle" | "preview-worker" | "mobile-sdk" | "native-sdk";
+
+export interface DevReloadResult {
+  ok: boolean;
+  mode?: "dev" | "bundle";
+  transport?: DevReloadTransport;
+  reloadTarget?: DevReloadTarget;
+  developmentMode?: DevReloadDevelopmentMode;
+  deliveredTo?: number;
+  message?: string;
+  webBundleTarget?: string;
+  webBundleBuiltAt?: string;
+  changeClass?: "js_only" | "native_rebuild_required" | "unknown";
+  nativeChangesDetected?: boolean;
+  nativeChanges?: Array<{ Path?: string; path?: string; Reason?: string; reason?: string }>;
+  error?: string;
+}
+
+export function describeDevReloadResult(result: DevReloadResult | null | undefined): string {
+  if (!result) return "Reload status unavailable.";
+  if (result.message) return result.message;
+  if (result.error) return result.error;
+  if (result.reloadTarget === "web-bundle-preview") return "Browser preview refreshed from the latest web bundle.";
+  if (result.reloadTarget === "preview-worker") return "Preview worker reload command sent.";
+  if (result.reloadTarget === "sdk-listeners") {
+    const n = typeof result.deliveredTo === "number" ? result.deliveredTo : 0;
+    return n === 1 ? "Native reload delivered to 1 app session." : `Native reload delivered to ${n} app sessions.`;
+  }
+  if (result.reloadTarget === "none") return "No active app or browser preview was available to reload.";
+  return result.ok ? "Reload command sent." : "Reload failed.";
+}
+
+export function devReloadReachedTarget(result: DevReloadResult | null | undefined): boolean {
+  if (!result?.ok) return false;
+  if (result.reloadTarget === "none") return false;
+  if (result.transport === "web-bundle") return true;
+  if (typeof result.deliveredTo === "number") return result.deliveredTo > 0;
+  return true;
+}
+
 // Matches desktop/agent/scheduler.go::ScheduledTask.
 export interface ScheduledTask {
   id: string;
@@ -3932,6 +3974,37 @@ export class QuicClient {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       throw new Error(data?.error || `submitRunnerBrowserAuthCode ${res.status}`);
+    }
+    return unwrapRunnerBrowserAuthEnvelope(data);
+  }
+
+  /** Replay a localhost OAuth callback URL on the RUNNER machine's loopback.
+   *  The claudeai flow hands off to localhost:<port>/callback?code=… after
+   *  sign-in; on the user's phone/laptop that address dies ("can't connect")
+   *  because the listener is on the box. Pasting the failed address here
+   *  completes the flow — the agent validates the port against the session's
+   *  observed callbackPort and replays it locally. Mirrors
+   *  web/lib/agent-client.ts::submitRunnerBrowserAuthCallback. */
+  async submitRunnerBrowserAuthCallback(
+    sessionId: string,
+    callbackUrl: string,
+    target?: string,
+  ): Promise<RunnerBrowserAuthSession> {
+    this.assertConnected();
+    if (!sessionId) {
+      throw new Error("submitRunnerBrowserAuthCallback requires sessionId");
+    }
+    const base = this.peerEndpoint(target, "/runner-auth/browser/submit-callback");
+    const url = new URL(base);
+    url.searchParams.set("id", sessionId);
+    const res = await fetch(url.toString(), {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ callbackUrl }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || `submitRunnerBrowserAuthCallback ${res.status}`);
     }
     return unwrapRunnerBrowserAuthEnvelope(data);
   }

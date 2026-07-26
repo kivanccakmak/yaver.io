@@ -69,6 +69,8 @@ export default function RunnerAuthModal({
   const [session, setSession] = useState<RunnerBrowserAuthSession | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   const [pasteCode, setPasteCode] = useState("");
+  const [callbackUrlInput, setCallbackUrlInput] = useState("");
+  const [submittingCallback, setSubmittingCallback] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   // Transient "Copied" feedback per copy target. Cleared after 1.6s so the
@@ -259,6 +261,26 @@ export default function RunnerAuthModal({
       await new Promise((res) => setTimeout(res, 250));
     }
     return quicClient.isConnected;
+  };
+
+  const submitCallbackUrl = async () => {
+    if (!session || !callbackUrlInput.trim()) return;
+    setSubmittingCallback(true);
+    setSubmitError(null);
+    try {
+      await waitForLiveConnection();
+      const next = await quicClient.submitRunnerBrowserAuthCallback(
+        session.id,
+        callbackUrlInput.trim(),
+        target,
+      );
+      setSession(next);
+      setCallbackUrlInput("");
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmittingCallback(false);
+    }
   };
 
   const submitCode = async () => {
@@ -470,6 +492,41 @@ export default function RunnerAuthModal({
                     {submitError ? (
                       <Text style={styles.submitError}>{submitError}</Text>
                     ) : null}
+                  </View>
+                ) : null}
+
+                {session.callbackPort && !terminal ? (
+                  /* Deliver-callback lane, ported from web (learned live
+                     2026-07-27): the claudeai flow hands off to
+                     localhost:<port>/callback?code=… after sign-in, which
+                     DIES in the user's browser ("can't connect") because the
+                     listener runs on the box. That failed address IS the
+                     credential handoff — pasting it here lets the agent
+                     replay it on the box's loopback and the CLI completes. */
+                  <View style={styles.pasteBox}>
+                    <Text style={styles.pasteLabel}>Browser ended on a localhost page?</Text>
+                    <Text style={styles.pasteHint}>
+                      If the sign-in tab ends on "can't connect to localhost:{session.callbackPort}", that's expected — the listener is on your box. Copy that page's full address and paste it here.
+                    </Text>
+                    <TextInput
+                      value={callbackUrlInput}
+                      onChangeText={(t) => { setCallbackUrlInput(t); setSubmitError(null); }}
+                      placeholder={`http://localhost:${session.callbackPort}/callback?...`}
+                      placeholderTextColor="#64748b"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      spellCheck={false}
+                      multiline
+                      textAlignVertical="top"
+                      style={styles.pasteInput}
+                    />
+                    <TouchableOpacity
+                      disabled={!callbackUrlInput.trim() || submittingCallback}
+                      onPress={submitCallbackUrl}
+                      style={[styles.submitBtn, (!callbackUrlInput.trim() || submittingCallback) && styles.submitBtnDisabled]}
+                    >
+                      <Text style={styles.submitBtnText}>{submittingCallback ? "Delivering…" : "Deliver callback"}</Text>
+                    </TouchableOpacity>
                   </View>
                 ) : null}
 
