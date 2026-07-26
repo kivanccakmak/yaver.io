@@ -565,7 +565,7 @@ func preflightClaudeMacKeychainForHeadlessLaunch() error {
 		return nil
 	}
 	if err := probeClaudeMacKeychainItem(kc); err != nil {
-		return nil
+		return fmt.Errorf("No Claude Code credential detected on this machine. Run `yaver runner-auth <machine> claude` from an already signed-in device, import credentials from another owned Mac, or run `claude auth login` on this Mac")
 	}
 	pw := claudeLoginKeychainPassword()
 	if pw == "" {
