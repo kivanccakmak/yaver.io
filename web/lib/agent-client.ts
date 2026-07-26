@@ -4833,6 +4833,20 @@ export class AgentClient {
     });
     const data: any = await res.json().catch(() => ({}));
     if (!res.ok) {
+      // 412 = missing toolchain, a STRUCTURED refusal (missingTools /
+      // installEndpoint / helpHint). The mobile app renders it as a one-tap
+      // install; the web surface must at least NAME the remedy instead of
+      // letting the bare error line time out into "still no preview".
+      if (res.status === 412 && Array.isArray(data?.missingTools) && data.missingTools.length > 0) {
+        const remedy = data?.installable
+          ? ` Yaver can install ${data.missingTools.join(", ")} on that machine — ${data?.helpHint || `POST ${data?.installEndpoint || "/install/<tool>"} and retry`}.`
+          : ` Install ${data.missingTools.join(", ")} on that machine, then retry.`;
+        const err: any = new Error((data?.error || "Cannot start dev server: toolchain missing.") + remedy);
+        err.missingTools = data.missingTools;
+        err.installEndpoint = data?.installEndpoint;
+        err.installable = data?.installable === true;
+        throw err;
+      }
       throw new Error(data?.error || `Failed to start dev server (HTTP ${res.status})`);
     }
     return {
