@@ -5,8 +5,9 @@ import {
   guardYaverSelfDevelopmentActions,
   isYaverSelfDevelopmentProject,
   YAVER_SELF_DEV_HERMES_BLOCK_REASON,
+  workspaceAppLanes,
   type MobileProjectAction,
-} from "./mobileProjectActions";
+} from "./mobileProjectActions.ts";
 
 const actions: MobileProjectAction[] = [
   { label: "Project Overview", target: ".", type: "project" },
@@ -132,4 +133,96 @@ test("applyPreviewCapabilities degrades to the composed actions when the agent c
   assert.deepEqual(applyPreviewCapabilities(actions, undefined), actions);
   assert.deepEqual(applyPreviewCapabilities(actions, null), actions);
   assert.deepEqual(applyPreviewCapabilities(actions, { options: [] }), actions);
+});
+
+// ── Composition from agent capabilities (1g) ─────────────────────────────
+// The agent's options COMPOSE the sheet; the locally built lanes are
+// templates + fallback. Two regressions pinned here:
+//   1. an agent-offered option with no local template (wire-push) was
+//      silently DROPPED — the phone hid a capability the box explicitly
+//      advertised;
+//   2. an option id this app version doesn't know yet must render DISABLED
+//      with the agent's label+reason — never vanish.
+
+test("an agent-offered wire-push option is composed, not dropped", () => {
+  const out = applyPreviewCapabilities(
+    [
+      { label: "Browser Reload", target: ".", type: "dev-server", framework: "expo", supported: true },
+      { label: "WebRTC Reload", target: ".", type: "remote-runtime", framework: "expo", supported: true },
+    ],
+    {
+      framework: "expo",
+      options: [
+        { id: "dev-server", supported: true, primary: true },
+        { id: "wire-push", label: "Install on connected device", supported: true },
+      ],
+    },
+  );
+  const wire = out.find((a) => a.type === "wire-push");
+  assert.ok(wire, "wire-push was dropped");
+  assert.equal(wire?.supported, true);
+  assert.equal(wire?.label, "Install on connected device");
+});
+
+test("an unknown option id renders disabled with the agent's label and reason", () => {
+  const out = applyPreviewCapabilities(
+    [{ label: "Browser Reload", target: ".", type: "dev-server", framework: "expo", supported: true }],
+    {
+      framework: "expo",
+      options: [
+        { id: "dev-server", supported: true },
+        { id: "holo-projector", label: "Holo projector", supported: true, reason: "renders on the desk" },
+      ],
+    },
+  );
+  const unknown = out.find((a) => a.type === "holo-projector");
+  assert.ok(unknown, "unknown option vanished — the agent advertised it");
+  assert.equal(unknown?.supported, false, "unknown option must render disabled");
+  assert.equal(unknown?.label, "Holo projector");
+  assert.ok(unknown?.reason, "needs a reason line for the disabled state");
+});
+
+test("agent option order + primary-first is preserved in composition", () => {
+  const out = applyPreviewCapabilities(
+    [
+      { label: "Browser Reload", target: ".", type: "dev-server", framework: "expo" },
+      { label: "WebRTC Reload", target: ".", type: "remote-runtime", framework: "expo" },
+    ],
+    {
+      framework: "expo",
+      options: [
+        { id: "remote-runtime", supported: true },
+        { id: "dev-server", supported: true, primary: true },
+      ],
+    },
+  );
+  assert.equal(out[0].type, "dev-server");
+  assert.equal(out[1].type, "remote-runtime");
+});
+
+// ── Monorepo sub-app lanes (1g) ──────────────────────────────────────────
+// Tapping a monorepo project must offer its sub-apps (mobile · expo /
+// web · next) as concrete browser lanes — web has this via /workspace/apps;
+// mobile previously had no client for the route at all.
+
+test("workspaceAppLanes maps sub-apps to per-target dev-server actions", () => {
+  const lanes = workspaceAppLanes([
+    { name: "mobile", path: "mobile", framework: "expo", kind: "mobile", exists: true },
+    { name: "web", path: "web", framework: "nextjs", kind: "web", exists: true },
+    { name: "ghost", path: "gone", framework: "vite", exists: false },
+  ]);
+  assert.equal(lanes.length, 2, "non-existent app must be excluded");
+  assert.deepEqual(lanes.map((l) => l.target), ["mobile", "web"]);
+  assert.ok(lanes.every((l) => l.type === "dev-server"));
+  assert.match(lanes[0].label, /mobile.*expo/i);
+  assert.match(lanes[1].label, /web.*next/i);
+});
+
+test("workspaceAppLanes yields nothing for a single-app or empty workspace", () => {
+  assert.deepEqual(workspaceAppLanes([]), []);
+  assert.deepEqual(
+    workspaceAppLanes([{ name: "app", path: ".", framework: "expo", exists: true }]),
+    [],
+    "a single app is the project itself — no sub-app step",
+  );
 });

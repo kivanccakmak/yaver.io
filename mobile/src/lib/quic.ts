@@ -3090,6 +3090,30 @@ export class QuicClient {
    *  scope to mobile/ and never the Go agent / web / cli code.
    *  Uses /repos/list directly so stale framework caches cannot hide repo roots.
    */
+  /** One app from the monorepo workspace manifest (/workspace/apps). Mirrors
+   *  web/lib/agent-client.ts::WorkspaceAppView — mobile previously had NO
+   *  client for this route, so tapping a monorepo project could never offer
+   *  its sub-apps (yaver.io → mobile · expo / web · next) the way web does. */
+  async getWorkspaceApps(kind?: string | string[], root?: string): Promise<Array<{
+    name: string;
+    path: string;
+    absPath?: string;
+    stack?: string;
+    kind?: string;
+    framework?: string;
+    exists?: boolean;
+  }>> {
+    this.assertConnected();
+    const params = new URLSearchParams();
+    if (kind) params.set("kind", Array.isArray(kind) ? kind.join(",") : kind);
+    if (root) params.set("root", root);
+    const query = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(`${this.baseUrl}/workspace/apps${query}`, { headers: this.authHeaders });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data as any)?.error || `Failed to load workspace apps: HTTP ${res.status}`);
+    return Array.isArray((data as any)?.apps) ? (data as any).apps : [];
+  }
+
   async listWorkspaceRepos(): Promise<{
     repos: {
       name: string;

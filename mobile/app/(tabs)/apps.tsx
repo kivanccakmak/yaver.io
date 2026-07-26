@@ -49,7 +49,7 @@ import { previewPhaseTitle, previewTimeoutExplanation } from "../../src/lib/prev
 import { describePort, describeResources } from "../../src/lib/machineResources";
 import { subscribeSse, type SseSubscription } from "../../src/lib/sseClient";
 import { isWebServedStatus } from "../../src/lib/devLane";
-import { applyPreviewCapabilities, guardYaverSelfDevelopmentActions, isHermesMobileFramework } from "../../src/lib/mobileProjectActions";
+import { applyPreviewCapabilities, guardYaverSelfDevelopmentActions, isHermesMobileFramework, workspaceAppLanes } from "../../src/lib/mobileProjectActions";
 import { runtimeSurfaceClient } from "../../src/lib/runtimeSurfaceClient";
 import { lightCardShadow, spacing, typography } from "../../src/theme/tokens";
 import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
@@ -1110,6 +1110,16 @@ export default function AppsScreen() {
       } catch {
         /* older agent — keep the locally composed lanes */
       }
+      // Monorepo "pick a sub-app" step: a workspace with several apps
+      // (yaver.io → mobile · expo / web · next) offers each one as its own
+      // browser lane, exactly like web's target discovery. Best-effort —
+      // an older agent without /workspace/apps changes nothing.
+      try {
+        const apps = await quicClient.getWorkspaceApps(undefined, result.path || projectPath);
+        composed = [...composed, ...workspaceAppLanes(apps as any)];
+      } catch {
+        /* no workspace manifest or older agent — no sub-app step */
+      }
       result.actions = composed;
       setActionSheet({ ...result, compatibility });
     } catch (e) {
@@ -1234,6 +1244,20 @@ export default function AppsScreen() {
 
     if (action.type === "remote-runtime") {
       router.navigate({ pathname: "/remote-runtime", params: { project, path, framework: action.framework || "" } } as any);
+      return;
+    }
+
+    if (action.type === "wire-push") {
+      // Agent-offered lane (project_preview_options): a phone/tablet is
+      // USB-attached to the BOX, so the box can native-build + install the
+      // app on it. The box does the work; dispatch it as a task so the
+      // build streams into Tasks like any other box-side operation.
+      await sendTaskOrWarn(
+        `Install ${project} on the USB-connected device`,
+        `Run \`yaver wire push\` in ${path}: build ${project} for the USB-attached device and install it. ` +
+          "Stream the build output and report the installed bundle id — or the failure verbatim, never a summary.",
+        "Install via USB",
+      );
       return;
     }
 
