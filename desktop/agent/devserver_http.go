@@ -1881,7 +1881,28 @@ func (s *HTTPServer) handleDevServerStop(w http.ResponseWriter, r *http.Request)
 }
 
 // handleDevServerReload triggers a hot reload on the active dev server.
-// POST /dev/reload
+// normalizeDevReloadMode maps the wire value of /dev/reload's `mode`
+// field onto the fast/full contract. Backward compatible: absent /
+// unknown / legacy "dev" all mean fast (the cheapest refresh), so a
+// pre-mode client keeps its exact old behavior. Only an explicit
+// "full" escalates (Flutter hot RESTART, forced web-bundle rebuild).
+func normalizeDevReloadMode(mode string) string {
+	if strings.TrimSpace(strings.ToLower(mode)) == "full" {
+		return "full"
+	}
+	return "fast"
+}
+
+// POST /dev/reload  { "mode": "fast" | "full" }   (default: fast)
+//
+// fast — the framework's cheapest refresh: Metro/Expo built-in reload +
+//
+//	BlackBox "reload" broadcast; Flutter stdin "r" (hot reload).
+//
+// full — framework-level restart: Flutter stdin "R" (hot restart); when
+//
+//	the active preview lane is the static web bundle, additionally
+//	forces an async re-export (warm cache — never a cache clear).
 //
 // Also computes a native-change delta against the fingerprint captured at
 // dev-server start. If native-only files (app.json splash, Podfile,
@@ -1905,6 +1926,7 @@ func (s *HTTPServer) handleDevServerReload(w http.ResponseWriter, r *http.Reques
 		_ = json.NewDecoder(r.Body).Decode(&reqBody)
 	}
 	scopedDeviceID := strings.TrimSpace(reqBody.TargetDeviceID)
+	reloadMode := normalizeDevReloadMode(reqBody.Mode)
 
 	target := DevServerTarget{}
 	if s.devServerMgr != nil {
@@ -1917,7 +1939,8 @@ func (s *HTTPServer) handleDevServerReload(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	reloadOp := s.upsertDevOperation("reload", "running", "request", "Preparing reload…", projectPath, target.DeviceID, 0.05, map[string]interface{}{
-		"mode": "dev",
+		"mode":       "dev",
+		"reloadMode": reloadMode,
 	})
 	if s.devServerMgr == nil {
 		incident := s.appendDevIncident("reload", ReasonReloadDevServerUnavailable, "Dev server unavailable", "The agent cannot reload because no active dev server is available.", "dev server manager not available", "Start or reconnect the dev server before reloading.", projectPath, target.DeviceID, "dev-server", IncidentSeverityError, true, false, nil, nil, reloadOp.ID)
@@ -1950,8 +1973,23 @@ func (s *HTTPServer) handleDevServerReload(w http.ResponseWriter, r *http.Reques
 	// (connection-refuses on 127.0.0.1). That's fine — the actual mobile
 	// reload path is the blackbox BroadcastCommand below, which doesn't care
 	// whether Metro's HTTP layer responded. Log + keep going.
-	if err := s.devServerMgr.Reload(); err != nil {
-		log.Printf("[dev] dev server Reload() soft-failed (continuing to broadcast): %v", err)
+	if err := s.devServerMgr.ReloadMode(reloadMode); err != nil {
+		log.Printf("[dev] dev server Reload(mode=%s) soft-failed (continuing to broadcast): %v", reloadMode, err)
+	}
+
+	// Full reload with an active static web-bundle preview: force an
+	// async re-export (warm persistent cache — never a cache clear).
+	// The iframe's freshness poll / next index load picks up the new
+	// BuiltAt. Fast mode leaves the bundle to the serve-time freshness
+	// guard, which already rebuilds only when HEAD moved.
+	webBundleRebuildKicked := false
+	if reloadMode == "full" {
+		if info, ok := s.activeWebBundleMatches(projectPath); ok {
+			webBundleRebuildKicked = s.triggerWebBundleRebuildAsync(info)
+			if webBundleRebuildKicked {
+				log.Printf("[dev] full reload: forced web-bundle re-export kicked off (workDir=%s)", resolveWebBundleWorkDir(info))
+			}
+		}
 	}
 
 	// Emit control signal for hot reload
@@ -2070,6 +2108,8 @@ func (s *HTTPServer) handleDevServerReload(w http.ResponseWriter, r *http.Reques
 	resp["nativeChanges"] = nativeChanges
 	resp["changeClass"] = changeClass // "js_only" | "native_rebuild_required" | "" (no baseline)
 	resp["mode"] = "dev"
+	resp["reloadMode"] = reloadMode // "fast" | "full"
+	resp["webBundleRebuildKicked"] = webBundleRebuildKicked
 	resp["transport"] = "blackbox"
 	if resp["reloadTarget"] == "web-bundle-preview" {
 		resp["transport"] = "web-bundle"
@@ -2174,8 +2214,14 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&req)
 	}
-	if req.Mode == "" {
+	// fast/full aliases (the cross-surface reload contract) map onto the
+	// two lanes this endpoint always had: fast = hot reload via the dev
+	// server ("dev"), full = rebuild the bundle and push it ("bundle").
+	switch req.Mode {
+	case "", "fast":
 		req.Mode = "dev"
+	case "full":
+		req.Mode = "bundle"
 	}
 	if req.Mode != "dev" && s.isolatedGuestDevMutationBlocked(w, r, "native reload/bundle build") {
 		return
@@ -2352,7 +2398,7 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 		}
 
 	default:
-		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "invalid mode, use 'dev' or 'bundle'"})
+		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "invalid mode, use 'fast'/'dev' or 'full'/'bundle'"})
 	}
 }
 
@@ -2784,6 +2830,12 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 		// Platform field still picks ios|android for mobile-hermes;
 		// it's ignored when target is web-*.
 		Target string `json:"target"`
+		// Mode — fast/full reload contract for web targets:
+		//   "fast" — re-serve the existing bundle when provably fresh
+		//            (stamped HEAD commit unchanged, tracked tree
+		//            clean); otherwise rebuild with the warm cache.
+		//   "full" / "" — always re-export (warm cache; never cleared).
+		Mode string `json:"mode,omitempty"`
 		// Caller compat baseline — only consumed by web targets.
 		// Web UI sends `clientVersion: "web/1.1.96"` plus the React
 		// range it knows how to render (today: a single major).
@@ -3018,6 +3070,7 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 			ClientVersion:  strings.TrimSpace(req.ClientVersion),
 			ExpectReact:    strings.TrimSpace(req.ExpectReact),
 			ExpectReactDom: strings.TrimSpace(req.ExpectReactDom),
+			Mode:           strings.TrimSpace(strings.ToLower(req.Mode)),
 		})
 		return
 	}
@@ -3376,7 +3429,7 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 	// large RN bundle and well below the 7-8 GB physical RAM where the
 	// Linux OOM-killer starts reaping. Without this cap, node will try
 	// to grow its heap to the full machine size and SIGKILL itself.
-	cmd.Env = append(augmentEnv(nil), "NODE_ENV=production", "NODE_OPTIONS=--max-old-space-size=5120")
+	cmd.Env = append(applyMetroCacheEnv(augmentEnv(nil), workDir), "NODE_ENV=production", "NODE_OPTIONS=--max-old-space-size=5120")
 	// Hosted-tier: bake the box's own self-hosted Convex URL into the
 	// bundle so the developer's app — and every friend who Hermes-loads
 	// it inside the Yaver container — points at the right backend with

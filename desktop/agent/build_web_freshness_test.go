@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -94,6 +95,127 @@ func TestWebBundleStaleVsHead_UnparseableBuiltAtIsNotStale(t *testing.T) {
 	stale, _, ok := webBundleStaleVsHead(dir, "not-a-timestamp")
 	if ok {
 		t.Fatalf("expected ok=false on unparseable builtAt, got stale=%v ok=%v", stale, ok)
+	}
+}
+
+func writeFileMkdir(path, content string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func gitHeadOf(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v: %s", err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestWebBundleStale_StampedCommitBeatsTimestamps is the regression
+// guard for the double-build incident (2026-07-26): the pre-build
+// `git pull --rebase --autostash` re-stamps committer times, so HEAD's
+// commit TIME postdated the bundle's BuiltAt wall clock even though the
+// exported COMMIT was unchanged — and a second full ~87 s export fired
+// 13 s after the first finished. With the commit-identity stamp, the
+// same inputs are fresh. Proven by breaking: the legacy time-based
+// fallback (no stamp) still calls this stale.
+func TestWebBundleStale_StampedCommitBeatsTimestamps(t *testing.T) {
+	dir := shellGitInit(t)
+	head := gitHeadOf(t, dir)
+	// BuiltAt an hour BEFORE the commit's timestamp — the exact shape
+	// that used to false-stale.
+	builtAt := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	info := WebBundleInfo{WorkDir: dir, BuiltAt: builtAt, HeadCommit: head}
+
+	stale, _, ok := webBundleStale(info)
+	if !ok {
+		t.Fatalf("expected ok=true with a stamped commit in a git workdir")
+	}
+	if stale {
+		t.Fatalf("stamped commit == HEAD must be fresh regardless of timestamps")
+	}
+
+	// Contrast: the un-stamped legacy path calls this stale — that IS
+	// the bug the stamp fixes. If this half ever starts passing as
+	// fresh, the fallback changed and this test should be revisited.
+	legacyStale, _, legacyOK := webBundleStale(WebBundleInfo{WorkDir: dir, BuiltAt: builtAt})
+	if !legacyOK || !legacyStale {
+		t.Fatalf("legacy timestamp fallback expected to report stale (stale=%v ok=%v)", legacyStale, legacyOK)
+	}
+}
+
+func TestWebBundleStale_StampedCommitMismatchIsStale(t *testing.T) {
+	dir := shellGitInit(t)
+	head := gitHeadOf(t, dir)
+	gitEmptyCommit(t, dir) // HEAD moves past the stamp
+	info := WebBundleInfo{WorkDir: dir, BuiltAt: time.Now().UTC().Format(time.RFC3339), HeadCommit: head}
+	stale, _, ok := webBundleStale(info)
+	if !ok || !stale {
+		t.Fatalf("HEAD moved past the stamped commit — expected stale=true ok=true, got stale=%v ok=%v", stale, ok)
+	}
+}
+
+func TestWebBundleStale_StampInNonGitDirIsUndecided(t *testing.T) {
+	dir := t.TempDir() // no .git
+	stale, _, ok := webBundleStale(WebBundleInfo{WorkDir: dir, HeadCommit: "deadbeef"})
+	if ok {
+		t.Fatalf("non-git workdir must be undecided, got stale=%v ok=%v", stale, ok)
+	}
+}
+
+func TestWebBundleFastReusable(t *testing.T) {
+	dir := shellGitInit(t)
+	// A tracked file, committed, so we can dirty it later.
+	tracked := filepath.Join(dir, "app.js")
+	if err := writeFileMkdir(tracked, "console.log('v1')\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	for _, args := range [][]string{{"add", "app.js"}, {"commit", "-q", "-m", "app"}} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	head := gitHeadOf(t, dir)
+	buildDir := filepath.Join(dir, ".yaver-build-web")
+	if err := writeFileMkdir(filepath.Join(buildDir, "index.html"), "<html></html>"); err != nil {
+		t.Fatalf("write bundle: %v", err)
+	}
+	info := WebBundleInfo{
+		WorkDir: dir, BuildDir: buildDir, IndexFile: "index.html",
+		BuiltAt: time.Now().UTC().Format(time.RFC3339), HeadCommit: head,
+	}
+
+	if reuse, why := webBundleFastReusable(info, dir); !reuse {
+		t.Fatalf("fresh stamped bundle with clean tree must be reusable (reason: %s)", why)
+	}
+
+	// Uncommitted edit to a TRACKED file must force a rebuild — this is
+	// the active-coding-agent case; serving the old bundle here would
+	// hide the agent's edits behind a "successful" fast reload.
+	if err := writeFileMkdir(tracked, "console.log('v2-uncommitted')\n"); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if reuse, why := webBundleFastReusable(info, dir); reuse {
+		t.Fatalf("dirty tracked tree must not fast-reuse (reason given: %s)", why)
+	}
+
+	// Missing output on disk must rebuild even when git says fresh.
+	if err := exec.Command("git", "-C", dir, "checkout", "--", "app.js").Run(); err != nil {
+		t.Fatalf("git checkout: %v", err)
+	}
+	infoGone := info
+	infoGone.BuildDir = filepath.Join(dir, ".yaver-build-web-missing")
+	if reuse, _ := webBundleFastReusable(infoGone, dir); reuse {
+		t.Fatalf("missing bundle output must not be reusable")
+	}
+
+	// A different project's bundle must never satisfy a fast request.
+	other := t.TempDir()
+	if reuse, _ := webBundleFastReusable(info, other); reuse {
+		t.Fatalf("bundle for another workdir must not be reusable")
 	}
 }
 

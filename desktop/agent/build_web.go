@@ -46,6 +46,14 @@ type buildWebRequest struct {
 	ClientVersion  string // e.g. "web/1.1.96" — for telemetry + audit
 	ExpectReact    string // e.g. "^19.0.0"
 	ExpectReactDom string // e.g. "^19.0.0"
+	// Mode is the fast/full reload contract:
+	//   "fast" — re-serve the existing bundle when it is provably fresh
+	//            (stamped commit == HEAD, tracked tree clean); otherwise
+	//            rebuild with the WARM persistent Metro cache.
+	//   "full" — always re-export. NEVER clears the persistent Metro
+	//            cache: full means re-export, not cold-start.
+	//   ""     — legacy callers: build (same as full).
+	Mode string
 }
 
 // handleBuildWebTarget dispatches between the two web compile flows.
@@ -83,9 +91,40 @@ func (s *HTTPServer) buildWebJSBundle(w http.ResponseWriter, r *http.Request, re
 		target = s.devServerMgr.PreferredTarget()
 	}
 
+	// Fast mode: skip the whole export when the existing bundle is
+	// provably fresh (stamped commit == HEAD, tracked tree clean). The
+	// pre-build git pull already ran in handleBuildNativeBundle, so a
+	// remote commit that just landed HAS advanced HEAD by this point
+	// and correctly falls through to a rebuild.
+	if req.Mode == "fast" {
+		info := s.devServerMgr.GetWebBundleInfo()
+		if reuse, why := webBundleFastReusable(info, workDir); reuse {
+			s.devServerMgr.EmitLog("[web-js-bundle] fast reload: re-serving existing bundle (" + why + ")")
+			log.Printf("[build-web] fast reuse workdir=%s (%s)", workDir, why)
+			webSig, _ := signDevBundleURL("", "web", defaultDevBundleTTL)
+			if webSig != "" {
+				setDevWebBundleCookie(w, webSig)
+			}
+			jsonReply(w, http.StatusOK, map[string]interface{}{
+				"status":    "ok",
+				"target":    "web-js-bundle",
+				"bundleUrl": "/dev/web-bundle/?" + webSig,
+				"size":      info.Size,
+				"fileCount": info.FileCount,
+				"caller":    req.Caller,
+				"reused":    true,
+				"builtAt":   info.BuiltAt,
+			})
+			return
+		} else {
+			s.devServerMgr.EmitLog("[web-js-bundle] fast reload: rebuild needed — " + why)
+		}
+	}
+
 	buildOp := s.upsertDevOperation("build_web_js", "running", "build", "Preparing web bundle build…", workDir, target.DeviceID, 0.02, map[string]interface{}{
 		"target": "web-js-bundle",
 		"caller": req.Caller,
+		"mode":   req.Mode,
 	})
 
 	log.Printf("[build-web] caller=%s target=web-js-bundle workdir=%s buildDir=%s", req.Caller, workDir, buildDir)
@@ -202,7 +241,11 @@ func (s *HTTPServer) buildWebJSBundle(w http.ResponseWriter, r *http.Request, re
 
 	cmd := webBundleCommand(prep.PackageManager, buildDir)
 	cmd.Dir = workDir
-	cmd.Env = append(augmentEnv(nil), "NODE_ENV=production", "EXPO_PUBLIC_PLATFORM=web")
+	// applyMetroCacheEnv pins TMPDIR to the persistent per-project cache
+	// so Metro's transform cache survives across exports (the ~87 s
+	// cold-cache export drops to a warm incremental one). See
+	// devserver_metro_cache.go for the measured incident.
+	cmd.Env = append(applyMetroCacheEnv(augmentEnv(nil), workDir), "NODE_ENV=production", "EXPO_PUBLIC_PLATFORM=web")
 	logW := &devLogWriter{prefix: "[web-js-bundle]"}
 	if s.devServerMgr != nil {
 		logW.onLogLine = func(line string) { s.devServerMgr.EmitLog(line) }
@@ -243,11 +286,11 @@ func (s *HTTPServer) buildWebJSBundle(w http.ResponseWriter, r *http.Request, re
 	}
 	fileCount := len(bundleManifest)
 	s.upsertDevOperation("build_web_js", "completed", "ready", fmt.Sprintf("Web bundle ready: %d KB, %d files", totalBytes/1024, fileCount), workDir, target.DeviceID, 1, map[string]interface{}{
-		"target":     "web-js-bundle",
-		"caller":     req.Caller,
-		"size":       totalBytes,
-		"fileCount":  fileCount,
-		"builderOS":  runtime.GOOS,
+		"target":    "web-js-bundle",
+		"caller":    req.Caller,
+		"size":      totalBytes,
+		"fileCount": fileCount,
+		"builderOS": runtime.GOOS,
 	})
 	s.devServerMgr.EmitLog(fmt.Sprintf("[web-js-bundle] ready: %d KB, %d files", totalBytes/1024, fileCount))
 	s.devServerMgr.SetWebBundleInfo(WebBundleInfo{
@@ -258,7 +301,12 @@ func (s *HTTPServer) buildWebJSBundle(w http.ResponseWriter, r *http.Request, re
 		Size:      totalBytes,
 		FileCount: fileCount,
 		BuiltAt:   time.Now().UTC().Format(time.RFC3339),
-		Caller:    req.Caller,
+		// Post-pull HEAD — the commit this export actually contains.
+		// The serve-time freshness guard compares COMMIT IDENTITY
+		// against this stamp (webBundleStale); the wall-clock BuiltAt
+		// comparison double-built back-to-back opens (2026-07-26).
+		HeadCommit: gitHeadCommitForStamp(workDir),
+		Caller:     req.Caller,
 	})
 	// Yaver Protocol v1 — webview/transport. Spin up a per-bundle
 	// transport tracker so the dashboard CONSOLE has a live view of
@@ -356,7 +404,7 @@ func (s *HTTPServer) buildWebHermesWasm(w http.ResponseWriter, r *http.Request, 
 	defer bundleCancel()
 	cmd := bundleCommand(bundleCtx, prep.PackageManager, "expo", "web", "", bundlePath, assetsDir, shouldResetMetroCache(workDir))
 	cmd.Dir = workDir
-	cmd.Env = append(augmentEnv(nil), "NODE_ENV=production", "NODE_OPTIONS=--max-old-space-size=5120")
+	cmd.Env = append(applyMetroCacheEnv(augmentEnv(nil), workDir), "NODE_ENV=production", "NODE_OPTIONS=--max-old-space-size=5120")
 	logW := &devLogWriter{prefix: "[web-hermes-wasm]"}
 	if s.devServerMgr != nil {
 		logW.onLogLine = func(line string) { s.devServerMgr.EmitLog(line) }
@@ -427,14 +475,15 @@ func (s *HTTPServer) buildWebHermesWasm(w http.ResponseWriter, r *http.Request, 
 		"md5":    bundleMD5,
 	})
 	s.devServerMgr.SetWebBundleInfo(WebBundleInfo{
-		Target:    "web-hermes-wasm",
-		BuildDir:  buildDir,
-		WorkDir:   workDir,
-		IndexFile: "index.html",
-		Size:      int64(len(bundleBytes)),
-		FileCount: 0,
-		BuiltAt:   time.Now().UTC().Format(time.RFC3339),
-		Caller:    req.Caller,
+		Target:     "web-hermes-wasm",
+		BuildDir:   buildDir,
+		WorkDir:    workDir,
+		IndexFile:  "index.html",
+		Size:       int64(len(bundleBytes)),
+		FileCount:  0,
+		BuiltAt:    time.Now().UTC().Format(time.RFC3339),
+		HeadCommit: gitHeadCommitForStamp(workDir),
+		Caller:     req.Caller,
 	})
 
 	webSig, _ := signDevBundleURL("", "web", defaultDevBundleTTL)
@@ -464,7 +513,13 @@ func (s *HTTPServer) buildWebHermesWasm(w http.ResponseWriter, r *http.Request, 
 // asset routes. Forcing relative paths makes the bundle survive
 // being served under any prefix the proxy gives it.
 func webBundleCommand(packageManager, outputDir string) *exec.Cmd {
-	args := []string{"expo", "export", "-p", "web", "--output-dir", outputDir, "--clear"}
+	// NO --clear. That flag reset Metro's transform cache on EVERY
+	// export, which (together with a non-persistent TMPDIR) is why
+	// each "web ui" open paid the full ~87 s cold bundle. The
+	// persistent cache lives under ~/.yaver/cache/metro/<project>/
+	// (see devserver_metro_cache.go); "full reload" means re-export,
+	// not cold-start. Guarded by TestWebBundleCommandDoesNotClearCache.
+	args := []string{"expo", "export", "-p", "web", "--output-dir", outputDir}
 	switch packageManager {
 	case "yarn":
 		return exec.Command("yarn", args...)
@@ -657,7 +712,7 @@ func (s *HTTPServer) handleServeWebBundle(w http.ResponseWriter, r *http.Request
 	// non-git workdir, missing upstream, parse error, etc. — those
 	// users keep getting the existing static bundle behavior.
 	if isIndexRequest {
-		if stale, headTime, ok := webBundleStaleVsHead(resolveWebBundleWorkDir(info), info.BuiltAt); ok && stale {
+		if stale, headTime, ok := webBundleStale(info); ok && stale {
 			if s.triggerWebBundleRebuildAsync(info) {
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")

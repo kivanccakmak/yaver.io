@@ -30,6 +30,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -76,11 +77,115 @@ func releaseWebRebuildSlot(workDir string) {
 	webRebuildSlotsMu.Unlock()
 }
 
+// gitHeadCommitForStamp returns the current HEAD commit hash of workDir,
+// or "" when it cannot be determined (not a git checkout, detached ref
+// deleted, …). Used to stamp WebBundleInfo.HeadCommit at export time.
+func gitHeadCommitForStamp(workDir string) string {
+	workDir = strings.TrimSpace(workDir)
+	if workDir == "" {
+		return ""
+	}
+	out, err := runGit(workDir, "rev-parse", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// webBundleStale is the serve-time staleness decision for a built bundle.
+//
+// Preferred comparison is COMMIT IDENTITY: the build pipeline stamps
+// WebBundleInfo.HeadCommit with the post-pull HEAD it actually exported,
+// and the bundle is stale iff HEAD has moved off that commit. The older
+// timestamp comparison (HEAD commit time vs. BuiltAt wall clock) remains
+// only as a fallback for persisted info that predates the stamp.
+//
+// Why identity, not time (measured 2026-07-26): the pre-build
+// `git pull --rebase --autostash` advances/rewrites HEAD during build N,
+// so HEAD's *commit timestamp* is not ordered against the *wall-clock*
+// BuiltAt stamp — rebases re-stamp committer time, remote clocks skew,
+// and a commit landing mid-build postdates nothing. The result was a
+// SECOND full ~87 s export kicked off 13 s after the first finished,
+// for a tree whose exported commit had not changed. Comparing the
+// exported commit hash against `git rev-parse HEAD` cannot produce that
+// false-stale: back-to-back opens reuse the fresh bundle.
+func webBundleStale(info WebBundleInfo) (stale bool, headTime time.Time, ok bool) {
+	workDir := resolveWebBundleWorkDir(info)
+	stamped := strings.TrimSpace(info.HeadCommit)
+	if stamped == "" {
+		return webBundleStaleVsHead(workDir, info.BuiltAt)
+	}
+	if strings.TrimSpace(workDir) == "" {
+		return false, time.Time{}, false
+	}
+	if out, err := runGit(workDir, "rev-parse", "--is-inside-work-tree"); err != nil ||
+		strings.TrimSpace(out) != "true" {
+		return false, time.Time{}, false
+	}
+	head := gitHeadCommitForStamp(workDir)
+	if head == "" {
+		return false, time.Time{}, false
+	}
+	// headTime is display-only (the rebuilding page shows it); best-effort.
+	if out, err := runGit(workDir, "log", "-1", "--format=%ct", "HEAD"); err == nil {
+		if secs, perr := strconv.ParseInt(strings.TrimSpace(out), 10, 64); perr == nil {
+			headTime = time.Unix(secs, 0).UTC()
+		}
+	}
+	return head != stamped, headTime, true
+}
+
+// webBundleFastReusable decides whether a mode=fast build request may
+// skip the export entirely and re-serve the existing bundle. All of
+// these must hold:
+//   - a bundle for the SAME workdir exists on disk (index file present)
+//   - the stamped commit matches HEAD (webBundleStale says fresh, with
+//     a definitive ok=true — "can't tell" never silently reuses)
+//   - no TRACKED file is modified in the working tree (an active coding
+//     agent's uncommitted edits must rebuild; untracked files — the
+//     .yaver-build-web output itself, logs — don't invalidate)
+//
+// Returns reason strings for the log line either way, so a surprising
+// reuse/rebuild is explainable from the dev console.
+func webBundleFastReusable(info WebBundleInfo, workDir string) (bool, string) {
+	if strings.TrimSpace(info.BuildDir) == "" {
+		return false, "no prior bundle recorded"
+	}
+	if !sameDevWorkDir(resolveWebBundleWorkDir(info), workDir) {
+		return false, "prior bundle belongs to a different project"
+	}
+	indexFile := strings.TrimSpace(info.IndexFile)
+	if indexFile == "" {
+		indexFile = "index.html"
+	}
+	if _, err := os.Stat(filepath.Join(info.BuildDir, indexFile)); err != nil {
+		return false, "prior bundle output missing on disk"
+	}
+	stale, _, ok := webBundleStale(info)
+	if !ok {
+		return false, "freshness undecidable (not a git checkout?)"
+	}
+	if stale {
+		return false, "HEAD moved past the built commit"
+	}
+	if out, err := runGit(workDir, "status", "--porcelain", "--untracked-files=no"); err != nil {
+		return false, "git status failed"
+	} else if strings.TrimSpace(out) != "" {
+		return false, "tracked files modified in working tree"
+	}
+	return true, "bundle matches HEAD and tree is clean"
+}
+
 // webBundleStaleVsHead reports whether the bundle is older than the
 // current git HEAD commit. ok=false means we can't decide (not a git
 // repo, no HEAD, builtAt unparseable) and the caller should not auto-
 // rebuild — too risky to flip "I don't know" into "rebuild on every
 // hit" in a non-git workdir.
+//
+// LEGACY FALLBACK — only consulted when WebBundleInfo carries no
+// HeadCommit stamp (bundle built by an older agent). Timestamp
+// comparison is unordered under rebase re-stamping and clock skew; see
+// webBundleStale above for the incident this caused.
 func webBundleStaleVsHead(workDir, builtAt string) (stale bool, headTime time.Time, ok bool) {
 	workDir = strings.TrimSpace(workDir)
 	if workDir == "" {

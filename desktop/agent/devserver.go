@@ -346,7 +346,15 @@ type WebBundleInfo struct {
 	Size      int64  `json:"size"`              // total bundle bytes
 	FileCount int    `json:"fileCount"`         // file count for js-bundle target
 	BuiltAt   string `json:"builtAt"`           // RFC3339 build completion timestamp
-	Caller    string `json:"caller"`            // X-Yaver-Caller of the build trigger
+	// HeadCommit is the git HEAD hash the export actually contains
+	// (recorded AFTER the pre-build pull). The serve-time freshness
+	// guard compares commit identity against this; the BuiltAt
+	// wall-clock comparison alone false-staled fresh bundles when the
+	// pre-build `git pull --rebase` re-stamped committer times
+	// (double-build incident, 2026-07-26). Empty on bundles built by
+	// older agents — those fall back to the timestamp comparison.
+	HeadCommit string `json:"headCommit,omitempty"`
+	Caller     string `json:"caller"` // X-Yaver-Caller of the build trigger
 }
 
 // NativeBundleInfo describes one compiled Hermes/native build artifact set.
@@ -910,6 +918,22 @@ func (m *DevServerManager) Stop() error {
 
 // Reload triggers a hot reload on the active dev server.
 func (m *DevServerManager) Reload() error {
+	return m.ReloadMode("fast")
+}
+
+// modeReloadableDevServer is implemented by dev servers that distinguish
+// a fast reload from a full one (today: Flutter, where fast = "r" hot
+// reload and full = "R" hot restart). Servers without the interface get
+// their plain Reload() for either mode.
+type modeReloadableDevServer interface {
+	ReloadWithMode(mode string) error
+}
+
+// ReloadMode triggers a reload on the active dev server with an explicit
+// mode: "fast" (default — the framework's cheapest refresh) or "full"
+// (framework-level restart of the app state where supported; NEVER a
+// cache clear or process cold-start).
+func (m *DevServerManager) ReloadMode(mode string) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -921,15 +945,23 @@ func (m *DevServerManager) Reload() error {
 		return fmt.Errorf("%s does not support hot reload", m.active.server.Name())
 	}
 
-	if err := m.active.server.Reload(); err != nil {
+	if mr, ok := m.active.server.(modeReloadableDevServer); ok {
+		if err := mr.ReloadWithMode(mode); err != nil {
+			return err
+		}
+	} else if err := m.active.server.Reload(); err != nil {
 		return err
 	}
 
+	msg := "Hot reload triggered"
+	if mode == "full" {
+		msg = "Full reload triggered"
+	}
 	m.emit(DevServerEvent{
 		Type:      "reload",
 		Framework: m.active.server.Name(),
 		BundleURL: m.active.server.BundleURL(""),
-		Message:   "Hot reload triggered",
+		Message:   msg,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	})
 
@@ -1837,7 +1869,10 @@ func (b *baseDevServer) startProcess(ctx context.Context, name string, args []st
 	// augmentEnv prepends ~/.yaver/runtimes/node/bin to PATH so
 	// `npx` / `node` invocations resolve to the agent-managed Node
 	// runtime on a fresh Linux box that never had system Node.
-	cmd.Env = append(augmentEnv(nil), env...)
+	// applyMetroCacheEnv pins TMPDIR to the persistent per-project
+	// cache dir so Metro/Expo transform caches survive restarts and
+	// /tmp cleanups (see devserver_metro_cache.go).
+	cmd.Env = append(applyMetroCacheEnv(augmentEnv(nil), workDir), env...)
 	// Put the dev server in its own process group so Stop() can take down
 	// all child processes (vite/next fork node + esbuild; killing only the
 	// shell PID leaks them and the dev port stays bound until reboot).
@@ -2353,7 +2388,22 @@ func (e *ExpoDevServer) StartWebPreview(parent context.Context, workDir string) 
 	// bundler state. Two concurrent `expo start` invocations on the
 	// same project without separate cache dirs occasionally race on
 	// watchman manifest writes; dedicated dirs eliminate the risk.
-	cacheDir, _ := os.MkdirTemp("", "yaver-expo-web-*")
+	//
+	// The isolation comes from a DEDICATED SUBDIR of the persistent
+	// per-project cache — not from a throwaway temp dir, which started
+	// this lane with a cold Metro cache on every single open (part of
+	// the ~87 s "web ui" incident; see devserver_metro_cache.go).
+	cacheDir, cacheEphemeral := "", false
+	if base := metroCacheDir(workDir); base != "" {
+		cacheDir = filepath.Join(base, "expo-web")
+		if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+			cacheDir = ""
+		}
+	}
+	if cacheDir == "" {
+		cacheDir, _ = os.MkdirTemp("", "yaver-expo-web-*")
+		cacheEphemeral = true
+	}
 	extraEnv := []string{
 		fmt.Sprintf("EXPO_METRO_CACHE_DIR=%s", cacheDir),
 		// Don't open a browser tab on the remote machine.
@@ -2383,7 +2433,9 @@ func (e *ExpoDevServer) StartWebPreview(parent context.Context, workDir string) 
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		os.RemoveAll(cacheDir)
+		if cacheEphemeral {
+			os.RemoveAll(cacheDir)
+		}
 		return 0, fmt.Errorf("expo --web failed to start: %w", err)
 	}
 
@@ -2411,7 +2463,9 @@ func (e *ExpoDevServer) StartWebPreview(parent context.Context, workDir string) 
 		}
 		e.webMu.Unlock()
 		cancel()
-		os.RemoveAll(cacheDir)
+		if cacheEphemeral {
+			os.RemoveAll(cacheDir)
+		}
 		if e.emitFn != nil {
 			e.emitFn(DevServerEvent{
 				Type:      "stopped",
@@ -2889,7 +2943,10 @@ func (f *FlutterDevServer) startProcessWithStdin(ctx context.Context, name strin
 	// augmentEnv prepends ~/.yaver/runtimes/node/bin to PATH so
 	// `npx` / `node` invocations resolve to the agent-managed Node
 	// runtime on a fresh Linux box that never had system Node.
-	cmd.Env = append(augmentEnv(nil), env...)
+	// applyMetroCacheEnv pins TMPDIR to the persistent per-project
+	// cache dir so Metro/Expo transform caches survive restarts and
+	// /tmp cleanups (see devserver_metro_cache.go).
+	cmd.Env = append(applyMetroCacheEnv(augmentEnv(nil), workDir), env...)
 	// Put the dev server in its own process group so Stop() can take down
 	// all child processes (vite/next fork node + esbuild; killing only the
 	// shell PID leaks them and the dev port stays bound until reboot).
@@ -3045,9 +3102,20 @@ func (f *FlutterDevServer) BundleURL(platform string) string {
 func (f *FlutterDevServer) SupportsHotReload() bool { return true }
 
 func (f *FlutterDevServer) Reload() error {
-	// Flutter hot reload via stdin "r"
+	return f.ReloadWithMode("fast")
+}
+
+// ReloadWithMode maps the fast/full reload contract onto Flutter's
+// stdin protocol: fast = "r" (hot reload, preserves app state), full =
+// "R" (hot restart, resets app state). Neither clears any cache — full
+// means restart, not cold-start.
+func (f *FlutterDevServer) ReloadWithMode(mode string) error {
 	if f.stdinPipe != nil && f.stdinPipe.w != nil {
-		_, err := f.stdinPipe.w.Write([]byte("r\n"))
+		key := "r\n"
+		if mode == "full" {
+			key = "R\n"
+		}
+		_, err := f.stdinPipe.w.Write([]byte(key))
 		return err
 	}
 	return fmt.Errorf("flutter process stdin not available")
