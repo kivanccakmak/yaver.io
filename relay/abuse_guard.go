@@ -125,6 +125,13 @@ type abuseGuard struct {
 	deviceActive   map[string]int
 	deniedLogLast  map[string]time.Time
 	trustedProxies []*net.IPNet
+	// unmeteredIPs is a TTL whitelist of client IPs that recently completed
+	// an AUTHENTICATED request whose Convex-verified plan is bandwidth-exempt
+	// (owner-dev). The pre-auth per-IP proxy cap ignores these — a preview
+	// session loads hundreds of subresources and trips ProxyPerIPPerMin long
+	// before any identity is known. Entry is only ever granted post-auth
+	// (markUnmeteredIP), so a pre-auth flood can never whitelist itself.
+	unmeteredIPs map[string]time.Time
 }
 
 // defaultTrustedProxyCIDRs are the DEFAULT trusted reverse-proxy ranges. The
@@ -176,6 +183,7 @@ func newAbuseGuard(cfg abuseGuardConfig) *abuseGuard {
 		deviceActive:   make(map[string]int),
 		deniedLogLast:  make(map[string]time.Time),
 		trustedProxies: parseTrustedProxies(os.Getenv("RELAY_TRUSTED_PROXIES")),
+		unmeteredIPs:   make(map[string]time.Time),
 	}
 	if cfg.MaxConcurrentHTTP > 0 {
 		g.httpSem = make(chan struct{}, cfg.MaxConcurrentHTTP)
@@ -348,6 +356,40 @@ func (g *abuseGuard) classifyHTTPPath(path string) (name string, perMinute int, 
 	}
 }
 
+// unmeteredIPTTL is how long a post-auth owner-dev verdict keeps a client IP
+// exempt from the per-IP proxy cap. Short and rolling: every authenticated
+// exempt request renews it, so an active session never expires while a
+// stale entry closes quickly.
+const unmeteredIPTTL = 10 * time.Minute
+
+// markUnmeteredIP whitelists a client IP whose AUTHENTICATED request resolved
+// to a bandwidth-exempt plan. Called only after Convex's verdict — never from
+// anything pre-auth or client-claimed.
+func (g *abuseGuard) markUnmeteredIP(ip string) {
+	if ip == "" {
+		return
+	}
+	g.mu.Lock()
+	g.unmeteredIPs[ip] = time.Now().Add(unmeteredIPTTL)
+	g.mu.Unlock()
+}
+
+// allowProxyIP is the per-IP admission check for /d/ proxy paths: the normal
+// token bucket, except IPs on the unmetered whitelist pass unconditionally.
+func (g *abuseGuard) allowProxyIP(ip string) bool {
+	g.mu.Lock()
+	exp, ok := g.unmeteredIPs[ip]
+	if ok && time.Now().After(exp) {
+		delete(g.unmeteredIPs, ip)
+		ok = false
+	}
+	g.mu.Unlock()
+	if ok {
+		return true
+	}
+	return g.allow("http:proxy:"+ip, g.cfg.ProxyPerIPPerMin, g.cfg.ProxyBurstPerIP)
+}
+
 func (g *abuseGuard) httpMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
@@ -356,7 +398,13 @@ func (g *abuseGuard) httpMiddleware(next http.Handler) http.Handler {
 		}
 		ip := g.clientIP(r)
 		name, perMinute, burst := g.classifyHTTPPath(r.URL.Path)
-		if !g.allow("http:"+name+":"+ip, perMinute, burst) {
+		allowed := false
+		if name == "proxy" {
+			allowed = g.allowProxyIP(ip)
+		} else {
+			allowed = g.allow("http:"+name+":"+ip, perMinute, burst)
+		}
+		if !allowed {
 			g.logLimited("http-"+name, ip)
 			writeRelayError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return

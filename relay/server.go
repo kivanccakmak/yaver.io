@@ -1846,6 +1846,12 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// limit and the bandwidth cap below. The verdict came from Convex about
 	// the AUTHENTICATED caller — nothing client-sent can claim it.
 	relayUnmetered := planBandwidthExempt(relayPlan)
+	if relayUnmetered {
+		// Whitelist this client IP against the PRE-auth per-IP proxy cap for
+		// a rolling TTL — an owner's preview session pulls hundreds of
+		// subresources and would trip the IP bucket before auth even runs.
+		s.abuseGuard.markUnmeteredIP(s.abuseGuard.clientIP(r))
+	}
 	if userID != "" && !relayUnmetered && !s.abuseGuard.allow("proxy-user:"+userID, s.abuseGuard.cfg.ProxyPerUserPerMin, s.abuseGuard.cfg.ProxyBurstPerUser) {
 		s.abuseGuard.logLimited("proxy-user", userID)
 		writeRelayError(w, http.StatusTooManyRequests, "free relay user rate limit exceeded")

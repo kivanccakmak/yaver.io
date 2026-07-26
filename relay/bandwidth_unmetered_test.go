@@ -113,3 +113,34 @@ func TestRelayAccessEntitlementReadsPlanFromCache(t *testing.T) {
 		t.Fatalf("expired entitlement = (%v, %q), want (false, \"\")", isPaid, plan)
 	}
 }
+
+// The pre-auth per-IP proxy guard must honor the unmetered-IP whitelist: an
+// owner's preview session loads hundreds of subresources through /d/<id>/ and
+// trips ProxyPerIPPerMin long before the per-user or bandwidth checks run.
+// Only a Convex-verified owner-dev verdict (markUnmeteredIP, called from the
+// proxy handler AFTER auth) can enter an IP into the set — an attacker
+// hammering pre-auth never does, so flood protection stays intact.
+func TestUnmeteredIPBypassesProxyIPGuard(t *testing.T) {
+	g := newAbuseGuard(defaultAbuseGuardConfig())
+
+	ip := "203.0.113.7"
+	// Exhaust the proxy budget for this IP.
+	for g.allow("http:proxy:"+ip, g.cfg.ProxyPerIPPerMin, g.cfg.ProxyBurstPerIP) {
+	}
+	if g.allowProxyIP(ip) {
+		t.Fatal("exhausted IP must be denied before it is marked unmetered")
+	}
+
+	g.markUnmeteredIP(ip)
+	if !g.allowProxyIP(ip) {
+		t.Fatal("an IP the owner authenticated from must bypass the per-IP proxy cap")
+	}
+
+	// Expiry: the whitelist is a TTL, not a permanent hole.
+	g.mu.Lock()
+	g.unmeteredIPs[ip] = time.Now().Add(-time.Second)
+	g.mu.Unlock()
+	if g.allowProxyIP(ip) {
+		t.Fatal("an expired unmetered IP must fall back to the normal cap")
+	}
+}
