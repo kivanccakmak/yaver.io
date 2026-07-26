@@ -1830,7 +1830,9 @@ func (b *baseDevServer) startProcess(ctx context.Context, name string, args []st
 	b.workDir = workDir
 	b.mu.Unlock()
 
-	cmd := exec.CommandContext(ctx, name, args...)
+	// Resolve via the runtime dirs at SPAWN time — exec.Command alone uses
+	// the agent's boot-time PATH and misses agent-installed toolchains.
+	cmd := exec.CommandContext(ctx, resolveSpawnPath(name), args...)
 	cmd.Dir = workDir
 	// augmentEnv prepends ~/.yaver/runtimes/node/bin to PATH so
 	// `npx` / `node` invocations resolve to the agent-managed Node
@@ -2345,7 +2347,7 @@ func (e *ExpoDevServer) StartWebPreview(parent context.Context, workDir string) 
 		"--port", fmt.Sprintf("%d", port),
 		"--host", "lan",
 	}
-	cmd := exec.CommandContext(ctx, "npx", args...)
+	cmd := exec.CommandContext(ctx, resolveSpawnPath("npx"), args...)
 	cmd.Dir = workDir
 	// Isolate this Expo's cache so it doesn't fight Metro over .expo/
 	// bundler state. Two concurrent `expo start` invocations on the
@@ -2717,7 +2719,7 @@ func (f *FlutterDevServer) Start(ctx context.Context, opts DevServerOpts) error 
 		// support idempotently first so the browser lane actually serves.
 		if _, statErr := os.Stat(filepath.Join(opts.WorkDir, "web")); os.IsNotExist(statErr) {
 			log.Printf("[dev:flutter] %s has no web/ dir — enabling web support (flutter create --platforms web .)", opts.WorkDir)
-			cre := exec.CommandContext(ctx, "flutter", "create", "--platforms", "web", ".")
+			cre := exec.CommandContext(ctx, resolveSpawnPath("flutter"), "create", "--platforms", "web", ".")
 			cre.Dir = opts.WorkDir
 			if out, cerr := cre.CombinedOutput(); cerr != nil {
 				log.Printf("[dev:flutter] flutter create --platforms web failed: %v — %.300s", cerr, string(out))
@@ -2776,7 +2778,7 @@ func flutterDeviceMatchesTarget(deviceName string, target DevServerTarget) bool 
 // If preferredPlatform is "ios" or "android", it prefers that class first.
 // If a Yaver preview target is selected, it tries to match by device name first.
 func detectFlutterMobileDevice(ctx context.Context, preferredPlatform string, target DevServerTarget) string {
-	out, err := exec.CommandContext(ctx, "flutter", "devices", "--machine").Output()
+	out, err := exec.CommandContext(ctx, resolveSpawnPath("flutter"), "devices", "--machine").Output()
 	if err != nil {
 		return ""
 	}
@@ -2845,9 +2847,9 @@ func (f *FlutterDevServer) startNativeProcess(ctx context.Context, name string, 
 	f.workDir = workDir
 	f.mu.Unlock()
 
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, resolveSpawnPath(name), args...)
 	cmd.Dir = workDir
-	cmd.Env = os.Environ()
+	cmd.Env = augmentEnv(nil)
 
 	// Create stdin pipe for hot reload ("r") and hot restart ("R")
 	pipe, err := cmd.StdinPipe()
@@ -2882,7 +2884,7 @@ func (f *FlutterDevServer) startProcessWithStdin(ctx context.Context, name strin
 	f.workDir = workDir
 	f.mu.Unlock()
 
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, resolveSpawnPath(name), args...)
 	cmd.Dir = workDir
 	// augmentEnv prepends ~/.yaver/runtimes/node/bin to PATH so
 	// `npx` / `node` invocations resolve to the agent-managed Node

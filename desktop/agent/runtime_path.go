@@ -87,6 +87,28 @@ func augmentEnv(env []string) []string {
 	return out
 }
 
+// resolveSpawnPath resolves a tool name to an absolute path for
+// exec.Command, consulting the agent-managed runtime dirs FIRST.
+//
+// Why this exists: exec.Command(name) resolves the binary via the AGENT
+// process's PATH — which systemd/launchd fixed at boot — while augmentEnv
+// only fixes the CHILD's PATH. So a toolchain the agent itself installed
+// under ~/.yaver/runtimes (or flutterRoot) stayed "executable file not
+// found" until the agent was restarted with a luckier PATH, even though
+// every readiness probe (lookPathWithRuntimes) said present. Presence must
+// be a per-spawn probe, never a boot-time fact. Unknown tools pass through
+// unchanged so exec fails with the recognizable 'not found' the
+// missing-toolchain remedy path parses.
+func resolveSpawnPath(name string) string {
+	if strings.ContainsRune(name, os.PathSeparator) {
+		return name // already a path — respect it
+	}
+	if p, err := lookPathWithRuntimes(name); err == nil && strings.TrimSpace(p) != "" {
+		return p
+	}
+	return name
+}
+
 // lookPathWithRuntimes prefers agent-managed runtime bins before the
 // ambient PATH so readiness checks agree with subprocess execution.
 func lookPathWithRuntimes(name string) (string, error) {
