@@ -1965,11 +1965,14 @@ export default function VibeCodingView({
                     ) : null}
                   </div>
                   {runnerAuthStatus ? (
-                    <div className="mt-3 rounded-xl border border-surface-800 bg-surface-950/60 p-3 text-[10px] text-surface-300">
+                    <div className="mt-3 min-w-0 overflow-hidden rounded-xl border border-surface-800 bg-surface-950/60 p-3 text-[10px] text-surface-300">
                       <div className="font-semibold uppercase tracking-[0.14em] text-surface-500">Sign-in status</div>
                       <div className="mt-2">{runnerAuthStatus.status.replaceAll("_", " ")}</div>
-                      {runnerAuthStatus.code ? <div className="mt-1 font-mono text-surface-200">Code: {runnerAuthStatus.code}</div> : null}
-                      {runnerAuthStatus.detail ? <div className="mt-1 text-surface-400">{runnerAuthStatus.detail}</div> : null}
+                      {runnerAuthStatus.code ? <div className="mt-1 break-all font-mono text-surface-200">Code: {runnerAuthStatus.code}</div> : null}
+                      {/* break-all: the CLI prints the full auth URL into this
+                          line — one unbroken token otherwise sets the PANE's
+                          intrinsic width and the whole column bleeds off-screen. */}
+                      {runnerAuthStatus.detail ? <div className="mt-1 break-all text-surface-400">{runnerAuthStatus.detail}</div> : null}
                       {runnerAuthStatus.openUrl && !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
                         /* One-line, one-tap copy. The CLI's own "If the
                            browser didn't open, visit: <url>" line wraps over
