@@ -59,6 +59,12 @@ type runnerBrowserAuthSession struct {
 	StartedAt      int64  `json:"startedAt"`
 	UpdatedAt      int64  `json:"updatedAt"`
 	CompletedAt    int64  `json:"completedAt,omitempty"`
+	// LastOutputAt is when the spawned CLI last wrote ANY line. Surfaces
+	// render "CLI alive, no URL yet — last output 12s ago" from it instead
+	// of an undifferentiated spinner; its absence while Status is still
+	// "starting" means the CLI has said nothing at all (the silence
+	// watchdog's territory). remained.md P0 contract.
+	LastOutputAt int64 `json:"lastOutputAt,omitempty"`
 }
 
 type runnerBrowserAuthSessionState struct {
@@ -358,6 +364,7 @@ func scanRunnerBrowserAuthOutput(sess *runnerBrowserAuthSessionState, reader io.
 		}
 		sess.update(func(state *runnerBrowserAuthSession) {
 			state.Detail = line
+			state.LastOutputAt = time.Now().UnixMilli()
 			if state.OpenURL == "" {
 				if url := urlPattern.FindString(line); url != "" {
 					state.OpenURL = strings.TrimRight(url, ".)")
