@@ -6,14 +6,28 @@ package main
 //
 // Remote sign-in needs the OAuth URL. Measured 2026-07-26 against real CLIs:
 //
-//   claude auth login --claudeai   silent in a pipe, under `script`, in a real
-//                                  tmux TTY, with BROWSER=echo, and inside the
-//                                  agent's own launchd session. It opens a
-//                                  browser locally and prints nothing, ever.
-//   codex login --device-auth      accepted (it hangs rather than erroring, so
-//                                  the flag exists) but emits nothing either.
-//   kimi login                     prints URL + code properly — the exception,
-//                                  not the rule.
+//   ON LINUX ALL THREE PRINT WHAT WE NEED — the important correction, verified
+//   on an aarch64 Hetzner box (claude 2.1.165, codex-cli 0.144.1):
+//
+//     claude   "If the browser didn't open, visit: https://claude.com/cai/oauth/
+//               authorize?...  Paste code here if prompted >"
+//     codex    "…sign in with ChatGPT using device code authorization:
+//               1. Open this link  2. Enter this one-time code"
+//     kimi     RFC 8628 device code.
+//
+//   claude's redirect_uri is a HOSTED callback (platform.claude.com), not
+//   localhost — so no process ever binds a port, on any OS, and no callback
+//   tunnel is required. It takes the code on STDIN, which the session holds.
+//
+//   ON MACOS the same commands emit nothing: no output, no listener, no network,
+//   no files — while spawning `security find-generic-password`, and keychain
+//   calls independently hang on that host. macOS silence is a KEYCHAIN problem
+//   on that machine, not a property of these CLIs.
+//
+//   This shim therefore matters far less than it seemed: on Linux the stdout
+//   scanner already gets everything, and on macOS the CLI never reaches the
+//   browser step for the shim to catch. Kept because xdg-open IS a subprocess
+//   and a future CLI may open silently — but it is a fallback, not the plan.
 //
 // So scraping stdout cannot be the strategy. Two of the three CLIs a user is
 // most likely to have will never print anything to scrape.
