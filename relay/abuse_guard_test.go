@@ -18,6 +18,14 @@ func TestAbuseGuardHTTPMiddleware_RateLimitsProxyByIP(t *testing.T) {
 	g := newAbuseGuard(cfg)
 
 	h := g.httpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The middleware no longer denies over-budget /d/ requests itself —
+		// it MARKS them and the proxy handler applies the account verdict
+		// (only a Convex-verified bandwidth-exempt plan survives). Mirror
+		// that contract here.
+		if proxyOverBudget(r) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
@@ -29,13 +37,42 @@ func TestAbuseGuardHTTPMiddleware_RateLimitsProxyByIP(t *testing.T) {
 		t.Fatalf("first proxy request expected 204, got %d", w.Code)
 	}
 
+	// Over budget: the request reaches the handler marked, and a non-exempt
+	// account is denied there — same observable 429 for a free-tier caller.
 	req = httptest.NewRequest(http.MethodGet, "/d/device123/health", nil)
 	req.RemoteAddr = "203.0.113.10:1235"
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("second proxy request expected 429, got %d", w.Code)
+		t.Fatalf("second proxy request expected 429 (denied at account check), got %d", w.Code)
 	}
+
+	// Beyond the hard cap the MIDDLEWARE denies — the flood never reaches
+	// auth. Exhaust proxyHardCapMultiple× the budget.
+	sawMiddlewareDeny := false
+	for i := 0; i < proxyHardCapMultiple*2+2; i++ {
+		req = httptest.NewRequest(http.MethodGet, "/d/device123/health", nil)
+		req.RemoteAddr = "203.0.113.10:1240"
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+	}
+	// The hard bucket is spent now; the next request must be denied without
+	// reaching the handler (which would have added the marker 429 anyway —
+	// distinguish via a handler that records invocation).
+	reached := false
+	probe := g.httpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req = httptest.NewRequest(http.MethodGet, "/d/device123/health", nil)
+	req.RemoteAddr = "203.0.113.10:1241"
+	w = httptest.NewRecorder()
+	probe.ServeHTTP(w, req)
+	if w.Code != http.StatusTooManyRequests || reached {
+		t.Fatalf("beyond hard cap expected middleware 429 without reaching handler, got %d reached=%v", w.Code, reached)
+	}
+	sawMiddlewareDeny = true
+	_ = sawMiddlewareDeny
 
 	req = httptest.NewRequest(http.MethodGet, "/health", nil)
 	req.RemoteAddr = "203.0.113.10:1236"

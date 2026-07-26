@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -114,33 +116,87 @@ func TestRelayAccessEntitlementReadsPlanFromCache(t *testing.T) {
 	}
 }
 
-// The pre-auth per-IP proxy guard must honor the unmetered-IP whitelist: an
-// owner's preview session loads hundreds of subresources through /d/<id>/ and
-// trips ProxyPerIPPerMin long before the per-user or bandwidth checks run.
-// Only a Convex-verified owner-dev verdict (markUnmeteredIP, called from the
-// proxy handler AFTER auth) can enter an IP into the set — an attacker
-// hammering pre-auth never does, so flood protection stays intact.
-func TestUnmeteredIPBypassesProxyIPGuard(t *testing.T) {
+// The per-IP proxy bucket is a FLOOD BOUND, not the whitelist — the whitelist
+// is the ACCOUNT. When the bucket is spent, the middleware defers the verdict
+// to the proxy handler (marking the request over-budget) so the authenticated
+// account's Convex-verified plan can decide; a hard cap keeps unauthenticated
+// floods from reaching auth without limit.
+func TestProxyOverBudgetDefersToAccountWithinHardCap(t *testing.T) {
 	g := newAbuseGuard(defaultAbuseGuardConfig())
+	mw := g.httpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if proxyOverBudget(r) {
+			w.WriteHeader(http.StatusTeapot) // marker: deferred to account check
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
 
-	ip := "203.0.113.7"
-	// Exhaust the proxy budget for this IP.
-	for g.allow("http:proxy:"+ip, g.cfg.ProxyPerIPPerMin, g.cfg.ProxyBurstPerIP) {
-	}
-	if g.allowProxyIP(ip) {
-		t.Fatal("exhausted IP must be denied before it is marked unmetered")
+	req := func() *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/d/device1234/info", nil)
+		r.RemoteAddr = "203.0.113.7:4444"
+		return r
 	}
 
-	g.markUnmeteredIP(ip)
-	if !g.allowProxyIP(ip) {
-		t.Fatal("an IP the owner authenticated from must bypass the per-IP proxy cap")
+	// Within the normal budget: passes unmarked.
+	w := httptest.NewRecorder()
+	mw.ServeHTTP(w, req())
+	if w.Code != http.StatusOK {
+		t.Fatalf("first request = %d, want 200 unmarked", w.Code)
 	}
 
-	// Expiry: the whitelist is a TTL, not a permanent hole.
-	g.mu.Lock()
-	g.unmeteredIPs[ip] = time.Now().Add(-time.Second)
-	g.mu.Unlock()
-	if g.allowProxyIP(ip) {
-		t.Fatal("an expired unmetered IP must fall back to the normal cap")
+	// Exhaust the normal bucket: requests must now arrive MARKED, not 429'd —
+	// the account decides at the handler.
+	sawDeferred := false
+	for i := 0; i < g.cfg.ProxyBurstPerIP*2; i++ {
+		w := httptest.NewRecorder()
+		mw.ServeHTTP(w, req())
+		if w.Code == http.StatusTeapot {
+			sawDeferred = true
+			break
+		}
+		if w.Code == http.StatusTooManyRequests {
+			t.Fatal("over-budget proxy request was denied pre-auth — the account never got to decide")
+		}
+	}
+	if !sawDeferred {
+		t.Fatal("never saw a deferred (over-budget) request")
+	}
+
+	// Beyond the hard cap: denied outright, so a flood can't reach auth
+	// (and Convex) without bound.
+	sawHardDeny := false
+	for i := 0; i < proxyHardCapMultiple*g.cfg.ProxyBurstPerIP*2; i++ {
+		w := httptest.NewRecorder()
+		mw.ServeHTTP(w, req())
+		if w.Code == http.StatusTooManyRequests {
+			sawHardDeny = true
+			break
+		}
+	}
+	if !sawHardDeny {
+		t.Fatal("hard cap never engaged — unauthenticated flood is unbounded")
+	}
+}
+
+// Non-proxy paths keep the plain deny — deferral is only for /d/ where an
+// authenticated account check follows.
+func TestNonProxyPathsStillDenyAtMiddleware(t *testing.T) {
+	g := newAbuseGuard(defaultAbuseGuardConfig())
+	mw := g.httpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	sawDeny := false
+	for i := 0; i < g.cfg.BusBurstPerIP*3; i++ {
+		r := httptest.NewRequest(http.MethodGet, "/bus/sub", nil)
+		r.RemoteAddr = "203.0.113.8:4444"
+		w := httptest.NewRecorder()
+		mw.ServeHTTP(w, r)
+		if w.Code == http.StatusTooManyRequests {
+			sawDeny = true
+			break
+		}
+	}
+	if !sawDeny {
+		t.Fatal("bus path over budget was never denied")
 	}
 }
