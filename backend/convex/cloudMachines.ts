@@ -1256,6 +1256,7 @@ export const seedMachineInfo = internalMutation({
       name: v.optional(v.string()),
       installed: v.optional(v.boolean()),
       authed: v.optional(v.boolean()),
+      verified: v.optional(v.boolean()),
       authSource: v.optional(v.string()),
     }))),
   },

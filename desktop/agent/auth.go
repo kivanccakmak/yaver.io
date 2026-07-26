@@ -127,12 +127,22 @@ func LoginWithEmail(baseURL, email, password string) (string, error) {
 
 // RunnerInfo describes an active runner process for heartbeat reporting.
 type RunnerInfo struct {
-	TaskID   string `json:"taskId"`
-	RunnerID string `json:"runnerId"`
-	Model    string `json:"model,omitempty"`
-	PID      int    `json:"pid"`
-	Status   string `json:"status"` // "running" or "idle"
-	Title    string `json:"title"`
+	TaskID         string `json:"taskId"`
+	RunnerID       string `json:"runnerId"`
+	Model          string `json:"model,omitempty"`
+	PID            int    `json:"pid"`
+	Status         string `json:"status"` // "running" or "idle"
+	Title          string `json:"title"`
+	Installed      bool   `json:"installed"`
+	Ready          bool   `json:"ready"`
+	AuthConfigured bool   `json:"authConfigured"`
+	// AuthVerified means the runner itself verified the account/token, not
+	// merely that a credentials file exists. The dashboard must not render a
+	// green "signed in" chip when this is explicitly false.
+	AuthVerified bool   `json:"authVerified"`
+	AuthSource   string `json:"authSource,omitempty"`
+	Warning      string `json:"warning,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 // newBearerRequest creates an HTTP request with Authorization: Bearer header.

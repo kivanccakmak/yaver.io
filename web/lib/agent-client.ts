@@ -113,6 +113,7 @@ export interface EnvironmentRunnerSummary {
   installed: boolean;
   ready: boolean;
   authConfigured?: boolean;
+  authVerified?: boolean;
   authSource?: string;
   warning?: string;
   error?: string;
@@ -894,6 +895,7 @@ export interface RunnerAuthStatusRow {
   installed: boolean;
   ready: boolean;
   authConfigured: boolean;
+  authVerified?: boolean;
   authSource?: string;
   warning?: string;
   error?: string;
@@ -917,6 +919,7 @@ export interface RunnerBrowserAuthSession {
   code?: string;
   detail?: string;
   authConfigured?: boolean;
+  authVerified?: boolean;
   authSource?: string;
   error?: string;
   startedAt: number;

@@ -460,6 +460,7 @@ interface RunnerChipState {
   health: RunnerHealth;
   hint?: string;
   authSource?: string;
+  authVerified?: boolean;
 }
 
 function runnerDisplayName(id: string): string {
@@ -511,13 +512,25 @@ function deriveRunnerChipStates(
     const label = runnerDisplayName(id);
     const authSource = typeof raw?.authSource === "string" ? raw.authSource : undefined;
     const rawError = String(raw?.error || raw?.warning || "").trim();
+    const authVerified = typeof raw?.authVerified === "boolean" ? raw.authVerified : undefined;
+    const needsVerifiedAuth = id === "claude" || id === "codex";
     if (raw?.installed === false) return { id, label, health: "not-installed", hint: "Not installed on this machine" };
-    if (raw?.ready === true) return { id, label, health: "ready", hint: authSource || status || "signed in", authSource };
+    if (raw?.authConfigured === true && authVerified === false && needsVerifiedAuth) {
+      return {
+        id,
+        label,
+        health: "needs-auth",
+        hint: rawError || "credentials found, but the runner has not verified this login",
+        authSource,
+        authVerified,
+      };
+    }
+    if (raw?.ready === true) return { id, label, health: "ready", hint: authSource || status || "signed in", authSource, authVerified };
     if (raw?.ready === false) {
       if (raw?.authConfigured === false || /auth|login|sign.?in|authenticate/i.test(rawError)) {
-        return { id, label, health: "needs-auth", hint: rawError || "not signed in", authSource };
+        return { id, label, health: "needs-auth", hint: rawError || "not signed in", authSource, authVerified };
       }
-      if (rawError) return { id, label, health: "down", hint: rawError, authSource };
+      if (rawError) return { id, label, health: "down", hint: rawError, authSource, authVerified };
     }
     const reported = normalizeRunnerReportedStatus(status);
     switch (reported) {
@@ -525,14 +538,14 @@ function deriveRunnerChipStates(
       case "idle":
       case "ready":
       case "running":
-        return { id, label, health: "ready", hint: status, authSource };
+        return { id, label, health: "ready", hint: status, authSource, authVerified };
       case "needs-auth":
       case "needs_auth":
-        return { id, label, health: "needs-auth", hint: status, authSource };
+        return { id, label, health: "needs-auth", hint: status, authSource, authVerified };
       case "down":
-        return { id, label, health: "down", hint: status, authSource };
+        return { id, label, health: "down", hint: status, authSource, authVerified };
       default:
-        return { id, label, health: "unknown", hint: status, authSource };
+        return { id, label, health: "unknown", hint: status, authSource, authVerified };
     }
   };
 
@@ -578,7 +591,9 @@ function runnerChipDotClass(health: RunnerHealth): string {
 function runnerChipTitle(state: RunnerChipState): string {
   switch (state.health) {
     case "ready": return `${state.label}: installed and authenticated${state.hint ? ` (${state.hint})` : ""}`;
-    case "needs-auth": return `${state.label}: installed but not signed in — click "Sign in" on this runner to authorize it with your Claude Max / ChatGPT Plus subscription`;
+    case "needs-auth": return state.authVerified === false
+      ? `${state.label}: credentials were found, but the runner has not verified them. Click to refresh remote OAuth.`
+      : `${state.label}: installed but not signed in — click "Sign in" on this runner to authorize it with your Claude Max / ChatGPT Plus subscription`;
     case "down": return `${state.label}: detected but reporting an error: ${state.hint ?? "unknown"}`;
     case "not-installed": return `${state.label}: not installed on this machine`;
     default: return state.label;
@@ -588,7 +603,7 @@ function runnerChipTitle(state: RunnerChipState): string {
 function runnerChipStatusText(state: RunnerChipState): string {
   switch (state.health) {
     case "ready": return state.authSource ? `signed in · ${state.authSource}` : "signed in";
-    case "needs-auth": return "sign in needed";
+    case "needs-auth": return state.authVerified === false ? "verify needed" : "sign in needed";
     case "down": return "error";
     case "not-installed": return "not installed";
     default: return "unknown";

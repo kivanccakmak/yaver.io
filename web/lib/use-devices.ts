@@ -110,6 +110,7 @@ export interface Device {
     ready?: boolean;
     installed?: boolean;
     authConfigured?: boolean;
+    authVerified?: boolean;
     authSource?: string;
     warning?: string;
     error?: string;

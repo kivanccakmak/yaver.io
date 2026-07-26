@@ -1032,6 +1032,13 @@ export const heartbeat = mutation({
       pid: v.number(),
       status: v.string(),
       title: v.string(),
+      installed: v.optional(v.boolean()),
+      ready: v.optional(v.boolean()),
+      authConfigured: v.optional(v.boolean()),
+      authVerified: v.optional(v.boolean()),
+      authSource: v.optional(v.string()),
+      warning: v.optional(v.string()),
+      error: v.optional(v.string()),
     }))),
     installedRunnerIds: v.optional(v.array(v.string())),
     quicHost: v.optional(v.string()),
@@ -1309,8 +1316,23 @@ export const heartbeat = mutation({
           const statusById = new Map<string, string>();
           for (const r of args.runners ?? []) if (r?.runnerId) statusById.set(r.runnerId, String(r.status ?? ""));
           cp.runnersAvailable = Array.from(new Set(args.installedRunnerIds)).map((id) => {
+            const runner = (args.runners ?? []).find((r) => r?.runnerId === id);
             const st = statusById.get(id);
-            return { id, installed: true, ...(st === "ready" ? { authed: true } : st === "needs-auth" ? { authed: false } : {}) };
+            return {
+              id,
+              installed: runner?.installed ?? true,
+              ...(typeof runner?.authVerified === "boolean"
+                ? { authed: runner.authVerified }
+                : typeof runner?.authConfigured === "boolean"
+                  ? { authed: runner.authConfigured }
+                : st === "ready"
+                  ? { authed: true }
+                  : st === "needs-auth"
+                    ? { authed: false }
+                    : {}),
+              ...(typeof runner?.authVerified === "boolean" ? { verified: runner.authVerified } : {}),
+              ...(runner?.authSource ? { authSource: runner.authSource } : {}),
+            };
           });
         }
         if (Object.keys(cp).length > 0) {

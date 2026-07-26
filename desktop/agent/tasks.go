@@ -603,6 +603,24 @@ func (tm *TaskManager) GetRunnerInfos() []RunnerInfo {
 	defer tm.mu.RUnlock()
 	infos := make([]RunnerInfo, 0) // never nil — Convex expects [] not null
 	seenRunner := map[string]bool{}
+	decorate := func(info *RunnerInfo, id string) {
+		cfg, ok := builtinRunners[id]
+		if !ok {
+			return
+		}
+		if _, err := exec.LookPath(cfg.Command); err != nil {
+			info.Installed = false
+			return
+		}
+		rs := DetectRunnerRuntimeStatus(cfg, tm.workDir)
+		info.Installed = true
+		info.Ready = rs.Ready
+		info.AuthConfigured = rs.AuthConfigured
+		info.AuthVerified = rs.AuthVerified
+		info.AuthSource = rs.AuthSource
+		info.Warning = rs.Warning
+		info.Error = rs.Error
+	}
 	for _, t := range tm.tasks {
 		if t.Status == TaskStatusRunning || t.Status == TaskStatusQueued {
 			pid := 0
@@ -613,14 +631,16 @@ func (tm *TaskManager) GetRunnerInfos() []RunnerInfo {
 			if t.Status == TaskStatusQueued {
 				status = "idle"
 			}
-			infos = append(infos, RunnerInfo{
+			info := RunnerInfo{
 				TaskID:   t.ID,
 				RunnerID: t.RunnerID,
 				Model:    t.Model,
 				PID:      pid,
 				Status:   status,
 				Title:    t.Title,
-			})
+			}
+			decorate(&info, normalizeRunnerID(t.RunnerID))
+			infos = append(infos, info)
 			seenRunner[normalizeRunnerID(t.RunnerID)] = true
 		}
 	}
@@ -669,10 +689,17 @@ func (tm *TaskManager) GetRunnerInfos() []RunnerInfo {
 			}
 		}
 		infos = append(infos, RunnerInfo{
-			TaskID:   "",
-			RunnerID: id,
-			Status:   healthStatus,
-			Title:    "",
+			TaskID:         "",
+			RunnerID:       id,
+			Status:         healthStatus,
+			Title:          "",
+			Installed:      true,
+			Ready:          rs.Ready,
+			AuthConfigured: rs.AuthConfigured,
+			AuthVerified:   rs.AuthVerified,
+			AuthSource:     rs.AuthSource,
+			Warning:        rs.Warning,
+			Error:          rs.Error,
 		})
 		seenRunner[normalizeRunnerID(id)] = true
 	}
