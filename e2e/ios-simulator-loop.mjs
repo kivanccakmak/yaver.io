@@ -64,6 +64,23 @@ try {
   console.log(`  [${el()}] session ${sessionId} status=${created.json?.status} device=${created.json?.deviceId?.slice(0, 8)}…`);
   console.log(`  [${el()}] frameTransport=${created.json?.frameTransport}`);
 
+  // BASELINE FIRST. Without this the loop cannot tell "the guest app rendered"
+  // from "the simulator was already showing something". It could not, and it
+  // did not: sfmg, talos, yaver.io and e-mobile each reported PIXELS with
+  // near-identical frame sizes (45726 / 45781 / 45738 / 45747 bytes) — four
+  // passes that were one screenshot of YAVER'S OWN app, repeated. run-guest
+  // never swapped what was on screen, and a harness that scores frame arrival
+  // as success cannot see that. Exactly the false green this suite exists to
+  // catch, produced by the suite itself.
+  let baseline = null;
+  {
+    const r = await fetch(`${AGENT}/remote-runtime/sessions/${sessionId}/frame`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    if (r.status === 200) {
+      baseline = Buffer.from(await r.arrayBuffer()).length;
+      console.log(`  [${el()}] baseline frame before launch: ${baseline} bytes`);
+    }
+  }
+
   console.log(`  [${el()}] launching the guest app into the simulator`);
   const ran = await api(`/remote-runtime/sessions/${sessionId}/command`, {
     method: 'POST',
@@ -111,8 +128,16 @@ try {
   } else if (got === 0) {
     console.log('SILENT  no frame ever arrived, and nothing said why');
     process.exitCode = 1;
+  } else if (baseline !== null && !sizes.some((n) => n !== baseline)) {
+    // Every post-launch frame is byte-identical in size to the pre-launch one.
+    // The pipe works; the APP did not change. Saying PIXELS here would claim
+    // something never observed.
+    console.log(`STATIC  ${got} frames, all ${sizes[0]} bytes — IDENTICAL to the pre-launch baseline.`);
+    console.log('        Streaming works, but the guest app never appeared: run-guest did not');
+    console.log('        change what is on screen. This is NOT a render pass.');
+    process.exitCode = 1;
   } else {
-    console.log(`PIXELS  ${got} frames, sizes ${sizes.join(', ')} — ${varied ? 'frames VARY (live stream)' : 'identical sizes (possibly a static screen)'}`);
+    console.log(`PIXELS  ${got} frames, sizes ${sizes.join(', ')}${baseline !== null ? ` (baseline ${baseline})` : ''} — screen CHANGED after launch`);
     console.log(`        last frame: ${lastPath}`);
   }
   console.log('\nverifies STREAMING only — a native binary has no DOM, so this cannot');
