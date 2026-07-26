@@ -1022,7 +1022,13 @@ export interface RunnerBrowserAuthSession {
   /** Mirrors the states emitted by the agent in
    *  desktop/agent/runner_auth_browser_http.go (starting →
    *  awaiting_browser → verifying → completed | cancelled | failed). */
-  status: "starting" | "awaiting_browser" | "verifying" | "completed" | "failed" | "cancelled";
+  /** `authorized_no_entitlement` means the OAuth handshake SUCCEEDED and the
+   *  account simply has no active plan for that runner yet (Kimi answers a good
+   *  device-code login with "unable to verify your membership benefits"). It is
+   *  deliberately NOT "failed": every step the user controls worked, so a
+   *  surface must say "signed in — membership not active" and point at the
+   *  account, never at the sign-in button they already used correctly. */
+  status: "starting" | "awaiting_browser" | "verifying" | "completed" | "failed" | "cancelled" | "authorized_no_entitlement";
   method?: string;
   openUrl?: string;
   code?: string;

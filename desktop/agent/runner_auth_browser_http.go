@@ -204,6 +204,41 @@ func runnerBrowserAuthCommand(runner string, tr tenantRuntime) (method string, c
 			cmd.Env = append(cmd.Environ(), "CI=1", "NO_COLOR=1", "TERM=dumb")
 		}
 		return "device-auth", cmd, nil
+	case "kimi":
+		bin := resolveRunnerBinary("kimi")
+		if bin == "" {
+			return "", nil, fmt.Errorf("kimi CLI not found on this machine (looked in PATH, ~/.npm-global/bin, ~/.local/bin, ~/.bun/bin, /opt/homebrew/bin, /usr/local/bin, and the user login shell). Install it with `curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash` or `npm i -g @moonshot-ai/kimi-code`, then try again.")
+		}
+		// `kimi login` is an RFC 8628 device-code flow and the ONLY runner here
+		// that was designed for this. It needs no TUI, prints the verification
+		// URL and user code to STDERR, and polls until the browser side
+		// completes — so it works identically on a headless box, a phone, a TV
+		// or a watch, because the authorising device never has to be the one
+		// running the CLI.
+		//
+		// Observed output (2026-07-26):
+		//   Opening browser for Kimi device login: https://www.kimi.com/code/authorize_device?user_code=IY0N-NC7Z
+		//   If the browser did not open, paste the URL above and enter code: IY0N-NC7Z
+		//   Code expires in 1800s.
+		//   Waiting for authorization to complete...
+		//
+		// The URL is caught by urlPattern and the XXXX-XXXX code by the shared
+		// device-code pattern, so no new capture logic is required.
+		//
+		// Subscription only, per Yaver's no-API-keys rule: `kimi login` is the
+		// OAuth path. Kimi also accepts a platform API key, and that belongs in
+		// OpenCode's provider config where a key is a deliberate choice — never
+		// here.
+		if tr.Enabled {
+			cmd, err = tr.command(context.Background(), tr.Home, bin, []string{"login"}, append(tr.authEnv(), "CI=1", "NO_COLOR=1", "TERM=dumb"))
+			if err != nil {
+				return "", nil, err
+			}
+		} else {
+			cmd = exec.Command(bin, "login")
+			cmd.Env = append(cmd.Environ(), "CI=1", "NO_COLOR=1", "TERM=dumb")
+		}
+		return "device-auth", cmd, nil
 	case "claude":
 		bin := resolveRunnerBinary("claude")
 		if bin == "" {
@@ -269,11 +304,57 @@ func scanRunnerBrowserAuthOutput(sess *runnerBrowserAuthSessionState, reader io.
 					log.Printf("[runner-auth-browser] %s captured openUrl=%s", state.Runner, state.OpenURL)
 				}
 			}
-			if state.Runner == "codex" && state.Code == "" {
+			// Codex and Kimi both emit an RFC 8628 style XXXX-XXXX user code.
+			// Kimi's looks like "IY0N-NC7Z" — the same shape, so one pattern
+			// serves both rather than two that can drift apart.
+			if (state.Runner == "codex" || state.Runner == "kimi") && state.Code == "" {
 				if code := codexCodePattern.FindString(line); code != "" {
 					state.Code = code
 					state.Status = "awaiting_browser"
-					log.Printf("[runner-auth-browser] codex captured code=%s", code)
+					log.Printf("[runner-auth-browser] %s captured code=%s", state.Runner, code)
+				}
+			}
+
+			// A CLI that says it FAILED must end the session, not leave the
+			// phone waiting on a code that will never be accepted. Kimi reports
+			//   Login failed: ... unable to verify your membership benefits ...
+			// after a perfectly good device handshake — the flow worked and the
+			// ACCOUNT was rejected. Those are different problems and the user
+			// can only act on the second if we repeat it verbatim.
+			if state.Status != "completed" {
+				if idx := strings.Index(line, "Login failed:"); idx >= 0 {
+					detail := strings.TrimSpace(line[idx:])
+					// AUTHORIZED-BUT-NOT-ENTITLED IS NOT A LOGIN FAILURE.
+					//
+					// Kimi answers a perfectly good device handshake with
+					//   Login failed: ... unable to verify your membership
+					//   benefits ... Please ensure your membership is active.
+					// The user opened the URL, signed in (Google, in this case)
+					// and approved the code — every step they control SUCCEEDED.
+					// What is missing is a plan on the account.
+					//
+					// Rendering that as "login failed" tells them to retry the
+					// one thing that already worked, forever. It is its own
+					// status so every surface can say: signed in, membership not
+					// active yet — and point at the account page instead of the
+					// sign-in button.
+					lower := strings.ToLower(detail)
+					entitlement := strings.Contains(lower, "membership") ||
+						strings.Contains(lower, "subscription") ||
+						strings.Contains(lower, "benefits") ||
+						strings.Contains(lower, "waitlist") ||
+						strings.Contains(lower, "not eligible") ||
+						strings.Contains(lower, "no active plan")
+					if entitlement {
+						state.Status = "authorized_no_entitlement"
+						state.Error = detail
+						state.Detail = "Signed in successfully, but this account has no active plan for " + state.Runner + " yet. Authorization worked — activate or wait for your membership, then reconnect. Nothing to retry here."
+						log.Printf("[runner-auth-browser] %s authorized but NOT entitled: %s", state.Runner, detail)
+					} else {
+						state.Status = "failed"
+						state.Error = detail
+						log.Printf("[runner-auth-browser] %s login failed: %s", state.Runner, detail)
+					}
 				}
 			}
 		})

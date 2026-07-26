@@ -409,7 +409,10 @@ export default function VibeCodingView({
   const [runnerAuthSessionId, setRunnerAuthSessionId] = useState<string | null>(null);
   const [runnerAuthStatus, setRunnerAuthStatus] = useState<{
     runner: "claude" | "codex";
-    status: "starting" | "awaiting_browser" | "completed" | "failed" | "cancelled";
+    // Mirrors agent-client's union. authorized_no_entitlement = the OAuth
+    // handshake worked and the ACCOUNT lacks an active plan; it must render as
+    // "signed in, membership not active", never as a login failure.
+    status: "starting" | "awaiting_browser" | "completed" | "failed" | "cancelled" | "authorized_no_entitlement";
     openUrl?: string;
     code?: string;
     detail?: string;
