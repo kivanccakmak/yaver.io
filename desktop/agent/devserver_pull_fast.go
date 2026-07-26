@@ -194,6 +194,9 @@ func executePullDecision(workDir string, d preBuildPullDecision) (string, error)
 	case pullActionRebaseAutostash:
 		out, err := runGit(workDir, "pull", "--rebase", "--autostash")
 		if err != nil {
+			if isUntrackedOverwritePullFailure(out) {
+				return executePullWithUntrackedStash(workDir, strings.TrimSpace(out))
+			}
 			return fmt.Sprintf("git pull --rebase --autostash failed: %s", strings.TrimSpace(out)), err
 		}
 		return "git pull --rebase --autostash succeeded", nil
@@ -224,6 +227,38 @@ func executePullDecision(workDir string, d preBuildPullDecision) (string, error)
 		return "checkpoint committed, rebased, pushed", nil
 	}
 	return "", nil
+}
+
+func isUntrackedOverwritePullFailure(out string) bool {
+	lower := strings.ToLower(out)
+	return strings.Contains(lower, "untracked working tree files would be overwritten by merge")
+}
+
+func executePullWithUntrackedStash(workDir, firstFailure string) (string, error) {
+	stashMsg := fmt.Sprintf("yaver pre-build untracked stash %s", time.Now().UTC().Format(time.RFC3339))
+	stashOut, stashErr := runGit(workDir, "stash", "push", "-u", "-m", stashMsg)
+	if stashErr != nil {
+		return fmt.Sprintf("git pull blocked by untracked files; git stash -u failed: %s", strings.TrimSpace(stashOut)), stashErr
+	}
+	pullOut, pullErr := runGit(workDir, "pull", "--rebase")
+	if pullErr != nil {
+		// Put the files back if the pull still failed. Keep the stash if apply
+		// also fails; `stash apply` is non-destructive to the stash entry.
+		applyOut, _ := runGit(workDir, "stash", "apply")
+		return fmt.Sprintf("git pull still failed after stashing untracked files: %s; restore attempt: %s", strings.TrimSpace(pullOut), strings.TrimSpace(applyOut)), pullErr
+	}
+	applyOut, applyErr := runGit(workDir, "stash", "apply")
+	if applyErr != nil {
+		return fmt.Sprintf("git pull succeeded after stashing untracked files; stash kept because re-apply needs attention: %s", strings.TrimSpace(applyOut)), nil
+	}
+	dropOut, dropErr := runGit(workDir, "stash", "drop")
+	if dropErr != nil {
+		return fmt.Sprintf("git pull succeeded after stashing untracked files; stash applied but drop failed: %s", strings.TrimSpace(dropOut)), nil
+	}
+	if firstFailure != "" {
+		return "git pull succeeded after safely stashing and restoring untracked files that would have been overwritten", nil
+	}
+	return "git pull succeeded after stashing and restoring untracked files", nil
 }
 
 // pullAutoPublishEnabled is the env-flag gate for the rebase + push

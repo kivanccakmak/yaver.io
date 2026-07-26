@@ -205,6 +205,41 @@ func TestDecidePullBeforeBuild_DirtyWithAgentRebaseAutostash(t *testing.T) {
 	}
 }
 
+func TestExecutePullDecision_RebaseAutostashHandlesUntrackedOverwrite(t *testing.T) {
+	remote := initBareRemote(t)
+	a := cloneAndConfig(t, remote)
+	gitCommitFile(t, a, "src/index.js", "x", "init")
+	gitInDir(t, a, "push", "-q", "-u", "origin", "main")
+
+	b := cloneAndConfig(t, remote)
+	gitInDir(t, b, "branch", "--set-upstream-to=origin/main", "main")
+	if err := os.MkdirAll(filepath.Join(b, "desktop", "agent"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(b, "desktop", "agent", "ops_diskguard.go"), []byte("local scratch"), 0o644); err != nil {
+		t.Fatalf("write untracked collision: %v", err)
+	}
+
+	gitCommitFile(t, a, "desktop/agent/ops_diskguard.go", "package main\n", "track diskguard")
+	gitInDir(t, a, "push", "-q")
+	gitInDir(t, b, "fetch", "-q")
+
+	d := decidePullBeforeBuild(b, true /*hasAgent*/, false /*no autopublish*/)
+	if d.Action != pullActionRebaseAutostash {
+		t.Fatalf("dirty+agent should rebase-autostash, got %+v", d)
+	}
+	summary, err := executePullDecision(b, d)
+	if err != nil {
+		t.Fatalf("rebase-autostash fallback failed: %v (%s)", err, summary)
+	}
+	if !strings.Contains(summary, "stashing") && !strings.Contains(summary, "stashed") {
+		t.Fatalf("summary should name untracked stash fallback, got %q", summary)
+	}
+	if got := gitInDir(t, b, "show", "HEAD:desktop/agent/ops_diskguard.go"); got != "package main" {
+		t.Fatalf("expected remote tracked file in HEAD after pull, got %q", got)
+	}
+}
+
 func TestDecidePullBeforeBuild_DirtyWithAgentAndAutoPublish(t *testing.T) {
 	remote := initBareRemote(t)
 	clone := cloneAndConfig(t, remote)

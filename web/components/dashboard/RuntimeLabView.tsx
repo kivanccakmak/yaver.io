@@ -49,6 +49,81 @@ const mobilePreviewDevices: Record<MobilePreviewMode, { label: string; width: nu
   tablet: { label: "Tablet", width: 820, height: 1180, radius: 26 },
 };
 
+function RuntimePreviewLoadingSurface({
+  mobile,
+  device,
+  note,
+  projectName,
+}: {
+  mobile: boolean;
+  device: { label: string; width: number; height: number; radius: number };
+  note?: string | null;
+  projectName?: string;
+}) {
+  const body = (
+    <div className="flex h-full flex-col bg-[#05070a] text-white">
+      <div className="flex h-9 items-center justify-between px-5 text-[11px] font-semibold text-white/80">
+        <span>9:41</span>
+        <div className="flex items-center gap-1.5">
+          <span className="h-1.5 w-4 rounded-full bg-white/70" />
+          <span className="h-2.5 w-4 rounded-sm border border-white/70" />
+        </div>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
+        <div className="flex items-center justify-center gap-3">
+          <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-2xl shadow-white/10">
+            <img src="/icon-192.png" alt="Yaver" className="h-full w-full object-cover" />
+          </div>
+          <div className="text-4xl font-black tracking-[0.08em] text-white">YAVER</div>
+        </div>
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-[0.35em] text-white/55">Remote AI Runtime</div>
+          <div className="mt-3 text-xs font-medium text-white/45">{projectName || "Mobile app"}</div>
+        </div>
+        <div className="mt-2 flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-[12px] text-white/75">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+          <span>{note || "Building web preview..."}</span>
+        </div>
+      </div>
+      <div className="flex justify-center pb-3">
+        <div className="h-1 w-28 rounded-full bg-white/35" />
+      </div>
+    </div>
+  );
+
+  if (!mobile) {
+    return (
+      <div className="flex h-[520px] w-full items-center justify-center rounded-md border border-[#d7dce3] bg-[#0b0d11] dark:border-[#2a3039]">
+        <div className="w-full max-w-sm">{body}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-[640px] w-full justify-center overflow-auto rounded-md border border-[#d7dce3] bg-[#0b0d11] p-4 dark:border-[#2a3039]">
+      <div
+        className="shrink-0 overflow-hidden bg-[#1f2933] p-[10px] shadow-2xl"
+        style={{
+          borderRadius: device.radius,
+          width: device.width + 20,
+          height: device.height + 20,
+        }}
+      >
+        <div
+          className="overflow-hidden bg-black"
+          style={{
+            borderRadius: Math.max(0, device.radius - 10),
+            width: device.width,
+            height: device.height,
+          }}
+        >
+          {body}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export type RuntimeLabIntent = {
   nonce: number;
   kind: "runtime" | "tmux";
@@ -411,6 +486,8 @@ export default function RuntimeLabView({
   const [error, setError] = useState<string | null>(null);
   const [showAdvancedTargets, setShowAdvancedTargets] = useState(false);
   const [webPreviewUrl, setWebPreviewUrl] = useState<string | null>(null);
+  const [webPreviewPanelOpen, setWebPreviewPanelOpen] = useState(false);
+  const [runtimeControlsOpen, setRuntimeControlsOpen] = useState(false);
   const [webPreviewBusy, setWebPreviewBusy] = useState(false);
   const [webPreviewNote, setWebPreviewNote] = useState<string | null>(null);
   const [mobilePreviewMode, setMobilePreviewMode] = useState<MobilePreviewMode>("phone");
@@ -698,6 +775,9 @@ export default function RuntimeLabView({
 
   const openWebUI = useCallback(async () => {
     if (!selectedProject) return;
+    setWebPreviewPanelOpen(true);
+    setRuntimeControlsOpen(false);
+    setWebPreviewUrl(null);
     setWebPreviewBusy(true);
     setWebPreviewNote(null);
     setError(null);
@@ -765,6 +845,13 @@ export default function RuntimeLabView({
     }
   }, [appendLog, selectedProject]);
 
+  const closeWebPreview = useCallback(() => {
+    setWebPreviewPanelOpen(false);
+    setRuntimeControlsOpen(false);
+    setWebPreviewUrl(null);
+    setWebPreviewNote(null);
+  }, []);
+
   useEffect(() => {
     if (!intent || intent.kind !== "runtime" || projects.length === 0) return;
     const project = projects.find((p) => projectMatches(p, intent.projectQuery)) || projects[0];
@@ -800,12 +887,13 @@ export default function RuntimeLabView({
   return (
     <div className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-3 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] sm:p-4 xl:grid-cols-[minmax(0,1fr)_420px]">
       <div className="min-h-0 space-y-3 overflow-y-auto">
+        {!webPreviewPanelOpen ? (
         <div className="flex flex-wrap items-end gap-2">
           <label className="min-w-[260px] flex-1">
             <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Project</span>
             <select
               value={selectedPath}
-              onChange={(e) => { setSelectedPath(e.target.value); setCaps(null); setSession(null); setWebPreviewUrl(null); setWebPreviewNote(null); }}
+              onChange={(e) => { setSelectedPath(e.target.value); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
               className="w-full rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec]"
             >
               {projects.map((p) => (
@@ -821,6 +909,7 @@ export default function RuntimeLabView({
             {busy ? "Loading targets..." : "Load Targets"}
           </button>
         </div>
+        ) : null}
 
         {error ? (
           <div className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-700 dark:text-rose-200">{error}</div>
@@ -880,6 +969,7 @@ export default function RuntimeLabView({
               };
               return (
                 <>
+                  {!webPreviewPanelOpen ? (
                   <section className="space-y-2">
                     <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">
                       Browser
@@ -899,7 +989,7 @@ export default function RuntimeLabView({
                             aria-label="Open Web UI in browser"
                             className="rounded-md bg-sky-500/15 px-3 py-1.5 text-xs font-semibold text-sky-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-sky-200"
                           >
-                            {webPreviewBusy ? "Opening..." : "Open"}
+                            {webPreviewBusy ? "Building..." : "Open"}
                           </button>
                         </div>
                         {webPreviewNote ? <div className="mt-2 text-xs text-[#667085] dark:text-[#9aa3af]">{webPreviewNote}</div> : null}
@@ -907,12 +997,19 @@ export default function RuntimeLabView({
                       {(groupedTargets.browser ?? []).map((target) => renderTarget(target))}
                     </div>
                   </section>
-                  {webPreviewUrl ? (
+                  ) : null}
+                  {webPreviewPanelOpen ? (
                     <section className="space-y-2">
-                      <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center justify-between gap-3 rounded-md border border-[#d7dce3] bg-white px-3 py-2 dark:border-[#2a3039] dark:bg-[#161b22]">
                         <div className="flex min-w-0 flex-wrap items-center gap-2">
-                          <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">
-                            {selectedProjectIsMobile ? "Mobile Web UI" : "Web UI"}
+                          <img src="/icon-192.png" alt="Yaver" className="h-6 w-6 rounded-md" />
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-[#1f2933] dark:text-[#e6e8ec]">
+                              {selectedProject?.name || "Preview"}
+                            </div>
+                            <div className="truncate text-[11px] text-[#667085] dark:text-[#9aa3af]">
+                              {webPreviewNote || (webPreviewBusy ? "Building web preview..." : selectedProjectIsMobile ? "Mobile Web UI" : "Web UI")}
+                            </div>
                           </div>
                           {selectedProjectIsMobile ? (
                             <div className="inline-flex rounded-md border border-[#d7dce3] bg-white p-0.5 dark:border-[#2a3039] dark:bg-[#161b22]">
@@ -937,14 +1034,67 @@ export default function RuntimeLabView({
                             </div>
                           ) : null}
                         </div>
-                        <button
-                          onClick={() => setWebPreviewUrl(null)}
-                          className="rounded-md border border-[#d7dce3] bg-white px-2 py-1 text-[11px] text-[#475467] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#d7dce3]"
-                        >
-                          Close
-                        </button>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setRuntimeControlsOpen((v) => !v)}
+                            title="Preview controls"
+                            aria-label="Preview controls"
+                            className={`rounded-md border p-1.5 ${
+                              runtimeControlsOpen
+                                ? "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-200"
+                                : "border-[#d7dce3] bg-white text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                            }`}
+                          >
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <line x1="4" y1="21" x2="4" y2="14" />
+                              <line x1="4" y1="10" x2="4" y2="3" />
+                              <line x1="12" y1="21" x2="12" y2="12" />
+                              <line x1="12" y1="8" x2="12" y2="3" />
+                              <line x1="20" y1="21" x2="20" y2="16" />
+                              <line x1="20" y1="12" x2="20" y2="3" />
+                              <line x1="2" y1="14" x2="6" y2="14" />
+                              <line x1="10" y1="8" x2="14" y2="8" />
+                              <line x1="18" y1="16" x2="22" y2="16" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void openWebUI()}
+                            disabled={webPreviewBusy}
+                            title="Rebuild preview"
+                            aria-label="Rebuild preview"
+                            className="rounded-md border border-[#d7dce3] bg-white p-1.5 text-[#475467] hover:text-[#1f2933] disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                          >
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <path d="M21 12a9 9 0 0 1-15.1 6.6" />
+                              <path d="M3 12A9 9 0 0 1 18.1 5.4" />
+                              <path d="M3 19v-6h6" />
+                              <path d="M21 5v6h-6" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={closeWebPreview}
+                            title="Close preview"
+                            aria-label="Close preview"
+                            className="rounded-md border border-[#d7dce3] bg-white p-1.5 text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                          >
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <line x1="18" y1="6" x2="6" y2="18" />
+                              <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                          </button>
+                        </div>
                       </div>
-                      {selectedProjectIsMobile ? (
+                      {!webPreviewUrl ? (
+                        <RuntimePreviewLoadingSurface
+                          mobile={selectedProjectIsMobile}
+                          device={mobilePreviewDevice}
+                          note={webPreviewNote}
+                          projectName={selectedProject?.name}
+                        />
+                      ) : selectedProjectIsMobile ? (
                         <div className="flex min-h-[640px] w-full justify-center overflow-auto rounded-md border border-[#d7dce3] bg-[#0b0d11] p-4 dark:border-[#2a3039]">
                           <div
                             className="shrink-0 overflow-hidden bg-[#1f2933] p-[10px] shadow-2xl"
@@ -981,6 +1131,33 @@ export default function RuntimeLabView({
                       )}
                     </section>
                   ) : null}
+                  {!webPreviewPanelOpen || runtimeControlsOpen ? (
+                  <>
+                  {webPreviewPanelOpen ? (
+                    <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+                      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Project</div>
+                      <div className="flex flex-wrap items-end gap-2">
+                        <label className="min-w-[260px] flex-1">
+                          <select
+                            value={selectedPath}
+                            onChange={(e) => { setSelectedPath(e.target.value); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
+                            className="w-full rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
+                          >
+                            {projects.map((p) => (
+                              <option key={p.path} value={p.path}>{p.name} · {p.framework || "unknown"}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <button
+                          disabled={!selectedProject || busy}
+                          onClick={() => void loadCapabilities()}
+                          className="rounded-md bg-[#1f2933] px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
+                        >
+                          {busy ? "Loading..." : "Load Targets"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                   {primaryTargets.length === 0 && enabledTargets.length > 0 ? (
                     <div className="grid gap-2 md:grid-cols-2">
                       {enabledTargets.map((target) => renderTarget(target))}
@@ -1010,6 +1187,8 @@ export default function RuntimeLabView({
                         </div>
                       ) : null}
                     </div>
+                  ) : null}
+                  </>
                   ) : null}
                 </>
               );
