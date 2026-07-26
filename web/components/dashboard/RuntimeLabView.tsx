@@ -14,6 +14,7 @@ import {
 } from "@/lib/agent-client";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 import { formatDevProgressLine } from "@/lib/devEventLine";
+import { runnerAuthFlowKind } from "@/lib/runnerAuthFlow";
 import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
@@ -533,6 +534,8 @@ export default function RuntimeLabView({
   const [runnerAuthError, setRunnerAuthError] = useState<string | null>(null);
   const [runnerAuthCallbackUrl, setRunnerAuthCallbackUrl] = useState("");
   const [runnerAuthCallbackBusy, setRunnerAuthCallbackBusy] = useState(false);
+  const [runnerAuthCodeInput, setRunnerAuthCodeInput] = useState("");
+  const [runnerAuthCodeBusy, setRunnerAuthCodeBusy] = useState(false);
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
   const taskStreamStopRef = useRef<(() => void) | null>(null);
@@ -752,6 +755,7 @@ export default function RuntimeLabView({
     setRunnerAuthBusy(true);
     setRunnerAuthError(null);
     setRunnerAuthCallbackUrl("");
+    setRunnerAuthCodeInput("");
     try {
       const session = await agentClient.startRunnerBrowserAuth(selectedRunnerRow.id);
       setRunnerAuthStatus(session);
@@ -761,6 +765,23 @@ export default function RuntimeLabView({
       setRunnerAuthError(err instanceof Error ? err.message : String(err));
     }
   }, [selectedRunnerRow]);
+
+  const submitRunnerAuthCode = useCallback(async () => {
+    const code = runnerAuthCodeInput.trim();
+    if (!runnerAuthStatus?.id || !code || runnerAuthCodeBusy) return;
+    setRunnerAuthCodeBusy(true);
+    setRunnerAuthError(null);
+    try {
+      const next = await agentClient.submitRunnerBrowserAuthCode(runnerAuthStatus.id, code);
+      setRunnerAuthStatus(next);
+      setRunnerAuthCodeInput("");
+      appendLog(`runner oauth code submitted: ${runnerAuthStatus.runner}`);
+    } catch (err) {
+      setRunnerAuthError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRunnerAuthCodeBusy(false);
+    }
+  }, [appendLog, runnerAuthCodeBusy, runnerAuthCodeInput, runnerAuthStatus?.id, runnerAuthStatus?.runner]);
 
   const submitRunnerAuthCallback = useCallback(async () => {
     const callbackUrl = runnerAuthCallbackUrl.trim();
@@ -1636,8 +1657,54 @@ export default function RuntimeLabView({
                     </a>
                   ) : null}
                   {runnerAuthStatus.detail ? <div className="mt-1">{runnerAuthStatus.detail}</div> : null}
+                  {runnerAuthFlowKind(runnerAuthStatus.openUrl) !== "localhost-callback" &&
+                  !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
+                    <div className="mt-2 space-y-1">
+                      <div className="text-[#667085] dark:text-[#9aa3af]">
+                        If Claude gives you an authentication code or token, paste it here. It is sent directly to the runner CLI on the machine.
+                      </div>
+                      <input
+                        value={runnerAuthCodeInput}
+                        onChange={(event) => {
+                          setRunnerAuthCodeInput(event.target.value);
+                          setRunnerAuthError(null);
+                        }}
+                        onPaste={(event) => {
+                          const pasted = event.clipboardData.getData("text") || "";
+                          const cleaned = pasted.trim();
+                          if (cleaned !== pasted) {
+                            event.preventDefault();
+                            setRunnerAuthCodeInput(cleaned);
+                          }
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && runnerAuthCodeInput.trim()) {
+                            event.preventDefault();
+                            void submitRunnerAuthCode();
+                          }
+                        }}
+                        placeholder="Paste authentication code or token"
+                        spellCheck={false}
+                        autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 font-mono text-[11px] text-[#1f2933] outline-none focus:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
+                      />
+                      <button
+                        type="button"
+                        disabled={!runnerAuthCodeInput.trim() || runnerAuthCodeBusy}
+                        onClick={() => void submitRunnerAuthCode()}
+                        className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
+                      >
+                        {runnerAuthCodeBusy ? "Submitting..." : "Submit code / token"}
+                      </button>
+                    </div>
+                  ) : null}
                   {runnerAuthStatus.callbackPort && !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
                     <div className="mt-2 space-y-1">
+                      <div className="text-[#667085] dark:text-[#9aa3af]">
+                        If the auth tab ends at localhost:{runnerAuthStatus.callbackPort}, paste that full address here.
+                      </div>
                       <input
                         value={runnerAuthCallbackUrl}
                         onChange={(event) => setRunnerAuthCallbackUrl(event.target.value)}
