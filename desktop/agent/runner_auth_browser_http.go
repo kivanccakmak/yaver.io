@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -544,7 +545,20 @@ func scanRunnerBrowserAuthOutput(sess *runnerBrowserAuthSessionState, reader io.
 		})
 	}
 	if err := scanner.Err(); err != nil {
-		log.Printf("[runner-auth-browser] %s scanner error: %v", sess.Runner, err)
+		// "file already closed" is the EXPECTED shape of shutdown: cmd.Wait
+		// closes the pipes when the CLI exits, and both scanner goroutines
+		// then see os.ErrClosed on their blocked read. Logging that as
+		// "scanner error" made every successful sign-in end with two error
+		// lines in the journal (observed live 2026-07-27, right after a
+		// callback replay completed). Only a read failure on a LIVE pipe is
+		// worth an error line.
+		if errors.Is(err, os.ErrClosed) || strings.Contains(err.Error(), "file already closed") {
+			if debug {
+				log.Printf("[runner-auth-browser] %s reader closed after process exit", sess.Runner)
+			}
+		} else {
+			log.Printf("[runner-auth-browser] %s scanner error: %v", sess.Runner, err)
+		}
 	} else if debug {
 		log.Printf("[runner-auth-browser] %s reader closed (EOF)", sess.Runner)
 	}
