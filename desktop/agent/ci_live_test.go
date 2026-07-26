@@ -28,7 +28,7 @@ func TestLiveCIRunnerSeams(t *testing.T) {
 	}
 	repo := os.Getenv("GH_TEST_REPO")
 	if repo == "" {
-		repo = "kivanccakmak/yaver.io"
+		repo = "yaver-io/yaver.io"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

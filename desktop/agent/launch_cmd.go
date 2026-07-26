@@ -42,7 +42,7 @@ import (
 	"time"
 )
 
-const cloudImagesManifestURL = "https://raw.githubusercontent.com/kivanccakmak/yaver.io/main/cloud-images.json"
+const cloudImagesManifestURL = "https://raw.githubusercontent.com/yaver-io/yaver.io/main/cloud-images.json"
 
 type cloudImagesManifest struct {
 	SchemaVersion int                           `json:"schemaVersion"`

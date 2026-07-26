@@ -360,7 +360,11 @@ func yaverRepoMobileDir(start string) string {
 		return ""
 	}
 	detected := detectRepoRemoteFromGit(start)
-	if !strings.EqualFold(detected.Host, "github.com") || !strings.EqualFold(detected.Repo, "kivanccakmak/yaver.io") {
+	// Canonical repo moved to the yaver-io org (2026-07-17); pre-move clones
+	// still carry the old remote (GitHub redirects it), so accept both.
+	isYaverRepo := strings.EqualFold(detected.Repo, "yaver-io/yaver.io") ||
+		strings.EqualFold(detected.Repo, "kivanccakmak/yaver.io")
+	if !strings.EqualFold(detected.Host, "github.com") || !isYaverRepo {
 		return ""
 	}
 	mobileDir := filepath.Join(root, "mobile")

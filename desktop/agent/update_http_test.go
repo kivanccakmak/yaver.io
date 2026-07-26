@@ -6,6 +6,22 @@ import (
 	"time"
 )
 
+// Pins the release-resolver default to the canonical org repo. The repo
+// moved from kivanccakmak/ to yaver-io/ on 2026-07-17; a stale default
+// keeps working through GitHub's redirect right up until an API error
+// names the dead owner ("release lookup failed (403) from
+// kivanccakmak/yaver.io") — so pin the string, not the behaviour.
+func TestUpdateRepoDefault(t *testing.T) {
+	t.Setenv("YAVER_UPDATE_REPO", "")
+	if got := updateRepo(); got != "yaver-io/yaver.io" {
+		t.Fatalf("updateRepo() default = %q, want yaver-io/yaver.io", got)
+	}
+	t.Setenv("YAVER_UPDATE_REPO", "example/override")
+	if got := updateRepo(); got != "example/override" {
+		t.Fatalf("updateRepo() with override = %q, want example/override", got)
+	}
+}
+
 func TestAgentUpdateStatusEndpoint(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)

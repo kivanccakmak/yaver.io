@@ -20,7 +20,7 @@ const STATE_DIR = path.join(os.homedir(), '.yaver');
 const STATE_FILE = path.join(STATE_DIR, 'update-check.json');
 const CHECK_INTERVAL_MS = 8 * 60 * 60 * 1000; // 8h
 const FETCH_TIMEOUT_MS = 1500;
-const RELEASES_URL = 'https://github.com/kivanccakmak/yaver.io/releases';
+const RELEASES_URL = 'https://github.com/yaver-io/yaver.io/releases';
 
 function readState() {
   try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch { return {}; }

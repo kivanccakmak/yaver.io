@@ -162,7 +162,7 @@ fi
 		agentArch = "amd64"
 	}
 	agentURL := fmt.Sprintf(
-		"https://github.com/kivanccakmak/yaver.io/releases/latest/download/yaver-%s-%s",
+		"https://github.com/yaver-io/yaver.io/releases/latest/download/yaver-%s-%s",
 		platform, agentArch,
 	)
 	script.WriteString(fmt.Sprintf(`

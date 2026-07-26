@@ -5073,14 +5073,17 @@ func valueOrEmpty(s string) string {
 //
 // Default was historically `kivanccakmak/yaver-cli` but its `latest`
 // release pointer drifted to v1.37.0 while the actual current
-// release pipeline targets `kivanccakmak/yaver.io`. Pointing here by
-// default stops the silent downgrade. Operators who maintain a
-// separate distribution repo can still set YAVER_UPDATE_REPO.
+// release pipeline targets the canonical repo. That repo moved to the
+// `yaver-io` org on 2026-07-17; GitHub redirects the old path for git
+// operations, but API callers see the stale owner in error text
+// ("release lookup failed (403) from kivanccakmak/yaver.io"), so name
+// the canonical repo directly. Operators who maintain a separate
+// distribution repo can still set YAVER_UPDATE_REPO.
 func updateRepo() string {
 	if r := strings.TrimSpace(os.Getenv("YAVER_UPDATE_REPO")); r != "" {
 		return r
 	}
-	return "kivanccakmak/yaver.io"
+	return "yaver-io/yaver.io"
 }
 
 func updateRepoForLog() string { return updateRepo() }

@@ -309,13 +309,13 @@ func reportRescue(ctx context.Context, baseURL, token, commandID, status, result
 func resolveLatestDebURL(pinnedVersion string) (string, error) {
 	if pinnedVersion != "" {
 		return fmt.Sprintf(
-			"https://github.com/kivanccakmak/yaver.io/releases/download/v%s/yaver_%s_%s.deb",
+			"https://github.com/yaver-io/yaver.io/releases/download/v%s/yaver_%s_%s.deb",
 			pinnedVersion, pinnedVersion, runtime.GOARCH,
 		), nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/repos/kivanccakmak/yaver.io/releases/latest", nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/repos/yaver-io/yaver.io/releases/latest", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
