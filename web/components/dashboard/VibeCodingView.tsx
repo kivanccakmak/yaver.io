@@ -1866,7 +1866,19 @@ export default function VibeCodingView({
                   {selectedRunnerRow.error || selectedRunnerRow.warning || `${selectedRunnerRow.name} is installed but not ready on this machine.`}
                 </div>
               ) : null}
-              {selectedRunnerRow && (selectedRunnerRow.id === "claude" || selectedRunnerRow.id === "codex") && selectedRunnerRow.ready === false ? (
+              {/* Gate on the AGENT'S answer, not on `ready`.
+                  This CTA is the only way out of a stuck chat, and it was
+                  invisible in exactly the case that needs it: claude reports
+                  authConfigured=false while `ready` is not false, so the button
+                  never rendered, the runner stayed selected, and every message
+                  waited forever with no offered fix. Same omission as the
+                  sidebar chip — a runner that says it cannot run must both LOOK
+                  unavailable and hand the user the sign-in. */}
+              {selectedRunnerRow &&
+              (selectedRunnerRow.id === "claude" || selectedRunnerRow.id === "codex" || selectedRunnerRow.id === "kimi") &&
+              (selectedRunnerRow.ready === false ||
+                (selectedRunnerRow as { authConfigured?: boolean }).authConfigured === false ||
+                (selectedRunnerRow as { needsAuth?: boolean }).needsAuth === true) ? (
                 <div className="mt-3 rounded-2xl border border-sky-500/20 bg-sky-500/10 p-3 text-[11px] text-sky-800 dark:text-sky-100">
                   <div className="font-semibold">
                     {selectedRunnerRow.id === "claude" ? "Claude Code" : "OpenAI Codex"} sign-in is available from here.
