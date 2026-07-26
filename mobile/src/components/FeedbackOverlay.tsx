@@ -20,7 +20,7 @@ import Markdown from "react-native-markdown-display";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../context/AuthContext";
 import { useDevice } from "../context/DeviceContext";
-import { quicClient } from "../lib/quic";
+import { describeDevReloadResult, devReloadReachedTarget, quicClient } from "../lib/quic";
 import { subscribeFeedbackLaunch } from "../lib/feedbackTrigger";
 import { getLocalSecret, getUserSettings, LOCAL_KEYS, type SpeechProvider, type TtsProvider } from "../lib/auth";
 import { transcribe, initWhisper, speakText as speakConfiguredText } from "../lib/speech";
@@ -522,8 +522,8 @@ export function FeedbackOverlay() {
     setTaskStatusLine("Sending reload…");
     setReloading(true);
     try {
-      const ok = await quicClient.reloadDevServer({ mode: "bundle" });
-      setTaskStatusLine(ok ? "Reload sent. Waiting for bundle…" : "Reload failed.");
+      const result = await quicClient.reloadDevServerDetailed({ mode: "bundle" });
+      setTaskStatusLine(devReloadReachedTarget(result) ? describeDevReloadResult(result) : `Reload failed: ${describeDevReloadResult(result)}`);
     } catch (e) {
       setTaskStatusLine(`Reload error: ${String(e).slice(0, 40)}`);
     } finally {

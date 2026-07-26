@@ -50,7 +50,7 @@ import { useRouter } from "expo-router";
 import { AppBackButton } from "../src/components/AppBackButton";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useDevice, type Device } from "../src/context/DeviceContext";
-import { quicClient } from "../src/lib/quic";
+import { describeDevReloadResult, devReloadReachedTarget, quicClient } from "../src/lib/quic";
 import { HIDE_PAID_UI } from "../src/lib/launchFlags";
 import {
   runYaverAgent,
@@ -680,7 +680,9 @@ export default function GlassTerminalScreen() {
         return;
       }
       const r = res.result;
-      if (r?.changeClass === "native_rebuild_required") {
+      if (r && !devReloadReachedTarget(r)) {
+        appendLine("err", `reload did not reach an active target: ${describeDevReloadResult(r)}`);
+      } else if (r?.changeClass === "native_rebuild_required") {
         appendLine("err", "⚠ native rebuild required — JS reload accepted but native files changed");
         if (r.nativeChanges?.length) {
           for (const c of r.nativeChanges.slice(0, 5)) {
@@ -688,7 +690,7 @@ export default function GlassTerminalScreen() {
           }
         }
       } else {
-        appendLine("tool", `⏺ mobile_hermes_reload → ${r?.changeClass ?? "ok"}`);
+        appendLine("tool", `⏺ mobile_hermes_reload → ${r?.reloadTarget ?? r?.changeClass ?? "ok"} · ${describeDevReloadResult(r)}`);
       }
       appendLine("sys", "— ⟳ reload done —");
     } catch (e: unknown) {

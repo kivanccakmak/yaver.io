@@ -13,7 +13,7 @@ import {
   View,
 } from "react-native";
 import { WebView } from "react-native-webview";
-import { quicClient, type DevServerStatus } from "../lib/quic";
+import { describeDevReloadResult, devReloadReachedTarget, quicClient, type DevServerStatus } from "../lib/quic";
 import { useColors } from "../context/ThemeContext";
 import { isBundleLoaded, loadAppIfChanged, onBundleEvent } from "../lib/bundleLoader";
 import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../lib/nativeBuild";
@@ -602,10 +602,10 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
       setLoading(true);
     }
     try {
-      const ok = await quicClient.reloadDevServer({ mode: mustUseNativePreview ? "bundle" : "dev" });
-      if (!ok) {
+      const result = await quicClient.reloadDevServerDetailed({ mode: mustUseNativePreview ? "bundle" : "dev" });
+      if (!devReloadReachedTarget(result)) {
         setLoading(false);
-        Alert.alert("Reload Failed", "Could not reload — is the dev server still running?");
+        Alert.alert("Reload Failed", describeDevReloadResult(result));
         return;
       }
       if (!mustUseNativePreview) {

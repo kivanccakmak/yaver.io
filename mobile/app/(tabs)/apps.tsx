@@ -32,7 +32,7 @@ import EmptyState from "../../src/components/EmptyState";
 import NoMachineEmpty from "../../src/components/NoMachineEmpty";
 import { isEffectivelyConnected as computeEffectiveConnected } from "../../src/lib/connectionState";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
-import { quicClient, type CapabilitySnapshot, type DevCompatibilityStatus, type DevServerStatus, type MobileWorkerPreviewSession } from "../../src/lib/quic";
+import { describeDevReloadResult, devReloadReachedTarget, quicClient, type CapabilitySnapshot, type DevCompatibilityStatus, type DevServerStatus, type MobileWorkerPreviewSession } from "../../src/lib/quic";
 import { getAvailableModules, isBundleLoaderAvailable, loadApp } from "../../src/lib/bundleLoader";
 import { openAppBus } from "../../src/lib/openAppBus";
 import { setActivePreviewLane, subscribeBrowserShake } from "../../src/lib/feedbackTrigger";
@@ -1994,7 +1994,14 @@ export default function AppsScreen() {
     if (!nativeHermes) {
       setWebViewLoading(true);
     }
-    await quicClient.reloadDevServer({ mode: nativeHermes ? "bundle" : "dev" });
+    const result = await quicClient.reloadDevServerDetailed({ mode: nativeHermes ? "bundle" : "dev" });
+    if (!devReloadReachedTarget(result)) {
+      setWebViewLoading(false);
+      Alert.alert("Reload failed", describeDevReloadResult(result));
+      return;
+    }
+    setQuickActionStatus(describeDevReloadResult(result));
+    setTimeout(() => setQuickActionStatus(null), 3000);
     if (!nativeHermes) {
       setWebViewKey(k => k + 1);
     }

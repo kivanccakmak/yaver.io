@@ -18,7 +18,7 @@
 // concatenated text otherwise. Callers that want the raw shape can
 // reach for `callMcpDirectRaw`.
 
-import { quicClient } from "./quic";
+import { quicClient, type DevReloadDevelopmentMode, type DevReloadTarget, type DevReloadTransport } from "./quic";
 
 export interface McpDirectResult<T = unknown> {
   ok: boolean;
@@ -124,6 +124,14 @@ export async function callMcpDirect<T = unknown>(
 // Pre-baked one-shot helpers for the glass-terminal vibe chips.
 export interface MobileHermesReloadResult {
   ok: boolean;
+  mode?: "dev" | "bundle";
+  transport?: DevReloadTransport;
+  reloadTarget?: DevReloadTarget;
+  developmentMode?: DevReloadDevelopmentMode;
+  deliveredTo?: number;
+  message?: string;
+  webBundleTarget?: string;
+  webBundleBuiltAt?: string;
   changeClass?: "js_only" | "native_rebuild_required" | "unknown";
   nativeChangesDetected?: boolean;
   nativeChanges?: Array<{ Path: string; Reason: string }>;

@@ -8263,7 +8263,7 @@ export class QuicClient {
    * through to /dev/reload-app bundle mode so the user never sees a
    * "connection refused to 127.0.0.1:8081" Go error.
    */
-  async reloadDevServer(opts?: { mode?: "dev" | "bundle" }): Promise<boolean> {
+  async reloadDevServerDetailed(opts?: { mode?: "dev" | "bundle" }): Promise<DevReloadResult> {
     const mode = opts?.mode ?? "bundle";
     try {
       if (mode === "dev") {
@@ -8271,7 +8271,8 @@ export class QuicClient {
           method: "POST",
           headers: this.authHeaders,
         });
-        if (primary.ok) return true;
+        const data = await primary.json().catch(() => ({}));
+        if (primary.ok) return { ok: data.ok !== false, mode, ...data };
         // Metro dead — fall through to bundle rebuild below.
       }
       const res = await fetch(`${this.baseUrl}/dev/reload-app`, {
@@ -8279,11 +8280,21 @@ export class QuicClient {
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ mode: "bundle" }),
       });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        console.warn("[QUIC] Hermes reload failed:", await responseErrorMessage(res, `HTTP ${res.status}`));
+        const error = data.error || data.message || `HTTP ${res.status}`;
+        console.warn("[QUIC] Hermes reload failed:", error);
+        return { ok: false, mode: "bundle", ...data, error };
       }
-      return res.ok;
-    } catch { return false; }
+      return { ok: data.ok !== false, mode: "bundle", ...data };
+    } catch (e) {
+      return { ok: false, mode, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  async reloadDevServer(opts?: { mode?: "dev" | "bundle" }): Promise<boolean> {
+    const result = await this.reloadDevServerDetailed(opts);
+    return devReloadReachedTarget(result);
   }
 
   /** Get the full URL for the dev server bundle (through relay if needed). */

@@ -12,7 +12,7 @@
 // visible error (no silent retry), per the project's failure policy.
 
 import { connectionManager } from "./connectionManager";
-import { quicClient } from "./quic";
+import { describeDevReloadResult, devReloadReachedTarget, quicClient } from "./quic";
 import { openAppBus } from "./openAppBus";
 import { openRobotBus } from "./openRobotBus";
 import { describeStep, type Shortcut, type ShortcutStep } from "./shortcuts";
@@ -63,8 +63,8 @@ async function runStep(step: ShortcutStep, hooks: RunShortcutHooks): Promise<voi
       if (step.runner && step.deviceId && hooks.setAgent) {
         await hooks.setAgent(step.deviceId, step.runner, step.model);
       }
-      const ok = await clientFor(step.deviceId).reloadDevServer({ mode: step.mode || "bundle" });
-      if (!ok) throw new Error("dev server unreachable — start one first");
+      const result = await clientFor(step.deviceId).reloadDevServerDetailed({ mode: step.mode || "bundle" });
+      if (!devReloadReachedTarget(result)) throw new Error(describeDevReloadResult(result));
       return;
     }
     case "open-robot":

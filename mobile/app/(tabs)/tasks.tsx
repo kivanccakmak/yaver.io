@@ -57,6 +57,8 @@ import {
   CloudWorkspaceRequiredError,
   ConnectionMode,
   ConnectionState,
+  describeDevReloadResult,
+  devReloadReachedTarget,
   ImageAttachment,
   ModelInfo,
   quicClient,
@@ -2978,18 +2980,19 @@ export default function TasksScreen() {
     setIsSubmitting(true);
     setReloadFlash(`Reloading on ${targetName}…`);
     try {
-      const ok = await client.reloadDevServer({ mode: "bundle" });
-      if (ok) {
+      const result = await client.reloadDevServerDetailed({ mode: "bundle" });
+      if (devReloadReachedTarget(result)) {
         taskHaptics.send();
         setNewTaskText("");
         setInputFromSpeech(false);
-        setReloadFlash(`Hermes reload pushed to ${targetName}`);
-        setTimeout(() => setReloadFlash((cur) => (cur?.startsWith("Hermes reload pushed") ? null : cur)), 3500);
+        const message = describeDevReloadResult(result);
+        setReloadFlash(`${targetName}: ${message}`);
+        setTimeout(() => setReloadFlash((cur) => (cur === `${targetName}: ${message}` ? null : cur)), 3500);
       } else {
         setReloadFlash(null);
         Alert.alert(
           "Reload failed",
-          `Couldn't reach a dev server on ${targetName}. Start one from the Reload tab (or have the agent run a dev server for the project), then try again.`,
+          describeDevReloadResult(result) || `Couldn't reach a dev server on ${targetName}. Start one from the Reload tab (or have the agent run a dev server for the project), then try again.`,
         );
       }
     } catch (e) {

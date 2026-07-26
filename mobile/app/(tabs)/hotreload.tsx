@@ -18,6 +18,8 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { useDevice } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import {
+  describeDevReloadResult,
+  devReloadReachedTarget,
   quicClient,
   type DevServerStatus,
   type IncidentEvent,
@@ -756,15 +758,13 @@ export default function HotReloadScreen() {
     setReloadLoading(true);
     setLoadingStatus(isHermesFramework ? "Preparing fresh bundle..." : "Sending reload command...");
     try {
-      const ok = await quicClient.reloadDevServer({ mode: isHermesFramework ? "bundle" : "dev" });
-      if (!ok) {
+      const result = await quicClient.reloadDevServerDetailed({ mode: isHermesFramework ? "bundle" : "dev" });
+      if (!devReloadReachedTarget(result)) {
         setLoadingStatus("");
-        Alert.alert("Reload failed", "Could not send reload to the running app.");
+        Alert.alert("Reload failed", describeDevReloadResult(result));
         return;
       }
-      if (!isHermesFramework) {
-        setLoadingStatus("Reload sent.");
-      }
+      setLoadingStatus(describeDevReloadResult(result));
     } finally {
       setReloadLoading(false);
     }
