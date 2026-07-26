@@ -1043,6 +1043,10 @@ export interface RunnerBrowserAuthSession {
   startedAt?: number;
   updatedAt?: number;
   completedAt?: number;
+  /** When the spawned CLI last wrote ANY line (agent 1.99.375+). Lets the
+   *  waiting state say "CLI alive — last output 12s ago" instead of an
+   *  undifferentiated spinner; absent while the CLI has said nothing. */
+  lastOutputAt?: number;
 }
 
 /** Unwrap the `{ok:true, session: {...}}` envelope the agent returns from

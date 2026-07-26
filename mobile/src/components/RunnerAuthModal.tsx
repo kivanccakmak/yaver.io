@@ -159,7 +159,8 @@ export default function RunnerAuthModal({
     if (
       session.status === "completed" ||
       session.status === "failed" ||
-      session.status === "cancelled"
+      session.status === "cancelled" ||
+      session.status === "account_not_eligible"
     ) {
       if (session.status === "completed") onCompleted?.();
       return;
@@ -197,7 +198,7 @@ export default function RunnerAuthModal({
     };
   }, [session, target, onCompleted, onClose, baseUrl, JSON.stringify(headers || {})]);
 
-  const terminal = session && ["completed", "failed", "cancelled"].includes(session.status);
+  const terminal = session && ["completed", "failed", "cancelled", "account_not_eligible"].includes(session.status);
 
   const copyToClipboard = async (target: "url" | "code", value: string) => {
     if (!value) return;
@@ -343,6 +344,16 @@ export default function RunnerAuthModal({
                   {session.detail || "Auth stored on the remote machine."}
                 </Text>
               </View>
+            ) : session.status === "account_not_eligible" ? (
+              /* The runner rejected the ACCOUNT, not the code — retrying the
+                 sign-in is the one thing that cannot help. Quote the CLI
+                 verbatim and point at the account. */
+              <View style={styles.errorBox}>
+                <Text style={styles.errorTitle}>Signed in, but the account isn't eligible</Text>
+                <Text style={styles.errorBody}>
+                  {session.detail || session.error || `${session.runner} rejected the account — activate the plan on the account, then retry.`}
+                </Text>
+              </View>
             ) : session.status === "failed" || session.status === "cancelled" ? (
               <View style={styles.errorBox}>
                 <Text style={styles.errorTitle}>
@@ -393,7 +404,14 @@ export default function RunnerAuthModal({
                 ) : (
                   <View style={styles.urlPending}>
                     <ActivityIndicator size="small" color="#94a3b8" />
-                    <Text style={styles.urlPendingText}>Waiting for the verification URL from the remote CLI…</Text>
+                    <Text style={styles.urlPendingText}>
+                      {/* Liveness, not just hope: lastOutputAt distinguishes
+                          "CLI alive, no URL yet" from "CLI silent since
+                          spawn" (the 45s watchdog's territory). */}
+                      {session.lastOutputAt
+                        ? `Waiting for the verification URL — the remote CLI is alive (last output ${Math.max(1, Math.round((Date.now() - session.lastOutputAt) / 1000))}s ago)…`
+                        : "Waiting for the verification URL from the remote CLI…"}
+                    </Text>
                   </View>
                 )}
 
