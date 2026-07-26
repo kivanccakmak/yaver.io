@@ -148,9 +148,17 @@ func (bm *BrowserManager) OpenInteractiveSession(id, profileDir string, width, h
 	// Boot Chrome. A cold first launch with a fresh profile can take a while —
 	// far longer than chromedp's default patience — so give it an explicit,
 	// generous budget rather than reporting a slow start as a missing browser.
+	// NOT `defer bootCancel()`. chromedp binds the browser target to the context
+	// passed to Run, so cancelling this one on return tears down the browser we
+	// just booted — the session then dies the moment start() returns and the very
+	// next navigate fails with "context canceled". I introduced exactly that bug
+	// with the first version of this timeout, and it looked like a navigation
+	// problem rather than a teardown.
+	//
+	// Cancel ONLY on the failure path, where there is nothing left to keep.
 	bootCtx, bootCancel := context.WithTimeout(browserCtx, 60*time.Second)
-	defer bootCancel()
 	if err := chromedp.Run(bootCtx); err != nil {
+		bootCancel()
 		browserCancel()
 		allocCancel()
 		return fmt.Errorf("launch interactive chrome: %w (install Chrome/Chromium or Playwright Chromium)", err)
