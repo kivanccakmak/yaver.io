@@ -186,21 +186,26 @@ func runnerBrowserAuthCommand(runner string, tr tenantRuntime) (method string, c
 			return "", nil, fmt.Errorf("codex CLI not found on this machine (looked in PATH, ~/.npm-global/bin, ~/.local/bin, ~/.bun/bin, /opt/homebrew/bin, /usr/local/bin, and the user login shell). Run `npm i -g @openai/codex` and try again.")
 		}
 		if tr.Enabled {
-			cmd, err = tr.command(context.Background(), tr.Home, bin, []string{"login"}, append(tr.authEnv(), "CI=1", "NO_COLOR=1", "TERM=dumb"))
+			cmd, err = tr.command(context.Background(), tr.Home, bin, []string{"login", "--device-auth"}, append(tr.authEnv(), "CI=1", "NO_COLOR=1", "TERM=dumb"))
 			if err != nil {
 				return "", nil, err
 			}
 		} else {
-			// NOT --device-auth. codex-cli removed that flag; 0.144.4 offers
-			// only --with-api-key / --with-access-token / --enable / --disable,
-			// and passing an unknown flag makes codex exit without ever printing
-			// a URL — which the reader above then waited on forever. This is why
-			// remote codex sign-in silently stopped working after a CLI upgrade:
-			// nothing in Yaver changed, the flag disappeared underneath it.
+			// --device-auth IS still supported. It is absent from `codex login
+			// --help` on 0.144.4, and I briefly removed it on that basis — wrong.
+			// An unknown flag makes codex exit IMMEDIATELY with "unexpected
+			// argument"; this HANGS instead, which is what an accepted flag doing
+			// a device-code poll looks like. Help output is not the contract.
 			//
-			// Deliberately NOT falling back to --with-api-key: Yaver is
-			// subscription-only and must never take an API key.
-			cmd = exec.Command(bin, "login")
+			// OpenAI's docs still recommend it for headless and note it can be
+			// gated per-workspace by an admin (openai/codex#9253) — so a silent
+			// flow may be an ENTITLEMENT problem on the account rather than a
+			// missing flag, which is what the watchdog now surfaces instead of
+			// spinning forever.
+			//
+			// Deliberately NOT falling back to --with-api-key or
+			// --with-access-token: Yaver is subscription-only.
+			cmd = exec.Command(bin, "login", "--device-auth")
 			cmd.Env = append(cmd.Environ(), "CI=1", "NO_COLOR=1", "TERM=dumb")
 		}
 		return "device-auth", cmd, nil
