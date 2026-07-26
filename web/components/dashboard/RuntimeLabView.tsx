@@ -565,6 +565,10 @@ export default function RuntimeLabView({
   const [webPreviewFrameReady, setWebPreviewFrameReady] = useState(false);
   const [webPreviewBusy, setWebPreviewBusy] = useState(false);
   const [webPreviewNote, setWebPreviewNote] = useState<string | null>(null);
+  // Bumped by Fast/Full Reload to re-mount the preview iframe even when
+  // the (signed) bundle URL is unchanged — e.g. a fast reload that
+  // re-served the existing fresh bundle.
+  const [webPreviewNonce, setWebPreviewNonce] = useState(0);
   const [mobilePreviewMode, setMobilePreviewMode] = useState<MobilePreviewMode>("phone");
 
   const selectedProject = useMemo(
@@ -981,6 +985,63 @@ export default function RuntimeLabView({
     }
   }, [appendLog, selectedProject]);
 
+  /** Fast/Full Reload for the open web preview (agent 1.99.374+).
+   *
+   *  Static-bundle lane (Expo / RN): POST /dev/build-native with
+   *  mode:"fast" — the agent re-serves the existing bundle when the
+   *  built commit still matches HEAD and the tracked tree is clean
+   *  (sub-second), and otherwise re-exports on the warm persistent
+   *  Metro cache. mode:"full" always re-exports (still warm cache).
+   *
+   *  Dev-server lane (Vite / Next / Flutter web): POST /dev/reload with
+   *  the same mode — Flutter maps fast→"r" (hot reload) and full→"R"
+   *  (hot restart). Either way the iframe is re-mounted afterwards. */
+  const reloadWebPreview = useCallback(async (kind: "fast" | "full") => {
+    if (!selectedProject || webPreviewBusy) return;
+    const framework = browserPreviewFrameworkForProject(selectedProject);
+    const staticBundleFramework = ["expo", "react-native"].includes(framework);
+    appendLog(`${kind} reload ${selectedProject.name}`);
+    setError(null);
+    if (staticBundleFramework) {
+      setWebPreviewBusy(true);
+      setWebPreviewFrameReady(false);
+      setWebPreviewNote(kind === "fast" ? "Fast reload: checking bundle freshness..." : "Full reload: re-exporting web bundle...");
+      try {
+        const built = await agentClient.buildWebJSBundle({
+          projectName: selectedProject.name,
+          projectPath: selectedProject.path,
+          mode: kind,
+        });
+        if (!built.ok) throw new Error(built.error || "Could not rebuild the Web UI bundle.");
+        const signedUrl = agentClient.webBundlePreviewUrl(built.bundleUrl);
+        if (signedUrl) setWebPreviewUrl(signedUrl);
+        setWebPreviewNonce((n) => n + 1);
+        setWebPreviewNote(
+          built.reused
+            ? "Fast reload: bundle already matches HEAD — re-served instantly."
+            : `Web UI bundle rebuilt: ${built.fileCount} files.`,
+        );
+        appendLog(built.reused ? "fast reload: reused fresh bundle" : `web bundle re-exported (${kind})`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Reload failed.";
+        setWebPreviewNote(message);
+        setError(message);
+        appendLog(`${kind} reload failed: ${message}`);
+      } finally {
+        setWebPreviewBusy(false);
+      }
+      return;
+    }
+    try {
+      await agentClient.reloadDevServer({ mode: kind });
+      appendLog(`${kind} reload sent to dev server`);
+    } catch (err) {
+      appendLog(`${kind} reload failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    setWebPreviewFrameReady(false);
+    setWebPreviewNonce((n) => n + 1);
+  }, [appendLog, selectedProject, webPreviewBusy]);
+
   const closeWebPreview = useCallback(() => {
     setWebPreviewPanelOpen(false);
     setRuntimeControlsOpen(false);
@@ -1054,7 +1115,7 @@ export default function RuntimeLabView({
 
   return (
     <div className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-3 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] sm:p-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-      <div className="min-h-0 space-y-3 overflow-y-auto">
+      <div className="min-h-0 min-w-0 space-y-3 overflow-y-auto">
         {!webPreviewPanelOpen ? (
         <div className="flex flex-wrap items-end gap-2">
           <label className="min-w-[260px] flex-1">
@@ -1062,17 +1123,19 @@ export default function RuntimeLabView({
             <select
               value={selectedPath}
               onChange={(e) => { setSelectedPath(e.target.value); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
-              className="w-full rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec]"
+              className="h-10 w-full rounded-md border border-[#d7dce3] bg-white px-3 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec]"
             >
               {projects.map((p) => (
                 <option key={p.path} value={p.path}>{p.name} · {p.framework || "unknown"}</option>
               ))}
             </select>
           </label>
+          {/* h-10 matches the select's height exactly; shrink-0 keeps the
+              button from compressing below it when the row wraps tight. */}
           <button
             disabled={!selectedProject || busy}
             onClick={() => void loadCapabilities()}
-            className="rounded-md bg-[#1f2933] px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
+            className="inline-flex h-10 shrink-0 items-center rounded-md bg-[#1f2933] px-3 text-xs font-semibold text-white disabled:opacity-40"
           >
             {busy ? "Loading targets..." : "Load Targets"}
           </button>
@@ -1228,18 +1291,23 @@ export default function RuntimeLabView({
                           </button>
                           <button
                             type="button"
-                            onClick={() => void openWebUI()}
+                            onClick={() => void reloadWebPreview("fast")}
                             disabled={webPreviewBusy}
-                            title="Rebuild preview"
-                            aria-label="Rebuild preview"
-                            className="rounded-md border border-[#d7dce3] bg-white p-1.5 text-[#475467] hover:text-[#1f2933] disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                            title="Fast Reload — re-serve the fresh bundle instantly, or hot-reload the dev server"
+                            aria-label="Fast Reload"
+                            className="rounded-md bg-[#1f2933] px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-40 dark:bg-[#e6e8ec] dark:text-[#101318]"
                           >
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                              <path d="M21 12a9 9 0 0 1-15.1 6.6" />
-                              <path d="M3 12A9 9 0 0 1 18.1 5.4" />
-                              <path d="M3 19v-6h6" />
-                              <path d="M21 5v6h-6" />
-                            </svg>
+                            Fast Reload
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void reloadWebPreview("full")}
+                            disabled={webPreviewBusy}
+                            title="Full Reload — force a re-export / hot restart (warm cache, never a cold start)"
+                            aria-label="Full Reload"
+                            className="rounded-md border border-[#d7dce3] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#475467] hover:text-[#1f2933] disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                          >
+                            Full Reload
                           </button>
                           <button
                             type="button"
@@ -1282,6 +1350,7 @@ export default function RuntimeLabView({
                               }}
                             >
                               <iframe
+                                key={`mobile-preview-${webPreviewNonce}`}
                                 ref={mobilePreviewFrameRef}
                                 src={webPreviewUrl}
                                 width={mobilePreviewDevice.width}
@@ -1305,6 +1374,7 @@ export default function RuntimeLabView({
                       ) : (
                         <div className="relative h-[520px] w-full overflow-hidden rounded-md border border-[#d7dce3] bg-[#0b0d11]">
                           <iframe
+                            key={`web-preview-${webPreviewNonce}`}
                             src={webPreviewUrl}
                             className="h-full w-full border-none bg-white"
                             title="Project Web UI preview"
@@ -1327,12 +1397,12 @@ export default function RuntimeLabView({
                   {webPreviewPanelOpen ? (
                     <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
                       <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Project</div>
-                      <div className="flex flex-wrap items-end gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <label className="min-w-[260px] flex-1">
                           <select
                             value={selectedPath}
                             onChange={(e) => { setSelectedPath(e.target.value); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
-                            className="w-full rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
+                            className="h-10 w-full rounded-md border border-[#d7dce3] bg-white px-3 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
                           >
                             {projects.map((p) => (
                               <option key={p.path} value={p.path}>{p.name} · {p.framework || "unknown"}</option>
@@ -1342,7 +1412,7 @@ export default function RuntimeLabView({
                         <button
                           disabled={!selectedProject || busy}
                           onClick={() => void loadCapabilities()}
-                          className="rounded-md bg-[#1f2933] px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
+                          className="inline-flex h-10 shrink-0 items-center rounded-md bg-[#1f2933] px-3 text-xs font-semibold text-white disabled:opacity-40"
                         >
                           {busy ? "Loading..." : "Load Targets"}
                         </button>
@@ -1505,8 +1575,8 @@ export default function RuntimeLabView({
             </div>
           </div>
         </div>
-        <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#141820]">
-          <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="min-w-0 rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#141820]">
+          <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Runtime Console</div>
               <div className="mt-0.5 text-[11px] text-[#667085] dark:text-[#9aa3af]">{log.length} events</div>
@@ -1524,10 +1594,13 @@ export default function RuntimeLabView({
               </button>
             ) : null}
           </div>
+          {/* whitespace-pre + overflow-x-auto: long unbroken lines (file
+              paths, URLs from expo export) scroll INSIDE this box; they
+              must never push the pane wider. Ancestors carry min-w-0. */}
           <pre
             ref={runtimeConsoleRef}
             onScroll={(event) => setRuntimeConsolePinned(isNearBottom(event.currentTarget))}
-            className="h-52 overflow-auto rounded-md border border-[#1f2933] bg-[#0b0d11] p-3 text-[11px] leading-5 text-[#d5dae1]"
+            className="h-52 min-w-0 overflow-y-auto overflow-x-auto whitespace-pre rounded-md border border-[#1f2933] bg-[#0b0d11] p-3 text-[11px] leading-5 text-[#d5dae1]"
           >
             {log.length ? log.join("\n") : "No runtime operations yet."}
           </pre>

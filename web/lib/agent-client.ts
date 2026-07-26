@@ -4905,7 +4905,20 @@ export class AgentClient {
     return data;
   }
 
-  async reloadDevServer(opts?: { mode?: "dev" | "bundle" }): Promise<{
+  /** Reload the running preview.
+   *
+   *  Fast/full contract (agent 1.99.374+):
+   *   - "fast" (default) — the framework's cheapest refresh: Metro/Expo
+   *     built-in reload, Flutter "r" hot reload, existing bundle re-served
+   *     when fresh. POST /dev/reload {mode:"fast"}.
+   *   - "full" — framework-level restart: Flutter "R" hot restart; when the
+   *     active lane is the static web bundle, the agent also forces an async
+   *     re-export (warm cache — never a cold start). POST /dev/reload
+   *     {mode:"full"}.
+   *  Legacy modes stay supported: "dev" is fast; "bundle" rebuilds the
+   *  Hermes bundle via /dev/reload-app. Older agents ignore the unknown
+   *  mode field and behave exactly as before — backward compatible. */
+  async reloadDevServer(opts?: { mode?: "dev" | "bundle" | "fast" | "full" }): Promise<{
     ok?: boolean;
     nativeChangesDetected?: boolean;
     nativeChanges?: Array<{ path?: string; reason?: string }>;
@@ -4913,12 +4926,19 @@ export class AgentClient {
     status?: string;
     bundleUrl?: string;
     moduleName?: string;
+    reloadMode?: string;
+    webBundleRebuildKicked?: boolean;
     error?: string;
   }> {
     this.assertConnected();
-    const mode = opts?.mode ?? "dev";
-    if (mode === "dev") {
-      const res = await fetch(`${this.baseUrl}/dev/reload`, { method: "POST", headers: this.authHeaders });
+    const mode = opts?.mode ?? "fast";
+    if (mode !== "bundle") {
+      const wireMode = mode === "full" ? "full" : "fast";
+      const res = await fetch(`${this.baseUrl}/dev/reload`, {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: wireMode }),
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data?.error || "Failed to reload dev server");
@@ -5034,11 +5054,20 @@ export class AgentClient {
      *  instead of full execution. The protocol half is wired so the
      *  experimental render can be filled in without protocol churn. */
     target?: "web-js-bundle" | "web-hermes-wasm";
+    /** Fast/full reload contract (agent 1.99.374+):
+     *  "fast" re-serves the existing bundle when it is provably fresh
+     *  (built commit == HEAD, tracked tree clean) and otherwise rebuilds
+     *  with the warm persistent Metro cache; "full" always re-exports
+     *  (still warm cache — never a cold start). Older agents ignore the
+     *  field and always rebuild. Default (undefined) = always rebuild. */
+    mode?: "fast" | "full";
   }): Promise<{
     ok: boolean;
     bundleUrl: string;
     size: number;
     fileCount: number;
+    /** True when the agent re-served an existing fresh bundle (mode:"fast"). */
+    reused?: boolean;
     error?: string;
     output?: string;
   }> {
@@ -5048,6 +5077,7 @@ export class AgentClient {
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({
         target: opts.target ?? "web-js-bundle",
+        mode: opts.mode ?? undefined,
         projectName: opts.projectName ?? undefined,
         projectPath: opts.projectPath ?? undefined,
         caller: "web-ui",
@@ -5086,6 +5116,7 @@ export class AgentClient {
       bundleUrl: typeof obj.bundleUrl === "string" ? obj.bundleUrl : "/dev/web-bundle/",
       size: typeof obj.size === "number" ? obj.size : 0,
       fileCount: typeof obj.fileCount === "number" ? obj.fileCount : 0,
+      reused: obj.reused === true,
     };
   }
 

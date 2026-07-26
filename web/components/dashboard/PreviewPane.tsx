@@ -1052,19 +1052,28 @@ export default function PreviewPane({
     setSending(false);
   }, [composer, sending, devStatus?.workDir, stopActiveTaskStream]);
 
-  const handleReload = useCallback(async () => {
+  /** Fast/full reload split (agent 1.99.374+):
+   *  - fast: framework's cheapest refresh — Metro/Expo built-in reload,
+   *    Flutter "r" hot reload — plus an iframe refresh. Sub-second.
+   *  - full: framework-level restart — Flutter "R" hot restart, forced
+   *    web-bundle re-export (warm cache) — or, for the native Hermes
+   *    lane, the bundle rebuild + push.
+   *  Both refresh the iframe; neither ever cold-starts the Metro cache. */
+  const handleReload = useCallback(async (kind: "fast" | "full" = "fast") => {
     const framework = (devStatus?.framework || "").toLowerCase();
     setIframeKey((k) => k + 1);
     setReloadNonce((n) => n + 1);
     if (isWebPreviewFramework(framework)) {
       try {
-        await agentClient.reloadDevServer({ mode: "dev" });
+        await agentClient.reloadDevServer({ mode: kind });
       } catch {
         // Browser preview already got a hard refresh above.
       }
       return;
     }
-    await agentClient.reloadDevServer({ mode: "bundle" });
+    // Native Hermes lane: fast = dev-server hot reload broadcast,
+    // full = rebuild the Hermes bundle and push it to the phone.
+    await agentClient.reloadDevServer({ mode: kind === "full" ? "bundle" : "fast" });
   }, [devStatus?.framework]);
 
   const handleStop = useCallback(async () => {
@@ -1359,11 +1368,26 @@ export default function PreviewPane({
         {devStatus?.running ? (
           <>
             <button
-              onClick={() => void handleReload()}
-              className="rounded border border-warning/40 px-2 py-0.5 text-[10px] text-warning hover:bg-warning/10 transition-colors"
-              title={isWebPreviewFramework(devStatus?.framework) ? "Refresh preview" : "Reload mobile app"}
+              onClick={() => void handleReload("fast")}
+              className="rounded bg-brand px-2 py-0.5 text-[10px] font-semibold text-brand-fg hover:bg-brand/90 transition-colors"
+              title={
+                isWebPreviewFramework(devStatus?.framework)
+                  ? "Fast Reload — cheapest refresh (hot reload / fresh bundle re-served)"
+                  : "Fast Reload — hot reload via the dev server"
+              }
             >
-              ↻ Hard reload
+              ↻ Fast Reload
+            </button>
+            <button
+              onClick={() => void handleReload("full")}
+              className="rounded border border-warning/40 px-2 py-0.5 text-[10px] text-warning hover:bg-warning/10 transition-colors"
+              title={
+                isWebPreviewFramework(devStatus?.framework)
+                  ? "Full Reload — restart the app state and re-export the bundle (warm cache)"
+                  : "Full Reload — rebuild the Hermes bundle and push it to the phone"
+              }
+            >
+              ⟳ Full Reload
             </button>
             <button
               onClick={handleStop}
@@ -1771,8 +1795,11 @@ export default function PreviewPane({
           )}
         </div>
 
-        <div className="min-h-0 border-surface-800 bg-surface-950/70 xl:border-l">
-          <div className="flex h-full min-h-0 flex-col">
+        {/* min-w-0 on every flex/grid ancestor of the console: without it a
+            single long unbroken Metro line (file path, URL) widens the whole
+            pane instead of scrolling INSIDE the log box below. */}
+        <div className="min-h-0 min-w-0 border-surface-800 bg-surface-950/70 xl:border-l">
+          <div className="flex h-full min-h-0 min-w-0 flex-col">
             <div className="flex items-center justify-between border-b border-surface-800 px-3 py-2">
               <div>
                 <div className="text-[10px] uppercase tracking-widest text-surface-500">Console</div>
@@ -1796,12 +1823,14 @@ export default function PreviewPane({
               topicProgress={topicProgress}
               latestSnapshot={latestSnapshot}
             />
-            <div className="flex-1 min-h-0 overflow-auto whitespace-pre-wrap break-all px-3 py-2 font-mono text-[10px] leading-4">
+            {/* whitespace-pre + overflow-x-auto: long expo-export paths scroll
+                inside this box; they must never widen the pane. */}
+            <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-auto whitespace-pre px-3 py-2 font-mono text-[10px] leading-4">
               {logLines.length === 0 ? (
                 <span className="text-surface-600">{consoleEmptyHint(connState, sseState, sseError, devStatus)}</span>
               ) : (
                 logLines.slice(-200).map((line, i) => (
-                  <div key={i} className={consoleLineClass(line)}>{line}</div>
+                  <div key={i} className={`w-max min-w-full ${consoleLineClass(line)}`}>{line}</div>
                 ))
               )}
             </div>
