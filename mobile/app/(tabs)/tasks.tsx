@@ -11,6 +11,7 @@ import {
   Animated,
   Dimensions,
   FlatList,
+  GestureResponderEvent,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -1080,6 +1081,23 @@ function TaskCardInner({
       item.status === "running" ||
       item.status === "queued" ||
       item.status === "review";
+    if (Platform.OS === "web") {
+      const title = normalizeTaskTitle(item.title);
+      if (canMarkComplete) {
+        const complete = typeof window !== "undefined"
+          ? window.confirm(`Mark "${title}" complete?\n\nPress Cancel to keep it, or use the next prompt to delete it.`)
+          : false;
+        if (complete) {
+          onComplete();
+          return;
+        }
+      }
+      const remove = typeof window !== "undefined"
+        ? window.confirm(`Remove "${title}" from Tasks?`)
+        : false;
+      if (remove) onDelete();
+      return;
+    }
     if (canMarkComplete) {
       Alert.alert("Task actions", normalizeTaskTitle(item.title), [
         { text: "Mark complete", onPress: onComplete },
@@ -1092,6 +1110,19 @@ function TaskCardInner({
         { text: "Delete", style: "destructive", onPress: onDelete },
       ]);
     }
+  };
+
+  const handleActionPress = (event: GestureResponderEvent) => {
+    event.stopPropagation();
+    // RN-web nests this Pressable inside the card's TouchableOpacity. Stop the
+    // DOM event too so the card does not open before the action can run.
+    const nativeEvent = event.nativeEvent as unknown as {
+      stopPropagation?: () => void;
+      preventDefault?: () => void;
+    };
+    nativeEvent.stopPropagation?.();
+    nativeEvent.preventDefault?.();
+    handleLongPress();
   };
 
   // Last line is part of the key because capOutput() pins output.length
@@ -1202,10 +1233,7 @@ function TaskCardInner({
             })()}
             <Pressable
               hitSlop={12}
-              onPress={(event) => {
-                event.stopPropagation();
-                handleLongPress();
-              }}
+              onPress={handleActionPress}
               style={({ pressed }) => [
                 s.taskActionButton,
                 { backgroundColor: c.bgInput, borderColor: c.borderSubtle },

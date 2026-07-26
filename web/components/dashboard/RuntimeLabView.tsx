@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import {
   agentClient,
   type RemoteRuntimeCapabilities,
@@ -539,6 +539,7 @@ export default function RuntimeLabView({
   const taskPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const runtimeConsoleRef = useRef<HTMLPreElement | null>(null);
   const taskConsoleRef = useRef<HTMLPreElement | null>(null);
+  const mobilePreviewFrameRef = useRef<HTMLIFrameElement | null>(null);
   const [runtimeConsolePinned, setRuntimeConsolePinned] = useState(true);
   const [taskConsolePinned, setTaskConsolePinned] = useState(true);
   const [activeTaskStream, setActiveTaskStream] = useState<{
@@ -967,6 +968,29 @@ export default function RuntimeLabView({
     setWebPreviewNote(null);
   }, []);
 
+  const scrollMobilePreviewFrame = useCallback((event: WheelEvent<HTMLDivElement>) => {
+    const frame = mobilePreviewFrameRef.current;
+    if (!frame) return;
+    try {
+      const win = frame.contentWindow;
+      const doc = frame.contentDocument;
+      if (!win || !doc) return;
+      const root = doc.scrollingElement || doc.documentElement || doc.body;
+      const beforeTop = root?.scrollTop ?? 0;
+      const beforeLeft = root?.scrollLeft ?? 0;
+      win.scrollBy({ top: event.deltaY, left: event.deltaX, behavior: "auto" });
+      const afterTop = root?.scrollTop ?? beforeTop;
+      const afterLeft = root?.scrollLeft ?? beforeLeft;
+      if (afterTop !== beforeTop || afterLeft !== beforeLeft) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    } catch {
+      // Cross-origin previews keep native iframe scrolling; the dashboard must
+      // not turn a security boundary into a broken preview.
+    }
+  }, []);
+
   useEffect(() => {
     if (!webPreviewUrl) {
       setWebPreviewFrameReady(false);
@@ -1229,6 +1253,7 @@ export default function RuntimeLabView({
                           >
                             <div
                               className="relative overflow-hidden bg-black"
+                              onWheel={scrollMobilePreviewFrame}
                               style={{
                                 borderRadius: Math.max(0, mobilePreviewDevice.radius - 10),
                                 width: mobilePreviewDevice.width,
@@ -1236,10 +1261,12 @@ export default function RuntimeLabView({
                               }}
                             >
                               <iframe
+                                ref={mobilePreviewFrameRef}
                                 src={webPreviewUrl}
                                 width={mobilePreviewDevice.width}
                                 height={mobilePreviewDevice.height}
                                 className="border-none bg-white"
+                                style={{ touchAction: "pan-y" }}
                                 title={`${mobilePreviewDevice.label} Web UI preview`}
                                 onLoad={() => window.setTimeout(() => setWebPreviewFrameReady(true), 900)}
                               />

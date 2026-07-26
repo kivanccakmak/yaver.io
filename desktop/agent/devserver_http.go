@@ -319,6 +319,82 @@ func (s *HTTPServer) syncPreviewWorkerIncident(projectPath string, target DevSer
 	})
 }
 
+func sameDevWorkDir(a, b string) bool {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if a == "" || b == "" {
+		return false
+	}
+	aa, errA := filepath.Abs(a)
+	bb, errB := filepath.Abs(b)
+	if errA == nil {
+		a = aa
+	}
+	if errB == nil {
+		b = bb
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+func (s *HTTPServer) activeWebBundleMatches(projectPath string) (WebBundleInfo, bool) {
+	if s == nil || s.devServerMgr == nil {
+		return WebBundleInfo{}, false
+	}
+	info := s.devServerMgr.GetWebBundleInfo()
+	if strings.TrimSpace(info.BuildDir) == "" {
+		return info, false
+	}
+	if strings.TrimSpace(projectPath) == "" {
+		return info, true
+	}
+	return info, sameDevWorkDir(info.WorkDir, projectPath)
+}
+
+func reloadDeliveryContext(s *HTTPServer, projectPath string, target DevServerTarget, deliveredTo int) map[string]interface{} {
+	out := map[string]interface{}{
+		"deliveredTo": deliveredTo,
+	}
+	if deliveredTo > 0 {
+		if strings.TrimSpace(target.DeviceID) != "" {
+			out["developmentMode"] = "preview-worker"
+			out["reloadTarget"] = "preview-worker"
+			out["message"] = "Reload command reached the selected preview worker on this agent."
+		} else {
+			out["developmentMode"] = "mobile-sdk"
+			out["reloadTarget"] = "sdk-listeners"
+			out["message"] = "Reload command reached connected SDK listener(s) on this agent."
+		}
+		return out
+	}
+	if info, ok := s.activeWebBundleMatches(projectPath); ok {
+		out["developmentMode"] = "web-bundle"
+		out["reloadTarget"] = "web-bundle-preview"
+		out["message"] = "The active preview is a browser web bundle on this agent; rebuild the web bundle or refresh the iframe. No mobile SDK listener is required for this lane."
+		if strings.TrimSpace(info.BuiltAt) != "" {
+			out["webBundleBuiltAt"] = info.BuiltAt
+		}
+		if strings.TrimSpace(info.Target) != "" {
+			out["webBundleTarget"] = info.Target
+		}
+		return out
+	}
+	out["developmentMode"] = "native-sdk"
+	out["reloadTarget"] = "none"
+	if strings.TrimSpace(target.DeviceID) != "" {
+		out["message"] = "No command listener is connected for the selected preview target on this agent."
+		out["targetDeviceId"] = strings.TrimSpace(target.DeviceID)
+		if strings.TrimSpace(target.DeviceName) != "" {
+			out["targetDeviceName"] = strings.TrimSpace(target.DeviceName)
+		}
+		if strings.TrimSpace(target.DeviceClass) != "" {
+			out["targetDeviceClass"] = strings.TrimSpace(target.DeviceClass)
+		}
+	} else {
+		out["message"] = "No mobile SDK listener or browser bundle preview is connected on this agent."
+	}
+	return out
+}
+
 func (s *HTTPServer) guestAllowedDevWorkDir(guestUID, workDir string) bool {
 	if guestUID == "" || s.guestConfigMgr == nil {
 		return true
@@ -1988,17 +2064,22 @@ func (s *HTTPServer) handleDevServerReload(w http.ResponseWriter, r *http.Reques
 		"changeClass":           changeClass,
 	}, incidentIDs...)
 
-	resp := map[string]interface{}{
-		"ok":                    true,
-		"nativeChangesDetected": len(nativeChanges) > 0,
-		"nativeChanges":         nativeChanges,
-		"changeClass":           changeClass, // "js_only" | "native_rebuild_required" | "" (no baseline)
-		// deliveredTo: how many live phone command-listeners (or the preview
-		// worker) actually received the reload. 0 = no phone is listening on
-		// this agent; the caller should tell the human to open Yaver on the
-		// phone and select THIS device rather than report success.
-		"deliveredTo": deliveredTo,
+	resp := reloadDeliveryContext(s, projectPath, target, deliveredTo)
+	resp["ok"] = true
+	resp["nativeChangesDetected"] = len(nativeChanges) > 0
+	resp["nativeChanges"] = nativeChanges
+	resp["changeClass"] = changeClass // "js_only" | "native_rebuild_required" | "" (no baseline)
+	resp["mode"] = "dev"
+	resp["transport"] = "blackbox"
+	if resp["reloadTarget"] == "web-bundle-preview" {
+		resp["transport"] = "web-bundle"
 	}
+	// deliveredTo: how many live phone command-listeners (or the preview
+	// worker) actually received the reload. 0 = no phone is listening on
+	// this agent; when reloadTarget=web-bundle-preview, the active lane is
+	// browser-rendered and the caller should rebuild/refresh the iframe
+	// instead of reporting a missing phone.
+	resp["deliveredTo"] = deliveredTo
 	if scopedDeviceID != "" {
 		resp["targetedDeviceId"] = scopedDeviceID
 	}
@@ -2131,17 +2212,33 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 			s.devServerMgr.Reload()
 		}
 		if sent := s.sendPreviewWorkerReloadCommand(); sent {
+			deliveredTo := 1
 			s.syncPreviewWorkerIncident(projectPath, target, true)
 			log.Printf("[dev] Reload-app (dev mode): sent targeted preview reload to preview worker")
+			resp := reloadDeliveryContext(s, projectPath, target, deliveredTo)
+			resp["ok"] = true
+			resp["mode"] = "dev"
+			resp["transport"] = "blackbox"
+			s.upsertDevOperation("reload_app", "completed", "done", "Reload command sent to app.", projectPath, target.DeviceID, 1, map[string]interface{}{"mode": "dev"})
+			jsonReply(w, http.StatusOK, resp)
+			return
 		} else {
 			s.syncPreviewWorkerIncident(projectPath, target, strings.TrimSpace(target.DeviceID) == "")
-			s.blackboxMgr.BroadcastCommand(BlackBoxCommand{
+			deliveredTo := s.blackboxMgr.BroadcastCommand(BlackBoxCommand{
 				Command: "reload",
 			})
 			log.Printf("[dev] Reload-app (dev mode): broadcast reload to SDK devices")
+			resp := reloadDeliveryContext(s, projectPath, target, deliveredTo)
+			resp["ok"] = true
+			resp["mode"] = "dev"
+			resp["transport"] = "blackbox"
+			if resp["reloadTarget"] == "web-bundle-preview" {
+				resp["transport"] = "web-bundle"
+			}
+			s.upsertDevOperation("reload_app", "completed", "done", "Reload command sent to app.", projectPath, target.DeviceID, 1, map[string]interface{}{"mode": "dev"})
+			jsonReply(w, http.StatusOK, resp)
+			return
 		}
-		s.upsertDevOperation("reload_app", "completed", "done", "Reload command sent to app.", projectPath, target.DeviceID, 1, map[string]interface{}{"mode": "dev"})
-		jsonReply(w, http.StatusOK, map[string]string{"ok": "true", "mode": "dev"})
 
 	case "bundle":
 		target := s.devServerMgr.PreferredTarget()

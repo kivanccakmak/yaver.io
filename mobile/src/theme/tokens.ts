@@ -145,7 +145,7 @@ export const lightTokens = {
 } as const;
 
 export const darkTokens = {
-  background: "#000000",
+  background: "#FF6B00",
   surface: "#15151A",
   surfaceElevated: "#1F1F26",
   surfaceMuted: "#0E0E12",
