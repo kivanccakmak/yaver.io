@@ -77,7 +77,14 @@ function defaultApps() {
 
 // Light lanes only: browser targets give DOM assertions. Native-only projects
 // belong in ios-simulator-loop.mjs, which can verify pixels but not DOM state.
+// The workDir check is LOCAL, but the agent may be remote — those paths live on
+// the other machine. Checking them here skipped every app as "missing" when
+// pointed at a Hetzner box, which reads as "no projects" rather than "wrong
+// filesystem". Only pre-filter when the agent is local; otherwise let the agent
+// answer, since it is the one that can actually see the directory.
+const AGENT_IS_LOCAL = /^https?:\/\/(127\.0\.0\.1|localhost)\b/.test(AGENT) && !process.env.YAVER_LANE_APPS;
 const APPS = (parseAppsEnv() || defaultApps()).filter((app) => {
+  if (!AGENT_IS_LOCAL) return true;
   const ok = existsSync(app.workDir);
   if (!ok) console.log(`\nSKIP   ${app.name} — missing workDir ${app.workDir}`);
   return ok;
@@ -161,7 +168,12 @@ for (const app of APPS) {
   console.log(`\n──── ${app.name} ────`);
   const page = await ctx.newPage();          // fresh page ⇒ one video PER app
   const errs = [];
+  const consoleErrs = [];
   page.on('pageerror', (e) => errs.push(String(e.message).slice(0, 140)));
+  page.on('console', (msg) => {
+    if (msg.type() !== 'error') return;
+    consoleErrs.push(msg.text().slice(0, 220));
+  });
 
   const up = await bringUpWebLane(app);
   if (!up.ok) {
@@ -176,11 +188,21 @@ for (const app of APPS) {
   await page.screenshot({ path: `/tmp/todo-${app.name.replace(/[^a-z0-9]+/gi, '-')}.png` }).catch(() => {});
 
   const four04 = /Unmatched Route|could not be found/i.test(seen.text);
+  const dwdsFailure = [...consoleErrs, ...errs].find((msg) => /\$dwdsSseHandler/i.test(msg));
+  const browserFailure = dwdsFailure || [...errs, ...consoleErrs].find((msg) =>
+    /web_entrypoint\.dart|injected client\.js/i.test(msg)
+  );
   if (four04) {
     // The base-path fix exists precisely for this; if it reappears, say so
     // instead of calling a mounted 404 a pass.
     results.push({ app: app.name, verdict: 'SILENT', detail: `mounted onto its own 404 at pathname=${seen.path} — base-path injection did not apply` });
     console.log(`  SILENT mounted onto a 404 (pathname=${seen.path})`);
+  } else if (browserFailure) {
+    const detail = /\$dwdsSseHandler/i.test(browserFailure)
+      ? `Flutter DWDS websocket was not proxied at agent root: ${browserFailure}`
+      : `Flutter injected client failed before a stable mount: ${browserFailure}`;
+    results.push({ app: app.name, verdict: 'SILENT', detail });
+    console.log(`  SILENT ${detail}`);
   } else if ((seen.kids > 0 && seen.text) || seen.flutterViews > 0 || seen.canvases > 0) {
     const matched = !app.expect || app.expect.test(seen.text);
     const visual = seen.flutterViews > 0 || seen.canvases > 0
