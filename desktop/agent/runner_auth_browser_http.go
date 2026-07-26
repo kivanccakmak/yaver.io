@@ -160,6 +160,36 @@ func (s *runnerBrowserAuthSessionState) update(fn func(*runnerBrowserAuthSession
 // A silence budget converts that into an answer. It does not make claude's
 // browser flow work — nothing here can — it makes the failure legible and
 // points at the paths that DO work headlessly.
+// watchInterceptedBrowserURL promotes a shim-captured URL into the session.
+//
+// The stdout scanner stays authoritative when a CLI does print (kimi), because
+// its line carries the user code alongside the URL. This is the fallback for
+// the ones that say nothing at all — and it is the ONLY way those flows ever
+// produce something the user can act on.
+func watchInterceptedBrowserURL(sess *runnerBrowserAuthSessionState, interceptor *browserInterceptor) {
+	defer interceptor.cleanup()
+	// Generous: a cold CLI can take a while to reach the browser step, and this
+	// costs nothing while it waits. Shorter than the silence watchdog so a
+	// captured URL always wins the race against "we gave up".
+	url := interceptor.waitForURL(40 * time.Second)
+	if url == "" {
+		return
+	}
+	sess.update(func(state *runnerBrowserAuthSession) {
+		if state.OpenURL != "" {
+			return // the CLI printed one itself; that one is richer, keep it
+		}
+		state.OpenURL = url
+		if state.Status == "starting" {
+			state.Status = "awaiting_browser"
+		}
+		if state.Detail == "" {
+			state.Detail = "Captured the sign-in link the CLI tried to open locally — finish it on this device."
+		}
+		log.Printf("[runner-auth-browser] %s captured openUrl via browser shim: %s", state.Runner, url)
+	})
+}
+
 func watchRunnerBrowserAuthSilence(sess *runnerBrowserAuthSessionState, runner string) {
 	const silenceBudget = 45 * time.Second
 	time.Sleep(silenceBudget)
@@ -464,6 +494,18 @@ func startRunnerBrowserAuthSession(runner string, tr tenantRuntime, onTerminal f
 		return nil, fmt.Errorf("stdin pipe: %w", err)
 	}
 	sess.stdin = stdin
+
+	// Route the child's browser-open through a shim so a CLI that prints NOTHING
+	// still yields its URL. claude and codex both open a browser and emit no
+	// text; without this there is no URL to send to the phone, and the whole
+	// remote flow has nothing to show. See runner_auth_browser_intercept.go.
+	if interceptor, ierr := newBrowserInterceptor(sess.ID); ierr == nil {
+		cmd.Env = interceptor.env(cmd.Env)
+		go watchInterceptedBrowserURL(sess, interceptor)
+	} else {
+		log.Printf("[runner-auth-browser] %s: browser interception unavailable (%v) — falling back to stdout scraping only", runner, ierr)
+	}
+
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return nil, fmt.Errorf("start %s auth: %w", runner, err)
