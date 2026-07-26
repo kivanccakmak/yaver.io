@@ -1400,6 +1400,16 @@ export class QuicClient {
     return this._reconnectStopped;
   }
 
+  /** True once this client has completed at least one successful connect
+   *  (this session, or restored via the persisted connection cache). The
+   *  reconnect ladder never gives up on such a device — only on a
+   *  never-reached one (see scheduleReconnect's give-up policy). Exposed so
+   *  DeviceContext can apply the SAME policy instead of tearing the pooled
+   *  client down at attempt>=max regardless. */
+  get hadSuccessfulConnect(): boolean {
+    return this._hadSuccessfulConnect;
+  }
+
   /** Set relay servers fetched from platform config. */
   setRelayServers(servers: RelayServer[]): void {
     this.relayServers = servers.sort((a, b) => a.priority - b.priority);
@@ -6182,7 +6192,18 @@ export class QuicClient {
 
   private assertConnected(): void {
     if (!this.isConnected && !this.hasConnectionInfo) {
-      throw new Error("QuicClient is not connected. Call connect() first.");
+      // Self-describing on purpose. The old text ("QuicClient is not
+      // connected. Call connect() first.") told the user to call a function.
+      // The condition here means this client has NO coordinates at all —
+      // which in practice is the never-connected fallback client after focus
+      // drifted off the box the user picked, not a box that dropped.
+      const id = this.deviceId ? `${this.deviceId.slice(0, 8)}…` : "none";
+      const target = this.host ? `last host ${this.host}:${this.port}` : "no host learned yet";
+      throw new Error(
+        `No usable connection for this request (device ${id}, state ${this._connectionState}, ${target}). ` +
+          "Yaver's focused connection has drifted off the selected machine — " +
+          "pick the machine again from the banner to re-focus it.",
+      );
     }
   }
 
@@ -7220,6 +7241,19 @@ export class QuicClient {
       this._reconnectRepairAttempted = true;
       this._relayRepairHook?.().catch(() => {});
     }
+    // Topology refresh rung. "device not connected to relay" (the box's relay
+    // registration is gone — relay restarted, or the box moved relays) is NOT
+    // an auth failure, so the repair rung above never fires for it — and this
+    // ladder otherwise reuses the relay list + device coordinates it was born
+    // with, forever. That is exactly why a relay restart looped
+    // "reconnect n/5" for minutes and only an app relaunch (which re-reads
+    // Convex) fixed it. Every 3rd failed attempt, ask DeviceContext to
+    // re-pull the relay list + device rows so the next attempt runs against
+    // fresh topology. Best-effort and idempotent; a no-op when nothing
+    // changed.
+    if (this._reconnectAttempt > 0 && this._reconnectAttempt % 3 === 0) {
+      this._topologyRefreshHook?.().catch(() => {});
+    }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this._reconnectStopped) return;
@@ -7239,6 +7273,15 @@ export class QuicClient {
   private _reconnectRepairAttempted = false;
   setRelayRepairHook(fn: (() => Promise<void>) | null): void {
     this._relayRepairHook = fn;
+  }
+
+  // Same seam as the relay-repair hook, different failure class: the ladder's
+  // relay list / device coordinates are a snapshot, and only DeviceContext can
+  // re-pull them (Convex platform config + device rows). Registered by
+  // DeviceContext; invoked by scheduleReconnect every 3rd failed attempt.
+  private _topologyRefreshHook: (() => Promise<void>) | null = null;
+  setTopologyRefreshHook(fn: (() => Promise<void>) | null): void {
+    this._topologyRefreshHook = fn;
   }
 
   /**

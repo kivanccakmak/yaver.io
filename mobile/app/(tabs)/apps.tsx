@@ -42,6 +42,9 @@ import { downloadArtifact } from "../../src/lib/builds";
 import { describeConnectionStatus } from "../../src/lib/connection";
 import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../../src/lib/nativeBuild";
 import { isActiveDevServerStatus } from "../../src/lib/devServerState";
+import { connectionManager } from "../../src/lib/connectionManager";
+import { shouldPollDevStatus } from "../../src/lib/devStatusPolling";
+import { previewPhaseTitle, previewTimeoutExplanation } from "../../src/lib/previewPhase";
 import { describePort, describeResources } from "../../src/lib/machineResources";
 import { subscribeSse, type SseSubscription } from "../../src/lib/sseClient";
 import { isWebServedStatus } from "../../src/lib/devLane";
@@ -469,7 +472,7 @@ export default function AppsScreen() {
   const insets = useSafeAreaInsets();
   const layout = useResponsiveLayout();
   const tabletContent = useTabletContentStyle("wide");
-  const { activeDevice, connectionStatus, devices, connectedDeviceIds, refreshDevices } = useDevice();
+  const { activeDevice, connectionStatus, devices, connectedDeviceIds, refreshDevices, retryConnection } = useDevice();
   const isConnected = connectionStatus === "connected" && !!activeDevice;
   // Effective state — focused box OR any pool client live. See
   // lib/connectionState; aligns this tab with Devices/Tasks/Reload so
@@ -783,16 +786,32 @@ export default function AppsScreen() {
     void quicClient.refreshMobileProjects().catch(() => {});
   }, [activeDevice?.id, isConnected]);
 
-  // Poll dev server status + all projects
+  // Poll dev server status + all projects.
+  //
+  // Keyed to the DEVICE, not the focused client's mood: the old gate was
+  // `isConnected` (connectionStatus === "connected"), which is fed by a
+  // focus-bound listener and can sit at "connecting" after a relay restart
+  // while the box's own pooled client is back up. That froze this poll and
+  // stranded the preview modal on "Waiting for the dev server to report its
+  // address…" while /dev/status on the box reported running+serving. Gate on
+  // the pool (the header's transport truth) and talk to the active device's
+  // OWN pooled client so the poll can never be answered by a stale or
+  // fallback focus.
+  const devStatusPollEnabled = shouldPollDevStatus({
+    activeDeviceId: activeDevice?.id,
+    connectedDeviceIds,
+  });
   useEffect(() => {
-    if (!isConnected) return;
+    const deviceId = activeDevice?.id;
+    if (!devStatusPollEnabled || !deviceId) return;
+    const client = connectionManager.clientFor(deviceId);
     let mounted = true;
 
     const pollStatus = async () => {
       try {
         const [status, session] = await Promise.all([
-          quicClient.getDevServerStatus(),
-          quicClient.getMobileWorkerPreviewSession(),
+          client.getDevServerStatus(),
+          client.getMobileWorkerPreviewSession(),
         ]);
         if (mounted) setDevStatus(status && (isActiveDevServerStatus(status) || Boolean((status as DevServerStatus).error)) ? status : null);
         if (mounted) setWorkerSession(session);
@@ -805,8 +824,8 @@ export default function AppsScreen() {
     const fetchProjects = async () => {
       try {
         const [projectsData, reposData] = await Promise.all([
-          quicClient.listMobileProjectsDetailed(),
-          quicClient.listWorkspaceRepos().catch(() => ({ repos: [] })),
+          client.listMobileProjectsDetailed(),
+          client.listWorkspaceRepos().catch(() => ({ repos: [] })),
         ]);
         if (!mounted) return;
         let projectRows = projectsData.projects;
@@ -818,7 +837,7 @@ export default function AppsScreen() {
         // Selenium/RN-web path on 2026-07-25).
         if (projectRows.length === 0 || projectsData.discovery?.discovering) {
           try {
-            const fallback = await quicClient.listProjectsDetailed();
+            const fallback = await client.listProjectsDetailed();
             projectRows = mergeProjectRows([...projectRows, ...(fallback.projects as ProjectItem[])], []);
           } catch {}
         }
@@ -839,7 +858,7 @@ export default function AppsScreen() {
     // on a Remote Box switch — without it the closure keeps using the
     // same `mounted` flag and the user has to wait up to 15s for the
     // next interval tick to fetch the new box's data.
-  }, [isConnected, projectsDiscovering, activeDevice?.id]);
+  }, [devStatusPollEnabled, projectsDiscovering, activeDevice?.id]);
 
   // SSE auto-reload
   // Shake -> feedback SDK, for the BROWSER lane.
@@ -3044,6 +3063,38 @@ export default function AppsScreen() {
                       {devStatus.error}
                     </Text>
                   </>
+                ) : (previewNowTick - (webPreviewStartedAt ?? previewNowTick)) >= 10000 ? (
+                  /* 10s with no address is no longer "waiting", it's a state
+                     that needs a NAMED reason and an action — an unbounded
+                     spinner over a missing address is the unfalsifiable
+                     silence this screen exists to avoid. */
+                  <>
+                    <Ionicons name="time-outline" size={36} color={c.warn} />
+                    <Text style={[s.previewFailTitle, { color: c.textPrimary }]}>
+                      Still no address from the dev server
+                    </Text>
+                    <Text style={[s.previewSubtle, { color: c.textMuted }]}>
+                      {devStatusPollEnabled
+                        ? "The box is reachable, but /dev/status has not reported an active server yet. It may have stopped — retry, or start the preview again from Projects."
+                        : `Yaver ${describeConnectionStatus(connectionStatus)} — status polling is paused until the box is reachable again.`}
+                    </Text>
+                    <Pressable
+                      onPress={() => {
+                        retryConnection();
+                        const id = activeDevice?.id;
+                        if (id) {
+                          void connectionManager
+                            .clientFor(id)
+                            .getDevServerStatus()
+                            .then((st) => { if (isActiveDevServerStatus(st)) setDevStatus(st); })
+                            .catch(() => {});
+                        }
+                      }}
+                      style={[s.previewBtn, { backgroundColor: "#1a2e1a", marginTop: 12 }]}
+                    >
+                      <Text style={[s.previewBtnText, { color: "#22c55e" }]}>Retry</Text>
+                    </Pressable>
+                  </>
                 ) : (
                 <Text style={[s.previewSubtle, { color: c.textMuted }]}>
                   Waiting for the dev server to report its address…
@@ -3111,6 +3162,10 @@ export default function AppsScreen() {
                     if (m.t === "yaver-preview-timeout") {
                       const reason = String(m.state?.reason || "preview probe timed out");
                       setWebPreviewLogs((prev) => appendPreviewLogLine(prev, `[preview] render probe timed out: ${reason}`));
+                      // Name the likely CAUSE for the terminal reason (e.g.
+                      // flutter_booting → asset/CanvasKit fetch failure), not
+                      // just the fact of the timeout.
+                      setWebPreviewLogs((prev) => appendPreviewLogLine(prev, previewTimeoutExplanation(m.state?.reason, devStatus?.framework)));
                       setWebPreviewFailed(true);
                     }
                   } else if (m && m.t === "yaver-rendered") {
@@ -3258,8 +3313,13 @@ export default function AppsScreen() {
                 ) : (
                   <>
                     <ActivityIndicator size="large" color={c.accent} />
+                    {/* Phase-accurate: "Starting flutter dev server…" over a
+                        server that is already serving (probe reason
+                        flutter_booting) sent users debugging the wrong layer.
+                        previewPhase.ts maps status+probe to the honest line —
+                        shared with DevPreview.tsx. */}
                     <Text style={[s.previewStartTitle, { color: c.textPrimary }]}>
-                      Starting {devStatus?.framework || "web"} dev server…
+                      {previewPhaseTitle(devStatus, webPreviewProbe)}
                     </Text>
                     <Text style={s.previewStepCmd}>{devServerStepsFor(devStatus?.framework)}</Text>
                     <Text style={[s.previewSubtle, { color: c.textMuted }]}>

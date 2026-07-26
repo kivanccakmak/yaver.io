@@ -20,6 +20,7 @@ import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureT
 import { isActiveDevServerStatus } from "../lib/devServerState";
 import { mustUseNativePreview as mustUseNativePreviewLane } from "../lib/devLane";
 import { PREVIEW_READY_SCRIPT } from "../lib/previewReadyScript";
+import { previewPhaseTitle, previewTimeoutExplanation } from "../lib/previewPhase";
 import { setActivePreviewLane, subscribeBrowserShake } from "../lib/feedbackTrigger";
 import { subscribeSse } from "../lib/sseClient";
 import { useResponsiveLayout } from "../hooks/useResponsiveLayout";
@@ -108,7 +109,7 @@ type PreviewProbeState = {
   mediaCount?: number;
 };
 
-export function DevPreview() {
+export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean } = {}) {
   const c = useColors();
   const layout = useResponsiveLayout();
   const [status, setStatus] = useState<DevServerStatus | null>(null);
@@ -202,28 +203,46 @@ export function DevPreview() {
     return () => { unsub(); setActivePreviewLane(null); };
   }, [showPreview]);
 
-  // Poll dev server status every 3s
+  // Poll dev server status every 3s.
+  //
+  // A SINGLE failed /dev/status must not tear the preview down: over relay a
+  // transient error makes getDevServerStatus() return a synthetic
+  // running:false object (or null), and the old code nulled `status` on the
+  // spot — the card vanished and the modal flash-closed, which read as "the
+  // tap did nothing". Require consecutive inactive polls before believing the
+  // server is really gone, and never tear down a preview whose WebView has
+  // ACTUAL rendered content — the user is looking at a working app; give them
+  // Stop/Back instead of yanking it.
+  const inactivePolls = useRef(0);
   useEffect(() => {
     let mounted = true;
     const poll = async () => {
       const s = await quicClient.getDevServerStatus();
       if (!mounted) return;
       const isActive = isActiveDevServerStatus(s);
-      setStatus(isActive ? s : null);
-
-      // Auto-show banner when dev server first starts
-      if (isActive && !wasRunning.current) {
-        wasRunning.current = true;
+      if (isActive) {
+        inactivePolls.current = 0;
+        setStatus(s);
+        // Auto-show banner when dev server first starts
+        if (!wasRunning.current) {
+          wasRunning.current = true;
+        }
+        return;
       }
-      if (!isActive) {
-        wasRunning.current = false;
-        if (showPreview) setShowPreview(false);
-      }
+      inactivePolls.current += 1;
+      // Keep the last-known status through short blips (~2 polls ≈ 6s).
+      if (inactivePolls.current < 3) return;
+      // Persistent: the server really is gone — unless the preview has real
+      // rendered content on screen, in which case keep it (Stop/Back exit).
+      if (showPreview && webContentLoaded) return;
+      wasRunning.current = false;
+      setStatus(null);
+      if (showPreview) setShowPreview(false);
     };
     poll();
     const interval = setInterval(poll, 3000);
     return () => { mounted = false; clearInterval(interval); };
-  }, [showPreview]);
+  }, [showPreview, webContentLoaded]);
 
   // Subscribe to SSE events for auto-reload + log streaming
   useEffect(() => {
@@ -530,6 +549,10 @@ export function DevPreview() {
         setLastLogLine("Already up to date");
       }
       setBundleMounted(true);
+      // Success must clear the busy flag too — only the catch below did, so a
+      // successful load left the card button disabled on "Building…" until an
+      // onBundleUnloaded event happened to arrive.
+      setNativeLoading(false);
     } catch (err: any) {
       clearTimeout(buildAbortTimer);
       setNativeLoading(false);
@@ -616,7 +639,15 @@ export function DevPreview() {
   // preview, healthy status. Kept in step with app/(tabs)/apps.tsx; these two are
   // the app's two browser-preview implementations and a fix in one is not a fix.
   const devWebLane = (status as any)?.webPort ? "/dev-web/" : "";
-  const bundleUrl = quicClient.getDevServerBundleUrl(devWebLane || status.bundleUrl || "/dev/");
+  // An EMPTY bundleUrl means "there is no web target" (bare Metro) — it must
+  // NOT be papered over with a "/dev/" default: Metro serves no page there,
+  // and a WebView mounted on a wrong-or-empty url issues no useful request,
+  // so nothing can ever fail or retry — a blank preview behind a healthy
+  // status. apps.tsx already treats an empty url as a bug, never a value;
+  // kept in step here (the app's two browser-preview implementations). An
+  // agent-REPORTED "/dev/" stays valid — a direct expo-web serve lives there.
+  const reportedBundlePath = devWebLane || status.bundleUrl || "";
+  const bundleUrl = reportedBundlePath ? quicClient.getDevServerBundleUrl(reportedBundlePath) : "";
   const projectLabel = projectLabelFromStatus(status);
   const frameworkLabel = status.framework || "app";
   const portLabel = status.port ? `port ${status.port}` : null;
@@ -736,9 +767,18 @@ export function DevPreview() {
           </Pressable>
         </View>
       </View>
-      {/* Full-screen WebView Modal */}
-      <Modal visible={showPreview} animationType="slide" onRequestClose={() => setShowPreview(false)}>
-        <View style={[styles.container, { backgroundColor: c.bg }]}>
+      {/* Full-screen preview. Presentation is host-aware: iOS cannot reliably
+          present a second native <Modal> while another one is on screen — the
+          newcomer mounts invisibly behind it and the flow dead-ends (same
+          constraint tasks.tsx's handoffModal works around). When this
+          component is rendered INSIDE an already-presented modal (the Tasks
+          task-detail sheet), a nested <Modal> is exactly that dead end: "Open
+          in Yaver" set showPreview and nothing visible happened. So a hosted
+          instance renders the preview as an absolute-fill overlay inside the
+          host modal instead of presenting a second one. */}
+      {(() => {
+        const previewBody = (
+        <View style={[styles.container, { backgroundColor: c.bg }, hostedInModal && styles.inlineOverlay]}>
           {/* Header */}
           <View style={[styles.header, { backgroundColor: "#111", borderBottomColor: "#333" }]}>
             <Pressable onPress={() => setShowPreview(false)} style={styles.headerBtn}>
@@ -890,6 +930,17 @@ export function DevPreview() {
             /* Web mode: load app in WebView, with a progress/failure overlay
                that stays until REAL content is confirmed (see webContentLoaded). */
             <>
+              {!bundleUrl ? (
+                /* No address yet (or no web target at all) — mounting a
+                   WebView on uri:"" issues no request, so nothing could ever
+                   error or retry. Render an explicit waiting state instead;
+                   the progress overlay below narrates the phase on top. */
+                <View style={[styles.webview, { alignItems: "center", justifyContent: "center" }]}>
+                  <Text style={styles.previewSubtle}>
+                    Waiting for the dev server to report its address…
+                  </Text>
+                </View>
+              ) : (
               <WebView
                 ref={webViewRef}
                 key={webViewKey}
@@ -913,6 +964,9 @@ export function DevPreview() {
                       setPreviewProbe((m.state || null) as PreviewProbeState | null);
                       if (m.t === "yaver-preview-timeout") {
                         pushLog(`[preview] render probe timed out: ${String(m.state?.reason || "unknown")}`);
+                        // Name the likely cause per terminal reason (shared
+                        // with apps.tsx via previewPhase.ts).
+                        pushLog(previewTimeoutExplanation(m.state?.reason, status?.framework));
                         setPreviewFailed(true);
                       }
                     } else if (m && m.t === "yaver-rendered") {
@@ -929,6 +983,7 @@ export function DevPreview() {
                 allowsInlineMediaPlayback
                 originWhitelist={["*"]}
               />
+              )}
               {!webContentLoaded && (
                 <View style={styles.previewOverlay}>
                   {previewFailed ? (
@@ -977,8 +1032,11 @@ export function DevPreview() {
                   ) : (
                     <>
                       <ActivityIndicator size="large" color="#22c55e" />
+                      {/* Phase-accurate title (previewPhase.ts, shared with
+                          apps.tsx): a server that is already serving while
+                          Flutter's engine boots must not read "Starting…". */}
                       <Text style={styles.previewStartTitle}>
-                        Starting {frameworkLabel} dev server…
+                        {previewPhaseTitle(status, previewProbe)}
                       </Text>
                       <Text style={styles.previewStepCmd}>{devServerSteps(frameworkLabel)}</Text>
                       {progressState && progressState.pct > 0 ? (
@@ -1019,7 +1077,16 @@ export function DevPreview() {
             </>
           )}
         </View>
-      </Modal>
+        );
+        if (hostedInModal) {
+          return showPreview ? previewBody : null;
+        }
+        return (
+          <Modal visible={showPreview} animationType="slide" onRequestClose={() => setShowPreview(false)}>
+            {previewBody}
+          </Modal>
+        );
+      })()}
     </>
   );
 }
@@ -1282,6 +1349,18 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   container: { flex: 1 },
+  // Hosted-in-modal presentation: cover the host modal's content instead of
+  // presenting a second native <Modal> (which iOS mounts invisibly behind the
+  // first — the "Open in Yaver did nothing" dead end).
+  inlineOverlay: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 50,
+    elevation: 50,
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",

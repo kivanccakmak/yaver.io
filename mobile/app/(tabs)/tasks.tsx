@@ -5937,8 +5937,12 @@ export default function TasksScreen() {
                   </View>
                 ) : null}
 
-                {/* Dev server banner — shown inside task detail so user doesn't have to go back */}
-                {isEffectivelyConnected && <DevPreview />}
+                {/* Dev server banner — shown inside task detail so user doesn't have to go back.
+                    hostedInModal: this sits INSIDE the task-detail <Modal>, and iOS won't
+                    reliably present a second native Modal on top (it mounts invisibly —
+                    "Open in Yaver" looked like it did nothing). The prop makes DevPreview
+                    render its preview as an in-modal overlay instead. */}
+                {isEffectivelyConnected && <DevPreview hostedInModal />}
 
                 {/* Chat messages */}
                 {/* FlatList (not ScrollView+.map) so streaming a 60-message

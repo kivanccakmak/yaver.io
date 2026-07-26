@@ -2069,7 +2069,17 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       } else if (state === "error") {
         const attempt = quicClient.reconnectAttempt;
         const max = quicClient.maxReconnectAttempts;
-        const gaveUp = attempt >= max || quicClient.reconnectStopped;
+        // Align the give-up policy with the client's own (scheduleReconnect):
+        // a previously-reachable box keeps retrying forever with capped
+        // backoff — only a never-reached one (wrong host / typo) stops at
+        // max. The old `attempt >= max` teardown here contradicted that:
+        // connectionManager.disconnect() below also CLEARS FOCUS, so every
+        // later quicClient.* call resolved to the never-connected fallback
+        // client and threw, while the pool could still paint the box green —
+        // the "Connected · <box>" vs "not connected" split-brain.
+        const gaveUp =
+          quicClient.reconnectStopped ||
+          (attempt >= max && !quicClient.hadSuccessfulConnect);
         if (gaveUp) {
           // Only the failed device's pooled client dies — peer
           // connections to other boxes the user is mid-session on
@@ -2092,10 +2102,21 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           // with a bare "Reconnecting (n/max)…" that matched no self-heal
           // string, so a relay-token failure looped forever silently.
           const cause = quicClient.lastTransportError || "";
+          // "device not connected to relay" is the relay's 502 for a box whose
+          // relay REGISTRATION is gone (relay restarted / box on a fallback the
+          // relay can't route) — a box-presence problem, not a phone problem.
+          // The raw string reads like the phone is being refused; say what is
+          // actually happening and what to expect instead.
+          const friendlyCause = cause.toLowerCase().includes("device not connected to relay")
+            ? "your box lost its relay session — it usually re-registers within a minute; retrying"
+            : cause;
+          // Attempts can exceed max now that a previously-reachable box
+          // retries forever — clamp the display so it never reads "7/5".
+          const shownAttempt = Math.min(attempt, max);
           setLastError(
-            cause
-              ? `Reconnecting (${attempt}/${max}) — ${cause}`
-              : `Reconnecting (${attempt}/${max})...`,
+            friendlyCause
+              ? `Reconnecting (${shownAttempt}/${max}) — ${friendlyCause}`
+              : `Reconnecting (${shownAttempt}/${max})...`,
           );
         }
       } else if (state === "disconnected") {
@@ -2306,6 +2327,25 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     secondaryDeviceId,
     userDisconnected,
   ]);
+
+  // Focus invariant — the other half of the split-brain fix. `activeDevice`
+  // (what every screen renders) and connectionManager's focusedId (what every
+  // `quicClient.*` call resolves to) can drift apart: a reconnect give-up or
+  // a pool disconnect clears focus WITHOUT clearing activeDevice, after which
+  // the Proxy resolves to the never-connected fallback client and every call
+  // throws "no usable connection" while the header still paints the box green.
+  // Re-assert focus whenever they disagree. Depends on connectedDeviceIds /
+  // connectionStatus so it also runs right after a background
+  // ensureConnected() brings the active box's pooled client back up.
+  useEffect(() => {
+    if (!activeDevice?.id || userDisconnected) return;
+    if (connectionManager.focusedDeviceId() === activeDevice.id) return;
+    // Mint (or fetch) the pooled client first so the Proxy lands on a real
+    // per-device client — hydrated with relays + token by the manager —
+    // never on the boot-time fallback stub.
+    connectionManager.clientFor(activeDevice.id);
+    connectionManager.setFocused(activeDevice.id);
+  }, [activeDevice?.id, userDisconnected, connectedDeviceIds, connectionStatus]);
 
   // Re-trigger auto-connect whenever the device set changes — a box that just
   // came online (or a freshly-paired one) deserves a fresh sweep.
@@ -2519,6 +2559,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   // Read by the auto-connect sweep, which no longer lists callbacks as deps.
   const repairRelayRef = useRef(repairRelay);
   repairRelayRef.current = repairRelay;
+  // Same "latest value" pattern for the topology-refresh rung below, whose
+  // registration effect runs once with [] deps.
+  const refreshDevicesRef = useRef(refreshDevices);
+  refreshDevicesRef.current = refreshDevices;
 
   // Register the repair rung into every QuicClient that gets minted, so
   // scheduleReconnect can invoke repairRelay ONCE per failure streak
@@ -2530,6 +2574,22 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     const hook = () => repairRelayRef.current().then(() => {});
     connectionManager.setRelayRepairHook(hook);
     return () => connectionManager.setRelayRepairHook(null);
+  }, []);
+
+  // Topology refresh rung for the reconnect ladder (fired by scheduleReconnect
+  // every 3rd failed attempt). The ladder itself can only retry the relay
+  // snapshot it was born with — after a relay restart it looped "device not
+  // connected to relay" for minutes and only an app relaunch (which re-reads
+  // Convex) recovered. Re-pull the relay list + device rows here so the NEXT
+  // attempt runs against fresh topology. Best-effort; failures are the
+  // ladder's problem to keep retrying.
+  useEffect(() => {
+    const hook = async () => {
+      await fetchRelayServersRef.current?.();
+      await refreshDevicesRef.current?.();
+    };
+    connectionManager.setTopologyRefreshHook(hook);
+    return () => connectionManager.setTopologyRefreshHook(null);
   }, []);
 
   // Seamless relay self-heal. When connections fail with a relay-auth-shaped
@@ -3937,12 +3997,14 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         if (lastType && lastType !== currentType) {
           console.log(`[DeviceContext] Network changed: ${lastType} → ${currentType}`);
           sendTelemetry(token, "network-change", `${lastType} → ${currentType}`);
+          setUnreachableSet(new Set());
           connectionManager.fullReconnectFocused();
         } else if (lastType && lastType === currentType && lastIp && currentIp && lastIp !== currentIp) {
           // Same type but IP changed — Wi-Fi roam, VPN toggle, DHCP renew.
           // Stale tunnel will hang on the old route; reprobe.
           console.log(`[DeviceContext] IP changed (${currentType}): ${lastIp} → ${currentIp}`);
           sendTelemetry(token, "network-ip-change", `${currentType} ${lastIp}→${currentIp}`);
+          setUnreachableSet(new Set());
           connectionManager.fullReconnectFocused();
         } else if (!lastType) {
           // First event after mount or reconnection — just probe to be safe

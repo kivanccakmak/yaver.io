@@ -127,6 +127,12 @@ class ConnectionManager {
     if (this.relayRepairHook) {
       try { fresh.setRelayRepairHook(this.relayRepairHook); } catch {}
     }
+    // Same treatment for the topology-refresh rung (relay list + device rows
+    // re-pull every 3rd failed reconnect attempt) — a client minted mid-
+    // session must not be the one that loops on a stale relay snapshot.
+    if (this.topologyRefreshHook) {
+      try { fresh.setTopologyRefreshHook(this.topologyRefreshHook); } catch {}
+    }
     this.clients.set(id, fresh);
     this.watchClientState(id, fresh);
     this.notify();
@@ -165,6 +171,15 @@ class ConnectionManager {
       try { c.setRelayRepairHook(fn); } catch {}
     }
     try { this.fallback.setRelayRepairHook(fn); } catch {}
+  }
+
+  private topologyRefreshHook: (() => Promise<void>) | null = null;
+  setTopologyRefreshHook(fn: (() => Promise<void>) | null): void {
+    this.topologyRefreshHook = fn;
+    for (const c of this.clients.values()) {
+      try { c.setTopologyRefreshHook(fn); } catch {}
+    }
+    try { this.fallback.setTopologyRefreshHook(fn); } catch {}
   }
 
   /** Make `deviceId` the focus that the Proxy resolves to. Pass null
