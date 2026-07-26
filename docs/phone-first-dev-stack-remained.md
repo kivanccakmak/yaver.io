@@ -92,27 +92,21 @@ JSON; partial-success contract on apply.
 
 ## Remained — ordered by leverage
 
-### ⏳ Slice 3.5 — UI + secure-store glue for the LLM client
+### ✅ Slice 3.5 — editor AI wiring (landed, in its NO-API-KEYS form)
 
-The provider exists but the editor screen doesn't call it yet, and
-the API key has nowhere persistent to live. Small slice, ships
-real value the day it lands.
+Landed after this doc was written, and deliberately NOT as specced
+here: the BYOK "paste an sk-ant- key" design was superseded by the
+standing subscription-only law (no API keys, ever). What shipped:
 
-- **Persist the API key.** New `mobile/src/lib/llmKeys.ts` wrapping
-  `expo-secure-store` (already shimmed in mobile-headless). Keys
-  scoped per provider id (`anthropic` / `openai` / future).
-- **Settings entry to enter the key.** Small screen
-  `mobile/app/phone-project/llm-settings.tsx` with a TextInput,
-  save, clear. No trickery — paste the `sk-ant-...` key in.
-- **"Ask AI" button on the editor screen.** Read all source files,
-  build `EditFilesRequest`, call `createAnthropicProvider().editFiles(...)`,
-  show `formatEditPlan` output in a modal with Apply / Cancel
-  buttons. On Apply, run `applyEditPlan` against
-  `phoneSandboxSourceDefault`.
-- **Tests.** Headless test for `llmKeys` (round-trip via shim,
-  clear works). UI is pure plumbing, no headless coverage path.
-
-Effort: 1 day.
+- `SandboxAiPanel` (mobile/src/components/SandboxAiPanel.tsx) is
+  mounted on the code editor screen — reads the source tree, calls
+  `provider.editFiles(...)`, renders `formatEditPlan`, applies via
+  `applyEditPlan` against `phoneSandboxSourceDefault`.
+- Providers (mobile/src/lib/): `llmClaudeSubscription.ts` (the
+  user's mirrored Claude PLAN token — never a metered key),
+  `llmRemote.ts` (dispatch to the connected box's OpenCode runner),
+  `llmLocal.ts` (on-device llama.rn). No `llmKeys.ts`, no
+  key-entry screen — that part of the old spec is dead on purpose.
 
 ### ⏳ Slice 4 — source-mode dev preview
 
@@ -142,7 +136,13 @@ Open questions to resolve before starting:
 
 Effort: 3-5 days, mostly driven by the open questions above.
 
-### ⏳ Slice 5 — Step 2 deploy plumbing
+### ⏳ Slice 5 — Step 2 deploy plumbing (agent verb LANDED; verify the UI end)
+
+The agent side exists: `phone_project_runtime_deploy` is a live MCP
+verb (desktop/agent/mcp_phone.go, also dispatched from vibing.go).
+Before doing anything here, grep for it and check the mobile target
+picker — the remaining work, if any, is the phone-side picker +
+capability flags, not the agent plumbing this section describes.
 
 Hand off the project from the phone to a hosted PC and run one of
 the four canonical deploy scripts. Reuses every existing piece —
