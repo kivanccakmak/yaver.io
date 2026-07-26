@@ -1275,6 +1275,11 @@ function extractTaskErrorMessage(task: Task): string {
 // present. Runner / Model mirror the TaskHeader chip — same fallback
 // chain so e.g. opencode tasks surface "glm-4.7" in both places.
 interface AgentContextExtras {
+  /** The model the RUNNER on that box is actually configured to use, read from
+   *  its own config via GET /runner/opencode/config. Authoritative — this is
+   *  what will execute, not what the app guessed. The endpoint already existed
+   *  and quic.ts already called it; the panel simply never asked. */
+  runnerConfiguredModel?: string | null;
   /** Currently picked model id from the in-screen picker. */
   selectedModelId?: string;
   /** Active device descriptor (full object, not just name) for the
@@ -1325,19 +1330,31 @@ function buildAgentContextRows(
     if (taskModelId) {
       modelLabel = models.find((m) => m.id === taskModelId)?.name || taskModelId;
     }
+    // What the box is really configured to run beats anything inferred here.
+    // The mini reads `zai-coding-plan/glm-5.2` while this panel claimed
+    // "Sonnet"; the real value was one already-implemented call away.
+    if (!modelLabel && extras.runnerConfiguredModel) {
+      modelLabel = extras.runnerConfiguredModel;
+    }
     if (!modelLabel && extras.selectedModelId && isModelCompatibleWithRunnerId(extras.selectedModelId, task.runnerId)) {
       modelLabel = models.find((m) => m.id === extras.selectedModelId)?.name || extras.selectedModelId;
     }
-    if (!modelLabel) {
-      const fallbackId = preferredDefaultModelForRunner(
-        task.runnerId,
-        extras.activeDevice ?? {},
-        extras.userEmail,
-      );
-      if (fallbackId) {
-        modelLabel = models.find((m) => m.id === fallbackId)?.name || fallbackId;
-      }
-    }
+    // NO FALLBACK GUESS HERE. This panel is titled "Agent context" and its only
+    // job is to say what is ACTUALLY running; a per-runner default dressed as
+    // fact is worse than an absent row.
+    //
+    // Measured 2026-07-26: the panel showed MODEL "Sonnet" for an OpenCode task
+    // on the Mac mini, where ~/.config/opencode/opencode.json reads
+    // `model: zai-coding-plan/glm-5.2`, provider `zai`. No --model flag was
+    // passed, so OpenCode used its config and NOTHING in the chain ever said
+    // Sonnet — preferredDefaultModelForRunner() invented it from the runner id.
+    // The user spotted it immediately ("we don't use sonnet with opencode at
+    // all"), which is the point: a fabricated field is only harmless until
+    // somebody trusts it, and this one sits next to DEVICE, TRANSPORT and TASK
+    // ID, which are all real.
+    //
+    // Same fabrication removed from the task header earlier the same day; this
+    // was the second surface reading the same guess.
     if (modelLabel) {
       rows.push({ label: "Model", value: modelLabel, mono: false });
     }
