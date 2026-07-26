@@ -2045,8 +2045,15 @@ export default function VibeCodingView({
                           </button>
                         </div>
                       ) : null}
+                      {/* ALWAYS offered while a callbackPort exists: the
+                          claudeai flow's auth URL names platform.claude.com
+                          as redirect_uri, but after sign-in the page hands
+                          off to localhost:<port>/callback?code=… — observed
+                          live 2026-07-27 ("Safari Can't Connect to the
+                          Server" on localhost:40717). That failed address
+                          bar URL is exactly what this box replays on the
+                          box's loopback. Never hide it behind flow-kind. */}
                       {runnerAuthStatus.callbackPort &&
-                      runnerAuthFlowKind(runnerAuthStatus.openUrl) !== "code-paste" &&
                       !["completed", "failed", "cancelled"].includes(runnerAuthStatus.status) ? (
                         <div className="mt-3 space-y-2">
                           <div className="text-surface-500">
