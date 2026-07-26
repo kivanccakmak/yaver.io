@@ -1485,27 +1485,20 @@ export default function RuntimeLabView({
           </pre>
         </div>
         <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
-          <button
-            type="button"
-            onClick={() => setVibingSettingsOpen((open) => !open)}
-            className="flex w-full items-center justify-between gap-3 text-left"
-            aria-expanded={vibingSettingsOpen}
-          >
-            <div className="min-w-0">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Vibing</div>
-              <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#475467] dark:text-[#d7dce3]">
-                <span><span className="font-semibold text-[#1f2933] dark:text-[#e6e8ec]">Runner</span> {selectedRunnerRow?.name || selectedRunner || "none"}</span>
-                <span className="text-[#98a2b3]">/</span>
-                <span className="min-w-0 truncate"><span className="font-semibold text-[#1f2933] dark:text-[#e6e8ec]">Model</span> {safeModelForRunner(selectedRunner, selectedModel, availableModels) || selectedModel || "runner default"}</span>
-              </div>
-            </div>
-            <span className="shrink-0 text-xs font-semibold text-sky-700 dark:text-sky-300">
-              {vibingSettingsOpen ? "Hide" : "Settings"}
-            </span>
-          </button>
-          {vibingSettingsOpen || runnerAuthStatus || runnerAuthError ? (
-            <div className="mt-3 grid gap-2">
-              <label className="block">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Vibing</div>
+            <button
+              type="button"
+              onClick={() => setVibingSettingsOpen((open) => !open)}
+              className="shrink-0 text-xs font-semibold text-sky-700 dark:text-sky-300"
+              aria-expanded={vibingSettingsOpen}
+            >
+              {vibingSettingsOpen ? "Hide details" : "Details"}
+            </button>
+          </div>
+          <div className="grid gap-2">
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.2fr)]">
+              <label className="min-w-0">
                 <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Runner</span>
                 <select
                   value={selectedRunner}
@@ -1521,7 +1514,7 @@ export default function RuntimeLabView({
                 </select>
               </label>
               {availableModels.length > 0 ? (
-                <label className="block">
+                <label className="min-w-0">
                   <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Model</span>
                   <select
                     value={selectedModel}
@@ -1532,6 +1525,44 @@ export default function RuntimeLabView({
                       <option key={model.id} value={model.id}>{model.name || model.id}</option>
                     ))}
                   </select>
+                </label>
+              ) : (
+                <div className="min-w-0">
+                  <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Model</span>
+                  <div className="truncate rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1.5 text-xs text-[#667085] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#9aa3af]">
+                    runner default
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={!connectedDevice?.id || !selectedRunner}
+                onClick={() => void saveRunnerChoice()}
+                className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-emerald-200"
+              >
+                Save for machine
+              </button>
+              {selectedRunnerRow?.supportsBrowserAuth && selectedRunnerRow.ready === false ? (
+                <button
+                  type="button"
+                  disabled={runnerAuthBusy}
+                  onClick={() => void startSelectedRunnerSignIn()}
+                  className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-xs font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
+                >
+                  {runnerAuthBusy ? "Opening..." : "Remote OAuth"}
+                </button>
+              ) : null}
+              <span className="min-w-0 truncate text-[11px] text-[#667085] dark:text-[#9aa3af]">
+                {selectedRunnerRow?.name || selectedRunner || "No runner"} / {safeModelForRunner(selectedRunner, selectedModel, availableModels) || selectedModel || "runner default"}
+              </span>
+            </div>
+          </div>
+          {vibingSettingsOpen || runnerAuthStatus || runnerAuthError ? (
+            <div className="mt-3 grid gap-2">
+              {availableModels.length > 0 ? (
+                <div>
                   {normalizeRunnerId(selectedRunner) === "opencode" ? (
                     <div className="mt-2 rounded-md border border-cyan-500/20 bg-cyan-500/5 p-2 text-[10px] text-[#475467] dark:text-[#c7d2e1]">
                       <div className="font-semibold uppercase tracking-wide text-cyan-700 dark:text-cyan-200">OpenCode config</div>
@@ -1560,26 +1591,8 @@ export default function RuntimeLabView({
                       </div>
                     </div>
                   ) : null}
-                </label>
+                </div>
               ) : null}
-              <div className="flex flex-wrap gap-2">
-                <button
-                  disabled={!connectedDevice?.id || !selectedRunner}
-                  onClick={() => void saveRunnerChoice()}
-                  className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-700 disabled:opacity-40 dark:text-emerald-200"
-                >
-                  Save for machine
-                </button>
-                {selectedRunnerRow?.supportsBrowserAuth && selectedRunnerRow.ready === false ? (
-                  <button
-                    disabled={runnerAuthBusy}
-                    onClick={() => void startSelectedRunnerSignIn()}
-                    className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
-                  >
-                    {runnerAuthBusy ? "Opening..." : "Remote OAuth"}
-                  </button>
-                ) : null}
-              </div>
               {runnerAuthStatus ? (
                 <div className="rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 text-[11px] text-[#475467] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]">
                   <div className="font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">OAuth status</div>
