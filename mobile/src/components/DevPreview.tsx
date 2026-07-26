@@ -20,6 +20,7 @@ import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureT
 import { isActiveDevServerStatus } from "../lib/devServerState";
 import { mustUseNativePreview as mustUseNativePreviewLane } from "../lib/devLane";
 import { PREVIEW_READY_SCRIPT } from "../lib/previewReadyScript";
+import { previewBundlePath } from "../lib/previewBundlePath";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../lib/previewPhase";
 import { setActivePreviewLane, subscribeBrowserShake } from "../lib/feedbackTrigger";
 import { subscribeSse } from "../lib/sseClient";
@@ -633,20 +634,11 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
 
   if (!status) return null;
 
-  // Prefer the /dev-web/ lane when the agent runs an Expo Web sibling. An older
-  // agent (< 1.99.355) reports bundleUrl "/dev/" — Metro — even while the actual
-  // web app is on webPort behind /dev-web/, and Metro serves no page: blank
-  // preview, healthy status. Kept in step with app/(tabs)/apps.tsx; these two are
-  // the app's two browser-preview implementations and a fix in one is not a fix.
-  const devWebLane = (status as any)?.webPort ? "/dev-web/" : "";
-  // An EMPTY bundleUrl means "there is no web target" (bare Metro) — it must
-  // NOT be papered over with a "/dev/" default: Metro serves no page there,
-  // and a WebView mounted on a wrong-or-empty url issues no useful request,
-  // so nothing can ever fail or retry — a blank preview behind a healthy
-  // status. apps.tsx already treats an empty url as a bug, never a value;
-  // kept in step here (the app's two browser-preview implementations). An
-  // agent-REPORTED "/dev/" stays valid — a direct expo-web serve lives there.
-  const reportedBundlePath = devWebLane || status.bundleUrl || "";
+  // WHICH url the preview loads — previewBundlePath (shared with apps.tsx;
+  // the app's two browser-preview implementations, a fix in one is not a
+  // fix) applies the agent-is-authority rule, the single legacy
+  // "/dev/"+webPort override, and the empty-url guard.
+  const reportedBundlePath = previewBundlePath(status as any);
   const bundleUrl = reportedBundlePath ? quicClient.getDevServerBundleUrl(reportedBundlePath) : "";
   const projectLabel = projectLabelFromStatus(status);
   const frameworkLabel = status.framework || "app";

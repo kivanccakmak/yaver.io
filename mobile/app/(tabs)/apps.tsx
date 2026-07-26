@@ -44,6 +44,7 @@ import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureT
 import { isActiveDevServerStatus } from "../../src/lib/devServerState";
 import { connectionManager } from "../../src/lib/connectionManager";
 import { shouldPollDevStatus } from "../../src/lib/devStatusPolling";
+import { previewBundlePath } from "../../src/lib/previewBundlePath";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../../src/lib/previewPhase";
 import { describePort, describeResources } from "../../src/lib/machineResources";
 import { subscribeSse, type SseSubscription } from "../../src/lib/sseClient";
@@ -1993,20 +1994,13 @@ export default function AppsScreen() {
     ]);
   }, []);
 
-  // WHICH url the preview loads.
-  //
-  // The agent is the authority (bundleUrl), but two cases need help here:
-  //   • an OLDER agent (< 1.99.355) reports bundleUrl "/dev/" for Expo even while
-  //     it runs the web app on a sibling port proxied at /dev-web/. Loading /dev/
-  //     then hits METRO, which serves no page — a blank preview behind a healthy
-  //     status. If webPort is set, /dev-web/ is where the app actually is.
-  //   • an EMPTY bundleUrl now means "there is no web target" (bare Metro), which
-  //     must not be papered over with a "/dev/" default that renders nothing.
-  const devWebLane = (devStatus as any)?.webPort ? "/dev-web/" : "";
-  const reportedBundlePath = devStatus?.bundleUrl || devWebLane;
+  // WHICH url the preview loads — previewBundlePath (shared with
+  // DevPreview.tsx) applies the agent-is-authority rule, the single legacy
+  // "/dev/"+webPort override, and the empty-url guard.
+  const reportedBundlePath = previewBundlePath(devStatus as any);
   const bundleUrl =
     devStatus && reportedBundlePath
-      ? quicClient.getDevServerBundleUrl(devWebLane || reportedBundlePath)
+      ? quicClient.getDevServerBundleUrl(reportedBundlePath)
       : "";
   const webPreviewServerLooksReady =
     (devStatus ? isWebServedStatus(devStatus) : false) ||
