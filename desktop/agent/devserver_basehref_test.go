@@ -144,3 +144,54 @@ func TestRewriteLeavesProtocolRelativeAndAbsoluteURLsAlone(t *testing.T) {
 		}
 	}
 }
+
+// The relay authenticates EVERY proxied request, and a browser cannot put
+// ?token/&__rp on the sub-resource requests the HTML parser issues. The agent
+// grew applyPreviewRelayAuth for exactly this — and it was never called from
+// the proxy hook, so over the relay the page loaded and every script 401'd
+// (measured live 2026-07-26: /d/<id>/dev-web/...entry.bundle → 401 while the
+// page showed its empty #root). Pin the wiring, not just the helper.
+func TestModifyResponsePropagatesAuthQueryOntoAssets(t *testing.T) {
+	html := `<html><head></head><body><script src="node_modules/expo-router/entry.bundle?platform=web&dev=true"></script></body></html>`
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:18080/dev-web/?token=tok123&__rp=pw456", nil)
+	resp := &http.Response{
+		Header:  http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+		Body:    io.NopCloser(strings.NewReader(html)),
+		Request: req,
+	}
+	if err := rewriteDevIndexBaseHref(resp); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	s := string(got)
+	if !strings.Contains(s, "entry.bundle?platform=web&dev=true&__rp=pw456&token=tok123") {
+		t.Fatalf("static script src did not gain the page's auth query — over the relay it will 401:\n%s", s)
+	}
+	if !strings.Contains(s, "yaver-preview-auth-shim") {
+		t.Fatalf("dynamic-loader auth shim was not injected:\n%s", s)
+	}
+}
+
+// No auth query on the page request → no auth material may appear in the
+// output (the router base-path script still injects; that part is unrelated).
+// LAN direct traffic is header-authenticated and must never gain query creds.
+func TestModifyResponseLeavesUnauthedPagesWithoutAuth(t *testing.T) {
+	html := `<html><head></head><body><script src="app.js"></script></body></html>`
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:18080/dev/", nil)
+	resp := &http.Response{
+		Header:  http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+		Body:    io.NopCloser(strings.NewReader(html)),
+		Request: req,
+	}
+	if err := rewriteDevIndexBaseHref(resp); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	s := string(got)
+	if strings.Contains(s, "yaver-preview-auth-shim") {
+		t.Fatalf("auth shim injected on a page with no auth query:\n%s", s)
+	}
+	if !strings.Contains(s, `src="app.js"`) {
+		t.Fatalf("asset src was altered without an auth query to carry:\n%s", s)
+	}
+}

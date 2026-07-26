@@ -219,6 +219,17 @@ func rewriteDevIndexBaseHref(resp *http.Response) error {
 	// required: assets alone leave the guest router on its 404 route, and the
 	// route rewrite alone breaks every relative asset. See injectRouterBasePath.
 	rewritten := injectRouterBasePath(rewriteDevIndexBaseHrefHTML(string(body)))
+	// Carry the page's auth query onto its sub-resources. Over the public relay
+	// every proxied request is authenticated, and a browser cannot add ?token/
+	// &__rp to the requests the HTML parser or a dynamic loader issues — so the
+	// document loaded and every script/asset 401'd. applyPreviewRelayAuth existed
+	// for exactly this and was never wired into the proxy (measured live
+	// 2026-07-26: entry.bundle 401 through /d/<id>/dev-web/ while the page
+	// rendered its empty #root). No auth query on the request → no-op, so LAN
+	// direct traffic is untouched.
+	if req := resp.Request; req != nil && req.URL != nil {
+		rewritten = applyPreviewRelayAuth(rewritten, req.URL.RawQuery)
+	}
 	if rewritten == string(body) {
 		// Nothing changed — hand back the exact original bytes (still
 		// compressed if it was), so we never re-encode needlessly.
