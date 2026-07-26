@@ -168,14 +168,19 @@ upload_remote_config() {
   local token="$3"
   local root="${REMOTE_ROOTS[$host]}"
   local cfg="$WORK_DIR/${device_id}.json"
-  python3 - "$cfg" "$token" "$device_id" "$CONVEX_SITE_URL" <<'PY'
-import json, sys
-path, token, device_id, convex = sys.argv[1:]
+  # Token travels via the environment, NOT argv: /proc/PID/cmdline is
+  # world-readable, so a token in python3's arguments is visible to every
+  # local user in `ps` for the lifetime of the write. /proc/PID/environ is
+  # owner-only.
+  YAVER_CI_TOKEN="$token" YAVER_CI_DEVICE_ID="$device_id" \
+    YAVER_CI_CONVEX="$CONVEX_SITE_URL" python3 - "$cfg" <<'PY'
+import json, os, sys
+path = sys.argv[1]
 with open(path, "w", encoding="utf-8") as fh:
     json.dump({
-        "auth_token": token,
-        "device_id": device_id,
-        "convex_site_url": convex,
+        "auth_token": os.environ["YAVER_CI_TOKEN"],
+        "device_id": os.environ["YAVER_CI_DEVICE_ID"],
+        "convex_site_url": os.environ["YAVER_CI_CONVEX"],
     }, fh, indent=2)
 PY
   scp_to "$cfg" "$host" "$root/home/.yaver/config.json"
@@ -379,14 +384,16 @@ run_mesh() {
   )
   LOCAL_HOME="$WORK_DIR/local-home"
   mkdir -p "$LOCAL_HOME/.yaver"
-  python3 - "$LOCAL_HOME/.yaver/config.json" "$token" "$CONVEX_SITE_URL" <<'PY'
-import json, sys, time
-path, token, convex = sys.argv[1:]
+  # Env, not argv — same ps-visibility rule as upload_remote_config above.
+  YAVER_CI_TOKEN="$token" YAVER_CI_CONVEX="$CONVEX_SITE_URL" \
+    python3 - "$LOCAL_HOME/.yaver/config.json" <<'PY'
+import json, os, sys, time
+path = sys.argv[1]
 with open(path, "w", encoding="utf-8") as fh:
     json.dump({
-        "auth_token": token,
+        "auth_token": os.environ["YAVER_CI_TOKEN"],
         "device_id": f"ci-mesh-local-{int(time.time())}",
-        "convex_site_url": convex,
+        "convex_site_url": os.environ["YAVER_CI_CONVEX"],
     }, fh, indent=2)
 PY
 

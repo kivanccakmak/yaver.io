@@ -20,13 +20,17 @@ yaver --version 2>&1 | head -1
 
 log "write local smoke config"
 install -d -m 0700 "$CONFIG_DIR" "$WORK_DIR"
-python3 - "$CONFIG_DIR/config.json" "$TOKEN" <<'PY'
+# Token travels via the environment, NOT argv: /proc/PID/cmdline is
+# world-readable, so passing it as a python3 argument leaks it to every
+# local user in `ps` for the lifetime of the write.
+YAVER_CI_TOKEN="$TOKEN" python3 - "$CONFIG_DIR/config.json" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-token = sys.argv[2]
+token = os.environ["YAVER_CI_TOKEN"]
 cfg = {}
 if path.exists():
     try:
