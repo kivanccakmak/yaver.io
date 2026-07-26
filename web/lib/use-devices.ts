@@ -107,6 +107,12 @@ export interface Device {
   runners?: Array<{
     runnerId?: string;
     status?: string;
+    ready?: boolean;
+    installed?: boolean;
+    authConfigured?: boolean;
+    authSource?: string;
+    warning?: string;
+    error?: string;
   }>;
   installedRunnerIds?: string[];
   sessionBinding?: "dedicated" | "legacy-shared";

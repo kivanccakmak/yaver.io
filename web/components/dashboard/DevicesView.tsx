@@ -459,6 +459,16 @@ interface RunnerChipState {
   label: string;
   health: RunnerHealth;
   hint?: string;
+  authSource?: string;
+}
+
+function runnerDisplayName(id: string): string {
+  switch (formatRunnerChipLabel(id)) {
+    case "claude": return "Claude Code";
+    case "codex": return "Codex";
+    case "opencode": return "OpenCode";
+    default: return id;
+  }
 }
 
 function normalizeRunnerReportedStatus(status?: string): RunnerReportedStatus | "unknown" {
@@ -497,34 +507,45 @@ function deriveRunnerChipStates(
   const seen = new Set<string>();
   const out: RunnerChipState[] = [];
 
-  const classify = (id: string, status?: string): RunnerChipState => {
+  const classify = (id: string, status?: string, raw?: any): RunnerChipState => {
+    const label = runnerDisplayName(id);
+    const authSource = typeof raw?.authSource === "string" ? raw.authSource : undefined;
+    const rawError = String(raw?.error || raw?.warning || "").trim();
+    if (raw?.installed === false) return { id, label, health: "not-installed", hint: "Not installed on this machine" };
+    if (raw?.ready === true) return { id, label, health: "ready", hint: authSource || status || "signed in", authSource };
+    if (raw?.ready === false) {
+      if (raw?.authConfigured === false || /auth|login|sign.?in|authenticate/i.test(rawError)) {
+        return { id, label, health: "needs-auth", hint: rawError || "not signed in", authSource };
+      }
+      if (rawError) return { id, label, health: "down", hint: rawError, authSource };
+    }
     const reported = normalizeRunnerReportedStatus(status);
     switch (reported) {
       case "":
       case "idle":
       case "ready":
       case "running":
-        return { id, label: id, health: "ready", hint: status };
+        return { id, label, health: "ready", hint: status, authSource };
       case "needs-auth":
       case "needs_auth":
-        return { id, label: id, health: "needs-auth", hint: status };
+        return { id, label, health: "needs-auth", hint: status, authSource };
       case "down":
-        return { id, label: id, health: "down", hint: status };
+        return { id, label, health: "down", hint: status, authSource };
       default:
-        return { id, label: id, health: "unknown", hint: status };
+        return { id, label, health: "unknown", hint: status, authSource };
     }
   };
 
   for (const id of KNOWN_RUNNERS) {
     seen.add(id);
     const r = reported.get(id);
-    if (r) out.push(classify(id, r.status));
-    else out.push({ id, label: id, health: "not-installed", hint: "Not detected on this machine" });
+    if (r) out.push(classify(id, r.status, r.raw));
+    else out.push({ id, label: runnerDisplayName(id), health: "not-installed", hint: "Not detected on this machine" });
   }
   // Anything reported that isn't in the known set — append at the end.
   for (const [id, r] of reported.entries()) {
     if (seen.has(id)) continue;
-    out.push(classify(id, r.status));
+    out.push(classify(id, r.status, r.raw));
   }
   return out;
 }
@@ -562,6 +583,56 @@ function runnerChipTitle(state: RunnerChipState): string {
     case "not-installed": return `${state.label}: not installed on this machine`;
     default: return state.label;
   }
+}
+
+function runnerChipStatusText(state: RunnerChipState): string {
+  switch (state.health) {
+    case "ready": return state.authSource ? `signed in · ${state.authSource}` : "signed in";
+    case "needs-auth": return "sign in needed";
+    case "down": return "error";
+    case "not-installed": return "not installed";
+    default: return "unknown";
+  }
+}
+
+function RunnerStatusChip({
+  state,
+  token,
+  onSignIn,
+  primary,
+}: {
+  state: RunnerChipState;
+  token: string | null;
+  onSignIn: (runnerId: string) => void;
+  primary?: boolean;
+}) {
+  const canSignIn = !!token && state.health === "needs-auth" && (state.id === "claude" || state.id === "codex");
+  const inner = (
+    <>
+      <span className={`h-1.5 w-1.5 rounded-full ${runnerChipDotClass(state.health)}`} />
+      <span className="font-semibold">{state.label}</span>
+      <span className="text-[10px] opacity-75">{runnerChipStatusText(state)}</span>
+      {primary ? <span className="text-[10px] text-indigo-700 dark:text-indigo-200">★</span> : null}
+    </>
+  );
+  const className = `inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] ${runnerChipClass(state.health)} ${canSignIn ? "cursor-pointer hover:brightness-110" : ""}`;
+  if (canSignIn) {
+    return (
+      <button
+        type="button"
+        onClick={() => onSignIn(state.id)}
+        className={className}
+        title={`${runnerChipTitle(state)}\nClick to open remote OAuth.`}
+      >
+        {inner}
+      </button>
+    );
+  }
+  return (
+    <span className={className} title={runnerChipTitle(state)}>
+      {inner}
+    </span>
+  );
 }
 
 /**
@@ -3637,6 +3708,7 @@ export default function DevicesView({
                       onRescue={() => setRescueOpenDeviceId(rescueOpenDeviceId === device.id ? null : device.id)}
                       onShell={() => setShellSession({ device })}
                       onLaunchRunner={(launch) => setShellSession({ device, launch })}
+                      onSignIn={(runnerId) => setAuthModal({ device, runner: runnerId })}
                       onCodingAgent={() => setCodingAgentModalDeviceId(device.id)}
                       onToggleDetails={() => setExpandedId(expandedId === device.id ? null : device.id)}
                       onLeftShare={() => { void onRefresh(); }}
@@ -3832,6 +3904,17 @@ export default function DevicesView({
                               suggested
                             </span>
                           ) : null}
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                          {states.map((state) => (
+                            <RunnerStatusChip
+                              key={`${device.id}:runner-status:${state.id}`}
+                              state={state}
+                              token={token ?? null}
+                              onSignIn={(runnerId) => setAuthModal({ device, runner: runnerId })}
+                              primary={state.id === primaryId}
+                            />
+                          ))}
                         </div>
                       </div>
                       {codingAgentModalDeviceId === device.id ? (
@@ -4523,6 +4606,7 @@ function DeviceActionsMenu({
   onRescue,
   onShell,
   onLaunchRunner,
+  onSignIn,
   onCodingAgent,
   onToggleDetails,
   onLeftShare,
@@ -4541,6 +4625,7 @@ function DeviceActionsMenu({
   onRescue: () => void;
   onShell: () => void;
   onLaunchRunner: (runner: TerminalLaunchRunner) => void;
+  onSignIn: (runnerId: string) => void;
   onCodingAgent: () => void;
   onToggleDetails: () => void;
   onLeftShare: () => void;
@@ -4553,6 +4638,26 @@ function DeviceActionsMenu({
   const { pingState, ping } = useDevicePing(device, token);
   const pingFailure = pingState.ok === false ? classifyPingFailure(pingState) : null;
   const canManage = !device.isGuest && !!token;
+  const runnerStates = deriveRunnerChipStates(device);
+  const runnerStateById = new Map(runnerStates.map((state) => [state.id, state]));
+
+  function runnerMenuHint(runner: TerminalLaunchRunner): string {
+    const state = runnerStateById.get(runner);
+    if (!state) return runner === "opencode" ? "tmux · auto" : "tmux · yolo";
+    if (state.health === "needs-auth" && (runner === "claude" || runner === "codex")) return "sign in";
+    return runnerChipStatusText(state);
+  }
+
+  function runOrAuthorize(runner: TerminalLaunchRunner) {
+    const state = runnerStateById.get(runner);
+    if (state?.health === "needs-auth" && (runner === "claude" || runner === "codex")) {
+      onSignIn(runner);
+      setOpen(false);
+      return;
+    }
+    onLaunchRunner(runner);
+    setOpen(false);
+  }
 
   async function doLeave() {
     if (!token) return;
@@ -4605,17 +4710,17 @@ function DeviceActionsMenu({
             role="menu"
             className="absolute right-0 top-full z-40 mt-1 min-w-[228px] overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg dark:border-surface-700 dark:bg-surface-900"
           >
-            <button className={itemClass} onClick={() => { onLaunchRunner("claude"); setOpen(false); }}>
+            <button className={itemClass} onClick={() => runOrAuthorize("claude")}>
               <span>› Claude</span>
-              <span className={hintClass}>tmux · yolo</span>
+              <span className={hintClass}>{runnerMenuHint("claude")}</span>
             </button>
-            <button className={itemClass} onClick={() => { onLaunchRunner("codex"); setOpen(false); }}>
+            <button className={itemClass} onClick={() => runOrAuthorize("codex")}>
               <span>› Codex</span>
-              <span className={hintClass}>tmux · yolo</span>
+              <span className={hintClass}>{runnerMenuHint("codex")}</span>
             </button>
-            <button className={itemClass} onClick={() => { onLaunchRunner("opencode"); setOpen(false); }}>
+            <button className={itemClass} onClick={() => runOrAuthorize("opencode")}>
               <span>› OpenCode</span>
-              <span className={hintClass}>tmux · auto</span>
+              <span className={hintClass}>{runnerMenuHint("opencode")}</span>
             </button>
             <div className="my-1 border-t border-slate-200 dark:border-surface-800" />
             <button className={itemClass} onClick={() => { onToggleDetails(); setOpen(false); }}>
