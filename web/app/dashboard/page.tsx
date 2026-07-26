@@ -62,7 +62,7 @@ import { capStreamText } from "@/lib/streamBuffer";
 import PendingClaimsSection from "@/components/dashboard/PendingClaimsSection";
 import WebviewView from "@/components/dashboard/WebviewView";
 import RuntimeLabView, { type RuntimeLabIntent } from "@/components/dashboard/RuntimeLabView";
-import DevicesView, { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice, RUNNER_WHITELIST_SET, OPENCODE_PROVIDER_CATALOGUE } from "@/components/dashboard/DevicesView";
+import DevicesView, { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice, RUNNER_WHITELIST_SET, OPENCODE_PROVIDER_CATALOGUE, MODEL_OPTIONS_BY_RUNNER } from "@/components/dashboard/DevicesView";
 import { CapabilityShelf } from "@/components/dashboard/CapabilityShelf";
 import { HIDE_PAID_UI } from "@/lib/launchFlags";
 import { parseDashboardChatIntent } from "@/lib/dashboard-chat-intent";
@@ -121,6 +121,32 @@ function statusColor(s: string) {
 
 type ChatMsg = { role: "user" | "assistant"; text: string; queued?: boolean };
 type OpenCodeAgentRow = { name: string; model?: string; isBuiltin?: boolean };
+const DASHBOARD_TABS = [
+  "home", "chat", "projects", "runtime", "vibe", "devices", "git", "todos",
+  "feedback", "artifacts", "builds", "webview", "preview", "web-reload",
+  "health", "quality", "convex", "data", "switch", "accounts", "company-ai",
+  "companion", "observ", "ops", "autoruns", "extras", "share", "guests",
+  "collab", "infra", "connect", "network", "tools", "security", "storage",
+  "vault", "apikeys", "schedules", "exec", "phone", "vibe-preview",
+  "domains", "screenlog", "settings", "billing", "stores", "cloud", "build",
+  "arm", "appletv", "packages", "verbs",
+] as const;
+type DashboardTab = typeof DASHBOARD_TABS[number];
+
+function isDashboardTab(value: string | null): value is DashboardTab {
+  return DASHBOARD_TABS.includes(value as DashboardTab);
+}
+
+function runnerModelOptions(runner?: Runner | null, runnerId?: string) {
+  const live = Array.isArray(runner?.models) ? runner.models : [];
+  if (live.length > 0) return live;
+  return (MODEL_OPTIONS_BY_RUNNER[runnerId || ""] || []).map((model, index) => ({
+    id: model.id,
+    name: model.label,
+    description: model.hint,
+    isDefault: index === 0,
+  }));
+}
 
 // Tasks created from the mobile "Open App" / "Run" flow carry a full
 // "Project context: - Work dir: X\nUser request: Y" prompt as their title
@@ -286,8 +312,37 @@ function runnerLabel(runnerId?: string): string {
   return normalized || "Selected runner";
 }
 
-function runnerAuthIssue(runner: Pick<Runner, "id" | "installed" | "ready" | "warning" | "error"> | null | undefined): string | null {
-  if (!runner || !runner.installed || runner.ready !== false) return null;
+function runnerAuthIssue(
+  runner:
+    | (Pick<Runner, "id" | "installed" | "ready" | "warning" | "error"> & { authConfigured?: boolean; needsAuth?: boolean })
+    | null
+    | undefined,
+): string | null {
+  if (!runner || !runner.installed) return null;
+
+  // authConfigured is the AGENT'S OWN ANSWER about whether that runner can
+  // actually run, and it was never consulted here. The old guard bailed out
+  // unless ready === false, so a runner reporting authConfigured:false sailed
+  // through as healthy and the sidebar rendered "✓ SIGNED IN".
+  //
+  // Measured 2026-07-26 on the Mac mini: /agent/runners said
+  //   opencode authConfigured=true
+  //   claude   authConfigured=FALSE
+  //   codex    authConfigured=true
+  // while the dashboard showed "runner: Claude Code ✓ SIGNED IN", made Claude
+  // Code the ACTIVE runner, and every message sent from Chat stopped at
+  // "⏳ Waiting for response from AI agent…" forever — dispatched to a runner
+  // that cannot start. The user reported it as "chat is stuck"; it was the chip
+  // lying one step upstream.
+  //
+  // Checked BEFORE the ready/warning heuristics below, because this is a direct
+  // statement of fact from the machine rather than a string match on an error
+  // message that may not exist.
+  if (runner.authConfigured === false || runner.needsAuth === true) {
+    return `${runnerLabel(runner.id)} is installed but NOT signed in on this machine — sign it in, or pick a runner that is. Tasks sent to it will wait forever.`;
+  }
+
+  if (runner.ready !== false) return null;
   const detail = String(runner.error || runner.warning || "").trim();
   const lower = detail.toLowerCase();
   if (
@@ -841,12 +896,13 @@ export default function DashboardPage() {
   // instead of silently opening a WS against the wrong baseUrl.
   const [shellDevice, setShellDevice] = useState<Device | null>(null);
   const [shellTmuxSession, setShellTmuxSession] = useState<string | null>(null);
+  const [shellTmuxTaskId, setShellTmuxTaskId] = useState<string | null>(null);
   // Live tmux sessions for the sidebar "Vibing" list. One shared source with the
   // Vibing tab (agentClient.listTmuxSessions), polled only while connected — a
   // session list from a box we're not attached to would be fiction.
   const [sidebarTmux, setSidebarTmux] = useState<TmuxSessionSummary[]>([]);
   const [remoteDesktopDevice, setRemoteDesktopDevice] = useState<Device | null>(null);
-  const [activeTab, setActiveTab] = useState<"home" | "chat" | "projects" | "runtime" | "vibe" | "devices" | "git" | "todos" | "feedback" | "artifacts" | "builds" | "webview" | "preview" | "web-reload" | "health" | "quality" | "convex" | "data" | "switch" | "accounts" | "company-ai" | "companion" | "observ" | "ops" | "autoruns" | "extras" | "share" | "guests" | "collab" | "infra" | "connect" | "network" | "tools" | "security" | "storage" | "vault" | "apikeys" | "schedules" | "exec" | "phone" | "vibe-preview" | "domains" | "screenlog" | "settings" | "billing" | "stores" | "cloud" | "build" | "arm" | "appletv" | "packages" | "verbs">("devices");
+  const [activeTab, setActiveTab] = useState<DashboardTab>("devices");
   const [runtimeIntent, setRuntimeIntent] = useState<RuntimeLabIntent | null>(null);
   const [autoStart2faSetup, setAutoStart2faSetup] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -873,13 +929,26 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const applyUrlTab = () => {
+      const params = new URLSearchParams(window.location.search);
+      const tab = params.get("tab");
+      if (isDashboardTab(tab)) setActiveTab(tab);
+    };
+    applyUrlTab();
+    window.addEventListener("popstate", applyUrlTab);
     const params = new URLSearchParams(window.location.search);
-    const tab = params.get("tab");
-    if (tab && ["security", "runtime", "webview", "preview", "web-reload", "projects", "chat", "devices"].includes(tab)) {
-      setActiveTab(tab as typeof activeTab);
-    }
     if (params.get("setup2fa") === "1") setAutoStart2faSetup(true);
+    return () => window.removeEventListener("popstate", applyUrlTab);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (url.pathname !== "/dashboard") return;
+    if (url.searchParams.get("tab") === activeTab) return;
+    url.searchParams.set("tab", activeTab);
+    window.history.replaceState(null, "", url.toString());
+  }, [activeTab]);
 
   const repairRelay = useCallback(async () => {
     if (!token) throw new Error("Not signed in");
@@ -1423,11 +1492,7 @@ export default function DashboardPage() {
     // BYOK picker below). Don't let the generic model-syncer reset it.
     if (selectedRunner === "opencode") return;
     const runner = runners.find((r) => r.id === selectedRunner);
-    const models = Array.isArray(runner?.models) ? runner.models : [];
-    if (models.length === 0) {
-      if (selectedModel) setSelectedModel("");
-      return;
-    }
+    const models = runnerModelOptions(runner, selectedRunner);
     const explicitModel = connectedDevice ? primaryModelByDevice[connectedDevice.id] : "";
     if (explicitModel && models.some((model) => model.id === explicitModel) && selectedModel !== explicitModel) {
       setSelectedModel(explicitModel);
@@ -2084,7 +2149,7 @@ export default function DashboardPage() {
       return;
     }
     setInput(""); setSending(true);
-    const continuing = !!activeTask;
+    const continuing = !!activeTask && activeTask.status !== "stopped" && activeTask.status !== "failed";
     // Optimistic user echo — always push the user bubble + empty assistant placeholder
     // so the next streamed line flows into the assistant bubble, not into the last
     // run's response.
@@ -2311,6 +2376,18 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!activeTask) return;
     if (activeTask.status === "running" || activeTask.status === "queued") return;
+    if (activeTask.status === "stopped" || activeTask.status === "failed") {
+      setPendingFollowUps([]);
+      setChatMsgs((prev) =>
+        prev.map((msg) =>
+          msg.queued
+            ? { role: msg.role, text: msg.text }
+            : msg,
+        ),
+      );
+      setConnectError("The previous task is stopped. Start a new task to send another prompt.");
+      return;
+    }
     if (sending) return;
     if (pendingFollowUps.length === 0) return;
     const [next, ...rest] = pendingFollowUps;
@@ -2590,6 +2667,7 @@ export default function DashboardPage() {
                     onClick={() => {
                       if (connectedDevice) {
                         setShellTmuxSession(t.name);
+                        setShellTmuxTaskId(t.taskId || null);
                         setShellDevice(connectedDevice);
                       }
                     }}
@@ -3502,7 +3580,7 @@ export default function DashboardPage() {
                               m.role === "user" ? (
                                 <div key={i} className="flex justify-end">
                                   <div className={`max-w-[80%] rounded-2xl rounded-br-sm px-3.5 py-2 text-[13px] text-white whitespace-pre-wrap break-words shadow-sm ${m.queued ? "bg-indigo-500/40 italic ring-1 ring-indigo-300/30" : "bg-indigo-500"}`}>
-                                    {m.queued ? <span className="mr-1.5 text-[10px] uppercase tracking-wide text-indigo-800 dark:text-indigo-100/80">queued</span> : null}
+                                    {m.queued ? <span className="mr-1.5 text-[10px] uppercase tracking-wide text-indigo-800 dark:text-indigo-100/80">queued after current run</span> : null}
                                     {m.text}
                                   </div>
                                 </div>
@@ -3533,7 +3611,9 @@ export default function DashboardPage() {
                                           <span className="h-2 w-2 animate-pulse rounded-full bg-surface-400 [animation-delay:400ms]" />
                                         </span>
                                         <span className="text-[11px] tracking-wide">
-                                          {runnerLabel(activeTask.runnerId || selectedRunner)} is thinking…
+                                          {activeTask.status === "queued"
+                                            ? "Waiting for the current run slot..."
+                                            : `${runnerLabel(activeTask.runnerId || selectedRunner)} is thinking...`}
                                         </span>
                                       </span>
                                     ) : (
@@ -3548,7 +3628,7 @@ export default function DashboardPage() {
                       </div>
                     </>
                   ) : (
-                    <div className="flex flex-1 items-center justify-center text-sm text-surface-600">Describe what you want to build</div>
+                    <div className="flex flex-1 items-center justify-center text-sm text-surface-400">Describe what you want to build</div>
                   )}
                 </div>
               </div>
@@ -3557,7 +3637,7 @@ export default function DashboardPage() {
                   {(() => {
                     const installed = chatRunnerChoices;
                     const selectedRunnerRow = installed.find((r) => r.id === selectedRunner) || null;
-                    const selectedRunnerModels = Array.isArray(selectedRunnerRow?.models) ? selectedRunnerRow.models : [];
+                    const selectedRunnerModels = runnerModelOptions(selectedRunnerRow, selectedRunner);
                     if (installed.length === 0) {
                       return (
                         <div className="text-[11px] text-amber-400">
@@ -3633,9 +3713,25 @@ export default function DashboardPage() {
                                       key={runner.id}
                                       type="button"
                                       onClick={() => {
+                                        const nextModels = runnerModelOptions(runner, runner.id);
+                                        const nextModel =
+                                          (selectedModel && nextModels.some((m) => m.id === selectedModel) ? selectedModel : "") ||
+                                          nextModels.find((m) => m.isDefault)?.id ||
+                                          nextModels[0]?.id ||
+                                          "";
                                         setSelectedRunner(runner.id);
+                                        if (runner.id !== "opencode") setSelectedModel(nextModel);
                                         setOpencodeSaveMsg(null);
                                         setOpencodeChangingKey(false);
+                                        if (connectedDevice?.id) {
+                                          void setPrimaryRunner(
+                                            connectedDevice.id,
+                                            runner.id,
+                                            runner.id === "opencode" ? selectedModel || null : nextModel || null,
+                                            runner.id === "opencode" ? selectedOpenCodeMode || null : null,
+                                            runner.id === "opencode" ? opencodeProvider || null : null,
+                                          ).catch((err: any) => setConnectError(err?.message || "Failed to save agent selection"));
+                                        }
                                       }}
                                       title={runner.error || runner.warning || runner.name}
                                       className={`rounded-full border px-2.5 py-1 transition ${
@@ -3661,7 +3757,16 @@ export default function DashboardPage() {
                                     <button
                                       key={model.id}
                                       type="button"
-                                      onClick={() => setSelectedModel(model.id)}
+                                      onClick={() => {
+                                        setSelectedModel(model.id);
+                                        if (connectedDevice?.id) {
+                                          void setPrimaryRunner(
+                                            connectedDevice.id,
+                                            selectedRunner || null,
+                                            model.id,
+                                          ).catch((err: any) => setConnectError(err?.message || "Failed to save model selection"));
+                                        }
+                                      }}
                                       title={model.description || model.id}
                                       className={`rounded-full border px-2.5 py-1 transition ${
                                         active
@@ -3818,7 +3923,18 @@ export default function DashboardPage() {
                               <button
                                 key={m.id}
                                 type="button"
-                                onClick={() => setSelectedModel(fullId)}
+                                onClick={() => {
+                                  setSelectedModel(fullId);
+                                  if (connectedDevice?.id) {
+                                    void setPrimaryRunner(
+                                      connectedDevice.id,
+                                      "opencode",
+                                      fullId,
+                                      selectedOpenCodeMode || null,
+                                      opencodeProvider || null,
+                                    ).catch((err: any) => setConnectError(err?.message || "Failed to save model selection"));
+                                  }
+                                }}
                                 title={m.hint || m.id}
                                 className={`rounded-full border px-2.5 py-1 transition ${
                                   active
@@ -4108,10 +4224,12 @@ export default function DashboardPage() {
                         ? `Sign in to ${runnerLabel(activeRunnerId)} to continue on ${connectedDevice?.name || "this machine"}...`
                         : taskRunning
                           ? queuedCount > 0
-                            ? `Queued ${queuedCount} — type to queue another…`
-                            : "Type to queue a follow-up — sent when this turn finishes…"
+                            ? `Queued ${queuedCount} after the current run; type another follow-up...`
+                            : "Type to queue a follow-up; it sends when this turn finishes..."
                           : activeTask
-                            ? "Add a task update or refinement..."
+                            ? activeTask.status === "stopped" || activeTask.status === "failed"
+                              ? "Start a new task from this prompt..."
+                              : "Add a task update or refinement..."
                             : preferredSurfaceProjectPath
                               ? "Describe what to do in this repo..."
                               : "Describe the task you want this machine to run...";
@@ -4119,10 +4237,12 @@ export default function DashboardPage() {
                         ? "..."
                         : taskRunning
                           ? queuedCount > 0
-                            ? `Queue (+${queuedCount})`
-                            : "Queue"
+                            ? `Queue after current run (+${queuedCount})`
+                            : "Queue after current run"
                           : activeTask
-                            ? "Update task"
+                            ? activeTask.status === "stopped" || activeTask.status === "failed"
+                              ? "Start new task"
+                              : "Update task"
                             : "Start task";
                       const disabled = !input.trim()
                         || sending
@@ -4134,7 +4254,7 @@ export default function DashboardPage() {
                             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
                             placeholder={placeholder} rows={1}
                             disabled={Boolean(activeRunnerAuthIssue)}
-                            className="max-h-32 w-full resize-none rounded-xl border border-surface-700 bg-surface-950 px-4 py-3 text-sm text-surface-100 placeholder-surface-600 outline-none focus:border-surface-500 disabled:cursor-not-allowed disabled:opacity-60" style={{ minHeight: "48px" }} />
+                            className="max-h-32 w-full resize-none rounded-xl border border-surface-700 bg-surface-950 px-4 py-3 text-sm text-surface-50 caret-surface-50 placeholder-surface-400 outline-none focus:border-surface-500 disabled:cursor-not-allowed disabled:opacity-60" style={{ minHeight: "48px" }} />
                           <button type="submit" disabled={disabled}
                             className="h-12 shrink-0 rounded-xl bg-surface-100 px-5 text-sm font-medium text-surface-900 hover:bg-surface-50 disabled:opacity-30">
                             {buttonLabel}
@@ -4156,6 +4276,7 @@ export default function DashboardPage() {
         <WebShellModal
           device={shellDevice}
           tmuxSession={shellTmuxSession || undefined}
+          tmuxTaskId={shellTmuxTaskId || undefined}
           isCurrentDeviceSelected={Boolean(connectedDevice && connectedDevice.id === shellDevice.id)}
           isCurrentDeviceConnected={Boolean(connectedDevice && connectedDevice.id === shellDevice.id && connState === "connected")}
           onConnect={() => { void connectToDevice(shellDevice); }}
@@ -4168,7 +4289,13 @@ export default function DashboardPage() {
             // attention-needed devices on top.
             setActiveTab("devices");
           }}
-          onClose={() => { setShellDevice(null); setShellTmuxSession(null); }}
+          onTmuxClosed={() => {
+            setShellDevice(null);
+            setShellTmuxSession(null);
+            setShellTmuxTaskId(null);
+            void agentClient.listTmuxSessions().then(setSidebarTmux).catch(() => setSidebarTmux([]));
+          }}
+          onClose={() => { setShellDevice(null); setShellTmuxSession(null); setShellTmuxTaskId(null); }}
         />
       ) : null}
       {/* Remote Desktop modal — live screen (MJPEG /rd/stream) + optional
