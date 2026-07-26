@@ -3290,6 +3290,7 @@ export default function DashboardPage() {
               <RuntimeLabView
                 intent={runtimeIntent}
                 connectedDevice={connectedDevice}
+                onReconnect={connectedDevice ? async () => { await connectToDevice(connectedDevice); } : undefined}
                 onOpenTmux={(sessionName) => {
                   if (!connectedDevice) {
                     setConnectError("Connect to a device before attaching to tmux.");

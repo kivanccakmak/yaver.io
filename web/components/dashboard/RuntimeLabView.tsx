@@ -504,6 +504,20 @@ function runtimeTargetGroup(target: RemoteRuntimeTarget): "browser" | "simulator
   return "advanced";
 }
 
+function isAgentAuthErrorMessage(message: string | null | undefined): boolean {
+  const lower = String(message || "").toLowerCase();
+  return (
+    lower.includes("invalid token") ||
+    lower.includes("session expired") ||
+    lower.includes("agent auth expired") ||
+    lower.includes("convex session is expired") ||
+    lower.includes("http 401") ||
+    lower.includes("http 403") ||
+    lower.includes("unauthorized") ||
+    lower.includes("forbidden")
+  );
+}
+
 const runtimeGroupLabels: Record<ReturnType<typeof runtimeTargetGroup>, string> = {
   browser: "Browser",
   simulator: "Phone / tablet simulators",
@@ -516,10 +530,12 @@ const runtimeGroupLabels: Record<ReturnType<typeof runtimeTargetGroup>, string> 
 export default function RuntimeLabView({
   intent,
   onOpenTmux,
+  onReconnect,
   connectedDevice,
 }: {
   intent?: RuntimeLabIntent | null;
   onOpenTmux?: (sessionName: string) => void;
+  onReconnect?: () => Promise<void>;
   connectedDevice?: Device | null;
 }) {
   const { token } = useAuth();
@@ -557,6 +573,7 @@ export default function RuntimeLabView({
   const [devEventsUrl, setDevEventsUrl] = useState<string | null>(() => agentClient.devEventsUrl);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recoveringAgentAuth, setRecoveringAgentAuth] = useState(false);
   const [showAdvancedTargets, setShowAdvancedTargets] = useState(false);
   const [webPreviewUrl, setWebPreviewUrl] = useState<string | null>(null);
   const [webPreviewPanelOpen, setWebPreviewPanelOpen] = useState(false);
@@ -879,11 +896,39 @@ export default function RuntimeLabView({
       const primaryCount = next.targets.filter(isPrimaryRuntimeTarget).length;
       appendLog(`targets: ${primaryCount} primary, ${Math.max(0, next.targets.length - primaryCount)} advanced/unavailable${next.cached ? " (cached)" : ""}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load runtime capabilities.");
+      const message = err instanceof Error ? err.message : "Could not load runtime capabilities.";
+      if (isAgentAuthErrorMessage(message)) {
+        appendLog(`agent auth failed while loading targets: ${message}`);
+        setError("Agent auth expired or mismatched. Reconnect this machine, then retry Load Targets.");
+      } else {
+        setError(message);
+      }
     } finally {
       setBusy(false);
     }
   }, [appendLog, selectedProject]);
+
+  const recoverAgentAuthAndReloadTargets = useCallback(async () => {
+    if (!selectedProject || recoveringAgentAuth) return;
+    setRecoveringAgentAuth(true);
+    setError(null);
+    appendLog("recovering agent auth before loading targets");
+    try {
+      if (onReconnect) {
+        await onReconnect();
+      } else {
+        agentClient.triggerReconnect();
+      }
+      appendLog("agent reconnect complete; retrying target probe");
+      await loadCapabilities(selectedProject);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      appendLog(`agent auth recovery failed: ${message}`);
+      setError(`Agent auth recovery failed: ${message}`);
+    } finally {
+      setRecoveringAgentAuth(false);
+    }
+  }, [appendLog, loadCapabilities, onReconnect, recoveringAgentAuth, selectedProject]);
 
   const createSession = useCallback(async (targetId: string) => {
     if (!selectedProject) return;
@@ -1143,7 +1188,41 @@ export default function RuntimeLabView({
         ) : null}
 
         {error ? (
-          <div className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-700 dark:text-rose-200">{error}</div>
+          <div className={`rounded-md border p-3 text-sm ${
+            isAgentAuthErrorMessage(error)
+              ? "border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-100"
+              : "border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-200"
+          }`}>
+            <div className="font-semibold">
+              {isAgentAuthErrorMessage(error) ? "Agent auth needs refresh" : "Runtime target probe failed"}
+            </div>
+            <div className="mt-1">{error}</div>
+            {isAgentAuthErrorMessage(error) ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void recoverAgentAuthAndReloadTargets()}
+                  disabled={recoveringAgentAuth || busy}
+                  className="rounded-md border border-amber-500/40 bg-amber-500/15 px-3 py-1.5 text-xs font-semibold text-amber-800 disabled:opacity-40 dark:text-amber-100"
+                >
+                  {recoveringAgentAuth ? "Recovering..." : "Reconnect & Retry"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void loadCapabilities()}
+                  disabled={recoveringAgentAuth || busy}
+                  className="rounded-md border border-[#d7dce3] bg-white px-3 py-1.5 text-xs font-semibold text-[#475467] disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                >
+                  Retry only
+                </button>
+                {connectedDevice ? (
+                  <span className="text-xs text-amber-800/70 dark:text-amber-100/70">
+                    {connectedDevice.name || connectedDevice.id}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         ) : null}
 
         {caps ? (
