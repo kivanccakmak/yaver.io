@@ -187,12 +187,19 @@ func buildTmuxRunnerCommand(
 	taskID string,
 	runnerCmd string,
 	runnerArgs []string,
+	runnerEnv []string,
 ) (*exec.Cmd, []string) {
 	short := shortTaskKey(taskID)
 	win := "yaver-task-" + short
 	sig := "yaver-done-" + short
 	logPath := fmt.Sprintf("/tmp/yaver-tmux-%s.log", short)
-	inner := shellJoin(append([]string{runnerCmd}, runnerArgs...))
+	innerCmd := append([]string{}, runnerEnv...)
+	innerCmd = append(innerCmd, runnerCmd)
+	innerCmd = append(innerCmd, runnerArgs...)
+	if len(runnerEnv) > 0 {
+		innerCmd = append([]string{"env"}, innerCmd...)
+	}
+	inner := shellJoin(innerCmd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", tmuxRunnerScript)
 	envAdditions := []string{

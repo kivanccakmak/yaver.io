@@ -104,6 +104,7 @@ func TestBuildTmuxRunnerCommandShape(t *testing.T) {
 		"task-abc-def-ghi-jkl",
 		"claude",
 		[]string{"-p", "say hi"},
+		[]string{"CLAUDE_CONFIG_DIR=/tmp/yaver-claude"},
 	)
 	if cmd.Args[0] != "sh" || cmd.Args[1] != "-c" {
 		t.Fatalf("expected sh -c invocation, got %v", cmd.Args)
@@ -123,7 +124,7 @@ func TestBuildTmuxRunnerCommandShape(t *testing.T) {
 	if !strings.Contains(cmd.Args[2], "trap cleanup") {
 		t.Fatal("script body missing cleanup trap (would leak panes on cancel)")
 	}
-	wantInner := "'claude' '-p' 'say hi'"
+	wantInner := "'env' 'CLAUDE_CONFIG_DIR=/tmp/yaver-claude' 'claude' '-p' 'say hi'"
 	var sawInner, sawSession bool
 	for _, kv := range env {
 		if kv == "YAVER_TMUX_SESSION=yaver-claude" {

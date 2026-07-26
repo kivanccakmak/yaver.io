@@ -2630,6 +2630,13 @@ func (tm *TaskManager) startProcess(task *Task) error {
 
 	// Determine working directory
 	taskDir := tm.effectiveTaskWorkDir(task)
+	mcpScope := prepareRunnerMCPScope(runner.RunnerID, taskDir)
+	switch normalizeRunnerID(runner.RunnerID) {
+	case "codex":
+		args = insertArgsAfter(args, "exec", mcpScope.Args)
+	case "claude", "glm":
+		args = append(args, mcpScope.Args...)
+	}
 	// An isolation-required guest task (requireIsolation:true) runs confined as
 	// an unprivileged per-tenant OS user in a partition on this box. Confinement
 	// is Linux-only; tenantRT.prepare() below fails loudly on a host that can't
@@ -2779,7 +2786,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 				if task.TmuxSessionID == "" {
 					task.TmuxSessionID = getActivePaneIdentity(session).SessionID
 				}
-				cmd, tmuxEnvAdditions = buildTmuxRunnerCommand(ctx, session, task.ID, runner.Command, args)
+				cmd, tmuxEnvAdditions = buildTmuxRunnerCommand(ctx, session, task.ID, runner.Command, args, mcpScope.Env)
 			}
 		} else {
 			if tenantRT.Enabled {
@@ -2810,6 +2817,9 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		}
 		if len(tmuxEnvAdditions) > 0 {
 			cmd.Env = append(cmd.Env, tmuxEnvAdditions...)
+		}
+		if len(mcpScope.Env) > 0 {
+			cmd.Env = append(cmd.Env, mcpScope.Env...)
 		}
 
 		// Log the first two argv tokens for context (subcommand + first

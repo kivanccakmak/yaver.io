@@ -120,6 +120,68 @@ const MOBILE_FRAMEWORKS = ["expo", "react-native", "flutter"];
 const SECOND_CLASS_MOBILE_FRAMEWORKS = ["flutter", "swift", "kotlin"];
 const WEB_FRAMEWORKS = ["nextjs", "vite", "react"];
 const PREVIEW_TARGET_KEY = "@yaver/hotreload_preview_target";
+const MAX_WEB_PREVIEW_LOGS = 80;
+
+const WEBVIEW_DIAGNOSTICS_SCRIPT = `(function(){
+  if (window.__yaverPreviewDiagnosticsInstalled) return true;
+  window.__yaverPreviewDiagnosticsInstalled = true;
+  var MAX = 1200;
+  function clean(value) {
+    try {
+      if (value instanceof Error) value = value.stack || value.message || String(value);
+      else if (typeof value === 'object') value = JSON.stringify(value);
+      else value = String(value);
+    } catch (e) {
+      try { value = String(value); } catch (_) { value = '[unserializable]'; }
+    }
+    value = String(value || '')
+      .replace(/Bearer\\s+[A-Za-z0-9._~+\\/=:-]+/gi, 'Bearer [redacted]')
+      .replace(/([?&](?:token|access_token|refresh_token|password|secret|key)=)[^\\s&]+/gi, '$1[redacted]')
+      .replace(/((?:token|password|secret|api[_-]?key)\\s*[:=]\\s*)[^\\s,;}]+/gi, '$1[redacted]');
+    return value.length > MAX ? value.slice(0, MAX) + ' ...' : value;
+  }
+  function post(level, parts) {
+    try {
+      var text = Array.prototype.slice.call(parts || []).map(clean).filter(Boolean).join(' ');
+      if (!text) return;
+      window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({
+        t: 'yaver-preview-log',
+        level: level || 'log',
+        text: text,
+        ts: Date.now()
+      }));
+    } catch (e) {}
+  }
+  ['log','warn','error'].forEach(function(level) {
+    var original = console[level];
+    if (!original || original.__yaverWrapped) return;
+    var wrapped = function() {
+      post(level, arguments);
+      return original.apply(console, arguments);
+    };
+    wrapped.__yaverWrapped = true;
+    console[level] = wrapped;
+  });
+  window.addEventListener('error', function(event) {
+    var target = event && event.target;
+    if (target && target !== window && (target.src || target.href)) {
+      post('error', ['resource failed', target.tagName || 'node', target.src || target.href]);
+      return;
+    }
+    post('error', [
+      event && event.message ? event.message : 'window error',
+      event && event.filename ? ('@ ' + event.filename + ':' + (event.lineno || 0) + ':' + (event.colno || 0)) : '',
+      event && event.error ? (event.error.stack || event.error.message || event.error) : ''
+    ]);
+  }, true);
+  window.addEventListener('unhandledrejection', function(event) {
+    var reason = event && event.reason;
+    post('error', ['unhandled rejection', reason && (reason.stack || reason.message) ? (reason.stack || reason.message) : reason]);
+  });
+  return true;
+})(); true;`;
+
+const WEBVIEW_INJECTED_SCRIPT = `${WEBVIEW_DIAGNOSTICS_SCRIPT}\n${PREVIEW_READY_SCRIPT}`;
 
 function pathLeaf(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() || path;
@@ -162,6 +224,16 @@ function previewLogColor(
     return colors.info || colors.accent;
   }
   return colors.textMuted;
+}
+
+function appendPreviewLogLine(prev: string[], line: string, limit = MAX_WEB_PREVIEW_LOGS): string[] {
+  const trimmed = line.trim();
+  if (!trimmed) return prev;
+  return (prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed]).slice(-limit);
+}
+
+function isPreviewRuntimeIssueLevel(level: string): boolean {
+  return level === "error" || level === "warn";
 }
 
 // "carrotbet / mobile" → ["carrotbet", "mobile"]. The trailing "/ <subdir>"
@@ -623,6 +695,8 @@ export default function AppsScreen() {
   // (a preview you cannot leave would be worse than a header you cannot hide).
   const [previewFullScreen, setPreviewFullScreen] = useState(false);
   const [webPreviewLogs, setWebPreviewLogs] = useState<string[]>([]);
+  const [webRuntimeLogOpen, setWebRuntimeLogOpen] = useState(false);
+  const [webRuntimeIssueCount, setWebRuntimeIssueCount] = useState(0);
   const [webPreviewProbe, setWebPreviewProbe] = useState<PreviewProbeState | null>(null);
   const webPreviewLogScrollRef = useRef<ScrollView>(null);
   useEffect(() => () => { if (webPreviewRetryTimer.current) clearTimeout(webPreviewRetryTimer.current); }, []);
@@ -649,6 +723,8 @@ export default function AppsScreen() {
     setWebPreviewContentLoaded(false);
     setWebPreviewFailed(false);
     setWebPreviewLogs([]);
+    setWebRuntimeLogOpen(false);
+    setWebRuntimeIssueCount(0);
     setWebPreviewProbe(null);
     webPreviewRenderWatchdogFiredRef.current = false;
     setWebPreviewStartedAt(Date.now());
@@ -829,10 +905,7 @@ export default function AppsScreen() {
       onError: (reason) => {
         // A stream that cannot open is a fact the user needs; silence here is
         // what made this bug invisible for a whole session.
-        setWebPreviewLogs((p) => {
-          const line = `[preview] log stream unavailable: ${reason}`;
-          return p[p.length - 1] === line ? p : [...p, line].slice(-40);
-        });
+        setWebPreviewLogs((p) => appendPreviewLogLine(p, `[preview] log stream unavailable: ${reason}`));
       },
       onEvent: (event: any) => {
                 if (event.type === "reload" || event.type === "ready") {
@@ -841,11 +914,11 @@ export default function AppsScreen() {
                 } else if (event.type === "log" && event.logLine) {
                   setWebPreviewLastLogAt(Date.now());
                   const ln = String(event.logLine).trim();
-                  if (ln) setWebPreviewLogs((p) => (p[p.length - 1] === ln ? p : [...p, ln].slice(-40)));
+                  if (ln) setWebPreviewLogs((p) => appendPreviewLogLine(p, ln));
                 } else if (event.type === "building" && event.message) {
                   setWebPreviewLastLogAt(Date.now());
                   const ln = String(event.message).trim();
-                  if (ln) setWebPreviewLogs((p) => (p[p.length - 1] === ln ? p : [...p, ln].slice(-40)));
+                  if (ln) setWebPreviewLogs((p) => appendPreviewLogLine(p, ln));
                 } else if (event.type === "snapshot" && Array.isArray(event.snapshot?.recentLogs)) {
                   // The agent's periodic snapshot carries `recentLogs` — the
                   // tail of what the subprocess has printed SO FAR. Without
@@ -866,7 +939,7 @@ export default function AppsScreen() {
                     // have delivered newer lines than this snapshot's tail.
                     setWebPreviewLogs((p) => {
                       const fresh = tail.filter((ln) => !p.includes(ln));
-                      return fresh.length ? [...p, ...fresh].slice(-40) : p;
+                      return fresh.length ? [...p, ...fresh].slice(-MAX_WEB_PREVIEW_LOGS) : p;
                     });
                   }
                 } else if (event.type === "progress" || event.type === "phase") {
@@ -885,7 +958,7 @@ export default function AppsScreen() {
                   const line = `${phase || "working"}${pct}${file}`.trim();
                   if (line) {
                     setWebPreviewLastLogAt(Date.now());
-                    setWebPreviewLogs((p) => (p[p.length - 1] === line ? p : [...p, line].slice(-40)));
+                    setWebPreviewLogs((p) => appendPreviewLogLine(p, line));
                   }
                 } else if (event.type === "heartbeat") {
                   // Proof of life even when nothing new is printed. It keeps
@@ -897,7 +970,7 @@ export default function AppsScreen() {
                   // split it so the failure panel reads like a log, not one blob.
                   const em = String(event.message || "Dev server failed to start").trim();
                   const lines = em.split("\n").map((l) => l.trimEnd()).filter(Boolean);
-                  setWebPreviewLogs((p) => [...p, ...lines].slice(-60));
+                  setWebPreviewLogs((p) => [...p, ...lines].slice(-MAX_WEB_PREVIEW_LOGS));
                   setWebPreviewFailed(true);
                 }
       },
@@ -1931,7 +2004,7 @@ export default function AppsScreen() {
         : "no render probe message received";
       let path = bundleUrl;
       try { path = new URL(bundleUrl).pathname; } catch {}
-      setWebPreviewLogs((prev) => [...prev, `[preview] server is listening but the WebView did not render after 20s (${path}; ${probe})`].slice(-60));
+      setWebPreviewLogs((prev) => appendPreviewLogLine(prev, `[preview] server is listening but the WebView did not render after 20s (${path}; ${probe})`));
       setWebPreviewFailed(true);
     }, 20000);
     return () => clearTimeout(id);
@@ -2927,6 +3000,15 @@ export default function AppsScreen() {
               </Pressable>
               <View style={s.previewEscapeActions}>
                 <Pressable
+                  onPress={() => setPreviewFullScreen((v) => !v)}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel={previewFullScreen ? "Exit full screen" : "Full screen"}
+                  style={s.previewEscapeIconBtn}
+                >
+                  <Ionicons name={previewFullScreen ? "contract-outline" : "expand-outline"} size={20} color={c.accent} />
+                </Pressable>
+                <Pressable
                   onPress={handleReload}
                   hitSlop={10}
                   accessibilityRole="button"
@@ -2993,13 +3075,13 @@ export default function AppsScreen() {
                 const code = e.nativeEvent.statusCode;
                 if (code === 401 || code === 403) {
                   // Terminal: retrying cannot fix credentials. Name the cause.
-                  setWebPreviewLogs((prev) => [...prev, `HTTP ${code} — the preview URL was rejected. The relay credential is missing or stale; reconnect to this box to refetch it.`]);
+                  setWebPreviewLogs((prev) => appendPreviewLogLine(prev, `HTTP ${code} — the preview URL was rejected. The relay credential is missing or stale; reconnect to this box to refetch it.`));
                   setWebPreviewFailed(true);
                   setWebViewLoading(false);
                   return;
                 }
                 if (code === 404) {
-                  setWebPreviewLogs((prev) => [...prev, "HTTP 404 — the dev server is up but is not serving a web target at this path. Confirm the project has a web build (react-native-web + react-dom)."]);
+                  setWebPreviewLogs((prev) => appendPreviewLogLine(prev, "HTTP 404 — the dev server is up but is not serving a web target at this path. Confirm the project has a web build (react-native-web + react-dom)."));
                   setWebPreviewFailed(true);
                   setWebViewLoading(false);
                   return;
@@ -3019,7 +3101,8 @@ export default function AppsScreen() {
               // screen — and latched, so a slow or failed 7 MB bundle stayed
               // blank with no error and no retry. Verified against sfmg and
               // talos/mobile exports: t0 #root=0, old probe said "rendered".
-              injectedJavaScript={PREVIEW_READY_SCRIPT}
+              injectedJavaScriptBeforeContentLoaded={WEBVIEW_DIAGNOSTICS_SCRIPT}
+              injectedJavaScript={WEBVIEW_INJECTED_SCRIPT}
               onMessage={(e) => {
                 try {
                   const m = JSON.parse(e.nativeEvent.data);
@@ -3027,7 +3110,7 @@ export default function AppsScreen() {
                     setWebPreviewProbe((m.state || null) as PreviewProbeState | null);
                     if (m.t === "yaver-preview-timeout") {
                       const reason = String(m.state?.reason || "preview probe timed out");
-                      setWebPreviewLogs((prev) => [...prev, `[preview] render probe timed out: ${reason}`].slice(-60));
+                      setWebPreviewLogs((prev) => appendPreviewLogLine(prev, `[preview] render probe timed out: ${reason}`));
                       setWebPreviewFailed(true);
                     }
                   } else if (m && m.t === "yaver-rendered") {
@@ -3035,6 +3118,16 @@ export default function AppsScreen() {
                     setWebPreviewContentLoaded(true);
                     setWebPreviewFailed(false);
                     webPreviewRetryRef.current = 0;
+                  } else if (m && m.t === "yaver-preview-log") {
+                    const level = String(m.level || "log").toLowerCase();
+                    const text = String(m.text || "").trim();
+                    if (!text) return;
+                    const line = `[web:${level}] ${text}`.slice(0, 1400);
+                    setWebPreviewLogs((prev) => appendPreviewLogLine(prev, line));
+                    if (isPreviewRuntimeIssueLevel(level)) {
+                      setWebRuntimeIssueCount((count) => Math.min(99, count + 1));
+                      setWebRuntimeLogOpen(true);
+                    }
                   }
                 } catch { /* not ours */ }
               }}
@@ -3043,6 +3136,83 @@ export default function AppsScreen() {
               allowsInlineMediaPlayback
             />
             )}
+            {bundleUrl && webPreviewContentLoaded && webPreviewLogs.length > 0 ? (
+              <>
+                <Pressable
+                  onPress={() => setWebRuntimeLogOpen((v) => !v)}
+                  accessibilityRole="button"
+                  accessibilityLabel={webRuntimeLogOpen ? "Hide preview logs" : "Show preview logs"}
+                  style={[
+                    s.previewRuntimeLogFab,
+                    {
+                      bottom: Math.max(18, insets.bottom + 14),
+                      backgroundColor: webRuntimeIssueCount > 0 ? "#321313" : "#10101a",
+                      borderColor: webRuntimeIssueCount > 0 ? "#ef444466" : "#818cf855",
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name={webRuntimeIssueCount > 0 ? "alert-circle-outline" : "terminal-outline"}
+                    size={18}
+                    color={webRuntimeIssueCount > 0 ? c.error : c.accent}
+                  />
+                  <Text style={[s.previewRuntimeLogFabText, { color: webRuntimeIssueCount > 0 ? c.error : c.accent }]}>
+                    {webRuntimeIssueCount > 0 ? `${webRuntimeIssueCount} issue${webRuntimeIssueCount === 1 ? "" : "s"}` : "Logs"}
+                  </Text>
+                </Pressable>
+                {webRuntimeLogOpen ? (
+                  <View style={[s.previewRuntimeLogPanel, { bottom: Math.max(74, insets.bottom + 70) }]}>
+                    <View style={s.previewRuntimeLogHeader}>
+                      <View style={s.previewRuntimeLogTitleRow}>
+                        <Ionicons
+                          name={webRuntimeIssueCount > 0 ? "alert-circle-outline" : "terminal-outline"}
+                          size={18}
+                          color={webRuntimeIssueCount > 0 ? c.error : c.accent}
+                        />
+                        <Text style={s.previewRuntimeLogTitle}>Preview logs</Text>
+                      </View>
+                      <Pressable
+                        onPress={() => setWebRuntimeLogOpen(false)}
+                        hitSlop={10}
+                        accessibilityRole="button"
+                        accessibilityLabel="Close preview logs"
+                        style={s.previewRuntimeLogClose}
+                      >
+                        <Ionicons name="close" size={18} color="#fff" />
+                      </Pressable>
+                    </View>
+                    <ScrollView
+                      ref={webPreviewLogScrollRef}
+                      style={s.previewRuntimeLogScroll}
+                      contentContainerStyle={{ padding: 10 }}
+                      onContentSizeChange={() => webPreviewLogScrollRef.current?.scrollToEnd({ animated: true })}
+                    >
+                      {webPreviewLogs.slice(-32).map((ln, i) => (
+                        <Text key={i} style={[s.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
+                      ))}
+                    </ScrollView>
+                    <View style={s.previewRuntimeLogActions}>
+                      <Pressable onPress={() => { setWebViewLoading(true); setWebRuntimeLogOpen(false); setWebViewKey((k) => k + 1); }} style={[s.previewBtn, s.previewRuntimeActionBtn, { backgroundColor: "#1a2e1a" }]}>
+                        <Text style={[s.previewBtnText, { color: "#22c55e" }]}>Reload</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => {
+                          const proj = (runningProject || devStatus?.framework || "the app").split(" / ")[0];
+                          const logs = webPreviewLogs.slice(-60).join("\n");
+                          void quicClient.sendTask(
+                            `Fix ${proj} browser preview runtime`,
+                            `The browser preview for ${proj} (workDir: ${devStatus?.workDir || "?"}) rendered, but the app then logged runtime errors or got stuck. Diagnose the root cause from the runtime output below and fix it in the project, preserving the browser lane.\n\n--- browser/runtime output ---\n${logs}`,
+                          ).then(() => { setShowWebView(false); router.navigate("/(tabs)/tasks" as any); }).catch(() => {});
+                        }}
+                        style={[s.previewBtn, s.previewRuntimeActionBtn, { backgroundColor: "#2e1f3a" }]}
+                      >
+                        <Text style={[s.previewBtnText, { color: "#c084fc" }]}>Fix in Yaver</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : null}
+              </>
+            ) : null}
             {bundleUrl && !webPreviewContentLoaded && (
               <View style={s.previewOverlay}>
                 {webPreviewFailed ? (
@@ -3213,6 +3383,54 @@ const s = StyleSheet.create({
   previewFailBtns: { flexDirection: "row", gap: 12, marginTop: 8 },
   previewBtn: { paddingHorizontal: 22, paddingVertical: 11, borderRadius: 10 },
   previewBtnText: { fontSize: 14, fontWeight: "700" },
+  previewRuntimeLogFab: {
+    position: "absolute",
+    right: 14,
+    zIndex: 70,
+    minHeight: 42,
+    paddingHorizontal: 12,
+    borderRadius: 21,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  previewRuntimeLogFabText: { fontSize: 13, fontWeight: "800" },
+  previewRuntimeLogPanel: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    zIndex: 69,
+    maxHeight: 260,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#ffffff1f",
+    backgroundColor: "#08080d",
+    overflow: "hidden",
+  },
+  previewRuntimeLogHeader: {
+    minHeight: 42,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: "#ffffff14",
+  },
+  previewRuntimeLogTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  previewRuntimeLogTitle: { color: "#fff", fontSize: 14, fontWeight: "800" },
+  previewRuntimeLogClose: { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  previewRuntimeLogScroll: { maxHeight: 142 },
+  previewRuntimeLogActions: {
+    flexDirection: "row",
+    gap: 10,
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    paddingBottom: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#ffffff14",
+  },
+  previewRuntimeActionBtn: { flex: 1, alignItems: "center", paddingHorizontal: 12 },
 
   // Repos row (monorepo roots + standalone repos)
   reposSection: { marginTop: 12, marginBottom: 4 },
