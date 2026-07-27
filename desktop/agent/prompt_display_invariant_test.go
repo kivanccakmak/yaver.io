@@ -280,3 +280,93 @@ func TestPromptEchoGuardFlushesOnEveryBound(t *testing.T) {
 		}
 	})
 }
+
+// --- part B proof: the frame as a real system prompt, not prompt-stuffing ----
+//
+// The user's second instruction: "if there is such an industry-standard library
+// for these cases, use that too — or wire MCP with first-message options … behind
+// the scenes." The frame is instructions, and claude has a first-class channel
+// for instructions. Verified against the installed binaries, not from memory:
+// claude 2.1.220 (local) and 2.1.165 (box) both advertise
+// --append-system-prompt; codex 0.142.5/0.144.1 reject every instructions-file
+// key; opencode's --agent selects a pre-defined agent, not a per-turn prompt.
+// See docs/architecture/PROMPT_FRAMING.md.
+
+func TestOnlyVerifiedRunnersGetTheNativeChannel(t *testing.T) {
+	if !runnerSupportsNativeSystemPrompt("claude") {
+		t.Error("claude has --append-system-prompt (verified on 2.1.220 and 2.1.165)")
+	}
+	for _, id := range []string{"codex", "opencode", "glm", "aider", ""} {
+		if runnerSupportsNativeSystemPrompt(id) {
+			t.Errorf("%q has no verified system-prompt channel — claiming otherwise DROPS the briefing and the runner silently stops behaving like it is inside Yaver", id)
+		}
+	}
+}
+
+func TestNativeChannelAppendsNeverReplaces(t *testing.T) {
+	got := nativeSystemPromptArgs("claude", "[Yaver — decision policy]\nOperate autonomously.")
+	if len(got) != 2 || got[0] != "--append-system-prompt" {
+		t.Fatalf("want --append-system-prompt <frame>; got %v", got)
+	}
+	// --system-prompt would discard claude's own default system prompt. We are
+	// adding context to a working agent, not rebuilding one.
+	if got[0] == "--system-prompt" {
+		t.Fatal("replacing claude's system prompt throws away its tool-use and editing discipline")
+	}
+	if nativeSystemPromptArgs("codex", "frame") != nil {
+		t.Error("codex must not be handed a flag it does not have")
+	}
+	if nativeSystemPromptArgs("claude", "   ") != nil {
+		t.Error("an empty frame must not produce an empty flag")
+	}
+}
+
+// The split must not change WHAT the runner reads — only which channel carries
+// it. In-band assembly stays byte-identical, and the native form is the same
+// bytes redistributed.
+func TestNativeSplitCarriesTheSameBytes(t *testing.T) {
+	tm := framedTestManager(t)
+	task := framedMobileTask(tm)
+	const userText = "add a settings screen"
+
+	inBand := tm.composeTurnPrompt(task, userText, promptFramePolicy{ArmPreamble: true})
+	frame, message := tm.composeTurn(task, userText, promptFramePolicy{ArmPreamble: true, NativeSystemPrompt: true})
+
+	if frame == "" {
+		t.Fatal("an armed native turn must produce a frame")
+	}
+	if !strings.Contains(frame, "[Yaver — decision policy]") || !strings.Contains(frame, "Yaver orchestration") {
+		t.Error("the native frame must carry the same briefing the in-band one does")
+	}
+	// The message is the user's ask plus what is genuinely about this turn.
+	if !strings.HasPrefix(message, userText) {
+		t.Fatalf("the user's words must LEAD their own message; got %q", message[:min(80, len(message))])
+	}
+	if strings.Contains(message, "[Yaver — decision policy]") || strings.Contains(message, "Yaver orchestration") {
+		t.Error("the frame must leave the user's message entirely on the native path — that is the point")
+	}
+	// Nothing was lost between the two forms.
+	for _, block := range []string{"[Yaver — decision policy]", "[Yaver Agent Context]", "Yaver orchestration", userText} {
+		if !strings.Contains(inBand, block) {
+			t.Errorf("in-band form lost %q", block)
+		}
+		if !strings.Contains(frame+message, block) {
+			t.Errorf("native form lost %q", block)
+		}
+	}
+}
+
+// composeTurnPrompt is the historical single-string API and must stay
+// byte-identical, or every existing frame test is asserting fiction.
+func TestInBandFormIsUnchangedByTheSplit(t *testing.T) {
+	tm := framedTestManager(t)
+	task := framedMobileTask(tm)
+
+	frame, message := tm.composeTurn(task, "make it red", promptFramePolicy{ArmPreamble: true})
+	if frame != "" {
+		t.Fatal("without NativeSystemPrompt the frame must stay in band — a caller that ignores the first return value would otherwise silently drop it")
+	}
+	if got := tm.composeTurnPrompt(task, "make it red", promptFramePolicy{ArmPreamble: true}); got != message {
+		t.Fatal("composeTurnPrompt must be exactly composeTurn's two halves joined")
+	}
+}

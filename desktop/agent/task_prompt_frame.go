@@ -80,6 +80,53 @@ type promptFramePolicy struct {
 	// non-technical end user. That user must never see coding-agent framing,
 	// so chat mode swaps the whole armed frame for its own clean contract.
 	ChatMode string
+
+	// NativeSystemPrompt is set when the runner CLI can take the armed frame
+	// through its OWN system-prompt channel instead of having it prepended to
+	// the user's sentence. composeTurn then returns the frame separately and
+	// the caller threads it as a flag.
+	//
+	// This is the honest shape and it is worth stating why: the frame is
+	// instructions, not conversation. Stuffed into the message it (a) becomes
+	// the first thing a runner echoes to stdout, (b) is indistinguishable from
+	// something the user said, and (c) buries the actual ask under two
+	// thousand words. Only claude offers the channel today
+	// (`--append-system-prompt`, verified against 2.1.220 locally and 2.1.165
+	// on the box); codex and opencode do not, which is why the fallback is not
+	// going away. See docs/architecture/PROMPT_FRAMING.md.
+	NativeSystemPrompt bool
+}
+
+// runnerSupportsNativeSystemPrompt reports whether a runner CLI accepts the
+// armed frame out-of-band.
+//
+// Deliberately a whitelist keyed on VERIFIED flags, not a guess from a version
+// string. Getting this wrong in the permissive direction is severe: the frame
+// would be dropped on the floor and a runner would silently operate without
+// the briefing that makes it behave like it is inside Yaver.
+//
+//	claude    --append-system-prompt / --system-prompt / --settings / --agents
+//	codex     NO. `-c` config overrides only; `experimental_instructions_file`
+//	          was REMOVED (0.142.5 and 0.144.1 both reject it as an unknown
+//	          field). The only recognised instructions key is `-c instructions`,
+//	          whose semantics are undocumented — not a channel to bet on.
+//	opencode  NO. `--agent <name>` selects a PRE-DEFINED agent from config; it
+//	          cannot carry a per-turn prompt.
+func runnerSupportsNativeSystemPrompt(runnerID string) bool {
+	return normalizeRunnerID(runnerID) == "claude"
+}
+
+// nativeSystemPromptArgs renders the flag pair for a runner that has the
+// channel. Empty for everyone else, and for an empty frame.
+func nativeSystemPromptArgs(runnerID, frame string) []string {
+	if strings.TrimSpace(frame) == "" || !runnerSupportsNativeSystemPrompt(runnerID) {
+		return nil
+	}
+	// APPEND, never replace. `--system-prompt` would discard claude's own
+	// default system prompt — its tool-use conventions, its file-editing
+	// discipline, everything that makes it good — in exchange for our briefing.
+	// We are adding context to a working agent, not rebuilding one.
+	return []string{"--append-system-prompt", frame}
 }
 
 // perTurnContextHook renders context that is true only of THIS turn. Returns
@@ -135,11 +182,26 @@ func isChatTaskMode(mode string) bool {
 // cold spawn) and startResume (follow-up) both call it; they differ in exactly
 // one input, ArmPreamble.
 func (tm *TaskManager) composeTurnPrompt(task *Task, userText string, p promptFramePolicy) string {
+	systemFrame, prompt := tm.composeTurn(task, userText, p)
+	// The in-band form: the frame leads the message. This is what codex and
+	// opencode get, and what composeTurn produces on its own whenever
+	// NativeSystemPrompt is false — so the two forms can never disagree about
+	// WHAT the frame says, only about which channel carries it.
+	return systemFrame + prompt
+}
+
+// composeTurn is composeTurnPrompt with the frame kept separate, so a runner
+// that has a real system-prompt channel can be handed it out-of-band.
+//
+// Returns (systemFrame, prompt). systemFrame is always "" unless
+// p.NativeSystemPrompt is set; callers that do not care use composeTurnPrompt
+// and get the historical single string.
+func (tm *TaskManager) composeTurn(task *Task, userText string, p promptFramePolicy) (string, string) {
 	// Runner-native commands pass through untouched. Deliberately BEFORE
 	// everything, including the sentinel: `/exit` with a trailing sentinel is
 	// not `/exit`.
 	if p.RawRunnerCommand {
-		return strings.TrimLeft(userText, " \t\r\n")
+		return "", strings.TrimLeft(userText, " \t\r\n")
 	}
 
 	contextDir := tm.workDir
@@ -147,8 +209,10 @@ func (tm *TaskManager) composeTurnPrompt(task *Task, userText string, p promptFr
 		contextDir = task.WorkDir
 	}
 
+	// The armed blocks, held apart from the user's sentence so they can go out
+	// of band when the runner has a channel for them.
 	prefix := ""
-	prompt := userText
+	armed := ""
 
 	if p.ArmPreamble {
 		if p.ChatMode != "" {
@@ -157,43 +221,63 @@ func (tm *TaskManager) composeTurnPrompt(task *Task, userText string, p promptFr
 			// "schedule_self" framing is wrong for a conversational turn, and
 			// "[Yaver wrapper capabilities]" in front of a non-technical end
 			// user is the leak this lane exists to prevent.
-			prompt += chatTaskResponseContext(p.ChatMode)
+			armed += chatTaskResponseContext(p.ChatMode)
 		} else {
-			prompt += tm.armedSystemFrame(task, contextDir)
+			armed += tm.armedSystemFrame(task, contextDir)
 			prefix = armedSystemPrefix(task)
 		}
 		// Output shaping is neutral between the two lanes — it describes the
 		// screen the answer lands on, not the agent's job — so it rides both.
-		prompt += armedOutputShape(task)
+		armed += armedOutputShape(task)
 	}
 
 	// ---- per-turn, every message ------------------------------------------
 
+	perTurn := ""
 	for _, hook := range perTurnContextHooks {
 		if block := hook(task, contextDir); block != "" {
-			prompt += block
+			perTurn += block
 		}
 	}
 
 	// Attachment paths are DATA the runner cannot discover on its own, and a
 	// follow-up is exactly when new ones arrive — so this rides every turn.
+	// They stay in the MESSAGE even on the native path: they describe this
+	// turn, not the session.
 	if len(task.ImagePaths) > 0 {
-		prompt += "\n\n[Attached images — use the Read tool to examine these files]\n"
+		perTurn += "\n\n[Attached images — use the Read tool to examine these files]\n"
 		for i, path := range task.ImagePaths {
-			prompt += fmt.Sprintf("Image %d: %s\n", i+1, path)
+			perTurn += fmt.Sprintf("Image %d: %s\n", i+1, path)
 		}
 	}
 
-	prompt = prefix + prompt
+	systemFrame := ""
+	prompt := ""
+	if p.NativeSystemPrompt {
+		// Out of band. The user's message becomes just their words plus what is
+		// genuinely about this turn — which is the whole point of the exercise.
+		systemFrame = prefix + armed
+		prompt = userText + perTurn
+	} else {
+		// In band, byte-for-byte as it has always been assembled: the frame
+		// trails the user's ask, the yaver-action prefix leads the whole thing.
+		prompt = prefix + userText + armed + perTurn
+	}
 
 	// Company dataPolicy.redactPII: scrub the fully-assembled prompt as the
 	// LAST step before it reaches the runner. Per-turn because the user's own
 	// follow-up text is exactly what needs scrubbing. No-op unless the task is
-	// under a redaction policy.
+	// under a redaction policy. The frame is scrubbed too — it carries project
+	// paths and vault hints, and moving it to a flag must not move it out of
+	// the policy's reach.
 	if task.RedactPII {
 		if redacted, n := RedactPII(prompt); n > 0 {
 			log.Printf("[task %s] dataPolicy.redactPII: scrubbed %d PII/secret span(s) from prompt", task.ID, n)
 			prompt = redacted
+		}
+		if redacted, n := RedactPII(systemFrame); n > 0 {
+			log.Printf("[task %s] dataPolicy.redactPII: scrubbed %d PII/secret span(s) from system frame", task.ID, n)
+			systemFrame = redacted
 		}
 	}
 
@@ -204,7 +288,7 @@ func (tm *TaskManager) composeTurnPrompt(task *Task, userText string, p promptFr
 	// echo lands in ResultText as if the assistant had said it.
 	prompt += "\n\n" + promptEchoSentinel + "\n"
 
-	return prompt
+	return systemFrame, prompt
 }
 
 // armedSystemPrefix is the part of the armed frame that must lead the prompt

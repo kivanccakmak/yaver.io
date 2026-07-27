@@ -2599,10 +2599,14 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	if chatMode {
 		chatModeArg = task.runner.Mode
 	}
-	prompt = tm.composeTurnPrompt(task, prompt, promptFramePolicy{
-		ArmPreamble:      true,
-		RawRunnerCommand: rawRunnerCommand,
-		ChatMode:         chatModeArg,
+	// claude takes the armed frame through --append-system-prompt; codex and
+	// opencode have no such channel and get it in band. Same bytes either way —
+	// composeTurn is the only assembler.
+	systemFrame, prompt := tm.composeTurn(task, prompt, promptFramePolicy{
+		ArmPreamble:        true,
+		RawRunnerCommand:   rawRunnerCommand,
+		ChatMode:           chatModeArg,
+		NativeSystemPrompt: !rawRunnerCommand && runnerSupportsNativeSystemPrompt(task.runner.RunnerID),
 	})
 	// The frame is a TRANSPORT artifact — it goes on the wire to the runner and
 	// nowhere else. Raw-mode runners echo stdin to stdout, which would put the
@@ -2642,6 +2646,11 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// rejects apply_patch / sed inplace edits.
 	taskDirForArgs := tm.effectiveTaskWorkDir(task)
 	args := buildRunnerArgsWithWorkDir(runner, prompt, taskDirForArgs)
+	// Out-of-band frame for runners that have the channel. Appended AFTER
+	// buildRunnerArgs so the frame can never be caught by the `{prompt}` /
+	// `{model}` / `{workDir}` placeholder substitution above — a frame that
+	// happened to contain "{model}" would otherwise be rewritten.
+	args = append(args, nativeSystemPromptArgs(runner.RunnerID, systemFrame)...)
 
 	// Recurring-schedule resume: when the scheduler re-fires a schedule with
 	// resume enabled, pick up the prior session on this first spawn. Takes
@@ -4081,10 +4090,15 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	if isChatTaskMode(task.runner.Mode) {
 		chatModeArg = task.runner.Mode
 	}
-	prompt = tm.composeTurnPrompt(task, prompt, promptFramePolicy{
+	rawFollowUpCommand := isRawRunnerCommand(prompt)
+	systemFrame, prompt := tm.composeTurn(task, prompt, promptFramePolicy{
 		ArmPreamble:      !carriesContext,
-		RawRunnerCommand: isRawRunnerCommand(prompt),
+		RawRunnerCommand: rawFollowUpCommand,
 		ChatMode:         chatModeArg,
+		// A follow-up that re-arms (cold process, runner switch, unresumable
+		// session) briefs the same way a first message does — including through
+		// the native channel when the runner has one.
+		NativeSystemPrompt: !rawFollowUpCommand && runnerSupportsNativeSystemPrompt(runner.RunnerID),
 	})
 	// Follow-ups echo too — codex reproduces stdin on EVERY turn, not just the
 	// first — so the guard is re-armed per turn with that turn's exact bytes.
@@ -4097,6 +4111,7 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	// codex's -C sandbox allowlist stays consistent across follow-ups.
 	resumeWorkDir := tm.effectiveTaskWorkDir(task)
 	args := buildRunnerArgsWithWorkDir(runner, prompt, resumeWorkDir)
+	args = append(args, nativeSystemPromptArgs(runner.RunnerID, systemFrame)...)
 
 	// Resume the prior conversation (this is always a follow-up). resumeTransform
 	// handles claude (--resume <id>), opencode (--continue), codex (exec
