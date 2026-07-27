@@ -104,10 +104,25 @@ func runFlutterInstall(ctx context.Context, progress func(string)) error {
 	root := flutterRoot()
 	flutterBin := filepath.Join(root, "bin", "flutter")
 
-	if info, err := os.Stat(flutterBin); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
-		logf(fmt.Sprintf("Flutter already installed at %s — skipping download.", root))
-		return ensureFlutterShellPath(progress)
+	// `bin/flutter` existing is the INVENTORY. It is not proof the SDK works:
+	// tar writes the archive in order and bin/ is near the front, so an install
+	// killed during extraction leaves an executable at exactly this path over a
+	// 15%-extracted tree. Before 2026-07-27 that made every subsequent install
+	// announce "already installed", return success, and change nothing — a
+	// green fix over an unchanged failure, unescapable from a phone.
+	//
+	// So: the marker (or a real usability probe) decides, and a provably
+	// partial tree is cleared before we write a byte. See capability_partial.go.
+	flutterUsable := func() bool {
+		return flutterSDKLooksComplete(root)
 	}
+	if info, err := os.Stat(flutterBin); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+		if installTreeIsComplete(root, flutterUsable) {
+			logf(fmt.Sprintf("Flutter already installed at %s — skipping download.", root))
+			return ensureFlutterShellPath(progress)
+		}
+	}
+	beginToolInstall("flutter", root, flutterUsable, progress)
 
 	url, archiveName, ok := flutterStableTarball()
 	if !ok {
@@ -124,6 +139,7 @@ func runFlutterInstall(ctx context.Context, progress func(string)) error {
 		warm := exec.CommandContext(ctx, flutterBin, "--version")
 		warm.Env = append(augmentEnv(nil), "FLUTTER_ROOT="+root)
 		_ = warm.Run()
+		finishToolInstall("flutter", root)
 		logf("Flutter SDK ready at " + root + " (git clone)")
 		return ensureFlutterShellPath(progress)
 	}
@@ -182,8 +198,33 @@ func runFlutterInstall(ctx context.Context, progress func(string)) error {
 	warm.Env = append(augmentEnv(nil), "FLUTTER_ROOT="+root)
 	_ = warm.Run() // best-effort; failure is just lazy load on first task
 
+	// LAST action before we call it done. Written after the tree is usable, so
+	// the marker can never describe a window it did not cover.
+	finishToolInstall("flutter", root)
 	logf("Flutter SDK ready at " + root)
 	return ensureFlutterShellPath(progress)
+}
+
+// flutterSDKLooksComplete is the OPERATION-side probe for a pre-marker tree:
+// the entries a usable Flutter checkout always has beyond `bin/flutter`. Not a
+// `flutter --version` run — that costs 30s on a cold snapshot and this is
+// called on a path a user is waiting on. It is deliberately conservative: a
+// tree that passes keeps its 1.2 GB and gets adopted with a marker; only a tree
+// that fails BOTH the marker and this gets cleared.
+func flutterSDKLooksComplete(root string) bool {
+	if strings.TrimSpace(root) == "" {
+		return false
+	}
+	for _, rel := range []string{
+		filepath.Join("bin", "flutter"),
+		filepath.Join("bin", "internal"),
+		filepath.Join("packages", "flutter"),
+	} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // ensureFlutterShellPath drops a /etc/profile.d snippet (when running
