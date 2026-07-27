@@ -38,10 +38,14 @@ package main
 // container and a locked-down Mac without owning any of them.
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 )
 
 // PowerActionID names a power action. Wire values — surfaces switch on these.
@@ -385,19 +389,38 @@ func detectContainerRuntime() string {
 
 // detectAgentServiceManager reports who would bring the agent back if it died.
 //
-// It checks for the UNIT FILE rather than asking the service manager whether we
-// are "active", because the answer has to be the same whether this call happens
-// during startup, during a restart, or from a `yaver` CLI invocation that is not
-// the daemon at all.
+// Unit-file presence alone is NOT enough, and a real box proved it: the Hetzner
+// worker has BOTH /etc/systemd/system/yaver.service AND
+// ~/.config/systemd/user/yaver.service, but only the system one is active
+// (`systemctl --user is-active yaver` → inactive, system → active). A
+// file-presence check that preferred the user unit would have emitted
+// `systemctl --user restart yaver`, which restarts nothing while reporting
+// success — the inventory saying yes while the operation says no, in the one
+// place where the user is relying on us to un-stick their machine.
+//
+// So: presence narrows the candidates, and `is-active` picks between them.
+// Cached, because the answer is consulted while rendering a device card and the
+// unit topology does not change under us.
+var (
+	svcManagerOnce sync.Once
+	svcManagerVal  string
+)
+
 func detectAgentServiceManager() string {
-	home, err := os.UserHomeDir()
+	svcManagerOnce.Do(func() { svcManagerVal = detectAgentServiceManagerUncached() })
+	return svcManagerVal
+}
+
+func detectAgentServiceManagerUncached() string {
+	home, homeErr := os.UserHomeDir()
+
 	if runtime.GOOS == "darwin" {
-		if err == nil {
-			if _, statErr := os.Stat(home + "/Library/LaunchAgents/io.yaver.agent.plist"); statErr == nil {
+		if homeErr == nil {
+			if _, err := os.Stat(home + "/Library/LaunchAgents/io.yaver.agent.plist"); err == nil {
 				return "launchd"
 			}
 		}
-		if _, statErr := os.Stat("/Library/LaunchDaemons/io.yaver.agent.plist"); statErr == nil {
+		if _, err := os.Stat("/Library/LaunchDaemons/io.yaver.agent.plist"); err == nil {
 			return "launchd"
 		}
 		return ""
@@ -405,23 +428,71 @@ func detectAgentServiceManager() string {
 	if runtime.GOOS != "linux" {
 		return ""
 	}
-	if err == nil {
+
+	userUnit := false
+	if homeErr == nil {
 		for _, unit := range []string{
 			home + "/.config/systemd/user/yaver.service",
 			home + "/.config/systemd/user/yaver-agent.service",
 		} {
-			if _, statErr := os.Stat(unit); statErr == nil {
-				return "systemd-user"
+			if _, err := os.Stat(unit); err == nil {
+				userUnit = true
+				break
 			}
 		}
 	}
+	systemUnit := false
 	for _, unit := range []string{
 		"/etc/systemd/system/yaver.service",
 		"/etc/systemd/system/yaver-agent.service",
 	} {
-		if _, statErr := os.Stat(unit); statErr == nil {
-			return "systemd-system"
+		if _, err := os.Stat(unit); err == nil {
+			systemUnit = true
+			break
 		}
 	}
+
+	switch {
+	case userUnit && systemUnit:
+		// Both exist — ask which one is actually running. Whichever answers
+		// "active" is the one that would bring us back.
+		if systemdUnitActive(false) {
+			return "systemd-system"
+		}
+		if systemdUnitActive(true) {
+			return "systemd-user"
+		}
+		// Neither is active (we may be mid-restart, or hand-started). A root
+		// process is not in a user session bus, so the system unit is the only
+		// credible supervisor; otherwise prefer the user one.
+		if os.Geteuid() == 0 {
+			return "systemd-system"
+		}
+		return "systemd-user"
+	case systemUnit:
+		return "systemd-system"
+	case userUnit:
+		return "systemd-user"
+	}
 	return ""
+}
+
+// systemdUnitActive asks systemd whether the yaver unit is running. Bounded:
+// a wedged systemd must never hang a device-card render.
+func systemdUnitActive(userScope bool) bool {
+	args := []string{"is-active", "--quiet"}
+	if userScope {
+		args = append([]string{"--user"}, args...)
+	}
+	for _, unit := range []string{"yaver", "yaver-agent"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		cmd := exec.CommandContext(ctx, "systemctl", append(args, unit)...)
+		cmd.WaitDelay = 2 * time.Second
+		err := cmd.Run()
+		cancel()
+		if err == nil {
+			return true
+		}
+	}
+	return false
 }

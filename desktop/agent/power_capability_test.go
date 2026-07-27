@@ -225,6 +225,37 @@ func TestAgentRestartCommandPerServiceManager(t *testing.T) {
 	}
 }
 
+// Regression for a real box (the Hetzner worker, probed 2026-07-27): root,
+// passwordless sudo, BOTH a system and a user systemd unit present, with only
+// the SYSTEM one active. Resolving that to systemd-user would emit
+// `systemctl --user restart yaver`, which restarts nothing while returning
+// success — the exact inventory-says-yes shape, in the one place the user is
+// relying on us to un-stick their machine.
+func TestRootSystemdBoxRestartsViaSystemUnit(t *testing.T) {
+	f := PowerFacts{
+		GOOS: "linux", IsRoot: true, PasswordlessSudo: true,
+		ServiceManager: "systemd-system", AgentUser: "root", UID: 0,
+	}
+	a := actionFor(t, f, ActionAgentRestart)
+	if !a.Available {
+		t.Fatalf("root systemd box must be able to restart its agent; reason=%q", a.Reason)
+	}
+	if a.Command != "systemctl restart yaver" {
+		t.Errorf("command = %q, want %q (root needs no sudo)", a.Command, "systemctl restart yaver")
+	}
+	if strings.Contains(a.Command, "--user") {
+		t.Error("must not use the user bus — a root agent is not in a user session")
+	}
+	// And the host reboot on that same box IS available, since it is root.
+	r := actionFor(t, f, ActionHostReboot)
+	if !r.Available {
+		t.Errorf("root linux box should permit a host reboot; reason=%q", r.Reason)
+	}
+	if r.Command != "systemctl reboot" {
+		t.Errorf("reboot command = %q, want %q", r.Command, "systemctl reboot")
+	}
+}
+
 // The invariant that makes the whole report trustworthy: any action we refuse
 // must explain itself. A bare `available:false` is what we are replacing.
 func TestEveryUnavailableActionExplainsItself(t *testing.T) {
