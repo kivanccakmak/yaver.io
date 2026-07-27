@@ -713,3 +713,181 @@ Three corollaries, each earned by a row above:
 only. tvOS, watchOS, Wear, car, glass and Electron consume task output through
 their own clients and inherit **none** of it — consistent with §6g of the
 architecture doc, and unchanged by this pass.
+
+---
+
+## 10. Dependency + render/reload failures, end to end (2026-07-27)
+
+> Scope of this pass: every DEPENDENCY and RENDER/RELOAD failure a user can
+> hit, on **both** the regular Tasks lane and the render lanes (Hermes,
+> browser/dev-server, WebRTC/remote-runtime). Verified against code, not
+> against §6–§9 or `FAILURE_PLUMBING_ARCHITECTURE.md`; where those disagree
+> with a row here, this row was read later.
+>
+> Earlier sections are **not** modified — other threads cite them by number.
+> Rows below carry a `DR` prefix so they cannot collide.
+
+### 10.0 The one finding that explains most of the others
+
+**`DetectCapabilityGap` understood three sentences, all of them written by
+`os/exec`. This tree almost never lets `os/exec` write the sentence.**
+
+Nearly every spawn site calls `exec.LookPath` first and substitutes its own
+prose — `carton not found on PATH — SwiftWasm previews need…`
+(`devserver_swiftwasm.go:73`), `claude not found in PATH or common locations`
+(`CheckRunnerBinary`, `tasks.go:2054`), `adb not on PATH — run \`yaver install
+remote-runtime\`` (`remote_runtime_video_track.go:265`), `xcrun not on PATH —
+install Xcode Command Line Tools` (`:245`), `ffmpeg not found — install it`
+(`capture.go:138`), `tmux not found in PATH`. Each one destroys the only text
+the detector could parse. So the detector was an inventory of **one package's
+error strings**, not of the failure — and the gap seam, which is otherwise
+sound, could fire on almost nothing outside the Flutter case it was written
+for.
+
+Fixed in `8280efc89` (`rxNotFoundOnPath`, PATH-anchored so a bundler's
+`Module not found: Can't resolve 'react-dom'` cannot be read as a missing
+binary). Everything in 10.1–10.3 that now has a route depends on it.
+
+### 10.1 Dependency / toolchain failures
+
+Legend as §6: detect `op`=probes the real operation, `inv`=inventory proxy ·
+signal `struct`=typed+coded, `str`=prose, `—`=silence · UI `route`=a tap that
+starts a fix, `named`=named cause no tap, `text`=raw string, `spin`=spinner.
+🔧 = fixed in this pass.
+
+| # | Failure | Detect (file:line) | Signal | Mobile | Web | Fixer + stream | Rank |
+|---|---|---|---|---|---|---|---|
+| DR1 | 🔧 **Runner binary absent at `POST /tasks`** (claude/codex/opencode) | `op` `CheckRunnerBinary` `tasks.go:2040`, called `tasks.go:1685` | was 500 `{ok,error}` prose → now **`struct`** `capabilityGap` on the 500 **and** on the 201-with-`status:failed` body (`tasks_capability_gap.go`, wired `httpserver.go`) | `route` via `capabilityGap.ts` | `route` via `capabilityGap.ts` | `POST /install/<runner>` → `install:<runner>` | was **P0** |
+| DR2 | 🔧 **SwiftWasm start without `carton`/`swift`** | `op` `devserver_swiftwasm.go:73,79` — but the prose matched no detector, and `/dev/start` answered 200 | `str` → **`struct`** (Constraint; carton has no recipe) + synchronous 412 via `devStartToolchainBinary("swiftwasm")` | `named` | `named` | none — Constraint names it honestly | was **P0** |
+| DR3 | 🔧 **`/dev/build-native` missing tools** (audit V7) | `op` `detectProjectPreparation` `devserver_http.go:762` | was 500 `{"error":"missing required tools…"}` → now the **same body `/dev/start` refuses with** (`devStartGapRefusal`) **and** a `/dev/events` `error` frame carrying `gap` | `route` | `route` | `POST /install/<tool>` | was **P0** |
+| DR4 | 🔧 **`/dev/build-native` deps that cannot be auto-installed** | `op` `devserver_http.go:845-856` | was 500 prose about "auto-install" → now a gap on the **package manager** when it has a recipe; degrades to the old body when it does not | `route` | `route` | `POST /install/{pnpm,yarn,bun}` | was **P1** |
+| DR5 | 🔧 **`POST /install/bunx` installed no `bunx` and reported success** | `inv` — the plan passed `pkg` as the script name (`install_cmd.go:1160`) | false `{"status":"ok"}` | 412 → install → **412 loop, green stream each lap** | same | now `installNodeBackedCLIAs` writes the name the preflight looked for, execs `bun x`, **and verifies `commandExists()` before returning ok** | was **P0** |
+| DR6 | 🔧 **`yaver install remote-runtime` could never succeed on macOS** | — | `missing install plan: xcodegen` **after** java+android-sdk+flutter had downloaded (GB, up to an hour) | — | — | `resolveCompositePlan` falls back to `integrations`; step lists are now a function of GOOS so the darwin branch is assertable from Linux | was **P0** |
+| DR7 | 🔧 **A full disk was reported as a lockfile bug** | none — `classifyInstallFailure` `devserver_install_diag.go:65` had no ENOSPC branch | npm surfaces ENOSPC as EINTEGRITY / ENOENT / EACCES, so the user was told to "re-pack the referenced tarball" or "check ~/.npm is writable" | `text` | `text` | branch added FIRST so the disk wins over its own downstream symptoms | was **P0** |
+| DR8 | npm-install failure inside a start (EINTEGRITY/ERESOLVE/EACCES/ETARGET/network/lockfile) | `op` `devserver_install_diag.go:65-93` | `str` — a good multi-line envelope (`installFailureMessage:105`), no code | `text` | `text` | none; correctly **not** a toolchain gap | **P1** |
+| DR9 | `hermesc` unresolvable | `op` `resolveHermesc` `hermesc_resolver.go:27`, failure `devserver_http.go:3738-3745` | incident `ReasonBuildHermesFailed` with prose `SuggestedAction`; **falls through to plain-JS**, no refusal | `text` | `text` | `POST /install/mobile` exists (`install_cmd.go:1246` resolves hermesc) and is **never named as a route**. `findMissingHermescBins:259` already returns the `[]string` a gap wants and flattens it into `fmt.Errorf` | **P0** |
+| DR10 | `capture_error` — ffmpeg / adb / xcrun missing for WebRTC capture | `op` `capture.go:136`, `remote_runtime_video_track.go:245,265` | events-DataChannel `{"type":"capture_error","error":…}` `:144` | **dropped** — `RemoteRuntimeViewer.tsx:317` handles `dims`/`rotation`/`ready`/`throttle` only | same | `ffmpeg` HAS a recipe (`install_cmd.go:1287`); `remote-runtime` now works on macOS (DR6). The gap object is producible today; the DataChannel needs a `gap` field and one consumer | **P0** |
+| DR11 | `adb` absent | `op` — **three independent hand-written sentences** for one fact: `remote_runtime.go:800`, `native_build.go:136`, `:174`, each naming a *different* remedy | `str` ×3 | `text` | `text` | `installableViaAgent("adb")` is **false**; `adb` is only a probe alias of `android-sdk` (`install_cmd.go:625`). One `adb → android-sdk` alias row would give all three a route | **P1** |
+| DR12 | `xcodebuild` / full Xcode missing | `op` `xcodebuildIsRealXcode` `build_preflight.go:248` | **`struct`** `preflightResult{Code:"deps_missing", Missing:[{Auto:false, Fix:…}], Installable:false}` — the closest existing analogue to a Constraint gap | `text` | `text` | genuinely none (App Store). Correct answer is a Constraint, not a button | **P1** |
+| DR13 | CocoaPods (`pod`) missing on a native build | **no preflight at all**; `mcp_appdev.go:450` execs `pod` with no LookPath | raw `exec: "pod": executable file not found` — the ONE place the original regexes fire | `text` | `text` | `doctor_build.go:221` already knows `sudo gem install cocoapods`; no install recipe, so today a Constraint | **P1** |
+| DR14 | iOS simulator runtime / device type not installed | `op` `remote_runtime.go:755,760,764` | `RemoteRuntimeTarget{Enabled:false, Reason, RequiredCLI}` — prose | `text` | `text` | none possible (Xcode Components) → Constraint | **P1** |
+| DR15 | Android emulator binary / AVD absent | `op` `remote_runtime.go:800-809` | same prose shape | `text` | `text` | `POST /install/remote-runtime` (now working, DR6) — never rendered as a route | **P1** |
+| DR16 | `wda` — advertised remedy, HTTP route 404s | — | `remote_runtime_target.go:193,199,211` name `yaver install wda`; the **CLI** works (`install_cmd.go:539` → `runInstallWDA`), `POST /install/wda` falls through to the registry and 404s (`install_http.go:137`) | `text` | `text` | `runInstallWDA` is `os.Exit`-based and print-based, so it cannot be reused by the HTTP handler without extraction. Gap correctly emits a Constraint today | **P1** |
+| DR17 | `carton` / `swift` (SwiftWasm) have no recipe | — | Constraint (DR2) | `named` | `named` | none — the toolchain is hundreds of MB and is baked into the workspace image by design | note |
+| DR18 | Composite recipes resolved steps through `metaInstallPlan` only | — | — | — | — | 🔧 all five now use `resolveCompositePlan`; `TestEveryCompositePlanStepResolves` walks every step of every recipe on both platforms | 🔧 |
+
+### 10.2 Render / reload failures
+
+| # | Failure | Detect (file:line) | Signal | Mobile | Web | Fixer + stream | Rank |
+|---|---|---|---|---|---|---|---|
+| DR19 | Compile failure with a healthy dev server (incl. Flutter blank-but-200) | `op` `devBuildFailureLine` `devserver_start_remedy.go:119`, fired `devserver.go:1700` | `error` SSE + persisted `SetCompileError` + custodian | `route`-adjacent — `compileFailure.ts:41` | `web/lib/compileFailure.ts:44` | correctly **no** gap (installing nothing would help) | ✅ |
+| DR20 | Port already in use / substituted | `op` `devserver_ports.go:86`, `portBindFailure` `devport_allocator.go:199` | `resources` SSE `{portSubstituted, preferredPort}` + `/dev/status` fields | `named` | `named` | `DetectCapabilityGap` explicitly returns nil — correct | ✅ |
+| DR21 | Orphaned child squatting a port | `op` `reapOrphanedDevChildren` `devserver_child_registry.go:211` with an argv identity guard | **`CustodianFinding`** incl. `OutcomeNeedsHuman` + `Remedy` `:238` | ❌ custodian is web-only | ✅ | self-heals | **P1** (surface reach, = audit N1) |
+| DR22 | Dev server exits **before** readiness | `op` `devserver.go:1991`, foreign-listener guard `:2020` | `str` with a 12-line tail | `text` | `text` | — | **P1** |
+| DR23 | **Dev server exits AFTER readiness** | **none.** `cmd.Wait()` lands in a buffered channel nobody reads (`devserver.go:1977`); `Status()` never flips `running` false (`:1840`). `PidAlive` is computed (`:1546`) and **nothing acts on false** | — | `spin` — "serving" over a dead process | same | the one assertion of death is web-mode-only (`devserver_http.go:1431`) | **P0** |
+| DR24 | Hermes bytecode-version mismatch | `op` `hermes_runtime.go:101` | **`OK:true`** with the mismatch only in `.Error`; never promoted to `HermesSmokeResult.Hint` (`:222` requires `!OK`) | — | — | false green — audit V3, unchanged | **P0** |
+| DR25 | Native-module / RN-family compat wall | `op` `devserver_http.go:3973` | **409, the richest refusal in the product** — `recoverKind`, per-module mismatches, host SDK/RN/React versions | **zero consumers** | **zero consumers** | audit V1, unchanged | **P0** |
+| DR26 | Missing native modules (the expo-gl class) | `devserver_http.go:3945` | deliberately **non-fatal**, log-only | — | — | correct by design | note |
+| DR27 | WebRTC ICE failure | `op` `remote_runtime_webrtc.go:364` | `Status:"failed"` on a DataChannel that is already dead | centered text, no Retry | same | `classifyICECandidates` `doctor_webrtc_ice.go:162` returns real TURN/STUN remedies and is **not joined to this path** | **P1** |
+| DR28 | **Offer stalls on ICE gathering** | none | `<-gather` `remote_runtime_webrtc.go:457` — **unbounded block, no ctx select**; the HTTP request hangs rather than erroring | `spin` | `spin` | the only failure in this pass with *no signal of any shape* | **P0** |
+| DR29 | `run-guest` rejected for a physical device | `op` `remote_runtime.go:1767`, allowlist `:1296` | bare 400 interpolating the target id | `text` | `text` | a genuine constraint, and the one row where `CapabilityGap{Constraint}` fits with no new fields and is not used. The Hermes-push alternative is never named | **P1** |
+| DR30 | WebView load error on mobile | `DevPreview.tsx:1013` — **only `status >= 500` counts**; a 404 on the bundle or a 403 on a stale signed URL is ignored | none escapes the component; `description`/`code`/`url` discarded | `spin` → blind retry | n/a | the empty-`bundleUrl` fallback still renders the exact "Waiting for the dev server to report its address…" string the whole seam was built to delete | **P1** |
+| DR31 | Dev-events SSE frames dropped to a slow subscriber | `devserver.go:1433` `default:` drop | no counter, no gap marker | `text` | `text` | audit S6/V6, unchanged | **P1** |
+
+### 10.3 Regular Tasks lane
+
+`POST /tasks` has exactly two shapes: **500** `{ok:false,error}` when the task
+object could not be built, and **201 Created with `status:"failed"`** when it
+could (deliberate — the chat renders a failed bubble rather than a banner).
+`GET /tasks/{id}/output` has **no `error` and no `capability_gap` event type**:
+its frames are `output`, `done`, `agent_question`, `agent_answered`,
+`agent_question_cancelled`, `command_{start,output,end}`,
+`runtime_render_requested`. Every failure below therefore arrives as prose
+inside `output`, or as a bare `done{status:"failed"}`.
+
+| # | Failure | Detect (file:line) | Signal | Mobile | Web | Fixer + stream | Rank |
+|---|---|---|---|---|---|---|---|
+| DR32 | 🔧 Runner binary absent | see DR1 | **`struct`** | `route` | `route` | `POST /install/<runner>` | was **P0** |
+| DR33 | Runner not signed in | `inv` `CheckRunnerReady` `runner_auth.go:51` → `DetectRunnerRuntimeStatus:130`. The real probe `POST /agent/runners/test` is **never called on the task path** | 201/`failed`, prose in `task.Output` | ✅ route | 🟡 gated to claude/codex/kimi | browser OAuth, polled | **P1** (=§6c R1) |
+| DR34 | **`RunnerPreflightByID` still voice-only** | `runner_preflight.go:35` returns `{fresh,needsReauth,reason,action,spoken}` | — | — | — | one non-test caller: `voice_dispatch.go:70`. Neither `POST /tasks` nor `POST /vibing/execute` calls it | **P0** (=R18, unchanged) |
+| DR35 | Silent runner substitution | `tasks.go:1674-1681` | **log line only**; the 201's `runnerId` carries the truth and nothing diffs it | none | none | — | **P1** |
+| DR36 | Silent model substitution (opencode) | `tasks.go:1707-1724` | **log line only** `:1720`; and `effectiveModelFor:299-315` drops an incompatible fallback a second time, silently | none | pre-send veto only | — | **P1** |
+| DR37 | Model hard-reject | `tasks.go:1725` | 500 prose | `text` | `text` | `runnerModelCompatible:278` is a prefix/substring heuristic — a well-formed but nonexistent opencode model passes and dies later as opaque runner output | **P1** |
+| DR38 | Task spawn failure (`cmd.Start`) | `op` `tasks.go:3006` | 201/`failed`, raw errno in `task.Output` | `text` | `text` | 🔧 now grows an Install route when the errno is a missing binary (DR1) | **P1** |
+| DR39 | **`workDir` missing / not a directory** | **no validation at all.** `effectiveTaskWorkDir:1123` trims and returns; `cmd.Dir` is set blind (`:2946`). `checkRunnerWorkDirWritable:96` explicitly `return nil` on stat failure, commenting that "non-existent paths surface a clearer error elsewhere" — **they do not** | raw `chdir` errno | `text` | `text` | none | **P0** |
+| DR40 | Not a git repo | `op` `isInsideGitRepo` `tasks.go:2385` | **silently compensated** for codex only (`--skip-git-repo-check`, `:2307`); never reported | — | — | — | **P1** |
+| DR41 | **git pull / rebase conflict before a build** | **none anywhere.** `tasks.go` has zero pull/rebase handling; a conflicted tree becomes runner stdout | — | `text` | `text` | — | **P1** |
+| DR42 | **Disk full anywhere on the task path** | **none.** `saveImages:1799` ignores write errors; `persist()`/`persistAsync:1540` drop store errors; the codex `lastMsg` temp write `:2902` is unchecked. ENOSPC detection exists only in `diskhealth.go`/`storage_reclaim.go`, which this path never calls | — | — | — | **P0** |
+| DR43 | tmux missing | `op` `tmuxAvailable` `tmux.go:123` | **silent branch** — `runner_tmux.go:79` returns `""`, `tasks.go:2909` falls to direct exec with no log, no event, no field | **silent** | **silent** | auto-install exists (`tmux.go:155`, 6 package managers), boot-time and log-only | **P0** (=R14) |
+| DR44 | Empty reply, exit 0 | `op` `isEmptyRunnerReply` `tasks_empty_reply.go:9` | canned `ResultText` **blaming the model** `tasks.go:3206` | generic failed card | `runnerFailure.ts` has no rule → **no card at all** | — | **P0** (=R3) |
+| DR45 | **`CheckRunnerBinary` and `resolveRunnerBinary` disagree** | `CheckRunnerBinary` `tasks.go:2049` is LookPath + common paths; `resolveRunnerBinary` `runner_resolve.go:81` also tries a **login shell**. A runner installed via shellrc PATH shows **ready** on `/agent/runners` and `/runner-auth/*` and **"not found"** on `POST /tasks` | two answers to one question | `route` (now) | `route` (now) | 🔧 the gap makes the disagreement *visible* rather than silent; the divergence itself remains | **P1** |
+| DR46 | Runner PTY errors | `runner_pty.go:579` | bespoke WS frame `{"type":"runner_pty_error"}` | **zero clients map it** | zero | — | **P1** (=R15) |
+
+### 10.4 Route coverage — before and after this pass
+
+Counting the 46 rows above (`DR1`–`DR46`), by whether the failure has all four
+layers (detect → structured signal → visible named cause → invocable fix):
+
+| | Full route | Named, no route | Prose / silent |
+|---|---|---|---|
+| Before this pass | 3 (DR19, DR20, DR21-web) | 6 | **37** |
+| After this pass | **10** (DR1–DR7, DR18, DR19, DR20) | 8 | 28 |
+
+The seven that changed are the P0s fixed below. The remaining 28 are ranked in
+10.5; note that **eleven of them need no new detector** — the agent already
+computes the fact and drops it (DR9, DR10, DR11, DR25, DR27, DR34, DR35, DR36,
+DR40, DR43, DR46). That ratio is the same one §6h of the architecture doc
+found, one lane over: the problem is almost never that Yaver does not know.
+
+### 10.5 What remains, ranked
+
+**P0 — a real failure renders as a spinner, a lie, or has no route to a fix
+that exists:**
+
+1. **DR23** — a dev server that exits *after* readiness is never detected;
+   `PidAlive` is computed and nothing reads it. The surface says "serving" over
+   a dead process, which is the false green in its purest form.
+2. **DR28** — `<-gather` at `remote_runtime_webrtc.go:457` blocks with no
+   timeout and no ctx select. The only failure in this pass with no signal of
+   any shape.
+3. **DR42 / DR39** — the Tasks lane has no disk-full detection and no `workDir`
+   validation; the one function positioned to catch the latter explicitly
+   returns nil and says a clearer error appears elsewhere. It does not.
+4. **DR24 / DR25** — `HermesValidation` returns `OK:true` on a bytecode
+   mismatch; the 409 compat wall is the richest refusal in the product and has
+   zero consumers.
+5. **DR10** — `capture_error` carries real, now-working install remedies to a
+   viewer that handles four other message types and drops this one.
+6. **DR9** — hermesc unresolvable falls through to plain JS with a prose hint,
+   while `POST /install/mobile` resolves hermesc and is never named as a route.
+   `findMissingHermescBins` already returns exactly the `[]string` a gap wants.
+7. **DR34 / DR43 / DR44** — unchanged from §6c: the preflight payload every
+   runner row lacks is voice-only; tmux degrades silently with an auto-install
+   that has no endpoint; the empty-reply remedy blames the model.
+
+**P1 — one surface only, or the remedy is prose:** DR8, DR11–DR17, DR21,
+DR22, DR27, DR29–DR33, DR35–DR38, DR40, DR41, DR45, DR46.
+
+**The cheapest remaining wins, in order:** an `adb → android-sdk` alias row in
+`installableViaAgent` routes DR11 and DR15 at once; a `gap` field on the
+`capture_error` DataChannel frame plus one `RemoteRuntimeViewer` branch closes
+DR10; and `os.Stat` on `workDir` in `CreateTaskWithOptions` closes DR39 in
+four lines.
+
+### 10.6 Fixed in this pass
+
+| Commit | Row(s) | What changed |
+|---|---|---|
+| `8280efc89` | 10.0, DR2 | `rxNotFoundOnPath` + `notAToolName`; `devStartToolchainBinary` gains `swiftwasm → carton` |
+| `093a70670` | DR1, DR32, DR38 | `DetectTaskCapabilityGap` + `capabilityGap` on both `/tasks` failure shapes |
+| `997b18898` | DR3, DR4 | `/dev/build-native` refuses with the same body `/dev/start` does |
+| `d0076be3d` | DR6, DR18 | `resolveCompositePlan`; GOOS-parameterised step lists |
+| `cf1c70299` | DR5, DR7 | bunx shim named correctly + verified; ENOSPC classified first |
+| `a9fc0239c` | DR3, DR4 | the build lane's gap emitted on `/dev/events`, the channel all four renderers already parse |
+| `8704e5346` | §9 S7 | four web `streamTaskOutput` sites wired to the reattach ladder via one shared wrapper |
+
+Guards proven by breaking them: the composite-plan resolver (dropping the
+`integrations` fallback fails on `xcodegen`/`cliclick` by name), the Tasks
+wiring guard (reverting to `jsonError` fails with "no room for a route"), and
+the web stream guard (reverting `PreviewPane` to a bare `streamTaskOutput`
+fails by file).
