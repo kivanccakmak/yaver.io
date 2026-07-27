@@ -12,7 +12,7 @@ import { HIDE_PAID_UI } from "@/lib/launchFlags";
 // third-party dev-portal gate) rather than specific competitor names,
 // per LEGAL_SAFETY.md §2 (trademark) and §3 (comparative claims).
 const LANDING_TAGLINE =
-  "AI writes code in seconds; the loop around it still takes hours. Yaver plugs your coding agent — Claude Code, Codex, or OpenCode — into your phone: it builds a full-stack app on your own machine, loads it live on iOS and Android, and you keep fixing it from inside the running app — shake to report, the agent patches it while it's still open. It runs on the AI subscription you already pay for, so there's no token markup and your code never leaves your machine. Open source and self-hostable, with the same live loop reaching watch, TV, car, and AR/VR.";
+  "Vibe it, see it — instantly. AI writes code in seconds; the loop around it still takes hours, and Yaver closes it: every prompt you send becomes the real app in your hand. Claude Code, Codex, or OpenCode builds on your own machine, and the result is live on your iPhone and Android seconds later. Spot something off? Shake, say it, and watch the fix land while the app is still open. No waiting on builds, no guessing from logs — you see the outcome the whole time you're vibing. On the AI subscription you already pay for, no token markup, your code never leaves your machine. Open source, self-hostable, and the same see-it-live loop reaches watch, TV, car, and AR/VR.";
 
 const SUPPORTED_SURFACES = ["iOS", "Android", "Watch", "TV", "Car", "AR/VR"];
 
@@ -1257,10 +1257,10 @@ export default function HomePage() {
           </div>
 
           <h1 className="mb-5 text-4xl font-bold leading-[1.02] tracking-tight text-surface-50 sm:text-5xl md:text-6xl">
-            AI writes code in seconds.
+            Vibe it, see it &mdash;
             <br className="hidden sm:block" />
             <span className="bg-gradient-to-r from-indigo-400 to-emerald-400 bg-clip-text text-transparent">
-              The loop around it still takes hours.
+              instantly, on your real phone.
             </span>
           </h1>
 
@@ -1269,14 +1269,17 @@ export default function HomePage() {
           <p className="sr-only">{LANDING_TAGLINE}</p>
 
           <p className="mx-auto max-w-2xl text-sm leading-relaxed text-surface-300 sm:text-base md:text-[17px]">
-            Your coding agent &mdash; Claude Code, Codex, or OpenCode &mdash;
-            builds a full-stack app on your own machine and loads it live on
-            your iPhone and Android. Keep fixing it from inside the running
-            app: shake to report, the agent patches it while it&rsquo;s still
-            open. It runs on the AI subscription you already pay for &mdash; no
-            token markup, and your code never leaves your machine. Open source
-            and self-hostable, with the same live loop reaching watch, TV, car,
-            and AR/VR.
+            AI writes code in seconds; the loop around it still takes hours.
+            Yaver closes it: every prompt you send becomes the real app in
+            your hand. Claude Code, Codex, or OpenCode builds on your own
+            machine, and the result is live on your iPhone and
+            Android seconds later. Spot something off? Shake, say it, and
+            watch the fix land while the app is still open. No waiting on
+            builds, no guessing from logs &mdash; you see the outcome the
+            whole time you&rsquo;re vibing. On the AI subscription you already
+            pay for, no token markup, your code never leaves your machine.
+            Open source, self-hostable, and the same see-it-live loop reaches
+            watch, TV, car, and AR/VR.
           </p>
 
           <div className="mx-auto mt-6 flex max-w-2xl flex-wrap items-center justify-center gap-2">
