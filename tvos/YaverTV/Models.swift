@@ -267,11 +267,18 @@ struct RunnerAuthSession: Decodable, Identifiable {
     var detail: String?
     var authConfigured: Bool?
     var error: String?
+    /// Epoch millis. The agent has stamped both the whole time; tvOS decoded
+    /// neither, so a pending session rendered as an undifferentiated "pending"
+    /// row with no way to tell "working" from "wedged". Every wait the product
+    /// imposes must narrate itself.
+    var startedAt: Double?
+    var lastOutputAt: Double?
 
     enum CodingKeys: String, CodingKey {
         case id, runner, method, status, code, detail, error
         case openURL = "openUrl"
         case authConfigured
+        case startedAt, lastOutputAt
     }
 }
 

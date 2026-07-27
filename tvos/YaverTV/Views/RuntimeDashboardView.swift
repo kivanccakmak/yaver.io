@@ -23,6 +23,11 @@ struct RuntimeDashboardView: View {
     @State private var notice: String?
     @State private var refreshTask: Task<Void, Never>?
     @State private var reloading = false
+    /// Drives the runner-auth liveness line so "Started 2m 14s ago" keeps
+    /// counting between the 2s status polls instead of sitting still.
+    @State private var authTicker = Date()
+
+    private let authClock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ScrollView {
@@ -193,6 +198,31 @@ struct RuntimeDashboardView: View {
                                         .foregroundStyle(.secondary)
                                         .lineLimit(2)
                                 }
+                                // The one terminal state where "try again" is a
+                                // lie: the sign-in worked, the account has no
+                                // eligible subscription. Say so instead of
+                                // showing a bare "ACCOUNT_NOT_ELIGIBLE" row.
+                                if FailureSignals.runnerAuthRetryIsFutile(authSession.status),
+                                   let verdict = FailureSignals.explainRunnerAuthOutcome(
+                                       status: authSession.status,
+                                       runnerLabel: runnerLabel(authSession.runner),
+                                       error: authSession.error,
+                                       detail: authSession.detail
+                                   ) {
+                                    Text(verdict)
+                                        .font(.system(size: 16))
+                                        .foregroundStyle(.orange)
+                                        .frame(maxWidth: 820, alignment: .leading)
+                                } else if !FailureSignals.isRunnerAuthTerminal(authSession.status),
+                                          let line = FailureSignals.runnerAuthLivenessLine(
+                                              now: authTicker.timeIntervalSince1970 * 1000,
+                                              startedAt: authSession.startedAt,
+                                              lastOutputAt: authSession.lastOutputAt
+                                          ) {
+                                    Text(line)
+                                        .font(.system(size: 15).monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                             if let gitAuthSession {
                                 RuntimeRow("Git", gitProviderLabel(gitAuthSession.provider))
@@ -254,6 +284,11 @@ struct RuntimeDashboardView: View {
             .padding(56)
         }
         .task { await startLoop() }
+        .onReceive(authClock) { now in
+            if authSession != nil, !FailureSignals.isRunnerAuthTerminal(authSession?.status) {
+                authTicker = now
+            }
+        }
         .onDisappear {
             refreshTask?.cancel()
             authPollingTask?.cancel()
@@ -393,13 +428,36 @@ struct RuntimeDashboardView: View {
                             notice = "\(runnerLabel(session.runner)) is authorized on the remote runtime."
                             return
                         }
-                        if status == "cancelled" || status == "canceled" || status == "error" || status == "failed" {
-                            notice = session.error ?? "\(runnerLabel(session.runner)) auth ended with \(status)."
+                        // account_not_eligible was MISSING from this set, so an
+                        // ineligible account polled every 2s forever behind a
+                        // stale "pending" row — a spinner over a decided
+                        // verdict. FailureSignals owns the terminal set now, so
+                        // it cannot drift from the agent's again.
+                        if FailureSignals.isRunnerAuthTerminal(status) {
+                            notice = FailureSignals.explainRunnerAuthOutcome(
+                                status: status,
+                                runnerLabel: runnerLabel(session.runner),
+                                error: session.error,
+                                detail: session.detail
+                            ) ?? "\(runnerLabel(session.runner)) auth ended with \(status)."
                             return
+                        }
+                        // Still running: say how long, and when the CLI last
+                        // said anything.
+                        if let line = FailureSignals.runnerAuthLivenessLine(
+                            now: Date().timeIntervalSince1970 * 1000,
+                            startedAt: session.startedAt,
+                            lastOutputAt: session.lastOutputAt
+                        ) {
+                            notice = line
                         }
                     }
                 } catch {
-                    notice = error.localizedDescription
+                    // A status call that keeps failing used to overwrite the
+                    // notice every 2 seconds forever. Report it once and stop —
+                    // the session is unobservable from here.
+                    notice = "Lost contact with the auth session: \(error.localizedDescription)"
+                    return
                 }
             }
         }

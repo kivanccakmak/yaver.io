@@ -9,6 +9,16 @@ import Foundation
 
 struct AgentError: Error, LocalizedError {
     let message: String
+    /// The structured capability gap the agent attached to this refusal, when
+    /// it attached one. `message` stays exactly what it always was — a shipped
+    /// view that renders only the message must not lose a word — and `gap` is
+    /// the additive route a view can turn into a button.
+    ///
+    /// Without this, every 412 from /dev/start arrived as the flat sentence
+    /// "flutter is not installed", the `fix` object was discarded by the
+    /// transport, and the TV showed a spinner over a fact the agent had
+    /// already stated. Same shape as the 2026-07-26 phone incident.
+    var gap: CapabilityGap? = nil
     var errorDescription: String? { message }
 }
 
@@ -291,8 +301,21 @@ actor AgentClient {
     /// would turn a local preview problem into a billable cloud log stream.
     /// The agent already retains a bounded replay window, so late subscribers
     /// still get the recent tail without another storage surface.
+    ///
+    /// `onGap` fires when a frame carries a structured capability gap, and
+    /// `onEnd` fires EXACTLY ONCE when the stream stops for any reason.
+    ///
+    /// THE BUG onEnd EXISTS TO KILL: this function used to `return` silently
+    /// when the SSE body ended. `/dev/events` is a bus that should never close,
+    /// so a clean EOF is what a dropped relay tunnel looks like — and the log
+    /// panel simply stopped growing, with the box still compiling happily. A
+    /// stream that ends without saying so is the same defect as a silent
+    /// `serve`. The caller classifies with FailureSignals.classifyStreamEnd and
+    /// decides whether to reattach; this function only reports the truth.
     func subscribeDevEvents(
         onEvent: @escaping @Sendable (DevServerEvent) -> Void,
+        onGap: (@Sendable (CapabilityGap) -> Void)? = nil,
+        onEnd: (@Sendable (FailureSignals.StreamEndKind, String?) -> Void)? = nil,
         onError: (@Sendable (String) -> Void)? = nil
     ) -> Task<Void, Never> {
         let endpoints = requestEndpoints(path: "/dev/events")
@@ -301,8 +324,9 @@ actor AgentClient {
         let urlSession = self.session
         return Task {
             var lastError = "dev event stream unavailable"
+            var connected = false
             for endpoint in endpoints {
-                if Task.isCancelled { return }
+                if Task.isCancelled { onEnd?(.cancelled, nil); return }
                 var req = URLRequest(url: endpoint.url)
                 req.httpMethod = "GET"
                 req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -317,11 +341,12 @@ actor AgentClient {
                         lastError = "dev event stream returned HTTP \((resp as? HTTPURLResponse)?.statusCode ?? -1)"
                         continue
                     }
+                    connected = true
                     var dataLines: [String] = []
                     for try await line in bytes.lines {
-                        if Task.isCancelled { return }
+                        if Task.isCancelled { onEnd?(.cancelled, nil); return }
                         if line.isEmpty {
-                            emitDevEvent(dataLines, onEvent: onEvent)
+                            emitDevEvent(dataLines, onEvent: onEvent, onGap: onGap)
                             dataLines.removeAll(keepingCapacity: true)
                             continue
                         }
@@ -329,28 +354,124 @@ actor AgentClient {
                             dataLines.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
                         }
                     }
-                    emitDevEvent(dataLines, onEvent: onEvent)
+                    emitDevEvent(dataLines, onEvent: onEvent, onGap: onGap)
+                    // The body ended and nobody asked it to. /dev/events has no
+                    // terminal frame, so there is no such thing as a stream that
+                    // finished on purpose — this is an interruption, and saying
+                    // "done" here is exactly how the frozen panel shipped.
+                    onEnd?(.interrupted, "the box closed the event stream")
                     return
                 } catch {
-                    if Task.isCancelled { return }
+                    if Task.isCancelled { onEnd?(.cancelled, nil); return }
                     lastError = error.localizedDescription
+                    // A mid-stream throw AFTER a successful connect is a drop,
+                    // not "this endpoint is dead, try the next one" — walking on
+                    // to the relay would restart from zero and lose the tail.
+                    if connected {
+                        onEnd?(.interrupted, lastError)
+                        return
+                    }
                     continue
                 }
             }
             onError?(lastError)
+            onEnd?(.interrupted, lastError)
         }
     }
 
     private nonisolated func emitDevEvent(
         _ dataLines: [String],
-        onEvent: @escaping @Sendable (DevServerEvent) -> Void
+        onEvent: @escaping @Sendable (DevServerEvent) -> Void,
+        onGap: (@Sendable (CapabilityGap) -> Void)? = nil
     ) {
         guard !dataLines.isEmpty else { return }
         let payload = dataLines.joined(separator: "\n")
-        guard let data = payload.data(using: .utf8),
-              let event = try? JSONDecoder().decode(DevServerEvent.self, from: data)
-        else { return }
+        guard let data = payload.data(using: .utf8) else { return }
+        // The gap rides the SAME frame as the log line (`{type:"error",
+        // gap:{…}}`), and DevServerEvent is a fixed Decodable that cannot see
+        // it. Parse the raw object alongside rather than widening the struct.
+        if let onGap,
+           let obj = try? JSONSerialization.jsonObject(with: data),
+           let gap = FailureSignals.capabilityGapFromDevEvent(obj) {
+            onGap(gap)
+        }
+        guard let event = try? JSONDecoder().decode(DevServerEvent.self, from: data) else { return }
         onEvent(event)
+    }
+
+    // ---- Capability-gap fix: run the route the gap carries ----------------
+
+    struct InstallStarted: Decodable { let ok: Bool?; let tool: String?; let stream: String? }
+
+    /// POST /install/<tool>. The agent answers 202 with the log-stream name to
+    /// watch; prefer ITS name over our copy so a server-side rename cannot
+    /// leave the TV subscribed to nothing.
+    func installTool(_ tool: String) async throws -> InstallStarted {
+        let data = try await postJSON("/install/\(tool)", [:])
+        return (try? JSONDecoder().decode(InstallStarted.self, from: data))
+            ?? InstallStarted(ok: true, tool: tool, stream: "install:\(tool)")
+    }
+
+    /// Tail GET /streams/<name>. A 1.2 GB SDK behind a silent spinner is the
+    /// same defect as a silent `serve` — the user cannot tell fetching from
+    /// hung — so every line goes to the surface as it arrives.
+    func subscribeInstallStream(
+        _ name: String,
+        onLine: @escaping @Sendable (String) -> Void,
+        onDone: @escaping @Sendable (Bool, String?) -> Void
+    ) -> Task<Void, Never> {
+        let endpoints = requestEndpoints(path: "/streams/\(name)")
+        let token = self.token
+        let relayPassword = box.relayPassword
+        let urlSession = self.session
+        return Task {
+            for endpoint in endpoints {
+                if Task.isCancelled { return }
+                var req = URLRequest(url: endpoint.url)
+                req.httpMethod = "GET"
+                req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+                if endpoint.relay, let relayPassword, !relayPassword.isEmpty {
+                    req.setValue(relayPassword, forHTTPHeaderField: "X-Relay-Password")
+                }
+                do {
+                    let (bytes, resp) = try await urlSession.bytes(for: req)
+                    guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                        continue
+                    }
+                    for try await line in bytes.lines {
+                        if Task.isCancelled { return }
+                        guard line.hasPrefix("data:") else { continue }
+                        let payload = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                        guard let data = payload.data(using: .utf8),
+                              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                        else { continue }
+                        // Same frame vocabulary the phone reads (see
+                        // mobile/src/lib/quic.ts::subscribeStream): {type:"line",
+                        // text} for output, {type:"result", status, error} for
+                        // the verdict.
+                        let kind = obj["type"] as? String ?? ""
+                        if kind == "line", let text = obj["text"] as? String, !text.isEmpty {
+                            onLine(text)
+                        } else if kind == "result" {
+                            let status = obj["status"] as? String ?? ""
+                            onDone(status == "ok", obj["error"] as? String)
+                            return
+                        }
+                    }
+                    // The install stream DOES have a terminal frame, so an end
+                    // without one means we never learned the verdict. Say that
+                    // instead of implying success.
+                    onDone(false, "the install stream ended before reporting a result")
+                    return
+                } catch {
+                    if Task.isCancelled { return }
+                    continue
+                }
+            }
+            onDone(false, "could not reach the install log stream")
+        }
     }
 
     /// Small POST helper for the JSON endpoints above.
@@ -440,9 +561,17 @@ actor AgentClient {
                     throw AgentError(message: "no response")
                 }
                 if !(200..<300).contains(http.statusCode) {
+                    // The agent carries a structured `capabilityGap` alongside
+                    // `error` on a 412 refusal (and on a /tasks 500). Carry BOTH
+                    // out: the string for every existing call site, the gap for
+                    // the ones that can render a fix.
+                    let gap = FailureSignals.capabilityGapFromData(data)
                     if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let err = obj["error"] as? String, !err.isEmpty {
-                        throw AgentError(message: err)
+                        throw AgentError(message: err, gap: gap)
+                    }
+                    if let gap {
+                        throw AgentError(message: gap.summary, gap: gap)
                     }
                     lastError = AgentError(message: "\(failure) (\(http.statusCode))")
                     continue

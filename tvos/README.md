@@ -123,3 +123,24 @@ exceed the current ASC max.
 | `Views/DashboardView.swift` | Lean-back tile launcher. |
 | `Views/RuntimeDashboardView.swift` | Runtime control room: status, Claude/Codex sessions, voice, QR OAuth, reload, Apple surface readiness. |
 | `Views/AppleTVRemoteView.swift` | D-pad / transport / now-playing. |
+| `FailureSignals.swift` | Named failure seams — capability gaps + install route, stream-drop recovery, relay deny verdicts, runner-auth terminal states. Pure Foundation, no SwiftUI. |
+
+## Verifying `FailureSignals`
+
+`project.yml` declares one application target and no test target, and the
+generated `.xcodeproj` is gitignored — so there is nowhere here for an XCTest
+to live that a reviewer could run. `FailureSignals.swift` is deliberately
+Foundation-only so the Swift toolchain alone can prove it, without Xcode, a
+simulator, or an Apple TV:
+
+```bash
+swiftc -O -parse-as-library \
+  tvos/YaverTV/FailureSignals.swift \
+  tvos/Checks/FailureSignalsChecks.swift \
+  -o /tmp/yaver-tv-checks && /tmp/yaver-tv-checks
+```
+
+`tvos/Checks/` sits outside `tvos/YaverTV/` on purpose: the XcodeGen spec globs
+that whole directory into the shipping app, and a second `main` there is a link
+error. Everything the app renders about a failure goes through `FailureSignals`,
+so a wording or classification change is caught here rather than on a TV.
