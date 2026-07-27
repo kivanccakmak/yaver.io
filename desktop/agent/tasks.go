@@ -2584,6 +2584,27 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		prompt += yaverDevServerContext(contextDir)
 	}
 
+	// Screen context — WHICH SCREEN the user is looking at right now.
+	//
+	// Not gated on Source. A live preview is a live preview whether the user is
+	// on web, phone, or a car HUD, and gating on source is how the last three
+	// context blocks in this function ended up reaching one surface each. The
+	// gate that matters is the one inside the store: a context exists only if a
+	// surface reported it, and it is served only while it is fresh.
+	//
+	// Opting out is done at the SOURCE — the surface stops reporting and clears
+	// what it already reported (DELETE /screen-context) — so "off" means the
+	// agent is not holding the user's screen at all, rather than holding it and
+	// promising not to look.
+	if !rawRunnerCommand {
+		if sc, ok := globalScreenContexts.Get(contextDir, time.Now()); ok {
+			if block := FormatScreenContextBlock(sc); block != "" {
+				prompt += block
+				log.Printf("[task %s] screen context attached: %s", task.ID, sc.Summary())
+			}
+		}
+	}
+
 	// Viewport hint — tells Claude what surface this output will be
 	// read on (HUD vs desktop vs tmux split vs voice readback) so the
 	// response shape matches. Built from the Voice/mobile/web/spatial

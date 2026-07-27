@@ -3891,6 +3891,16 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			},
 		},
 		{
+			"name":        "screen_context",
+			"description": "Read the screen the user is CURRENTLY LOOKING AT in the live preview: route, title, heading, and the visible interactive control labels. Use it whenever the user says \"this screen\", \"it\", \"this button\", or names a label you cannot place — it tells you which screen they mean so you can open the file that renders it instead of grepping the repo. Returns present=false when no preview is open or the last observation aged out; do not guess in that case, ask. Labels only — never the text a user has typed into a field.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"workDir": map[string]interface{}{"type": "string", "description": "Project root (defaults to the agent's active work-dir)."},
+				},
+			},
+		},
+		{
 			"name":        "diagnose",
 			"description": "Run the yaver self-check (binary paths, running procs, ports, auth state, workspace manifest, systemd unit, runtime deps). Returns the event list and final summary. Equivalent to `yaver diagnose`.",
 			"inputSchema": map[string]interface{}{

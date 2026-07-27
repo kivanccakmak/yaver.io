@@ -798,6 +798,11 @@ func (s *HTTPServer) serveWebBundleHTML(w http.ResponseWriter, htmlPath string) 
 	// synchronously inside <head> so it executes before any
 	// `defer`'d script tag in <body>.
 	patched = injectStaticBundleRouterReset(patched)
+	// Screen-context probe. This is the lane the sfmg incident happened on (an
+	// Expo/RN project previewed as a static web bundle), so if only one lane
+	// could have it, it would be this one. Both have it — see
+	// screen_context_inject.go.
+	patched = []byte(injectScreenContextProbe(string(patched)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	info := s.devServerMgr.GetWebBundleInfo()

@@ -219,6 +219,12 @@ func rewriteDevIndexBaseHref(resp *http.Response) error {
 	// required: assets alone leave the guest router on its 404 route, and the
 	// route rewrite alone breaks every relative asset. See injectRouterBasePath.
 	rewritten := injectRouterBasePath(rewriteDevIndexBaseHrefHTML(string(body)))
+	// Screen-context probe: tells the agent WHICH screen the user is looking at
+	// so a prompt like "it only has ileri, it should have geri too" arrives with
+	// the screen attached instead of sending the runner on a repo-wide grep.
+	// Injected last (it goes before </body>) and no-ops on anything that is not
+	// an HTML document. See screen_context_inject.go.
+	rewritten = injectScreenContextProbe(rewritten)
 	// Carry the page's auth query onto its sub-resources. Over the public relay
 	// every proxied request is authenticated, and a browser cannot add ?token/
 	// &__rp to the requests the HTML parser or a dynamic loader issues — so the

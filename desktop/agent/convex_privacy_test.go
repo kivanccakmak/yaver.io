@@ -71,6 +71,16 @@ var fieldsWeForbidInAnyConvexPayload = []string{
 	"openai_api_key",
 	"deepgram_api_key",
 	"cartesia_api_key",
+	// Screen context (screen_context.go). What the user is looking at in a
+	// live preview is work-derived content — the headings, button labels and
+	// route of an unreleased app, captured off the user's own screen. It rides
+	// the P2P channel to the runner and lives in memory on the box; it must
+	// never be synced. Convex holds identity and discovery, not the product
+	// under development.
+	"screenContext",
+	"screenHeading",
+	"screenRoute",
+	"visibleControls",
 	// Output / logs
 	"stdout",
 	"stderr",

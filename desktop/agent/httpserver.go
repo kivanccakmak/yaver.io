@@ -962,6 +962,13 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// Dev server (reverse proxy to local Metro/Vite/Flutter dev server)
 	mux.HandleFunc("/dev/status", s.authSDKOrGuest(s.handleDevServerStatus))
 
+	// Screen context (screen_context_http.go): the surface reports WHICH screen
+	// the user is looking at in the live preview, so a prompt about "this
+	// screen" reaches the runner with the screen attached. Owner-authenticated
+	// on purpose — the /dev/ preview itself is unauthenticated, and an
+	// unauthenticated write here would be a prompt-injection channel.
+	mux.HandleFunc("/screen-context", s.auth(s.handleScreenContext))
+
 	// Co-vibe (vibe_sessions_http.go): one report + four verbs. Readable by any
 	// authenticated participant — seeing who else is driving is what stops two
 	// people fighting over one simulator.
@@ -14451,6 +14458,36 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			workDir = s.taskMgr.workDir
 		}
 		body, _ := json.MarshalIndent(projectContextFiles(workDir), "", "  ")
+		return mcpToolResult(string(body))
+
+	case "screen_context":
+		// Pull, as the complement to the push in tasks.go. A runner that is
+		// three tool-calls deep and has just realised it does not know which
+		// screen the user meant can ask, instead of having been told once at
+		// dispatch and then having to remember.
+		var args struct {
+			WorkDir string `json:"workDir,omitempty"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		workDir := strings.TrimSpace(args.WorkDir)
+		if workDir == "" && s.taskMgr != nil {
+			workDir = s.taskMgr.workDir
+		}
+		sc, ok := globalScreenContexts.Get(workDir, time.Now())
+		if !ok {
+			body, _ := json.MarshalIndent(map[string]interface{}{
+				"present": false,
+				"workDir": workDir,
+				"reason":  "no fresh screen context for this project — no preview is open, or the last observation aged out. Ask the user which screen they mean; do not guess.",
+			}, "", "  ")
+			return mcpToolResult(string(body))
+		}
+		body, _ := json.MarshalIndent(map[string]interface{}{
+			"present": true,
+			"workDir": workDir,
+			"context": sc,
+			"summary": sc.Summary(),
+		}, "", "  ")
 		return mcpToolResult(string(body))
 
 	case "diagnose":
