@@ -15,4 +15,11 @@ const (
 	ReasonDeployTestFlightXcodeMissing     = "deploy.testflight.xcode_missing"
 	ReasonDeployPlaystoreAndroidSDKMissing = "deploy.play.android_sdk_missing"
 	ReasonAuthSDKScopeDenied               = "auth.sdk.scope_denied"
+	// ReasonCapabilityToolchainMissing is the wire contract for "the
+	// operation needs a tool this machine does not have". Carried by
+	// CapabilityGap.Code on every channel (the /dev/start 412, the
+	// /dev/events SSE error frame, /dev/status), and looked up — not
+	// regex-matched — by mobile/src/lib/capabilityGap.ts and
+	// web/lib/capabilityGap.ts. First client-read reason code in the file.
+	ReasonCapabilityToolchainMissing = "capability.toolchain_missing"
 )
