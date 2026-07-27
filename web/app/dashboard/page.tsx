@@ -939,11 +939,37 @@ export default function DashboardPage() {
   const machineRoles = useMachineRoles(token);
 
   useEffect(() => {
+    const isOnline = (id: string | null | undefined) => {
+      if (!id) return false;
+      const d = devices.find((device) => device.id === id && !device.isGuest);
+      if (!d) return false;
+      const probe = probeStates[id];
+      const peer = peerStates[id];
+      return probe?.ok === true || peer?.state === "online" || d.online === true;
+    };
+    const chooseRoleDevice = (primary?: string | null, secondary?: string | null) => {
+      if (!primary) return secondary || null;
+      if (isOnline(primary)) return primary;
+      if (secondary && isOnline(secondary)) return secondary;
+      // Match primary/secondary connection semantics: an explicit primary still
+      // owns the role when neither candidate is known reachable. The request then
+      // fails against the configured box instead of silently running on a third.
+      return primary;
+    };
+    const row = machineRoles.favorite;
     agentClient.setMachineRoleRoutes({
-      runnerDeviceId: machineRoles.favorite?.runnerDeviceId ?? null,
-      renderDeviceId: machineRoles.favorite?.renderDeviceId ?? null,
+      runnerDeviceId: chooseRoleDevice(row?.runnerDeviceId, row?.secondaryRunnerDeviceId),
+      renderDeviceId: chooseRoleDevice(row?.renderDeviceId ?? row?.runnerDeviceId, row?.secondaryRenderDeviceId),
     });
-  }, [machineRoles.favorite?.runnerDeviceId, machineRoles.favorite?.renderDeviceId]);
+  }, [
+    devices,
+    probeStates,
+    peerStates,
+    machineRoles.favorite?.runnerDeviceId,
+    machineRoles.favorite?.secondaryRunnerDeviceId,
+    machineRoles.favorite?.renderDeviceId,
+    machineRoles.favorite?.secondaryRenderDeviceId,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -3662,6 +3688,7 @@ export default function DashboardPage() {
                 activeWorkspaceDeviceId={connectedDevice?.id ?? null}
                 hiddenCount={hiddenIds.size}
                 onNavigateCloud={() => setActiveTab("settings")}
+                machineRoles={machineRoles}
               />
             </div>
           ) : (

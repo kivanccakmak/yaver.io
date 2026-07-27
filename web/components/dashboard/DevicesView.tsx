@@ -49,6 +49,7 @@ import {
   getLastFailure,
   subscribeLastFailure,
 } from "@/lib/probe-backoff";
+import type { useMachineRoles, MachineRolesRow } from "@/lib/useMachineRoles";
 
 function transportToneClasses(tone: TransportInfo["tone"]): string {
   switch (tone) {
@@ -1295,6 +1296,8 @@ interface DevicesViewProps {
   hiddenCount?: number;
   /** Navigate to the dedicated Yaver Cloud page (slim summary card links here). */
   onNavigateCloud?: () => void;
+  /** Shared runner/render role settings hook from dashboard/page.tsx. */
+  machineRoles?: ReturnType<typeof useMachineRoles>;
 }
 
 interface DeviceRuntimeInfo {
@@ -3042,6 +3045,7 @@ export default function DevicesView({
   activeWorkspaceDeviceId = null,
   hiddenCount = 0,
   onNavigateCloud,
+  machineRoles,
 }: DevicesViewProps) {
   const agentConnectionState = useAgentConnectionState();
   const failureRegistryVersion = useFailureRegistryVersion();
@@ -3189,6 +3193,33 @@ export default function DevicesView({
   const [shellSession, setShellSession] = useState<{ device: Device; launch?: TerminalLaunchRunner } | null>(null);
   const [rescueStatus, setRescueStatus] = useState<Record<string, { msg: string; tone: "info" | "ok" | "err" } | undefined>>({});
   const [showDormantDevices, setShowDormantDevices] = useState(false);
+  const saveMachineRoleFavorite = useCallback(
+    async (slot: "primary-runner" | "secondary-runner" | "primary-render" | "secondary-render", device: Device) => {
+      if (!machineRoles || !token || device.isGuest) return;
+      const current = machineRoles.favorite;
+      const defaultPrimary = activeWorkspaceDeviceId || primaryDeviceId || device.id;
+      const currentRunner = current?.runnerDeviceId || defaultPrimary;
+      const currentRender = current?.renderDeviceId || current?.runnerDeviceId || defaultPrimary;
+      const nextRunner = slot === "primary-runner" ? device.id : currentRunner;
+      const nextRender = slot === "primary-render" ? device.id : currentRender;
+      const nextSecondaryRunner = slot === "secondary-runner"
+        ? (current?.secondaryRunnerDeviceId === device.id ? undefined : device.id)
+        : current?.secondaryRunnerDeviceId;
+      const nextSecondaryRender = slot === "secondary-render"
+        ? (current?.secondaryRenderDeviceId === device.id ? undefined : device.id)
+        : current?.secondaryRenderDeviceId;
+      const next: MachineRolesRow = {
+        runnerDeviceId: nextRunner,
+        ...(nextSecondaryRunner && nextSecondaryRunner !== nextRunner ? { secondaryRunnerDeviceId: nextSecondaryRunner } : {}),
+        renderDeviceId: nextRender,
+        ...(nextSecondaryRender && nextSecondaryRender !== nextRender ? { secondaryRenderDeviceId: nextSecondaryRender } : {}),
+        workspace: current?.workspace || "runner-clone",
+        autoPush: current?.autoPush || "ask",
+      };
+      await machineRoles.save(next);
+    },
+    [activeWorkspaceDeviceId, machineRoles, primaryDeviceId, token],
+  );
   const actionableDevices = devices.filter((device) => !isDormantUnreachableDevice(device));
   const dormantDevices = devices.filter((device) => isDormantUnreachableDevice(device));
   const renderedDevices = showDormantDevices ? devices : actionableDevices;
@@ -3808,6 +3839,10 @@ export default function DevicesView({
                       sshCommand={sshCommand}
                       isPrimary={primaryDeviceId === device.id}
                       isSecondary={secondaryDeviceId === device.id}
+                      isPrimaryRunner={machineRoles?.favorite?.runnerDeviceId === device.id}
+                      isSecondaryRunner={machineRoles?.favorite?.secondaryRunnerDeviceId === device.id}
+                      isPrimaryRenderer={(machineRoles?.favorite?.renderDeviceId || machineRoles?.favorite?.runnerDeviceId) === device.id}
+                      isSecondaryRenderer={machineRoles?.favorite?.secondaryRenderDeviceId === device.id}
                       detailsOpen={expandedId === device.id}
                       rescueOpen={rescueOpenDeviceId === device.id}
                       onSetPrimary={async () => {
@@ -3822,6 +3857,34 @@ export default function DevicesView({
                           await setSecondaryDevice(secondaryDeviceId === device.id ? null : device.id);
                         } catch (e: any) {
                           alert(`Failed to update secondary: ${e?.message ?? e}`);
+                        }
+                      }}
+                      onSetPrimaryRunner={async () => {
+                        try {
+                          await saveMachineRoleFavorite("primary-runner", device);
+                        } catch (e: any) {
+                          alert(`Failed to update AI runner: ${e?.message ?? e}`);
+                        }
+                      }}
+                      onSetSecondaryRunner={async () => {
+                        try {
+                          await saveMachineRoleFavorite("secondary-runner", device);
+                        } catch (e: any) {
+                          alert(`Failed to update secondary AI runner: ${e?.message ?? e}`);
+                        }
+                      }}
+                      onSetPrimaryRenderer={async () => {
+                        try {
+                          await saveMachineRoleFavorite("primary-render", device);
+                        } catch (e: any) {
+                          alert(`Failed to update renderer: ${e?.message ?? e}`);
+                        }
+                      }}
+                      onSetSecondaryRenderer={async () => {
+                        try {
+                          await saveMachineRoleFavorite("secondary-render", device);
+                        } catch (e: any) {
+                          alert(`Failed to update secondary renderer: ${e?.message ?? e}`);
                         }
                       }}
                       onRecycle={() => setRecycleFor({ id: device.id, name: device.alias || device.name || device.id })}
@@ -4730,10 +4793,18 @@ function DeviceActionsMenu({
   sshCommand,
   isPrimary,
   isSecondary,
+  isPrimaryRunner,
+  isSecondaryRunner,
+  isPrimaryRenderer,
+  isSecondaryRenderer,
   detailsOpen,
   rescueOpen,
   onSetPrimary,
   onSetSecondary,
+  onSetPrimaryRunner,
+  onSetSecondaryRunner,
+  onSetPrimaryRenderer,
+  onSetSecondaryRenderer,
   onRecycle,
   onRescue,
   onPower,
@@ -4750,10 +4821,18 @@ function DeviceActionsMenu({
   sshCommand: string;
   isPrimary: boolean;
   isSecondary: boolean;
+  isPrimaryRunner: boolean;
+  isSecondaryRunner: boolean;
+  isPrimaryRenderer: boolean;
+  isSecondaryRenderer: boolean;
   detailsOpen: boolean;
   rescueOpen: boolean;
   onSetPrimary: () => void;
   onSetSecondary: () => void;
+  onSetPrimaryRunner: () => void;
+  onSetSecondaryRunner: () => void;
+  onSetPrimaryRenderer: () => void;
+  onSetSecondaryRenderer: () => void;
   onRecycle: () => void;
   onRescue: () => void;
   onPower: () => void;
@@ -4869,6 +4948,39 @@ function DeviceActionsMenu({
               <span>Coding agent…</span>
               <span className={hintClass}>runner · model</span>
             </button>
+            {canManage ? (
+              <>
+                <div className="my-1 border-t border-slate-200 dark:border-surface-800" />
+                <button className={itemClass} onClick={() => { onSetPrimaryRunner(); setOpen(false); }}>
+                  <span>{isPrimaryRunner ? "Primary AI runner" : "Set primary AI runner"}</span>
+                  <span className={isPrimaryRunner ? "shrink-0 text-[10px] text-emerald-600 dark:text-emerald-400" : hintClass}>
+                    {isPrimaryRunner ? "active" : "tasks"}
+                  </span>
+                </button>
+                {!isPrimaryRunner ? (
+                  <button className={itemClass} onClick={() => { onSetSecondaryRunner(); setOpen(false); }}>
+                    <span>{isSecondaryRunner ? "Unset secondary AI runner" : "Set secondary AI runner"}</span>
+                    <span className={isSecondaryRunner ? "shrink-0 text-[10px] text-emerald-600 dark:text-emerald-400" : hintClass}>
+                      {isSecondaryRunner ? "fallback" : "tasks fallback"}
+                    </span>
+                  </button>
+                ) : null}
+                <button className={itemClass} onClick={() => { onSetPrimaryRenderer(); setOpen(false); }}>
+                  <span>{isPrimaryRenderer ? "Primary renderer" : "Set primary renderer"}</span>
+                  <span className={isPrimaryRenderer ? "shrink-0 text-[10px] text-emerald-600 dark:text-emerald-400" : hintClass}>
+                    {isPrimaryRenderer ? "active" : "preview"}
+                  </span>
+                </button>
+                {!isPrimaryRenderer ? (
+                  <button className={itemClass} onClick={() => { onSetSecondaryRenderer(); setOpen(false); }}>
+                    <span>{isSecondaryRenderer ? "Unset secondary renderer" : "Set secondary renderer"}</span>
+                    <span className={isSecondaryRenderer ? "shrink-0 text-[10px] text-emerald-600 dark:text-emerald-400" : hintClass}>
+                      {isSecondaryRenderer ? "fallback" : "preview fallback"}
+                    </span>
+                  </button>
+                ) : null}
+              </>
+            ) : null}
             <button
               className={itemClass}
               disabled={pingState.pinging}

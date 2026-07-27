@@ -280,7 +280,9 @@ import { BUS_PRESENCE_STALE_MS, HEARTBEAT_STALE_MS } from "../_core/constants";
 export type MachineRolesRow = {
   projectName?: string;
   runnerDeviceId: string;
+  secondaryRunnerDeviceId?: string;
   renderDeviceId?: string;
+  secondaryRenderDeviceId?: string;
   workspace?: "runner-clone" | "render-ssh";
   autoPush?: "never" | "ask" | "always";
   updatedAt?: number;
@@ -1211,7 +1213,12 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         : { runnerDeviceId: null },
     });
     setMachineRolesState(row);
-    connectionManager.setMachineRoles(row ? { runnerDeviceId: row.runnerDeviceId, renderDeviceId: row.renderDeviceId } : null);
+    connectionManager.setMachineRoles(row ? {
+      runnerDeviceId: row.runnerDeviceId,
+      secondaryRunnerDeviceId: row.secondaryRunnerDeviceId,
+      renderDeviceId: row.renderDeviceId,
+      secondaryRenderDeviceId: row.secondaryRenderDeviceId,
+    } : null);
     appLog("info", `[settings] machineRoles ${row ? `saved: run=${row.runnerDeviceId.slice(0, 8)} render=${(row.renderDeviceId || row.runnerDeviceId).slice(0, 8)}` : "cleared (single-box)"}`);
   }, [token]);
 
@@ -2900,7 +2907,12 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           const favorite = roleRows.find((r) => r && !r.projectName && r.runnerDeviceId) || null;
           setMachineRolesState(favorite);
           connectionManager.setMachineRoles(
-            favorite ? { runnerDeviceId: favorite.runnerDeviceId, renderDeviceId: favorite.renderDeviceId } : null,
+            favorite ? {
+              runnerDeviceId: favorite.runnerDeviceId,
+              secondaryRunnerDeviceId: favorite.secondaryRunnerDeviceId,
+              renderDeviceId: favorite.renderDeviceId,
+              secondaryRenderDeviceId: favorite.secondaryRenderDeviceId,
+            } : null,
           );
           appLog("info", `[settings] machineRoles=${favorite ? `run=${favorite.runnerDeviceId.slice(0, 8)} render=${(favorite.renderDeviceId || favorite.runnerDeviceId).slice(0, 8)}` : "(single-box)"}`);
         }
@@ -4100,7 +4112,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         // transport supports this per-request (path-addressed), so two
         // concurrent pooled clients are just two `/d/<id>/` prefixes.
         machineRoles?.runnerDeviceId,
+        machineRoles?.secondaryRunnerDeviceId,
         machineRoles?.renderDeviceId,
+        machineRoles?.secondaryRenderDeviceId,
       ].filter((id): id is string => typeof id === "string" && id.length > 0),
     );
     if (warmIds.size === 0) return;
@@ -4141,7 +4155,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [activeDevice?.id, devices, primaryDeviceId, secondaryDeviceId, machineRoles?.runnerDeviceId, machineRoles?.renderDeviceId, token, relaysReady, userDisconnected, connectedDeviceIds, unreachableSet]);
+  }, [activeDevice?.id, devices, primaryDeviceId, secondaryDeviceId, machineRoles?.runnerDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.renderDeviceId, machineRoles?.secondaryRenderDeviceId, token, relaysReady, userDisconnected, connectedDeviceIds, unreachableSet]);
 
   // Trigger immediate reconnection on network change (WiFi↔cellular roaming,
   // Wi-Fi → Wi-Fi roam between APs (same SSID, new IP), VPN/Tailscale toggle).

@@ -1061,7 +1061,9 @@ export default defineSchema({
         v.object({
           projectName: v.optional(v.string()),
           runnerDeviceId: v.string(),
+          secondaryRunnerDeviceId: v.optional(v.string()),
           renderDeviceId: v.optional(v.string()),
+          secondaryRenderDeviceId: v.optional(v.string()),
           workspace: v.optional(v.union(v.literal("runner-clone"), v.literal("render-ssh"))),
           autoPush: v.optional(v.union(v.literal("never"), v.literal("ask"), v.literal("always"))),
           updatedAt: v.number(),

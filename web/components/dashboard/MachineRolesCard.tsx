@@ -39,7 +39,9 @@ export function MachineRolesCard({
   const ownRoles = useMachineRoles(roles ? null : token);
   const { favorite: savedRow, loaded, save: saveRow, clear: clearRow } = roles ?? ownRoles;
   const [runnerId, setRunnerId] = useState("");
+  const [secondaryRunnerId, setSecondaryRunnerId] = useState("");
   const [renderId, setRenderId] = useState("");
+  const [secondaryRenderId, setSecondaryRenderId] = useState("");
   const [workspace, setWorkspace] = useState<"runner-clone" | "render-ssh">("runner-clone");
   const [autoPush, setAutoPush] = useState<"never" | "ask" | "always">("ask");
   const [note, setNote] = useState<string | null>(null);
@@ -48,7 +50,9 @@ export function MachineRolesCard({
   useEffect(() => {
     if (!savedRow) return;
     setRunnerId(savedRow.runnerDeviceId);
+    setSecondaryRunnerId(savedRow.secondaryRunnerDeviceId || "");
     setRenderId(savedRow.renderDeviceId || savedRow.runnerDeviceId);
+    setSecondaryRenderId(savedRow.secondaryRenderDeviceId || "");
     setWorkspace(savedRow.workspace || "runner-clone");
     setAutoPush(savedRow.autoPush || "ask");
   }, [savedRow]);
@@ -60,7 +64,9 @@ export function MachineRolesCard({
     try {
       const row: RolesRow = {
         runnerDeviceId: runnerId,
+        ...(secondaryRunnerId && secondaryRunnerId !== runnerId ? { secondaryRunnerDeviceId: secondaryRunnerId } : {}),
         renderDeviceId: renderId || runnerId,
+        ...(secondaryRenderId && secondaryRenderId !== (renderId || runnerId) ? { secondaryRenderDeviceId: secondaryRenderId } : {}),
         workspace,
         autoPush,
       };
@@ -77,7 +83,7 @@ export function MachineRolesCard({
     } finally {
       setBusy(false);
     }
-  }, [autoPush, devices, renderId, runnerId, saveRow, token, workspace]);
+  }, [autoPush, devices, renderId, runnerId, saveRow, secondaryRenderId, secondaryRunnerId, token, workspace]);
 
   const clear = useCallback(async () => {
     if (!token) return;
@@ -129,9 +135,27 @@ export function MachineRolesCard({
               </select>
             </label>
             <label className="block">
+              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-surface-500">Secondary AI runner</span>
+              <select value={secondaryRunnerId} onChange={(e) => setSecondaryRunnerId(e.target.value)} className={selectCls}>
+                <option value="">none</option>
+                {devices.map((d) => (
+                  <option key={d.id} value={d.id}>{d.name}{d.platform ? ` · ${d.platform}` : ""}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
               <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-surface-500">Default renderer / build machine</span>
               <select value={renderId} onChange={(e) => setRenderId(e.target.value)} className={selectCls}>
                 <option value="">same as runner</option>
+                {devices.map((d) => (
+                  <option key={d.id} value={d.id}>{d.name}{d.platform ? ` · ${d.platform}` : ""}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-surface-500">Secondary renderer / build machine</span>
+              <select value={secondaryRenderId} onChange={(e) => setSecondaryRenderId(e.target.value)} className={selectCls}>
+                <option value="">none</option>
                 {devices.map((d) => (
                   <option key={d.id} value={d.id}>{d.name}{d.platform ? ` · ${d.platform}` : ""}</option>
                 ))}

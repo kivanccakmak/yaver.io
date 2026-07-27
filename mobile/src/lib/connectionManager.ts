@@ -103,11 +103,26 @@ class ConnectionManager {
   // NOT changed by roles: focus doubles as "the box the user is looking
   // at", and dragging it to the runner would tear previews off the render
   // box (mobile twin of the web taskBaseUrl/devBaseUrl separation).
-  private machineRoles: { runnerDeviceId: string; renderDeviceId: string } | null = null;
+  private machineRoles: {
+    runnerDeviceId: string;
+    secondaryRunnerDeviceId?: string;
+    renderDeviceId: string;
+    secondaryRenderDeviceId?: string;
+  } | null = null;
 
-  setMachineRoles(roles: { runnerDeviceId: string; renderDeviceId?: string } | null): void {
+  setMachineRoles(roles: {
+    runnerDeviceId: string;
+    secondaryRunnerDeviceId?: string;
+    renderDeviceId?: string;
+    secondaryRenderDeviceId?: string;
+  } | null): void {
     this.machineRoles = roles?.runnerDeviceId
-      ? { runnerDeviceId: roles.runnerDeviceId, renderDeviceId: roles.renderDeviceId || roles.runnerDeviceId }
+      ? {
+          runnerDeviceId: roles.runnerDeviceId,
+          secondaryRunnerDeviceId: roles.secondaryRunnerDeviceId,
+          renderDeviceId: roles.renderDeviceId || roles.runnerDeviceId,
+          secondaryRenderDeviceId: roles.secondaryRenderDeviceId,
+        }
       : null;
     this.notify();
   }
@@ -115,9 +130,16 @@ class ConnectionManager {
   /** deviceId the given role resolves to, or null when it's just the
    *  focused box (no split configured, or the role IS the focused box). */
   roleDeviceId(role: "runner" | "render"): string | null {
-    const id = role === "runner" ? this.machineRoles?.runnerDeviceId : this.machineRoles?.renderDeviceId;
-    if (!id || id === this.focusedId) return null;
-    return id;
+    const ids = role === "runner"
+      ? [this.machineRoles?.runnerDeviceId, this.machineRoles?.secondaryRunnerDeviceId]
+      : [this.machineRoles?.renderDeviceId, this.machineRoles?.secondaryRenderDeviceId];
+    for (const id of ids) {
+      if (!id || id === this.focusedId) continue;
+      const client = this.clients.get(id);
+      if (client?.isConnected) return id;
+    }
+    const first = ids.find(Boolean) || null;
+    return first && first !== this.focusedId ? first : null;
   }
 
   /** Client for AI-task dispatch: the configured runner box, else focused. */

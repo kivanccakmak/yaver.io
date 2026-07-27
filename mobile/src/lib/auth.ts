@@ -711,7 +711,9 @@ export interface UserSettings {
   machineRolesByProject?: Array<{
     projectName?: string;
     runnerDeviceId: string;
+    secondaryRunnerDeviceId?: string;
     renderDeviceId?: string;
+    secondaryRenderDeviceId?: string;
     workspace?: "runner-clone" | "render-ssh";
     autoPush?: "never" | "ask" | "always";
     updatedAt?: number;
@@ -719,7 +721,9 @@ export interface UserSettings {
   machineRolesForProject?: {
     projectName?: string;
     runnerDeviceId: string | null;
+    secondaryRunnerDeviceId?: string;
     renderDeviceId?: string;
+    secondaryRenderDeviceId?: string;
     workspace?: "runner-clone" | "render-ssh";
     autoPush?: "never" | "ask" | "always";
     updatedAt?: number;

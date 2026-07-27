@@ -893,6 +893,10 @@ export default function RuntimeLabView({
   const [machinesDraftRender, setMachinesDraftRender] = useState("");
   const [machinesBusy, setMachinesBusy] = useState(false);
   const [machinesNote, setMachinesNote] = useState<string | null>(null);
+  // Failure note for the Load-Targets-row render-machine picker — the chat
+  // aside's machinesNote is off-screen from that row, and a save that fails
+  // silently is an unfalsifiable state.
+  const [renderPickNote, setRenderPickNote] = useState<string | null>(null);
   const [chatPaneWidth, setChatPaneWidth] = useState(() => {
     if (typeof window === "undefined") return defaultRuntimeChatWidth("phone");
     const parsed = Number(window.localStorage.getItem(RUNTIME_CHAT_WIDTH_KEY));
@@ -1274,6 +1278,13 @@ export default function RuntimeLabView({
     () => (devices || []).filter((d) => !d.isGuest),
     [devices],
   );
+  // The box that will actually answer the target probe / serve previews:
+  // explicit render role → runner (renders too) → the connected device.
+  const effectiveRenderDeviceId =
+    machineRoles?.renderDeviceId || machineRoles?.runnerDeviceId || connectedDevice?.id || null;
+  const effectiveRenderBoxName = effectiveRenderDeviceId
+    ? deviceNameById.get(effectiveRenderDeviceId) || effectiveRenderDeviceId.slice(0, 8)
+    : null;
 
   useEffect(() => {
     void refreshRunners();
@@ -1298,7 +1309,9 @@ export default function RuntimeLabView({
     try {
       await onSaveMachineRoles({
         runnerDeviceId: machinesDraftRunner,
+        ...(machineRoles?.secondaryRunnerDeviceId ? { secondaryRunnerDeviceId: machineRoles.secondaryRunnerDeviceId } : {}),
         renderDeviceId: renderId,
+        ...(machineRoles?.secondaryRenderDeviceId ? { secondaryRenderDeviceId: machineRoles.secondaryRenderDeviceId } : {}),
         workspace: machineRoles?.workspace || "runner-clone",
         autoPush: machineRoles?.autoPush || "ask",
       });
@@ -1315,7 +1328,7 @@ export default function RuntimeLabView({
     } finally {
       setMachinesBusy(false);
     }
-  }, [appendLog, deviceNameById, machineRoles?.autoPush, machineRoles?.workspace, machinesDraftRender, machinesDraftRunner, onSaveMachineRoles]);
+  }, [appendLog, deviceNameById, machineRoles?.autoPush, machineRoles?.secondaryRenderDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.workspace, machinesDraftRender, machinesDraftRunner, onSaveMachineRoles]);
 
   const clearMachineRoles = useCallback(async () => {
     if (!onClearMachineRoles) return;
@@ -2029,6 +2042,35 @@ export default function RuntimeLabView({
     }
   }, [appendLog, selectedProject]);
 
+  // Render-machine picker on the Load Targets row: save the chosen box as the
+  // account favorite, re-point agentClient in the same breath, then re-probe.
+  // Routes are set directly (not only via the dashboard-shell effect) because
+  // that effect fires on the NEXT commit — an immediate reprobe would race it
+  // and hit the old box.
+  const setRenderDeviceAndReprobe = useCallback(async (renderId: string) => {
+    if (!onSaveMachineRoles || !renderId) return;
+    const runnerId = machineRoles?.runnerDeviceId || connectedDevice?.id || renderId;
+    setMachinesBusy(true);
+    setRenderPickNote(null);
+    try {
+      await onSaveMachineRoles({
+        runnerDeviceId: runnerId,
+        ...(machineRoles?.secondaryRunnerDeviceId ? { secondaryRunnerDeviceId: machineRoles.secondaryRunnerDeviceId } : {}),
+        renderDeviceId: renderId,
+        ...(machineRoles?.secondaryRenderDeviceId ? { secondaryRenderDeviceId: machineRoles.secondaryRenderDeviceId } : {}),
+        workspace: machineRoles?.workspace || "runner-clone",
+        autoPush: machineRoles?.autoPush || "ask",
+      });
+      agentClient.setMachineRoleRoutes({ runnerDeviceId: runnerId, renderDeviceId: renderId });
+      appendLog(`render machine → ${deviceNameById.get(renderId) || renderId.slice(0, 8)}`);
+      void loadCapabilities();
+    } catch (err) {
+      setRenderPickNote(`Could not set render machine: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setMachinesBusy(false);
+    }
+  }, [appendLog, connectedDevice?.id, deviceNameById, loadCapabilities, machineRoles?.autoPush, machineRoles?.runnerDeviceId, machineRoles?.secondaryRenderDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.workspace, onSaveMachineRoles]);
+
   const recoverAgentAuthAndReloadTargets = useCallback(async () => {
     if (!selectedProject || recoveringAgentAuth) return;
     setRecoveringAgentAuth(true);
@@ -2428,6 +2470,32 @@ export default function RuntimeLabView({
           >
             {runtimeProjectSaving ? "Saving..." : selectedProjectIsSavedDefault ? "Default" : "Save default"}
           </button>
+          {/* Render-machine picker, ON the row that probes it. The Route
+              editor in the chat aside also sets this, but the box a probe is
+              about to hit must be visible and changeable where the probe is
+              launched — not two panes away. */}
+          {onSaveMachineRoles && roleEligibleDevices.length > 0 ? (
+            <label className="shrink-0">
+              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Render machine</span>
+              <select
+                value={effectiveRenderDeviceId || ""}
+                disabled={machinesBusy || busy}
+                onChange={(e) => void setRenderDeviceAndReprobe(e.target.value)}
+                title="Which machine boots simulators, emulators, and previews — Load Targets probes this box"
+                className="h-10 rounded-md border border-[#d7dce3] bg-white px-2 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec]"
+              >
+                {!effectiveRenderDeviceId ? <option value="">— pick a machine —</option> : null}
+                {roleEligibleDevices.map((device) => (
+                  <option key={device.id} value={device.id}>
+                    {device.name || device.id.slice(0, 8)}{device.online === false ? " (offline)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {renderPickNote ? (
+            <span className="inline-flex h-10 items-center text-xs text-rose-600 dark:text-rose-300">{renderPickNote}</span>
+          ) : null}
           {runtimeProjectNote ? (
             <span className="inline-flex h-10 min-w-[160px] items-center text-xs text-[#667085] dark:text-[#9aa3af]">{runtimeProjectNote}</span>
           ) : null}
@@ -2467,6 +2535,43 @@ export default function RuntimeLabView({
                     {connectedDevice.name || connectedDevice.id}
                   </span>
                 ) : null}
+              </div>
+            ) : /device not connected to relay|only reachable over a relay/i.test(error) ? (
+              // Relay-presence failure: the relay answered FOR the render box —
+              // it has no live tunnel. A coding agent cannot fix an offline
+              // machine, so this branch names the box and offers deterministic
+              // routes instead of "Fix with <runner>".
+              <div className="mt-2 space-y-2">
+                {/device not connected to relay/i.test(error) ? (
+                  // The routing-config throw ("only reachable over a relay…")
+                  // already names its own cause + remedy; this sentence is for
+                  // the relay-presence 502 only.
+                  <div className="text-xs">
+                    The render machine <span className="font-semibold">{effectiveRenderBoxName || "(unknown)"}</span> has
+                    no live relay connection, so the target probe never reached it. Bring that box online, or pick a
+                    different render machine above.
+                  </div>
+                ) : null}
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void loadCapabilities()}
+                    disabled={busy || machinesBusy}
+                    className="rounded-md border border-[#d7dce3] bg-white px-3 py-1.5 text-xs font-semibold text-[#475467] disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                  >
+                    Retry probe
+                  </button>
+                  {machineSplitActive && machineRoles?.runnerDeviceId ? (
+                    <button
+                      type="button"
+                      onClick={() => void setRenderDeviceAndReprobe(machineRoles.runnerDeviceId)}
+                      disabled={busy || machinesBusy}
+                      className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-700 disabled:opacity-40 dark:text-emerald-200"
+                    >
+                      Render on {runnerBoxName} instead
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ) : (
               // Non-auth failure (target probe / web ui failed): the route to

@@ -150,7 +150,9 @@ const machineRolesValidator = v.object({
   projectName: v.optional(v.union(v.string(), v.null())),
   // null runnerDeviceId clears the row for this project scope.
   runnerDeviceId: v.union(v.string(), v.null()),
+  secondaryRunnerDeviceId: v.optional(v.union(v.string(), v.null())),
   renderDeviceId: v.optional(v.union(v.string(), v.null())),
+  secondaryRenderDeviceId: v.optional(v.union(v.string(), v.null())),
   workspace: v.optional(v.union(v.literal("runner-clone"), v.literal("render-ssh"), v.null())),
   autoPush: v.optional(v.union(v.literal("never"), v.literal("ask"), v.literal("always"), v.null())),
   updatedAt: v.optional(v.number()),
@@ -159,7 +161,9 @@ const machineRolesValidator = v.object({
 type MachineRolesRow = {
   projectName?: string;
   runnerDeviceId: string;
+  secondaryRunnerDeviceId?: string;
   renderDeviceId?: string;
+  secondaryRenderDeviceId?: string;
   workspace?: "runner-clone" | "render-ssh";
   autoPush?: "never" | "ask" | "always";
   updatedAt: number;
@@ -168,7 +172,9 @@ type MachineRolesRow = {
 type MachineRolesPatch = {
   projectName?: string | null;
   runnerDeviceId: string | null;
+  secondaryRunnerDeviceId?: string | null;
   renderDeviceId?: string | null;
+  secondaryRenderDeviceId?: string | null;
   workspace?: "runner-clone" | "render-ssh" | null;
   autoPush?: "never" | "ask" | "always" | null;
   updatedAt?: number;
@@ -186,7 +192,9 @@ async function assertMachineRolesOwned(
 ): Promise<void> {
   for (const [slot, id] of [
     ["runnerDeviceId", payload.runnerDeviceId],
+    ["secondaryRunnerDeviceId", payload.secondaryRunnerDeviceId],
     ["renderDeviceId", payload.renderDeviceId],
+    ["secondaryRenderDeviceId", payload.secondaryRenderDeviceId],
   ] as const) {
     if (!id) continue;
     const device = await ctx.db
@@ -209,11 +217,15 @@ function mergeMachineRoles(
   );
   const runnerDeviceId = cleanRuntimeText(payload.runnerDeviceId ?? undefined, 120);
   if (!runnerDeviceId) return filtered.length > 0 ? filtered : undefined;
+  const secondaryRunnerDeviceId = cleanRuntimeText(payload.secondaryRunnerDeviceId ?? undefined, 120);
   const renderDeviceId = cleanRuntimeText(payload.renderDeviceId ?? undefined, 120);
+  const secondaryRenderDeviceId = cleanRuntimeText(payload.secondaryRenderDeviceId ?? undefined, 120);
   const row: MachineRolesRow = {
     ...(projectName ? { projectName } : {}),
     runnerDeviceId,
+    ...(secondaryRunnerDeviceId && secondaryRunnerDeviceId !== runnerDeviceId ? { secondaryRunnerDeviceId } : {}),
     ...(renderDeviceId ? { renderDeviceId } : {}),
+    ...(secondaryRenderDeviceId && secondaryRenderDeviceId !== (renderDeviceId || runnerDeviceId) ? { secondaryRenderDeviceId } : {}),
     ...(payload.workspace ? { workspace: payload.workspace } : {}),
     ...(payload.autoPush ? { autoPush: payload.autoPush } : {}),
     updatedAt: payload.updatedAt ?? Date.now(),

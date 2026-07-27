@@ -17,7 +17,9 @@ import { CONVEX_URL } from "@/lib/constants";
 export type MachineRolesRow = {
   projectName?: string;
   runnerDeviceId: string;
+  secondaryRunnerDeviceId?: string;
   renderDeviceId?: string;
+  secondaryRenderDeviceId?: string;
   workspace?: "runner-clone" | "render-ssh";
   autoPush?: "never" | "ask" | "always";
 };
@@ -25,7 +27,11 @@ export type MachineRolesRow = {
 /** True when the row actually splits work across two machines. */
 export function machineRolesSplitActive(row: MachineRolesRow | null | undefined): boolean {
   if (!row?.runnerDeviceId) return false;
-  return !!row.renderDeviceId && row.renderDeviceId !== row.runnerDeviceId;
+  return Boolean(
+    (row.renderDeviceId && row.renderDeviceId !== row.runnerDeviceId) ||
+      (row.secondaryRunnerDeviceId && row.secondaryRunnerDeviceId !== row.runnerDeviceId) ||
+      (row.secondaryRenderDeviceId && row.secondaryRenderDeviceId !== (row.renderDeviceId || row.runnerDeviceId)),
+  );
 }
 
 export function useMachineRoles(token: string | null) {
