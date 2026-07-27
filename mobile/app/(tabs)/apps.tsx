@@ -52,9 +52,13 @@ import {
   capabilityGapFromError,
   capabilityGapFromStatus,
   gapBody,
+  gapConstraint,
   gapFixLabel,
+  gapHeadroomLine,
+  gapReclaimLabel,
   gapRetriesAfterFix,
   gapTitle,
+  gapWarning,
   type CapabilityGap,
 } from "../../src/lib/capabilityGap";
 import { formatFixElapsed, runCapabilityGapFix } from "../../src/lib/capabilityGapFix";
@@ -2101,6 +2105,19 @@ export default function AppsScreen() {
           {gapBody(activeGap)}
         </Text>
       ) : null}
+      {/* The headroom on the surface where the decision is made — "3.2 GB free
+          · needs 3.0 GB" BEFORE a ten-minute download, not after it fails. */}
+      {gapHeadroomLine(activeGap) ? (
+        <Text style={[s.previewSubtle, { color: c.textMuted, textAlign: "left", fontSize: 11 }]} selectable>
+          {gapHeadroomLine(activeGap)}
+        </Text>
+      ) : null}
+      {/* A WARNING is not a refusal: it renders above a button that STAYS. */}
+      {gapWarning(activeGap) ? (
+        <Text style={[s.previewSubtle, { color: c.warn, textAlign: "left" }]} selectable>
+          {gapWarning(activeGap)}
+        </Text>
+      ) : null}
       {activeGapFixLabel ? (
         <Pressable
           onPress={() => startGapFix(activeGap)}
@@ -2119,9 +2136,22 @@ export default function AppsScreen() {
         // No fixer on THIS machine — say so specifically. A gap with no route
         // must still name its constraint, never render an inert button.
         <Text style={[s.previewSubtle, { color: c.warn, textAlign: "left" }]} selectable>
-          {activeGap.constraint || "Yaver has no installer for this on this machine."}
+          {gapConstraint(activeGap) || "Yaver has no installer for this on this machine."}
         </Text>
       )}
+      {/* Space is the blocker, or nearly is: ship the route that frees it. The
+          Storage screen lists every path with its size and its rebuild cost and
+          deletes nothing without an explicit tick. */}
+      {gapReclaimLabel(activeGap) ? (
+        <Pressable
+          onPress={() => router.push("/storage")}
+          accessibilityRole="button"
+          accessibilityLabel={gapReclaimLabel(activeGap) || "Free up space"}
+          style={[s.previewBtn, s.gapFixBtn, { backgroundColor: "#2a1f0a" }]}
+        >
+          <Text style={[s.previewBtnText, { color: c.warn }]}>{gapReclaimLabel(activeGap)}</Text>
+        </Pressable>
+      ) : null}
     </View>
   ) : null;
 

@@ -11,12 +11,16 @@ import {
   capabilityGapFromError,
   capabilityGapFromStatus,
   gapBody,
+  gapConstraint,
   gapFixLabel,
+  gapHeadroomLine,
   gapInstallTool,
   gapRetriesAfterFix,
   gapTitle,
+  gapWarning,
   type CapabilityGap,
 } from "@/lib/capabilityGap";
+import { ReclaimPanel } from "./ReclaimPanel";
 import pkg from "../../package.json";
 import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskStreamWithRecovery";
 import { CommandCard } from "./CommandCard";
@@ -2087,6 +2091,18 @@ function CapabilityGapCard({
       {gapBody(gap) ? (
         <div className="mt-1 text-amber-700 dark:text-amber-200/80">{gapBody(gap)}</div>
       ) : null}
+      {/* The headroom belongs where the decision is made. A user told "3.2 GB
+          free · needs 3.0 GB" before a ten-minute download can decide; one told
+          nothing finds out at minute nine. */}
+      {gapHeadroomLine(gap) ? (
+        <div className="mt-1 font-mono text-[10px] text-amber-700/80 dark:text-amber-200/60">{gapHeadroomLine(gap)}</div>
+      ) : null}
+      {/* A WARNING is not a refusal — it renders above the button that stays. */}
+      {gapWarning(gap) ? (
+        <div className="mt-2 rounded border border-amber-600/40 bg-amber-500/10 px-2 py-1.5 text-amber-800 dark:text-amber-100">
+          {gapWarning(gap)}
+        </div>
+      ) : null}
       {label ? (
         <button
           type="button"
@@ -2098,9 +2114,13 @@ function CapabilityGapCard({
         </button>
       ) : (
         <div className="mt-2 text-amber-700 dark:text-amber-200/90">
-          {gap.constraint || "Yaver has no installer for this on this machine."}
+          {gapConstraint(gap) || "Yaver has no installer for this on this machine."}
         </div>
       )}
+      {/* When space is the blocker — or nearly is — the refusal ships the route
+          that fixes it: every candidate path with its size and its rebuild
+          cost, nothing pre-selected, nothing deleted without an explicit tick. */}
+      {gap.reclaim ? <ReclaimPanel gap={gap} /> : null}
       {running ? (
         <div className="mt-1 text-amber-700 dark:text-amber-200/60">
           Output is streaming into the CONSOLE below.

@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { WebView } from "react-native-webview";
+import { router } from "expo-router";
 import { describeDevReloadResult, devReloadReachedTarget, quicClient, type DevServerStatus } from "../lib/quic";
 import { useColors } from "../context/ThemeContext";
 import { isBundleLoaded, loadAppIfChanged, onBundleEvent } from "../lib/bundleLoader";
@@ -27,8 +28,12 @@ import {
   capabilityGapFromDevEvent,
   capabilityGapFromStatus,
   gapBody,
+  gapConstraint,
   gapFixLabel,
+  gapHeadroomLine,
+  gapReclaimLabel,
   gapTitle,
+  gapWarning,
   type CapabilityGap,
 } from "../lib/capabilityGap";
 import { formatFixElapsed, runCapabilityGapFix } from "../lib/capabilityGapFix";
@@ -1072,6 +1077,21 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                           {gapBody(gap) ? (
                             <Text style={[styles.previewSubtle, { textAlign: "left" }]} selectable>{gapBody(gap)}</Text>
                           ) : null}
+                          {/* The headroom on the surface where the decision is
+                              made. "3.2 GB free · needs 3.0 GB" before a
+                              ten-minute download, not after it fails. */}
+                          {gapHeadroomLine(gap) ? (
+                            <Text style={[styles.previewSubtle, { textAlign: "left", fontFamily: monoFamily, fontSize: 11 }]} selectable>
+                              {gapHeadroomLine(gap)}
+                            </Text>
+                          ) : null}
+                          {/* A WARNING is not a refusal — it renders ABOVE the
+                              button, which stays. The user decides. */}
+                          {gapWarning(gap) ? (
+                            <Text style={[styles.previewSubtle, { textAlign: "left", color: "#fbbf24" }]} selectable>
+                              {gapWarning(gap)}
+                            </Text>
+                          ) : null}
                           {fixLabel ? (
                             <Pressable
                               disabled={gapFixRunning}
@@ -1112,9 +1132,26 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                             </Pressable>
                           ) : (
                             <Text style={[styles.previewSubtle, { color: "#f59e0b", textAlign: "left" }]} selectable>
-                              {gap.constraint || "Yaver has no installer for this on this machine."}
+                              {gapConstraint(gap) || "Yaver has no installer for this on this machine."}
                             </Text>
                           )}
+                          {/* When space is the blocker — or nearly is — the
+                              refusal ships the route that frees it. The phone
+                              opens the Storage screen, which lists every path
+                              with its size and its rebuild cost and deletes
+                              nothing without an explicit tick. */}
+                          {gapReclaimLabel(gap) ? (
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={gapReclaimLabel(gap) || "Free up space"}
+                              onPress={() => router.push("/storage")}
+                              style={[styles.previewBtn, styles.gapFixBtn, { backgroundColor: "#2a1f0a" }]}
+                            >
+                              <Text style={[styles.previewBtnText, { color: "#f59e0b" }]}>
+                                {gapReclaimLabel(gap)}
+                              </Text>
+                            </Pressable>
+                          ) : null}
                         </View>
                       ) : null}
                       <Ionicons name="alert-circle-outline" size={40} color="#ef4444" />

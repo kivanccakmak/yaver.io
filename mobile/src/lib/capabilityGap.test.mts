@@ -18,16 +18,24 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  CAPABILITY_INSUFFICIENT_DISK,
   CAPABILITY_TOOLCHAIN_MISSING,
   capabilityGapFromDevEvent,
   capabilityGapFromError,
   capabilityGapFromStatus,
   gapBody,
+  gapConfirmPreview,
+  gapConstraint,
   gapFixLabel,
+  gapHeadroomLine,
   gapInstallTool,
+  gapIsDiskBlocked,
+  gapReclaimLabel,
   gapRetriesAfterFix,
+  gapState,
   gapStreamPath,
   gapTitle,
+  gapWarning,
   parseCapabilityGap,
 } from "./capabilityGap.ts";
 
@@ -103,6 +111,92 @@ test("a half-formed fix renders as NO button, never as a silent install", () => 
   assert.equal(parseCapabilityGap("flutter missing"), null);
 });
 
+// --- PLATFORM: a constraint is a STATE, not an error and not a dead button ---
+
+// The Windows box that got an "Install Flutter" button whose install would
+// report success and leave nothing on PATH. The agent now refuses it; the
+// client must render the sentence and STOP SPINNING, which is what gapState
+// exists to make unambiguous.
+test("a platform constraint renders as a first-class state, never as a button", () => {
+  const gap = parseCapabilityGap({
+    code: CAPABILITY_TOOLCHAIN_MISSING,
+    capability: "xcodebuild",
+    summary: "Xcode isn't installed on this machine.",
+    constraint:
+      "Xcode only exists on macOS — Apple ships no Xcode or iOS simulator runtime for linux, so there is nothing Yaver could install here.",
+  });
+  assert.ok(gap);
+  assert.equal(gapState(gap!), "constrained");
+  assert.equal(gapFixLabel(gap!), null, "a constrained gap must offer no button");
+  assert.match(gapConstraint(gap!)!, /only exists on macOS/);
+  assert.equal(gapWarning(gap!), null);
+  // And a FIXABLE gap must not read as constrained — the guard in both directions.
+  assert.equal(gapState(parseCapabilityGap(FLUTTER_GAP)!), "fixable");
+  assert.equal(gapConstraint(parseCapabilityGap(FLUTTER_GAP)!), null);
+});
+
+// --- RESOURCE: warn without removing the button; refuse with a way out ------
+
+const TIGHT_GAP = {
+  ...FLUTTER_GAP,
+  warning:
+    "Heads up — the install fits (2.0 GB needed, 3.2 GB free on /opt) but the FIRST build after it typically needs another 2.0 GB — you may run out mid-build.",
+  resource: { path: "/opt", freeBytes: 3355443200, freeHuman: "3.2 GB", needBytes: 3221225472, needHuman: "3.0 GB", level: "tight" },
+  reclaim: {
+    label: "Free up space — about 12.4 GB reclaimable",
+    method: "POST",
+    path: "/storage/reclaim",
+    stream: "",
+    est: "12.4 GB in caches and build artifacts · you approve each item",
+    retry: true,
+    confirm: { method: "GET", path: "/storage/scan", field: "confirm", prompt: "Review every path and size first." },
+  },
+};
+
+test("a thin-headroom warning rides BESIDE the fix — warning is not refusal", () => {
+  const gap = parseCapabilityGap(TIGHT_GAP);
+  assert.ok(gap);
+  assert.equal(gapState(gap!), "fixable-with-warning");
+  assert.ok(gapFixLabel(gap!), "the button must survive a warning; the user decides");
+  assert.match(gapWarning(gap!)!, /mid-build/);
+  assert.equal(gapConstraint(gap!), null, "a warning is not a constraint");
+  assert.match(gapHeadroomLine(gap!)!, /3\.2 GB free on \/opt/);
+});
+
+test("a disk refusal is a DIFFERENT code and ships the route that fixes it", () => {
+  const gap = parseCapabilityGap({
+    code: CAPABILITY_INSUFFICIENT_DISK,
+    capability: "flutter",
+    summary: "Flutter isn't installed on this machine.",
+    constraint: "Flutter needs about 2.0 GB to install and 1.0 GB of headroom — /opt has 340.0 MB free.",
+    resource: { path: "/opt", freeBytes: 356515840, freeHuman: "340.0 MB", needBytes: 3221225472, needHuman: "3.0 GB", reclaimableBytes: 13314398617, reclaimableHuman: "12.4 GB", level: "insufficient" },
+    reclaim: TIGHT_GAP.reclaim,
+  });
+  assert.ok(gap);
+  assert.equal(gapIsDiskBlocked(gap!), true);
+  assert.equal(gapFixLabel(gap!), null, "installing is not the remedy for a full disk");
+  assert.equal(gapState(gap!), "constrained");
+  assert.match(gapReclaimLabel(gap!)!, /12\.4 GB reclaimable/);
+  assert.match(gapHeadroomLine(gap!)!, /340\.0 MB free on \/opt/);
+  assert.match(gapHeadroomLine(gap!)!, /12\.4 GB reclaimable/);
+  // The toolchain gap must NOT read as disk-blocked — the guard both ways.
+  assert.equal(gapIsDiskBlocked(parseCapabilityGap(FLUTTER_GAP)!), false);
+});
+
+test("a destructive route is unusable without its preview — no silent deletes", () => {
+  const gap = parseCapabilityGap(TIGHT_GAP);
+  const preview = gapConfirmPreview(gap!.reclaim);
+  assert.ok(preview, "the reclaim route MUST name a preview the UI has to fetch first");
+  assert.equal(preview!.path, "/storage/scan");
+  assert.equal(preview!.field, "confirm");
+  // An install fix is not confirm-gated and must not pretend to be.
+  assert.equal(gapConfirmPreview(parseCapabilityGap(FLUTTER_GAP)!.fix), null);
+  // A "confirm" with no preview route would render a review affordance that
+  // reviews nothing — refuse the whole fix rather than render half a gate.
+  const noPreview = parseCapabilityGap({ ...TIGHT_GAP, reclaim: { ...TIGHT_GAP.reclaim, stream: "", confirm: { method: "GET", path: "", field: "confirm", prompt: "" } } });
+  assert.equal(gapReclaimLabel(noPreview!), null);
+});
+
 test("the wire contract is READ from the agent, not restated here", () => {
   const codes = readFileSync(join(repoRoot, "desktop/agent/reason_codes.go"), "utf8");
   assert.match(
@@ -118,6 +212,31 @@ test("the wire contract is READ from the agent, not restated here", () => {
   for (const key of ["json:\"label\"", "json:\"method\"", "json:\"path\"", "json:\"stream\"", "json:\"est,omitempty\"", "json:\"retry\""]) {
     assert.ok(producer.includes(key), `GapFix lost ${key} — the route would not render`);
   }
+  // The platform + resource lane (2026-07-27).
+  assert.match(
+    codes,
+    new RegExp(`ReasonCapabilityInsufficientDisk\\s*=\\s*"${CAPABILITY_INSUFFICIENT_DISK}"`),
+    "the disk reason code renamed in Go — clients would render Install for a full disk",
+  );
+  for (const key of ["json:\"warning,omitempty\"", "json:\"resource,omitempty\"", "json:\"reclaim,omitempty\"", "json:\"confirm,omitempty\""]) {
+    assert.ok(producer.includes(key), `CapabilityGap lost ${key} — the warning/reclaim lane goes dark`);
+  }
+  const resources = readFileSync(join(repoRoot, "desktop/agent/capability_resources.go"), "utf8");
+  for (const key of ["json:\"freeBytes\"", "json:\"freeHuman\"", "json:\"needBytes,omitempty\"", "json:\"level\""]) {
+    assert.ok(resources.includes(key), `CapabilityResource lost ${key} — gapHeadroomLine reads it`);
+  }
+  // The three verdict values the client branches on are the agent's, not ours.
+  for (const level of ["\"ok\"", "\"tight\"", "\"insufficient\""]) {
+    assert.ok(resources.includes(level), `capability_resources.go lost verdict level ${level}`);
+  }
+
+  // PLATFORM: the matrix must still declare the two truths that cost the most
+  // to get wrong — Flutter installable on linux/arm64, Apple toolchain not
+  // installable anywhere but darwin.
+  const platform = readFileSync(join(repoRoot, "desktop/agent/capability_platform.go"), "utf8");
+  assert.match(platform, /capabilityToolMatrix\s*=\s*map\[string\]capabilityToolSpec/, "the per-tool table moved");
+  assert.match(platform, /func darwinOnly\(/, "the Apple-only predicate is gone");
+  assert.match(platform, /emulatorHostSupported/, "the emulator row must reuse the installer's own truth, not a copy");
 
   // The carriers.
   const devserver = readFileSync(join(repoRoot, "desktop/agent/devserver.go"), "utf8");
