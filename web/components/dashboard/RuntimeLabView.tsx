@@ -406,6 +406,19 @@ function taskRowsEqual(a: Task[], b: Task[]): boolean {
   return true;
 }
 
+function taskStreamEqual(
+  a: { id: string; title: string; status: TaskStatus; lines: string[] } | null,
+  b: { id: string; title: string; status: TaskStatus; lines: string[] } | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.id !== b.id || a.title !== b.title || a.status !== b.status || a.lines.length !== b.lines.length) return false;
+  for (let i = 0; i < a.lines.length; i += 1) {
+    if (a.lines[i] !== b.lines[i]) return false;
+  }
+  return true;
+}
+
 function isModelCompatibleWithRunner(modelId: string | null | undefined, runnerId: string | null | undefined): boolean {
   const model = String(modelId || "").trim().toLowerCase();
   const runner = normalizeRunnerId(runnerId);
@@ -1016,8 +1029,12 @@ export default function RuntimeLabView({
 
   const attachTaskSession = useCallback((task: Task) => {
     stopActiveTaskStream();
-    setActiveTaskStream({ id: task.id, title: task.title, status: task.status, lines: taskOutputLines(task) });
-    setRecentTasks((prev) => [task, ...prev.filter((row) => row.id !== task.id)].slice(0, 8));
+    const initial = { id: task.id, title: task.title, status: task.status, lines: taskOutputLines(task) };
+    setActiveTaskStream((prev) => taskStreamEqual(prev, initial) ? prev : initial);
+    setRecentTasks((prev) => {
+      const next = [task, ...prev.filter((row) => row.id !== task.id)].slice(0, 8);
+      return taskRowsEqual(prev, next) ? prev : next;
+    });
     if (task.status !== "queued" && task.status !== "running") return;
     taskStreamStopRef.current = agentClient.streamTaskOutput(
       task.id,
@@ -1026,6 +1043,7 @@ export default function RuntimeLabView({
         if (!trimmed) return;
         setActiveTaskStream((prev) => {
           if (!prev || prev.id !== task.id) return prev;
+          if (prev.lines[prev.lines.length - 1] === trimmed) return prev;
           const lines = [...prev.lines, trimmed];
           return { ...prev, status: "running", lines: lines.slice(-240) };
         });
@@ -1047,9 +1065,13 @@ export default function RuntimeLabView({
         setActiveTaskStream((prev) => {
           if (!prev || prev.id !== task.id) return prev;
           const lines = taskOutputLines(fresh, prev.lines);
-          return { ...prev, status: fresh.status, lines };
+          const next = { ...prev, status: fresh.status, lines };
+          return taskStreamEqual(prev, next) ? prev : next;
         });
-        setRecentTasks((prev) => [fresh, ...prev.filter((row) => row.id !== fresh.id)].slice(0, 8));
+        setRecentTasks((prev) => {
+          const next = [fresh, ...prev.filter((row) => row.id !== fresh.id)].slice(0, 8);
+          return taskRowsEqual(prev, next) ? prev : next;
+        });
         if (fresh.status !== "queued" && fresh.status !== "running") stopActiveTaskStream();
       }).catch(() => {});
     }, 2000);
@@ -1967,9 +1989,30 @@ export default function RuntimeLabView({
                   {selectedProject?.name || "No project selected"}
                 </div>
               </div>
-              <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${chatStatusTone}`}>
-                {activeTaskStream?.status || "Ready"}
-              </span>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void copyTaskConsole()}
+                  disabled={!activeTaskStream}
+                  title="Copy chat output"
+                  aria-label="Copy chat output"
+                  className="flex h-7 w-7 items-center justify-center rounded-md border border-[#d7dce3] bg-[#f8fafc] text-[#475467] hover:text-[#1f2933] disabled:cursor-not-allowed disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                >
+                  {taskConsoleCopied ? (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M20 6 9 17l-5-5" />
+                    </svg>
+                  ) : (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect x="9" y="9" width="13" height="13" rx="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                  )}
+                </button>
+                <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${chatStatusTone}`}>
+                  {activeTaskStream?.status || "Ready"}
+                </span>
+              </div>
             </div>
             <div className="mt-3 grid gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 dark:border-[#2a3039] dark:bg-[#101318]">
               <div className="grid gap-2 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
@@ -2200,57 +2243,31 @@ export default function RuntimeLabView({
                   className="max-h-40 min-h-[76px] resize-none border-0 bg-transparent px-1 py-1 text-sm leading-5 text-[#1f2933] outline-none placeholder:text-[#98a2b3] dark:text-[#e6e8ec] dark:placeholder:text-[#667085]"
                 />
                 <div className="flex shrink-0 items-end gap-1">
-                  <div className="grid grid-cols-1 gap-1">
-                    <button
-                      type="button"
-                      onClick={toggleDictation}
-                      disabled={!sttAvailable}
-                      title={sttAvailable ? "Dictate prompt" : "Speech recognition is not available in this browser"}
-                      aria-label={dictating ? "Stop dictation" : "Dictate prompt"}
-                      className={`flex h-9 w-9 items-center justify-center rounded-md border disabled:cursor-not-allowed disabled:opacity-40 ${
-                        dictating
-                          ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-700 dark:text-emerald-200"
-                          : "border-[#d7dce3] bg-white text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
-                      }`}
-                    >
-                      {dictating ? (
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                          <rect x="6" y="6" width="12" height="12" rx="1.5" />
-                        </svg>
-                      ) : (
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                          <line x1="12" y1="19" x2="12" y2="22" />
-                        </svg>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={toggleSpeakSession}
-                      disabled={!ttsAvailable || !activeTaskStream}
-                      title={ttsAvailable ? "Read session output" : "Text to speech is not available in this browser"}
-                      aria-label={speaking ? "Stop speaking" : "Read session output"}
-                      className={`flex h-9 w-9 items-center justify-center rounded-md border disabled:cursor-not-allowed disabled:opacity-40 ${
-                        speaking
-                          ? "border-sky-500/50 bg-sky-500/15 text-sky-700 dark:text-sky-200"
-                          : "border-[#d7dce3] bg-white text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
-                      }`}
-                    >
-                      {speaking ? (
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                          <rect x="5" y="6" width="5" height="12" rx="1" />
-                          <rect x="14" y="6" width="5" height="12" rx="1" />
-                        </svg>
-                      ) : (
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                          <path d="M11 5 6 9H2v6h4l5 4V5Z" />
-                          <path d="M15.5 8.5a5 5 0 0 1 0 7" />
-                          <path d="M19 5a9 9 0 0 1 0 14" />
-                        </svg>
-                      )}
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={toggleSpeakSession}
+                    disabled={!ttsAvailable || !activeTaskStream}
+                    title={ttsAvailable ? "Read session output" : "Text to speech is not available in this browser"}
+                    aria-label={speaking ? "Stop speaking" : "Read session output"}
+                    className={`flex h-9 w-9 items-center justify-center rounded-md border disabled:cursor-not-allowed disabled:opacity-40 ${
+                      speaking
+                        ? "border-sky-500/50 bg-sky-500/15 text-sky-700 dark:text-sky-200"
+                        : "border-[#d7dce3] bg-white text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                    }`}
+                  >
+                    {speaking ? (
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <rect x="5" y="6" width="5" height="12" rx="1" />
+                        <rect x="14" y="6" width="5" height="12" rx="1" />
+                      </svg>
+                    ) : (
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M11 5 6 9H2v6h4l5 4V5Z" />
+                        <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+                        <path d="M19 5a9 9 0 0 1 0 14" />
+                      </svg>
+                    )}
+                  </button>
                   <button
                     disabled={!composer.trim() || sending}
                     onClick={() => void sendPrompt()}
