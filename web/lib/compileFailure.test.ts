@@ -65,6 +65,32 @@ test("timeout explanation names a cause per reason", () => {
   assert.match(previewTimeoutExplanation(null), /never confirmed a rendered frame/);
 });
 
+test("every failure line the AGENT names is one the card can detect", () => {
+  // THE WIRE CONTRACT. Go has its own failure vocabulary in
+  // devBuildFailureLine (desktop/agent/devserver_start_remedy.go) — the needles
+  // it uses to decide a dev server died compiling. The card's COMPILE_LINE was
+  // written separately and drifted: Metro's "bundling failed" / "unable to
+  // resolve module", webpack's "module build failed" and xcodebuild's "the
+  // following build commands failed" are all named by the agent and matched by
+  // NEITHER twin. On the tail-only path (RuntimeLabView passes statusError:
+  // null, and both mobile surfaces scan the tail before the agent persists
+  // status.error) those produce no card at all — a blank preview over a build
+  // that already failed, which is the exact defect this module exists to kill.
+  const goSrc = readFileSync(join(repoRoot, "desktop/agent/devserver_start_remedy.go"), "utf8");
+  const fn = goSrc.slice(goSrc.indexOf("func devBuildFailureLine"));
+  const list = fn.slice(fn.indexOf("[]string{") + 9, fn.indexOf("} {"));
+  const needles = Array.from(list.matchAll(/"([^"\n]+)"/g), (m) => m[1]);
+  assert.ok(needles.length >= 5, `expected the Go needle list, found ${needles.length}`);
+
+  for (const needle of needles) {
+    const line = `  ${needle}: something went wrong`;
+    assert.ok(
+      detectCompileFailure(null, [line]),
+      `the agent treats ${JSON.stringify(needle)} as a build failure but the card ignores it — add it to BOTH compileFailure.ts twins`,
+    );
+  }
+});
+
 test("web port carries the same detection shapes as the mobile original", () => {
   const web = readFileSync(join(webRoot, "lib/compileFailure.ts"), "utf8");
   const mobile = readFileSync(join(repoRoot, "mobile/src/lib/compileFailure.ts"), "utf8");

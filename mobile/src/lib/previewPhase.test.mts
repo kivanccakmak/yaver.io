@@ -3,6 +3,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { previewPhaseTitle, previewTimeoutExplanation } from "./previewPhase.ts";
 
@@ -68,4 +71,36 @@ test("timeout explanation for a mounted-but-blank app points at runtime errors",
 
 test("unknown timeout reason still gives an actionable generic line", () => {
   assert.match(previewTimeoutExplanation(undefined), /retry/i);
+});
+
+// ── PARITY ────────────────────────────────────────────────────────────────
+//
+// previewPhase.ts is the last of the preview twins with no parity guard.
+// capabilityGap, relayDeny and taskStreamRecovery each pin their two copies
+// byte-for-byte; this pair was pinned by nothing, and web has no test file of
+// its own at all — so a drift here fails on neither surface. The twins agree
+// today (the only textual difference is prose: "inside the WebView" vs
+// "inside the iframe"), which is exactly when the guard is cheap to add and
+// exactly when nobody adds it.
+//
+// Comparing SOURCE rather than behaviour is deliberate and is the idiom the
+// other three pairs use: web/ and mobile/ have no shared build, so a test
+// cannot import both. For pure functions, byte-identity is strictly stronger
+// than any fixture table.
+test("web/mobile twins are byte-identical below the header comment", () => {
+  const strip = (src: string) =>
+    src
+      .split("\n")
+      .filter((l) => !l.trimStart().startsWith("//"))
+      .join("\n")
+      .trim();
+  const here = dirname(fileURLToPath(import.meta.url));
+  const repoRoot = join(here, "..", "..", "..");
+  const mobile = strip(readFileSync(join(repoRoot, "mobile/src/lib/previewPhase.ts"), "utf8"));
+  const web = strip(readFileSync(join(repoRoot, "web/lib/previewPhase.ts"), "utf8"));
+  assert.equal(
+    mobile,
+    web,
+    "previewPhase twins drifted — sync web/lib/previewPhase.ts and mobile/src/lib/previewPhase.ts",
+  );
 });

@@ -25,7 +25,12 @@ export type CompileFailure = {
   detail: string;
 };
 
-const COMPILE_LINE = /failed to compile|compilation failed|error: the class .+ can't be extended|no file or variants found for asset|error TS\d+|SyntaxError:|error: cannot find|undefined name '|isn't defined for the (class|type)/i;
+// The failure shapes worth promoting. The first group MUST cover every needle
+// in devBuildFailureLine (desktop/agent/devserver_start_remedy.go) — the agent
+// and the card have to agree on what a build failure looks like, or the
+// tail-only path renders nothing over a build that already died. That
+// contract is enforced by compileFailure.test.ts, which reads the Go list.
+const COMPILE_LINE = /failed to compile|compilation failed|module build failed|bundling failed|unable to resolve module|the following build commands failed|error: the class .+ can't be extended|no file or variants found for asset|error TS\d+|SyntaxError:|error: cannot find|undefined name '|isn't defined for the (class|type)/i;
 
 /** Lines a human needs from a tail: everything matching the failure shapes,
  *  plus one line of context after each, capped so the card stays a card. */

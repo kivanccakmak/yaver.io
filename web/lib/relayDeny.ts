@@ -30,6 +30,13 @@ export function explainRelayDeny(cause: string | null | undefined): string | nul
       "on the box to sign it into this account, or switch here to the account the box uses."
     );
   }
+  if (lower.includes("reason=dead_token") || lower.includes("relay session expired")) {
+    return (
+      "The relay session for this device has expired (reason=dead_token). Retrying " +
+      "can't help — the credential itself is gone. Sign in again on this device, or " +
+      "run `yaver auth` on the box, and the relay will accept it immediately."
+    );
+  }
   return null;
 }
 
@@ -54,6 +61,21 @@ export function classifyRelayLimit(message: string | null | undefined): RelayLim
         "The cap resets daily. Direct LAN and tunnel connections are unmetered — " +
         "use one of those, or wait for the reset. A stream that stops mid-way with " +
         "this message was cut by the cap, not by your network.",
+    };
+  }
+  // The relay also aborts an ALREADY-RUNNING transfer when the budget runs out
+  // (relay/counting_writer.go). That message carries no figures, so it matched
+  // none of the branches below and reached the user as a raw Go string — even
+  // though the card above already describes exactly this experience.
+  if (lower.includes("bandwidth limit exceeded")) {
+    return {
+      kind: "bandwidth-cap",
+      title: "Daily relay bandwidth cap reached",
+      detail:
+        "This transfer was cut off because the device used up its daily relay " +
+        "bandwidth allowance — not because your network dropped. The cap resets " +
+        "daily. Direct LAN and tunnel connections are unmetered, so reconnecting " +
+        "over one of those works right now.",
     };
   }
   if (lower.includes("free relay user rate limit exceeded")) {
