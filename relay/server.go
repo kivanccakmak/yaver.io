@@ -2023,8 +2023,10 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"ok":    false,
-			"error": "device not connected to relay",
+			"ok":         false,
+			"code":       "relay.device_not_connected",
+			"reasonCode": "connectivity.relay.device_not_connected",
+			"error":      "device not connected to relay",
 		})
 		return
 	}
