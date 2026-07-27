@@ -94,7 +94,7 @@ did not even declare `lastOutputAt` — 🔧 added.)
 | CX2 | `account_not_eligible` unreachable for codex: the entitlement scan matches `Login failed:` lines, but codex device-auth is measured SILENT — an admin-gated workspace (device-auth disabled) fell to the generic 45s remedy that never mentioned the possibility | scanner + watchdog | 🔧 codex-specific watchdog remedy now names workspace gating + the terminal/import lanes |
 | CX3 | `lastOutputAt`/callbackPort/replay/completed-kick are runner-ungated — codex gets the callback lane and heartbeat kick like claude | spawn + `watchRunnerCallbackPort` + onTerminal | ✅ |
 | CX4 | Device-code copy affordance missing on 2 of 5 surfaces (VibeCoding, RuntimeLab rendered `Code: XXXX-XXXX` as plain text) | web panels | 🔧 Copy-code buttons added |
-| CX5 | Codex hard failures render the Go "exit status N", not the CLI's own words (no codex failure-line parsing) | exit transition | ❌ remaining (server preserves last stderr line in Detail when present) |
+| CX5 | Codex hard failures render the Go "exit status N", not the CLI's own words (no codex failure-line parsing) | exit transition | 🔧 fixed 2026-07-27 (`5f74049e5`): session keeps a bounded sanitized output tail; `applyRunnerBrowserAuthExit` quotes the last meaningful line (skipping sign-in URLs / bare device codes) into `Error` verbatim — `TestRunnerBrowserAuthExitQuotesCLIWords`, guard proven by breaking it |
 | CX6 | `/runner-auth/status?live=1` re-verify excluded for codex on a stale rationale — `codex login status` IS a free authoritative probe the code itself uses | `runner_auth.go` applyLiveRunnerAuthProbe | ❌ remaining |
 
 ### 2d. Live incident 2026-07-27 (web dialog vs mobile — "mobile was perfect")
@@ -117,12 +117,17 @@ user's Deliver-callback replay succeeded; terminal `completed`,
   `account_not_eligible` → loops ~6 min then generic timeout, dropping the
   verbatim entitlement quote. ❌ (mitigated server-side now that the status
   survives, but the CLI switch should still name it).
-- **SSH fallback** (`runner_auth_cmd.go:676`): still spawns
+- **SSH fallback** (`runner_auth_cmd.go`): spawned
   `claude auth login --console` — the API-billing flow whose token 401s against
-  subscription endpoints; the HTTP path was explicitly fixed to `--claudeai`. ❌
-- **MCP verbs**: start/status/submit-code/cancel exist; there is **no**
+  subscription endpoints; the HTTP path was explicitly fixed to `--claudeai`.
+  🔧 fixed 2026-07-27 (`5a90f5d1b`): now `--claudeai`, passed explicitly, with
+  the file-top rationale; stale `--console` comments updated with it.
+- **MCP verbs**: start/status/submit-code/cancel existed; there was **no**
   `runner_auth_browser_submit_callback` verb, so MCP/phone-connector callers
-  cannot use the Deliver-callback lane. ❌
+  could not use the Deliver-callback lane. 🔧 fixed 2026-07-27 (`d61d0b39a`):
+  MCP tool + dispatch + `ops runner_auth op=submit_callback` all funnel into
+  the same HTTP handler (`validateRunnerBrowserAuthCallbackURL` stays the
+  single validation authority); registration + payload-validation tests pin it.
 
 ## 3. Transport + session (mobile / web)
 
@@ -174,7 +179,7 @@ device; PTY gated on live auth; status on device cards).
 |---|---|---|
 | 1. No false green — Claude/Codex `signed in` requires `authVerified` | see §6a (verified against HEAD in the fix pass) | |
 | 2. Devices runner click → OAuth modal, not failing PTY | see §6a | |
-| 3. Localhost callback hardening (paste primary, timeout+recovery) | 🟡 server 45s watchdog + callbackPort replay exist; 🔧 this pass fixed the terminal-state machine and panel rendering gaps that stranded the flow | SSH fallback still uses `--console` (§2e) |
+| 3. Localhost callback hardening (paste primary, timeout+recovery) | 🟡 server 45s watchdog + callbackPort replay exist; 🔧 this pass fixed the terminal-state machine and panel rendering gaps that stranded the flow; 🔧 SSH `--console` fixed to `--claudeai` (`5a90f5d1b`) | |
 | 4. Spread agent-auth recovery beyond Load Targets | 🟡 RuntimeLab done (`isAgentAuthErrorMessage` + Reconnect & Retry) | other surfaces per §6a |
 | 5. OpenCode config snapshot first-class | see §6a | |
 
@@ -201,8 +206,8 @@ Paste lanes existed on all four panels; this pass added the agent-side
 15-minute whole-session deadline (a session waiting on a callback that
 never arrives used to stay `awaiting_browser` until the next spawn reaped
 it), elapsed/liveness narration on all panels, terminal-state honesty,
-and stale-session detection in the Devices modal. Remaining: SSH fallback
-still uses `claude auth login --console` (§2e).
+and stale-session detection in the Devices modal. The SSH fallback's
+`--console` flag is fixed to `--claudeai` (`5a90f5d1b`, §2e).
 
 **Item 4 — spread agent-auth recovery beyond Load Targets: 🔧 DONE
 (2026-07-27, `3bf874476` + `fca3be788`).** `isAgentAuthErrorMessage` hoisted
@@ -282,13 +287,14 @@ was surface-exclusive):
     stream was the cap, not your network") on web PreviewPane + connect
     errors and in mobile's reconnect narration. Remaining: no usage METER
     anywhere (relay `/admin/bandwidth` is still admin-only).
-12. CLI headless runner-auth poll drops `account_not_eligible`; SSH fallback
-    uses the wrong claude flag (`--console`) (§2e).
+12. CLI headless runner-auth poll drops `account_not_eligible` (§2e).
+    🔧 the SSH-fallback half — wrong claude flag `--console` — is fixed
+    (`5a90f5d1b`); the poll's terminal switch still omits the status.
 13. Web 412 install affordance + D2's promised-but-missing Install button.
 14. `deviceId already registered` cross-owner collision has no reason code
     (R9).
-15. MCP verb for submit-callback missing (§2e). *(agent files locked during
-    this pass)*
+15. 🔧 **FIXED** (`d61d0b39a`) MCP verb `runner_auth_browser_submit_callback`
+    + `ops runner_auth op=submit_callback` (§2e).
 
 **P2:** relay-hint table duplicated across quic.ts/agent-client.ts; three
 drifting relay-auth matchers on mobile; WS-fallback streaming constraint
