@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CONVEX_URL } from "@/lib/constants";
-import { useDevices } from "@/lib/use-devices";
+import { useDevices, type Device } from "@/lib/use-devices";
 import { PasskeysCard } from "./PasskeyEnrollPrompt";
 import YaverAgentSettings from "./YaverAgentSettings";
 import McpServersCard from "./McpServersCard";
@@ -11,6 +11,17 @@ import GitSettingsCard from "./GitSettingsCard";
 import { ManagedCloudPanel } from "./ManagedCloudPanel";
 import { agentClient } from "@/lib/agent-client";
 import { HIDE_PAID_UI } from "@/lib/launchFlags";
+import {
+  resolveRuntimeProjectPreference,
+  runtimeProjectCatalogMap,
+  runtimeProjectDefaultMap,
+  runtimeProjectDisplayName,
+  runtimeProjectMeta,
+  runtimeProjectPreferenceFor,
+  type RuntimeProjectCatalogRow,
+  type RuntimeProjectPreference,
+  type RuntimeProjectSeed,
+} from "@/lib/runtimeProjectSettings";
 import pkg from "../../package.json";
 
 const WEB_VERSION = (pkg as { version?: string }).version ?? "unknown";
@@ -133,6 +144,210 @@ function platformLabel(platform: string): string {
     default:
       return platform || "Unknown OS";
   }
+}
+
+function RuntimeProjectDefaultsCard({ token, devices }: { token: string | null; devices: Device[] }) {
+  const [catalogs, setCatalogs] = useState<Record<string, RuntimeProjectCatalogRow>>({});
+  const [defaults, setDefaults] = useState<Record<string, RuntimeProjectPreference>>({});
+  const [expandedDeviceId, setExpandedDeviceId] = useState<string | null>(null);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const cachedCatalogs = useMemo(() => {
+    const out: Record<string, RuntimeProjectCatalogRow> = {};
+    for (const device of devices) {
+      if (Array.isArray(device.runtimeProjectCatalog) && device.runtimeProjectCatalog.length > 0) {
+        out[device.id] = {
+          deviceId: device.id,
+          projects: device.runtimeProjectCatalog,
+        };
+      }
+    }
+    return out;
+  }, [devices]);
+
+  const cachedDefaults = useMemo(() => {
+    const out: Record<string, RuntimeProjectPreference> = {};
+    for (const device of devices) {
+      if (device.defaultRuntimeProject?.projectName) {
+        out[device.id] = runtimeProjectPreferenceFor(device.id, device.defaultRuntimeProject);
+      }
+    }
+    return out;
+  }, [devices]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    fetch(`${CONVEX_URL}/settings`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || `settings: HTTP ${res.status}`);
+        return data?.settings || {};
+      })
+      .then((settings) => {
+        if (cancelled) return;
+        setCatalogs(runtimeProjectCatalogMap(settings.runtimeProjectCatalogByDevice));
+        setDefaults(runtimeProjectDefaultMap(settings.defaultRuntimeProjectByDevice));
+      })
+      .catch((err) => {
+        if (!cancelled) setMessage(err instanceof Error ? err.message : "Could not load runtime project defaults.");
+      });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const effectiveCatalogs = useMemo(
+    () => ({ ...cachedCatalogs, ...catalogs }),
+    [cachedCatalogs, catalogs],
+  );
+  const effectiveDefaults = useMemo(
+    () => ({ ...cachedDefaults, ...defaults }),
+    [cachedDefaults, defaults],
+  );
+
+  const postRuntimeSettings = useCallback(async (body: Record<string, unknown>) => {
+    if (!token) throw new Error("Not signed in.");
+    const res = await fetch(`${CONVEX_URL}/settings`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `settings: HTTP ${res.status}`);
+  }, [token]);
+
+  const saveForDevice = useCallback(async (deviceId: string, project: RuntimeProjectSeed) => {
+    const pref = runtimeProjectPreferenceFor(deviceId, project);
+    setSaving(deviceId);
+    setMessage(null);
+    try {
+      await postRuntimeSettings({ defaultRuntimeProjectForDevice: pref });
+      setDefaults((prev) => ({ ...prev, [deviceId]: pref }));
+      setMessage(`Default render project saved for ${runtimeProjectDisplayName(project)}.`);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not save default render project.");
+    } finally {
+      setSaving(null);
+    }
+  }, [postRuntimeSettings]);
+
+  const applyToAll = useCallback(async (project: RuntimeProjectSeed) => {
+    setSaving("__all__");
+    setMessage(null);
+    try {
+      const next: Record<string, RuntimeProjectPreference> = {};
+      for (const device of devices) {
+        const match = resolveRuntimeProjectPreference(effectiveCatalogs[device.id]?.projects || [], project);
+        if (!match) continue;
+        const pref = runtimeProjectPreferenceFor(device.id, match);
+        await postRuntimeSettings({ defaultRuntimeProjectForDevice: pref });
+        next[device.id] = pref;
+      }
+      const count = Object.keys(next).length;
+      if (count === 0) throw new Error("No machine has a matching synced project catalog yet.");
+      setDefaults((prev) => ({ ...prev, ...next }));
+      setMessage(`Applied to ${count} machine${count === 1 ? "" : "s"} with a matching project.`);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not apply default render project.");
+    } finally {
+      setSaving(null);
+    }
+  }, [devices, effectiveCatalogs, postRuntimeSettings]);
+
+  if (devices.length === 0) return null;
+
+  return (
+    <div className="card mb-6">
+      <h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-surface-400">
+        Default Render Project
+      </h3>
+      <p className="mb-4 text-xs leading-5 text-surface-500">
+        Pick the project Yaver opens by default in Runtime for each machine. This stores only project names and remote repo identity, never local folder paths.
+      </p>
+      {message ? (
+        <p className="mb-3 rounded-lg border border-surface-800 bg-surface-900/60 px-3 py-2 text-xs text-surface-300">
+          {message}
+        </p>
+      ) : null}
+      <div className="space-y-2">
+        {devices.map((device) => {
+          const catalog = effectiveCatalogs[device.id]?.projects || [];
+          const saved = effectiveDefaults[device.id];
+          const savedProject = resolveRuntimeProjectPreference(catalog, saved);
+          const expanded = expandedDeviceId === device.id;
+          const label = savedProject
+            ? runtimeProjectDisplayName(savedProject)
+            : saved
+              ? runtimeProjectDisplayName(saved)
+              : "No default";
+          return (
+            <div key={device.id} className="rounded-lg border border-surface-800 bg-surface-900/60">
+              <button
+                type="button"
+                onClick={() => setExpandedDeviceId(expanded ? null : device.id)}
+                className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-surface-200">{device.name || device.hostName || device.id}</div>
+                  <div className="mt-1 truncate text-xs text-surface-500">
+                    {label}{saved ? ` · ${runtimeProjectMeta(saved) || "synced"}` : ""}
+                  </div>
+                </div>
+                <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.16em] ${catalog.length ? "border-sky-500/30 text-sky-700 dark:text-sky-300" : "border-surface-700 text-surface-500"}`}>
+                  {catalog.length ? `${catalog.length} projects ${expanded ? "Hide" : "Show"}` : "No catalog"}
+                </span>
+              </button>
+              {expanded ? (
+                <div className="space-y-2 border-t border-surface-800 p-3">
+                  {catalog.length === 0 ? (
+                    <p className="text-xs leading-5 text-surface-500">
+                      Open Runtime for this machine once so it can sync repo/project names, then pick a default here.
+                    </p>
+                  ) : (
+                    catalog.map((project, index) => {
+                      const active = savedProject === project;
+                      const busy = saving === device.id || saving === "__all__";
+                      return (
+                        <div key={`${runtimeProjectDisplayName(project)}:${project.gitRemote || project.repoName || index}`} className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${active ? "border-sky-500/40 bg-sky-500/10" : "border-surface-800 bg-surface-950/40"}`}>
+                          <div className="min-w-0">
+                            <div className={`truncate text-sm font-medium ${active ? "text-sky-700 dark:text-sky-300" : "text-surface-200"}`}>
+                              {runtimeProjectDisplayName(project)}
+                            </div>
+                            <div className="mt-1 truncate text-xs text-surface-500">{runtimeProjectMeta(project) || "repo identity synced"}</div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void saveForDevice(device.id, project)}
+                              className={`h-8 rounded-md border px-3 text-[11px] font-semibold uppercase tracking-[0.14em] disabled:opacity-40 ${active ? "border-sky-500 bg-sky-500 text-white" : "border-surface-700 text-surface-300 hover:bg-surface-800"}`}
+                            >
+                              {active ? "Default" : "Use"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void applyToAll(project)}
+                              className="h-8 rounded-md border border-surface-700 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-surface-300 hover:bg-surface-800 disabled:opacity-40"
+                            >
+                              All
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export default function SettingsView({ user, onLogout }: SettingsViewProps) {
@@ -557,6 +772,7 @@ export default function SettingsView({ user, onLogout }: SettingsViewProps) {
       </div>
 
       <GitSettingsCard devices={ownedDevices} />
+      <RuntimeProjectDefaultsCard token={token} devices={ownedDevices} />
 
       {!HIDE_PAID_UI ? (
         <>

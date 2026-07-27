@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { CONVEX_URL } from "@/lib/constants";
+import type { RuntimeProjectSeed } from "@/lib/runtimeProjectSettings";
 
 /** DeviceStorage is the live disk gauge the agent sends on every heartbeat. */
 export interface DeviceStorage {
@@ -168,6 +169,10 @@ export interface Device {
    */
   hosting?: "yaver-hosted" | "byo" | "self-hosted";
   managed?: boolean;
+  /** Privacy-safe cached runtime projects for this machine. Project/repo names
+   * only; no absolute local paths. */
+  runtimeProjectCatalog?: RuntimeProjectSeed[];
+  defaultRuntimeProject?: RuntimeProjectSeed;
   /** Managed-cloud machine id + status — needed to Pause (snapshot+delete) or
    *  Resume a Yaver-hosted box from the web dashboard, same as mobile does. */
   machineId?: string;
@@ -644,6 +649,9 @@ export function useDevices(token: string | null): DevicesState & { hiddenIds: Se
             ? d.hosting
             : undefined,
         managed: typeof d.managed === "boolean" ? d.managed : undefined,
+        runtimeProjectCatalog: Array.isArray(d.runtimeProjectCatalog) ? d.runtimeProjectCatalog : undefined,
+        defaultRuntimeProject:
+          d.defaultRuntimeProject && typeof d.defaultRuntimeProject === "object" ? d.defaultRuntimeProject : undefined,
         machineId: typeof d.machineId === "string" ? d.machineId : undefined,
         machineStatus: typeof d.machineStatus === "string" ? d.machineStatus : undefined,
         machineWakeable: d.machineWakeable === true,

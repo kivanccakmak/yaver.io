@@ -1062,7 +1062,10 @@ export default function RuntimeLabView({
       ]);
       const rows = await expandMonorepoProjects(mergeProjectInventory([...(projectRows as Project[]), ...(mobileRows as Project[])], repoRows));
       setProjects(rows);
-      void seedRuntimeProjectCatalog(rows).catch((err) => appendLog(`runtime project sync failed: ${err instanceof Error ? err.message : String(err)}`));
+      void seedRuntimeProjectCatalog(rows).catch((err) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        appendLog(`default project catalog sync skipped: ${detail || "settings unavailable"}`);
+      });
       if (!selectedPath && rows[0]?.path) {
         const saved = connectedDevice?.id
           ? (settings?.defaultRuntimeProjectByDevice || []).find((row: RuntimeProjectPreference) => row.deviceId === connectedDevice.id)
@@ -1978,7 +1981,7 @@ export default function RuntimeLabView({
             {runtimeProjectSaving ? "Saving..." : selectedProjectIsSavedDefault ? "Default" : "Save default"}
           </button>
           {runtimeProjectNote ? (
-            <span className="min-w-[160px] text-xs text-[#667085] dark:text-[#9aa3af]">{runtimeProjectNote}</span>
+            <span className="inline-flex h-10 min-w-[160px] items-center text-xs text-[#667085] dark:text-[#9aa3af]">{runtimeProjectNote}</span>
           ) : null}
         </div>
         ) : null}
@@ -2463,13 +2466,13 @@ export default function RuntimeLabView({
               </div>
             </div>
             <div className="mt-3">
-              <div className="flex min-w-0 items-center gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1.5 dark:border-[#2a3039] dark:bg-[#101318]">
-                <span className="min-w-0 flex-1 truncate text-[11px] text-[#667085] dark:text-[#9aa3af]">
+              <div className="grid min-h-11 min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1.5 dark:border-[#2a3039] dark:bg-[#101318]">
+                <span className="min-w-0 truncate text-[11px] leading-5 text-[#667085] dark:text-[#9aa3af]">
                   <span className="font-semibold uppercase tracking-wide">Runner</span>
                   <span className="mx-1.5 text-[#98a2b3]">/</span>
                   <span className="font-medium text-[#344054] dark:text-[#d7dce3]">{selectedRunnerRow?.name || selectedRunner || "No runner"}</span>
                 </span>
-                <span className="min-w-0 flex-1 truncate text-[11px] text-[#667085] dark:text-[#9aa3af]">
+                <span className="min-w-0 truncate text-[11px] leading-5 text-[#667085] dark:text-[#9aa3af]">
                   <span className="font-semibold uppercase tracking-wide">Model</span>
                   <span className="mx-1.5 text-[#98a2b3]">/</span>
                   <span className="font-medium text-[#344054] dark:text-[#d7dce3]">{effectiveChatModel || selectedModel || "runner default"}</span>
@@ -2477,7 +2480,7 @@ export default function RuntimeLabView({
                 <button
                   type="button"
                   onClick={() => setChatRunnerControlsOpen((open) => !open)}
-                  className="shrink-0 rounded-md border border-[#d7dce3] bg-white px-2 py-1 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#d7dce3]"
+                  className="flex h-8 shrink-0 items-center rounded-md border border-[#d7dce3] bg-white px-2 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#d7dce3]"
                   aria-expanded={chatRunnerControlsOpen}
                 >
                   {chatRunnerControlsOpen ? "Fold" : "Edit"}
