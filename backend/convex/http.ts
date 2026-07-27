@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { v } from "convex/values";
 import { httpAction, internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import { clientIpFromRequest } from "./rateLimiter";
 import type { SessionScope } from "./auth";
 import { sha256Hex, randomHex } from "./auth";
 import { managedDeviceIdFor } from "./cloudMachines";
@@ -2560,7 +2561,9 @@ http.route({
       // Batched CPU/RAM samples folded into the heartbeat (replaces the
       // separate /devices/metrics 60s poll). Validated by the mutation's
       // array schema; only forwarded when it's actually an array.
-      metricsSamples: Array.isArray(body.metricsSamples) ? body.metricsSamples : undefined,
+      // Cap the batch: one HTTP request must not become thousands of row
+      // inserts (60 samples = ~1h at the 60s cadence; older ones are pruned).
+      metricsSamples: Array.isArray(body.metricsSamples) ? body.metricsSamples.slice(-60) : undefined,
       // Resource envelope from the agent's in-process watchdog
       // (desktop/agent/resource_warden.go): level + counters only, allowlist
       // rebuilt here so nothing beyond these fields can ride the payload.
@@ -4865,7 +4868,7 @@ http.route({
         level: body.level || "info",
         provider: body.provider || "unknown",
         step: body.step || "unknown",
-        message: body.message || "",
+        message: String(body.message ?? "").slice(0, 1000),
         details: body.details ? String(body.details).slice(0, 2000) : undefined,
       });
       return jsonResponse({ ok: true });
@@ -5195,7 +5198,7 @@ http.route({
         buildNumber: body.buildNumber || "unknown",
         level: body.level || "info",
         step: body.step || "unknown",
-        message: body.message || "",
+        message: String(body.message ?? "").slice(0, 1000),
         details: body.details ? String(body.details).slice(0, 2000) : undefined,
       });
       return jsonResponse({ ok: true });
@@ -5230,7 +5233,7 @@ http.route({
         source: body.source || "agent",
         level: body.level || "info",
         tag: body.tag || "general",
-        message: body.message || "",
+        message: String(body.message ?? "").slice(0, 1000),
         data: body.data ? String(body.data).slice(0, 8000) : undefined,
       });
       return jsonResponse({ ok: true });
@@ -5730,15 +5733,9 @@ http.route({
   }),
 });
 
-/** POST /runners/seed — Seed predefined AI runners (idempotent, no auth). */
-http.route({
-  path: "/runners/seed",
-  method: "POST",
-  handler: httpAction(async (ctx) => {
-    await ctx.runMutation(api.aiRunners.seed, {});
-    return jsonResponse({ ok: true });
-  }),
-});
+// POST /runners/seed removed: it was an unauthenticated bulk read+write.
+// aiRunners.seed is internalMutation now — run it via `npx convex run
+// aiRunners:seed` at bootstrap, never over the wire.
 
 // ── AI Models ────────────────────────────────────────────────────────
 
@@ -5752,15 +5749,8 @@ http.route({
   }),
 });
 
-/** POST /models/seed — Seed predefined AI models (idempotent, no auth). */
-http.route({
-  path: "/models/seed",
-  method: "POST",
-  handler: httpAction(async (ctx) => {
-    await ctx.runMutation(api.aiModels.seed, {});
-    return jsonResponse({ ok: true });
-  }),
-});
+// POST /models/seed removed: unauthenticated bulk read+write. aiModels.seed
+// is internalMutation now — run via `npx convex run aiModels:seed`.
 
 // ── Subscription & Managed Relay ─────────────────────────────────────
 
@@ -7594,6 +7584,35 @@ http.route({
       return jsonResponse({ error: "Message required (max 500 chars)" }, 400);
     }
 
+    // This route is anonymous (landing-page help widget) and spends real
+    // OpenRouter money + a Convex action per call — the single worst
+    // bill-amplification vector on an open-source launch. Guard it:
+    //   1. per-IP + global rate limit,
+    //   2. bounded, role-sanitized history (was 4 messages of UNBOUNDED length
+    //      with attacker-chosen role — a system-prompt injection + cost bomb).
+    const chatIp = clientIpFromRequest(request);
+    const ipGate = await ctx.runMutation(internal.rateLimiter.enforceRateLimit, {
+      limitName: "chat-ip",
+      subject: chatIp,
+    });
+    const globalGate = await ctx.runMutation(internal.rateLimiter.enforceRateLimit, {
+      limitName: "chat-global",
+      subject: "all",
+    });
+    if (!ipGate.allowed || !globalGate.allowed) {
+      return jsonResponse({ error: "Rate limit — try again shortly." }, 429);
+    }
+    const safeHistory: Array<{ role: string; content: string }> = [];
+    let historyBudget = 4000; // total chars across the whole history window
+    for (const m of (Array.isArray(body.history) ? body.history : []).slice(-4)) {
+      const role = m?.role === "assistant" ? "assistant" : "user"; // never "system"
+      const content = String(m?.content ?? "").slice(0, Math.max(0, historyBudget));
+      if (!content) continue;
+      historyBudget -= content.length;
+      safeHistory.push({ role, content });
+      if (historyBudget <= 0) break;
+    }
+
     const systemPrompt = `You are Yaver's help assistant on the yaver.io website. Yaver is a free, open-source P2P tool that lets developers control AI coding agents (Claude Code, Codex, Aider, Ollama, etc.) from their phone, desktop, or any terminal.
 
 Your ONLY purpose is to help users with Yaver-related questions:
@@ -7625,7 +7644,7 @@ Rules:
           model: "meta-llama/llama-4-scout",
           messages: [
             { role: "system", content: systemPrompt },
-            ...(body.history || []).slice(-4),
+            ...safeHistory,
             { role: "user", content: userMessage },
           ],
           max_tokens: 300,

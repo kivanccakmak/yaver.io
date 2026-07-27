@@ -1388,6 +1388,10 @@ export const heartbeat = mutation({
     // runs on a beat that actually carries events — normally just the first one
     // after a boot — so a steady-state box pays nothing for it.
     if (args.flightEvents && args.flightEvents.length > 0) {
+      // Bound the batch BEFORE the insert loop: flight events are rare by
+      // construction (a boot/shutdown/degraded transition), so a request
+      // carrying more than a handful is malformed or hostile. Cap at 60.
+      const incomingFlight = args.flightEvents.slice(-60);
       const existing = await ctx.db
         .query("deviceFlightEvents")
         .withIndex("by_device", (q) => q.eq("deviceId", args.deviceId))
@@ -1396,7 +1400,7 @@ export const heartbeat = mutation({
       // agent that retries a heartbeat, or re-sends its buffer after a failed
       // sync, must not double-record the same history.
       const seen = new Set(existing.map((e) => `${e.session}|${e.kind}|${e.at}`));
-      for (const ev of args.flightEvents) {
+      for (const ev of incomingFlight) {
         const key = `${ev.session}|${ev.kind}|${ev.atMs}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -1522,7 +1526,9 @@ export const setConnectionPreferences = mutation({
  * already-stored localIps/publicEndpoints/relay presence. It is
  * idempotent and preserves user-config rows.
  */
-export const backfillConnectionPreferences = mutation({
+// internalMutation: with no tokenHash this patches the WHOLE devices table;
+// a public mutation = anon full-table read+write of every user's devices.
+export const backfillConnectionPreferences = internalMutation({
   args: {
     tokenHash: v.optional(v.string()),
     dryRun: v.optional(v.boolean()),

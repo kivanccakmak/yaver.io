@@ -1302,7 +1302,21 @@ export default defineSchema({
   })
     .index("by_userCode", ["userCode"])
     .index("by_deviceCode", ["deviceCode"])
-    .index("by_ownerHint", ["ownerHintUserId", "status"]),
+    .index("by_ownerHint", ["ownerHintUserId", "status"])
+    // Lazy cleanup scanned this table with an unindexed .filter(), so a flood
+    // of live (non-expired) rows made every subsequent insert O(table) — a
+    // self-amplifying cost bomb. This index makes expiry pruning O(matches).
+    .index("by_expiresAt", ["expiresAt"]),
+
+  // Fixed-window rate-limit counters (rateLimiter.ts). One row per bucket
+  // ("<limitName>:<subject>"), reset when its window rolls over. Keyed opaque
+  // so per-IP, per-user, and global backstops all share the same table — the
+  // global buckets are what cap total spend when an attacker rotates IPs/proxies.
+  rateLimits: defineTable({
+    key: v.string(),
+    windowStart: v.number(),
+    count: v.number(),
+  }).index("by_key", ["key"]),
 
   // Managed relay subscriptions (LemonSqueezy payments)
   subscriptions: defineTable({
