@@ -138,6 +138,72 @@ constraint if it does not.**
 Applies to runners, SDKs, simulators, emulators, adb, keychains — any capability
 gap.
 
+## Every failure must carry a route to its fix — four layers
+
+The missing-toolchain rule above is the **first instance of a general law**, not
+a special case. It applies to every failure in the product: remote runners,
+reload/preview (Hermes, browser, WebRTC), the feedback SDK, connectivity, auth,
+builds, deploys. Full architecture with the failure×route matrix and every
+`file:line` → [`docs/architecture/FAILURE_PLUMBING_ARCHITECTURE.md`](docs/architecture/FAILURE_PLUMBING_ARCHITECTURE.md);
+the failure *inventory* → `docs/audits/failure-recovery-audit-2026-07.md`.
+Condensed rule in [`CLAUDE.md`](CLAUDE.md). A failure is shipped only when all
+four layers exist:
+
+1. **DETECTION — probe the operation, never the inventory.** `commandExists` is
+   a proxy. A tool on PATH can be a stub; a cert can be present and unable to
+   sign; a device can be `online` and unreachable.
+2. **SIGNAL — structured and named, never prose.** A stable code (14 already
+   exist in `desktop/agent/reason_codes.go`) plus typed fields, on *every*
+   channel the failure can take: HTTP body, `/dev/events` SSE, task event,
+   incident, heartbeat. A bare `{ok:false, error:"<sentence>"}` forces every
+   surface to invent a regex, and regexes drift — mobile already ships **three**
+   different relay-auth matchers, none a superset of the others.
+3. **UI — a named cause the user can actually SEE.** A spinner is a bug, and
+   "rendered" is not enough: in build 482 an unbounded diagnostics wall squeezed
+   the action lanes to zero height (`40eec39ef`), so the one lane the agent
+   offered could not be seen. **Advisory content never wins over the route** —
+   not in pixels, and not in time (a blocking preflight in front of a capability
+   that already works is the same defect).
+4. **ROUTE-TO-FIX — the next tap, in place, streamed.** Not a sentence
+   describing a remedy: an invocable `method + path + stream` a surface can
+   render as a button, streaming bytes + elapsed, then returning the user to
+   what they were doing.
+
+Corollaries, each learned the hard way:
+
+- **A signal with no consumer is not shipped.** `recoverKind`
+  (`devserver_http.go:3958`), `capture_error`
+  (`remote_runtime_video_track.go:139`), `RunnerPreflightByID`
+  (`runner_preflight.go:35` — called by voice only), `RelaySessionExpiredAt` and
+  all 14 `reason_codes.go` values are correct producers that **nothing reads**.
+  Land the consumer in the same change, with a test that fails without it.
+- **Never report success for an operation that did not happen.** `if x != nil`
+  with no `else`, then `{"ok":true}` — `feedback_fix` with no task manager and
+  `launch-feedback` with no DataChannel both do this, and both surfaces show a
+  *success alert on a no-op*.
+- **Escalate to a coding agent only when there is no deterministic fixer.** "Fix
+  in Yaver" costs an LLM run; `POST /install/flutter` costs one command.
+
+**Worked example (2026-07-26, the user's own):** Flutter was not installed. The
+agent knew (`exec flutter: executable file not found in $PATH`), the installer
+existed and was arch-aware (`flutter_install.go` git-clones on linux/arm64 where
+no tarball ships), `POST /install/flutter` worked — and the phone showed
+*"Waiting for the dev server to report its address…"*. A had the truth; B
+flattened it to prose (`devserver_start_remedy.go:104`); C rendered text with no
+button (`apps.tsx:3120`); D was unreachable. The remedy string even said *"use
+Install on the preview panel"* — **no such button exists on any surface.** The
+contract the user asked for: **say "flutter is not installed", offer an Install
+button, start it, and stream the output well.**
+
+**And it must reach EVERY surface** — mobile, web, tvOS, watchOS, Wear OS, car,
+glass, Electron, CLI. Today custodian findings, playbook remedies and incidents
+render on **web only**; relay repair exists on **two** surfaces; runner OAuth is
+**tvOS-only** among native ones; and all three wearable/TV surfaces say *"sign it
+in from your phone"* with no way to do it. Native surfaces cannot import
+`mobile/src/lib/*`, so a copied classifier drifts by construction — the wake
+ladder's percentages already disagree across three copies whose comments claim
+they match. **Key off the code, not the copy.**
+
 ## Hard safety rules (summarised from CLAUDE.md)
 
 - **Never push or commit without explicit user permission.**

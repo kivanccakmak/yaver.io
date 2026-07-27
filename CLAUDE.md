@@ -348,6 +348,72 @@ changing those.
   exists → stream the fix → name the constraint if it does not.** Applies to
   runners, SDKs, simulators, emulators, `adb`, keychains and anything else a
   future lane needs.
+- **EVERY FAILURE MUST CARRY A ROUTE TO ITS FIX — four layers, no exceptions.**
+  The missing-toolchain rule above is the *first instance* of a general law, not
+  a special case. Generalize it to every failure in the product: remote runners,
+  reload/preview (Hermes, browser, WebRTC), the feedback SDK, connectivity,
+  auth, builds, deploys. Full architecture, with the failure×route matrix and
+  every `file:line`, in **`docs/architecture/FAILURE_PLUMBING_ARCHITECTURE.md`**;
+  the failure *inventory* is `docs/audits/failure-recovery-audit-2026-07.md`.
+  A failure is shipped only when all four layers exist:
+  1. **DETECTION — probe the operation, never the inventory.** `commandExists`
+     is a proxy; a tool on PATH can be a stub, a cert can be present and unable
+     to sign, a device can be `online` and unreachable. If the only way to know
+     is to attempt it, attempt it.
+  2. **SIGNAL — structured and named, never prose.** A stable code (there are
+     already 14 in `desktop/agent/reason_codes.go`) plus typed fields, carried
+     on *every* channel the failure can take: the HTTP body, the `/dev/events`
+     SSE event, the task event, the incident, the heartbeat. A bare
+     `{ok:false, error:"<sentence>"}` forces every surface to invent a regex,
+     and the regexes drift — mobile already carries **three** different
+     relay-auth matchers, none a superset of the others.
+  3. **UI — a named cause the user can actually SEE.** A spinner is a bug. And
+     "rendered" is not enough: an unbounded diagnostics wall squeezed the
+     action lanes to zero height in build 482 (`40eec39ef`), so the one lane
+     the agent offered could not be seen. Advisory content never wins over the
+     route — not in pixels, and not in time (a blocking preflight in front of a
+     capability that already works is the same defect: see the PTY launch gate).
+  4. **ROUTE-TO-FIX — the next tap, in place, streamed.** Not a sentence
+     describing a remedy: an invocable `method + path + stream` the surface can
+     render as a button, which streams bytes + elapsed and then **returns the
+     user to what they were trying to do**.
+  Three corollaries, each learned the hard way:
+  - **A signal with no consumer is not shipped.** `recoverKind`
+    (`devserver_http.go:3958`), `capture_error`
+    (`remote_runtime_video_track.go:139`), `RunnerPreflightByID`
+    (`runner_preflight.go:35`, called by voice only), `RelaySessionExpiredAt`
+    and all 14 `reason_codes.go` values are correct producers that **nothing
+    reads**. Land the consumer in the same change, with a test that fails when
+    it is removed.
+  - **Never report success for an operation that did not happen.** `if x != nil`
+    with no `else`, then `{"ok":true}`, is a false green wearing a bow —
+    `feedback_fix` with no task manager and `launch-feedback` with no
+    DataChannel both do exactly this, and both surfaces show a *success alert
+    on a no-op*.
+  - **Escalate to a coding agent only when there is no deterministic fixer.**
+    "Fix in Yaver" costs an LLM run; `POST /install/flutter` costs one command.
+    Spending the former on a class that has the latter is the most expensive
+    possible answer to the cheapest possible question.
+  **The worked example, verbatim from the user (2026-07-26):** Flutter was not
+  installed on the box. The agent knew (`exec flutter: executable file not found
+  in $PATH`), the installer existed and was arch-aware (`flutter_install.go`,
+  git-clone on linux/arm64 where no tarball ships), `POST /install/flutter`
+  worked — and the phone showed *"Waiting for the dev server to report its
+  address…"*. Layer A had the truth; layer B flattened it to prose
+  (`devserver_start_remedy.go:104`); layer C rendered text with no button
+  (`apps.tsx:3120`); layer D was unreachable. The remedy string even said *"use
+  Install on the preview panel"* — **there is no such button on any surface.**
+  What the user asked for is the contract: **say "flutter is not installed",
+  offer an Install button, start it, and stream the output well.**
+  **And it must reach EVERY surface** — mobile, web, tvOS, watchOS, Wear OS,
+  car, glass, Electron, CLI (see "Cross-surface parity"). Today custodian
+  findings, playbook remedies and incidents render on **web only**; relay repair
+  exists on **two** surfaces; runner OAuth is **tvOS-only** among native ones;
+  and the three wearable/TV surfaces all say *"sign it in from your phone"* with
+  no way to do it. Native surfaces cannot import `mobile/src/lib/*`, so a copied
+  classifier drifts by construction — the wake ladder's percentages already
+  disagree across three copies whose comments claim they match. **Key off the
+  code, not the copy.**
 - **Never WebView for third-party RN apps.** Use the Hermes-bundle native load
   path (`/dev/build-native` → ExpoReactNativeFactory). WebView is OK for plain
   web content (landing pages, docs).
