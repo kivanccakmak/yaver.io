@@ -28,11 +28,12 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import TerminalView from "./TerminalView";
 import { agentClient, type ConnectAttemptDiagnostic } from "@/lib/agent-client";
 import { getLastFailure, subscribeLastFailure } from "@/lib/probe-backoff";
 import { deriveBrowserReach, type BrowserReach } from "@/lib/device-lifecycle";
+import { diagnoseRunnerFailure } from "@/lib/runnerFailure";
 import type { Device } from "@/lib/use-devices";
 
 // A connect attempt that hasn't resolved by now is not going to. attemptConnect
@@ -40,6 +41,7 @@ import type { Device } from "@/lib/use-devices";
 // page.tsx may run one auto-reauth + a second full pass. 90s covers the whole
 // worst case with headroom; past that we stop claiming progress.
 const CONNECT_STALL_MS = 90_000;
+const RUNNER_PREFLIGHT_STALL_MS = 30_000;
 function useAgentConnectionState(): string {
   const [state, setState] = useState<string>(() => agentClient.connectionState);
   useEffect(() => {
@@ -98,7 +100,13 @@ export default function WebShellModal({
     key: string;
     state: "checking" | "allowed" | "blocked";
     message?: string;
+    startedAt?: number;
+    output?: string;
+    error?: string;
+    model?: string;
+    probe?: string;
   } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const connState = useAgentConnectionState();
   const reach = useBrowserReach(device);
   const hasRelay = agentClient.configuredRelayServers.length > 0;
@@ -117,6 +125,11 @@ export default function WebShellModal({
     const t = setTimeout(() => setStalled(true), CONNECT_STALL_MS);
     return () => clearTimeout(t);
   }, [attemptActive, device.id]);
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const reauthRequired = Boolean(device.needsAuth) && !device.isGuest;
   const state: "needs-reauth" | "not-connected" | "connecting" | "failed" | "ready" = reauthRequired
@@ -156,7 +169,17 @@ export default function WebShellModal({
     const key = `${device.id}:${launch}`;
     if (launchGate?.key === key) return;
     let cancelled = false;
-    setLaunchGate({ key, state: "checking" });
+    setLaunchGate({ key, state: "checking", startedAt: Date.now() });
+    const timeout = setTimeout(() => {
+      if (cancelled) return;
+      setLaunchGate((current) => current?.key === key && current.state === "checking"
+        ? {
+            ...current,
+            state: "blocked",
+            message: `${title} preflight did not finish within ${Math.round(RUNNER_PREFLIGHT_STALL_MS / 1000)}s. The runner may be hung even though auth inventory says signed in.`,
+          }
+        : current);
+    }, RUNNER_PREFLIGHT_STALL_MS);
     (async () => {
       try {
         const result = await agentClient.testRunner(launch, { timeoutMs: 20_000 });
@@ -166,7 +189,7 @@ export default function WebShellModal({
           return;
         }
         if (result.needsAuth && result.supportsBrowserAuth) {
-          setLaunchGate({ key, state: "blocked", message: result.error || "Runner needs sign-in." });
+          setLaunchGate({ key, state: "blocked", message: result.error || "Runner needs sign-in.", output: result.output, error: result.error, model: result.model, probe: result.probe });
           onRunnerNeedsAuth?.(launch);
           return;
         }
@@ -174,6 +197,10 @@ export default function WebShellModal({
           key,
           state: "blocked",
           message: result.error || `${launch} did not pass its preflight.`,
+          output: result.output,
+          error: result.error,
+          model: result.model,
+          probe: result.probe,
         });
       } catch (err) {
         if (cancelled) return;
@@ -186,8 +213,21 @@ export default function WebShellModal({
     })();
     return () => {
       cancelled = true;
+      clearTimeout(timeout);
     };
-  }, [authSensitiveLaunch, device.id, launch, launchGate?.key, launchGate?.state, onRunnerNeedsAuth, state]);
+  }, [authSensitiveLaunch, device.id, launch, launchGate?.key, launchGate?.state, onRunnerNeedsAuth, state, title]);
+
+  const launchGateDiagnosis = useMemo(() => {
+    if (!launchGate || launchGate.state !== "blocked") return null;
+    return diagnoseRunnerFailure({
+      runner: launch,
+      model: launchGate.model,
+      probe: launchGate.probe,
+      output: launchGate.output,
+      error: launchGate.error || launchGate.message,
+      failedAt: Date.now(),
+    });
+  }, [launch, launchGate]);
 
   const terminalLaunch = authSensitiveLaunch
     ? launchGate?.state === "allowed" ? launch : undefined
@@ -204,18 +244,18 @@ export default function WebShellModal({
           maximized ? "max-w-none rounded-none h-screen sm:rounded-none" : "max-w-5xl rounded-none sm:rounded-xl"
         }`}
       >
-        <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50/95 px-4 py-2.5 dark:border-surface-800 dark:bg-surface-900/80">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className={`inline-flex h-2 w-2 rounded-full ${state === "ready" ? "bg-emerald-400" : state === "needs-reauth" ? "bg-amber-400" : state === "failed" ? "bg-rose-400" : state === "connecting" ? "bg-cyan-400" : "bg-slate-400 dark:bg-surface-500"}`} />
-            <span className="truncate text-[13px] font-semibold text-slate-900 dark:text-surface-100">
+        <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/95 px-4 py-2.5 dark:border-surface-800 dark:bg-surface-900/80">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <span className={`inline-flex h-2 w-2 shrink-0 rounded-full ${state === "ready" ? "bg-emerald-400" : state === "needs-reauth" ? "bg-amber-400" : state === "failed" ? "bg-rose-400" : state === "connecting" ? "bg-cyan-400" : "bg-slate-400 dark:bg-surface-500"}`} />
+            <span className="min-w-0 truncate text-[13px] font-semibold text-slate-900 dark:text-surface-100">
               {title} · {device.alias ? `@${device.alias}` : device.name}
             </span>
-            <span className="hidden sm:inline truncate text-[11px] text-slate-500 dark:text-surface-500">
+            <span className="hidden max-w-[16rem] shrink truncate text-[11px] text-slate-500 dark:text-surface-500 md:inline">
               {device.host}:{device.port}
             </span>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="hidden sm:inline rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-slate-500 dark:border-surface-700 dark:bg-surface-950/60 dark:text-surface-400">
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="hidden max-w-[9rem] truncate rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-slate-500 dark:border-surface-700 dark:bg-surface-950/60 dark:text-surface-400 lg:inline">
               {state === "needs-reauth" ? "agent auth required" : state === "failed" ? "unreachable" : state === "connecting" ? "connecting…" : "via relay · PTY"}
             </span>
             <button
@@ -243,9 +283,16 @@ export default function WebShellModal({
                 </div>
                 <p className="max-w-md text-[13px] leading-5">
                   {launchGate?.state === "checking"
-                    ? `Checking whether ${title} is signed in on ${device.alias ? `@${device.alias}` : device.name} before opening the PTY.`
+                    ? `Checking whether ${title} can run on ${device.alias ? `@${device.alias}` : device.name} before opening the PTY${launchGate.startedAt ? ` · ${Math.max(0, Math.round((now - launchGate.startedAt) / 1000))}s` : ""}.`
                     : launchGate?.message || `${title} is not ready on this machine.`}
                 </p>
+                {launchGateDiagnosis ? (
+                  <div className="max-w-md rounded-md border border-rose-300 bg-rose-50 p-3 text-left text-[12px] leading-5 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-100">
+                    <div className="font-semibold">{launchGateDiagnosis.title}</div>
+                    <div>{launchGateDiagnosis.reason}</div>
+                    <div className="mt-1 opacity-80">{launchGateDiagnosis.remedy}</div>
+                  </div>
+                ) : null}
                 {launchGate?.state === "blocked" && authSensitiveLaunch ? (
                   <button
                     onClick={() => onRunnerNeedsAuth?.(launch)}

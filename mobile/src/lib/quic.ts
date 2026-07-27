@@ -1019,6 +1019,7 @@ export interface RunnerTestResult {
   error?: string;
   durationMs: number;
   model?: string;
+  checkedAt?: number;
 }
 
 export interface RunnerAuthStatusRow {

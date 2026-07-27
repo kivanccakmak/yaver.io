@@ -133,6 +133,7 @@ type RunnerInfo struct {
 	PID            int    `json:"pid"`
 	Status         string `json:"status"` // "running" or "idle"
 	Title          string `json:"title"`
+	CheckedAt      int64  `json:"checkedAt,omitempty"`
 	Installed      bool   `json:"installed"`
 	Ready          bool   `json:"ready"`
 	AuthConfigured bool   `json:"authConfigured"`

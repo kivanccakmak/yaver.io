@@ -428,6 +428,7 @@ export default defineSchema({
       pid: v.number(),
       status: v.string(),
       title: v.string(),
+      checkedAt: v.optional(v.number()),
       installed: v.optional(v.boolean()),
       ready: v.optional(v.boolean()),
       authConfigured: v.optional(v.boolean()),

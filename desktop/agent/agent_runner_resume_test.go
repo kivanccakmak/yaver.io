@@ -63,7 +63,7 @@ func TestResumeTransform_Codex(t *testing.T) {
 		t.Fatal("codex should resume with a session id")
 	}
 	joined := strings.Join(out, " ")
-	for _, want := range []string{"--sandbox workspace-write", "--ask-for-approval on-failure", "-C /proj", "exec resume uuid-9", "the prompt"} {
+	for _, want := range []string{"--dangerously-bypass-approvals-and-sandbox", "-C /proj", "exec resume uuid-9", "the prompt"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("codex resume args missing %q, got %v", want, out)
 		}

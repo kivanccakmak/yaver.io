@@ -48,6 +48,8 @@ import {
 } from "@/lib/pending-cloud-dispatch";
 import { CloudWorkspaceRequiredError } from "@/lib/cloud-workspace-required";
 import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
+import { diagnoseRunnerFailure, formatFailureTime } from "@/lib/runnerFailure";
+import { isRawRunnerCommand } from "@/lib/raw-runner-command";
 import PreviewPane from "./PreviewPane";
 import { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice } from "./DevicesView";
 
@@ -976,6 +978,7 @@ export default function VibeCodingView({
       return;
     }
     const promptText = composer.trim();
+    const rawRunnerCommand = isRawRunnerCommand(promptText);
 
     // Deep ask escalation: a broad / architectural QUESTION ("how does auth
     // work end to end?") runs a multi-agent graph (investigate → answer →
@@ -1054,21 +1057,21 @@ export default function VibeCodingView({
         targetDeviceId: recorded?.targetDeviceId ?? placementPreview?.targetDeviceId ?? null,
         params: {
           title,
-          description: buildVibeTaskPrompt({
-            project: selectedProject,
-            prompt: composer.trim(),
-            gitStatus,
-            deployTargets,
-            machine: connectedMachine,
-          }),
-          userPrompt: composer.trim(),
+	          description: buildVibeTaskPrompt({
+	            project: selectedProject,
+	            prompt: promptText,
+	            gitStatus,
+	            deployTargets,
+	            machine: connectedMachine,
+	          }),
+	          userPrompt: promptText,
           runner: selectedRunner || undefined,
           model: selectedModel || undefined,
           mode: selectedRunner === "opencode" && selectedMode ? selectedMode : undefined,
           projectName: selectedProject.name,
           workDir: selectedProject.path,
           videoEnabled: videoSummaryEnabled,
-          askMode: detectAskIntent(composer.trim()),
+	          askMode: rawRunnerCommand ? false : detectAskIntent(promptText),
         },
         createdAt: now,
         updatedAt: now,
@@ -1126,7 +1129,7 @@ export default function VibeCodingView({
       title,
       description: buildVibeTaskPrompt({
         project: selectedProject,
-        prompt: composer.trim(),
+        prompt: promptText,
         gitStatus,
         deployTargets,
         machine: connectedMachine,
@@ -1142,7 +1145,7 @@ export default function VibeCodingView({
       // STT/TTS?") routes to ask mode — deep grounded analysis, explain-first
       // — instead of a work run. High-precision; imperative build prompts are
       // left as normal tasks. See lib/ask-intent.ts.
-      askMode: detectAskIntent(composer.trim()),
+      askMode: rawRunnerCommand ? false : detectAskIntent(promptText),
     };
     let task: Task;
     try {
@@ -1204,9 +1207,10 @@ export default function VibeCodingView({
       setBusy(selectedRunnerRow.error || selectedRunnerRow.warning || `${selectedRunnerRow.name} is installed but not ready on this machine.`);
       return;
     }
-    const promptText = buildVibeContinuationPrompt({
+    const rawComposer = composer.trim();
+    const promptText = isRawRunnerCommand(rawComposer) ? rawComposer : buildVibeContinuationPrompt({
       project: selectedProject,
-      prompt: composer.trim(),
+      prompt: rawComposer,
       gitStatus,
       deployTargets,
       machine: connectedMachine,
@@ -1594,6 +1598,21 @@ export default function VibeCodingView({
       String(repo.description || "").toLowerCase().includes(needle),
     );
   }, [providerRepos, providerSearch]);
+
+	  const activeFailureDiagnosis = useMemo(() => {
+	    if (activeTask?.status !== "failed") return null;
+	    return diagnoseRunnerFailure({
+      runner: activeTask.runnerId || selectedRunner,
+      model: activeTask.model || selectedModel,
+      output: [Array.isArray(activeTask.output) ? activeTask.output.join("\n") : String(activeTask.output || ""), activeTask.resultText || "", liveOutput || ""].join("\n"),
+      failedAt: activeTask.finishedAt || activeTask.updatedAt || activeTask.createdAt,
+	    });
+	  }, [activeTask, liveOutput, selectedModel, selectedRunner]);
+
+	  const slashCommandSuggestions = useMemo(
+	    () => slashCommandsForRunner(selectedRunner, composer),
+	    [composer, selectedRunner],
+	  );
 
   const machineSummary = useMemo(() => {
     if (!connectedMachine) return null;
@@ -2654,6 +2673,17 @@ export default function VibeCodingView({
                 <DeepAskGraphPanel run={graphRun} liveOutput={graphNodeOutput} />
               ) : conversationTurns.length > 0 || showLiveOutput ? (
                 <div className="space-y-4">
+                  {activeFailureDiagnosis ? (
+                    <div className="max-w-[92%] rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-rose-100">
+                      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-rose-300">
+                        Failed · {activeFailureDiagnosis.kind.replaceAll("-", " ")}
+                        {formatFailureTime(activeFailureDiagnosis.failedAt) ? ` · ${formatFailureTime(activeFailureDiagnosis.failedAt)}` : ""}
+                      </div>
+                      <div className="text-sm font-semibold">{activeFailureDiagnosis.title}</div>
+                      <div className="mt-1 text-[13px] leading-5 text-rose-100/85">{activeFailureDiagnosis.reason}</div>
+                      <div className="mt-2 text-[12px] leading-5 text-rose-100/75">{activeFailureDiagnosis.remedy}</div>
+                    </div>
+                  ) : null}
                   {conversationTurns.map((turn, index) => (
                     <ChatBubble
                       key={`${turn.role}:${turn.timestamp}:${index}`}
@@ -2685,13 +2715,29 @@ export default function VibeCodingView({
                 placeholder="optional title"
                 className="mb-3 w-full rounded-xl border border-surface-700 bg-surface-950 px-3 py-2 text-sm text-surface-100 outline-none focus:border-surface-500"
               />
-              <textarea
-                value={composer}
-                onChange={(event) => setComposer(event.target.value)}
-                placeholder="Fix the mobile login screen, keep the RN preview running, and tell me the local URL or tunnel once it is reachable."
-                className="min-h-28 w-full rounded-2xl border border-surface-700 bg-surface-950 px-4 py-3 text-sm text-surface-100 outline-none focus:border-indigo-500"
-              />
-              <label className="mt-3 flex cursor-pointer items-center gap-2 text-xs text-surface-400 select-none">
+	              <textarea
+	                value={composer}
+	                onChange={(event) => setComposer(event.target.value)}
+	                placeholder="Fix the mobile login screen, keep the RN preview running, and tell me the local URL or tunnel once it is reachable."
+	                className="min-h-28 w-full rounded-2xl border border-surface-700 bg-surface-950 px-4 py-3 text-sm text-surface-100 outline-none focus:border-indigo-500"
+	              />
+	              {slashCommandSuggestions.length > 0 ? (
+	                <div className="mt-2 flex flex-wrap gap-1.5">
+	                  {slashCommandSuggestions.map((cmd) => (
+	                    <button
+	                      key={`${cmd.command}:${cmd.label}`}
+	                      type="button"
+	                      onClick={() => setComposer(cmd.command)}
+	                      className="rounded-md border border-indigo-500/25 bg-indigo-500/10 px-2 py-1 text-[11px] font-semibold text-indigo-200 hover:border-indigo-400/50 hover:bg-indigo-500/15"
+	                      title={cmd.description}
+	                    >
+	                      <span className="font-mono">{cmd.command}</span>
+	                      <span className="ml-1 opacity-70">{cmd.label}</span>
+	                    </button>
+	                  ))}
+	                </div>
+	              ) : null}
+	              <label className="mt-3 flex cursor-pointer items-center gap-2 text-xs text-surface-400 select-none">
                 <input
                   type="checkbox"
                   className="h-3.5 w-3.5 rounded border-surface-600 bg-surface-950 text-indigo-500 focus:ring-1 focus:ring-indigo-500"
@@ -2782,6 +2828,7 @@ function buildVibeTaskPrompt({
   deployTargets: Array<{ id: string; name: string }>;
   machine: MachineInfo | null;
 }): string {
+  if (isRawRunnerCommand(prompt)) return prompt.trimStart();
   const machineLines = describeMachineForPrompt(machine);
   const lines = [
     `You are working for a solo developer in project ${project.name}.`,
@@ -2821,6 +2868,7 @@ function buildVibeContinuationPrompt({
   deployTargets: Array<{ id: string; name: string }>;
   machine: MachineInfo | null;
 }): string {
+  if (isRawRunnerCommand(prompt)) return prompt.trimStart();
   const lines = [
     project ? `Continue in project ${project.name} (${project.path}).` : "",
     gitStatus?.branch ? `Current branch: ${gitStatus.branch}` : "",
@@ -2831,6 +2879,30 @@ function buildVibeContinuationPrompt({
     prompt,
   ].filter(Boolean);
   return lines.join("\n");
+}
+
+type SlashCommandSuggestion = {
+  command: string;
+  label: string;
+  description: string;
+  runners?: string[];
+};
+
+const SLASH_COMMAND_SUGGESTIONS: SlashCommandSuggestion[] = [
+  { command: "/goal ", label: "goal", description: "Set or update the runner goal.", runners: ["claude", "glm"] },
+  { command: "/exit", label: "exit", description: "Ask the runner session to exit.", runners: ["claude", "glm", "codex", "opencode"] },
+  { command: "/help", label: "help", description: "Show runner-native slash command help.", runners: ["claude", "glm", "codex", "opencode"] },
+  { command: "/clear", label: "clear", description: "Clear the runner conversation context.", runners: ["claude", "glm", "opencode"] },
+];
+
+function slashCommandsForRunner(runner: string, input: string): SlashCommandSuggestion[] {
+  const typed = input.trimStart();
+  if (!typed.startsWith("/")) return [];
+  const runnerId = (runner || "").trim().toLowerCase();
+  return SLASH_COMMAND_SUGGESTIONS
+    .filter((cmd) => !cmd.runners || !runnerId || cmd.runners.includes(runnerId))
+    .filter((cmd) => cmd.command.trimEnd().startsWith(typed.trimEnd()))
+    .slice(0, 6);
 }
 
 function describeMachineForPrompt(machine: MachineInfo | null): string[] {

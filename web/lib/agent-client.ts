@@ -64,12 +64,14 @@ export interface Task {
   description: string;
   status: TaskStatus;
   runnerId?: string;
+  model?: string;
   output: string[];
   resultText?: string;
   costUsd?: number;
   turns?: ConversationTurn[];
   createdAt: number;
   updatedAt: number;
+  finishedAt?: number;
   deviceName?: string;
   /** Video summary: when the task was created with videoEnabled, the
    *  agent records a clip after completion. videoClipId is populated
@@ -962,6 +964,7 @@ export interface RunnerTestResult {
   error?: string;
   durationMs: number;
   model?: string;
+  checkedAt?: number;
 }
 
 export interface GitProviderStatusRow {

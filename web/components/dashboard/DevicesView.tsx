@@ -14,6 +14,7 @@ import { HIDE_PAID_UI } from "@/lib/launchFlags";
 import { CONVEX_URL } from "@/lib/constants";
 import { agentClient, AgentClient, isRunnerBrowserAuthTerminal, requestAgentUpdateViaConvex, type AgentUpdateStatus, type OpenCodeConfigSummary, type OpenCodeModelSummary, type OpenCodeProviderSummary, type RunnerBrowserAuthSession, type RunnerTestResult } from "@/lib/agent-client";
 import { runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
+import { diagnoseRunnerFailure, formatFailureTime } from "@/lib/runnerFailure";
 import {
   lastSeenAgeMs,
   formatAgeShort,
@@ -733,6 +734,7 @@ function RunnerChipWithTest({
       );
       await client.connect(device.host, device.port, token, device.id, { tunnelUrls });
       const result = await client.testRunner(state.id);
+      result.checkedAt = Date.now();
       if (result.ok) {
         setLocal({ kind: "ok", result });
         // Test just proved the runner CLI's token is valid. Broadcast
@@ -829,7 +831,25 @@ function RunnerChipWithTest({
   // with a separate Test button. (We deliberately don't show Test when
   // the runner isn't installed at all; nothing to probe.)
   return (
-    <span className="inline-flex items-center gap-1">
+    <span className="inline-flex flex-wrap items-center gap-1">
+      {(() => {
+        const diagnosis = local.kind === "fail"
+          ? diagnoseRunnerFailure({
+              runner: local.result.runner || state.id,
+              model: local.result.model,
+              probe: local.result.probe,
+              output: local.result.output,
+              error: local.result.error,
+              failedAt: local.result.checkedAt,
+            })
+          : null;
+        const when = formatFailureTime(diagnosis?.failedAt);
+        return diagnosis ? (
+          <span className="sr-only">
+            {diagnosis.title}{when ? ` at ${when}` : ""}: {diagnosis.reason} {diagnosis.remedy}
+          </span>
+        ) : null;
+      })()}
       <span className={base} title={runnerChipTitle(state)}>
         <span className={`h-1.5 w-1.5 rounded-full ${runnerChipDotClass(state.health)}`} />
         {state.label}
@@ -844,7 +864,20 @@ function RunnerChipWithTest({
         {local.kind === "fail" ? (
           <span
             className="ml-1 text-[10px] text-red-700 dark:text-red-300"
-            title={local.result.error || "test failed"}
+            title={(() => {
+              const diagnosis = diagnoseRunnerFailure({
+                runner: local.result.runner || state.id,
+                model: local.result.model,
+                probe: local.result.probe,
+                output: local.result.output,
+                error: local.result.error,
+                failedAt: local.result.checkedAt,
+              });
+              const when = formatFailureTime(diagnosis?.failedAt);
+              return diagnosis
+                ? `${diagnosis.title}${when ? ` (${when})` : ""}\n${diagnosis.reason}\nFix: ${diagnosis.remedy}`
+                : local.result.error || "test failed";
+            })()}
           >
             ✗ {local.result.probe || "failed"}
           </span>
@@ -925,6 +958,26 @@ function RunnerChipWithTest({
           {local.kind === "running" ? "…" : "Test"}
         </button>
       ) : null}
+      {local.kind === "fail" ? (() => {
+        const diagnosis = diagnoseRunnerFailure({
+          runner: local.result.runner || state.id,
+          model: local.result.model,
+          probe: local.result.probe,
+          output: local.result.output,
+          error: local.result.error,
+          failedAt: local.result.checkedAt,
+        });
+        if (!diagnosis) return null;
+        const when = formatFailureTime(diagnosis.failedAt);
+        return (
+          <span className="basis-full max-w-[38rem] rounded-md border border-rose-300 bg-rose-50 px-2 py-1 text-[10px] leading-4 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-100">
+            <span className="font-semibold">{diagnosis.title}</span>
+            {when ? <span className="opacity-70"> · {when}</span> : null}
+            <span className="block">{diagnosis.reason}</span>
+            <span className="block opacity-80">{diagnosis.remedy}</span>
+          </span>
+        );
+      })() : null}
     </span>
   );
 }

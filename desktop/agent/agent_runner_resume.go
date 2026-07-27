@@ -56,10 +56,10 @@ func resumeTransform(runner RunnerConfig, baseArgs []string, prompt, workDir, se
 		if sessionID == "" {
 			return baseArgs, false
 		}
-		// codex --sandbox workspace-write --ask-for-approval on-failure
+		// codex --dangerously-bypass-approvals-and-sandbox
 		// [-C <dir>] exec resume <id> <prompt>. The sandbox/approval globals
 		// replicate `exec --full-auto`, which `exec resume` rejects.
-		out := []string{"--sandbox", "workspace-write", "--ask-for-approval", "on-failure"}
+		out := []string{"--dangerously-bypass-approvals-and-sandbox"}
 		if strings.TrimSpace(workDir) != "" {
 			out = append(out, "-C", workDir)
 		}

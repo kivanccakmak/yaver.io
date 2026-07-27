@@ -112,6 +112,7 @@ export interface Device {
     authConfigured?: boolean;
     authVerified?: boolean;
     authSource?: string;
+    checkedAt?: number;
     warning?: string;
     error?: string;
   }>;
