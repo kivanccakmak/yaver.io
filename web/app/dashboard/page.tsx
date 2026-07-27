@@ -2803,6 +2803,29 @@ export default function DashboardPage() {
                 see all &rarr;
               </button>
             </div>
+            {/* Machine-role split pill — when the account slices work across
+                two boxes, the left nav names BOTH, each with its own live
+                dot. Two silent sources are two unfalsifiable states; the
+                sidebar is the persistent banner for them. */}
+            {machineRoles.favorite?.runnerDeviceId && machineRoles.favorite?.renderDeviceId && machineRoles.favorite.renderDeviceId !== machineRoles.favorite.runnerDeviceId ? (
+              <button
+                onClick={() => setActiveTab("runtime")}
+                title="Machine roles — AI tasks and rendering run on different boxes. Click to open Vibing."
+                className="mb-1.5 w-full rounded-lg border border-indigo-500/30 bg-indigo-500/5 px-3 py-2 text-left shadow-sm hover:border-indigo-500/50"
+              >
+                {(["runner", "render"] as const).map((role) => {
+                  const id = role === "runner" ? machineRoles.favorite!.runnerDeviceId : machineRoles.favorite!.renderDeviceId!;
+                  const row = devices.find((d) => d.id === id);
+                  return (
+                    <div key={role} className="flex items-center gap-2 py-0.5">
+                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${row?.online ? "bg-success" : "bg-surface-600"}`} />
+                      <span className="w-10 shrink-0 text-[9px] font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-300">{role === "runner" ? "AI" : "Render"}</span>
+                      <span className="truncate text-[11px] text-surface-200">{row?.name || `${id.slice(0, 8)}…`}</span>
+                    </div>
+                  );
+                })}
+              </button>
+            ) : null}
             {isConnected && connectedDevice ? (
               (() => {
                 // Pill state must reflect *live* needsAuth / lastSeen, not

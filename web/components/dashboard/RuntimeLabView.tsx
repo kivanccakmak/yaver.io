@@ -1819,6 +1819,20 @@ export default function RuntimeLabView({
     window.speechSynthesis.speak(utterance);
   }, [activeTaskStream?.lines, activeTaskStream?.title, speaking, ttsAvailable]);
 
+  // Runner/render split: hand the runner box the project's git identity so
+  // it can ensure-clone when the source isn't there, plus the push policy
+  // that converges the result back (agent task_ensure_clone.go). Only when
+  // a split is actually active — single-box tasks carry nothing new.
+  const splitTaskFields = useMemo(() => {
+    if (!machineSplitActive) return {} as { gitRemote?: string; gitBranch?: string; autoPush?: "never" | "ask" | "always" };
+    const remote = selectedProject?.gitRemote || selectedProject?.remote || "";
+    return {
+      gitRemote: remote || undefined,
+      gitBranch: selectedProject?.branch || undefined,
+      autoPush: machineRoles?.autoPush || "ask",
+    };
+  }, [machineSplitActive, machineRoles?.autoPush, selectedProject?.gitRemote, selectedProject?.remote, selectedProject?.branch]);
+
   const sendPrompt = useCallback(async () => {
     // normalizeComposerPrompt trims the EDGES only — interior newlines are the
     // user's message structure and must reach the runner untouched.
@@ -1869,6 +1883,7 @@ export default function RuntimeLabView({
         model: effectiveModel,
         projectName: selectedProject?.name,
         workDir: selectedProject?.path,
+        ...splitTaskFields,
       });
       attachTaskSession(task);
       appendLog(`task ${task.id} started with ${selectedRunner || "default runner"}${effectiveModel ? ` ${effectiveModel}` : ""}`);
@@ -1878,7 +1893,7 @@ export default function RuntimeLabView({
     } finally {
       setSending(false);
     }
-  }, [activeTaskStream?.id, appendLog, attachTaskSession, availableModels, composer, opencodeSnapshot, selectedModel, selectedProject, selectedRunner, sending]);
+  }, [activeTaskStream?.id, appendLog, attachTaskSession, availableModels, composer, opencodeSnapshot, selectedModel, selectedProject, selectedRunner, sending, splitTaskFields]);
 
   // "Fix with <runner>" — the route-to-fix on a failed build/preview. It
   // dispatches a coding task on the SAME box+project through the EXACT path
@@ -1908,6 +1923,7 @@ export default function RuntimeLabView({
         model: effectiveModel,
         projectName: selectedProject?.name,
         workDir: selectedProject?.path,
+        ...splitTaskFields,
       });
       setFixTaskId(task.id);
       attachTaskSession(task);
@@ -1917,7 +1933,7 @@ export default function RuntimeLabView({
     } finally {
       setFixTaskBusy(false);
     }
-  }, [appendLog, attachTaskSession, availableModels, fixTaskBusy, selectedModel, selectedProject, selectedRunner, selectedRunnerRow, startSelectedRunnerSignIn]);
+  }, [appendLog, attachTaskSession, availableModels, fixTaskBusy, selectedModel, selectedProject, selectedRunner, selectedRunnerRow, startSelectedRunnerSignIn, splitTaskFields]);
 
   const runnerNotReadyForFix = !!(selectedRunnerRow && selectedRunnerRow.ready === false);
   const fixWithRunnerLabel = fixTaskBusy

@@ -1752,6 +1752,11 @@ export type CreateTaskParams = {
   videoSource?: "browser" | "sim-ios" | "sim-android" | "phone" | "";
   askMode?: boolean;
   allowLocalFallback?: boolean;
+  /** Runner/render split: git identity + push policy for the runner box's
+   *  ensure-clone + converge (send only when a split is active). */
+  gitRemote?: string;
+  gitBranch?: string;
+  autoPush?: "never" | "ask" | "always" | "";
 };
 
 export function buildCreateTaskBody(params: CreateTaskParams): Record<string, unknown> {
@@ -1769,6 +1774,12 @@ export function buildCreateTaskBody(params: CreateTaskParams): Record<string, un
     videoSource: params.videoSource ?? "",
     askMode: params.askMode ?? false,
     allowLocalFallback: params.allowLocalFallback ?? false,
+    // Runner/render split: the project's git identity + push policy, so a
+    // runner box without the source can ensure-clone before spawn and
+    // converge back through git afterwards (agent task_ensure_clone.go).
+    gitRemote: params.gitRemote ?? "",
+    gitBranch: params.gitBranch ?? "",
+    autoPush: params.autoPush ?? "",
     source: "web",
   };
 }
@@ -2115,6 +2126,11 @@ export class AgentClient {
      *  selected that target. Prevents the target agent from re-deferring the
      *  same task back into another pending-cloud placeholder. */
     allowLocalFallback?: boolean;
+    /** Runner/render split: git identity + push policy for ensure-clone +
+     *  converge on the runner box. Send only when a split is active. */
+    gitRemote?: string;
+    gitBranch?: string;
+    autoPush?: "never" | "ask" | "always" | "";
   }): Promise<Task> {
     this.assertConnected();
     const res = await fetch(`${this.taskBaseUrl}/tasks`, {
