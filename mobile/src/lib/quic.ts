@@ -7815,12 +7815,17 @@ export class QuicClient {
         installEndpoint?: string;
         installable?: boolean;
         helpHint?: string;
+        capabilityGap?: unknown;
       };
       err.kind = "missing-runtime";
       err.missingTools = detail.missingTools || [];
       err.installEndpoint = detail.installEndpoint || "";
       err.installable = !!detail.installable;
       err.helpHint = detail.helpHint || "";
+      // The typed route (agent 1.99.380+). Forwarded verbatim; callers parse it
+      // with capabilityGap.ts rather than re-deriving a tool name from prose.
+      // The legacy fields above stay for older agents.
+      err.capabilityGap = detail.capabilityGap;
       throw err;
     }
     if (!res.ok) return null;
@@ -8184,6 +8189,16 @@ export class QuicClient {
    * `onEvent` — if set — is called for every other structured event
    * on the stream, including `{type:"sudo_prompt", prompt}` which
    * the install catalogue uses to ask the phone for a password.
+   *
+   * XHR (src/lib/sseClient.ts), NOT fetch().body.getReader().
+   *
+   * RN's fetch exposes NO streaming body — `res.body` is undefined — so the
+   * previous implementation hit `if (!res.body) return;` and delivered exactly
+   * zero lines on a real phone. Every install triggered from the app therefore
+   * showed a spinner with no output for its entire duration, which for a 1.2 GB
+   * Flutter SDK is 3–10 minutes of "is this working or hung?". Same defect
+   * already fixed in subscribeDevEvents, apps.tsx and DevPreview.tsx; this was
+   * the fourth copy and the only one on the path a CapabilityGap's fix takes.
    */
   subscribeStream(
     name: string,
@@ -8191,50 +8206,31 @@ export class QuicClient {
     onResult?: (status: string, error?: string) => void,
     onEvent?: (event: any) => void,
   ): () => void {
-    const ctrl = new AbortController();
     const url = `${this.baseUrl}/streams/${encodeURIComponent(name)}`;
-    const auth = this.authHeaders;
-    const slot = this.acquireStreamSlot(STREAM_PRIORITY.installProgress, "streams/install", () => ctrl.abort());
-    (async () => {
-      try {
-        const res = await fetch(url, { headers: auth, signal: ctrl.signal });
-        if (!res.ok || !res.body) return;
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-        let buf = "";
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          let idx;
-          while ((idx = buf.indexOf("\n\n")) >= 0) {
-            const chunk = buf.slice(0, idx).trim();
-            buf = buf.slice(idx + 2);
-            if (!chunk.startsWith("data:")) continue;
-            const payload = chunk.slice(5).trim();
-            try {
-              const ev = JSON.parse(payload);
-              if (ev.type === "line" && typeof ev.text === "string") {
-                onLine(ev.text);
-              } else if (ev.type === "result" && onResult) {
-                onResult(ev.status || "", ev.error);
-              } else if (onEvent) {
-                onEvent(ev);
-              }
-            } catch {
-              // ignore non-JSON SSE comments / keepalives
-            }
-          }
+    let sub: { close(): void } | null = null;
+    const slot = this.acquireStreamSlot(STREAM_PRIORITY.installProgress, "streams/install", () => sub?.close());
+    sub = subscribeSse({
+      url,
+      headers: { ...this.authHeaders },
+      onEvent: (ev: any) => {
+        if (ev?.type === "line" && typeof ev.text === "string") {
+          onLine(ev.text);
+        } else if (ev?.type === "result" && onResult) {
+          onResult(ev.status || "", ev.error);
+        } else if (onEvent) {
+          onEvent(ev);
         }
-      } catch {
-        // network drop / cancel — caller should treat as ended
-      } finally {
-        this.releaseStreamSlot(slot);
-      }
-    })();
+      },
+      onError: (reason: string) => {
+        // A stream that cannot open is a fact the caller needs: silence here is
+        // indistinguishable from "the install is still going".
+        onLine(`[stream] /streams/${name} unavailable: ${reason}`);
+      },
+      onClose: () => this.releaseStreamSlot(slot),
+    });
     return () => {
       this.releaseStreamSlot(slot);
-      ctrl.abort();
+      sub?.close();
     };
   }
 
@@ -10764,6 +10760,11 @@ export interface DevServerStatus {
   platform?: string;
   startedAt?: string;
   error?: string;
+  /** Structured capability gap behind `error`, when the failure is one (a
+   *  missing toolchain). Same object the /dev/events error frame carries —
+   *  polled here for surfaces whose SSE is closed at the moment it is
+   *  produced. Parse with src/lib/capabilityGap.ts. */
+  capabilityGap?: unknown;
   pid?: number;
   workDir?: string;
   hotReload: boolean;

@@ -47,6 +47,17 @@ import { shouldPollDevStatus } from "../../src/lib/devStatusPolling";
 import { detectCompileFailure } from "../../src/lib/compileFailure";
 import { previewBundlePath } from "../../src/lib/previewBundlePath";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../../src/lib/previewPhase";
+import {
+  capabilityGapFromDevEvent,
+  capabilityGapFromError,
+  capabilityGapFromStatus,
+  gapBody,
+  gapFixLabel,
+  gapRetriesAfterFix,
+  gapTitle,
+  type CapabilityGap,
+} from "../../src/lib/capabilityGap";
+import { formatFixElapsed, runCapabilityGapFix } from "../../src/lib/capabilityGapFix";
 import { describePort, describeResources } from "../../src/lib/machineResources";
 import { subscribeSse, type SseSubscription } from "../../src/lib/sseClient";
 import { isWebServedStatus } from "../../src/lib/devLane";
@@ -721,7 +732,22 @@ export default function AppsScreen() {
   const [webPreviewStartedAt, setWebPreviewStartedAt] = useState<number | null>(null);
   const [webPreviewLastLogAt, setWebPreviewLastLogAt] = useState<number | null>(null);
   const [previewNowTick, setPreviewNowTick] = useState(Date.now());
+  // The named capability gap behind a failed preview, when the failure is one
+  // (missing Flutter/toolchain). Produced by the agent (capability_gap.go),
+  // carried on the 412 body, the /dev/events error frame AND /dev/status —
+  // whichever arrives first wins, because the async spawn failure can only ever
+  // reach us on the stream. `gapFixRunning` holds the install's live output so
+  // the download narrates itself instead of hiding behind a spinner.
+  const [previewGap, setPreviewGap] = useState<CapabilityGap | null>(null);
+  const [gapFixRunning, setGapFixRunning] = useState(false);
+  const [gapFixStartedAt, setGapFixStartedAt] = useState<number | null>(null);
+  const gapFixCancelRef = useRef<(() => void) | null>(null);
+  // What to re-run when the fix reports ok — "return them to what they were
+  // doing" is half the contract; an install that leaves the user on the same
+  // error panel has only done half the job.
+  const gapRetryRef = useRef<(() => Promise<void>) | null>(null);
   const resetWebPreview = useCallback(() => {
+    setPreviewGap(null);
     setPreviewFullScreen(false);
     webPreviewRetryRef.current = 0;
     webPreviewErroredRef.current = false;
@@ -741,6 +767,53 @@ export default function AppsScreen() {
     const id = setInterval(() => setPreviewNowTick(Date.now()), 1000);
     return () => clearInterval(id);
   }, [showWebView, webPreviewContentLoaded]);
+  // Keep the elapsed counter honest while a fix downloads — a 1.2 GB SDK with
+  // no clock on it is indistinguishable from a hang.
+  useEffect(() => {
+    if (!gapFixRunning) return;
+    const id = setInterval(() => setPreviewNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [gapFixRunning]);
+  useEffect(() => () => gapFixCancelRef.current?.(), []);
+
+  /**
+   * Run the gap's fix: POST its path, stream the output into the panel the user
+   * is already staring at, then re-run what they were trying to do.
+   *
+   * Everything here is driven off the typed route the agent shipped — no tool
+   * name is hardcoded, no endpoint is guessed. Teaching the agent a new gap
+   * lights this button up with no change on this screen.
+   */
+  const startGapFix = useCallback((gap: CapabilityGap) => {
+    if (gapFixRunning) return;
+    setGapFixRunning(true);
+    setGapFixStartedAt(Date.now());
+    setWebPreviewFailed(true);
+    gapFixCancelRef.current = runCapabilityGapFix(quicClient as any, gap, {
+      onLine: (line) => {
+        setWebPreviewLastLogAt(Date.now());
+        const ln = String(line).trimEnd();
+        if (ln) setWebPreviewLogs((p) => appendPreviewLogLine(p, ln));
+      },
+      onDone: (ok, error) => {
+        gapFixCancelRef.current = null;
+        setGapFixRunning(false);
+        if (!ok) {
+          setWebPreviewLogs((p) => appendPreviewLogLine(p, `[install] failed: ${error || "unknown error"}`));
+          return;
+        }
+        setPreviewGap(null);
+        setWebPreviewLogs((p) => appendPreviewLogLine(p, "[install] done — restarting the preview…"));
+        if (gapRetriesAfterFix(gap) && gapRetryRef.current) {
+          setWebPreviewFailed(false);
+          void gapRetryRef.current().catch((e) => {
+            setWebPreviewFailed(true);
+            setWebPreviewLogs((p) => appendPreviewLogLine(p, `[retry] ${e instanceof Error ? e.message : String(e)}`));
+          });
+        }
+      },
+    });
+  }, [gapFixRunning]);
   const scheduleWebPreviewRetry = useCallback(() => {
     webPreviewErroredRef.current = true;
     setWebViewLoading(false);
@@ -993,6 +1066,14 @@ export default function AppsScreen() {
                   const lines = em.split("\n").map((l) => l.trimEnd()).filter(Boolean);
                   setWebPreviewLogs((p) => [...p, ...lines].slice(-MAX_WEB_PREVIEW_LOGS));
                   setWebPreviewFailed(true);
+                  // THE ROUTE. mgr.Start returns before the process is spawned,
+                  // so a missing toolchain ("exec flutter: executable file not
+                  // found") can ONLY arrive here — no 412 can catch it. Before
+                  // this branch the phone rendered that fact as a log line under
+                  // an alert icon with no button, while POST /install/flutter
+                  // worked the whole time.
+                  const gap = capabilityGapFromDevEvent(event);
+                  if (gap) setPreviewGap(gap);
                 }
       },
     });
@@ -1267,19 +1348,27 @@ export default function AppsScreen() {
       setStartingProject(project);
       const targetPath = action.target === "." ? path : `${path}/${action.target}`.replace(/\/+$/, "");
       let deferStartingClear = false;
+      // One closure for "start this preview", so the capability-gap fix can
+      // re-issue the EXACT request that was refused instead of approximating it.
+      const startThisPreview = () => quicClient.startDevServer({
+        framework: action.framework || "",
+        workDir: targetPath,
+        // Browser Reload = the browser lane. Serve the web target, never a
+        // Hermes native bundle (Hermes needs the guest's native modules to
+        // match the container — sfmg dies on expo-gl — has no meaning for
+        // Flutter, and is blocked for Yaver-self-dev).
+        web: true,
+        targetDeviceId: selectedTarget?.id,
+        targetDeviceName: selectedTarget?.name,
+        targetDeviceClass: selectedTarget?.deviceClass,
+      });
+      gapRetryRef.current = async () => {
+        await startThisPreview();
+        setWebViewKey((k) => k + 1);
+        setWebViewLoading(true);
+      };
       try {
-        await quicClient.startDevServer({
-          framework: action.framework || "",
-          workDir: targetPath,
-          // Browser Reload = the browser lane. Serve the web target, never a
-          // Hermes native bundle (Hermes needs the guest's native modules to
-          // match the container — sfmg dies on expo-gl — has no meaning for
-          // Flutter, and is blocked for Yaver-self-dev).
-          web: true,
-          targetDeviceId: selectedTarget?.id,
-          targetDeviceName: selectedTarget?.name,
-          targetDeviceClass: selectedTarget?.deviceClass,
-        });
+        await startThisPreview();
         // Rendering is NOT a task. Do NOT spawn a coding task or navigate to
         // Tasks — the agent starts the dev server directly (it handles flutter
         // web / expo web itself). Open the full-screen browser preview RIGHT HERE
@@ -1305,76 +1394,25 @@ export default function AppsScreen() {
         setWebViewLoading(true);
         setShowWebView(true);
       } catch (e) {
-        const err = e as Error & {
-          kind?: "missing-runtime";
-          missingTools?: string[];
-          installEndpoint?: string;
-          installable?: boolean;
-          helpHint?: string;
-        };
-        if (err?.kind === "missing-runtime" && err.installable && err.installEndpoint) {
-          // Phone-driven sudo-free install path: fire /install/node and
-          // stream the agent's output as an alert until the result event
-          // lands, then auto-retry the dev server start. The async work
-          // outlives this try/catch so we hold the spinner until the
-          // result handler clears it.
+        // The agent's structured refusal. `capabilityGap` carries the whole
+        // route — the sentence, the endpoint, the stream and the estimate — so
+        // this branch no longer hardcodes a tool name or a copy line. It used to
+        // say "Install Node LTS into ~/.yaver/runtimes/node" for bun, pnpm AND
+        // (had it ever been reachable) Flutter: a route that worked wrapped in a
+        // sentence that lied.
+        const gap = capabilityGapFromError(e);
+        if (gap) {
           deferStartingClear = true;
-          const tool = err.installEndpoint.replace(/^\/install\//, "") || "node";
-          const missingLabel = (err.missingTools || []).join(", ") || tool;
-          Alert.alert(
-            "Install required",
-            `${missingLabel} missing on dev box. Install Node LTS into ~/.yaver/runtimes/node (no sudo)?`,
-            [
-              { text: "Cancel", style: "cancel", onPress: () => setStartingProject(null) },
-              {
-                text: "Install",
-                onPress: async () => {
-                  let lastLine = "Starting…";
-                  setQuickActionStatus(`Installing ${tool}: ${lastLine}`);
-                  const res = await quicClient.installTool(tool);
-                  if (!res.ok) {
-                    Alert.alert("Install failed", res.error || "Unknown error");
-                    setStartingProject(null);
-                    setQuickActionStatus(null);
-                    return;
-                  }
-                  const cancel = quicClient.subscribeStream(
-                    res.stream,
-                    (line) => {
-                      lastLine = line;
-                      setQuickActionStatus(`Installing ${tool}: ${line.slice(0, 80)}`);
-                    },
-                    async (status, error) => {
-                      cancel();
-                      if (status === "ok") {
-                        setQuickActionStatus("Install complete — retrying dev server…");
-                        try {
-                          await quicClient.startDevServer({
-                            framework: action.framework || "",
-                            workDir: targetPath,
-                            web: true,
-                            targetDeviceId: selectedTarget?.id,
-                            targetDeviceName: selectedTarget?.name,
-                            targetDeviceClass: selectedTarget?.deviceClass,
-                          });
-                        } catch (retryErr) {
-                          Alert.alert(
-                            "Dev server failed after install",
-                            retryErr instanceof Error ? retryErr.message : String(retryErr),
-                          );
-                        }
-                        setQuickActionStatus(null);
-                      } else {
-                        Alert.alert("Install failed", error || lastLine);
-                        setQuickActionStatus(null);
-                      }
-                      setStartingProject(null);
-                    },
-                  );
-                },
-              },
-            ],
-          );
+          setActionSheet(null);
+          resetWebPreview();
+          setPreviewGap(gap);
+          setWebPreviewFailed(true);
+          setWebPreviewLogs([gapTitle(gap), gapBody(gap)].filter(Boolean));
+          // Open the preview overlay: the card belongs where the user was
+          // heading, not in an Alert that dismisses to an unchanged Projects
+          // list. The overlay renders the named cause + the Install button.
+          setShowWebView(true);
+          setStartingProject(null);
           return;
         }
         // Genuine failure to start the preview — surface it inline, do NOT
@@ -2046,6 +2084,46 @@ export default function AppsScreen() {
   const webPreviewServerLooksReady =
     (devStatus ? isWebServedStatus(devStatus) : false) ||
     webPreviewLogs.some((line) => /\b(listening|serving on|compiled|ready|running)\b/i.test(line));
+
+  // ── Capability gap card ────────────────────────────────────────────────
+  // The gap can reach us on three carriers and we take whichever we have: the
+  // 412 body (synchronous refusal), the /dev/events error frame (the async
+  // spawn failure the 412 can never catch), or /dev/status (a poll that
+  // outlives a torn-down stream). One object, one card, one button.
+  const activeGap = previewGap || capabilityGapFromStatus(devStatus);
+  const activeGapFixLabel = gapFixLabel(activeGap);
+  const gapCard = activeGap ? (
+    <View style={s.gapCard}>
+      <Ionicons name="construct-outline" size={34} color={c.warn} />
+      <Text style={[s.previewFailTitle, { color: c.textPrimary }]}>{gapTitle(activeGap)}</Text>
+      {gapBody(activeGap) ? (
+        <Text style={[s.previewSubtle, { color: c.textMuted, textAlign: "left" }]} selectable>
+          {gapBody(activeGap)}
+        </Text>
+      ) : null}
+      {activeGapFixLabel ? (
+        <Pressable
+          onPress={() => startGapFix(activeGap)}
+          disabled={gapFixRunning}
+          accessibilityRole="button"
+          accessibilityLabel={activeGapFixLabel}
+          style={[s.previewBtn, s.gapFixBtn, { backgroundColor: gapFixRunning ? "#1f2937" : "#1a2e1a" }]}
+        >
+          <Text style={[s.previewBtnText, { color: gapFixRunning ? c.textMuted : "#22c55e" }]}>
+            {gapFixRunning
+              ? `Installing… ${gapFixStartedAt ? formatFixElapsed(gapFixStartedAt, previewNowTick) : ""}`.trim()
+              : activeGapFixLabel}
+          </Text>
+        </Pressable>
+      ) : (
+        // No fixer on THIS machine — say so specifically. A gap with no route
+        // must still name its constraint, never render an inert button.
+        <Text style={[s.previewSubtle, { color: c.warn, textAlign: "left" }]} selectable>
+          {activeGap.constraint || "Yaver has no installer for this on this machine."}
+        </Text>
+      )}
+    </View>
+  ) : null;
 
   useEffect(() => {
     if (!showWebView || !bundleUrl || webPreviewContentLoaded || webPreviewFailed) return;
@@ -3116,7 +3194,9 @@ export default function AppsScreen() {
                 instead; treat an empty url as a bug, never as a value. */}
             {!bundleUrl ? (
               <View style={s.previewOverlay}>
-                {devStatus?.error ? (
+                {activeGap ? (
+                  gapCard
+                ) : devStatus?.error ? (
                   <>
                     <Ionicons name="alert-circle-outline" size={36} color={c.error} />
                     <Text style={[s.previewFailTitle, { color: c.error }]}>Preview route is unavailable</Text>
@@ -3124,7 +3204,7 @@ export default function AppsScreen() {
                       {devStatus.error}
                     </Text>
                   </>
-                ) : (previewNowTick - (webPreviewStartedAt ?? previewNowTick)) >= 10000 ? (
+                ) :(previewNowTick - (webPreviewStartedAt ?? previewNowTick)) >= 10000 ? (
                   /* 10s with no address is no longer "waiting", it's a state
                      that needs a NAMED reason and an action — an unbounded
                      spinner over a missing address is the unfalsifiable
@@ -3342,6 +3422,12 @@ export default function AppsScreen() {
                     const compileCard = detectCompileFailure(devStatus?.error, webPreviewLogs);
                     return (
                   <>
+                    {/* A NAMED capability gap outranks every other diagnosis
+                        here: it has a deterministic one-tap fix, so offering
+                        "Fix in Yaver" (an LLM run) first would be the most
+                        expensive possible answer to the cheapest possible
+                        question. */}
+                    {activeGap ? gapCard : null}
                     <Ionicons name="alert-circle-outline" size={40} color={c.error} />
                     <Text style={[s.previewFailTitle, { color: c.error }]}>
                       {compileCard ? compileCard.title : "Dev server didn't come up"}
@@ -3521,6 +3607,12 @@ const s = StyleSheet.create({
   },
   previewLogLine: { fontFamily: "Menlo", fontSize: 10.5, color: "#9ca3af", lineHeight: 15 },
   previewFailBtns: { flexDirection: "row", gap: 12, marginTop: 8 },
+  // The gap card is the ROUTE, so it gets a floor and its own breathing room —
+  // advisory diagnostics must never squeeze it out (the 2026-07-26 action-sheet
+  // defect, where the one offered lane sat at zero height under a diagnostics
+  // wall).
+  gapCard: { alignItems: "center", gap: 8, paddingHorizontal: 8, paddingVertical: 12, marginBottom: 10, width: "100%" },
+  gapFixBtn: { marginTop: 4, minWidth: 200, alignItems: "center" },
   previewBtn: { paddingHorizontal: 22, paddingVertical: 11, borderRadius: 10 },
   previewBtnText: { fontSize: 14, fontWeight: "700" },
   previewRuntimeLogFab: {

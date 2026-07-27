@@ -23,6 +23,15 @@ import { PREVIEW_READY_SCRIPT } from "../lib/previewReadyScript";
 import { detectCompileFailure } from "../lib/compileFailure";
 import { previewBundlePath } from "../lib/previewBundlePath";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../lib/previewPhase";
+import {
+  capabilityGapFromDevEvent,
+  capabilityGapFromStatus,
+  gapBody,
+  gapFixLabel,
+  gapTitle,
+  type CapabilityGap,
+} from "../lib/capabilityGap";
+import { formatFixElapsed, runCapabilityGapFix } from "../lib/capabilityGapFix";
 import { setActivePreviewLane, subscribeBrowserShake } from "../lib/feedbackTrigger";
 import { subscribeSse } from "../lib/sseClient";
 import { useResponsiveLayout } from "../hooks/useResponsiveLayout";
@@ -132,11 +141,27 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
   // Rolling tail of dev-server log lines, for the starting + failure panels.
   const [logLines, setLogLines] = useState<string[]>([]);
   const [previewProbe, setPreviewProbe] = useState<PreviewProbeState | null>(null);
+  // The named capability gap behind a failed start (missing Flutter/toolchain),
+  // produced by the agent and carried on the /dev/events error frame AND
+  // /dev/status. This screen is the OTHER browser-preview implementation: it
+  // used to offer Retry and "Fix in Yaver" — an LLM run — for a class whose
+  // deterministic one-command fix already existed, and no Install at all.
+  const [previewGap, setPreviewGap] = useState<CapabilityGap | null>(null);
+  const [gapFixRunning, setGapFixRunning] = useState(false);
+  const [gapFixStartedAt, setGapFixStartedAt] = useState<number | null>(null);
+  const [gapFixNow, setGapFixNow] = useState(Date.now());
+  const gapFixCancelRef = useRef<(() => void) | null>(null);
   const pushLog = useCallback((line: string) => {
     const t = (line || "").trim();
     if (!t) return;
     setLogLines((prev) => (prev[prev.length - 1] === t ? prev : [...prev, t].slice(-40)));
   }, []);
+  useEffect(() => {
+    if (!gapFixRunning) return;
+    const id = setInterval(() => setGapFixNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [gapFixRunning]);
+  useEffect(() => () => gapFixCancelRef.current?.(), []);
   const webRetryCount = useRef(0);
   const webRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const webErroredThisLoad = useRef(false);
@@ -380,6 +405,10 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                   em.split("\n").map((l) => l.trimEnd()).filter(Boolean).forEach(pushLog);
                   setPreviewFailed(true);
                   setLastByteAt(Date.now());
+                  // The route. mgr.Start returns before the spawn, so a missing
+                  // toolchain can only ever arrive here.
+                  const gap = capabilityGapFromDevEvent(event);
+                  if (gap) setPreviewGap(gap);
                 }
               }
       },
@@ -1027,8 +1056,67 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                          remedy) or the tail's compile lines, never a raw
                          dump with the truth buried. Full output follows. */
                       const compileCard = detectCompileFailure(status?.error, logLines);
+                      // A named capability gap outranks the compile card and the
+                      // "Fix in Yaver" escalation below: it has a deterministic,
+                      // streamed, one-tap fix. Escalating a known capability gap
+                      // to a coding agent is the most expensive possible answer
+                      // to the cheapest possible question.
+                      const gap = previewGap || capabilityGapFromStatus(status);
+                      const fixLabel = gapFixLabel(gap);
                       return (
                     <>
+                      {gap ? (
+                        <View style={styles.gapCard}>
+                          <Ionicons name="construct-outline" size={34} color="#f59e0b" />
+                          <Text style={styles.previewFailTitle}>{gapTitle(gap)}</Text>
+                          {gapBody(gap) ? (
+                            <Text style={[styles.previewSubtle, { textAlign: "left" }]} selectable>{gapBody(gap)}</Text>
+                          ) : null}
+                          {fixLabel ? (
+                            <Pressable
+                              disabled={gapFixRunning}
+                              accessibilityRole="button"
+                              accessibilityLabel={fixLabel}
+                              onPress={() => {
+                                if (gapFixRunning) return;
+                                setGapFixRunning(true);
+                                setGapFixStartedAt(Date.now());
+                                gapFixCancelRef.current = runCapabilityGapFix(quicClient as any, gap, {
+                                  onLine: (line) => { pushLog(line); setLastByteAt(Date.now()); },
+                                  onDone: (ok, error) => {
+                                    gapFixCancelRef.current = null;
+                                    setGapFixRunning(false);
+                                    if (!ok) {
+                                      pushLog(`[install] failed: ${error || "unknown error"}`);
+                                      return;
+                                    }
+                                    // Return them to what they were doing: clear
+                                    // the failure and re-mount the WebView, which
+                                    // re-drives the dev-server start path.
+                                    setPreviewGap(null);
+                                    pushLog("[install] done — restarting the preview…");
+                                    resetPreviewProgress();
+                                    setPreviewFailed(false);
+                                    setLoading(true);
+                                    setWebViewKey((k) => k + 1);
+                                  },
+                                });
+                              }}
+                              style={[styles.previewBtn, styles.gapFixBtn, { backgroundColor: gapFixRunning ? "#1f2937" : "#1a2e1a" }]}
+                            >
+                              <Text style={[styles.previewBtnText, { color: gapFixRunning ? "#9ca3af" : "#22c55e" }]}>
+                                {gapFixRunning
+                                  ? `Installing… ${gapFixStartedAt ? formatFixElapsed(gapFixStartedAt, gapFixNow) : ""}`.trim()
+                                  : fixLabel}
+                              </Text>
+                            </Pressable>
+                          ) : (
+                            <Text style={[styles.previewSubtle, { color: "#f59e0b", textAlign: "left" }]} selectable>
+                              {gap.constraint || "Yaver has no installer for this on this machine."}
+                            </Text>
+                          )}
+                        </View>
+                      ) : null}
                       <Ionicons name="alert-circle-outline" size={40} color="#ef4444" />
                       <Text style={styles.previewFailTitle}>
                         {compileCard ? compileCard.title : "Dev server didn't come up"}
@@ -1541,4 +1629,8 @@ const styles = StyleSheet.create({
   previewFailBtns: { flexDirection: "row", gap: 12, marginTop: 8 },
   previewBtn: { paddingHorizontal: 22, paddingVertical: 11, borderRadius: 10 },
   previewBtnText: { fontSize: 14, fontWeight: "700" },
+  // The route gets its own space above the diagnostics — advisory text may
+  // never crowd out the one tap that fixes the problem.
+  gapCard: { alignItems: "center", gap: 8, paddingHorizontal: 8, paddingVertical: 12, marginBottom: 10, width: "100%" },
+  gapFixBtn: { marginTop: 4, minWidth: 200, alignItems: "center" },
 });

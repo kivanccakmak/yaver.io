@@ -4683,6 +4683,11 @@ export class AgentClient {
     /** HTTP status when the call returned a response. Useful for the
      *  dashboard to surface 401 → re-auth, 5xx → infra. */
     httpStatus?: number;
+    /** Structured capability gap behind `error` (a missing toolchain) — the
+     *  same object the /dev/events error frame carries, polled here for the
+     *  case where the stream was torn down when the failure happened. Parse
+     *  with @/lib/capabilityGap; never regex the error string. */
+    capabilityGap?: unknown;
   } | null> {
     this.assertConnected();
     try {
@@ -4942,6 +4947,11 @@ export class AgentClient {
         err.missingTools = data.missingTools;
         err.installEndpoint = data?.installEndpoint;
         err.installable = data?.installable === true;
+        // The typed route (agent 1.99.380+), forwarded verbatim. Everything
+        // above flattens the structured refusal back into a sentence no view
+        // branches on — which is exactly why web had no install affordance
+        // anywhere. Callers parse this with @/lib/capabilityGap instead.
+        err.capabilityGap = data?.capabilityGap;
         throw err;
       }
       throw new Error(data?.error || `Failed to start dev server (HTTP ${res.status})`);

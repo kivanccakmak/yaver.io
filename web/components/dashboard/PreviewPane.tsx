@@ -6,6 +6,17 @@ import { AGENT_AUTH_REMEDY, isAgentAuthErrorMessage } from "@/lib/agentAuthError
 import { detectCompileFailure } from "@/lib/compileFailure";
 import { previewPhaseTitle } from "@/lib/previewPhase";
 import { classifyRelayLimit } from "@/lib/relayDeny";
+import {
+  capabilityGapFromDevEvent,
+  capabilityGapFromError,
+  capabilityGapFromStatus,
+  gapBody,
+  gapFixLabel,
+  gapInstallTool,
+  gapRetriesAfterFix,
+  gapTitle,
+  type CapabilityGap,
+} from "@/lib/capabilityGap";
 import pkg from "../../package.json";
 import { CommandCard } from "./CommandCard";
 import {
@@ -169,6 +180,9 @@ export default function PreviewPane({
     /** Agent-persisted failure — including SetCompileError's "running but
      *  nothing to serve" detail. The compile-failure card reads this. */
     error?: string;
+    /** Structured capability gap behind `error` (missing toolchain), same
+     *  object the /dev/events error frame carries. Parsed by capabilityGap.ts. */
+    capabilityGap?: unknown;
   } | null>(null);
   const [workerSession, setWorkerSession] = useState<MobileWorkerPreviewSession | null>(null);
   const [projects, setProjects] = useState<Project[] | null>(null);
@@ -181,6 +195,15 @@ export default function PreviewPane({
   const [logLines, setLogLines] = useState<string[]>([]);
   const [startingPath, setStartingPath] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  // The named capability gap behind a failed start (missing Flutter/toolchain),
+  // from whichever carrier arrives first: the 412 body, the /dev/events error
+  // frame, or the /dev/status poll. gapFix* narrate the install while it runs —
+  // a 1.2 GB SDK behind a silent spinner is the same defect as a silent serve.
+  const [previewGap, setPreviewGap] = useState<CapabilityGap | null>(null);
+  const [gapFixRunning, setGapFixRunning] = useState(false);
+  const [gapFixStartedAt, setGapFixStartedAt] = useState<number | null>(null);
+  const [gapFixNow, setGapFixNow] = useState(Date.now());
+  const gapRetryRef = useRef<(() => Promise<void>) | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [recovering, setRecovering] = useState(false);
   const [recoveryLog, setRecoveryLog] = useState<string[]>([]);
@@ -697,6 +720,14 @@ export default function PreviewPane({
             setLogLines((prev) => [...prev.slice(-200), `[error] ${text}`]);
             setDevProgress((prev) => ({ ...prev, stage: `error: ${text.slice(0, 120)}`, active: true }));
           }
+          // THE ROUTE. mgr.Start returns before the process is spawned, so a
+          // missing toolchain ("exec flutter: executable file not found") can
+          // ONLY arrive on this channel — no 412 can catch it. Web had no
+          // install affordance anywhere: agent-client parsed the typed 412
+          // fields and immediately folded them back into a string nothing
+          // branched on, and this pane rendered it as one more log line.
+          const gap = capabilityGapFromDevEvent(ev);
+          if (gap) setPreviewGap(gap);
         } else if (ev.type === "stopped") {
           setDevProgress({ pct: 0, stage: "", active: false });
           setTopicProgress({});
@@ -1155,31 +1186,106 @@ export default function PreviewPane({
     async (project: Project) => {
       setStartingPath(project.path);
       setStartError(null);
+      setPreviewGap(null);
       setLogLines([
         `[ui] ▶ START ${project.name} (${likelyFramework(project)})`,
         `[ui] workDir: ${project.path}`,
         `[ui] sending POST /dev/start …`,
       ]);
+      // One closure for "start this project" so a capability-gap fix can
+      // re-issue the EXACT request that was refused, not an approximation.
+      const startThisProject = () => agentClient.startDevServer({
+        framework: likelyFramework(project),
+        workDir: project.path,
+        platform: previewPlatformForProject(project),
+        targetDeviceId: selectedPreviewTarget?.id,
+        targetDeviceName: selectedPreviewTarget?.name,
+      });
+      gapRetryRef.current = async () => { await startThisProject(); };
       try {
-        await agentClient.startDevServer({
-          framework: likelyFramework(project),
-          workDir: project.path,
-          platform: previewPlatformForProject(project),
-          targetDeviceId: selectedPreviewTarget?.id,
-          targetDeviceName: selectedPreviewTarget?.name,
-        });
+        await startThisProject();
         setLogLines((prev) => [...prev, `[ui] ✓ /dev/start accepted, waiting for "ready" event…`]);
         // status poll will pick up running=true shortly
       } catch (e: any) {
-        const raw = e?.message || "Failed to start dev server";
-        const msg = isAgentAuthErrorMessage(raw) ? `${AGENT_AUTH_REMEDY} (${raw})` : raw;
-        setStartError(msg);
-        setLogLines((prev) => [...prev, `[ui] ✗ /dev/start failed: ${msg}`]);
+        // A structured refusal carries the whole route — sentence, endpoint,
+        // stream, estimate. Render the card; do not flatten it back into prose.
+        const gap = capabilityGapFromError(e);
+        if (gap) {
+          setPreviewGap(gap);
+          setLogLines((prev) => [...prev, `[ui] ✗ /dev/start refused: ${gapTitle(gap)}`]);
+        } else {
+          const raw = e?.message || "Failed to start dev server";
+          const msg = isAgentAuthErrorMessage(raw) ? `${AGENT_AUTH_REMEDY} (${raw})` : raw;
+          setStartError(msg);
+          setLogLines((prev) => [...prev, `[ui] ✗ /dev/start failed: ${msg}`]);
+        }
       }
       setStartingPath(null);
     },
     [selectedPreviewTarget],
   );
+
+  // Elapsed clock while a fix downloads. Without it the user cannot tell
+  // fetching from hung, which is the whole reason this seam exists.
+  useEffect(() => {
+    if (!gapFixRunning) return;
+    const id = setInterval(() => setGapFixNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [gapFixRunning]);
+
+  /**
+   * Run the gap's fix: POST its path, stream the output into the CONSOLE the
+   * user is already reading, then re-issue what they were trying to do.
+   *
+   * Entirely driven by the typed route the agent shipped — no tool name is
+   * hardcoded here, so teaching the agent a new gap lights this button up with
+   * no change on this surface.
+   */
+  const runGapFix = useCallback(async (gap: CapabilityGap) => {
+    const tool = gapInstallTool(gap);
+    if (!tool || gapFixRunning) return;
+    setGapFixRunning(true);
+    setGapFixStartedAt(Date.now());
+    const push = (line: string) => setLogLines((prev) => [...prev.slice(-200), line]);
+    push(`[fix] POST ${gap.fix!.path} …`);
+    let started: { ok: boolean; stream: string; error?: string };
+    try {
+      started = await agentClient.installTool(tool);
+    } catch (e: any) {
+      push(`[fix] ✗ ${gap.fix!.path}: ${e?.message || String(e)}`);
+      setGapFixRunning(false);
+      return;
+    }
+    if (!started.ok) {
+      // Name the endpoint that refused. "Install failed" with no path is the
+      // vague-error cost this seam exists to remove.
+      push(`[fix] ✗ ${gap.fix!.path} refused: ${started.error || "unknown error"}`);
+      setGapFixRunning(false);
+      return;
+    }
+    const streamName = started.stream || gap.fix!.stream;
+    push(`[fix] streaming /streams/${streamName}`);
+    const stop = agentClient.streamLog(streamName, (ev: any) => {
+      if (ev?.type === "line" && typeof ev.text === "string") {
+        push(ev.text);
+      } else if (ev?.type === "result") {
+        stop();
+        setGapFixRunning(false);
+        if (ev.status === "ok") {
+          setPreviewGap(null);
+          push("[fix] ✓ installed — restarting the dev server…");
+          if (gapRetriesAfterFix(gap) && gapRetryRef.current) {
+            void gapRetryRef.current().catch((e: any) => push(`[fix] ✗ retry: ${e?.message || String(e)}`));
+          }
+        } else {
+          push(`[fix] ✗ install failed: ${ev.error || "unknown error"}`);
+        }
+      }
+    });
+  }, [gapFixRunning]);
+
+  // Whichever carrier got here first.
+  const activeGap = previewGap || capabilityGapFromStatus(devStatus);
 
   const mobileProjects = useMemo(() => {
     if (!projects) return [];
@@ -1359,6 +1465,11 @@ export default function PreviewPane({
       onStart={handleStartProject}
       startingPath={startingPath}
       startError={startError}
+      gap={activeGap}
+      gapRunning={gapFixRunning}
+      gapStartedAt={gapFixStartedAt}
+      gapNow={gapFixNow}
+      onRunGapFix={runGapFix}
     />
   );
 
@@ -1366,6 +1477,21 @@ export default function PreviewPane({
 
   return (
     <div className="flex flex-col h-full">
+      {/* A named capability gap is rendered at the TOP of the pane, above every
+          diagnostic, whether or not a dev server is nominally running: it is the
+          route, and advisory content may never crowd the route out. The same
+          card also renders inside EmptyPhoneState for the no-server case. */}
+      {activeGap && devStatus?.running ? (
+        <div className="px-3 py-2 border-b border-surface-800 shrink-0">
+          <CapabilityGapCard
+            gap={activeGap}
+            running={gapFixRunning}
+            startedAt={gapFixStartedAt}
+            now={gapFixNow}
+            onRun={runGapFix}
+          />
+        </div>
+      ) : null}
       {/* Toolbar */}
       <div className="h-9 flex items-center px-3 gap-2 border-b border-surface-800 bg-surface-900/50 shrink-0">
         <span
@@ -1915,6 +2041,61 @@ export default function PreviewPane({
   );
 }
 
+/**
+ * CapabilityGapCard — the named cause plus the ONE tap that fixes it.
+ *
+ * Byte-for-byte the same object mobile renders (mobile/src/lib/capabilityGap.ts
+ * and web/lib/capabilityGap.ts are parity-tested twins), so this cannot say
+ * something different from what the phone says about the same box.
+ *
+ * When `fix` is absent the card renders the CONSTRAINT instead — never an inert
+ * button. Offering an install that cannot work teaches the user Yaver lies.
+ */
+function CapabilityGapCard({
+  gap,
+  running,
+  startedAt,
+  now,
+  onRun,
+}: {
+  gap: CapabilityGap;
+  running: boolean;
+  startedAt: number | null;
+  now: number;
+  onRun: (gap: CapabilityGap) => void;
+}) {
+  const label = gapFixLabel(gap);
+  const elapsed = startedAt ? Math.max(0, Math.floor((now - startedAt) / 1000)) : 0;
+  const elapsedText = elapsed >= 60 ? `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}` : `${elapsed}s`;
+  return (
+    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-3 text-[11px] leading-relaxed">
+      <div className="font-semibold text-amber-700 dark:text-amber-200">{gapTitle(gap)}</div>
+      {gapBody(gap) ? (
+        <div className="mt-1 text-amber-700 dark:text-amber-200/80">{gapBody(gap)}</div>
+      ) : null}
+      {label ? (
+        <button
+          type="button"
+          onClick={() => onRun(gap)}
+          disabled={running}
+          className="mt-2 rounded-md bg-emerald-600 px-3 py-1.5 text-[11px] font-semibold text-white disabled:opacity-60"
+        >
+          {running ? `Installing… ${elapsedText} elapsed` : label}
+        </button>
+      ) : (
+        <div className="mt-2 text-amber-700 dark:text-amber-200/90">
+          {gap.constraint || "Yaver has no installer for this on this machine."}
+        </div>
+      )}
+      {running ? (
+        <div className="mt-1 text-amber-700 dark:text-amber-200/60">
+          Output is streaming into the CONSOLE below.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function EmptyPhoneState({
   projects,
   projectsAll,
@@ -1922,6 +2103,11 @@ function EmptyPhoneState({
   onStart,
   startingPath,
   startError,
+  gap,
+  gapRunning,
+  gapStartedAt,
+  gapNow,
+  onRunGapFix,
 }: {
   projects: Project[];
   projectsAll: Project[] | null;
@@ -1929,6 +2115,11 @@ function EmptyPhoneState({
   onStart: (p: Project) => void;
   startingPath: string | null;
   startError: string | null;
+  gap: CapabilityGap | null;
+  gapRunning: boolean;
+  gapStartedAt: number | null;
+  gapNow: number;
+  onRunGapFix: (gap: CapabilityGap) => void;
 }) {
   const orderedProjects = useMemo(() => {
     if (!preferredProjectPath) return projects;
@@ -1960,6 +2151,13 @@ function EmptyPhoneState({
           </div>
         </div>
       </div>
+
+      {/* The ROUTE comes first: a named capability gap has a deterministic,
+          streamed, one-tap fix, so it must never sit below (or be crowded out
+          by) advisory diagnostics. */}
+      {gap ? (
+        <CapabilityGapCard gap={gap} running={gapRunning} startedAt={gapStartedAt} now={gapNow} onRun={onRunGapFix} />
+      ) : null}
 
       {startError ? (
         <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-[11px] text-red-700 dark:text-red-300">

@@ -15,6 +15,14 @@ import {
 import { isRunnerBrowserAuthTerminal } from "@/lib/agent-client";
 import { isAgentAuthErrorMessage } from "@/lib/agentAuthError";
 import { detectCompileFailure } from "@/lib/compileFailure";
+import {
+  capabilityGapFromDevEvent,
+  gapBody,
+  gapFixLabel,
+  gapInstallTool,
+  gapTitle,
+  type CapabilityGap,
+} from "@/lib/capabilityGap";
 import { validateOpenCodeModel } from "@/lib/opencodeModel";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 import { formatDevProgressLine } from "@/lib/devEventLine";
@@ -733,6 +741,12 @@ export default function RuntimeLabView({
   const [session, setSession] = useState<RemoteRuntimeSession | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const [devEventsUrl, setDevEventsUrl] = useState<string | null>(() => agentClient.devEventsUrl);
+  // A named capability gap off the dev-events stream. The Runtime Lab console
+  // is where a web user watches a start fail; before this it rendered
+  // "dev error: exec flutter: executable file not found in $PATH" as one more
+  // grey line and offered nothing.
+  const [runtimeGap, setRuntimeGap] = useState<CapabilityGap | null>(null);
+  const [runtimeGapBusy, setRuntimeGapBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recoveringAgentAuth, setRecoveringAgentAuth] = useState(false);
@@ -1017,7 +1031,13 @@ export default function RuntimeLabView({
         // 100 here printed "1575% streaming". formatDevProgressLine clamps.
         else if (ev.type === "progress" && ev.topic) appendLog(formatDevProgressLine(ev.topic, ev.pct, ev.phase));
         else if (ev.type === "ready") { appendLog("dev server ready"); setDevLogTail([]); }
-        else if (ev.type === "error" && ev.error) { appendLog(`dev error: ${ev.error}`); pushTail(String(ev.error)); }
+        else if (ev.type === "error") {
+          if (ev.error) { appendLog(`dev error: ${ev.error}`); pushTail(String(ev.error)); }
+          if (ev.message) { appendLog(`dev error: ${ev.message}`); pushTail(String(ev.message)); }
+          // The route. Same object mobile renders, same code lookup.
+          const gap = capabilityGapFromDevEvent(ev);
+          if (gap) setRuntimeGap(gap);
+        }
         else if (ev.type === "snapshot" && ev.snapshot?.recentLogs?.length) {
           for (const line of ev.snapshot.recentLogs.slice(-3)) { appendLog(`dev: ${line}`); pushTail(String(line)); }
         }
@@ -1030,6 +1050,32 @@ export default function RuntimeLabView({
   }, [appendLog, devEventsUrl]);
 
   const runtimeCompileCard = useMemo(() => detectCompileFailure(null, devLogTail), [devLogTail]);
+
+  /** POST the gap's fix and stream it into the runtime console the user is
+   *  already reading. Driven entirely by the typed route the agent shipped. */
+  const runRuntimeGapFix = useCallback(async (gap: CapabilityGap) => {
+    const tool = gapInstallTool(gap);
+    if (!tool || runtimeGapBusy) return;
+    setRuntimeGapBusy(true);
+    appendLog(`fix: POST ${gap.fix!.path} …`);
+    const started = await agentClient.installTool(tool).catch((e: any) => ({ ok: false, stream: "", error: e?.message || String(e) }));
+    if (!started.ok) {
+      appendLog(`fix: ${gap.fix!.path} refused: ${started.error || "unknown error"}`);
+      setRuntimeGapBusy(false);
+      return;
+    }
+    const streamName = started.stream || gap.fix!.stream;
+    appendLog(`fix: streaming /streams/${streamName}`);
+    const stop = agentClient.streamLog(streamName, (ev: any) => {
+      if (ev?.type === "line" && typeof ev.text === "string") appendLog(`fix: ${ev.text}`);
+      else if (ev?.type === "result") {
+        stop();
+        setRuntimeGapBusy(false);
+        if (ev.status === "ok") { setRuntimeGap(null); appendLog("fix: installed — start the preview again"); }
+        else appendLog(`fix: install failed: ${ev.error || "unknown error"}`);
+      }
+    });
+  }, [appendLog, runtimeGapBusy]);
 
   const startSelectedRunnerSignIn = useCallback(async () => {
     if (!selectedRunnerRow || !["claude", "codex"].includes(selectedRunnerRow.id)) return;
@@ -1907,6 +1953,31 @@ export default function RuntimeLabView({
                           </button>
                         </div>
                       </div>
+                      {runtimeGap ? (
+                        // The ROUTE, above every diagnostic: a named capability
+                        // gap has a deterministic one-tap fix, so it must never
+                        // sit under (or be crowded out by) advisory output.
+                        <div className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+                          <div className="text-xs font-semibold text-amber-700 dark:text-amber-200">{gapTitle(runtimeGap)}</div>
+                          {gapBody(runtimeGap) ? (
+                            <div className="mt-1 text-[11px] leading-4 text-amber-700/90 dark:text-amber-200/80">{gapBody(runtimeGap)}</div>
+                          ) : null}
+                          {gapFixLabel(runtimeGap) ? (
+                            <button
+                              type="button"
+                              disabled={runtimeGapBusy}
+                              onClick={() => void runRuntimeGapFix(runtimeGap)}
+                              className="mt-2 rounded-md bg-emerald-600 px-3 py-1.5 text-[11px] font-semibold text-white disabled:opacity-60"
+                            >
+                              {runtimeGapBusy ? "Installing… (output in the runtime console)" : gapFixLabel(runtimeGap)}
+                            </button>
+                          ) : (
+                            <div className="mt-2 text-[11px] text-amber-700/90 dark:text-amber-200/80">
+                              {runtimeGap.constraint || "Yaver has no installer for this on this machine."}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
                       {runtimeCompileCard ? (
                         // Compile failure on a healthy server (audit gap D5):
                         // without this, a broken build renders as a blank
