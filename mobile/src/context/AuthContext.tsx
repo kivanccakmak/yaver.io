@@ -35,6 +35,14 @@ interface AuthState {
   isLoading: boolean;
   isAuthenticated: boolean;
   surveyCompleted: boolean;
+  // True only when the stored token was CONFIRMED invalid by the server and
+  // the user was signed out because of it (mount-restore `invalid` verdict, or
+  // notifyAuthFailure's validate-confirmed revoke). Lets the login screen say
+  // "Your session expired — sign in again" instead of silently dumping the
+  // user on a sign-in gate with no explanation (audit gap T6; web has named
+  // this since use-auth.ts gained `sessionExpired`). Never set on network
+  // errors, never set on a user-initiated logout. Cleared on the next login.
+  sessionExpired: boolean;
   login: (token: string) => Promise<void>;
   logout: () => Promise<void>;
   markSurveyCompleted: () => void;
@@ -55,6 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [surveyCompleted, setSurveyCompleted] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   // Mirror of `token` for reading from async closures (retry loop's
   // fire-and-forget refresh). Flip to null on logout → any in-flight
@@ -155,7 +164,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (invalidated) {
+          // The server actively rejected the stored token (rotated / expired /
+          // revoked). Name it — a silent logout reads as a broken app.
           await clearToken();
+          setSessionExpired(true);
           return;
         }
 
@@ -230,6 +242,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setToken(null);
         setUser(null);
         setSurveyCompleted(false);
+        // Confirmed revoke → the login screen must explain WHY the user is
+        // back on it (audit gap T6 — web already names this).
+        setSessionExpired(true);
       }
     } catch {
       // Recovery path must never throw.
@@ -278,6 +293,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       "info",
       `[auth] login resolved ${validatedUser.email || validatedUser.id} via ${getConvexSiteUrl()}`,
     );
+    setSessionExpired(false);
     await saveToken(newToken);
     await saveUser(validatedUser);
     setToken(newToken);
@@ -308,6 +324,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setToken(null);
     setUser(null);
     setSurveyCompleted(false);
+    // User-initiated — NOT an expiry; the login screen must not claim one.
+    setSessionExpired(false);
   }, [token]);
 
   const markSurveyCompleted = useCallback(() => {
@@ -330,13 +348,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isLoading,
       isAuthenticated: !!token && !!user,
       surveyCompleted,
+      sessionExpired,
       login,
       logout,
       markSurveyCompleted,
       refreshUser,
       notifyAuthFailure,
     }),
-    [user, token, isLoading, surveyCompleted, login, logout, markSurveyCompleted, refreshUser, notifyAuthFailure]
+    [user, token, isLoading, surveyCompleted, sessionExpired, login, logout, markSurveyCompleted, refreshUser, notifyAuthFailure]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

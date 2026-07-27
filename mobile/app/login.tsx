@@ -46,6 +46,7 @@ import {
 } from "../src/lib/passkey";
 
 import { resumePendingDeviceApproval } from "../src/lib/pendingDeviceApproval";
+import { SESSION_EXPIRED_NOTICE } from "../src/lib/sessionExpiredNotice";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -79,7 +80,7 @@ function isOAuthCallbackUrl(url: string): boolean {
 }
 
 export default function LoginScreen() {
-  const { login, surveyCompleted } = useAuth();
+  const { login, surveyCompleted, sessionExpired } = useAuth();
   const { isDark } = useTheme();
   const c = useColors();
   const layout = useResponsiveLayout();
@@ -544,6 +545,27 @@ export default function LoginScreen() {
               )}
             </View>
 
+            {sessionExpired ? (
+              // Confirmed session revoke (audit gap T6): the user did not
+              // choose to be here — say why, exactly like web's dashboard
+              // does, instead of a silent dump onto the sign-in gate.
+              <View
+                style={{
+                  alignSelf: "stretch",
+                  borderRadius: 10,
+                  borderWidth: 1,
+                  borderColor: c.warnBorder,
+                  backgroundColor: c.warnBg,
+                  paddingHorizontal: 12,
+                  paddingVertical: 10,
+                  marginBottom: 12,
+                }}
+              >
+                <Text style={{ color: c.warn, fontSize: 13, fontWeight: "600" }}>
+                  {SESSION_EXPIRED_NOTICE}
+                </Text>
+              </View>
+            ) : null}
             <View
               style={[
                 styles.formCard,

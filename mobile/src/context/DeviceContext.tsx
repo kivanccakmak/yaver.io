@@ -17,6 +17,7 @@ import * as WebBrowser from "expo-web-browser";
 import { quicClient, RecoveryResult, RelayServer, TunnelServer, type OpenCodeConfigSummary } from "../lib/quic";
 import { connectionManager } from "../lib/connectionManager";
 import { connectGiveUpMessage } from "../lib/platformTransport";
+import { classifyRelayLimit, explainRelayDeny } from "../lib/relayDeny";
 import { useAuth } from "./AuthContext";
 import { getConvexSiteUrl, getLocalSecret, getUserSettings, saveUserSettings, LOCAL_KEYS, UserSettingsUnavailableError } from "../lib/auth";
 import { appLog } from "../lib/logger";
@@ -2103,7 +2104,11 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           setLastError(
             quicClient.reconnectStopped
               ? "Reconnection stopped"
-              : connectGiveUpMessage(max, quicClient.lastTransportError),
+              // A terminal relay verdict (device_mismatch — audit R3) outranks
+              // the generic give-up: the cause is not "couldn't reach", it is
+              // "will never be allowed", and the remedy is named.
+              : explainRelayDeny(quicClient.lastTransportError) ??
+                connectGiveUpMessage(max, quicClient.lastTransportError),
           );
         } else {
           setConnectionStatus("error");
@@ -2119,9 +2124,20 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           // relay can't route) — a box-presence problem, not a phone problem.
           // The raw string reads like the phone is being refused; say what is
           // actually happening and what to expect instead.
-          const friendlyCause = cause.toLowerCase().includes("device not connected to relay")
-            ? "your box lost its relay session — it usually re-registers within a minute; retrying"
-            : cause;
+          // Terminal + limit verdicts get their names DURING the ladder too
+          // (audit R3, R13, R14): device_mismatch can never self-heal, so
+          // "Reconnecting (n/5) — <raw relay string>" was a lie of hope; and
+          // a free-tier/bandwidth verdict deserves its reset/unmetered-path
+          // statement instead of reading like a network flap.
+          const denyExplained = explainRelayDeny(cause);
+          const limitCard = classifyRelayLimit(cause);
+          const friendlyCause = denyExplained
+            ? denyExplained
+            : limitCard
+              ? `${limitCard.title} — ${limitCard.detail}`
+              : cause.toLowerCase().includes("device not connected to relay")
+                ? "your box lost its relay session — it usually re-registers within a minute; retrying"
+                : cause;
           // Attempts can exceed max now that a previously-reachable box
           // retries forever — clamp the display so it never reads "7/5".
           const shownAttempt = Math.min(attempt, max);
