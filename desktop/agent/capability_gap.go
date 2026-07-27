@@ -101,7 +101,36 @@ var (
 	rxExecBareNotFound = regexp.MustCompile(`exec:?\s+([A-Za-z0-9._+-]+):\s*executable file not found`)
 	// `flutter: command not found` (a shell that ran the spawn)
 	rxCommandNotFound = regexp.MustCompile(`([A-Za-z0-9._+-]+):\s*command not found`)
+
+	// THE PROSE FAMILY — added 2026-07-27 after measuring how often the three
+	// regexes above can actually fire.
+	//
+	// The three above only ever match RAW os/exec output. But almost every
+	// spawn site in this tree calls exec.LookPath FIRST and substitutes its
+	// own sentence — `carton not found on PATH — SwiftWasm previews need…`
+	// (devserver_swiftwasm.go), `claude not found in PATH or common
+	// locations` (CheckRunnerBinary, tasks.go), `adb not on PATH — run
+	// \`yaver install remote-runtime\`` (remote_runtime_video_track.go),
+	// `tmux not found in PATH`. Every one of those destroys the only text the
+	// detector could parse, so the detector was an inventory of one package's
+	// error strings rather than of the failure.
+	//
+	// Anchored on PATH deliberately. A bare `([A-Za-z0-9._+-]+) not found`
+	// would capture "Module" out of `Module not found: Can't resolve
+	// 'react-dom'` — a bundler failure whose remedy is `npm install`, not an
+	// SDK download. A wrong tool name is worse than no tool name: it sends
+	// the user to install something they already have, the install
+	// "succeeds", and the real failure repeats unchanged.
+	rxNotFoundOnPath = regexp.MustCompile(`\b([A-Za-z0-9._+-]+)\s+(?:is\s+)?not\s+(?:found\s+on|found\s+in|on|in)\s+(?:\$|%)?PATH\b`)
 )
+
+// notAToolName are words that can legitimately sit in front of "not found in
+// PATH" without being a binary. Kept tiny on purpose: this is a guard against
+// the handful of English nouns our own prose uses, not a dictionary.
+var notAToolName = map[string]bool{
+	"exec": true, "executable": true, "binary": true, "command": true,
+	"module": true, "file": true, "it": true, "tool": true, "runner": true,
+}
 
 // devStartToolchainBinary maps a dev-server framework to the executable its
 // dev server must spawn, for frameworks whose readiness is NOT covered by the
@@ -121,6 +150,18 @@ func devStartToolchainBinary(framework string) string {
 	case "flutter":
 		// devserver.go FlutterDevServer.Start → resolveSpawnPath("flutter").
 		return "flutter"
+	case "swiftwasm":
+		// devserver_swiftwasm.go Start → startProcess(ctx, "carton", …).
+		//
+		// carton has no recipe in either install table, so this row produces
+		// a gap with a CONSTRAINT rather than a button — which is the point.
+		// Before it existed, a SwiftWasm start on a box without the SwiftWasm
+		// toolchain answered 200 OK, then failed asynchronously with prose
+		// ("carton not found on PATH — …") that matched no detector, so the
+		// preview sat on "Waiting for the dev server to report its address…"
+		// over a constraint the agent had already stated. Naming an
+		// impossible thing is a route too: it ends the wait.
+		return "carton"
 	}
 	return ""
 }
@@ -129,8 +170,15 @@ func devStartToolchainBinary(framework string) string {
 // raw tool name, which is right for lowercase CLI names (bun, pnpm, adb).
 func capabilityDisplayName(tool string) string {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
+	case "claude", "codex", "opencode", "glm":
+		// ONE source of truth for how a runner is named to a human. A second
+		// spelling here would put "claude isn't installed" on the Tasks card
+		// next to "Claude Code" everywhere else in the same app.
+		return runnerCapabilityName(tool)
 	case "flutter":
 		return "Flutter"
+	case "carton":
+		return "carton (the SwiftWasm toolchain)"
 	case "node":
 		return "Node.js"
 	case "mobile":
@@ -157,6 +205,12 @@ func installEstimateForTool(tool string) string {
 		return "~2 GB · usually 5–15 min"
 	case "mobile", "node":
 		return "~60 MB · usually under a minute"
+	case "claude", "codex", "opencode":
+		// npm-backed CLIs (install_cmd.go ensureRunnerInstalledStream). Small,
+		// but the number is the difference between "fetching" and "hung".
+		return "~50 MB · usually under a minute"
+	case "ffmpeg", "tmux":
+		return "package-manager install · usually under a minute"
 	}
 	return ""
 }
@@ -175,7 +229,7 @@ func missingToolFromError(errText string) string {
 	if text == "" {
 		return ""
 	}
-	for _, rx := range []*regexp.Regexp{rxExecQuotedNotFound, rxExecBareNotFound, rxCommandNotFound} {
+	for _, rx := range []*regexp.Regexp{rxExecQuotedNotFound, rxExecBareNotFound, rxCommandNotFound, rxNotFoundOnPath} {
 		if m := rx.FindStringSubmatch(text); len(m) == 2 {
 			tool := strings.TrimSpace(m[1])
 			// os/exec sometimes hands back an absolute path; the install
@@ -183,7 +237,7 @@ func missingToolFromError(errText string) string {
 			if i := strings.LastIndexAny(tool, `/\`); i >= 0 {
 				tool = tool[i+1:]
 			}
-			if tool != "" && tool != "exec" {
+			if tool != "" && !notAToolName[strings.ToLower(tool)] {
 				return tool
 			}
 		}
@@ -194,10 +248,51 @@ func missingToolFromError(errText string) string {
 // looksLikeMissingExecutable reports whether the text is a spawn failure of
 // the "the binary is not there" family, even when the binary name could not
 // be extracted.
+//
+// The last three needles are the PROSE family (see rxNotFoundOnPath): sites
+// that call exec.LookPath themselves and write their own sentence. Kept
+// PATH-anchored for the same reason the regex is — `not found` on its own
+// matches a bundler's "Module not found", whose remedy is not an install.
 func looksLikeMissingExecutable(errText string) bool {
 	lower := strings.ToLower(errText)
 	return strings.Contains(lower, "executable file not found") ||
-		strings.Contains(lower, "command not found")
+		strings.Contains(lower, "command not found") ||
+		strings.Contains(lower, "not found in path") ||
+		strings.Contains(lower, "not found on path") ||
+		strings.Contains(lower, "not on path")
+}
+
+// DetectTaskCapabilityGap is the TASKS-lane producer — the same object the
+// preview lane carries, on the surface where a user types a prompt.
+//
+// Before this existed, POST /tasks answered 500 with
+// `failed to create task: runner not ready: claude not found in PATH or
+// common locations` while `POST /install/claude` worked and streamed. The
+// phone cannot type `yaver install claude`; the 500 was a dead end with a
+// sentence, on the busiest lane in the product.
+//
+// runnerCommand is the binary the task was about to spawn. It is used ONLY as
+// the fallback when the text proves a binary was missing without naming it —
+// the task knows which one, so that is a resolution, not a guess. Returns nil
+// for every other failure shape (not signed in, incompatible model, workDir
+// not writable, permission denied): those are real failures with real, and
+// DIFFERENT, remedies, and offering an install for them teaches the user that
+// Yaver's buttons do not work.
+func DetectTaskCapabilityGap(runnerCommand, errText string) *CapabilityGap {
+	if gap := DetectCapabilityGap(CapabilityGapContext{Err: errText}); gap != nil {
+		return gap
+	}
+	cmd := strings.TrimSpace(runnerCommand)
+	if cmd == "" || !looksLikeMissingExecutable(errText) {
+		return nil
+	}
+	if i := strings.LastIndexAny(cmd, `/\`); i >= 0 {
+		cmd = cmd[i+1:]
+	}
+	if cmd == "" {
+		return nil
+	}
+	return capabilityGapForMissingTools([]string{cmd})
 }
 
 // DetectCapabilityGap is THE producer. Every carrier (the /dev/start 412, the
