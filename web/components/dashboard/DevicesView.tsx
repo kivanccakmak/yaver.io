@@ -645,11 +645,11 @@ function runnerChipTitle(state: RunnerChipState): string {
 function runnerChipStatusText(state: RunnerChipState): string {
   switch (state.health) {
     case "ready":
-      // "signed in" unqualified is reserved for a credential the PROVIDER has
-      // answered for. Presence-only says so, quietly, rather than promising
-      // something only an operation can establish.
+      // "signed in" is reserved for a credential the PROVIDER has answered
+      // for. Presence-only reads "unverified" — it must not claim signed in,
+      // since only an operation can establish that.
       if (state.authVerified !== true && state.authPresent === true) {
-        return state.authSource ? `signed in (unverified) · ${state.authSource}` : "signed in (unverified)";
+        return state.authSource ? `unverified · ${state.authSource}` : "unverified";
       }
       return state.authSource ? `signed in · ${state.authSource}` : "signed in";
     case "needs-auth": return state.authVerified === false ? "verify needed" : "sign in needed";
@@ -5660,6 +5660,12 @@ function RunnerAuthModal({
 }) {
   const [session, setSession] = useState<RunnerBrowserAuthSession | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  // action:"noop" from the agent: it declined to start because the runner
+  // already looks signed in. An ANSWER, not an error — never rendered red.
+  // `reauthable` means the user may override with a confirmed restart
+  // (switching accounts), the only path allowed to reap a live credential.
+  const [declined, setDeclined] = useState<{ reason: string; reauthable: boolean } | null>(null);
+  const confirmNextStartRef = useRef(false);
   const startedRef = useRef(false);
   // sessionGone: the box no longer knows this session id. Two real causes,
   // both observed live 2026-07-27: another surface started a fresh sign-in
@@ -5715,6 +5721,10 @@ function RunnerAuthModal({
     startedRef.current = true;
     pollFailsRef.current = 0;
     const client = clientRef.current!;
+    // Consumed once per (re)start: true only when the user pressed
+    // "Sign in anyway" after the agent declined with reauthable:true.
+    const confirm = confirmNextStartRef.current;
+    confirmNextStartRef.current = false;
     (async () => {
       try {
         const tunnelUrls = Array.from(
@@ -5727,7 +5737,12 @@ function RunnerAuthModal({
               .filter(Boolean),
           ),
         );
-        let s: RunnerBrowserAuthSession | null = null;
+        const startParams = {
+          runner: runner as "claude" | "codex",
+          trigger: (confirm ? "confirmed" : "explicit") as "confirmed" | "explicit",
+          confirm,
+        };
+        let res: Awaited<ReturnType<typeof agentClient.runnerBrowserAuthStart>> | null = null;
         if (agentClient.isConnected) {
           // Mobile's working path routes runner-auth through /peer/<target>.
           // Use the same contract when the dashboard already has a live
@@ -5736,15 +5751,36 @@ function RunnerAuthModal({
           // from production yaver.io.
           try {
             authRouteRef.current = { client: agentClient, target: device.id, transient: false };
-            s = await agentClient.startRunnerBrowserAuth(runner, device.id);
+            const peerRes = await agentClient.runnerBrowserAuthStart(startParams, device.id);
+            if (peerRes.ok) {
+              res = peerRes;
+            } else {
+              authRouteRef.current = null;
+            }
           } catch {
             authRouteRef.current = null;
           }
         }
-        if (!s) {
+        // Only a failed peer CALL falls through to the direct route. A noop
+        // is an answer ("already signed in"), not a transport failure —
+        // retrying it against the direct route just spawns a second start.
+        if (!res) {
           await client.connect(device.host, device.port, token, device.id, { tunnelUrls });
           authRouteRef.current = { client, transient: true };
-          s = await client.startRunnerBrowserAuth(runner);
+          res = await client.runnerBrowserAuthStart(startParams);
+          if (!res.ok) throw new Error(res.error || "Could not start sign-in on the machine.");
+        }
+        if (res.action === "noop") {
+          setDeclined({
+            reason: res.reason || `${runner} is already signed in on ${deviceName}.`,
+            reauthable: res.reauthable !== false,
+          });
+          return;
+        }
+        const s = res.session;
+        if (!s) {
+          // Neither started nor explained — never render this as "waiting".
+          throw new Error(res.reason || "The machine did not start a sign-in session and did not say why.");
         }
         setSession(s);
         if (s.openUrl) {
@@ -5771,11 +5807,19 @@ function RunnerAuthModal({
     pollFailsRef.current = 0;
     setSession(null);
     setStartError(null);
+    setDeclined(null);
     setSubmitError(null);
     setAuthCode("");
     setCallbackUrl("");
     setSessionGone(false);
     setRestartNonce((n) => n + 1);
+  };
+
+  // "Sign in anyway (switch account)" after a noop — restarts the flow with
+  // confirm:true, the only path the agent lets reap a live credential.
+  const signInAnyway = () => {
+    confirmNextStartRef.current = true;
+    restartSignIn();
   };
 
   useEffect(() => {
@@ -5803,7 +5847,7 @@ function RunnerAuthModal({
     return () => clearInterval(iv);
   }, [session?.id, session?.status, sessionGone]);
 
-  const terminal = sessionGone || (session && isRunnerBrowserAuthTerminal(session.status));
+  const terminal = sessionGone || !!declined || (session && isRunnerBrowserAuthTerminal(session.status));
 
   const copyCode = async () => {
     if (!session?.code) return;
@@ -5864,6 +5908,29 @@ function RunnerAuthModal({
           <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-700 dark:text-red-300">
             <div className="font-semibold mb-1">Couldn't start sign-in</div>
             {startError}
+          </div>
+        ) : declined ? (
+          /* The agent declined to start: the runner already looks signed in.
+             Informational, not an error — the useful outcome already exists. */
+          <div className="rounded-lg border border-surface-800 bg-surface-800/40 p-3 text-xs text-surface-300">
+            <div className="font-semibold mb-1 text-surface-100">Already signed in</div>
+            <div>{declined.reason}</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {declined.reauthable ? (
+                <button
+                  onClick={signInAnyway}
+                  className="rounded-lg border border-surface-700 bg-surface-800/60 px-3 py-1.5 text-xs font-semibold text-surface-200 hover:border-surface-600"
+                >
+                  Sign in anyway (switch account)
+                </button>
+              ) : null}
+              <button
+                onClick={onClose}
+                className="rounded-lg border border-surface-700 px-3 py-1.5 text-xs font-semibold text-surface-400 hover:text-surface-200"
+              >
+                Close
+              </button>
+            </div>
           </div>
         ) : !session ? (
           <div className="rounded-lg border border-surface-800 bg-surface-800/40 p-3 text-xs text-surface-400">

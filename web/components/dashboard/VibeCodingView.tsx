@@ -488,6 +488,10 @@ export default function VibeCodingView({
     startedAt?: number;
     lastOutputAt?: number;
   } | null>(null);
+  // action:"noop" from the agent — it declined to start a sign-in because the
+  // runner already looks signed in. An answer, not an error; `reauthable`
+  // offers the confirmed restart (switch account), the only path that reaps.
+  const [runnerAuthDeclined, setRunnerAuthDeclined] = useState<{ reason: string; reauthable: boolean } | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1696,7 +1700,7 @@ export default function VibeCodingView({
     }
   }
 
-  async function startSelectedRunnerSignIn() {
+  async function startSelectedRunnerSignIn(confirm = false) {
     if (!selectedRunnerRow) return;
     if (selectedRunnerRow.id !== "claude" && selectedRunnerRow.id !== "codex") {
       setRunnerAuthError(`${selectedRunnerRow.name} does not expose browser sign-in here.`);
@@ -1704,13 +1708,32 @@ export default function VibeCodingView({
     }
     setRunnerAuthBusy(true);
     setRunnerAuthError(null);
+    setRunnerAuthDeclined(null);
     setRunnerAuthCallbackUrl("");
     setRunnerAuthStatus({
       runner: selectedRunnerRow.id,
       status: "starting",
     });
     try {
-      const session = await agentClient.startRunnerBrowserAuth(selectedRunnerRow.id);
+      const res = await agentClient.runnerBrowserAuthStart({
+        runner: selectedRunnerRow.id,
+        trigger: confirm ? "confirmed" : "explicit",
+        confirm,
+      });
+      if (!res.ok) throw new Error(res.error || "Could not start sign-in on the machine.");
+      if (res.action === "noop") {
+        // The agent answered "already signed in" — render its sentence, don't
+        // treat the missing session as a failure.
+        setRunnerAuthBusy(false);
+        setRunnerAuthStatus(null);
+        setRunnerAuthDeclined({
+          reason: res.reason || `${selectedRunnerRow.name} is already signed in on that machine.`,
+          reauthable: res.reauthable !== false,
+        });
+        return;
+      }
+      const session = res.session;
+      if (!session) throw new Error(res.reason || "The machine did not start a sign-in session and did not say why.");
       setRunnerAuthSessionId(session.id);
       setRunnerAuthStatus({
         runner: session.runner,
@@ -1726,6 +1749,7 @@ export default function VibeCodingView({
       }
     } catch (error) {
       setRunnerAuthBusy(false);
+      setRunnerAuthStatus(null);
       setRunnerAuthError(error instanceof Error ? error.message : String(error));
     }
   }
@@ -2375,6 +2399,24 @@ export default function VibeCodingView({
                             {runnerAuthCallbackBusy ? "Delivering..." : "Deliver callback"}
                           </button>
                         </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {runnerAuthDeclined ? (
+                    /* Informational, not error-red: the agent declined because
+                       the runner already looks signed in. */
+                    <div className="mt-3 rounded-xl border border-surface-800 bg-surface-950/60 p-3 text-[10px] text-surface-300">
+                      <div className="font-semibold uppercase tracking-[0.14em] text-surface-500">Already signed in</div>
+                      <div className="mt-2">{runnerAuthDeclined.reason}</div>
+                      {runnerAuthDeclined.reauthable ? (
+                        <button
+                          type="button"
+                          disabled={runnerAuthBusy}
+                          onClick={() => void startSelectedRunnerSignIn(true)}
+                          className="mt-2 rounded-lg border border-sky-400/30 bg-sky-400/10 px-3 py-1.5 text-[10px] font-semibold text-sky-800 hover:bg-sky-400/15 disabled:opacity-40 dark:text-sky-100"
+                        >
+                          Sign in anyway (switch account)
+                        </button>
                       ) : null}
                     </div>
                   ) : null}

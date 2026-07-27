@@ -4482,24 +4482,49 @@ function RunnerAuthModal({
 }) {
   const [session, setSession] = useState<RunnerBrowserAuthSession | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  // action:"noop" from the agent: it declined to start because the runner
+  // already looks signed in. An answer, not an error — `reauthable` offers
+  // the confirmed restart (switch account), the only path that reaps.
+  const [declined, setDeclined] = useState<{ reason: string; reauthable: boolean } | null>(null);
   const [copied, setCopied] = useState(false);
   const [pasteCode, setPasteCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const startedRef = useRef(false);
 
+  const startSignIn = useCallback(async (confirm: boolean) => {
+    setStartError(null);
+    setDeclined(null);
+    try {
+      const res = await agentClient.runnerBrowserAuthStart(
+        {
+          runner: runner as "claude" | "codex",
+          trigger: confirm ? "confirmed" : "explicit",
+          confirm,
+        },
+        target,
+      );
+      if (!res.ok) throw new Error(res.error || "Could not start sign-in on the machine.");
+      if (res.action === "noop") {
+        setDeclined({
+          reason: res.reason || `${runner} is already signed in on that machine.`,
+          reauthable: res.reauthable !== false,
+        });
+        return;
+      }
+      const started = res.session;
+      if (!started) throw new Error(res.reason || "The machine did not start a sign-in session and did not say why.");
+      setSession(started);
+    } catch (error) {
+      setStartError(error instanceof Error ? error.message : String(error));
+    }
+  }, [runner, target]);
+
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    (async () => {
-      try {
-        const started = await agentClient.startRunnerBrowserAuth(runner, target);
-        setSession(started);
-      } catch (error) {
-        setStartError(error instanceof Error ? error.message : String(error));
-      }
-    })();
-  }, [runner, target]);
+    void startSignIn(false);
+  }, [startSignIn]);
 
   useEffect(() => {
     if (!session) return;
@@ -4516,7 +4541,7 @@ function RunnerAuthModal({
     return () => clearInterval(interval);
   }, [session, onCompleted, target]);
 
-  const terminal = session && ["completed", "failed", "cancelled"].includes(session.status);
+  const terminal = !!declined || (session && ["completed", "failed", "cancelled"].includes(session.status));
 
   const copyCode = async () => {
     if (!session?.code) return;
@@ -4556,6 +4581,29 @@ function RunnerAuthModal({
           <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-700 dark:text-red-300">
             <div className="mb-1 font-semibold">Couldn&apos;t start sign-in</div>
             {startError}
+          </div>
+        ) : declined ? (
+          /* The agent declined to start: the runner already looks signed in.
+             Informational, not an error — the useful outcome already exists. */
+          <div className="rounded-lg border border-surface-800 bg-surface-800/40 p-3 text-xs text-surface-300">
+            <div className="mb-1 font-semibold text-surface-100">Already signed in</div>
+            <div>{declined.reason}</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {declined.reauthable ? (
+                <button
+                  onClick={() => void startSignIn(true)}
+                  className="rounded-lg border border-surface-700 bg-surface-800/60 px-3 py-1.5 text-xs font-semibold text-surface-200 hover:border-surface-600"
+                >
+                  Sign in anyway (switch account)
+                </button>
+              ) : null}
+              <button
+                onClick={onClose}
+                className="rounded-lg border border-surface-700 px-3 py-1.5 text-xs font-semibold text-surface-400 hover:text-surface-200"
+              >
+                Close
+              </button>
+            </div>
           </div>
         ) : !session ? (
           <div className="rounded-lg border border-surface-800 bg-surface-800/40 p-3 text-xs text-surface-400">

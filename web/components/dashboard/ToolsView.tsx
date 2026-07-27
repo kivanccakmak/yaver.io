@@ -293,8 +293,14 @@ export default function ToolsView({ devices = [] }: Props) {
     setBrowserAuthCallbackUrl("");
     const res = await agentClient.runnerBrowserAuthStart({ runner }, target);
     setStartingBrowserAuth(null);
+    if (res.ok && res.action === "noop") {
+      // The agent declined: already signed in. Show its sentence, not a
+      // fabricated "could not start" failure.
+      setBrowserAuthError(res.reason || `${runner} is already signed in on this machine.`);
+      return;
+    }
     if (!res.ok || !res.session) {
-      setBrowserAuthError(res.error || "Could not start browser auth.");
+      setBrowserAuthError(res.error || res.reason || "Could not start browser auth.");
       return;
     }
     setBrowserAuthSession(res.session);

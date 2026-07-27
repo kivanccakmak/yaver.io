@@ -2411,35 +2411,10 @@ export class AgentClient {
     return data.runners || [];
   }
 
-  /**
-   * Kick off remote browser-style auth for a runner on the connected agent
-   * (codex `login --device-auth`, claude `auth login --claudeai`). Returns a session
-   * id that callers poll via getRunnerBrowserAuthStatus to grab the URL +
-   * code the user needs to complete in their browser.
-   *
-   * Pass `target` to drive the OAuth flow on a peer device the connected
-   * agent owns (routes via `/peer/<id>/runner-auth/browser/*`). This is
-   * how the dashboard signs the user into claude/codex on a *different*
-   * machine than the one the dashboard is connected to — the same code
-   * path mobile uses from DeviceDetailsModal.
-   */
-  async startRunnerBrowserAuth(runner: string, target?: string, waitSeconds = 5): Promise<RunnerBrowserAuthSession> {
-    this.assertConnected();
-    const url = target
-      ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner-auth/browser/start`
-      : `${this.baseUrl}/runner-auth/browser/start`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: this.authHeaders,
-      body: JSON.stringify({ runner, wait_seconds: waitSeconds }),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`startRunnerBrowserAuth(${runner}) ${res.status}: ${body || res.statusText}`);
-    }
-    const data = await res.json();
-    return data.session as RunnerBrowserAuthSession;
-  }
+  // startRunnerBrowserAuth was removed on purpose: it returned `data.session`
+  // blind, which is undefined when the agent answers `action:"noop"` (already
+  // signed in), and every consumer crashed on `session.openUrl`. Use
+  // runnerBrowserAuthStart below and handle the noop/reuse envelope.
 
   async getRunnerBrowserAuthStatus(sessionId: string, target?: string): Promise<RunnerBrowserAuthSession> {
     this.assertConnected();

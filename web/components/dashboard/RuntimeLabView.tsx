@@ -835,6 +835,10 @@ export default function RuntimeLabView({
   const [runnerSaveNotice, setRunnerSaveNotice] = useState<{ tone: "ok" | "warn" | "error"; text: string } | null>(null);
   const [runnerAuthStatus, setRunnerAuthStatus] = useState<RunnerBrowserAuthSession | null>(null);
   const [runnerAuthError, setRunnerAuthError] = useState<string | null>(null);
+  // action:"noop" from the agent — it declined to start a sign-in because the
+  // runner already looks signed in. An answer, not an error; `reauthable`
+  // offers the confirmed restart (switch account), the only path that reaps.
+  const [runnerAuthDeclined, setRunnerAuthDeclined] = useState<{ reason: string; reauthable: boolean } | null>(null);
   const [runnerAuthCallbackUrl, setRunnerAuthCallbackUrl] = useState("");
   const [runnerAuthCallbackBusy, setRunnerAuthCallbackBusy] = useState(false);
   const [runnerAuthCodeInput, setRunnerAuthCodeInput] = useState("");
@@ -1308,14 +1312,32 @@ export default function RuntimeLabView({
     });
   }, [appendLog, runtimeGapBusy]);
 
-  const startSelectedRunnerSignIn = useCallback(async () => {
+  const startSelectedRunnerSignIn = useCallback(async (confirm = false) => {
     if (!selectedRunnerRow || !["claude", "codex"].includes(selectedRunnerRow.id)) return;
     setRunnerAuthBusy(true);
     setRunnerAuthError(null);
+    setRunnerAuthDeclined(null);
     setRunnerAuthCallbackUrl("");
     setRunnerAuthCodeInput("");
     try {
-      const session = await agentClient.startRunnerBrowserAuth(selectedRunnerRow.id);
+      const res = await agentClient.runnerBrowserAuthStart({
+        runner: selectedRunnerRow.id as "claude" | "codex",
+        trigger: confirm ? "confirmed" : "explicit",
+        confirm,
+      });
+      if (!res.ok) throw new Error(res.error || "Could not start sign-in on the machine.");
+      if (res.action === "noop") {
+        // The agent answered "already signed in" — render its sentence, don't
+        // treat the missing session as a failure.
+        setRunnerAuthBusy(false);
+        setRunnerAuthDeclined({
+          reason: res.reason || `${selectedRunnerRow.name} is already signed in on that machine.`,
+          reauthable: res.reauthable !== false,
+        });
+        return;
+      }
+      const session = res.session;
+      if (!session) throw new Error(res.reason || "The machine did not start a sign-in session and did not say why.");
       setRunnerAuthStatus(session);
       if (session.openUrl) window.open(session.openUrl, "_blank", "noopener,noreferrer");
     } catch (err) {
@@ -3038,7 +3060,7 @@ export default function RuntimeLabView({
               </p>
             ) : null}
           </div>
-          {vibingSettingsOpen || runnerAuthStatus || runnerAuthError ? (
+          {vibingSettingsOpen || runnerAuthStatus || runnerAuthError || runnerAuthDeclined ? (
             <div className="mt-3 grid gap-2">
               {availableModels.length > 0 ? (
                 <div>
@@ -3069,6 +3091,24 @@ export default function RuntimeLabView({
                         OpenCode uses provider/model IDs such as zai-coding-plan/glm-4.7. Unqualified Codex models are blocked before send.
                       </div>
                     </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {runnerAuthDeclined ? (
+                /* Informational, not error-red: the agent declined because the
+                   runner already looks signed in. */
+                <div className="rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 text-[11px] text-[#475467] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]">
+                  <div className="font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Already signed in</div>
+                  <div className="mt-1">{runnerAuthDeclined.reason}</div>
+                  {runnerAuthDeclined.reauthable ? (
+                    <button
+                      type="button"
+                      disabled={runnerAuthBusy}
+                      onClick={() => void startSelectedRunnerSignIn(true)}
+                      className="mt-2 rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
+                    >
+                      Sign in anyway (switch account)
+                    </button>
                   ) : null}
                 </div>
               ) : null}
