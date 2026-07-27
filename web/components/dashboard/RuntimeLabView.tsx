@@ -40,6 +40,8 @@ import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
 import { ScreenContextChip } from "./ScreenContextChip";
+// Read-aloud must never recite Yaver's own prompt header — see lib/promptFraming.ts.
+import { containsYaverFraming, sliceAfterFrameBoundary } from "@/lib/promptFraming";
 
 type Project = {
   name: string;
@@ -1555,8 +1557,13 @@ export default function RuntimeLabView({
       return;
     }
     const lines = activeTaskStream?.lines || [];
-    const text = (lines.length ? lines.slice(-40).join("\n") : activeTaskStream?.title || "").trim();
-    if (!text) return;
+    const raw = (lines.length ? lines.slice(-40).join("\n") : activeTaskStream?.title || "").trim();
+    // These lines are the RAW task.output stream. On a current agent the prompt
+    // frame never enters it; on an older one it is the first ~11 KB, and this
+    // path hands 3500 chars of it straight to the browser's speech synthesizer.
+    // Slice it out, and refuse outright if anything recognisable survives.
+    const text = sliceAfterFrameBoundary(raw).trim();
+    if (!text || containsYaverFraming(text)) return;
     const utterance = new SpeechSynthesisUtterance(text.slice(-3500));
     utterance.lang = navigator.language || "en-US";
     utterance.rate = 1;

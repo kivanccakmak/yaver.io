@@ -369,6 +369,44 @@ func (fm *FeedbackManager) DeleteFeedback(id string) error {
 	return nil
 }
 
+// UserWords returns the sentence the HUMAN actually contributed to a feedback
+// report — the thing they said or typed while shaking their phone — with none
+// of the device/timeline/stack-trace scaffolding GenerateFixPrompt wraps
+// around it.
+//
+// It exists because the fix task used to be NAMED by the generated prompt: a
+// user who said "the login button does nothing" got a task whose title, and
+// whose own chat bubble, was "Bug report from device testing: Device: iPhone 16
+// ios, ios 18.2 App version: … Timeline: - 0:03 — [voice] …". The report body
+// is a briefing for the runner; this is what belongs on screen.
+//
+// Returns "" when the report is pure telemetry (a crash with no annotation),
+// in which case the caller should fall back to a short human label rather than
+// to the generated prompt.
+func (fm *FeedbackManager) UserWords(id string) string {
+	fm.mu.RLock()
+	r, ok := fm.reports[id]
+	fm.mu.RUnlock()
+	if !ok {
+		return ""
+	}
+	if t := strings.TrimSpace(r.Transcript); t != "" {
+		return t
+	}
+	// Annotations are typed by the user; voice entries are their transcribed
+	// speech. Both are their words. Crash/screenshot entries are not.
+	var said []string
+	for _, e := range r.Timeline {
+		if e.Type != "annotation" && e.Type != "voice" {
+			continue
+		}
+		if txt := strings.TrimSpace(e.Text); txt != "" {
+			said = append(said, txt)
+		}
+	}
+	return strings.Join(said, " ")
+}
+
 // GenerateFixPrompt creates a structured prompt for the AI agent to fix bugs.
 func (fm *FeedbackManager) GenerateFixPrompt(id string) (string, error) {
 	fm.mu.RLock()

@@ -505,8 +505,13 @@ func createTaskFromFeedbackWorkItem(ctx context.Context, s *HTTPServer, item *fe
 		}
 	}
 	taskOpts := TaskCreateOptions{
-		WorkDir:           workDir,
-		InitialUserPrompt: body,
+		WorkDir: workDir,
+		// The user's own feedback sentence — NOT the wrapped `body`. This was
+		// the one producer that polluted InitialUserPrompt directly, so the
+		// "Review it and make the smallest useful owner-approved task plan"
+		// instruction was rendered as the user's own chat bubble.
+		InitialUserPrompt: firstNonEmpty(strings.TrimSpace(item.Body), title),
+		PromptText:        composeRunnerPrompt(body, "", ""),
 	}
 	meta := taskPlacementRequestFromTaskBody(taskPlacementRequestInput{
 		KindHint:       "vibe",
@@ -557,7 +562,9 @@ func createTaskFromFeedbackWorkItem(ctx context.Context, s *HTTPServer, item *fe
 	} else if previewPlacement != nil {
 		taskOpts.Placement = previewPlacement
 	}
-	task, err := s.taskMgr.CreateTaskWithOptions(title, body, "", "feedback-work", "", "", nil, taskOpts)
+	// Title + Description are DISPLAY: the item's own title and the user's own
+	// words. The wrapped prompt reaches the runner via taskOpts.PromptText.
+	task, err := s.taskMgr.CreateTaskWithOptions(title, strings.TrimSpace(item.Body), "", "feedback-work", "", "", nil, taskOpts)
 	if err != nil {
 		return nil, err
 	}

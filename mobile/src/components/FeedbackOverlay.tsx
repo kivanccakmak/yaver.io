@@ -24,6 +24,8 @@ import { describeDevReloadResult, devReloadReachedTarget, quicClient } from "../
 import { subscribeFeedbackLaunch } from "../lib/feedbackTrigger";
 import { getLocalSecret, getUserSettings, LOCAL_KEYS, type SpeechProvider, type TtsProvider } from "../lib/auth";
 import { transcribe, initWhisper, speakText as speakConfiguredText } from "../lib/speech";
+// ONE definition of Yaver's prompt frame, parity-tested against the Go source.
+import { sliceAfterFrameBoundary, containsYaverFraming } from "../lib/promptFraming";
 
 // Phone defaults; tablet sizes are computed at render time so the
 // drag button is large enough for finger or pencil input on a 10"
@@ -45,8 +47,13 @@ function stripAnsi(text: string): string {
     .replace(/\[\d+(?:;\d+)*m/g, "");
 }
 
+// This was the WEAKEST of the app's three copies: codex banner + "tokens used"
+// only, with no context-block slicing at all — so every Yaver frame marker
+// rendered in the overlay a shipped end user is looking at. It now slices on
+// the shared boundary list first (src/lib/promptFraming.ts), which is
+// parity-tested against the Go source.
 function stripPromptEcho(content: string): string {
-  return stripAnsi(content)
+  return sliceAfterFrameBoundary(stripAnsi(content))
     .replace(/^[\s\S]*?OpenAI Codex v[^\n]*\n(?:[\s\S]*?\n)?\s*\n/, "")
     .replace(/^Reading additional input from stdin[.…]*\s*\n?/, "")
     .replace(/\n*\s*tokens used\s*\n?\s*[\d,]+\s*/gi, "\n\n")
@@ -364,6 +371,10 @@ export function FeedbackOverlay() {
 
   const speakFeedbackResult = useCallback((text: string) => {
     if (!ttsEnabled || !text.trim()) return;
+    // This path falls back to the RAW output stream when resultText is empty,
+    // which is exactly when a stale agent's prompt echo is what would get read
+    // aloud to a shipped end user. Silence beats reciting our own header.
+    if (containsYaverFraming(text)) return;
     speakConfiguredText(text, { provider: ttsProvider, apiKey: speechApiKey }).catch(() => {});
   }, [ttsEnabled, ttsProvider, speechApiKey]);
 

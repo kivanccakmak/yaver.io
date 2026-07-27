@@ -251,16 +251,27 @@ func (s *Scheduler) executeScheduled(st *ScheduledTask) {
 	}
 
 	desc := st.Description
+	// The carry-memo is a briefing for the fresh runner process so it picks up
+	// where the previous scheduled run left off. It is NOT what the user wrote
+	// when they created the schedule, so it rides PromptText and the task's
+	// description stays the user's own instruction on every surface.
+	carryBriefing := ""
 	if strings.TrimSpace(st.CarryNotes) != "" {
-		// Prepend the carry-memo so a fresh runner process picks up where
-		// the previous scheduled run left off.
-		desc = "[Continuing a recurring task — notes carried from the previous run]\n" + strings.TrimSpace(st.CarryNotes) + "\n\n" + desc
+		carryBriefing = "[Continuing a recurring task — notes carried from the previous run]\n" + strings.TrimSpace(st.CarryNotes) + "\n\n"
 	}
 	// Native session resume (opt-in): on the second+ fire of a resume-enabled
 	// schedule, continue the prior run's session instead of starting cold.
 	// claude/glm/codex need the captured LastSessionID; opencode resumes the
 	// last session in its workDir regardless (handled in resumeTransform).
-	opts := TaskCreateOptions{}
+	opts := TaskCreateOptions{
+		InitialUserPrompt: firstNonEmpty(strings.TrimSpace(desc), st.Title),
+	}
+	if carryBriefing != "" {
+		// Byte-identical to what the old `desc = carry + desc` concatenation
+		// fed startProcess — the memo still sits between the title and the
+		// user's description. Only the DISPLAY fields changed.
+		opts.PromptText = st.Title + "\n\n" + carryBriefing + desc
+	}
 	if st.ResumeSession && st.RunCount > 0 {
 		opts.ResumeLast = true
 		opts.ResumeSessionID = st.LastSessionID

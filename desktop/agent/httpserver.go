@@ -4604,15 +4604,26 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For guest tasks, prepend security context to the prompt so the AI agent
-	// stays within the project directory and doesn't access sensitive files.
+	// `title` stays EXACTLY what the user typed from here down. Everything
+	// Yaver wants the runner to know goes into `briefing`, which the task is
+	// given as TaskCreateOptions.PromptText — a transport field with no
+	// counterpart on the wire DTO, so no surface can render it.
+	//
+	// Before this split, both blocks below prepended straight onto `title`,
+	// and `title` is the task's name in every list AND the fallback content of
+	// the user's own first chat bubble. A guest's task was literally named
+	// "[SECURITY CONTEXT — GUEST SESSION] You are running as a GUEST user…".
 	title := body.Title
+	var briefing strings.Builder
+
+	// For guest tasks, brief the runner with the security context so it stays
+	// within the project directory and doesn't access sensitive files.
 	if guestUID != "" {
 		promptWorkDir := s.taskMgr.workDir
 		if guestWorkDir != "" {
 			promptWorkDir = guestWorkDir
 		}
-		title = guestPromptPrefix(promptWorkDir, guestCfg) + title
+		briefing.WriteString(guestPromptPrefix(promptWorkDir, guestCfg))
 	}
 
 	// Feedback-source tasks (FeedbackOverlay typed message after a guest
@@ -4628,7 +4639,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	if guestUID != "" {
 		bodyWorkDir = guestWorkDir
 	}
-	s.vibingifyFeedbackTaskBody(r, source, &title, &body.ProjectName, &bodyWorkDir, &body.Runner, &body.Model, body.BundleID)
+	s.vibingifyFeedbackTaskBody(r, source, &title, &briefing, &body.ProjectName, &bodyWorkDir, &body.Runner, &body.Model, body.BundleID)
 	if guestUID == "" {
 		body.WorkDir = bodyWorkDir
 	}
@@ -4638,9 +4649,16 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	// and could otherwise override the guest prompt prefix that keeps the
 	// AI agent inside the host's workdir.
 	taskOpts := TaskCreateOptions{
-		WorkDir:           body.WorkDir,
+		WorkDir: body.WorkDir,
+		// What the user typed. Feedback / shake clients send no userPrompt,
+		// so the fallback to the (now clean) title is what keeps their own
+		// sentence in their own bubble.
 		InitialUserPrompt: body.UserPrompt,
 		SliceContract:     body.SliceContract,
+		// The runner's briefing + the user's ask, in that order. Empty when
+		// nothing briefed this task, in which case startProcess falls back to
+		// Title (+ Description) exactly as it always has.
+		PromptText: composeRunnerPrompt(briefing.String(), title, body.Description),
 	}
 	if guestUID != "" {
 		// Strip owner-only fields. If the host resolved a guest project,

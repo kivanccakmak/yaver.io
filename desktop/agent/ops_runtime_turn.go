@@ -304,17 +304,29 @@ func startRuntimeTurnTask(c OpsContext, req RuntimeTurnRequest, intentClass, ite
 		return runtimeTurnResponseFromItem(item, "No runner is available.", false)
 	}
 
+	// The utterance is what the user SAID; runtimeTurnPrompt is the surface
+	// contract Yaver wraps around it. Keeping them apart matters most on this
+	// lane: the car and glass surfaces read turns back ALOUD, and "Surface-
+	// neutral Yaver development turn. Treat this as development vibing against
+	// the selected remote runtime…" spoken to a driver is the worst possible
+	// shape of this bug.
+	spokenByUser := strings.TrimSpace(req.Utterance)
+	if spokenByUser == "" {
+		spokenByUser = strings.TrimSpace(req.Development.Goal)
+	}
 	task, err := c.Server.taskMgr.CreateTaskWithOptions(
 		runtimeTurnTitle(req),
-		runtimeTurnPrompt(req, intentClass),
+		spokenByUser,
 		"",
 		"runtime-turn",
 		req.Target.Runner,
 		"",
 		nil,
 		TaskCreateOptions{
-			WorkDir:  req.Target.WorkDir,
-			Viewport: runtimeViewportFromSurface(req.Surface),
+			WorkDir:           req.Target.WorkDir,
+			Viewport:          runtimeViewportFromSurface(req.Surface),
+			InitialUserPrompt: spokenByUser,
+			PromptText:        composeRunnerPrompt(runtimeTurnPrompt(req, intentClass), "", ""),
 		},
 	)
 	if err != nil {

@@ -96,8 +96,16 @@ func TestRuntimeTurnEnqueuesIdeaAsTaskWhenRequested(t *testing.T) {
 	if !ok {
 		t.Fatalf("task %q not found", resp.Queue.TaskID)
 	}
-	if !strings.Contains(task.Description, "Treat this as idea capture first") {
-		t.Fatalf("task prompt did not preserve idea-capture mode:\n%s", task.Description)
+	// The surface contract is a briefing for the RUNNER, so it lives on
+	// PromptText. Description is what the user said and is what the car / glass
+	// surfaces read back aloud — asserting the briefing there is what let
+	// "Surface-neutral Yaver development turn…" get spoken to a driver.
+	if !strings.Contains(task.PromptText, "Treat this as idea capture first") {
+		t.Fatalf("the runner's prompt did not preserve idea-capture mode:\n%s", task.PromptText)
+	}
+	assertNoFraming(t, "runtime-turn task description (read aloud on car/glass)", task.Description)
+	if !strings.Contains(task.Description, "make the disconnected screen show the failed probe") {
+		t.Fatalf("the description must be what the user said; got %q", task.Description)
 	}
 }
 

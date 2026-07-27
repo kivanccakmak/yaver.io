@@ -150,7 +150,14 @@ func (s *HTTPServer) dispatchWatchTranscript(w http.ResponseWriter, text, projec
 		RiskPolicy:   "watch",
 	}
 	title := voiceTitleFromTranscript(text)
-	taskOpts := TaskCreateOptions{Viewport: vp}
+	// `text` is what the user said into their watch; plan.Prompt is the watch
+	// surface contract ("Never put code, diffs, secrets… in the watch
+	// summary") wrapped around it. Only the first is display.
+	taskOpts := TaskCreateOptions{
+		Viewport:          vp,
+		InitialUserPrompt: strings.TrimSpace(text),
+		PromptText:        composeRunnerPrompt(plan.Prompt, "", ""),
+	}
 	meta := taskPlacementRequestFromTaskBody(taskPlacementRequestInput{
 		Title:          title,
 		Description:    plan.Prompt,
@@ -196,12 +203,12 @@ func (s *HTTPServer) dispatchWatchTranscript(w http.ResponseWriter, text, projec
 	}
 	task, err := s.taskMgr.CreateTaskWithOptions(
 		title,
-		plan.Prompt,
-		"",            // model: task manager default
-		"voice-input", // source: same arm as the car/voice loop
-		"",            // runner: default
-		"",            // customCommand
-		nil,           // images
+		strings.TrimSpace(text), // description: the user's own transcript
+		"",                      // model: task manager default
+		"voice-input",           // source: same arm as the car/voice loop
+		"",                      // runner: default
+		"",                      // customCommand
+		nil,                     // images
 		taskOpts,
 	)
 	if err != nil {

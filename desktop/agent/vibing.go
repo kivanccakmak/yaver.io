@@ -1529,9 +1529,14 @@ func (s *HTTPServer) handleVibingExecute(w http.ResponseWriter, r *http.Request)
 		})
 		return
 	}
-	prompt := req.Prompt
+	// The task is NAMED by what the user asked for; the execution context is a
+	// briefing for the runner and rides TaskCreateOptions.PromptText, which no
+	// surface is ever sent. Before the split, `prompt` was both, so every vibe
+	// task in the list read "Yaver mobile execution context: - Project
+	// framework: …" instead of "make the header sticky".
+	runnerBriefing := ""
 	if ctx := vibingExecutionContext(req.ProjectPath, info.Framework, target, isDirectConnection(r)); ctx != "" {
-		prompt = ctx + "\n\nUser request:\n" + req.Prompt
+		runnerBriefing = ctx + "\n\nUser request:\n"
 	}
 
 	// Pick a runner that's actually ready instead of blindly trusting
@@ -1627,7 +1632,9 @@ func (s *HTTPServer) handleVibingExecute(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	task, err := s.taskMgr.CreateTaskWithOptions(prompt, "", "", "vibing", pickedRunner, "", nil, taskOpts)
+	taskOpts.InitialUserPrompt = req.Prompt
+	taskOpts.PromptText = composeRunnerPrompt(runnerBriefing, req.Prompt, "")
+	task, err := s.taskMgr.CreateTaskWithOptions(req.Prompt, "", "", "vibing", pickedRunner, "", nil, taskOpts)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return

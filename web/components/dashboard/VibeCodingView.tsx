@@ -4,6 +4,9 @@ import type { ReactNode } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { capStreamText } from "@/lib/streamBuffer";
+// Fallback strip for transcripts produced by an OLDER agent. A current agent
+// keeps its prompt frame out of task.output entirely — see lib/promptFraming.ts.
+import { sliceAfterFrameBoundary } from "@/lib/promptFraming";
 import { classifyStreamEnd, planStreamRecovery } from "@/lib/taskStreamRecovery";
 import { agentClient, isRunnerBrowserAuthTerminal, type AgentGraphRun, type ConnectionState, type GitCommitRow, type GitProviderStatusRow, type GitRemoteRepo, type GitStatusRow, type MachineInfo, type Runner, type Task } from "@/lib/agent-client";
 import { AGENT_AUTH_REMEDY, isAgentAuthErrorMessage } from "@/lib/agentAuthError";
@@ -154,7 +157,7 @@ type ChatTurn = { role: string; content: string; timestamp?: number | string };
 // capStreamText() bound at the write site: without the cap this parse is over
 // the whole session transcript, which is what freezes the tab.
 export const AssistantMarkdown = memo(function AssistantMarkdown({ text }: { text: string }) {
-  const cleaned = useMemo(() => stripAnsi(text), [text]);
+  const cleaned = useMemo(() => sliceAfterFrameBoundary(stripAnsi(text)), [text]);
   return <ReactMarkdown components={ASSISTANT_MARKDOWN_COMPONENTS}>{cleaned}</ReactMarkdown>;
 });
 
@@ -169,7 +172,10 @@ const ChatBubble = memo(function ChatBubble({ turn }: { turn: ChatTurn }) {
   // agent emits for tool calls. ANSI is stripped defensively for
   // historic rows persisted before the live-stream filter shipped.
   const isUser = turn.role === "user";
-  const content = isUser ? turn.content : stripAnsi(turn.content);
+  // The user bubble is verbatim BY DESIGN: turn.content is what the user typed
+  // (the agent stores InitialUserPrompt, never the framed string). Only the
+  // assistant side can carry a stale agent's prompt echo.
+  const content = isUser ? turn.content : sliceAfterFrameBoundary(stripAnsi(turn.content));
   return (
     <div
       className={`max-w-[88%] rounded-2xl border px-4 py-3 ${

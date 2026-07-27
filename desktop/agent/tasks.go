@@ -894,10 +894,28 @@ type TaskSliceContract struct {
 }
 
 type TaskCreateOptions struct {
-	WorkDir           string
+	WorkDir string
+
+	// InitialUserPrompt is WHAT THE USER TYPED (or said, or shook their phone
+	// about). It becomes the first stored ConversationTurn — the chat bubble
+	// on mobile, web, and every other transcript.
+	//
+	// Set it. Always. When it is empty the turn falls back to Description and
+	// then Title, and any producer that put scaffolding in those fields has
+	// just written Yaver's own briefing into the user's bubble.
 	InitialUserPrompt string
-	SliceContract     *TaskSliceContract
-	Placement         *TaskPlacementMetadata
+
+	// PromptText is the TRANSPORT prompt — the scaffolded text the runner
+	// reads. Empty means "the runner reads Title (+ Description)", which is
+	// the right default for producers that add no scaffolding at all.
+	//
+	// Producers that DO add scaffolding put it here and leave Title /
+	// Description / InitialUserPrompt as the user's own words. See
+	// Task.PromptText for the full rule.
+	PromptText string
+
+	SliceContract *TaskSliceContract
+	Placement     *TaskPlacementMetadata
 
 	// SeedTurns is prior conversation history to PREPEND to the new task's
 	// Turns purely for DISPLAY continuity — it is NOT re-sent to the runner
@@ -998,11 +1016,37 @@ type Task struct {
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
 	Status      TaskStatus `json:"status"`
-	Source      string     `json:"source,omitempty"`      // "mobile", "mcp", "cli"
-	GuestUserID string     `json:"guestUserId,omitempty"` // set when task created by a guest
-	Model       string     `json:"model,omitempty"`
-	RunnerID    string     `json:"runnerId,omitempty"` // which runner is executing this task
-	SessionID   string     `json:"session_id,omitempty"`
+
+	// PromptText is the TRANSPORT prompt: the exact text the runner is asked
+	// to act on, scaffolding and all. Title/Description are the DISPLAY
+	// fields: what the user typed, and what every surface renders.
+	//
+	// Before this field existed the two were the same string. A producer that
+	// needed to brief the runner — the vibing execution context, the guest
+	// security context, the watch/car surface contract, the feedback-report
+	// body — had exactly one place to put it: Title. So Yaver's own briefing
+	// became the task's name in the list, and (because the first stored
+	// ConversationTurn falls back Title→Description when no InitialUserPrompt
+	// was given) it also became the user's own chat bubble. The user's report,
+	// 2026-07-27: "do NOT pollute the UI with our prefix prompt … show what
+	// the user actually wrote."
+	//
+	// The rule for any producer that adds scaffolding:
+	//
+	//	Title             → a short human label, or the user's own words
+	//	Description       → the user's own words (or empty)
+	//	InitialUserPrompt → the user's own words, ALWAYS
+	//	PromptText        → the scaffolded thing the runner should read
+	//
+	// The json tag is PERSISTENCE only — the wire DTO is TaskInfo, which has
+	// no PromptText field and never will. That is the structural guarantee:
+	// a surface cannot render the scaffolding because it is never sent one.
+	PromptText  string `json:"promptText,omitempty"`
+	Source      string `json:"source,omitempty"`      // "mobile", "mcp", "cli"
+	GuestUserID string `json:"guestUserId,omitempty"` // set when task created by a guest
+	Model       string `json:"model,omitempty"`
+	RunnerID    string `json:"runnerId,omitempty"` // which runner is executing this task
+	SessionID   string `json:"session_id,omitempty"`
 	// ResumeLast asks startProcess to resume the prior session on the FIRST
 	// spawn (not just on follow-ups). Set by the scheduler when a recurring
 	// schedule with resume enabled re-fires, so the run picks up where the
@@ -1106,6 +1150,11 @@ type Task struct {
 	cancel           context.CancelFunc
 	stdin            io.WriteCloser
 	outputCh         chan string
+	// echoGuard suppresses a raw-mode runner's verbatim echo of the
+	// Yaver-framed prompt before it reaches task.Output or the live stream.
+	// Armed by startProcess / startResume with the exact bytes we sent; nil
+	// for stream-json runners, which never echo. See prompt_echo_guard.go.
+	echoGuard *promptEchoGuard
 	// eventCh carries structured (non-text) events for this task —
 	// agent_question, agent_answered, agent_question_cancelled, …
 	// The SSE writer in handleTaskByID/streamOutput selects on this
@@ -1251,31 +1300,31 @@ type TaskInfo struct {
 	// task detail grew to 3.5MB and the web UI polled it every 2s over the
 	// relay (2026-07-27, ubuntu-4gb box), which is what "stuck" looked like
 	// from the browser. Surfaces render tails anyway (web keeps 240 lines).
-	TranscriptTruncated bool `json:"transcriptTruncated,omitempty"`
-	Source          string                 `json:"source,omitempty"`
-	TmuxSession     string                 `json:"tmuxSession,omitempty"`
-	TmuxSessionID   string                 `json:"tmuxSessionId,omitempty"`
-	TmuxWindowIndex string                 `json:"tmuxWindowIndex,omitempty"`
-	TmuxWindowName  string                 `json:"tmuxWindowName,omitempty"`
-	TmuxPaneIndex   string                 `json:"tmuxPaneIndex,omitempty"`
-	TmuxPaneID      string                 `json:"tmuxPaneId,omitempty"`
-	IsAdopted       bool                   `json:"isAdopted,omitempty"`
-	CreatedAt       time.Time              `json:"createdAt"`
-	StartedAt       *time.Time             `json:"startedAt,omitempty"`
-	FinishedAt      *time.Time             `json:"finishedAt,omitempty"`
-	ChainID         string                 `json:"chainId,omitempty"`
-	ChainOrder      int                    `json:"chainOrder,omitempty"`
-	AutoRetry       bool                   `json:"autoRetry,omitempty"`
-	AutoRetryCount  int                    `json:"autoRetryCount,omitempty"`
-	AutoRetryMax    int                    `json:"autoRetryMax,omitempty"`
-	VideoEnabled    bool                   `json:"videoEnabled,omitempty"`
-	VideoSource     string                 `json:"videoSource,omitempty"`
-	VideoClipID     string                 `json:"videoClipId,omitempty"`
-	VideoStatus     string                 `json:"videoStatus,omitempty"`
-	VideoClipURL    string                 `json:"videoClipUrl,omitempty"`
-	VideoPosterURL  string                 `json:"videoPosterUrl,omitempty"`
-	AskFreely       bool                   `json:"askFreely,omitempty"`
-	Placement       *TaskPlacementMetadata `json:"placement,omitempty"`
+	TranscriptTruncated bool                   `json:"transcriptTruncated,omitempty"`
+	Source              string                 `json:"source,omitempty"`
+	TmuxSession         string                 `json:"tmuxSession,omitempty"`
+	TmuxSessionID       string                 `json:"tmuxSessionId,omitempty"`
+	TmuxWindowIndex     string                 `json:"tmuxWindowIndex,omitempty"`
+	TmuxWindowName      string                 `json:"tmuxWindowName,omitempty"`
+	TmuxPaneIndex       string                 `json:"tmuxPaneIndex,omitempty"`
+	TmuxPaneID          string                 `json:"tmuxPaneId,omitempty"`
+	IsAdopted           bool                   `json:"isAdopted,omitempty"`
+	CreatedAt           time.Time              `json:"createdAt"`
+	StartedAt           *time.Time             `json:"startedAt,omitempty"`
+	FinishedAt          *time.Time             `json:"finishedAt,omitempty"`
+	ChainID             string                 `json:"chainId,omitempty"`
+	ChainOrder          int                    `json:"chainOrder,omitempty"`
+	AutoRetry           bool                   `json:"autoRetry,omitempty"`
+	AutoRetryCount      int                    `json:"autoRetryCount,omitempty"`
+	AutoRetryMax        int                    `json:"autoRetryMax,omitempty"`
+	VideoEnabled        bool                   `json:"videoEnabled,omitempty"`
+	VideoSource         string                 `json:"videoSource,omitempty"`
+	VideoClipID         string                 `json:"videoClipId,omitempty"`
+	VideoStatus         string                 `json:"videoStatus,omitempty"`
+	VideoClipURL        string                 `json:"videoClipUrl,omitempty"`
+	VideoPosterURL      string                 `json:"videoPosterUrl,omitempty"`
+	AskFreely           bool                   `json:"askFreely,omitempty"`
+	Placement           *TaskPlacementMetadata `json:"placement,omitempty"`
 }
 
 type taskStore interface {
@@ -1769,6 +1818,7 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		ID:                          id,
 		Title:                       title,
 		Description:                 description,
+		PromptText:                  opts.PromptText,
 		Status:                      TaskStatusQueued,
 		Source:                      source,
 		Model:                       model,
@@ -2487,9 +2537,17 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// Wait for other Claude Code sessions to finish (if --wait-for-session is set)
 	tm.waitForSessionSlot(task)
 
-	prompt := task.Title
-	if task.Description != "" && task.Description != task.Title {
-		prompt = task.Title + "\n\n" + task.Description
+	// The transport prompt. PromptText, when a producer set it, is the whole
+	// story — the scaffolded text the runner should read — and Title /
+	// Description are then free to hold nothing but the user's own words for
+	// the UI to render. Producers that add no scaffolding leave it empty and
+	// get the historical Title (+ Description) behaviour unchanged.
+	prompt := strings.TrimSpace(task.PromptText)
+	if prompt == "" {
+		prompt = task.Title
+		if task.Description != "" && task.Description != task.Title {
+			prompt = task.Title + "\n\n" + task.Description
+		}
 	}
 	rawRunnerCommand := task.RawRunnerCommand || isRawRunnerCommand(prompt)
 	if rawRunnerCommand {
@@ -2546,6 +2604,11 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		RawRunnerCommand: rawRunnerCommand,
 		ChatMode:         chatModeArg,
 	})
+	// The frame is a TRANSPORT artifact — it goes on the wire to the runner and
+	// nowhere else. Raw-mode runners echo stdin to stdout, which would put the
+	// whole preamble on the user's screen as if the assistant had said it, so
+	// arm the guard with the exact bytes we are about to send.
+	tm.armPromptEchoGuard(task, prompt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
@@ -3259,6 +3322,11 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 	// raw before this change, so we never regress.
 	stripLiveANSI := ocFilter == nil && normalizeRunnerID(task.runner.RunnerID) != ""
 
+	// Armed by startProcess / startResume with this turn's exact prompt bytes.
+	tm.mu.RLock()
+	echoGuard := task.echoGuard
+	tm.mu.RUnlock()
+
 	var wg sync.WaitGroup
 	readStream := func(name string, r io.Reader) {
 		defer wg.Done()
@@ -3274,6 +3342,18 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 					payload = ocFilter.process(payload)
 				} else if stripLiveANSI {
 					payload = []byte(stripANSI(string(payload)))
+				}
+				// Drop the runner's verbatim echo of the Yaver-framed prompt
+				// BEFORE it reaches task.Output or task.outputCh — i.e. before
+				// any surface can render it. Deliberately after the ANSI/
+				// opencode filters: an escape sequence spliced through the
+				// boundary sentinel would defeat the match. Bounded three ways
+				// and flushed below, so it can never hold output forever.
+				// See prompt_echo_guard.go.
+				if echoGuard != nil && len(payload) > 0 {
+					outputMu.Lock()
+					payload = []byte(echoGuard.filter(string(payload)))
+					outputMu.Unlock()
 				}
 				if len(payload) > 0 {
 					outputMu.Lock()
@@ -3321,6 +3401,17 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 			outputMu.Unlock()
 		}
 	}
+	// Unconditional release of anything the echo guard is still holding. A
+	// stream that ended mid-echo (runner crashed, sentinel never echoed) must
+	// surface what it did say rather than vanish: a guard that can swallow a
+	// crash message is the silent-failure defect wearing a new hat.
+	if echoGuard != nil {
+		if rem := echoGuard.flush(); rem != "" {
+			outputMu.Lock()
+			tm.emit(task, &output, rem)
+			outputMu.Unlock()
+		}
+	}
 	close(task.outputCh)
 
 	tm.mu.Lock()
@@ -3344,6 +3435,40 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 
 	log.Printf("[task %s] Raw output reader finished (output_len=%d, result_len=%d)",
 		task.ID, output.Len(), len(task.ResultText))
+}
+
+// composeRunnerPrompt joins a Yaver-authored runner briefing to the user's own
+// title/description the same way startProcess would have joined them.
+//
+// Returns "" when there is no briefing — which is the signal to startProcess to
+// use its historical Title (+ Description) path. That "" matters: it means a
+// producer that adds no scaffolding keeps byte-identical behaviour, so this
+// split cannot change what any unbriefed runner reads.
+func composeRunnerPrompt(briefing, title, description string) string {
+	if strings.TrimSpace(briefing) == "" {
+		return ""
+	}
+	prompt := briefing + title
+	if description != "" && description != title {
+		prompt += "\n\n" + description
+	}
+	return prompt
+}
+
+// armPromptEchoGuard records the exact prompt bytes this turn sends so
+// readRawOutput can recognise — and drop — the runner's echo of them.
+//
+// Armed for every turn regardless of runner: it is CONSUMED only by
+// readRawOutput, which is the raw-stdout path by construction. Stream-json
+// runners (claude) go through readStreamJSON and never touch it, so there is
+// no branch here that could get the runner classification wrong.
+func (tm *TaskManager) armPromptEchoGuard(task *Task, prompt string) {
+	if task == nil {
+		return
+	}
+	tm.mu.Lock()
+	task.echoGuard = newPromptEchoGuard(prompt)
+	tm.mu.Unlock()
 }
 
 // emit pushes text to both the output buffer and the streaming channel.
@@ -3961,6 +4086,9 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 		RawRunnerCommand: isRawRunnerCommand(prompt),
 		ChatMode:         chatModeArg,
 	})
+	// Follow-ups echo too — codex reproduces stdin on EVERY turn, not just the
+	// first — so the guard is re-armed per turn with that turn's exact bytes.
+	tm.armPromptEchoGuard(task, prompt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
@@ -4540,10 +4668,20 @@ func (tm *TaskManager) autoRetryTask(task *Task) bool {
 	task.eventCh = make(chan map[string]interface{}, 32)
 	task.doneCh = make(chan struct{})
 
-	// Update the prompt for this retry
+	// Send the retry prompt; SHOW a one-line narration of what just happened.
+	//
+	// This block used to do the exact opposite of what it says. The retry
+	// prompt was appended as a turn with Role "user" — so every surface
+	// rendered "The previous attempt failed. Here is the error output: ```…2000
+	// chars of stack trace…```" inside the human's own chat bubble — while
+	// startProcess went on to rebuild its prompt from task.Title and never read
+	// it. The error context was displayed and not sent; now it is sent and not
+	// displayed.
+	task.PromptText = retryPrompt
 	task.Turns = append(task.Turns, ConversationTurn{
-		Role:      "user",
-		Content:   retryPrompt,
+		Role: "assistant",
+		Content: fmt.Sprintf("⟳ The previous attempt failed. Retrying (%d/%d) with the error output.",
+			task.AutoRetryCount, task.AutoRetryMax),
 		Timestamp: time.Now(),
 	})
 

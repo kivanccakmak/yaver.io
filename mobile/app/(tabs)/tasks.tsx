@@ -46,6 +46,9 @@ import {
   stripAnsi,
   stripMarkdownForPreview,
 } from "../../src/lib/taskPreview";
+// ONE definition of "what Yaver's prompt frame looks like", shared with
+// FeedbackOverlay and parity-tested against the Go source.
+import { SYSTEM_CONTEXT_END_MARKERS, containsYaverFraming } from "../../src/lib/promptFraming";
 import EmptyState from "../../src/components/EmptyState";
 import NoMachineEmpty from "../../src/components/NoMachineEmpty";
 import TaskTargetWizard, { type TaskTarget } from "../../src/components/TaskTargetWizard";
@@ -292,11 +295,11 @@ function extractAssistantActivity(text: string, maxItems = 4): string[] {
 // echoes those blocks back verbatim ahead of its actual answer; we
 // slice from the LAST marker's end to recover just the assistant's
 // real response. If task_context.go changes, update here.
-const SYSTEM_CONTEXT_END_MARKERS = [
-  "Kill any stale expo/metro processes before retrying.",
-  "or related Yaver preview tools instead of asking them to guess.",
-  "pick up where you left off.",
-];
+// (moved to src/lib/promptFraming.ts — this list had drifted from the Go
+// original: it never learned about the boundary sentinel, so chat-mode tasks,
+// the per-turn screen-context block, [Verbosity:] and [Attached images] all
+// survived the strip and rendered in the bubble. There is now ONE list, and
+// promptFramingParity.test.ts fails when it disagrees with the Go source.)
 
 // Collapse codex's repeated/redundant blocks. codex 0.123.0 prints the
 // same listing up to three times for a simple "Run ls":
@@ -3098,6 +3101,15 @@ export default function TasksScreen() {
 
   const speakTaskResult = (text: string) => {
     if (!ttsEnabled) return;
+    // Never read Yaver's own prompt frame aloud. The agent keeps it out of the
+    // stream now, but this app talks to boxes that can be many versions behind,
+    // and "You are running inside Yaver, not a generic terminal…" spoken into a
+    // room is the worst shape this bug takes. Staying silent is the better
+    // failure — the text is still on screen.
+    if (containsYaverFraming(text)) {
+      console.warn("[speech] refusing to read Yaver prompt framing aloud (stale agent?)");
+      return;
+    }
     speakConfiguredText(text, { provider: ttsProvider, apiKey: speechApiKey, model: ttsModel, voice: ttsVoice }).catch((err: unknown) => {
       console.warn("[speech] TTS failed:", err instanceof Error ? err.message : String(err));
     });

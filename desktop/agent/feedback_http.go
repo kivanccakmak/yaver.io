@@ -428,7 +428,17 @@ func (s *HTTPServer) handleFeedbackFix(w http.ResponseWriter, r *http.Request, f
 			// applies to direct guest-authored task creation.
 			prompt = guestPromptPrefix(s.taskMgr.workDir, guestCfg) + prompt
 		}
-		task, err := s.taskMgr.CreateTaskWithOptions(prompt, "", "", "feedback", "", "", nil, opts)
+		// The whole synthesized report — device rows, timeline, stack traces,
+		// black-box dump, guest security context — is a briefing for the
+		// runner and rides PromptText. What the surfaces get is the sentence
+		// the user actually said. See FeedbackManager.UserWords.
+		displayText := strings.TrimSpace(s.feedbackMgr.UserWords(feedbackID))
+		if displayText == "" {
+			displayText = "Fix the reported issue (" + feedbackID + ")"
+		}
+		opts.InitialUserPrompt = displayText
+		opts.PromptText = prompt
+		task, err := s.taskMgr.CreateTaskWithOptions(displayText, "", "", "feedback", "", "", nil, opts)
 		if err != nil {
 			jsonReply(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return

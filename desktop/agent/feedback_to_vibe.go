@@ -105,15 +105,32 @@ func shouldVibingifyFeedbackTask(source string) bool {
 // vibingifyFeedbackTaskBody applies the same project resolution + prompt
 // shaping the /vibing/execute handler does, so a /tasks POST with a
 // feedback source ends up with: (a) the right workDir, (b) the
-// vibing-execution-context prefix on the prompt, (c) a runner that's
+// vibing-execution-context briefing for the runner, (c) a runner that's
 // actually ready. Returns true when it modified the body so the caller
-// can log/branch on it. Mutates `title`, `projectName`, `runner`, and
-// `workDir` in place via the pointer args — same field semantics as
+// can log/branch on it. Mutates `projectName`, `runner`, and `workDir` in
+// place via the pointer args — same field semantics as
 // httpserver.go::createTask uses.
+//
+// `title` is now READ-ONLY here, and that is the whole point. It used to be
+// rewritten to `vibingExecutionContext + "\n\nUser request:\n" + title`, which
+// meant a user who shook their phone and typed "the button is the wrong
+// colour" saw their task named:
+//
+//	Yaver mobile execution context:
+//	- Project framework: expo
+//	- Selected target phone: …
+//	- Hermes is the only first-class mobile runtime path…
+//
+// …on every surface, forever — and, because the feedback clients send no
+// `userPrompt`, that same wall became their own chat bubble (the stored first
+// turn falls back Title→Description). The briefing is a runner briefing, so it
+// now goes to `briefing`, which the caller hands to the runner as
+// TaskCreateOptions.PromptText and no surface ever sees.
 func (s *HTTPServer) vibingifyFeedbackTaskBody(
 	r *http.Request,
 	source string,
 	title *string,
+	briefing *strings.Builder,
 	projectName *string,
 	workDir *string,
 	runner *string,
@@ -147,8 +164,9 @@ func (s *HTTPServer) vibingifyFeedbackTaskBody(
 	if s.devServerMgr != nil {
 		target = s.devServerMgr.PreferredTarget()
 	}
-	if ctx := vibingExecutionContext(resolvedPath, info.Framework, target, isDirectConnection(r)); ctx != "" {
-		*title = ctx + "\n\nUser request:\n" + *title
+	if ctx := vibingExecutionContext(resolvedPath, info.Framework, target, isDirectConnection(r)); ctx != "" && briefing != nil {
+		briefing.WriteString(ctx)
+		briefing.WriteString("\n\nUser request:\n")
 	}
 
 	// Pick a runner that's ready. Source-of-truth order:
