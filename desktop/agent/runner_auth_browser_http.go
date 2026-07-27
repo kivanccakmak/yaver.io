@@ -35,6 +35,63 @@ func runnerAuthDebugEnabled() bool {
 
 type runnerBrowserAuthStartRequest struct {
 	Runner string `json:"runner"`
+	// Trigger says WHO asked. "" is treated as an EXPLICIT user tap, because
+	// that is what every pre-2026-07-27 caller was: the automatic callers
+	// (launch gates, health loops, modals that start on open) must now say
+	// "auto" and accept being refused. Defaulting the other way would silence
+	// the user's own button.
+	Trigger string `json:"trigger,omitempty"`
+	// Confirm is the user's second, deliberate tap after being told the runner
+	// already looks signed in — e.g. because they are switching accounts. This
+	// is the ONLY way to reap a healthy session.
+	Confirm bool `json:"confirm,omitempty"`
+}
+
+func runnerAuthStartTriggerFromRequest(r *http.Request, trigger string) RunnerAuthStartTrigger {
+	switch strings.ToLower(strings.TrimSpace(trigger)) {
+	case "auto", "automatic", "background":
+		return RunnerAuthTriggerAuto
+	case "confirmed", "confirm", "reauth", "switch-account":
+		return RunnerAuthTriggerConfirmed
+	}
+	if r != nil {
+		switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("trigger"))) {
+		case "auto", "automatic", "background":
+			return RunnerAuthTriggerAuto
+		case "confirmed", "confirm":
+			return RunnerAuthTriggerConfirmed
+		}
+	}
+	return RunnerAuthTriggerExplicit
+}
+
+// existingRunnerBrowserAuthSession returns the live (non-terminal) session for
+// this runner+tenant, or nil. Two surfaces asking at once (phone + web) must
+// converge on ONE session: reaping and respawning would leave the first surface
+// polling a session id that no longer exists, which reads as a sign-in that
+// silently died.
+func existingRunnerBrowserAuthSession(runner, tenantUserID string) *runnerBrowserAuthSessionState {
+	runner = normalizeRunnerAuthName(runner)
+	tenantUserID = strings.TrimSpace(tenantUserID)
+	var found *runnerBrowserAuthSessionState
+	runnerBrowserAuthSessions.Range(func(_, v any) bool {
+		st, ok := v.(*runnerBrowserAuthSessionState)
+		if !ok {
+			return true
+		}
+		snap := st.snapshot()
+		if normalizeRunnerAuthName(snap.Runner) != runner ||
+			strings.TrimSpace(snap.TenantUserID) != tenantUserID {
+			return true
+		}
+		switch snap.Status {
+		case "completed", "failed", "cancelled":
+			return true
+		}
+		found = st
+		return false
+	})
+	return found
 }
 
 type runnerBrowserAuthSession struct {
@@ -761,6 +818,13 @@ func startRunnerBrowserAuthSession(runner string, tr tenantRuntime, onTerminal f
 				// DeviceDetails would keep showing ⚠️ for up to 30 min
 				// after a successful re-sign-in.
 				ClearRunnerAuthInvalid(state.Runner)
+				// A completed OAuth exchange IS an operation against the
+				// provider: the authorization code was redeemed and the
+				// provider handed back a token. That is the one moment we can
+				// legitimately claim AuthVerified without spending anything —
+				// so record it, rather than leaving a freshly signed-in box
+				// reporting "present but unconfirmed" until its first task.
+				MarkRunnerAuthProven(state.Runner)
 				// `claude auth login` authenticates but does not mark the
 				// first-run wizard done, so the TUI would still greet this
 				// freshly signed-in box with "Select login method".
@@ -911,6 +975,49 @@ func (s *HTTPServer) handleRunnerBrowserAuthStart(w http.ResponseWriter, r *http
 		return
 	}
 	tr := runnerAuthTenantRuntimeFromRequest(r)
+
+	// DON'T REAP A HEALTHY SESSION. Starting a browser-auth flow is destructive
+	// — cancelStaleRunnerBrowserAuthSessions kills any live session for this
+	// runner, a PKCE flow is burned, and for claude the credential can end up
+	// REPLACED. On 2026-07-27 the user was shown sign-in dialogs repeatedly for
+	// runners that were fine; that is the same "inventory vs operation" defect
+	// as the false green, pointing the other way.
+	//
+	// The decision is centralised in DecideRunnerAuthStart so every caller
+	// (launch gate, chip, health loop, dispatch preflight, the modals that used
+	// to start a session merely because they opened) gets the same answer.
+	decision := DecideRunnerAuthStart(RunnerAuthStartInput{
+		Runner:   normalizeRunnerAuthName(req.Runner),
+		Trigger: func() RunnerAuthStartTrigger {
+			if req.Confirm {
+				return RunnerAuthTriggerConfirmed
+			}
+			return runnerAuthStartTriggerFromRequest(r, req.Trigger)
+		}(),
+		Status:   DetectRunnerRuntimeStatus(GetRunnerConfig(req.Runner), ""),
+		InFlight: existingRunnerBrowserAuthSession(req.Runner, tr.UserID) != nil,
+	})
+	switch decision.Action {
+	case RunnerAuthStartNoop:
+		jsonReply(w, http.StatusOK, map[string]any{
+			"ok":         true,
+			"action":     string(decision.Action),
+			"reason":     decision.Reason,
+			"reauthable": decision.Reauthable,
+		})
+		return
+	case RunnerAuthStartReuse:
+		if existing := existingRunnerBrowserAuthSession(req.Runner, tr.UserID); existing != nil {
+			jsonReply(w, http.StatusOK, map[string]any{
+				"ok":      true,
+				"action":  string(decision.Action),
+				"reason":  decision.Reason,
+				"session": existing.snapshot(),
+			})
+			return
+		}
+	}
+
 	sess, err := startRunnerBrowserAuthSession(req.Runner, tr, s.TriggerHeartbeat)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
@@ -1301,7 +1408,13 @@ func (s *HTTPServer) handleRunnerAuthCredentialsImport(w http.ResponseWriter, r 
 	// Reset the auth-failure override so the runner status pill flips
 	// back to ✓ signed in on the next poll instead of waiting for a
 	// task to vouch for the new creds.
+	//
+	// IMPORTED bytes are PRESENCE, not proof: a mirrored credential can be
+	// expired, scoped to another account, or already revoked at the source.
+	// Drop any standing proof rather than inheriting the old token's — this is
+	// a different credential now, and nobody has exercised it.
 	ClearRunnerAuthInvalid(runner)
+	ClearRunnerAuthProven(runner)
 	invalidateClaudeAuthStatusCache()
 	if runner == "claude" && !tr.Enabled {
 		ensureClaudeOnboardingForLocalHome()

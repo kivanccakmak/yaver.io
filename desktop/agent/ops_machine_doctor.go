@@ -594,6 +594,7 @@ func fetchRunnerVerdicts(ctx context.Context, baseURL, token string, timeout tim
 			Installed      bool   `json:"installed"`
 			Ready          bool   `json:"ready"`
 			AuthConfigured bool   `json:"authConfigured"`
+			AuthPresent    bool   `json:"authPresent"`
 			AuthVerified   bool   `json:"authVerified"`
 			AuthSource     string `json:"authSource"`
 			Warning        string `json:"warning"`
@@ -610,8 +611,14 @@ func fetchRunnerVerdicts(ctx context.Context, baseURL, token string, timeout tim
 			note = strings.TrimSpace(r.Warning)
 		}
 		if note == "" && r.AuthConfigured && !r.AuthVerified {
-			// Presence of a credentials file is NOT proof of a live session.
-			note = "credentials file found but not verified with the runner itself"
+			// Three distinct states, three distinct sentences. Collapsing the
+			// middle one into either neighbour is what let a revoked token read
+			// as "verified" on 2026-07-27.
+			if r.AuthPresent {
+				note = "the runner's CLI reports a credential, but nothing has exercised it against the provider yet"
+			} else {
+				note = "credentials file found but not verified with the runner itself"
+			}
 		}
 		if note == "" && r.AuthSource != "" {
 			note = "auth via " + r.AuthSource

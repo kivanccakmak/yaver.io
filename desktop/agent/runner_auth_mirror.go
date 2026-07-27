@@ -246,7 +246,9 @@ func AcceptMirrorPayload(_ context.Context, payload MirrorAcceptPayload) (Mirror
 	}
 	// Reset the cached auth-failure override so status pills flip
 	// back to ✓ on the next poll without waiting for a task probe.
+	// The mirrored bytes are PRESENCE, never proof — see the import handler.
 	ClearRunnerAuthInvalid(runner)
+	ClearRunnerAuthProven(runner)
 	return MirrorResult{
 		OK:         true,
 		Runner:     runner,

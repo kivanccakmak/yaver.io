@@ -824,14 +824,23 @@ func preflightRemoteRunnerAuth(baseURL, token string, headers http.Header, machi
 	}
 	if row.AuthConfigured {
 		if !quiet {
-			if row.AuthVerified {
+			switch {
+			case row.AuthVerified:
+				// The PROVIDER answered for this credential — a completed run
+				// or a completed OAuth. The only claim worth making flatly.
 				fmt.Fprintf(os.Stderr, "→ %s is signed in on %s (%s)\r\n", runnerID, machine, row.AuthSource)
-			} else {
-				// AuthVerified absent means one of two things we cannot tell
-				// apart from here: an agent older than 1.99.278, or a credential
-				// the runner could not be asked about (its CLI wouldn't answer).
-				// Either way the honest statement is the same — a credential was
-				// found, nobody confirmed it works. Don't guess which.
+			case row.AuthPresent:
+				// The runner's own CLI says a credential is there. That is a
+				// LOCAL read, and a local read cannot see a server-side
+				// revocation: on 2026-07-27 `claude auth status` reported
+				// loggedIn:true off a token Anthropic had already revoked. Say
+				// what we actually know.
+				fmt.Fprintf(os.Stderr, "→ %s: %s reports a credential on %s (%s), but nothing has used it yet — if a login screen appears, run `yaver runner-auth setup %s --target %s`\r\n",
+					machine, runnerID, machine, firstNonEmptyBrowserAuth(row.AuthSource, "no source reported"), runnerID, machine)
+			default:
+				// Neither the provider nor the runner's CLI vouched: this is a
+				// file on disk. Weakest of the three, and it must not read like
+				// either of the others.
 				fmt.Fprintf(os.Stderr, "→ %s: %s credential found on %s but not confirmed working (%s) — if a login screen appears, run `yaver runner-auth setup %s --target %s`\r\n",
 					machine, runnerID, machine, firstNonEmptyBrowserAuth(row.AuthSource, "no live check"), runnerID, machine)
 			}
