@@ -263,3 +263,48 @@ names both, because two silent sources are two chances to be unfalsifiable.
 - No auto-push without the user's standing instruction (`autoPush: always`
   is explicit, per config, per project).
 - No silent auto-switching of workspace mode mid-task.
+
+## 6. Fast lane: patch streaming (design, 2026-07-27 — user-directed)
+
+Two clones exist by design — one on the vibing (runner) box, one on the
+render box. Git push→pull is the DURABLE spine, but its latency per vibing
+turn is real: commit (~0.1-0.5s) + push (~1-4s to a forge) + render-side
+pull (~1-3s) + rebuild. For "type → see pixels" loops the sync should not
+be gated on a forge round-trip. The fast lane:
+
+1. **Runner side** after each coding turn (or on file-change debounce):
+   `git diff [--binary] > patchN.diff` — N monotonic per session, name
+   carries taskId + seq (`task-<id>-p<seq>.diff`) so ordering and replay
+   are self-evident.
+2. **Transfer**: the agent-to-agent authed HTTP lane over the relay
+   (`/d/<renderDeviceId>/dev/apply-patch`, bearer + same-owner) — the
+   Yaver-native equivalent of the user's scp sketch (port 22 is the
+   forced-command cage; HTTP relay is the lane that already exists on
+   every box). One hop, ~100-300ms.
+3. **Render side**: `git apply --3way --whitespace=nowarn patchN.diff`
+   onto the SAME base commit, then debounce-rebuild the browser lane.
+   Patches apply to the working tree only — the render box's git history
+   stays clean; the next real push→pull supersedes applied patches
+   (`git checkout -- .` before the pull, sequence guarded).
+4. **Alignment precondition (session start)**: both clones must agree —
+   same branch, same HEAD (`git rev-parse HEAD` + `git log --stat -1` as
+   the human-readable witness). If they disagree: ff-pull the stale side;
+   if diverged, rebase the render clone onto the runner's HEAD (render
+   clone is disposable working state, runner clone is authoritative
+   during a vibing session). Refuse the fast lane (named) until aligned.
+5. **Main-branch-production principle**: vibing runs on `main` unless the
+   project config says otherwise — commits land on main, pushes go to
+   main, the render box tracks main. No hidden integration branches.
+
+Speed budget (target): diff 20-80ms · relay hop 100-300ms · apply
+20-50ms · web-js-bundle warm rebuild 1-3s → **~1.5-3.5s turn-to-pixels**,
+vs ~6-12s via forge push→pull. The durable spine still runs underneath
+(autoPush policy unchanged); the patch lane is an optimization, never the
+source of truth.
+
+MCP surface: `runner_patch_send` (runner box, produces + ships patchN) and
+the render box's `/dev/apply-patch` (applies + triggers coalesced reload).
+Guests: never — owner bearer only, same-owner relay scope.
+
+Status: DESIGN. Prereqs landed: ensure-clone, autoPush converge,
+pre-spawn ff-pull, cross-machine reload hop.
