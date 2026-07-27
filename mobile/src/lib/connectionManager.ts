@@ -96,6 +96,42 @@ class ConnectionManager {
     return this.focusedId;
   }
 
+  // ── Machine-role routing (runner/render split) ─────────────────────
+  // Set by DeviceContext from userSettings.machineRolesByProject (favorite
+  // row). Role accessors fall back to the focused client when no split is
+  // configured — single-box behaviour stays byte-identical. Focus itself is
+  // NOT changed by roles: focus doubles as "the box the user is looking
+  // at", and dragging it to the runner would tear previews off the render
+  // box (mobile twin of the web taskBaseUrl/devBaseUrl separation).
+  private machineRoles: { runnerDeviceId: string; renderDeviceId: string } | null = null;
+
+  setMachineRoles(roles: { runnerDeviceId: string; renderDeviceId?: string } | null): void {
+    this.machineRoles = roles?.runnerDeviceId
+      ? { runnerDeviceId: roles.runnerDeviceId, renderDeviceId: roles.renderDeviceId || roles.runnerDeviceId }
+      : null;
+    this.notify();
+  }
+
+  /** deviceId the given role resolves to, or null when it's just the
+   *  focused box (no split configured, or the role IS the focused box). */
+  roleDeviceId(role: "runner" | "render"): string | null {
+    const id = role === "runner" ? this.machineRoles?.runnerDeviceId : this.machineRoles?.renderDeviceId;
+    if (!id || id === this.focusedId) return null;
+    return id;
+  }
+
+  /** Client for AI-task dispatch: the configured runner box, else focused. */
+  runnerClient(): QuicClient {
+    const id = this.roleDeviceId("runner");
+    return id ? this.clientFor(id) : this.active();
+  }
+
+  /** Client for build/preview flows: the configured render box, else focused. */
+  renderClient(): QuicClient {
+    const id = this.roleDeviceId("render");
+    return id ? this.clientFor(id) : this.active();
+  }
+
   /** Get-or-create a QuicClient for the given deviceId. The returned
    *  client is NOT auto-connected; call `connectClient` (or invoke
    *  `client.connect(...)` directly from DeviceContext, which already

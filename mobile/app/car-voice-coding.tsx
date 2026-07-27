@@ -140,6 +140,18 @@ export default function CarVoiceCodingScreen() {
     [],
   );
 
+  // Runner/render split: default the car/glass box to the configured AI
+  // runner machine — a hands-free surface shouldn't demand a picker tap
+  // when the account already names its default runner. Spoken switches and
+  // manual picks still override.
+  const roleRunnerId = (deviceCtx as any).machineRoles?.runnerDeviceId as string | undefined;
+  useEffect(() => {
+    if (deviceId || !roleRunnerId) return;
+    if (devices.some((d: any) => (d.id || d.deviceId) === roleRunnerId)) {
+      setDeviceId(roleRunnerId);
+    }
+  }, [deviceId, devices, roleRunnerId]);
+
   const pickedDevice = devices.find((d) => (d.id || d.deviceId) === deviceId);
   // Wake a self-parked box straight from the car picker — a spoken task to a
   // sleeping box would otherwise just fail. Big, glanceable progress only.

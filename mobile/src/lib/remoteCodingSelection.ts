@@ -118,14 +118,19 @@ export function preferredDefaultModelForRunner(
 
 export function resolveRunnerForRemoteSend(args: {
   activeDeviceId?: string | null;
+  /** Runner/render split: the box the task will actually run on. When set,
+   *  per-device runner defaults key off THIS id — dispatching the render
+   *  box's CLI to the runner box is the classic split mistake. */
+  dispatchDeviceId?: string | null;
   primaryRunnerByDevice?: Record<string, string | undefined>;
   selectedRunner?: string | null;
   fallbackRunner?: string | null;
   userPickedRunner?: boolean;
 }): string | undefined {
   if (args.selectedRunner === "custom") return "custom";
-  const explicitPrimary = args.activeDeviceId
-    ? normalizeTaskRunnerId(args.primaryRunnerByDevice?.[args.activeDeviceId])
+  const keyDeviceId = args.dispatchDeviceId || args.activeDeviceId;
+  const explicitPrimary = keyDeviceId
+    ? normalizeTaskRunnerId(args.primaryRunnerByDevice?.[keyDeviceId])
     : "";
   const picked = normalizeTaskRunnerId(args.selectedRunner);
   const fallback = normalizeTaskRunnerId(args.fallbackRunner);
@@ -138,6 +143,8 @@ export function resolveRunnerForRemoteSend(args: {
 export function resolveModelForRemoteSend(args: {
   runnerId?: string | null;
   activeDevice?: DeviceIdentityLike | null;
+  /** Runner/render split: box the task runs on — model defaults key here. */
+  dispatchDeviceId?: string | null;
   primaryModelByDevice?: Record<string, string | undefined>;
   selectedModel?: string | null;
   fallbackModel?: string | null;
@@ -148,7 +155,7 @@ export function resolveModelForRemoteSend(args: {
   const runner = normalizeTaskRunnerId(args.runnerId);
   if (!runner || runner === "custom") return undefined;
   const activeDevice = args.activeDevice ?? {};
-  const activeDeviceId = (activeDevice as any).id ? String((activeDevice as any).id) : "";
+  const activeDeviceId = args.dispatchDeviceId || ((activeDevice as any).id ? String((activeDevice as any).id) : "");
   const primary = activeDeviceId ? args.primaryModelByDevice?.[activeDeviceId] || "" : "";
   const picked = args.selectedModel || "";
   const fallback = args.fallbackModel || "";

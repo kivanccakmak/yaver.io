@@ -1533,7 +1533,7 @@ export default function TasksScreen() {
   const shouldOpenNew =
     typeof taskParams.openNew === "string" &&
     (taskParams.openNew === "1" || taskParams.openNew === "true");
-  const { connectionStatus, activeDevice, devices, userDisconnected, lastError, agentAuthExpired, recoverDeviceAuth, selectDevice, disconnect, isLoadingDevices, everHadDevices, refreshDevices, deviceListError, stopReconnectAndBounce, retryConnection, primaryDeviceId, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, setPrimaryRunnerForDevice, multiTargetMode, connectedDeviceIds } = useDevice();
+  const { connectionStatus, activeDevice, devices, userDisconnected, lastError, agentAuthExpired, recoverDeviceAuth, selectDevice, disconnect, isLoadingDevices, everHadDevices, refreshDevices, deviceListError, stopReconnectAndBounce, retryConnection, primaryDeviceId, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, setPrimaryRunnerForDevice, multiTargetMode, connectedDeviceIds, machineRoles } = useDevice();
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>(getLogEntries());
   const [isRefreshingDevices, setIsRefreshingDevices] = useState(false);
@@ -1991,6 +1991,8 @@ export default function TasksScreen() {
   const resolveRunnerForSend = useCallback((fallbackRunner?: string | null): string | undefined => {
     return resolveRunnerForRemoteSend({
       activeDeviceId: activeDevice?.id,
+      // Runner/render split: defaults key off the box the task RUNS on.
+      dispatchDeviceId: connectionManager.roleDeviceId("runner"),
       primaryRunnerByDevice,
       selectedRunner,
       fallbackRunner,
@@ -2002,6 +2004,7 @@ export default function TasksScreen() {
     return resolveModelForRemoteSend({
       runnerId,
       activeDevice,
+      dispatchDeviceId: connectionManager.roleDeviceId("runner"),
       primaryModelByDevice,
       selectedModel,
       fallbackModel,
@@ -2168,9 +2171,12 @@ export default function TasksScreen() {
   // Fetch tasks
   const fetchTasks = useCallback(async () => {
     try {
-      const list = await quicClient.listTasks();
-      const focusedDeviceId = quicClient.attachedDeviceId || activeDevice?.id || "";
-      const focusedDeviceName = devices.find((d) => d.id === focusedDeviceId)?.name || activeDevice?.name || "";
+      const list = await connectionManager.runnerClient().listTasks();
+      // Rows come from the runner box when a machine-role split is active —
+      // stamp them with THAT box's identity, not the focused/render box's.
+      const listDeviceId = connectionManager.roleDeviceId("runner") || quicClient.attachedDeviceId || activeDevice?.id || "";
+      const focusedDeviceId = listDeviceId;
+      const focusedDeviceName = devices.find((d) => d.id === focusedDeviceId)?.name || (connectionManager.roleDeviceId("runner") ? "" : activeDevice?.name) || "";
       // Filter out locally-deleted tasks and internal vibing-cache tasks
       const deletedIds = await getDeletedTaskIds();
       const filtered = list.filter((t) => !deletedIds.has(t.id) && t.source !== "vibing-cache");
@@ -2426,7 +2432,7 @@ export default function TasksScreen() {
 
     const subscribe = (since: number) => {
     if (disposed) return;
-    const abort = quicClient.streamTaskOutput(
+    const abort = connectionManager.runnerClient().streamTaskOutput(
       selectedTask.id,
       (text, offset) => {
         // Prefer the agent's authoritative byte cursor. Counting here means
@@ -3136,10 +3142,19 @@ export default function TasksScreen() {
       );
       return;
     }
+    // Runner/render split: the reload/build hop lands on the RENDER box —
+    // it holds/serves the app (the runner's push reaches it via the render
+    // box's pre-build-pull). Explicit wizard pick still wins.
+    const renderRoleId = pendingTarget?.deviceId ? null : connectionManager.roleDeviceId("render");
     const client = pendingTarget?.deviceId
       ? connectionManager.clientFor(pendingTarget.deviceId)
-      : quicClient;
-    const targetName = pendingTarget?.deviceName || activeDevice?.name || "the connected machine";
+      : renderRoleId
+        ? connectionManager.clientFor(renderRoleId)
+        : quicClient;
+    const targetName = pendingTarget?.deviceName
+      || (renderRoleId ? devices.find((d) => d.id === renderRoleId)?.name || "the render machine" : null)
+      || activeDevice?.name
+      || "the connected machine";
     setIsSubmitting(true);
     setReloadFlash(`Reloading on ${targetName}…`);
     try {
@@ -3368,9 +3383,15 @@ export default function TasksScreen() {
       // the wizard's runner/model attached. Going through clientFor
       // is deterministic: the URL + headers match the device we
       // genuinely picked.
+      // Precedence: an explicit wizard pick wins; otherwise the machine-role
+      // RUNNER box (userSettings.machineRolesByProject) is the default send
+      // target; otherwise the focused box — today's single-box behavior.
+      const runnerRoleId = pendingTarget?.deviceId ? null : connectionManager.roleDeviceId("runner");
       const sendClient = pendingTarget?.deviceId
         ? connectionManager.clientFor(pendingTarget.deviceId)
-        : quicClient;
+        : runnerRoleId
+          ? connectionManager.clientFor(runnerRoleId)
+          : quicClient;
       // Make sure focus follows so any post-send streams (logs, output)
       // arrive on the same client the new task ran on.
       if (pendingTarget?.deviceId) {
@@ -3411,13 +3432,36 @@ export default function TasksScreen() {
       // sendClient is the focused quicClient). Try once to (re)establish
       // via the active device, then fail with an actionable message.
       if (!sendClient.isConnected) {
-        if (activeDevice) {
-          try { await selectDevice(activeDevice); } catch {}
-        }
-        if (!sendClient.isConnected) {
-          throw new Error(
-            `Still connecting to ${pendingTarget?.deviceName ?? activeDevice?.name ?? "the device"} — wait for the status dot to turn green, then send again (or tap Retry).`,
-          );
+        if (runnerRoleId) {
+          // Role-routed dispatch: bring the runner box's pooled client up.
+          // Refusal is NAMED — never silently fall back to the render box.
+          const runnerRow = devices.find((d) => d.id === runnerRoleId);
+          if (runnerRow && token) {
+            try {
+              await connectionManager.ensureConnected(runnerRoleId, {
+                host: runnerRow.host,
+                port: runnerRow.port,
+                token,
+                lanIps: runnerRow.lanIps,
+                connectionPreferences: runnerRow.connectionPreferences,
+              });
+            } catch {}
+          }
+          if (!sendClient.isConnected) {
+            const runnerName = devices.find((d) => d.id === runnerRoleId)?.name || `${runnerRoleId.slice(0, 8)}…`;
+            throw new Error(
+              `Your AI runner machine (${runnerName}) is not reachable right now. Nothing was sent to the wrong box — wake it, or change the machine roles in Settings.`,
+            );
+          }
+        } else {
+          if (activeDevice) {
+            try { await selectDevice(activeDevice); } catch {}
+          }
+          if (!sendClient.isConnected) {
+            throw new Error(
+              `Still connecting to ${pendingTarget?.deviceName ?? activeDevice?.name ?? "the device"} — wait for the status dot to turn green, then send again (or tap Retry).`,
+            );
+          }
         }
       }
       const taskParams = {
@@ -3875,7 +3919,7 @@ export default function TasksScreen() {
           // non-empty runner; legacy tasks without a recorded runnerId
           // fall back to claude.
           const forkRunner = plan.forkRunner;
-          const result = await quicClient.forkTask(selectedTask.id, {
+          const result = await connectionManager.runnerClient().forkTask(selectedTask.id, {
             runner: forkRunner,
             input: followUpText.trim(),
           });
@@ -3909,7 +3953,7 @@ export default function TasksScreen() {
           // Same runner: regular continue. The agent now accepts
           // follow-ups while a task is still streaming and queues them
           // onto the same session instead of requiring a stop first.
-          await quicClient.continueTask(selectedTask.id, followUpText.trim(), followUpImages.length > 0 ? followUpImages : undefined);
+          await connectionManager.runnerClient().continueTask(selectedTask.id, followUpText.trim(), followUpImages.length > 0 ? followUpImages : undefined);
         }
       }
       setFollowUpText("");
@@ -4138,7 +4182,7 @@ export default function TasksScreen() {
       // Resolve the task BEFORE closing, then hand the chat-detail
       // Modal off to the tmux Modal's dismiss — opening it in the same
       // tick makes it present invisibly behind the sheet on iOS.
-      const updatedTasks = await quicClient.listTasks();
+      const updatedTasks = await connectionManager.runnerClient().listTasks();
       const newTask = updatedTasks.find(t => t.id === result.taskId);
       handoffModal(
         () => setShowTmuxSessions(false),
@@ -5291,7 +5335,11 @@ export default function TasksScreen() {
                       style={[s.agentBadgeText, { color: c.textSecondary, flexShrink: 1 }]}
                       numberOfLines={1}
                     >
-                      {activeDevice?.name || "Pick a machine"}
+                      {/* With a machine-role split active the task runs on the
+                          RUNNER box — name it, never imply the focused box. */}
+                      {(machineRoles?.runnerDeviceId
+                        ? devices.find((d) => d.id === machineRoles.runnerDeviceId)?.name
+                        : null) || activeDevice?.name || "Pick a machine"}
                     </Text>
                     <Text style={{ color: c.textMuted, fontSize: 10, marginLeft: 4 }}>▾</Text>
                   </Pressable>
@@ -5358,6 +5406,17 @@ export default function TasksScreen() {
                     </Pressable>
                   )}
                 </View>
+                {/* Machine-role split disclosure: two silent sources are two
+                    unfalsifiable states — when a split is active, name which
+                    box runs the AI and which box renders, right where the
+                    user is composing. */}
+                {!pendingTarget && machineRoles?.runnerDeviceId && machineRoles?.renderDeviceId && machineRoles.renderDeviceId !== machineRoles.runnerDeviceId ? (
+                  <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 6 }} numberOfLines={1}>
+                    AI: {devices.find((d) => d.id === machineRoles.runnerDeviceId)?.name || machineRoles.runnerDeviceId.slice(0, 8)}
+                    {"  ·  Render: "}
+                    {devices.find((d) => d.id === machineRoles.renderDeviceId)?.name || machineRoles.renderDeviceId.slice(0, 8)}
+                  </Text>
+                ) : null}
               </View>
               {/* Screen context — states, in plain language, that the agent is
                   about to prepend a description of the screen you're previewing

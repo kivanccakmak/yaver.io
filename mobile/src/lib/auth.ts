@@ -702,6 +702,28 @@ export interface UserSettings {
    * GET /settings. Clients should not write this directly — write via
    * primaryRunnerForDevice instead. */
   primaryRunnerByDevice?: Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }>;
+  /** Runner/render machine split (docs/architecture/RUNNER_RENDER_SPLIT.md):
+   * AI tasks run on runnerDeviceId, builds/previews on renderDeviceId. Row
+   * without projectName = account-wide favorite; per-project rows override.
+   * Same rows the web Settings card + Vibing header edit — one Convex
+   * source, no per-surface copy. Write via machineRolesForProject
+   * (runnerDeviceId=null clears a scope). */
+  machineRolesByProject?: Array<{
+    projectName?: string;
+    runnerDeviceId: string;
+    renderDeviceId?: string;
+    workspace?: "runner-clone" | "render-ssh";
+    autoPush?: "never" | "ask" | "always";
+    updatedAt?: number;
+  }>;
+  machineRolesForProject?: {
+    projectName?: string;
+    runnerDeviceId: string | null;
+    renderDeviceId?: string;
+    workspace?: "runner-clone" | "render-ssh";
+    autoPush?: "never" | "ask" | "always";
+    updatedAt?: number;
+  };
   /** Read-only default runtime project rows returned by GET /settings. */
   defaultRuntimeProjectByDevice?: RuntimeProjectPreference[];
   /** Read-only project catalogs returned by GET /settings. */

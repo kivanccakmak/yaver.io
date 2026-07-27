@@ -273,6 +273,17 @@ const BUILD_NUMBER =
 // alone. See ARCHITECTURE_CLIENT_CORE.md.
 import { BUS_PRESENCE_STALE_MS, HEARTBEAT_STALE_MS } from "../_core/constants";
 
+/** Runner/render machine split row (userSettings.machineRolesByProject).
+ *  One shared shape across surfaces — mirrors web/lib/useMachineRoles.ts. */
+export type MachineRolesRow = {
+  projectName?: string;
+  runnerDeviceId: string;
+  renderDeviceId?: string;
+  workspace?: "runner-clone" | "render-ssh";
+  autoPush?: "never" | "ask" | "always";
+  updatedAt?: number;
+};
+
 export interface RunnerInfo {
   taskId: string;
   runnerId: string;
@@ -984,6 +995,14 @@ export interface DeviceState {
    *  Stored locally on the phone (no Convex roundtrip). Default false. */
   multiTargetMode: boolean;
   setMultiTargetMode: (enabled: boolean) => Promise<void>;
+  /** Runner/render machine split — the account-wide favorite row from
+   *  userSettings.machineRolesByProject (same rows web edits). Null =
+   *  single-box. connectionManager.runnerClient()/renderClient() are the
+   *  routing accessors this drives. */
+  machineRoles: MachineRolesRow | null;
+  /** Persist the favorite runner/render split (null clears → single-box).
+   *  Convex-synced; every surface picks it up. */
+  setMachineRolesFavorite: (row: MachineRolesRow | null) => Promise<void>;
   setPrimaryRunnerForDevice: (
     deviceId: string,
     runnerId: string | null,
@@ -1131,6 +1150,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const [primaryModelByDevice, setPrimaryModelByDeviceState] = useState<Record<string, string>>({});
   const [primaryModeByDevice, setPrimaryModeByDeviceState] = useState<Record<string, string>>({});
   const [primaryProviderByDevice, setPrimaryProviderByDeviceState] = useState<Record<string, string>>({});
+  // Runner/render machine split — account-wide favorite row. Null =
+  // single-box. Mirrored into connectionManager so runnerClient()/
+  // renderClient() route without per-surface copies.
+  const [machineRoles, setMachineRolesState] = useState<MachineRolesRow | null>(null);
   // UI preference that follows the user across phones. Loaded from
   // userSettings on mount (see settings-load effect below) and
   // persisted through saveUserSettings on change.
@@ -1176,6 +1199,18 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     if (token) {
       await saveUserSettings(token, { multiTargetMode: enabled }).catch(() => {});
     }
+  }, [token]);
+
+  const setMachineRolesFavorite = useCallback(async (row: MachineRolesRow | null) => {
+    if (!token) throw new Error("Sign in first to change machine roles.");
+    await saveUserSettings(token, {
+      machineRolesForProject: row
+        ? { ...row, renderDeviceId: row.renderDeviceId || row.runnerDeviceId, updatedAt: Date.now() }
+        : { runnerDeviceId: null },
+    });
+    setMachineRolesState(row);
+    connectionManager.setMachineRoles(row ? { runnerDeviceId: row.runnerDeviceId, renderDeviceId: row.renderDeviceId } : null);
+    appLog("info", `[settings] machineRoles ${row ? `saved: run=${row.runnerDeviceId.slice(0, 8)} render=${(row.renderDeviceId || row.runnerDeviceId).slice(0, 8)}` : "cleared (single-box)"}`);
   }, [token]);
 
   const markDeviceUnreachable = useCallback((deviceId: string) => {
@@ -2803,6 +2838,20 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           appLog("info", `[settings] primaryRunnerByDevice=${Object.keys(runners).length} entries, models=${Object.keys(models).length}, modes=${Object.keys(modes).length}, providers=${Object.keys(providers).length}`);
         }
 
+        // Runner/render machine split — favorite (account-wide) row. Tasks
+        // route to runnerDeviceId, previews stay on renderDeviceId, via
+        // connectionManager.runnerClient()/renderClient(). Same Convex rows
+        // the web Settings card + Vibing header edit.
+        const roleRows = settings.machineRolesByProject;
+        if (Array.isArray(roleRows)) {
+          const favorite = roleRows.find((r) => r && !r.projectName && r.runnerDeviceId) || null;
+          setMachineRolesState(favorite);
+          connectionManager.setMachineRoles(
+            favorite ? { runnerDeviceId: favorite.runnerDeviceId, renderDeviceId: favorite.renderDeviceId } : null,
+          );
+          appLog("info", `[settings] machineRoles=${favorite ? `run=${favorite.runnerDeviceId.slice(0, 8)} render=${(favorite.renderDeviceId || favorite.runnerDeviceId).slice(0, 8)}` : "(single-box)"}`);
+        }
+
         // Apply tunnel from settings (if no local override)
         if (settings.tunnelUrl) {
           const customRaw = await AsyncStorage.getItem(TUNNELS_KEY);
@@ -3988,7 +4037,18 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!token || !relaysReady || userDisconnected) return;
     const warmIds = new Set(
-      [activeDevice?.id, primaryDeviceId, secondaryDeviceId].filter((id): id is string => typeof id === "string" && id.length > 0),
+      [
+        activeDevice?.id,
+        primaryDeviceId,
+        secondaryDeviceId,
+        // Runner/render split: with a split active, BOTH role boxes stay
+        // pooled by default — chat dispatch needs the runner box live and
+        // previews need the render box live, at the same time. Relay
+        // transport supports this per-request (path-addressed), so two
+        // concurrent pooled clients are just two `/d/<id>/` prefixes.
+        machineRoles?.runnerDeviceId,
+        machineRoles?.renderDeviceId,
+      ].filter((id): id is string => typeof id === "string" && id.length > 0),
     );
     if (warmIds.size === 0) return;
     const candidates = devices.filter((d) =>
@@ -4028,7 +4088,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [activeDevice?.id, devices, primaryDeviceId, secondaryDeviceId, token, relaysReady, userDisconnected, connectedDeviceIds, unreachableSet]);
+  }, [activeDevice?.id, devices, primaryDeviceId, secondaryDeviceId, machineRoles?.runnerDeviceId, machineRoles?.renderDeviceId, token, relaysReady, userDisconnected, connectedDeviceIds, unreachableSet]);
 
   // Trigger immediate reconnection on network change (WiFi↔cellular roaming,
   // Wi-Fi → Wi-Fi roam between APs (same SSID, new IP), VPN/Tailscale toggle).
@@ -4172,12 +4232,14 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       primaryProviderByDevice,
       multiTargetMode,
       setMultiTargetMode,
+      machineRoles,
+      setMachineRolesFavorite,
       setPrimaryRunnerForDevice,
       latestCliVersion,
       connectedDeviceIds,
       disconnectDevice,
     }),
-    [displayDevices, activeDevice, connectionStatus, isLoadingDevices, everHadDevices, userDisconnected, lastError, deviceListError, agentAuthExpired, recoverDeviceAuth, pendingClaims, refreshPendingClaims, claimPendingDevice, selectDevice, disconnect, refreshDevices, handleDetachDevice, handleLeaveSharedAccess, hiddenDeviceCount, handleUnhideAllDevices, handleRemoveDevice, handleSetDeviceAlias, unreachableSet, markDeviceUnreachable, manualAuthRequiredSet, stopReconnectAndBounce, guestInvitations, activeHosts, handleLeaveHost, acceptGuestInvitation, acceptGuestByCode, inviteGuest, primaryDeviceId, setPrimaryDevice, secondaryDeviceId, setSecondaryDevice, autoConnecting, autoConnectTarget, autoConnectStage, cancelAutoConnect, repairRelay, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, multiTargetMode, setMultiTargetMode, setPrimaryRunnerForDevice, latestCliVersion, connectedDeviceIds, disconnectDevice, retryConnection]
+    [displayDevices, activeDevice, connectionStatus, isLoadingDevices, everHadDevices, userDisconnected, lastError, deviceListError, agentAuthExpired, recoverDeviceAuth, pendingClaims, refreshPendingClaims, claimPendingDevice, selectDevice, disconnect, refreshDevices, handleDetachDevice, handleLeaveSharedAccess, hiddenDeviceCount, handleUnhideAllDevices, handleRemoveDevice, handleSetDeviceAlias, unreachableSet, markDeviceUnreachable, manualAuthRequiredSet, stopReconnectAndBounce, guestInvitations, activeHosts, handleLeaveHost, acceptGuestInvitation, acceptGuestByCode, inviteGuest, primaryDeviceId, setPrimaryDevice, secondaryDeviceId, setSecondaryDevice, autoConnecting, autoConnectTarget, autoConnectStage, cancelAutoConnect, repairRelay, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, multiTargetMode, setMultiTargetMode, machineRoles, setMachineRolesFavorite, setPrimaryRunnerForDevice, latestCliVersion, connectedDeviceIds, disconnectDevice, retryConnection]
   );
 
   return <DeviceContext.Provider value={value}>{children}</DeviceContext.Provider>;
