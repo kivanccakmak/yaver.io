@@ -138,6 +138,33 @@ func devBuildFailureLine(line string) bool {
 	return false
 }
 
+// devBuildRecoveryLine reports whether a dev-server output line means "the app
+// builds again" — the inverse of devBuildFailureLine, and just as load-bearing:
+// a persisted compile error that nothing ever CLEARS keeps `needs_project_fix`
+// (and the Fix-in-Yaver button) up over a working preview for the rest of the
+// session — including right after the Fix-in-Yaver runner itself repaired the
+// project and hot-reloaded. Recovery must be recognized from the same place
+// failure was: the output.
+func devBuildRecoveryLine(line string) bool {
+	l := strings.ToLower(strings.TrimSpace(line))
+	if l == "" {
+		return false
+	}
+	for _, needle := range []string{
+		"recompile complete",    // Flutter hot restart
+		"restarted application", // Flutter
+		"reloaded ",             // Flutter hot reload ("Reloaded 1 of 674 libraries…")
+		"compiled successfully", // webpack/Next.js
+		"bundled ",              // Metro success summary ("iOS Bundled 4814ms")
+		"hot restart performed", // Flutter tooling variants
+	} {
+		if strings.Contains(l, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 // compileErrorLines picks the lines a human needs out of a log tail: the failure
 // summary plus the first concrete error above it.
 //

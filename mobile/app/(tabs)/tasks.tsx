@@ -57,6 +57,7 @@ import { appTag } from "../../src/lib/appVersion";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
 import { rerenderActiveRemoteRuntimeSurface } from "../../src/lib/feedbackTrigger";
+import { mustUseNativePreview } from "../../src/lib/devLane";
 import {
   AgentStatus,
   CloudWorkspaceRequiredError,
@@ -3158,7 +3159,15 @@ export default function TasksScreen() {
     setIsSubmitting(true);
     setReloadFlash(`Reloading on ${targetName}…`);
     try {
-      const result = await client.reloadDevServerDetailed({ mode: "bundle" });
+      // Lane-aware: an RN project actively served on the BROWSER lane must get
+      // a browser reload, never a Hermes bundle rebuild — this was the last
+      // unconditional bundle caller of the leak class cb72c3e42 fixed. No
+      // status (older agent, nothing running) keeps the old bundle behavior.
+      const targetStatus = await client.getDevServerStatus().catch(() => null);
+      const nativeLane = !targetStatus || mustUseNativePreview(targetStatus);
+      const result = await client.reloadDevServerDetailed(
+        nativeLane ? { mode: "bundle" } : { mode: "full", allowBundleFallback: false },
+      );
       if (devReloadReachedTarget(result)) {
         taskHaptics.send();
         setNewTaskText("");

@@ -158,6 +158,103 @@ func TestCompileFailureIsRecognisedAndExplained(t *testing.T) {
 	}
 }
 
+func TestPreviewHealthDoesNotOfferProjectFixForHealthyStartupSignals(t *testing.T) {
+	cases := []struct {
+		name   string
+		status DevServerStatus
+		logs   []string
+	}{
+		{
+			name:   "queued flutter command",
+			status: DevServerStatus{Framework: "flutter", Building: true},
+			logs: []string{
+				"queued",
+				"$ flutter run -d web-server --web-port 9100 --web-hostname 0.0.0.0",
+			},
+		},
+		{
+			name:   "ready",
+			status: DevServerStatus{Framework: "expo", Running: true, Serving: true},
+			logs:   []string{"ready 100%", "iOS Bundled 48143ms index.ts (1090 modules)"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			health := previewHealthFromAgentSignals(tc.status, tc.logs)
+			if health == nil {
+				t.Fatal("health is nil")
+			}
+			if health.CanOfferProjectFix {
+				t.Fatalf("CanOfferProjectFix = true for healthy/startup signals: %+v", health)
+			}
+			if health.State == "needs_project_fix" {
+				t.Fatalf("state = needs_project_fix for healthy/startup signals: %+v", health)
+			}
+		})
+	}
+}
+
+func TestPreviewHealthOffersProjectFixForProjectCompileFailure(t *testing.T) {
+	health := previewHealthFromAgentSignals(DevServerStatus{Framework: "flutter", Running: true, Serving: true}, []string{
+		"Compiling lib/main.dart for the Web...",
+		"No file or variants found for asset: .env.",
+		"Failed to compile application.",
+	})
+	if health == nil {
+		t.Fatal("health is nil")
+	}
+	if !health.CanOfferProjectFix {
+		t.Fatalf("CanOfferProjectFix = false for compile failure: %+v", health)
+	}
+	if health.State != "needs_project_fix" {
+		t.Fatalf("state = %q, want needs_project_fix", health.State)
+	}
+}
+
+// A compile failure followed by a LATER recovery line means the app builds
+// again — the fix (possibly made by the Fix-in-Yaver runner itself) must take
+// the button down. Prove-by-breaking: remove the lastRecovery ordering in
+// previewProjectFailureLines and this fails.
+func TestPreviewHealthClearsProjectFixAfterRecoveryLine(t *testing.T) {
+	logs := []string{
+		"Compiling lib/main.dart for the Web...",
+		"lib/main.dart:10:1: Error: Expected ';' after this.",
+		"Failed to compile application.",
+		"Performing hot restart...",
+		"Recompile complete. Restarting app...",
+	}
+	health := previewHealthFromAgentSignals(DevServerStatus{Framework: "flutter", Running: true, Serving: true}, logs)
+	if health == nil {
+		t.Fatal("health is nil")
+	}
+	if health.CanOfferProjectFix || health.State == "needs_project_fix" {
+		t.Fatalf("stale compile failure outlived its recovery line: %+v", health)
+	}
+	// And the inverse order still fails: recovery BEFORE a fresh failure.
+	relapse := append(append([]string(nil), logs...),
+		"lib/main.dart:11:1: Error: Undefined name 'foo'.",
+		"Failed to compile application.")
+	health = previewHealthFromAgentSignals(DevServerStatus{Framework: "flutter", Running: true, Serving: true}, relapse)
+	if health == nil || !health.CanOfferProjectFix {
+		t.Fatalf("fresh failure after recovery must re-offer the fix: %+v", health)
+	}
+}
+
+func TestPreviewHealthDoesNotOfferProjectFixForGenericStatusErrors(t *testing.T) {
+	for _, msg := range []string{
+		"the browser preview exited — start it again to render this project in a browser",
+		"Another process already owns the dev-server port on this machine",
+	} {
+		health := previewHealthFromAgentSignals(DevServerStatus{Framework: "flutter", Error: msg}, nil)
+		if health == nil {
+			t.Fatal("health is nil")
+		}
+		if health.CanOfferProjectFix {
+			t.Fatalf("CanOfferProjectFix = true for generic status error %q: %+v", msg, health)
+		}
+	}
+}
+
 func TestCompileErrorLinesFallsBackToTheRawTail(t *testing.T) {
 	tail := []string{"something inscrutable happened", "and then it stopped"}
 	got := compileErrorLines(tail)

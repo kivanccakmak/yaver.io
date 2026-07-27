@@ -770,7 +770,13 @@ export default function HotReloadScreen() {
     setReloadLoading(true);
     setLoadingStatus(isHermesFramework ? "Preparing fresh bundle..." : "Sending reload command...");
     try {
-      const result = await quicClient.reloadDevServerDetailed({ mode: isHermesFramework ? "bundle" : "dev" });
+      // Non-Hermes frameworks must not fall back into a Hermes /dev/reload-app
+      // on a failed /dev/reload — the Hermes-flavored error would mask the
+      // real one (and a Flutter/web project has no bundle to push anyway).
+      const result = await quicClient.reloadDevServerDetailed({
+        mode: isHermesFramework ? "bundle" : "dev",
+        allowBundleFallback: isHermesFramework,
+      });
       if (!devReloadReachedTarget(result)) {
         setLoadingStatus("");
         Alert.alert("Reload failed", describeDevReloadResult(result));

@@ -33,6 +33,7 @@ import NoMachineEmpty from "../../src/components/NoMachineEmpty";
 import { isEffectivelyConnected as computeEffectiveConnected } from "../../src/lib/connectionState";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { describeDevReloadResult, devReloadReachedTarget, quicClient, type CapabilitySnapshot, type DevCompatibilityStatus, type DevServerStatus, type MobileWorkerPreviewSession } from "../../src/lib/quic";
+import { clientRuntimeLogsNeedProjectFix, previewAgentHealthIsAuthoritative, previewHealthCanOfferProjectFix } from "../../src/lib/previewHealth";
 import { getAvailableModules, isBundleLoaderAvailable, loadApp } from "../../src/lib/bundleLoader";
 import { openAppBus } from "../../src/lib/openAppBus";
 import { setActivePreviewLane, subscribeBrowserShake } from "../../src/lib/feedbackTrigger";
@@ -273,6 +274,11 @@ function previewLogsNeedProjectFix(lines: readonly string[], statusError?: strin
   if (!hasRealFailure) return false;
   return true;
 }
+
+// Shared gate (parity rule): both browser-preview implementations consume
+// src/lib/previewHealth — see previewHealth.test.mts for the drift guard.
+const previewCanOfferProjectFix = (status: DevServerStatus | null | undefined, lines: readonly string[]): boolean =>
+  previewHealthCanOfferProjectFix(status, lines, previewLogsNeedProjectFix);
 
 function appendPreviewLogLine(prev: string[], line: string, limit = MAX_WEB_PREVIEW_LOGS): string[] {
   const trimmed = line.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
@@ -1071,6 +1077,9 @@ export default function AppsScreen() {
                       const fresh = tail.filter((ln) => !p.includes(ln));
                       return fresh.length ? [...p, ...fresh].slice(-MAX_WEB_PREVIEW_LOGS) : p;
                     });
+                  }
+                  if (event.snapshot?.previewHealth) {
+                    setDevStatus((prev) => prev ? { ...prev, previewHealth: event.snapshot.previewHealth } : prev);
                   }
                 } else if (event.type === "progress" || event.type === "phase") {
                   // Structured progress (Yaver Protocol v1): the agent parses
@@ -3434,7 +3443,13 @@ export default function AppsScreen() {
                     setWebPreviewLogs((prev) => appendPreviewLogLine(prev, line));
                     if (isPreviewRuntimeIssueLevel(level)) {
                       setWebRuntimeIssueCount((count) => Math.min(99, count + 1));
-                      setWebRuntimeLogOpen(true);
+                      // Console evidence is client-only — the agent cannot see
+                      // inside the WebView, so a page crash may escalate even
+                      // when agent health says the SERVER is healthy.
+                      if (previewCanOfferProjectFix(devStatus, [...webPreviewLogs, line]) ||
+                          clientRuntimeLogsNeedProjectFix([...webPreviewLogs, line])) {
+                        setWebRuntimeLogOpen(true);
+                      }
                     }
                   }
                 } catch { /* not ours */ }
@@ -3500,7 +3515,8 @@ export default function AppsScreen() {
                       ))}
                     </ScrollView>
                     {(() => {
-                      const canOfferProjectFix = webRuntimeIssueCount > 0 && previewLogsNeedProjectFix(webPreviewLogs, devStatus?.error);
+                      const canOfferProjectFix = webRuntimeIssueCount > 0 &&
+                        (previewCanOfferProjectFix(devStatus, webPreviewLogs) || clientRuntimeLogsNeedProjectFix(webPreviewLogs));
                       return (
                     <View style={s.previewRuntimeLogActions}>
                       <Pressable onPress={() => { setWebViewLoading(true); setWebRuntimeLogOpen(false); setWebViewKey((k) => k + 1); }} style={[s.previewBtn, s.previewRuntimeActionBtn, { backgroundColor: "#1a2e1a" }]}>
@@ -3541,7 +3557,11 @@ export default function AppsScreen() {
                     const compileCard = detectCompileFailure(devStatus?.error, webPreviewLogs);
                     const healthyLogs = previewLogsLookHealthy(webPreviewLogs);
                     const connectionDropped = !effectivelyConnected;
-                    const canOfferProjectFix = !activeGap && (compileCard || previewLogsNeedProjectFix(webPreviewLogs, devStatus?.error));
+                    const canOfferProjectFix = !activeGap && (
+                      previewAgentHealthIsAuthoritative(devStatus)
+                        ? previewCanOfferProjectFix(devStatus, webPreviewLogs)
+                        : (compileCard || previewCanOfferProjectFix(devStatus, webPreviewLogs))
+                    );
                     const fallbackTitle = connectionDropped
                       ? "Connection dropped while preview was ready"
                       : healthyLogs

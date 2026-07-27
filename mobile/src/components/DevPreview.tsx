@@ -15,6 +15,7 @@ import {
 import { WebView } from "react-native-webview";
 import { router } from "expo-router";
 import { describeDevReloadResult, devReloadReachedTarget, quicClient, type DevServerStatus } from "../lib/quic";
+import { previewAgentHealthIsAuthoritative, previewHealthCanOfferProjectFix } from "../lib/previewHealth";
 import { useColors } from "../context/ThemeContext";
 import { isBundleLoaded, loadAppIfChanged, onBundleEvent } from "../lib/bundleLoader";
 import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../lib/nativeBuild";
@@ -130,6 +131,11 @@ function previewLogsNeedProjectFix(lines: readonly string[], statusError?: strin
   if (!hasRealFailure) return false;
   return true;
 }
+
+// Shared gate (parity rule): both browser-preview implementations consume
+// src/lib/previewHealth — see previewHealth.test.mts for the drift guard.
+const previewCanOfferProjectFix = (status: DevServerStatus | null | undefined, lines: readonly string[]): boolean =>
+  previewHealthCanOfferProjectFix(status, lines, previewLogsNeedProjectFix);
 
 function projectLabelFromStatus(status: DevServerStatus | null): string {
   const workDir = String(status?.workDir || "").trim();
@@ -392,6 +398,9 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                         return fresh.length ? [...prev, ...fresh].slice(-40) : prev;
                       });
                     }
+                  }
+                  if (event.snapshot?.previewHealth) {
+                    setStatus((prev) => prev ? { ...prev, previewHealth: event.snapshot.previewHealth } : prev);
                   }
                   if (event.snapshot?.progress) {
                     const p = event.snapshot.progress;
@@ -1107,7 +1116,11 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
 	                      const gap = previewGap || capabilityGapFromStatus(status);
 	                      const fixLabel = gapFixLabel(gap);
 	                      const healthyLogs = previewLogsLookHealthy(logLines);
-	                      const canOfferProjectFix = !gap && (compileCard || previewLogsNeedProjectFix(logLines, status?.error));
+	                      const canOfferProjectFix = !gap && (
+	                        previewAgentHealthIsAuthoritative(status)
+	                          ? previewCanOfferProjectFix(status, logLines)
+	                          : (compileCard || previewCanOfferProjectFix(status, logLines))
+	                      );
 	                      const fallbackTitle = healthyLogs
 	                        ? "Preview is ready, waiting for a rendered frame"
 	                        : "Dev server didn't come up";

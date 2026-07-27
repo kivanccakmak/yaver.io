@@ -11086,6 +11086,7 @@ export interface DevServerStatus {
    *  polled here for surfaces whose SSE is closed at the moment it is
    *  produced. Parse with src/lib/capabilityGap.ts. */
   capabilityGap?: unknown;
+  previewHealth?: PreviewHealthSignal;
   pid?: number;
   workDir?: string;
   hotReload: boolean;
@@ -11094,6 +11095,16 @@ export interface DevServerStatus {
   targetDeviceClass?: string;
   iosInstallMethod?: string;
   iosInstallReason?: string;
+}
+
+export interface PreviewHealthSignal {
+  state?: "starting" | "healthy" | "needs_project_fix" | "infrastructure_gap" | "disconnected" | "unknown" | string;
+  canOfferProjectFix?: boolean;
+  severity?: "info" | "warn" | "error" | string;
+  reason?: string;
+  signalSource?: string;
+  relevantLogLines?: string[];
+  hasDeterministicFix?: boolean;
 }
 
 export interface DevTargetPreference {

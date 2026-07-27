@@ -1434,6 +1434,10 @@ func (s *HTTPServer) handleDevServerStatus(w http.ResponseWriter, r *http.Reques
 		if strings.TrimSpace(status.Error) == "" {
 			status.Error = "the browser preview exited — start it again to render this project in a browser"
 		}
+		// previewHealth was derived before this mutation; recompute so the
+		// verdict and the Error beside it agree (the new Error is a generic
+		// status error → state "unknown", never a project-fix escalation).
+		mgr.RecomputePreviewHealth(status)
 	}
 
 	if status.Port > 0 {
@@ -1655,6 +1659,17 @@ func (s *HTTPServer) handleDevServerStart(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if s.isolatedGuestDevMutationBlocked(w, r, "dev server start") {
+		return
+	}
+	// Admission control (doctrine law 7), same gate as createTask: a
+	// critically starved box refuses NEW heavy work with a named reason
+	// instead of spawning a compiler the kernel will kill mid-flight.
+	if msg := ResourceAdmissionError(); msg != "" {
+		jsonReply(w, http.StatusServiceUnavailable, map[string]interface{}{
+			"ok":     false,
+			"reason": ReasonBoxResourcePressure,
+			"error":  msg,
+		})
 		return
 	}
 

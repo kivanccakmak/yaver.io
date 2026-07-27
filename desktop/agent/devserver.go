@@ -103,6 +103,7 @@ type DevServerStatus struct {
 	// failure the stream is closed exactly when the gap is emitted — the
 	// route would be invisible on that surface without this field.
 	CapabilityGap     *CapabilityGap `json:"capabilityGap,omitempty"`
+	PreviewHealth     *PreviewHealth `json:"previewHealth,omitempty"`
 	PID               int            `json:"pid,omitempty"`
 	WorkDir           string         `json:"workDir,omitempty"`
 	HotReload         bool           `json:"hotReload"`
@@ -120,6 +121,16 @@ type DevServerStatus struct {
 	// frameworks either serve web directly (Vite, Next) or are mobile-
 	// only (Flutter mobile, Swift, Kotlin).
 	WebPort int `json:"webPort,omitempty"`
+}
+
+type PreviewHealth struct {
+	State               string   `json:"state"` // starting | healthy | needs_project_fix | infrastructure_gap | disconnected | unknown
+	CanOfferProjectFix  bool     `json:"canOfferProjectFix"`
+	Severity            string   `json:"severity,omitempty"` // info | warn | error
+	Reason              string   `json:"reason,omitempty"`
+	SignalSource        string   `json:"signalSource,omitempty"`
+	RelevantLogLines    []string `json:"relevantLogLines,omitempty"`
+	HasDeterministicFix bool     `json:"hasDeterministicFix,omitempty"`
 }
 
 // DevServerEvent is pushed via SSE on /dev/events.
@@ -220,22 +231,23 @@ type DevServerEvent struct {
 // from this and never feels "stuck" because a fresh one arrives every
 // 5s regardless of whether anything happened.
 type DevServerSnapshot struct {
-	GeneratedAt string            `json:"generatedAt"`
-	Running     bool              `json:"running"`
-	Framework   string            `json:"framework,omitempty"`
-	Surface     string            `json:"surface,omitempty"`
-	Port        int               `json:"port,omitempty"`
-	WebPort     int               `json:"webPort,omitempty"`
-	WorkDir     string            `json:"workDir,omitempty"`
-	UptimeSec   int               `json:"uptimeSec,omitempty"`
-	Pid         int               `json:"pid,omitempty"`
-	PidAlive    bool              `json:"pidAlive,omitempty"`
-	IdleSec     int               `json:"idleSec,omitempty"`
-	Phases      map[string]string `json:"phases,omitempty"`   // topic → current phase
-	Progress    *ProgressSnapshot `json:"progress,omitempty"` // most recent active progress
-	WebProgress *ProgressSnapshot `json:"webProgress,omitempty"`
-	RecentLogs  []string          `json:"recentLogs,omitempty"` // last 8 stdout/stderr lines
-	BeatNumber  int               `json:"beatNumber,omitempty"`
+	GeneratedAt   string            `json:"generatedAt"`
+	Running       bool              `json:"running"`
+	Framework     string            `json:"framework,omitempty"`
+	Surface       string            `json:"surface,omitempty"`
+	Port          int               `json:"port,omitempty"`
+	WebPort       int               `json:"webPort,omitempty"`
+	WorkDir       string            `json:"workDir,omitempty"`
+	UptimeSec     int               `json:"uptimeSec,omitempty"`
+	Pid           int               `json:"pid,omitempty"`
+	PidAlive      bool              `json:"pidAlive,omitempty"`
+	IdleSec       int               `json:"idleSec,omitempty"`
+	Phases        map[string]string `json:"phases,omitempty"`   // topic → current phase
+	Progress      *ProgressSnapshot `json:"progress,omitempty"` // most recent active progress
+	WebProgress   *ProgressSnapshot `json:"webProgress,omitempty"`
+	RecentLogs    []string          `json:"recentLogs,omitempty"` // last 8 stdout/stderr lines
+	PreviewHealth *PreviewHealth    `json:"previewHealth,omitempty"`
+	BeatNumber    int               `json:"beatNumber,omitempty"`
 }
 
 // ─── DevServer Registry ────────────────────────────────────────────────
@@ -1051,6 +1063,10 @@ func (m *DevServerManager) Status() *DevServerStatus {
 	}
 	// The route, on the polled channel too — see the field's comment.
 	s.CapabilityGap = m.active.gap
+	m.recentLogMu.Lock()
+	recentLogs := append([]string(nil), m.recentLogTail...)
+	m.recentLogMu.Unlock()
+	s.PreviewHealth = previewHealthFromAgentSignals(s, recentLogs)
 	// One shape for "what does this session hold", shared with /vibe/sessions.
 	s.Resources = resourcesForOwner(m.resourceOwnerTag())
 	s.VibeSessionID = m.VibeSessionID
@@ -1062,6 +1078,160 @@ func (m *DevServerManager) Status() *DevServerStatus {
 	s.TargetDeviceName = m.active.target.DeviceName
 	s.TargetDeviceClass = m.active.target.DeviceClass
 	return &s
+}
+
+// RecomputePreviewHealth re-derives previewHealth after a handler mutated the
+// status it was computed from (the /dev/status dead-web-sibling probe sets
+// Error AFTER Status() ran). A health verdict sitting next to an Error it
+// never saw is a contradiction on the wire.
+func (m *DevServerManager) RecomputePreviewHealth(status *DevServerStatus) {
+	if status == nil {
+		return
+	}
+	m.recentLogMu.Lock()
+	recentLogs := append([]string(nil), m.recentLogTail...)
+	m.recentLogMu.Unlock()
+	status.PreviewHealth = previewHealthFromAgentSignals(*status, recentLogs)
+}
+
+func previewHealthFromAgentSignals(status DevServerStatus, recentLogs []string) *PreviewHealth {
+	if status.CapabilityGap != nil {
+		return &PreviewHealth{
+			State:               "infrastructure_gap",
+			CanOfferProjectFix:  false,
+			Severity:            "warn",
+			Reason:              "The agent detected a deterministic machine/setup gap with its own repair route.",
+			SignalSource:        "capability_gap",
+			HasDeterministicFix: true,
+		}
+	}
+	if strings.TrimSpace(status.Error) != "" {
+		if statusErrorNeedsProjectFix(status.Error) {
+			lines := compileErrorLines([]string{status.Error})
+			return &PreviewHealth{
+				State:              "needs_project_fix",
+				CanOfferProjectFix: true,
+				Severity:           "error",
+				Reason:             status.Error,
+				SignalSource:       "dev_status_error",
+				RelevantLogLines:   lines,
+			}
+		}
+		return &PreviewHealth{
+			State:              "unknown",
+			CanOfferProjectFix: false,
+			Severity:           "warn",
+			Reason:             status.Error,
+			SignalSource:       "dev_status_error",
+		}
+	}
+	if lines := previewProjectFailureLines(recentLogs); len(lines) > 0 {
+		return &PreviewHealth{
+			State:              "needs_project_fix",
+			CanOfferProjectFix: true,
+			Severity:           "error",
+			Reason:             strings.Join(lines, "\n"),
+			SignalSource:       "recent_logs",
+			RelevantLogLines:   lines,
+		}
+	}
+	if status.Building || previewLogsShowProgress(recentLogs) {
+		return &PreviewHealth{
+			State:              "starting",
+			CanOfferProjectFix: false,
+			Severity:           "info",
+			Reason:             "The dev server is starting or compiling and has not reported a project failure.",
+			SignalSource:       "agent_progress",
+		}
+	}
+	if status.Running || status.Serving || previewLogsShowHealthy(recentLogs) {
+		return &PreviewHealth{
+			State:              "healthy",
+			CanOfferProjectFix: false,
+			Severity:           "info",
+			Reason:             "The dev server is running and no project failure is active.",
+			SignalSource:       "agent_status",
+		}
+	}
+	return &PreviewHealth{
+		State:              "unknown",
+		CanOfferProjectFix: false,
+		Severity:           "info",
+		Reason:             "No project failure signal is active.",
+		SignalSource:       "agent_status",
+	}
+}
+
+func statusErrorNeedsProjectFix(msg string) bool {
+	if strings.TrimSpace(msg) == "" {
+		return false
+	}
+	for _, line := range strings.Split(msg, "\n") {
+		if devBuildFailureLine(line) {
+			return true
+		}
+	}
+	l := strings.ToLower(msg)
+	return strings.Contains(l, "no file or variants found for asset") ||
+		strings.Contains(l, "cannot find module") ||
+		strings.Contains(l, "unable to resolve module") ||
+		strings.Contains(l, "syntaxerror") ||
+		strings.Contains(l, "error ts")
+}
+
+func previewProjectFailureLines(lines []string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	// Order matters: a failure line followed by a LATER recovery line
+	// ("Recompile complete", "Compiled successfully") means the app builds
+	// again — the stale failure text must not keep needs_project_fix alive
+	// after the fix (possibly made by the Fix-in-Yaver runner itself) landed.
+	lastFailure, lastRecovery := -1, -1
+	for i, line := range lines {
+		if devBuildFailureLine(line) {
+			lastFailure = i
+		}
+		if devBuildRecoveryLine(line) {
+			lastRecovery = i
+		}
+	}
+	if lastFailure < 0 || lastRecovery > lastFailure {
+		return nil
+	}
+	return compileErrorLines(lines)
+}
+
+func previewLogsShowProgress(lines []string) bool {
+	for _, line := range lines {
+		l := strings.ToLower(strings.TrimSpace(line))
+		if l == "" {
+			continue
+		}
+		if l == "queued" || l == "starting" || l == "building" || strings.HasPrefix(l, "$ flutter ") ||
+			strings.HasPrefix(l, "$ npm ") || strings.HasPrefix(l, "$ npx ") ||
+			strings.HasPrefix(l, "$ yarn ") || strings.HasPrefix(l, "$ pnpm ") ||
+			strings.Contains(l, "compiling ") || strings.Contains(l, "waiting for connection") ||
+			strings.Contains(l, "logs for your project will appear") {
+			return true
+		}
+	}
+	return false
+}
+
+func previewLogsShowHealthy(lines []string) bool {
+	for _, line := range lines {
+		l := strings.ToLower(strings.TrimSpace(line))
+		if l == "" {
+			continue
+		}
+		if strings.Contains(l, "ready") || strings.Contains(l, "bundled") ||
+			strings.Contains(l, "compiled") || strings.Contains(l, "listening") ||
+			strings.Contains(l, "serving on") || strings.Contains(l, "running") {
+			return true
+		}
+	}
+	return false
 }
 
 // resourceOwnerTag is how this manager labels everything it claims. When a vibe
@@ -1696,6 +1866,11 @@ func (m *DevServerManager) emitSnapshot() {
 		snap.RecentLogs = append([]string{}, m.recentLogTail...)
 	}
 	m.recentLogMu.Unlock()
+	if active != nil {
+		st := active.server.Status()
+		st.CapabilityGap = active.gap
+		snap.PreviewHealth = previewHealthFromAgentSignals(st, snap.RecentLogs)
+	}
 
 	m.emit(DevServerEvent{
 		Type:      "snapshot",
@@ -1760,6 +1935,20 @@ func (m *DevServerManager) recordRecentLog(line string) {
 		// dependency is exactly the shape the playbook + runner escalation exist
 		// for, and it must not depend on a human noticing a log line.
 		ReportFailureToCustodian("dev-compile", m.frameworkNameForEvents(), detail)
+	} else if devBuildRecoveryLine(line) {
+		// The inverse transition: the app builds again. Without this clear the
+		// persisted error above outlives the failure it described, and
+		// previewHealth keeps offering a project fix over a WORKING preview —
+		// including immediately after the Fix-in-Yaver runner repaired the
+		// project (the feature would defeat its own acceptance criterion).
+		m.mu.RLock()
+		active := m.active
+		m.mu.RUnlock()
+		if active != nil {
+			if setter, ok := active.server.(interface{ SetCompileError(string) }); ok {
+				setter.SetCompileError("")
+			}
+		}
 	}
 }
 
