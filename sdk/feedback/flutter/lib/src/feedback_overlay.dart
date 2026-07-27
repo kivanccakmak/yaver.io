@@ -2,9 +2,12 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
+import 'p2p_client.dart';
+import 'reload_actions.dart';
 import 'types.dart';
 import 'upload.dart';
 
@@ -46,16 +49,86 @@ class _FeedbackOverlayState extends State<FeedbackOverlay> {
   String? _audioPath;
   final Stopwatch _sessionTimer = Stopwatch();
 
+  // ─── Reload ────────────────────────────────────────────────────────────
+  //
+  // WHICH reload actions render, and which are disabled with what reason, is
+  // decided by the pure `reloadActions()` seam shared with every other Yaver
+  // feedback SDK — never inline here. In particular a RELEASE build
+  // (`kDebugMode == false`) renders none of them at all.
+  P2PClient? _reloadClient;
+
+  /// Null means "we have not been able to ask the machine" — rendered as
+  /// "not connected", which is a different sentence from "no dev server".
+  DevServerSnapshot? _devSnapshot;
+  ReloadActionId? _reloadInFlight;
+  String? _reloadMessage;
+
   @override
   void initState() {
     super.initState();
     _sessionTimer.start();
+    if (kDebugMode) {
+      _reloadClient = P2PClient(
+        baseUrl: widget.agentUrl,
+        authToken: widget.authToken,
+      );
+      _refreshDevSnapshot();
+    }
   }
 
   @override
   void dispose() {
     _sessionTimer.stop();
+    _reloadClient?.dispose();
     super.dispose();
+  }
+
+  Future<void> _refreshDevSnapshot() async {
+    final client = _reloadClient;
+    if (client == null) return;
+    final snapshot = await client.getDevServerStatus();
+    if (mounted) setState(() => _devSnapshot = snapshot);
+  }
+
+  List<ReloadAction> get _reloadActions => reloadActions(
+        _devSnapshot,
+        // kDebugMode is Flutter's own build flag: false in a release build,
+        // so a shipped app renders no reload UI. That is the point, and it
+        // is what reload_actions_test.dart pins.
+        isDevBuild: kDebugMode,
+        connected: _devSnapshot != null,
+        machineLabel: Uri.tryParse(widget.agentUrl)?.host,
+      );
+
+  Future<void> _runReloadAction(ReloadAction action) async {
+    if (!action.enabled) {
+      // A disabled control that also SAYS why when pressed beats a tooltip
+      // nobody hovers on a phone. Doing nothing in silence is the defect.
+      setState(() => _reloadMessage = action.disabledReason);
+      return;
+    }
+    final client = _reloadClient;
+    if (client == null) return;
+
+    setState(() {
+      _reloadInFlight = action.id;
+      _reloadMessage = '${action.label}…';
+    });
+    try {
+      await client.reloadWithMode(action.mode, snapshot: _devSnapshot);
+      if (mounted) {
+        setState(() => _reloadMessage = '${action.label} requested.');
+      }
+      _addAnnotation('${action.label} requested');
+    } catch (e) {
+      // reloadWithMode already threw a NAMED cause. Surface it verbatim
+      // rather than replacing it with "Reload failed".
+      final message = e is HttpException ? e.message : '$e';
+      if (mounted) setState(() => _reloadMessage = message);
+    } finally {
+      if (mounted) setState(() => _reloadInFlight = null);
+      await _refreshDevSnapshot();
+    }
   }
 
   double get _elapsedSeconds => _sessionTimer.elapsedMilliseconds / 1000.0;
@@ -213,8 +286,39 @@ class _FeedbackOverlayState extends State<FeedbackOverlay> {
                 color: _isRecording ? Colors.red : null,
                 onPressed: _isSending ? null : _toggleRecording,
               ),
+              // Reload actions — Hot Reload (stdin "r") and Hot Restart
+              // (stdin "R"). Absent entirely in a release build.
+              for (final action in _reloadActions)
+                _ActionButton(
+                  icon: action.id == ReloadActionId.full
+                      ? Icons.restart_alt
+                      : Icons.bolt,
+                  label: _reloadInFlight == action.id ? '…' : action.label,
+                  // Greyed, but still TAPPABLE, when blocked — the tap is how
+                  // we get to say why on a touch device.
+                  color: action.enabled ? null : Theme.of(context).disabledColor,
+                  onPressed: _isSending || _reloadInFlight != null
+                      ? null
+                      : () => _runReloadAction(action),
+                ),
             ],
           ),
+
+          // The reload's own status line: what was asked for, or the named
+          // reason it cannot happen. Never a silent no-op.
+          if (_reloadMessage != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _reloadMessage!,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ] else if (kDebugMode && _reloadActions.any((a) => !a.enabled)) ...[
+            const SizedBox(height: 8),
+            Text(
+              _reloadActions.firstWhere((a) => !a.enabled).disabledReason!,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
           const SizedBox(height: 12),
 
           // Timeline

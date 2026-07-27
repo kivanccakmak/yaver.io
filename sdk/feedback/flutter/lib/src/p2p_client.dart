@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import 'reload_actions.dart';
 import 'types.dart';
 
 /// Translate a raw Go-agent error into something a user can act on.
@@ -209,6 +210,73 @@ class P2PClient {
   /// Returns the download URL for a build artifact.
   String getArtifactUrl(String buildId) {
     return '$_base/builds/$buildId/artifact';
+  }
+
+  /// Read the dev server's state so the overlay can decide WHICH reload
+  /// actions to offer, and disable the rest with a reason.
+  ///
+  /// Returns null when the machine cannot be reached at all — which the
+  /// caller must render as "not connected", never as "no dev server". Those
+  /// are two different problems with two different fixes.
+  Future<DevServerSnapshot?> getDevServerStatus() async {
+    try {
+      final response = await _httpClient
+          .get(Uri.parse('$_base/dev/status'), headers: _headers)
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode >= 400) return null;
+      final parsed = jsonDecode(response.body);
+      if (parsed is Map<String, dynamic>) {
+        return DevServerSnapshot.fromJson(parsed);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Trigger a reload with an EXPLICIT fast/full mode — no bundle fallback.
+  ///
+  /// [reloadApp] silently falls through to a Hermes bundle rebuild when the
+  /// dev server is down. That is right for a one-button UX and wrong the
+  /// moment the user picks between two named actions: someone who pressed
+  /// "Hot Restart" must not silently receive something else. So this throws
+  /// with a NAMED reason instead (see [describeReloadFailure]).
+  ///
+  /// On Flutter the agent maps `fast` → stdin "r" (hot reload, keeps state)
+  /// and `full` → stdin "R" (hot restart, resets state).
+  ///
+  /// Auth: the SAME bearer used for the feedback upload. `/dev/reload` sits
+  /// behind `authSDKOrGuest` on the agent and is already inside the
+  /// `guest-reload` SDK-token scope — no new secret, no widened gate.
+  Future<Map<String, dynamic>> reloadWithMode(
+    ReloadWireMode mode, {
+    DevServerSnapshot? snapshot,
+  }) async {
+    late final http.Response response;
+    try {
+      response = await _httpClient.post(
+        Uri.parse('$_base$kReloadPath'),
+        headers: _headers,
+        body: jsonEncode({'mode': reloadWireModeValue(mode)}),
+      );
+    } catch (e) {
+      // Status 0 = the request never reached anything. A different problem
+      // from a 5xx, so it gets a different sentence.
+      throw HttpException(describeReloadFailure(0, '$e', snapshot: snapshot));
+    }
+    if (response.statusCode >= 400) {
+      throw HttpException(
+        describeReloadFailure(response.statusCode, response.body, snapshot: snapshot),
+      );
+    }
+    try {
+      final parsed = jsonDecode(response.body);
+      if (parsed is Map<String, dynamic>) return parsed;
+    } catch (_) {
+      // A 2xx with an unparseable body is still a success — the agent
+      // accepted the reload. Do not manufacture a failure out of it.
+    }
+    return {'ok': true};
   }
 
   /// Trigger a reload of the third-party app.
