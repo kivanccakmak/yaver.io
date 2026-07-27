@@ -123,6 +123,7 @@ import { openTaskBus } from "../../src/lib/runningTasksBus";
 import { ErrorMessage, detectSmartRetry } from "../../src/components/ErrorMessage";
 import { AgentContextPanel, type AgentContextRow } from "../../src/components/AgentContextPanel";
 import { deriveRunnerBannerState, type RunnerFetchState } from "../../src/lib/runnerBannerState";
+import { runnerPollCadenceMs, sameAgentStatus, sameRunnerList } from "../../src/lib/runnerPollPolicy";
 import { TaskHeader } from "../../src/components/TaskHeader";
 import {
   displayRunnerLabel,
@@ -1997,6 +1998,11 @@ export default function TasksScreen() {
     });
   }, [activeDevice, availableRunners, primaryModelByDevice, selectedModel, user?.email]);
 
+  // Live mirror of the fetch state for the poller below. The poller must READ
+  // this, never DEPEND on it — see the storm described above the effect.
+  const runnersFetchStateRef = useRef<RunnerFetchState>("idle");
+  runnersFetchStateRef.current = runnersFetchState;
+
   const refreshRunnerState = useCallback(async () => {
     if (connectionStatus !== "connected") return;
     setRunnersFetchState((prev) => (prev === "ok" ? prev : "loading"));
@@ -2005,9 +2011,15 @@ export default function TasksScreen() {
         quicClient.getRunnersProbe(),
         quicClient.getAgentStatus(),
       ]);
-      setAvailableRunners(probe.runners);
+      // Hold the PREVIOUS objects when the box's answer is materially
+      // unchanged. The probe parses fresh JSON every poll, so identity is
+      // always new; handing that straight to setState re-ran every runner /
+      // model useMemo and re-derived the banner text on a metronome even when
+      // nothing about the box had moved. `sameRunnerList` / `sameAgentStatus`
+      // compare exactly what the banner renders (see runnerPollPolicy.ts).
+      setAvailableRunners((prev) => (sameRunnerList(prev, probe.runners) ? prev : probe.runners));
       setRunnersFetchState(probe.state);
-      if (status) setAgentStatus(status);
+      if (status) setAgentStatus((prev) => (sameAgentStatus(prev, status) ? prev : status));
     } catch {
       setRunnersFetchState("network-error");
     }
@@ -2016,21 +2028,50 @@ export default function TasksScreen() {
   // Refresh runner + agent state on connect and keep retrying quickly until
   // the runner fetch is healthy. Once healthy, slow back down to background
   // polling so the banner stays honest without spamming the box.
+  //
+  // THE BANNER RE-RENDER STORM (user, 2026-07-26: "i really hate this opencode
+  // etc super high frequency refresh at mobile ui at banner").
+  //
+  // This effect used to list `runnersFetchState` in its dependency array while
+  // `refreshRunnerState` WROTE that same state. Every write tore the effect
+  // down and re-ran it, which called refreshRunnerState again, which wrote
+  // "loading" again… The `setInterval` never lived long enough to fire once, so
+  // the intended "retry every 5s" became "retry as fast as the probe answers" —
+  // and `getRunnersProbe()` answers `{state:"network-error"}` SYNCHRONOUSLY
+  // when the transport is down while connectionStatus is still optimistically
+  // "connected". No await, no throttle: the loop ran at render speed and the
+  // banner alternated "OpenCode status loading" / "OpenCode status unavailable"
+  // many times per second, taking the whole Tasks tree with it.
+  //
+  // Two changes, both load-bearing:
+  //   1. `runnersFetchState` is GONE from the deps. The cadence is a policy we
+  //      CALL (runnerPollCadenceMs, reading a ref) — not a subscription. A
+  //      poller that restarts itself is not a poller.
+  //   2. Self-scheduling timeout instead of setInterval: the next probe is
+  //      queued only AFTER the previous one settles, so probes can never
+  //      overlap and a synchronous failure still costs real wall-clock time.
   useEffect(() => {
     if (connectionStatus !== "connected") {
       setAgentStatus(null);
-      setAvailableRunners([]);
-      setAvailableModels([]);
+      setAvailableRunners((prev) => (prev.length === 0 ? prev : []));
+      setAvailableModels((prev) => (prev.length === 0 ? prev : []));
       setRunnersFetchState("idle");
       return;
     }
-    void refreshRunnerState();
-    const cadenceMs = runnersFetchState === "ok" ? 30000 : 5000;
-    const interval = setInterval(() => {
-      void refreshRunnerState();
-    }, cadenceMs);
-    return () => clearInterval(interval);
-  }, [activeDevice?.id, connectionStatus, refreshRunnerState, runnersFetchState]);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const cycle = async () => {
+      if (cancelled) return;
+      await refreshRunnerState();
+      if (cancelled) return;
+      timer = setTimeout(cycle, runnerPollCadenceMs(runnersFetchStateRef.current));
+    };
+    void cycle();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [activeDevice?.id, connectionStatus, refreshRunnerState]);
 
   const openRunnerAuthModal = useCallback((runnerId: string, targetDeviceId?: string | null) => {
     const normalized = String(runnerId || "").trim().toLowerCase();
@@ -2100,7 +2141,7 @@ export default function TasksScreen() {
       if (ok) {
         // Refresh status
         const s = await quicClient.getAgentStatus();
-        if (s) setAgentStatus(s);
+        if (s) setAgentStatus((prev) => (sameAgentStatus(prev, s) ? prev : s));
       } else {
         Alert.alert("Error", "Could not restart runner.");
       }

@@ -69,7 +69,7 @@ export function shortAgentVersion(version: string): string {
   return dash > 0 ? v.slice(0, dash) : v;
 }
 
-export default function RemoteBoxBanner({ extra, onDeviceChange, disableTap }: RemoteBoxBannerProps) {
+function RemoteBoxBannerInner({ extra, onDeviceChange, disableTap }: RemoteBoxBannerProps) {
   const c = useColors();
   const { activeDevice, devices, connectionStatus, connectedDeviceIds, primaryDeviceId, secondaryDeviceId, deviceListError, everHadDevices, isLoadingDevices, refreshDevices, autoConnecting, autoConnectTarget, cancelAutoConnect } = useDevice();
   const { token } = useAuth();
@@ -347,6 +347,27 @@ export default function RemoteBoxBanner({ extra, onDeviceChange, disableTap }: R
     </>
   );
 }
+
+/**
+ * The banner is a fixed chrome row hosted by screens that re-render for reasons
+ * that have nothing to do with it — the Apps tab bumps a 1 Hz preview clock, the
+ * Tasks tab re-renders on every streamed turn. Without this, each of those
+ * repaints the connection row and the runner/version chips too.
+ *
+ * DEFAULT SHALLOW COMPARE ON PURPOSE — no custom comparator. `extra` is a React
+ * element that a host rebuilds each render, so a comparator that skipped it
+ * would freeze per-tab affordances (ping latency, Re-auth, runner chip) at
+ * whatever they were on first paint. Shallow compare is the honest contract:
+ * prop-free hosts (`<RemoteBoxBanner />` in apps.tsx / hotreload.tsx) are fully
+ * insulated, and a host that passes `extra` gets exactly the updates it asked
+ * for. That is why the storm had to be fixed at its SOURCE — the self-
+ * retriggering runner poller in tasks.tsx (see runnerPollPolicy.ts) — rather
+ * than papered over with a comparator here. Memoization contains spillover; it
+ * does not make a spinning parent stop spinning.
+ */
+const RemoteBoxBanner = React.memo(RemoteBoxBannerInner);
+RemoteBoxBanner.displayName = "RemoteBoxBanner";
+export default RemoteBoxBanner;
 
 const styles = StyleSheet.create({
   banner: {
