@@ -47,7 +47,32 @@ test("isTerminalMetaFrame: control JSON is meta, plain output is not", () => {
   assert.equal(isTerminalMetaFrame('{"sessionId":"x"}'), true);
   assert.equal(isTerminalMetaFrame("$ ls -la"), false);
   assert.equal(isTerminalMetaFrame("{not json"), false);
-  assert.equal(isTerminalMetaFrame('{"cols":80}'), false); // json but not a control frame
+});
+
+// THE 2026-07-27 KEEPALIVE LEAK. The agent answers a client keepalive on the
+// SAME socket that carries PTY bytes, and it shipped as an anonymous
+// `{"pong":1}` — no `type`, no `sessionId`. This helper used to require one of
+// those fields, so the reply classified as OUTPUT. On the web twin, which had
+// no filter at all, that is literally what a user photographed: an idle prompt
+// line reading `{"pong":1}{"pong":1}`, Yaver's own heartbeat rendered as if
+// they had typed it.
+//
+// The old assertion here was `isTerminalMetaFrame('{"cols":80}') === false`
+// with the comment "json but not a control frame" — i.e. this file encoded the
+// bug as intended behaviour. A whitelist of known fields cannot classify a
+// frame a NEWER agent invents; structured-but-unknown is control by
+// definition, and painting it is the failure mode.
+test("isTerminalMetaFrame: any JSON object is control, known fields or not", () => {
+  assert.equal(isTerminalMetaFrame('{"pong":1}'), true); // legacy keepalive reply
+  assert.equal(isTerminalMetaFrame('{"type":"pong","pong":1}'), true); // current shape
+  assert.equal(isTerminalMetaFrame('{"cols":80}'), true); // unknown-but-structured
+  assert.equal(isTerminalMetaFrame('  {"future_frame":true}  '), true);
+  assert.equal(isTerminalMetaFrame("{}"), true);
+  // Still NOT control: anything that isn't a JSON object is PTY output, so a
+  // shell printing an array or a brace can never be swallowed.
+  assert.equal(isTerminalMetaFrame('["type","ping"]'), false);
+  assert.equal(isTerminalMetaFrame('echo \'{"pong":1}\''), false);
+  assert.equal(isTerminalMetaFrame("{"), false);
 });
 
 test("parseBridgeMessage: ready / data / resize / junk", () => {

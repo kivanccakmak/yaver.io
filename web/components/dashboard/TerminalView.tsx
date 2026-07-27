@@ -225,10 +225,68 @@ export default function TerminalView({
         }
         ws.send(JSON.stringify({ resize: { cols: term.cols, rows: term.rows } }));
       };
+      // /ws/terminal carries two unrelated things on ONE socket, and the only
+      // thing separating them is the frame opcode:
+      //
+      //   binary = PTY bytes — the ONLY thing xterm is ever given
+      //   text   = control plane — session id, sudo prompt, errors, pong
+      //
+      // Before 2026-07-27 this handler wrote BOTH into the grid. So the agent's
+      // reply to our own 30s keepalive below was painted at the cursor, and an
+      // idle terminal on the user's Linux box showed
+      //
+      //   $ {"pong":1}{"pong":1}
+      //
+      // on the prompt line — Yaver's heartbeat rendered as if the user had
+      // typed it. The fix is to decide by FRAME TYPE, never by string-matching
+      // the payload: any content test ("does it look like JSON?", "does it say
+      // pong?") is a test the user can type into their own shell.
       ws.onmessage = (e) => {
+        // Liveness FIRST, before any filtering. The 60s force-close below
+        // keys off this, and the keepalive's answer is a control frame — if
+        // marking activity moved below the filter, answering a ping would
+        // stop counting as inbound data and we would resurrect the
+        // idle-but-healthy self-disconnect the pong exists to prevent.
         markActivity();
-        const data = typeof e.data === "string" ? e.data : new Uint8Array(e.data);
-        term.write(data as any);
+
+        if (typeof e.data !== "string") {
+          term.write(new Uint8Array(e.data));
+          return;
+        }
+
+        const text = e.data;
+        let frame: Record<string, unknown> | null = null;
+        if (text.trimStart().startsWith("{")) {
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              frame = parsed as Record<string, unknown>;
+            }
+          } catch {
+            frame = null;
+          }
+        }
+
+        if (!frame) {
+          // Older agents emit a few diagnostics as bare prose on this channel
+          // ("pty read err: …"). Show them DELIBERATELY, in Yaver's own voice,
+          // rather than smuggling them in as if the shell had printed them.
+          term.writeln(`\r\n\x1b[33m${text}\x1b[0m`);
+          return;
+        }
+
+        const type = typeof frame.type === "string" ? frame.type : "";
+        const detail = typeof frame.error === "string" ? frame.error : "";
+        if (type === "error" || detail) {
+          const msg = detail || "terminal error";
+          setCloseReason((prev) => prev || msg);
+          term.writeln(`\r\n\x1b[31m${msg}\x1b[0m`);
+          return;
+        }
+        // Every other control frame — pong, terminal_session, sudo_prompt,
+        // runner_auth_invalid, and anything a newer agent adds — is consumed
+        // here and never rendered. Unknown-but-structured is control by
+        // definition; painting it is what caused this bug.
       };
       ws.onclose = (ev) => {
         setStatus("closed");

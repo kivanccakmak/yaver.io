@@ -64,14 +64,31 @@ export function resizeFrame(cols: number, rows: number): string {
 }
 
 /** True when a server→client TEXT frame is a control/meta message (session
- *  id, sudo prompt, errors) that must NOT be written to the terminal grid.
- *  Binary frames (pty output) always go straight to term.write. */
+ *  id, sudo prompt, errors, keepalive pong) that must NOT be written to the
+ *  terminal grid. Binary frames (pty output) always go straight to term.write.
+ *
+ *  ANY JSON OBJECT IS CONTROL — recognised or not. This used to require a
+ *  `type` or `sessionId` field, so the agent's keepalive answer, which shipped
+ *  as an anonymous `{"pong":1}`, matched nothing and fell through to "must be
+ *  output". On the web twin — which had no filter at all — that is exactly how
+ *  a user's idle prompt line ended up reading
+ *
+ *    $ {"pong":1}{"pong":1}
+ *
+ *  on 2026-07-27. The agent now types that frame (`{"type":"pong","pong":1}`),
+ *  but keying on a whitelist of known fields is the bug, not the missing
+ *  field: a control frame a newer agent adds must be dropped by an older app,
+ *  not painted. Structured-but-unknown is control by definition.
+ *
+ *  Note the asymmetry, and it is deliberate: on the way OUT, a JSON object is
+ *  never stdin either (console_terminal.go drops it rather than typing it into
+ *  the PTY). Non-object text stays legacy stdin for the support console. */
 export function isTerminalMetaFrame(text: string): boolean {
   const t = text.trim();
   if (!t.startsWith("{")) return false;
   try {
-    const o = JSON.parse(t) as Record<string, unknown>;
-    return typeof o.type === "string" || typeof o.sessionId === "string";
+    const o = JSON.parse(t) as unknown;
+    return !!o && typeof o === "object" && !Array.isArray(o);
   } catch {
     return false;
   }

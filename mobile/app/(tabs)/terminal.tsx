@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 import { AppScreenHeader } from "../../src/components/AppScreenHeader";
 import { useColors } from "../../src/context/ThemeContext";
 import { quicClient } from "../../src/lib/quic";
+import { isTerminalMetaFrame } from "../../src/lib/xtermBridge";
 
 // Native mobile terminal — no WebView. WebSocket to /ws/terminal carries
 // PTY bytes both ways. We strip the most common ANSI escape sequences and
@@ -38,8 +39,16 @@ export default function TerminalScreen() {
       };
       ws.onmessage = (e) => {
         let text: string;
-        if (typeof e.data === "string") text = e.data;
-        else text = new TextDecoder().decode(new Uint8Array(e.data as ArrayBuffer));
+        if (typeof e.data === "string") {
+          // Text frames are the control plane (session id, sudo prompt,
+          // errors, keepalive pong) — never PTY output. Painting them is how
+          // the web twin put `{"pong":1}{"pong":1}` on a user's prompt line on
+          // 2026-07-27. Only binary frames are bytes.
+          if (isTerminalMetaFrame(e.data)) return;
+          text = e.data;
+        } else {
+          text = new TextDecoder().decode(new Uint8Array(e.data as ArrayBuffer));
+        }
         pending.current += stripAnsi(text);
         // Throttle state updates to ~10 fps to avoid jank during `tail -f` floods.
         if (!appendTimer.current) {

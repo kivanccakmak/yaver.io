@@ -263,6 +263,7 @@ export default function SupportPage() {
             sessionId?: string;
             resumed?: boolean;
             prompt?: string;
+            error?: string;
           };
           if (msg.type === "terminal_session" && msg.sessionId) {
             setTerminalSessionId(msg.sessionId);
@@ -275,6 +276,16 @@ export default function SupportPage() {
             appendTerminalOutput(`\n[sudo] ${msg.prompt || "Password required"}\n`);
             return;
           }
+          if (msg.type === "error" || typeof msg.error === "string") {
+            // The agent used to send these as bare prose, which landed in the
+            // catch branch below and got appended as if the shell had printed
+            // it. They are structured control frames now — render them as
+            // Yaver's voice, not the shell's.
+            appendTerminalOutput(`\n[yaver] ${msg.error || "terminal error"}\n`);
+            return;
+          }
+          // Any other structured frame (pong keepalive, and whatever a newer
+          // agent adds) is control — consumed, never painted.
         } catch {
           appendTerminalOutput(event.data);
         }
@@ -319,7 +330,16 @@ export default function SupportPage() {
   function sendTerminalLine() {
     const ws = terminalWSRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN || !terminalInput.trim()) return;
-    ws.send(`${terminalInput}\n`);
+    // BINARY, not text. On /ws/terminal the frame opcode is the ONLY thing
+    // separating stdin from the control plane: text frames are control, binary
+    // frames are bytes. This console used to send the operator's line as a
+    // TEXT frame, so a line that happened to be a JSON object — `{"type":
+    // "terminate_session"}`, `{"resize":{...}}`, `{"type":"ping"}` — was
+    // parsed as control by the agent and never reached the shell. Typing JSON
+    // at a prompt is ordinary; having it silently kill your session is not.
+    // The agent still accepts non-JSON text as stdin so an already-open tab
+    // keeps working, but nothing new should rely on that.
+    ws.send(new TextEncoder().encode(`${terminalInput}\n`));
     setTerminalInput("");
   }
 

@@ -52,6 +52,7 @@ import {
   type ProjectKindResult,
 } from "../src/lib/projectKind";
 import { yaverNativeSurfaceSummary } from "../src/lib/yaverNativeCatalog";
+import { isTerminalMetaFrame } from "../src/lib/xtermBridge";
 import { callMcpDirect } from "../src/lib/yaverMcpDirect";
 import {
   runYaverAgent,
@@ -224,6 +225,9 @@ function ShellPane(props: { focused: boolean; nonce: number }): React.ReactEleme
     ws.onopen = () => { if (alive) setConnected(true); };
     ws.onmessage = (e) => {
       if (!alive) return;
+      // Text frames are control (session id, sudo prompt, errors, keepalive
+      // pong), never PTY output — see isTerminalMetaFrame. Only binary is bytes.
+      if (typeof e.data === "string" && isTerminalMetaFrame(e.data)) return;
       const raw = typeof e.data === "string"
         ? e.data
         : new TextDecoder().decode(new Uint8Array(e.data as ArrayBuffer));
