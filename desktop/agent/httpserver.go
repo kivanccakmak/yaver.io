@@ -4741,7 +4741,16 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		// Pure validation errors (missing title, ID collision, etc.)
 		// have task == nil and continue to surface as 500 like before.
 		if task == nil || task.Status != TaskStatusFailed || task.Output == "" {
-			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create task: %v", err))
+			// Carry the ROUTE, not just the sentence. On a box where the
+			// runner binary is simply absent this used to be
+			// `500 {"error":"failed to create task: runner not ready: claude
+			// not found in PATH or common locations"}` — a dead end on the
+			// one surface (a phone) that cannot type `yaver install claude`,
+			// while POST /install/claude worked and streamed the whole time.
+			// tasks_capability_gap.go; nil gap for every non-toolchain
+			// failure, so nothing else changes shape.
+			jsonReply(w, http.StatusInternalServerError,
+				taskCreateFailureBody(body.Runner, fmt.Sprintf("failed to create task: %v", err)))
 			return
 		}
 		log.Printf("[HTTP] Task %s preflight-failed: %v (surfacing as failed bubble)", task.ID, err)
@@ -4762,6 +4771,13 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		"model":      task.Model,
 		"deviceName": hostname,
 		"project":    project.Name,
+	}
+	// A preflight-failed task renders as a normal failed bubble with the
+	// reason in task.Output. When that reason is "the binary isn't here",
+	// put the Install route next to the sentence — the chat is exactly where
+	// the user is standing, so it is exactly where the tap belongs.
+	if task.Status == TaskStatusFailed {
+		resp = decorateTaskResponseWithGap(resp, task.RunnerID, task.Output)
 	}
 	log.Printf("[HTTP] Sending create response for task %s", task.ID)
 	jsonReply(w, http.StatusCreated, resp)
@@ -4887,10 +4903,49 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 	currentStatus := task.Status
 	s.taskMgr.mu.RUnlock()
 
-	if existingOutput != "" {
+	// Resume support. A task SSE stream cut mid-render (relay bounce, box
+	// drop, phone backgrounded) was unrecoverable in PRACTICE even though
+	// re-subscribing has always worked: this handler replayed the ENTIRE
+	// accumulated transcript every time, so a client that reconnected
+	// either duplicated everything it already had or had to discard its
+	// scrollback. Faced with that, no surface reconnected at all — mobile
+	// and web both swallowed the drop and froze on the last frame.
+	//
+	// `?since=<bytes>` is the number of output bytes the client already
+	// holds. The `resume` frame that precedes the replay states whether
+	// what follows is an increment (append) or a full snapshot (replace),
+	// so the client never has to guess. Omitting `since` is byte-for-byte
+	// the old behavior, including emitting no resume frame at all.
+	resumeRequested := r.URL.Query().Has("since")
+	since := 0
+	if resumeRequested {
+		if n, err := strconv.Atoi(r.URL.Query().Get("since")); err == nil && n > 0 {
+			since = n
+		}
+	}
+	// A `since` past the end means the box's transcript is SHORTER than what
+	// the client holds — the task was re-created or its output reset. Silently
+	// replaying nothing would strand the client on stale bytes forever, so we
+	// fall back to a full snapshot and say so.
+	fullSnapshot := since <= 0 || since > len(existingOutput)
+	replay := existingOutput
+	if !fullSnapshot {
+		replay = existingOutput[since:]
+	}
+
+	if resumeRequested {
+		fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
+			"type":   "resume",
+			"offset": len(existingOutput),
+			"full":   fullSnapshot,
+		}))
+		flusher.Flush()
+	}
+
+	if replay != "" {
 		fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
 			"type": "output",
-			"text": existingOutput,
+			"text": replay,
 		}))
 		flusher.Flush()
 	}
