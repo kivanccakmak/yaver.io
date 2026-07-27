@@ -43,7 +43,11 @@ public final class YaverFeedback {
 
     public static let shared = YaverFeedback()
 
-    private var config: FeedbackConfig?
+    /// Internal, not private: YaverReloadControl.swift lives in the same
+    /// module and needs the SAME config object the feedback path uses. A
+    /// second copy is how the reload gate and the feedback gate end up
+    /// disagreeing about whether this is a dev build.
+    internal var config: FeedbackConfig?
     private var timeline: [TimelineEvent] = []
     private var errors: [CapturedError] = []
     private let startedAt = Date()
@@ -187,8 +191,18 @@ public final class YaverFeedback {
         #endif
     }
 
+    /// The host app's uncaught-exception handler, saved so we can chain to it.
+    ///
+    /// This is a STATIC and not a local, because `NSSetUncaughtExceptionHandler`
+    /// takes a C function pointer and a closure that captures local context
+    /// cannot be converted to one. Written as `let previous = ...` inside the
+    /// function, this file did not compile AT ALL — the whole package failed,
+    /// which is why nothing else in this SDK had ever been built or tested.
+    /// A static is referenced, not captured, so the closure stays convertible.
+    private static var previousExceptionHandler: (@convention(c) (NSException) -> Void)?
+
     private func installErrorHandler() {
-        let previous = NSGetUncaughtExceptionHandler()
+        YaverFeedback.previousExceptionHandler = NSGetUncaughtExceptionHandler()
         NSSetUncaughtExceptionHandler { exception in
             YaverFeedback.shared.lock.lock()
             YaverFeedback.shared.errors.append(
@@ -202,7 +216,7 @@ public final class YaverFeedback {
             // ALWAYS chain. Swallowing the host app's handler would break their
             // Crashlytics/Sentry reporting — a feedback SDK that costs someone
             // their crash telemetry is a net loss however good its own reports.
-            previous?(exception)
+            YaverFeedback.previousExceptionHandler?(exception)
         }
     }
 

@@ -29,13 +29,25 @@ public struct FeedbackConfig {
     /// Optional project slug so the agent can attribute the report.
     public let projectSlug: String?
 
+    /// Is this a DEVELOPMENT build?
+    ///
+    /// Gates the reload controls (`YaverReloadControl`, `reloadActions()`),
+    /// which must never appear in a shipped app. The default is resolved from
+    /// the SDK's own `#if DEBUG` at the point `FeedbackConfig` is constructed,
+    /// which is the honest reading for the overwhelmingly common case.
+    ///
+    /// Pass it explicitly if your app ships a debug-configuration build to
+    /// testers, or builds the SDK in release inside a debug app.
+    public let devBuild: Bool
+
     public init(
         agentURL: String,
         authToken: String,
         shakeEnabled: Bool = true,
         captureScreenshot: Bool = true,
         captureErrors: Bool = true,
-        projectSlug: String? = nil
+        projectSlug: String? = nil,
+        devBuild: Bool = FeedbackConfig.compiledInDebug
     ) {
         self.agentURL = agentURL
         self.authToken = authToken
@@ -43,6 +55,20 @@ public struct FeedbackConfig {
         self.captureScreenshot = captureScreenshot
         self.captureErrors = captureErrors
         self.projectSlug = projectSlug
+        self.devBuild = devBuild
+    }
+
+    /// Whether THIS SDK was compiled with `-DDEBUG`.
+    ///
+    /// Named rather than inlined so the default is greppable and so a caller
+    /// reading `devBuild: FeedbackConfig.compiledInDebug` can see exactly
+    /// which build's flag they are inheriting — the SDK's, not their app's.
+    public static var compiledInDebug: Bool {
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
     }
 }
 
