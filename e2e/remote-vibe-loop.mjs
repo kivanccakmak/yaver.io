@@ -204,25 +204,49 @@ async function restoreRepo() {
     const taskId = await dispatchColorTask();
     const terminal = await waitTask(taskId);
     if (!['completed', 'review'].includes(terminal)) throw new Error(`NAMED task ended ${terminal}`);
-    log('task terminal — watching for repaint');
+    if (terminal === 'review') {
+      // Tasks run in an isolated runner clone; "review" holds the patch until
+      // approval, when the clone LANDS atomically on the project tree (the
+      // approve step a phone user performs). Without this the served tree
+      // never changes and the loop reads SILENT — proven by a direct disk
+      // edit repainting while the reviewed task's diff did not.
+      const ok = await call(RUNNER_DEVICE, `/tasks/${taskId}/complete`, { method: 'POST' });
+      log(`approved task ${taskId} (complete → HTTP ${ok.status})`);
+    }
+    // The expo web preview is a STATIC EXPORT served by the agent ("Web UI
+    // bundle ready: N files") — file edits do NOT repaint by themselves.
+    // The product refreshes once at task-terminal via /dev/reload; do the
+    // same, then re-fetch the page until the new export paints.
+    // mode:"full" is REQUIRED here: fast mode only rebuilds the static web
+    // export when git HEAD moved, and a reviewed task's edit is uncommitted —
+    // devserver_http.go handleDevServerReload (triggerWebBundleRebuildAsync
+    // is gated on reloadMode == "full").
+    const rel = await call(RENDER_DEVICE, '/dev/reload', { method: 'POST', body: JSON.stringify({ mode: 'full' }) });
+    log(`task terminal — /dev/reload → HTTP ${rel.status}; watching for repaint`);
 
+    // Metro serves the fresh bundle immediately (verified by direct fetch),
+    // but Chromium's HTTP cache re-serves the OLD bundle to page.reload() —
+    // the bundle URL never changes. Sample from a FRESH context (own cache)
+    // each cycle, exactly like a user opening a new tab.
     const deadline = Date.now() + REPAINT_MS;
     let after = before;
-    let reloaded = false;
     while (Date.now() < deadline) {
-      after = await readBackground(page).catch(() => after);
-      if (after === expected) break;
-      // One explicit reload halfway through the budget — mirrors the product's
-      // "refresh once at terminal state" rule; HMR usually beats us to it.
-      if (!reloaded && Date.now() > deadline - REPAINT_MS / 2) {
-        reloaded = true;
-        log('no HMR repaint yet — one explicit reload');
-        await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-        await page.waitForFunction(() => (document.getElementById("root")?.children.length || 0) > 0, null, { timeout: 120_000 }).catch(() => {});
+      const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      try {
+        const p2 = await ctx.newPage();
+        await p2.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 120_000 });
+        await p2.waitForFunction(() => (document.getElementById("root")?.children.length || 0) > 0, null, { timeout: 120_000 });
+        await sleep(3000);
+        const sample = await readBackground(p2).catch(() => '');
+        if (sample && sample !== 'rgba(0, 0, 0, 0)' && sample !== 'transparent') after = sample;
+        if (after === expected) { await p2.screenshot({ path: path.join(ARTIFACTS, 'after.png') }); }
+      } catch { /* box busy compiling — try again */ } finally {
+        await ctx.close().catch(() => {});
       }
-      await sleep(3000);
+      if (after === expected) break;
+      await sleep(10_000);
     }
-    await page.screenshot({ path: path.join(ARTIFACTS, 'after.png') });
+    if (after !== expected) await page.screenshot({ path: path.join(ARTIFACTS, 'after.png') });
     log(`AFTER background: ${after} (expected ${expected})`);
     if (after === expected) {
       verdict = 'PIXELS';
