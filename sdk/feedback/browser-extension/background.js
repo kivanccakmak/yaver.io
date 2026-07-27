@@ -4,6 +4,12 @@
 //   1. Capture screenshots (chrome.tabs.captureVisibleTab — content scripts can't).
 //   2. POST the bundle to the local Yaver agent at the user-configured URL.
 
+// Classic (non-module) service worker, so importScripts is the load path.
+// reloadActions.js attaches globalThis.YaverReloadActions — the SAME pure
+// decision seam the popup uses, so the worker and the UI can never disagree
+// about which reload is legal or what to say when one fails.
+importScripts('reloadActions.js');
+
 const DEFAULT_AGENT_URL = 'http://localhost:18080';
 const STORAGE_KEY = 'yaver-extension-settings';
 
@@ -185,6 +191,86 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         return;
       }
+      if (msg.type === 'yaver:dev-status') {
+        // Null snapshot means "we could not ask" — the popup renders that as
+        // "not connected", which is a different sentence (and a different fix)
+        // from "no dev server is running".
+        const settings = await getSettings();
+        const headers = {};
+        if (settings.authToken) headers['Authorization'] = `Bearer ${settings.authToken}`;
+        try {
+          const resp = await fetch(
+            `${settings.agentUrl}${YaverReloadActions.STATUS_PATH}`,
+            { headers, signal: AbortSignal.timeout(5000) },
+          );
+          if (!resp.ok) {
+            sendResponse({ ok: false, snapshot: null, agentUrl: settings.agentUrl });
+            return;
+          }
+          const data = await resp.json().catch(() => ({}));
+          sendResponse({
+            ok: true,
+            agentUrl: settings.agentUrl,
+            // Degrade to "not running" on anything malformed rather than an
+            // optimistic default — claiming a dev server we have not seen is
+            // how a button ends up doing nothing in silence.
+            snapshot: {
+              running: data.running === true,
+              building: data.building === true,
+              framework: typeof data.framework === 'string' ? data.framework : undefined,
+            },
+          });
+        } catch (e) {
+          sendResponse({ ok: false, snapshot: null, agentUrl: settings.agentUrl });
+        }
+        return;
+      }
+
+      if (msg.type === 'yaver:dev-reload') {
+        const settings = await getSettings();
+        // Same gate the popup renders against. A message forged from anywhere
+        // else still cannot drive a non-local agent.
+        if (!YaverReloadActions.isDevAgentUrl(settings.agentUrl)) {
+          sendResponse({
+            ok: false,
+            error:
+              'Reload only works against a local Yaver agent ' +
+              '(localhost / 127.0.0.1) — that is all this extension can reach.',
+          });
+          return;
+        }
+        const mode = msg.mode === 'full' ? 'full' : 'fast';
+        const headers = { 'Content-Type': 'application/json' };
+        if (settings.authToken) headers['Authorization'] = `Bearer ${settings.authToken}`;
+        try {
+          const resp = await fetch(`${settings.agentUrl}${YaverReloadActions.RELOAD_PATH}`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ mode }),
+            signal: AbortSignal.timeout(30000),
+          });
+          if (!resp.ok) {
+            const text = await resp.text().catch(() => '');
+            sendResponse({
+              ok: false,
+              error: YaverReloadActions.describeReloadFailure(resp.status, text, msg.snapshot),
+            });
+            return;
+          }
+          sendResponse({
+            ok: true,
+            message: mode === 'full' ? 'Full reload requested.' : 'Hot reload requested.',
+          });
+        } catch (e) {
+          // Status 0 — the request never reached anything.
+          sendResponse({
+            ok: false,
+            error: YaverReloadActions.describeReloadFailure(0, String(e), msg.snapshot),
+          });
+        }
+        return;
+      }
+
       sendResponse({ ok: false, error: `unknown message ${msg.type}` });
     } catch (e) {
       sendResponse({ ok: false, error: String(e?.message || e) });

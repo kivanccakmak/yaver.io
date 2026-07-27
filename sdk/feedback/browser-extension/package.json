@@ -10,7 +10,8 @@
     "directory": "sdk/feedback/browser-extension"
   },
   "scripts": {
-    "pack": "zip -r yaver-extension.zip manifest.json background.js content.js overlay.css popup.html popup.js icons/"
+    "pack": "zip -r yaver-extension.zip manifest.json background.js content.js overlay.css popup.html popup.js reloadActions.js icons/",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "yaver",

@@ -142,6 +142,12 @@
     <button id="capture-page" class="secondary">Capture viewport <kbd id="kbd-page">⌘⇧P</kbd></button>
     <button id="capture-fullpage" class="secondary">Capture full page (slow)</button>
 
+    <!-- Reload actions are injected by popup.js, because WHICH ones exist
+         depends on the dev-server state and on whether the configured agent
+         is a local one this extension can actually reach. -->
+    <div id="reload-tools"></div>
+    <div id="reload-hint" class="hint" style="margin-top:-2px;"></div>
+
     <label for="agent-url">Local agent URL</label>
     <input id="agent-url" type="url" placeholder="http://localhost:18080" />
 
@@ -172,6 +178,9 @@
       <a href="https://github.com/kivanccakmak/yaver.io/tree/main/sdk/feedback/browser-extension" target="_blank">examples</a>
     </div>
 
+    <!-- The shared reload-decision seam. Must load BEFORE popup.js, which
+         reads globalThis.YaverReloadActions. -->
+    <script src="reloadActions.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

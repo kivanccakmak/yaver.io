@@ -39,6 +39,87 @@ async function pingAgent() {
   dot.className = `dot ${r.ok ? 'ok' : 'bad'}`;
   dot.title = r.ok ? `Connected to ${r.agentUrl}` : `Unreachable: ${r.agentUrl} (${r.error || r.status})`;
   loadRecent(r.ok);
+  refreshReloadTools();
+}
+
+// ─── Reload actions ────────────────────────────────────────────────────────
+//
+// Rendered from the shared YaverReloadActions seam rather than hard-coded, so
+// the rules it encodes hold here by construction:
+//   • an agent URL this extension cannot reach (anything but localhost /
+//     127.0.0.1 — see manifest host_permissions) renders NO reload UI;
+//   • a blocked action renders DISABLED with the reason beneath it, not
+//     hidden, because hidden teaches the user nothing;
+//   • Flutter's second action is a Hot RESTART, everyone else's a Full Reload.
+let devSnapshot = null;
+
+async function refreshReloadTools() {
+  const tools = $('reload-tools');
+  const hint = $('reload-hint');
+  const agentUrl = $('agent-url').value.trim();
+
+  if (!YaverReloadActions.isDevAgentUrl(agentUrl)) {
+    tools.innerHTML = '';
+    hint.textContent = '';
+    return;
+  }
+
+  const status = await bg({ type: 'yaver:dev-status' });
+  devSnapshot = status && status.ok ? status.snapshot : null;
+
+  const actions = YaverReloadActions.reloadActions(devSnapshot, {
+    isDevBuild: true, // already established by isDevAgentUrl above
+    connected: devSnapshot !== null,
+    machineLabel: agentUrl,
+  });
+
+  tools.innerHTML = '';
+  if (!actions.length) {
+    hint.textContent = '';
+    return;
+  }
+
+  actions.forEach((action) => {
+    const button = document.createElement('button');
+    button.className = 'secondary';
+    button.textContent = action.label;
+    if (!action.enabled) button.style.opacity = '0.55';
+    button.addEventListener('click', () => {
+      if (!action.enabled) {
+        // A control that also SAYS why when pressed beats a tooltip nobody
+        // hovers. Doing nothing in silence is the defect.
+        hint.textContent = action.disabledReason;
+        return;
+      }
+      runReloadAction(action, button);
+    });
+    tools.appendChild(button);
+  });
+
+  hint.textContent = actions[0].enabled ? actions[0].hint : actions[0].disabledReason;
+}
+
+async function runReloadAction(action, button) {
+  const hint = $('reload-hint');
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = `${action.label}…`;
+  hint.textContent = `${action.label}…`;
+
+  const result = await bg({
+    type: 'yaver:dev-reload',
+    mode: action.mode,
+    snapshot: devSnapshot,
+  });
+
+  // The background already produced a NAMED cause via describeReloadFailure.
+  // Show it verbatim rather than replacing it with "Reload failed".
+  hint.textContent = result.ok
+    ? result.message
+    : result.error || `${action.label} did not start, and the agent gave no reason.`;
+  button.disabled = false;
+  button.textContent = original;
+  refreshReloadTools();
 }
 
 async function loadRecent(agentOk) {
