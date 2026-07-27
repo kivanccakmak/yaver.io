@@ -24,6 +24,12 @@ import {
   type CapabilityGap,
 } from "@/lib/capabilityGap";
 import { validateOpenCodeModel } from "@/lib/opencodeModel";
+import {
+  decideComposerKey,
+  insertNewline,
+  newlineIsNative,
+  normalizeComposerPrompt,
+} from "@/lib/composerKeys";
 import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskStreamWithRecovery";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 import { StreamHealthNotice } from "./StreamHealthNotice";
@@ -1513,7 +1519,9 @@ export default function RuntimeLabView({
   }, [activeTaskStream?.lines, activeTaskStream?.title, speaking, ttsAvailable]);
 
   const sendPrompt = useCallback(async () => {
-    const prompt = composer.trim();
+    // normalizeComposerPrompt trims the EDGES only — interior newlines are the
+    // user's message structure and must reach the runner untouched.
+    const prompt = normalizeComposerPrompt(composer);
     if (!prompt || sending) return;
     if (webPreviewReloadInFlightRef.current) {
       appendLog("send paused: preview reload is still finishing");
@@ -1543,7 +1551,9 @@ export default function RuntimeLabView({
         if (!validation.ok) throw new Error(validation.error);
       }
       const task = await agentClient.createTask({
-        title: prompt.slice(0, 80),
+        // Title is a one-line label, so collapsing whitespace there is fine.
+        // `description` carries the prompt verbatim, newlines and all.
+        title: prompt.replace(/\s+/g, " ").slice(0, 80),
         description: prompt,
         runner: selectedRunner || undefined,
         model: effectiveModel,
@@ -2716,9 +2726,36 @@ export default function RuntimeLabView({
                   value={composer}
                   onChange={(event) => setComposer(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
+                    // See lib/composerKeys.ts — this used to be a bare
+                    // `Enter && !shiftKey -> send`, which sent on an IME commit
+                    // and turned every non-Shift newline chord into a send that
+                    // destroyed the rest of the message.
+                    const decision = decideComposerKey({
+                      key: event.key,
+                      shiftKey: event.shiftKey,
+                      altKey: event.altKey,
+                      ctrlKey: event.ctrlKey,
+                      metaKey: event.metaKey,
+                      isComposing: event.nativeEvent.isComposing,
+                      keyCode: event.keyCode,
+                    });
+                    if (decision === "send") {
                       event.preventDefault();
                       void sendPrompt();
+                      return;
+                    }
+                    if (decision === "newline" && !newlineIsNative({ key: event.key, shiftKey: event.shiftKey })) {
+                      // Alt/Ctrl/Cmd+Enter are inert in a textarea, so insert
+                      // the break ourselves rather than swallowing the keystroke.
+                      event.preventDefault();
+                      const field = event.currentTarget;
+                      const next = insertNewline(field.value, field.selectionStart, field.selectionEnd);
+                      setComposer(next.value);
+                      requestAnimationFrame(() => {
+                        try {
+                          field.setSelectionRange(next.caret, next.caret);
+                        } catch {}
+                      });
                     }
                   }}
                   rows={3}

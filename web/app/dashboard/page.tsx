@@ -69,6 +69,7 @@ import { CapabilityShelf } from "@/components/dashboard/CapabilityShelf";
 import RawFailureBanner from "@/components/dashboard/RawFailureBanner";
 import { HIDE_PAID_UI } from "@/lib/launchFlags";
 import { parseDashboardChatIntent } from "@/lib/dashboard-chat-intent";
+import { decideComposerKey, insertNewline, newlineIsNative } from "@/lib/composerKeys";
 import {
   activationBlockReason,
   activateTaskPlacement,
@@ -4283,7 +4284,30 @@ export default function DashboardPage() {
                       return (
                         <>
                           <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
-                            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+                            onKeyDown={e => {
+                              // See lib/composerKeys.ts (2026-07-27 "it removed
+                              // my second line"): an IME commit and every
+                              // non-Shift newline chord used to send instead.
+                              const decision = decideComposerKey({
+                                key: e.key,
+                                shiftKey: e.shiftKey,
+                                altKey: e.altKey,
+                                ctrlKey: e.ctrlKey,
+                                metaKey: e.metaKey,
+                                isComposing: e.nativeEvent.isComposing,
+                                keyCode: e.keyCode,
+                              });
+                              if (decision === "send") { e.preventDefault(); handleSend(); return; }
+                              if (decision === "newline" && !newlineIsNative({ key: e.key, shiftKey: e.shiftKey })) {
+                                e.preventDefault();
+                                const field = e.currentTarget;
+                                const next = insertNewline(field.value, field.selectionStart, field.selectionEnd);
+                                setInput(next.value);
+                                requestAnimationFrame(() => {
+                                  try { field.setSelectionRange(next.caret, next.caret); } catch {}
+                                });
+                              }
+                            }}
                             placeholder={placeholder} rows={1}
                             disabled={Boolean(activeRunnerAuthIssue)}
                             className="max-h-32 w-full resize-none rounded-xl border border-surface-700 bg-surface-950 px-4 py-3 text-sm text-surface-50 caret-surface-50 placeholder-surface-400 outline-none focus:border-surface-500 disabled:cursor-not-allowed disabled:opacity-60" style={{ minHeight: "48px" }} />
