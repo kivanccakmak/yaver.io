@@ -1077,6 +1077,9 @@ export default function DashboardPage() {
 
   const probedForCurrentTabOpenRef = useRef(false);
 
+  // Sidebar Vibing list folds by default; the header keeps the count.
+  const [sidebarVibingOpen, setSidebarVibingOpen] = useState(false);
+
   const isConnected = connState === "connected";
 
   // Initial landing (user directive 2026-07-27): a box already connected means
@@ -2702,7 +2705,20 @@ export default function DashboardPage() {
           {isConnected && sidebarTmux.length > 0 ? (
             <div className="mb-3 shrink-0">
               <div className="mb-1 flex items-center justify-between">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-surface-500">Vibing</p>
+                {/* Folded by default (user directive 2026-07-27): six session
+                    rows above the Devices pill pushed the thing people scan
+                    for below the fold. The count keeps the folded header
+                    informative; the chevron is the fold control. */}
+                <button
+                  onClick={() => setSidebarVibingOpen((open) => !open)}
+                  className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-widest text-surface-500 hover:text-surface-300"
+                  title={sidebarVibingOpen ? "Fold the Vibing list" : "Unfold the Vibing list"}
+                  aria-expanded={sidebarVibingOpen}
+                >
+                  <span aria-hidden className="inline-block w-2 text-[9px]">{sidebarVibingOpen ? "▾" : "▸"}</span>
+                  Vibing
+                  <span className="rounded-full bg-surface-800 px-1.5 text-[9px] normal-case tracking-normal text-surface-400">{sidebarTmux.length}</span>
+                </button>
                 <button
                   onClick={() => setActiveTab("runtime")}
                   className="text-[10px] text-surface-500 hover:text-surface-300"
@@ -2711,6 +2727,7 @@ export default function DashboardPage() {
                   see all &rarr;
                 </button>
               </div>
+              {sidebarVibingOpen ? (
               <div className="max-h-40 space-y-1 overflow-y-auto">
                 {sidebarTmux.slice(0, 6).map((t) => (
                   <button
@@ -2736,6 +2753,7 @@ export default function DashboardPage() {
                   <p className="px-2 text-[9px] text-surface-500">+{sidebarTmux.length - 6} more in Vibing</p>
                 ) : null}
               </div>
+              ) : null}
             </div>
           ) : null}
 
