@@ -151,8 +151,12 @@ func DetectProjectPreviewCapabilities(workDir, frameworkHint string, hasPairedDe
 		} else {
 			caps.Options = append(caps.Options,
 				ProjectPreviewOption{
+					ID: PreviewOptionDevServer, Label: "Browser Reload",
+					Supported: true, Primary: true, Framework: framework,
+				},
+				ProjectPreviewOption{
 					ID: PreviewOptionOpenNative, Label: "Open in Yaver",
-					Supported: hasPairedDevice, Primary: hasPairedDevice, Framework: framework,
+					Supported: hasPairedDevice, Framework: framework,
 					Reason: pairedDeviceReason(hasPairedDevice),
 				},
 				ProjectPreviewOption{
@@ -161,16 +165,13 @@ func DetectProjectPreviewCapabilities(workDir, frameworkHint string, hasPairedDe
 				},
 				ProjectPreviewOption{
 					ID: PreviewOptionRemoteRuntime, Label: "Stream over WebRTC",
-					Supported: true, Primary: !hasPairedDevice, Framework: framework,
+					Supported: true, Framework: framework,
 					Reason: "runs the RN web target on the box",
 				},
 			)
-			caps.Reason = "React Native / Expo: a real device via Hermes is the most honest test; " +
-				"WebRTC covers the web target when no device is paired."
+			caps.Reason = "React Native / Expo: Browser Reload is the lightest preview path and keeps reload/render inside the browser lane; " +
+				"Hermes remains available for real-container checks, and WebRTC covers streamed native surfaces."
 		}
-		caps.Options = append(caps.Options, ProjectPreviewOption{
-			ID: PreviewOptionDevServer, Label: "Dev server", Supported: true, Framework: framework,
-		})
 
 	// ── Native mobile: Swift / Kotlin ────────────────────────────────────
 	case nativeMobileFramework(framework):

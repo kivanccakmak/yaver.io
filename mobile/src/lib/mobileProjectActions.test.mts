@@ -40,7 +40,7 @@ test("Yaver self-development puts WebRTC first and blocks Hermes actions", () =>
   assert.equal(openNative?.reason, YAVER_SELF_DEV_HERMES_BLOCK_REASON);
 });
 
-test("third-party RN apps keep the existing Hermes-first order", () => {
+test("third-party RN apps keep the agent/fallback order", () => {
   const planned = guardYaverSelfDevelopmentActions(actions, "todo", "/Users/me/Workspace/todo/mobile");
   assert.deepEqual(planned.map((a) => a.type), actions.map((a) => a.type));
   assert.equal(planned.find((a) => a.type === "open-native")?.supported, true);
@@ -98,6 +98,26 @@ test("applyPreviewCapabilities keeps Hermes for react-native", () => {
     },
   );
   assert.ok(out.some((a) => a.type === "compile-hermes"), "hermes stripped from an RN project");
+});
+
+test("applyPreviewCapabilities keeps Browser Reload first for react-native when the agent says so", () => {
+  const out = applyPreviewCapabilities(
+    [
+      { label: "Browser Reload", target: ".", type: "dev-server", framework: "expo" },
+      { label: "Hermes Reload", target: ".", type: "open-native", framework: "expo" },
+      { label: "Compile", target: ".", type: "compile-hermes", framework: "expo" },
+      { label: "WebRTC Reload", target: ".", type: "remote-runtime", framework: "expo" },
+    ],
+    {
+      framework: "expo",
+      options: [
+        { id: "dev-server", supported: true, primary: true },
+        { id: "open-native", supported: true },
+        { id: "remote-runtime", supported: true },
+      ],
+    },
+  );
+  assert.deepEqual(out.map((a) => a.type), ["dev-server", "open-native", "remote-runtime"]);
 });
 
 test("applyPreviewCapabilities carries the agent's reason onto a disabled action", () => {

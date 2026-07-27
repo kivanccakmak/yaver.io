@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -112,9 +114,9 @@ func TestRemoteRuntimeCapabilitiesForSwiftOnLinuxRequiresMacHost(t *testing.T) {
 		t.Skip("linux-only expectation")
 	}
 	caps := remoteRuntimeCapabilitiesForProject("/tmp/swift-app", "swift")
-	// Five Apple sim surfaces (iPhone/iPad/watch/tv/vision) + ios-device.
-	// All disabled on non-macOS — Swift/iOS needs a Mac either way.
-	wantIDs := []string{"ios-simulator", "ipados-simulator", "watchos-simulator", "tvos-simulator", "visionos-simulator", "ios-device"}
+	// Mobile/tablet Apple targets only. watchOS/tvOS/visionOS need project
+	// code markers; a Swift label alone is not an Apple TV/watch app.
+	wantIDs := []string{"ios-simulator", "ipados-simulator", "ios-device"}
 	if len(caps.Targets) != len(wantIDs) {
 		t.Fatalf("swift targets = %d, want %d (%v)", len(caps.Targets), len(wantIDs), wantIDs)
 	}
@@ -137,9 +139,9 @@ func TestRemoteRuntimeCapabilitiesForSwiftOnLinuxRequiresMacHost(t *testing.T) {
 
 func TestRemoteRuntimeCapabilitiesForKotlinUseAndroidHostClass(t *testing.T) {
 	caps := remoteRuntimeCapabilitiesForProject("/tmp/kotlin-app", "kotlin")
-	// Post-P6: android-emulator + Wear/TV/XR/Auto surface variants +
-	// android-redroid (Docker) + android-device (physical fallback).
-	wantIDs := []string{"android-emulator", "android-wear", "android-tv", "android-xr", "android-auto", "android-redroid", "android-device"}
+	// Phone/tablet Android targets only. Wear/TV/XR/Auto need project code
+	// markers; host inventory alone must not advertise them.
+	wantIDs := []string{"android-emulator", "android-redroid", "android-device"}
 	if len(caps.Targets) != len(wantIDs) {
 		t.Fatalf("kotlin targets = %d, want %d (%v)", len(caps.Targets), len(wantIDs), wantIDs)
 	}
@@ -164,18 +166,12 @@ func TestRemoteRuntimeCapabilitiesForFlutterExposesBothTargets(t *testing.T) {
 	if !caps.RemoteRuntimeEligible {
 		t.Fatal("flutter should be remote-runtime eligible")
 	}
-	// Post-P6: Android fan-out (emulator + wear + tv + xr + auto +
-	// redroid + device) + Apple sim fan-out (iPhone/iPad/watch/tv/
-	// vision) + ios-device = 13 targets.
+	// Browser first, then ordinary mobile/tablet targets. Specialized
+	// watch/TV/XR/car targets require code markers.
 	wantIDs := map[string]bool{
-		// Flutter runs as a web dev server on the box, so the browser lane is
-		// offered and LEADS: ~0 vCPU against an emulator boot, and the only
-		// path where the in-app yaver_feedback SDK (pub.dev) applies.
 		"browser-window":   true,
-		"android-emulator": true, "android-wear": true, "android-tv": true,
-		"android-xr": true, "android-auto": true, "android-redroid": true,
+		"android-emulator": true, "android-redroid": true,
 		"android-device": true, "ios-simulator": true, "ipados-simulator": true,
-		"watchos-simulator": true, "tvos-simulator": true, "visionos-simulator": true,
 		"ios-device": true,
 	}
 	if len(caps.Targets) != len(wantIDs) {
@@ -191,6 +187,53 @@ func TestRemoteRuntimeCapabilitiesForFlutterExposesBothTargets(t *testing.T) {
 	}
 	if len(wantIDs) != 0 {
 		t.Fatalf("flutter caps missing targets %v (got %v)", wantIDs, ids)
+	}
+}
+
+func TestRemoteRuntimeCapabilitiesOnlyOffersDeclaredSpecialClientSurfaces(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "ios", "App.xcodeproj"), 0o755); err != nil {
+		t.Fatalf("mkdir xcodeproj: %v", err)
+	}
+	pbx := strings.Join([]string{
+		"SDKROOT = watchos;",
+		"SDKROOT = appletvos;",
+		"SDKROOT = xros;",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(dir, "ios", "App.xcodeproj", "project.pbxproj"), []byte(pbx), 0o600); err != nil {
+		t.Fatalf("write pbxproj: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "android", "wear", "src", "main"), 0o755); err != nil {
+		t.Fatalf("mkdir wear manifest: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(dir, "android", "wear", "src", "main", "AndroidManifest.xml"),
+		[]byte(`<manifest><uses-feature android:name="android.hardware.type.watch"/></manifest>`),
+		0o600,
+	); err != nil {
+		t.Fatalf("write wear manifest: %v", err)
+	}
+	for _, marker := range []string{"android-tv", "android-xr", "android-auto"} {
+		if err := os.MkdirAll(filepath.Join(dir, marker), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", marker, err)
+		}
+	}
+
+	caps := remoteRuntimeCapabilitiesForProject(dir, "flutter")
+	want := map[string]bool{
+		"watchos-simulator":  true,
+		"android-wear":       true,
+		"tvos-simulator":     true,
+		"android-tv":         true,
+		"visionos-simulator": true,
+		"android-xr":         true,
+		"android-auto":       true,
+	}
+	for _, target := range caps.Targets {
+		delete(want, target.ID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("declared special surfaces missing: %v", want)
 	}
 }
 

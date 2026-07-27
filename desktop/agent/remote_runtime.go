@@ -366,9 +366,108 @@ func frameworkStreamsRNViaSimulator(framework string) bool {
 	return false
 }
 
+type runtimeProjectSurfaceSet map[WireSurface]bool
+
+func runtimeProjectSurfaces(workDir, framework string) runtimeProjectSurfaceSet {
+	out := runtimeProjectSurfaceSet{}
+	if strings.TrimSpace(workDir) == "" {
+		return out
+	}
+	stack := strings.ToLower(strings.TrimSpace(framework))
+	switch stack {
+	case "swift":
+		stack = "native-ios"
+	case "kotlin":
+		stack = "native-android"
+	}
+	for _, surface := range DetectProjectSurfaces(workDir, stack) {
+		out[surface] = true
+	}
+	return out
+}
+
+func runtimeProjectHasMobileAppleSurface(framework string, surfaces runtimeProjectSurfaceSet) bool {
+	switch strings.ToLower(strings.TrimSpace(framework)) {
+	case "expo", "react-native", "flutter", "swift":
+		return true
+	default:
+		return surfaces[SurfaceIOS]
+	}
+}
+
+func runtimeProjectHasMobileAndroidSurface(framework string, surfaces runtimeProjectSurfaceSet) bool {
+	switch strings.ToLower(strings.TrimSpace(framework)) {
+	case "expo", "react-native", "flutter", "kotlin":
+		return true
+	default:
+		return surfaces[SurfaceAndroid]
+	}
+}
+
+func projectHasAnyPathMarker(root string, markers ...string) bool {
+	if strings.TrimSpace(root) == "" {
+		return false
+	}
+	for _, marker := range markers {
+		p := filepath.Join(root, filepath.FromSlash(marker))
+		if st, err := os.Stat(p); err == nil && (st.IsDir() || st.Mode().IsRegular()) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendAppleMobileRuntimeTargets(targets []RemoteRuntimeTarget, families map[string]bool, familiesKnown bool) []RemoteRuntimeTarget {
+	return append(targets,
+		probeIOSSimulatorTarget(families, familiesKnown),
+		probeIPadSimulatorTarget(families, familiesKnown),
+		probeIOSDeviceTarget(),
+	)
+}
+
+func appendAndroidMobileRuntimeTargets(targets []RemoteRuntimeTarget, includeRedroid bool) []RemoteRuntimeTarget {
+	targets = append(targets, probeAndroidEmulatorTarget())
+	if includeRedroid {
+		targets = append(targets, probeRedroidTarget())
+	}
+	return append(targets, probeAndroidDeviceTarget())
+}
+
+func appendDeclaredSpecialRuntimeTargets(
+	targets []RemoteRuntimeTarget,
+	workDir string,
+	surfaces runtimeProjectSurfaceSet,
+	families map[string]bool,
+	familiesKnown bool,
+) []RemoteRuntimeTarget {
+	if surfaces[SurfaceWatchOS] {
+		targets = append(targets, probeWatchOSSimulatorTarget(families, familiesKnown))
+	}
+	if surfaces[SurfaceWearOS] {
+		targets = append(targets, probeAndroidWearTarget())
+	}
+	if surfaces[SurfaceTVOS] {
+		targets = append(targets, probeTVOSSimulatorTarget(families, familiesKnown))
+	}
+	if projectHasAnyPathMarker(workDir, "android-tv", "androidtv", "tv/android", "tv/android-tv") {
+		targets = append(targets, probeAndroidTVTarget())
+	}
+	if surfaces[SurfaceVisionOS] {
+		targets = append(targets, probeVisionOSSimulatorTarget(families, familiesKnown))
+	}
+	if projectHasAnyPathMarker(workDir, "android-xr", "xr/android", "vision/android") {
+		targets = append(targets, probeAndroidXRTarget())
+	}
+	if projectHasAnyPathMarker(workDir, "android-auto", "automotive", "car/android", "car/android-auto") {
+		targets = append(targets, probeAndroidAutoTarget())
+	}
+	return targets
+}
+
 func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntimeCapabilities {
 	mode := executionModeForFramework(framework)
 	rnSim := frameworkStreamsRNViaSimulator(framework)
+	projectSurfaces := runtimeProjectSurfaces(workDir, framework)
 	// Eligibility is decoupled from the PRIMARY execution mode: a native app is
 	// WebRTC-primary, while an RN app is Hermes-primary but ALSO simulator-
 	// streamable. Both are remote-runtime eligible; PrimarySurface records which
@@ -410,12 +509,6 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 	if !caps.RemoteRuntimeEligible {
 		return caps
 	}
-	// RN/Expo streams into the same simulators/emulators the native path uses;
-	// only the BUILD command differs (expo run:ios / run:android). Offer the FULL
-	// surface fan-out — phone is the common case, but Expo/RN also targets tablet,
-	// watchOS, tvOS, visionOS and the Android wear/TV/XR/auto AVDs, so any of them
-	// can be the streamed surface. The mobile sim → mobile client path is the
-	// default; the rest are there for the AR/VR/watch/car/tablet reach.
 	if rnSim {
 		rnAppleFams, rnAppleFamsKnown := appleRuntimeFamiliesForCaps()
 		caps.Targets = []RemoteRuntimeTarget{
@@ -428,24 +521,15 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 			// video of one, so feedback carries real state instead of a
 			// viewer-triggered control message.
 			//
-			// It adds an option, it removes none. Hermes (the real bundle in
-			// the Yaver container on this phone) and the simulators below stay
-			// exactly as they were; RN is the one stack with three honest
-			// choices, and only the user knows which they want.
 			probeBrowserWindowTarget(),
-			probeIOSSimulatorTarget(rnAppleFams, rnAppleFamsKnown),
-			probeIPadSimulatorTarget(rnAppleFams, rnAppleFamsKnown),
-			probeWatchOSSimulatorTarget(rnAppleFams, rnAppleFamsKnown),
-			probeTVOSSimulatorTarget(rnAppleFams, rnAppleFamsKnown),
-			probeVisionOSSimulatorTarget(rnAppleFams, rnAppleFamsKnown),
-			probeAndroidEmulatorTarget(),
-			probeAndroidWearTarget(),
-			probeAndroidTVTarget(),
-			probeAndroidXRTarget(),
-			probeAndroidAutoTarget(),
-			probeAndroidDeviceTarget(),
-			probeIOSDeviceTarget(),
 		}
+		if runtimeProjectHasMobileAppleSurface(framework, projectSurfaces) {
+			caps.Targets = appendAppleMobileRuntimeTargets(caps.Targets, rnAppleFams, rnAppleFamsKnown)
+		}
+		if runtimeProjectHasMobileAndroidSurface(framework, projectSurfaces) {
+			caps.Targets = appendAndroidMobileRuntimeTargets(caps.Targets, false)
+		}
+		caps.Targets = appendDeclaredSpecialRuntimeTargets(caps.Targets, workDir, projectSurfaces, rnAppleFams, rnAppleFamsKnown)
 		caps.RemoteBuilders = collectIOSBuilderSummaries()
 		return caps
 	}
@@ -481,64 +565,33 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 				}
 				break
 			}
-			// iPhone default; then iPad/watchOS/tvOS/visionOS sims (each
-			// gated on its runtime being installed); physical iPhone last.
-			caps.Targets = []RemoteRuntimeTarget{
-				probeIOSSimulatorTarget(appleFams, appleFamsKnown),
-				probeIPadSimulatorTarget(appleFams, appleFamsKnown),
-				probeWatchOSSimulatorTarget(appleFams, appleFamsKnown),
-				probeTVOSSimulatorTarget(appleFams, appleFamsKnown),
-				probeVisionOSSimulatorTarget(appleFams, appleFamsKnown),
-				probeIOSDeviceTarget(),
-			}
+			caps.Targets = appendAppleMobileRuntimeTargets(caps.Targets, appleFams, appleFamsKnown)
+			caps.Targets = appendDeclaredSpecialRuntimeTargets(caps.Targets, workDir, projectSurfaces, appleFams, appleFamsKnown)
 		case "kotlin":
 			// Emulator first (default where the host can run it),
 			// physical device second (the only path on a host with no
-			// emulator binary — e.g. linux/arm64). Capability-probed,
-			// never host-name-gated. P6 adds Wear/TV/XR/Auto surface
-			// variants (all adb-based, differ only in AVD).
-			caps.Targets = []RemoteRuntimeTarget{
-				probeAndroidEmulatorTarget(),
-				probeAndroidWearTarget(),
-				probeAndroidTVTarget(),
-				probeAndroidXRTarget(),
-				probeAndroidAutoTarget(),
-				probeRedroidTarget(),
-				probeAndroidDeviceTarget(),
-			}
+			// emulator binary — e.g. linux/arm64). Specialized Wear/TV/XR/Auto
+			// targets require code markers in the project; host inventory alone
+			// must not advertise a surface this app does not build.
+			caps.Targets = appendAndroidMobileRuntimeTargets(caps.Targets, true)
+			caps.Targets = appendDeclaredSpecialRuntimeTargets(caps.Targets, workDir, projectSurfaces, appleFams, appleFamsKnown)
 		case "flutter":
-			// Flutter projects compile to the same booted simulators
-			// or emulators as their native counterparts. Expose every
-			// surface so the user can pick — `flutter build apk` for
-			// the Android side, `flutter build ios` for iOS. The
-			// session's build dispatch is identical to native; only
-			// the build command differs (handled in native_build.go).
-			// android-device is the fallback when no local emulator
-			// binary exists (linux/arm64); sim/emu stay first-class
-			// wherever the host supports them.
 			caps.Targets = []RemoteRuntimeTarget{
 				// Flutter runs as a WEB dev server on the box
 				// (devserver_kind.go classes it DevServerKindWeb), so the
 				// lightest honest preview is the app itself in a browser —
 				// no emulator boot, no Redroid, and the in-app yaver_feedback
 				// SDK (pub.dev) works because the app is real rather than a
-				// video of one. Simulators stay below for platform-specific
-				// checks.
+				// video of one.
 				probeBrowserWindowTarget(),
-				probeAndroidEmulatorTarget(),
-				probeAndroidWearTarget(),
-				probeAndroidTVTarget(),
-				probeAndroidXRTarget(),
-				probeAndroidAutoTarget(),
-				probeRedroidTarget(),
-				probeAndroidDeviceTarget(),
-				probeIOSSimulatorTarget(appleFams, appleFamsKnown),
-				probeIPadSimulatorTarget(appleFams, appleFamsKnown),
-				probeWatchOSSimulatorTarget(appleFams, appleFamsKnown),
-				probeTVOSSimulatorTarget(appleFams, appleFamsKnown),
-				probeVisionOSSimulatorTarget(appleFams, appleFamsKnown),
-				probeIOSDeviceTarget(),
 			}
+			if runtimeProjectHasMobileAndroidSurface(framework, projectSurfaces) {
+				caps.Targets = appendAndroidMobileRuntimeTargets(caps.Targets, true)
+			}
+			if runtimeProjectHasMobileAppleSurface(framework, projectSurfaces) {
+				caps.Targets = appendAppleMobileRuntimeTargets(caps.Targets, appleFams, appleFamsKnown)
+			}
+			caps.Targets = appendDeclaredSpecialRuntimeTargets(caps.Targets, workDir, projectSurfaces, appleFams, appleFamsKnown)
 		case "browser":
 			// One target: a headless Chromium tab on the agent host.
 			// Same JPEG-DC transport as android/ios. Useful entry

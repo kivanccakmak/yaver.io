@@ -59,7 +59,7 @@ func TestHermesOfferedOnlyForReactNativeAndExpo(t *testing.T) {
 		},
 		{
 			name:       "flutter",
-			files:      map[string]string{"pubspec.yaml": "name: todo_flutter\n"},
+			files:      map[string]string{"pubspec.yaml": "name: todo_flutter\nflutter:\n  uses-material-design: true\n"},
 			wantFw:     "flutter",
 			wantHermes: false,
 		},
@@ -146,7 +146,7 @@ func TestNativeStacksGetARuntimeOptionWithAnExplanation(t *testing.T) {
 
 // Flutter renders in a browser: dev server leads, Hermes never appears.
 func TestFlutterLeadsWithTheDevServer(t *testing.T) {
-	caps := capsFor(t, map[string]string{"pubspec.yaml": "name: todo\n"}, true)
+	caps := capsFor(t, map[string]string{"pubspec.yaml": "name: todo\nflutter:\n  uses-material-design: true\n"}, true)
 	var primary string
 	for _, o := range caps.Options {
 		if o.Primary {
@@ -185,13 +185,17 @@ func TestPairedDeviceDrivesOpenInYaverSupport(t *testing.T) {
 	}
 }
 
-// With no device, streaming should lead rather than a disabled device action.
-func TestUnpairedRNLeadsWithStreaming(t *testing.T) {
+// Browser Reload is the primary RN/Expo preview lane, even when Hermes is
+// available. It is the same direct browser/WebView path used by the web UI.
+func TestRNLeadsWithBrowserReload(t *testing.T) {
 	caps := capsFor(t, map[string]string{"package.json": `{"dependencies":{"expo":"*"}}`}, false)
 	for _, o := range caps.Options {
-		if o.Primary && o.ID != PreviewOptionRemoteRuntime {
-			t.Fatalf("primary = %q with no paired device, want remote-runtime", o.ID)
+		if o.Primary && o.ID != PreviewOptionDevServer {
+			t.Fatalf("primary = %q, want dev-server", o.ID)
 		}
+	}
+	if caps.Options[0].ID != PreviewOptionDevServer {
+		t.Fatalf("first option = %q, want dev-server", caps.Options[0].ID)
 	}
 }
 
@@ -242,7 +246,7 @@ func TestThirdPartyRNInsideRepoKeepsHermes(t *testing.T) {
 // project. Disk wins.
 func TestDetectionOverridesAWrongFrameworkHint(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "pubspec.yaml"), []byte("name: todo\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "pubspec.yaml"), []byte("name: todo\nflutter:\n  uses-material-design: true\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	caps := DetectProjectPreviewCapabilities(dir, "react-native", true)
@@ -269,7 +273,7 @@ func TestFrameworkHintUsedOnlyWhenNothingIsDetectable(t *testing.T) {
 
 func TestOpsProjectPreviewOptionsReturnsDetectedOptions(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "pubspec.yaml"), []byte("name: todo\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "pubspec.yaml"), []byte("name: todo\nflutter:\n  uses-material-design: true\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	body, _ := json.Marshal(map[string]interface{}{"workDir": dir, "hasPairedDevice": true})

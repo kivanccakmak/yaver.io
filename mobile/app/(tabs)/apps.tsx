@@ -232,6 +232,10 @@ function previewLogColor(
   colors: { error: string; warn: string; success: string; info: string; textMuted: string; accent: string },
 ): string {
   const l = line.toLowerCase();
+  if (/^\s*(queued|starting|building|running|listening|ready)\s*$/i.test(line) ||
+      /^\s*\$\s+(flutter|npm|npx|yarn|pnpm|bun|expo|vite|next)\b/i.test(line)) {
+    return colors.info || colors.accent;
+  }
   if (/\b(error|failed|failure|exception|fatal|crash|cannot|unable|denied|rejected|timed out|timeout)\b/.test(l) || /\bhttp\s*[45]\d\d\b/.test(l)) {
     return colors.error;
   }
@@ -241,14 +245,37 @@ function previewLogColor(
   if (/\b(ready|success|succeeded|compiled|done|listening|serving on|running|connected)\b/.test(l)) {
     return colors.success;
   }
-  if (/\b(starting|building|waiting|scanning|probe|progress|installing)\b/.test(l)) {
+  if (/\b(queued|starting|building|waiting|scanning|probe|progress|installing)\b/.test(l)) {
     return colors.info || colors.accent;
   }
   return colors.textMuted;
 }
 
+function previewLogsLookHealthy(lines: readonly string[]): boolean {
+  const tail = lines.slice(-80).join("\n").toLowerCase();
+  return /\b(queued|starting|ready|ready\s+100%|bundled|compiled|listening|serving on|running)\b/.test(tail) ||
+    /^\s*\$\s+(flutter|npm|npx|yarn|pnpm|bun|expo|vite|next)\b/im.test(tail) ||
+    /\b(?:ios|android|web)\b[^\n]*\b\d{1,3}(?:\.\d+)?%\s*\(\d+\/\d+\)/.test(tail);
+}
+
+function previewLogsNeedProjectFix(lines: readonly string[], statusError?: string | null): boolean {
+  const err = String(statusError || "").toLowerCase();
+  const tail = lines.slice(-80).join("\n").toLowerCase();
+  const text = `${err}\n${tail}`;
+  if (!text.trim()) return false;
+  if (/\b(render probe timed out|server is listening but the webview did not render|no render probe message received)\b/.test(text)) {
+    return false;
+  }
+  if (/\b(disconnected|not connected|connection dropped|relay disconnected|status polling is paused)\b/.test(text)) {
+    return false;
+  }
+  const hasRealFailure = /\b(failed to compile|compilation failed|module build failed|bundling failed|unable to resolve module|syntaxerror|error ts\d+|no file or variants found for asset|cannot find module|undefined name|isn't defined|runtime error|uncaught|exception|crash)\b/.test(text);
+  if (!hasRealFailure) return false;
+  return true;
+}
+
 function appendPreviewLogLine(prev: string[], line: string, limit = MAX_WEB_PREVIEW_LOGS): string[] {
-  const trimmed = line.trim();
+  const trimmed = line.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
   if (!trimmed) return prev;
   return (prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed]).slice(-limit);
 }
@@ -726,6 +753,10 @@ export default function AppsScreen() {
     const id = setTimeout(() => webPreviewLogScrollRef.current?.scrollToEnd({ animated: true }), 30);
     return () => clearTimeout(id);
   }, [showWebView, webPreviewLogs.length]);
+  useEffect(() => {
+    if (!showWebView) return;
+    setWebRuntimeLogOpen(!webPreviewContentLoaded);
+  }, [showWebView, webPreviewContentLoaded]);
   // Elapsed + last-output heartbeat.
   //
   // A spinner that never changes reads as HUNG, and a first web compile can
@@ -1150,9 +1181,9 @@ export default function AppsScreen() {
       // testing by vibing text to the agent, so those never need a button here.
       //
       // Three reload lanes, framework-gated:
+      //   Browser Reload — first-class browser/WebView lane; no Hermes.
       //   Hermes Reload  — RN/Expo only (loads the real bundle into the Yaver
       //                    container on THIS phone).
-      //   Browser Reload — RN web target, Flutter web, and plain web stacks.
       //   WebRTC Reload  — universal: RN, Flutter, Swift/iOS, Kotlin/Android
       //                    (streams the app from the dev box).
       const fw = hermesFramework || secondClassFramework ||
@@ -1160,11 +1191,15 @@ export default function AppsScreen() {
       const isRN = isHermesMobileFramework(hermesFramework);
 
       // Exactly three lanes, no Flush:
+      //   Browser — first for RN/Expo too. It serves the web target in a
+      //             WebView and must never compile/push a Hermes bundle.
       //   Hermes  — RN/Expo ONLY (loads the JS bundle into the container).
-      //   Browser — ALL stacks (serves the web target in a WebView). This is the
-      //             primary, universal vibing lane.
       //   WebRTC  — ALL stacks (streams the app from the box).
       const reloadLanes: any[] = [];
+      reloadLanes.push({
+        label: "Browser Reload", target: ".", type: "dev-server", icon: "\u{1F310}",
+        framework: fw, platform: Platform.OS, supported: true,
+      });
       if (isRN) {
         reloadLanes.push({
           label: "Hermes Reload", target: ".", type: "open-native", icon: "\u{1F4F1}",
@@ -1172,10 +1207,6 @@ export default function AppsScreen() {
           supported: compatibility?.compatible !== false, reason: compatibility?.errors?.[0],
         });
       }
-      reloadLanes.push({
-        label: "Browser Reload", target: ".", type: "dev-server", icon: "\u{1F310}",
-        framework: fw, platform: Platform.OS, supported: true,
-      });
       reloadLanes.push({
         label: "WebRTC Reload", target: ".", type: "remote-runtime", icon: "\u{1F4FA}",
         framework: fw, platform: Platform.OS, supported: true,
@@ -2041,12 +2072,15 @@ export default function AppsScreen() {
    *         cache) on the browser lane; Hermes rebuild + push on the
    *         native lane. */
   const handleReload = useCallback(async (kind: "fast" | "full" = "fast") => {
-    const nativeHermes = isHermesMobileFramework(devStatus?.framework);
+    const nativeHermes = isHermesMobileFramework(devStatus?.framework) && !isWebServedStatus(devStatus || {});
     if (!nativeHermes) {
       setWebViewLoading(true);
     }
     const mode = nativeHermes ? (kind === "full" ? "bundle" : "fast") : kind;
-    const result = await quicClient.reloadDevServerDetailed({ mode });
+    const result = await quicClient.reloadDevServerDetailed({
+      mode,
+      allowBundleFallback: nativeHermes,
+    });
     if (!devReloadReachedTarget(result)) {
       setWebViewLoading(false);
       Alert.alert("Reload failed", describeDevReloadResult(result));
@@ -2077,6 +2111,24 @@ export default function AppsScreen() {
       },
     ]);
   }, []);
+
+  const openVibingFromPreview = useCallback(async () => {
+    const project = (
+      projects.find((item) => item.path === devStatus?.workDir)?.name ||
+      devStatus?.workDir?.split("/").pop() ||
+      devStatus?.framework ||
+      "Preview"
+    ).split(" / ")[0];
+    const path = devStatus?.workDir || "";
+    setWebRuntimeLogOpen(false);
+    setPreviewFullScreen(false);
+    try {
+      const state = await quicClient.getVibingState(project);
+      setVibingState(state || { project, path, suggestions: [], quickActions: [], history: [] });
+    } catch {
+      setVibingState({ project, path, suggestions: [], quickActions: [], history: [] });
+    }
+  }, [devStatus?.framework, devStatus?.workDir, projects]);
 
   // WHICH url the preview loads — previewBundlePath (shared with
   // DevPreview.tsx) applies the agent-is-authority rule, the single legacy
@@ -3119,9 +3171,21 @@ export default function AppsScreen() {
                  ~96pt, give each control a real 44pt touch target, and let the
                  title keep the space it needs. Accessibility labels carry the
                  words for screen readers. */
-              <View style={s.webViewHeaderActions}>
+	              <View style={s.webViewHeaderActions}>
                 <Pressable
-                  onPress={() => setPreviewFullScreen(true)}
+                  onPress={() => void openVibingFromPreview()}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Vibe with this project"
+                  style={s.webViewHeaderBtn}
+                >
+                  <Ionicons name="mic-outline" size={20} color={c.accent} />
+                </Pressable>
+		                <Pressable
+		                  onPress={() => {
+	                    setWebRuntimeLogOpen(false);
+	                    setPreviewFullScreen(true);
+	                  }}
                   hitSlop={10}
                   accessibilityRole="button"
                   accessibilityLabel="Full screen"
@@ -3178,7 +3242,16 @@ export default function AppsScreen() {
                 <Ionicons name="chevron-back" size={22} color="#fff" />
                 <Text style={s.previewEscapeText}>Back</Text>
               </Pressable>
-              <View style={s.previewEscapeActions}>
+	              <View style={s.previewEscapeActions}>
+                <Pressable
+                  onPress={() => void openVibingFromPreview()}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Vibe with this project"
+                  style={s.previewEscapeIconBtn}
+                >
+                  <Ionicons name="mic-outline" size={20} color={c.accent} />
+                </Pressable>
                 <Pressable
                   onPress={() => setPreviewFullScreen((v) => !v)}
                   hitSlop={10}
@@ -3371,7 +3444,7 @@ export default function AppsScreen() {
               allowsInlineMediaPlayback
             />
             )}
-            {bundleUrl && webPreviewContentLoaded && webPreviewLogs.length > 0 ? (
+            {showWebView && !previewFullScreen && webPreviewLogs.length > 0 ? (
               <>
                 <Pressable
                   onPress={() => setWebRuntimeLogOpen((v) => !v)}
@@ -3426,24 +3499,31 @@ export default function AppsScreen() {
                         <Text key={i} style={[s.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
                       ))}
                     </ScrollView>
+                    {(() => {
+                      const canOfferProjectFix = webRuntimeIssueCount > 0 && previewLogsNeedProjectFix(webPreviewLogs, devStatus?.error);
+                      return (
                     <View style={s.previewRuntimeLogActions}>
                       <Pressable onPress={() => { setWebViewLoading(true); setWebRuntimeLogOpen(false); setWebViewKey((k) => k + 1); }} style={[s.previewBtn, s.previewRuntimeActionBtn, { backgroundColor: "#1a2e1a" }]}>
                         <Text style={[s.previewBtnText, { color: "#22c55e" }]}>Reload</Text>
                       </Pressable>
-                      <Pressable
-                        onPress={() => {
-                          const proj = (runningProject || devStatus?.framework || "the app").split(" / ")[0];
-                          const logs = webPreviewLogs.slice(-60).join("\n");
-                          void quicClient.sendTask(
-                            `Fix ${proj} browser preview runtime`,
-                            `The browser preview for ${proj} (workDir: ${devStatus?.workDir || "?"}) rendered, but the app then logged runtime errors or got stuck. Diagnose the root cause from the runtime output below and fix it in the project, preserving the browser lane.\n\n--- browser/runtime output ---\n${logs}`,
-                          ).then(() => { setShowWebView(false); router.navigate("/(tabs)/tasks" as any); }).catch(() => {});
-                        }}
-                        style={[s.previewBtn, s.previewRuntimeActionBtn, { backgroundColor: "#2e1f3a" }]}
-                      >
-                        <Text style={[s.previewBtnText, { color: "#c084fc" }]}>Fix in Yaver</Text>
-                      </Pressable>
+                      {canOfferProjectFix ? (
+                        <Pressable
+                          onPress={() => {
+                            const proj = (runningProject || devStatus?.framework || "the app").split(" / ")[0];
+                            const logs = webPreviewLogs.slice(-60).join("\n");
+                            void quicClient.sendTask(
+                              `Fix ${proj} browser preview runtime`,
+                              `The browser preview for ${proj} (workDir: ${devStatus?.workDir || "?"}) rendered, but the app then logged runtime errors or got stuck. Diagnose the root cause from the runtime output below and fix it in the project, preserving the browser lane.\n\n--- browser/runtime output ---\n${logs}`,
+                            ).then(() => { setShowWebView(false); router.navigate("/(tabs)/tasks" as any); }).catch(() => {});
+                          }}
+                          style={[s.previewBtn, s.previewRuntimeActionBtn, { backgroundColor: "#2e1f3a" }]}
+                        >
+                          <Text style={[s.previewBtnText, { color: "#c084fc" }]}>Fix in Yaver</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
+                      );
+                    })()}
                   </View>
                 ) : null}
               </>
@@ -3459,6 +3539,14 @@ export default function AppsScreen() {
                        compile: <reason>", never a raw log dump with the
                        truth buried in purple. Full output stays below. */
                     const compileCard = detectCompileFailure(devStatus?.error, webPreviewLogs);
+                    const healthyLogs = previewLogsLookHealthy(webPreviewLogs);
+                    const connectionDropped = !effectivelyConnected;
+                    const canOfferProjectFix = !activeGap && (compileCard || previewLogsNeedProjectFix(webPreviewLogs, devStatus?.error));
+                    const fallbackTitle = connectionDropped
+                      ? "Connection dropped while preview was ready"
+                      : healthyLogs
+                        ? "Preview is ready, waiting for a rendered frame"
+                        : "Dev server didn't come up";
                     return (
                   <>
                     {/* A NAMED capability gap outranks every other diagnosis
@@ -3469,17 +3557,21 @@ export default function AppsScreen() {
                     {activeGap ? gapCard : null}
                     <Ionicons name="alert-circle-outline" size={40} color={c.error} />
                     <Text style={[s.previewFailTitle, { color: c.error }]}>
-                      {compileCard ? compileCard.title : "Dev server didn't come up"}
+                      {compileCard ? compileCard.title : fallbackTitle}
                     </Text>
                     {compileCard ? (
                       <Text style={[s.previewSubtle, { color: c.textPrimary, textAlign: "left" }]} selectable>
                         {compileCard.detail}
                       </Text>
+                    ) : connectionDropped ? (
+                      <Text style={s.previewStepCmd}>{`Yaver ${describeConnectionStatus(connectionStatus)}. Reconnect, then reload the preview.`}</Text>
+                    ) : healthyLogs ? (
+                      <Text style={s.previewStepCmd}>The dev server reported ready. The WebView has not confirmed the first rendered frame yet.</Text>
                     ) : (
                       <Text style={s.previewStepCmd}>{devServerStepsFor(devStatus?.framework)}</Text>
                     )}
                     <Text style={[s.previewSubtle, { color: c.textMuted }]}>
-                      {compileCard ? "Full output:" : `The ${devStatus?.framework || "web"} server never served content. Recent output:`}
+                      {compileCard ? "Full output:" : healthyLogs ? "Recent healthy output:" : `The ${devStatus?.framework || "web"} server never served content. Recent output:`}
                     </Text>
                     <ScrollView
                       ref={webPreviewLogScrollRef}
@@ -3495,19 +3587,21 @@ export default function AppsScreen() {
                       <Pressable onPress={() => { resetWebPreview(); setWebViewLoading(true); setWebViewKey((k) => k + 1); }} style={[s.previewBtn, { backgroundColor: "#1a2e1a" }]}>
                         <Text style={[s.previewBtnText, { color: "#22c55e" }]}>Retry</Text>
                       </Pressable>
-                      <Pressable
-                        onPress={() => {
-                          const proj = (runningProject || devStatus?.framework || "the app").split(" / ")[0];
-                          const logs = webPreviewLogs.slice(-40).join("\n");
-                          void quicClient.sendTask(
-                            `Fix ${proj} preview (${devStatus?.framework || "app"})`,
-                            `The ${devStatus?.framework || "app"} dev server / browser preview for ${proj} (workDir: ${devStatus?.workDir || "?"}) failed to build or render. Diagnose the ROOT cause from the output below and fix it so the app builds and serves in the browser lane. Common causes: a missing asset declared in config (e.g. a Flutter pubspec asset that isn't on disk), a missing dependency, or a bad import.\n\n--- dev server output ---\n${logs}`,
-                          ).then(() => { setShowWebView(false); router.navigate("/(tabs)/tasks" as any); }).catch(() => {});
-                        }}
-                        style={[s.previewBtn, { backgroundColor: "#2e1f3a" }]}
-                      >
-                        <Text style={[s.previewBtnText, { color: "#c084fc" }]}>Fix in Yaver</Text>
-                      </Pressable>
+                      {canOfferProjectFix ? (
+                        <Pressable
+                          onPress={() => {
+                            const proj = (runningProject || devStatus?.framework || "the app").split(" / ")[0];
+                            const logs = webPreviewLogs.slice(-40).join("\n");
+                            void quicClient.sendTask(
+                              `Fix ${proj} preview (${devStatus?.framework || "app"})`,
+                              `The ${devStatus?.framework || "app"} dev server / browser preview for ${proj} (workDir: ${devStatus?.workDir || "?"}) failed to build or render. Diagnose the ROOT cause from the output below and fix it so the app builds and serves in the browser lane. Common causes: a missing asset declared in config (e.g. a Flutter pubspec asset that isn't on disk), a missing dependency, or a bad import.\n\n--- dev server output ---\n${logs}`,
+                            ).then(() => { setShowWebView(false); router.navigate("/(tabs)/tasks" as any); }).catch(() => {});
+                          }}
+                          style={[s.previewBtn, { backgroundColor: "#2e1f3a" }]}
+                        >
+                          <Text style={[s.previewBtnText, { color: "#c084fc" }]}>Fix in Yaver</Text>
+                        </Pressable>
+                      ) : null}
                       <Pressable onPress={() => void handleReload("full")} style={[s.previewBtn, { backgroundColor: "#1a1a2e" }]}>
                         <Text style={[s.previewBtnText, { color: "#818cf8" }]}>Restart</Text>
                       </Pressable>

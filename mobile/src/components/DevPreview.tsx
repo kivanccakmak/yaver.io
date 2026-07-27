@@ -89,6 +89,10 @@ function previewLogColor(
   colors: { error: string; warn: string; success: string; info: string; textMuted: string; accent: string },
 ): string {
   const l = line.toLowerCase();
+  if (/^\s*(queued|starting|building|running|listening|ready)\s*$/i.test(line) ||
+      /^\s*\$\s+(flutter|npm|npx|yarn|pnpm|bun|expo|vite|next)\b/i.test(line)) {
+    return colors.info || colors.accent;
+  }
   if (/\b(error|failed|failure|exception|fatal|crash|cannot|unable|denied|rejected|timed out|timeout)\b/.test(l) || /\bhttp\s*[45]\d\d\b/.test(l)) {
     return colors.error;
   }
@@ -98,10 +102,33 @@ function previewLogColor(
   if (/\b(ready|success|succeeded|compiled|done|listening|serving on|running|connected)\b/.test(l)) {
     return colors.success;
   }
-  if (/\b(starting|building|waiting|scanning|probe|progress|installing)\b/.test(l)) {
+  if (/\b(queued|starting|building|waiting|scanning|probe|progress|installing)\b/.test(l)) {
     return colors.info || colors.accent;
   }
   return colors.textMuted;
+}
+
+function previewLogsLookHealthy(lines: readonly string[]): boolean {
+  const tail = lines.slice(-80).join("\n").toLowerCase();
+  return /\b(queued|starting|ready|ready\s+100%|bundled|compiled|listening|serving on|running)\b/.test(tail) ||
+    /^\s*\$\s+(flutter|npm|npx|yarn|pnpm|bun|expo|vite|next)\b/im.test(tail) ||
+    /\b(?:ios|android|web)\b[^\n]*\b\d{1,3}(?:\.\d+)?%\s*\(\d+\/\d+\)/.test(tail);
+}
+
+function previewLogsNeedProjectFix(lines: readonly string[], statusError?: string | null): boolean {
+  const err = String(statusError || "").toLowerCase();
+  const tail = lines.slice(-80).join("\n").toLowerCase();
+  const text = `${err}\n${tail}`;
+  if (!text.trim()) return false;
+  if (/\b(render probe timed out|server is listening but the webview did not render|no render probe message received)\b/.test(text)) {
+    return false;
+  }
+  if (/\b(disconnected|not connected|connection dropped|relay disconnected|status polling is paused)\b/.test(text)) {
+    return false;
+  }
+  const hasRealFailure = /\b(failed to compile|compilation failed|module build failed|bundling failed|unable to resolve module|syntaxerror|error ts\d+|no file or variants found for asset|cannot find module|undefined name|isn't defined|runtime error|uncaught|exception|crash)\b/.test(text);
+  if (!hasRealFailure) return false;
+  return true;
 }
 
 function projectLabelFromStatus(status: DevServerStatus | null): string {
@@ -158,7 +185,7 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
   const [gapFixNow, setGapFixNow] = useState(Date.now());
   const gapFixCancelRef = useRef<(() => void) | null>(null);
   const pushLog = useCallback((line: string) => {
-    const t = (line || "").trim();
+    const t = (line || "").replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
     if (!t) return;
     setLogLines((prev) => (prev[prev.length - 1] === t ? prev : [...prev, t].slice(-40)));
   }, []);
@@ -650,7 +677,10 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
       const mode = mustUseNativePreview
         ? (kind === "full" ? "bundle" : "fast")
         : kind;
-      const result = await quicClient.reloadDevServerDetailed({ mode });
+      const result = await quicClient.reloadDevServerDetailed({
+        mode,
+        allowBundleFallback: mustUseNativePreview,
+      });
       if (!devReloadReachedTarget(result)) {
         setLoading(false);
         Alert.alert("Reload Failed", describeDevReloadResult(result));
@@ -1068,15 +1098,20 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                          agent's persisted status.error (offending lines +
                          remedy) or the tail's compile lines, never a raw
                          dump with the truth buried. Full output follows. */
-                      const compileCard = detectCompileFailure(status?.error, logLines);
+	                      const compileCard = detectCompileFailure(status?.error, logLines);
                       // A named capability gap outranks the compile card and the
                       // "Fix in Yaver" escalation below: it has a deterministic,
                       // streamed, one-tap fix. Escalating a known capability gap
                       // to a coding agent is the most expensive possible answer
                       // to the cheapest possible question.
-                      const gap = previewGap || capabilityGapFromStatus(status);
-                      const fixLabel = gapFixLabel(gap);
-                      return (
+	                      const gap = previewGap || capabilityGapFromStatus(status);
+	                      const fixLabel = gapFixLabel(gap);
+	                      const healthyLogs = previewLogsLookHealthy(logLines);
+	                      const canOfferProjectFix = !gap && (compileCard || previewLogsNeedProjectFix(logLines, status?.error));
+	                      const fallbackTitle = healthyLogs
+	                        ? "Preview is ready, waiting for a rendered frame"
+	                        : "Dev server didn't come up";
+	                      return (
                     <>
                       {gap ? (
                         <View style={styles.gapCard}>
@@ -1162,20 +1197,22 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                           ) : null}
                         </View>
                       ) : null}
-                      <Ionicons name="alert-circle-outline" size={40} color="#ef4444" />
-                      <Text style={styles.previewFailTitle}>
-                        {compileCard ? compileCard.title : "Dev server didn't come up"}
-                      </Text>
-                      {compileCard ? (
-                        <Text style={[styles.previewSubtle, { textAlign: "left" }]} selectable>
-                          {compileCard.detail}
-                        </Text>
-                      ) : (
-                        <Text style={styles.previewStepCmd}>{devServerSteps(frameworkLabel)}</Text>
-                      )}
-                      <Text style={styles.previewSubtle}>
-                        {compileCard ? "Full output:" : `The ${frameworkLabel} web server never started serving. Recent output:`}
-                      </Text>
+	                      <Ionicons name="alert-circle-outline" size={40} color="#ef4444" />
+	                      <Text style={styles.previewFailTitle}>
+	                        {compileCard ? compileCard.title : fallbackTitle}
+	                      </Text>
+	                      {compileCard ? (
+	                        <Text style={[styles.previewSubtle, { textAlign: "left" }]} selectable>
+	                          {compileCard.detail}
+	                        </Text>
+	                      ) : healthyLogs ? (
+	                        <Text style={styles.previewStepCmd}>The dev server reported ready. The WebView has not confirmed the first rendered frame yet.</Text>
+	                      ) : (
+	                        <Text style={styles.previewStepCmd}>{devServerSteps(frameworkLabel)}</Text>
+	                      )}
+	                      <Text style={styles.previewSubtle}>
+	                        {compileCard ? "Full output:" : healthyLogs ? "Recent healthy output:" : `The ${frameworkLabel} web server never started serving. Recent output:`}
+	                      </Text>
                       <ScrollView
                         ref={previewLogScrollRef}
                         style={styles.previewLogBox}
@@ -1193,19 +1230,21 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                         >
                           <Text style={[styles.previewBtnText, { color: "#22c55e" }]}>Retry</Text>
                         </Pressable>
-                        <Pressable
-                          onPress={() => {
-                            const proj = projectLabel || frameworkLabel || "the app";
-                            const logs = logLines.slice(-40).join("\n");
-                            void quicClient.sendTask(
-                              `Fix ${proj} preview (${frameworkLabel})`,
-                              `The ${frameworkLabel} dev server / browser preview for ${proj} (workDir: ${status?.workDir || "?"}) failed to build or render. Diagnose the ROOT cause from the output below and fix it so the app builds and serves in the browser lane. Common causes: a missing asset declared in config (e.g. a Flutter pubspec asset not on disk), a missing dependency, or a bad import.\n\n--- dev server output ---\n${logs}`,
-                            ).then(() => setShowPreview(false)).catch(() => {});
-                          }}
-                          style={[styles.previewBtn, { backgroundColor: "#2e1f3a" }]}
-                        >
-                          <Text style={[styles.previewBtnText, { color: "#c084fc" }]}>Fix in Yaver</Text>
-                        </Pressable>
+	                        {canOfferProjectFix ? (
+	                          <Pressable
+	                            onPress={() => {
+	                              const proj = projectLabel || frameworkLabel || "the app";
+	                              const logs = logLines.slice(-40).join("\n");
+	                              void quicClient.sendTask(
+	                                `Fix ${proj} preview (${frameworkLabel})`,
+	                                `The ${frameworkLabel} dev server / browser preview for ${proj} (workDir: ${status?.workDir || "?"}) failed to build or render. Diagnose the ROOT cause from the output below and fix it so the app builds and serves in the browser lane. Common causes: a missing asset declared in config (e.g. a Flutter pubspec asset not on disk), a missing dependency, or a bad import.\n\n--- dev server output ---\n${logs}`,
+	                              ).then(() => setShowPreview(false)).catch(() => {});
+	                            }}
+	                            style={[styles.previewBtn, { backgroundColor: "#2e1f3a" }]}
+	                          >
+	                            <Text style={[styles.previewBtnText, { color: "#c084fc" }]}>Fix in Yaver</Text>
+	                          </Pressable>
+	                        ) : null}
                         <Pressable onPress={() => void handleReload("full")} style={[styles.previewBtn, { backgroundColor: "#1a1a2e" }]}>
                           <Text style={[styles.previewBtnText, { color: "#818cf8" }]}>Restart</Text>
                         </Pressable>

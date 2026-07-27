@@ -13,12 +13,32 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/yaver-io/agent/testkit"
 )
+
+func appleSpecialSurfaceProject(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	proj := filepath.Join(dir, "App.xcodeproj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatalf("mkdir xcodeproj: %v", err)
+	}
+	body := strings.Join([]string{
+		"SDKROOT = watchos;",
+		"SDKROOT = appletvos;",
+		"SDKROOT = xros;",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(proj, "project.pbxproj"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write pbxproj: %v", err)
+	}
+	return dir
+}
 
 func TestParseInstalledRuntimeFamilies_SimctlFixture(t *testing.T) {
 	// Captured from `xcrun simctl list runtimes` on a mac that has iOS 26.4
@@ -95,7 +115,7 @@ func TestCapabilitiesEnumeratesAllAppleSurfacesAndBadgesSurface(t *testing.T) {
 	})
 	defer cleanupDevices()
 
-	caps := remoteRuntimeCapabilitiesForProject("/tmp/swift-app", "swift")
+	caps := remoteRuntimeCapabilitiesForProject(appleSpecialSurfaceProject(t), "swift")
 	if !caps.RemoteRuntimeEligible {
 		t.Fatal("swift caps should be remote-runtime eligible")
 	}
@@ -159,8 +179,9 @@ func TestHandleRemoteRuntimeCapabilitiesReturnsAppleFanOut(t *testing.T) {
 	defer cleanupDevices()
 
 	srv := &HTTPServer{}
+	workDir := appleSpecialSurfaceProject(t)
 	req := httptest.NewRequest(http.MethodGet,
-		"/remote-runtime/capabilities?workDir=/tmp/swift-app&framework=swift&refresh=1", nil)
+		"/remote-runtime/capabilities?workDir="+workDir+"&framework=swift&refresh=1", nil)
 	rec := httptest.NewRecorder()
 	srv.handleRemoteRuntimeCapabilities(rec, req)
 	if rec.Code != http.StatusOK {

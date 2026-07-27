@@ -8584,8 +8584,12 @@ export class QuicClient {
    * through to /dev/reload-app bundle mode so the user never sees a
    * "connection refused to 127.0.0.1:8081" Go error.
    */
-  async reloadDevServerDetailed(opts?: { mode?: "dev" | "bundle" | "fast" | "full" }): Promise<DevReloadResult> {
+  async reloadDevServerDetailed(opts?: {
+    mode?: "dev" | "bundle" | "fast" | "full";
+    allowBundleFallback?: boolean;
+  }): Promise<DevReloadResult> {
     const mode = opts?.mode ?? "bundle";
+    const allowBundleFallback = opts?.allowBundleFallback !== false;
     try {
       if (mode === "dev" || mode === "fast" || mode === "full") {
         // Fast/full contract (agent 1.99.374+): fast = the framework's
@@ -8602,6 +8606,10 @@ export class QuicClient {
         });
         const data = await primary.json().catch(() => ({}));
         if (primary.ok) return { ok: data.ok !== false, mode, ...data };
+        if (!allowBundleFallback) {
+          const error = data.error || data.message || `HTTP ${primary.status}`;
+          return { ok: false, mode, ...data, error };
+        }
         // Metro dead — fall through to bundle rebuild below.
       }
       const res = await fetch(`${this.baseUrl}/dev/reload-app`, {
