@@ -1118,9 +1118,14 @@ export default function RuntimeLabView({
         ...prev.filter((r) => !(r.deviceId === row.deviceId && (r.projectName || "") === (row.projectName || ""))),
         { deviceId: row.deviceId, ...(row.projectName ? { projectName: row.projectName } : {}), targetId: row.targetId, ...(row.targetKind ? { targetKind: row.targetKind } : {}) },
       ]);
+      // Visible confirmation, not just the log pane — an ack the user cannot
+      // see is the "Save for machine" silence all over again (2026-07-27).
+      setRuntimeProjectNote(`★ Default target saved: ${target.id}${selectedProject?.name ? ` for ${selectedProject.name}` : " (machine-wide)"}. Vibing will auto-render when the default project is set too.`);
       appendLog(`default target saved: ${target.id}${selectedProject?.name ? ` for ${selectedProject.name}` : ""}`);
     } catch (err) {
-      appendLog(`default target save failed: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      setRuntimeProjectNote(`Could not save default target: ${msg}`);
+      appendLog(`default target save failed: ${msg}`);
     }
   }, [appendLog, connectedDevice?.id, postRuntimeSettings, selectedProject?.name]);
 
@@ -2380,6 +2385,7 @@ export default function RuntimeLabView({
                     </div>
                     {target.enabled ? (
                       <button
+                        type="button"
                         onClick={(event) => {
                           event.stopPropagation();
                           void saveRuntimeTargetDefault(target);
