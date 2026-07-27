@@ -531,3 +531,154 @@ already carries it — never between the user and the thing they asked for.
 | Root `IS_SANDBOX=1` on `/ws/terminal` | `desktop/agent/console_terminal.go` | 🔧 |
 | Mobile shell has no equivalent gate | `mobile/app/shell.tsx` | ❌ untouched — no gate to fix, but no fast-path narration either |
 | `/agent/runners/test` still spawns a paid generation | `runner_test_http.go:194` | 🟡 correct for an explicit "Test" button; must never be on a launch path again |
+
+---
+
+# 9. Connectivity + Vibing — the in-flight session (2026-07-27, second pass)
+
+> Separate pass, separate heading. §1–§8 above are cited by other threads and
+> are **not** rewritten here. Scope: what a user actually hits **while a render
+> or a coding turn is in flight** — the transport under it, the session behind
+> it, and the streams that carry both. Every `file:line` re-grepped at this
+> commit.
+
+## 9.1 Headline: the streams had no failure state at all
+
+The 2026-07 pass mapped how failures are *worded*. This pass asked a narrower
+question — *what happens when the pipe carrying the words breaks mid-sentence?*
+— and found that on both surfaces the answer was **nothing, by explicit design**:
+
+| Carrier | The silence, as written | Effect |
+|---|---|---|
+| `/tasks/{id}/output` (mobile) | `xhr.onerror = () => { /* silent (matches the previous behavior) */ }` | transcript freezes on its last frame |
+| `/tasks/{id}/output` (web) | `catch { /* Silent best-effort stream; callers usually poll task status too */ }` | same, plus the backstop is a lie |
+| `/dev/events` (mobile) | `subscribeSse({… onClose …})` — **`onError` never wired**, though `sseClient` has always offered it | Metro/Flutter log tail freezes mid-compile |
+
+Three separate long-lived streams, three independent decisions to treat a
+severed connection as a non-event. The user-visible result is identical in all
+three and is the worst shape in the project's own rulebook: **a spinner over a
+fact the product already had.**
+
+Two aggravating details make this worse than a missing `catch`:
+
+1. **The web comment's backstop does not exist.** "Callers usually poll task
+   status too" — the poll (`VibeCodingView.tsx:673`, every 4 s) runs over the
+   **same transport** that just died. It fails at the same instant, for the same
+   reason. A backstop sharing the failure domain of the thing it backs is not a
+   backstop.
+2. **The reattach was already supported server-side and nobody could afford it.**
+   `streamOutput` (`httpserver.go:4861`) has always replayed on subscribe — but
+   it replayed the **entire** transcript, so a client that reconnected either
+   duplicated its scrollback or had to discard it. The route existed and cost
+   the user their output. *That* is why no surface took it: not an oversight, a
+   priced-out remedy.
+
+This is the "money table" pattern from `FAILURE_PLUMBING_ARCHITECTURE.md` §6h in
+its purest form — the agent knew, and knowing stopped at the process boundary —
+with a twist worth naming: **a route that exists but is too expensive to take is
+indistinguishable from a route that does not exist.**
+
+## 9.2 Gap table — connectivity + vibing
+
+Legend as §1. **detect**: `op` probes the real operation · `inv` inventory proxy.
+Rank: **P0** renders as a spinner/lie or has no route to a fix that exists.
+
+### 9.2a Streams under an in-flight session
+
+| # | Failure | Detection | Signal | Mobile | Web | Route | Rank |
+|---|---|---|---|---|---|---|---|
+| S1 | **Task-output stream cut mid-turn** (relay bounce, tunnel break, box drop, phone backgrounded) | none — end swallowed | none | `spin` — frozen transcript | `spin` — same | 🔧 **fixed**: `?since=` resume + `taskStreamRecovery` ladder + narrated reattach + Reattach button | **P0** 🔧 |
+| S2 | **Stream closes cleanly with no `done` frame** | — | — | read as benign EOF | same | 🔧 an end with neither `done` nor a local cancel is now an INTERRUPTION regardless of whether an error object exists | **P0** 🔧 |
+| S3 | **Re-subscribe replays the whole transcript** | — | — | would duplicate scrollback | same | 🔧 `?since=<bytes>` + `{type:"resume",offset,full}` frame (`httpserver.go:4919-4941`) | **P0** 🔧 |
+| S4 | **`/dev/events` drop mid-compile** | `onError` **not wired** (`quic.ts:2284`) | none | `spin` — frozen log tail | (own impl) | 🔧 bounded reattach + `onStreamHealth` line in the activity card | **P0** 🔧 |
+| S5 | Web `listTasks` failure rendered as "no tasks" | `.catch(() => [])` | none | ✅ mobile `fetchTasks` `catch {}` keeps the list | ❌ **wiped `taskList` → nulled `activeTask` → cleared transcript → tore down the stream**, silently, every 4 s | 🔧 `null` ≠ `[]`; last known list held | **P0** 🔧 |
+| S6 | `/dev/events` slow-subscriber frame drop | `devserver.go` `default:` drop | **no counter, no gap marker** | — | text only | ❌ still open (V6 in the arch doc) | **P1** |
+| S7 | Task-stream reattach on **web `PreviewPane`/`RuntimeLabView`/`WebReloadView`/`page.tsx`** | — | — | n/a | ❌ four more `streamTaskOutput` call sites still pass no `onEnd` | the transport now reports; these callers do not listen | **P1** |
+
+### 9.2b Vibing session vs transport
+
+| # | Failure | Mobile (Tasks chat) | Web (VibeCodingView) | Rank |
+|---|---|---|---|---|
+| V1 | Box drops mid-turn | 🔧 named + reattach ladder + "the task is still running on the box" | 🔧 same | 🔧 |
+| V2 | Relay bounces mid-turn | 🔧 cause preserved into the reattach line | 🔧 same | 🔧 |
+| V3 | Runner logs out mid-task | ✅ route (`ErrorMessage.tsx` → RunnerAuthModal) | 🟡 CTA gated to `claude/codex/kimi`; opencode is text-only | **P1** |
+| V4 | Menu the runner is waiting on | agent sends `409 {awaitingChoice, options[]}`; `vibe.tsx:141` **keeps `options` and renders only `error`** | not consumed | **P0** (unchanged from arch doc R6) |
+| V5 | Prompt typed into tmux, never submitted | `200 {ok:true, pane}` — nothing compares the pane tail | n/a | **P0** (unchanged, R5) |
+| V6 | Dev server dies mid-render during a turn | ✅ failure overlay + Retry | 🟡 raw text | **P1** |
+
+### 9.2c Transport / session rows re-verified at this commit
+
+| # | Row | State |
+|---|---|---|
+| T7 | `explainNoTransport` had zero consumers | ✅ now consumed via `connectGiveUpMessage` (`DeviceContext.tsx:2111`), pinned by `platformTransport.test.ts` |
+| R2 | `RelaySessionExpiredAt` dead sentinel | ❌ **still zero readers**; `/settings/health` still does not exist |
+| R9 | cross-owner `deviceId already registered` | ❌ still no reason code — still loops "Reconnecting (n/5)" forever |
+| R13/R14 | relay rate/bandwidth limits | 🟡 named on both surfaces; **still no usage meter on any surface** |
+| N3 | three drifting relay-auth matchers on mobile | ❌ unchanged (`quic.ts`, `DeviceContext.tsx` ×2) |
+
+## 9.3 What was fixed in this pass
+
+| Fix | Commit | Guard |
+|---|---|---|
+| Agent `?since=` resume + `resume` frame | `093a70670` (swept by a concurrent session) | `httpserver_task_output_resume_test.go` — 4 cases |
+| `taskStreamRecovery.ts` twins + both transports report stream end + mobile/web vibing reattach UI + web task-list wipe | `dba683364` | `web/lib/taskStreamRecovery.test.ts` — 10 cases incl. twin parity |
+| `/dev/events` reattach + health line | `3e512df6f` | same suite, `/dev/events` case |
+
+**Guards proven by breaking them**, both required by the brief:
+
+- Pre-implementation, the resume suite failed with
+  `resume re-sent bytes the client already had — transcript would duplicate` —
+  the exact defect, stated by the test.
+- Deleting the `onError` wiring from `subscribeDevEvents` fails
+  `subscribeDevEvents must observe stream errors`.
+
+## 9.4 The design rule this pass adds
+
+> **A long-lived stream that closes without being asked has FAILED, and a
+> failure the client cannot afford to recover from is a failure with no route.**
+
+Three corollaries, each earned by a row above:
+
+1. **A clean EOF is not consent.** On a stream the server holds open for the
+   life of the resource, "no error object" means the tunnel died politely. Both
+   surfaces read that as success. Classification must key on *"did I see the
+   terminal frame"*, never on *"was there an exception"*.
+2. **Price the remedy, not just its existence.** Re-subscribe worked for a year
+   and no one used it, because it charged the user their scrollback. Auditing
+   for *presence* of a route would have scored this row green.
+3. **A backstop inside the failure domain is not a backstop.** "Callers usually
+   poll too" is only true while the transport is up — precisely never when it
+   matters.
+
+## 9.5 Ranked remainder
+
+**P0 — still open (not touched this pass):**
+
+1. **V4** — the runner is blocked on a menu; the agent ships the exact options
+   in a `409`, `vibe.tsx:141` keeps them on the object and renders only
+   `error`. The user sees the word "error" instead of the choices they must
+   answer. Smallest P0 in the tree by fix size.
+2. **V5** — a prompt typed into a tmux pane but never submitted returns
+   `200 {ok:true}`. The response already carries the `pane` tail that would
+   prove it; nothing compares it. Unfalsifiable by construction.
+
+**P1 — ranked:**
+
+3. **S7** — four remaining `streamTaskOutput` call sites on web (`PreviewPane`,
+   `RuntimeLabView`, `WebReloadView`, `dashboard/page.tsx`) still pass no
+   `onEnd`. The transport reports now; these do not listen, so they keep the
+   old freeze. Mechanical follow-up: the seam and the policy already exist.
+   *(Three of the four are owned by the concurrent render/dependency thread —
+   coordinate before editing.)*
+4. **V3** — opencode auth failure is text-only on web while mobile routes it.
+5. **S6** — dev-events frame drops to a slow subscriber have no counter and no
+   gap marker, so a *partial* stream is indistinguishable from a complete one.
+6. **R2/R9** — dead `RelaySessionExpiredAt` sentinel; cross-owner registration
+   collision with no reason code (both unchanged since the first pass).
+7. **N3** — three drifting relay-auth matchers on mobile, no set a superset of
+   another.
+
+**Cross-surface parity note:** the reattach ladder now exists on mobile and web
+only. tvOS, watchOS, Wear, car, glass and Electron consume task output through
+their own clients and inherit **none** of it — consistent with §6g of the
+architecture doc, and unchanged by this pass.
