@@ -27,7 +27,7 @@ Legend: ✅ good · 🟡 partial · ❌ missing · 🔧 fixed in this audit's fi
 |---|---|---|---|---|---|---|---|
 | R1 | Stale/invalid per-user relay password (`reason=bad_password`) | `relay/server.go:1096` (verdict from Convex) | 🟡 names cause, not action | ✅ ×3: agent refetch+retry (`desktop/agent/main.go:11264`), bus transport (`bus_relay.go:63-79`), mesh repair (`agent_mesh_remote.go:1065`) | ✅ auto-heal effect (`DeviceContext.tsx:2601-2645`) + quic repair rung (`quic.ts:7341`) + narrated probe ladder (`probeWithRepair.ts:101`) | ✅ auto-repair + manual "Repair relay" (`WebReloadView.tsx:1396`), `/d/` proxy inline heal (`route.ts:178-188`) | Best-covered class. Minor: `main.go:11250` comment names a `yaver repair-relay` CLI command that does not exist |
 | R2 | Dead relay session token (`reason=dead_token`) | `relay/server.go:1086` | ✅ "sign in again on this device" | 🟡 agent writes `RelaySessionExpiredAt` (`main.go:11454`) | ❌ nothing reads the sentinel | ❌ | **Dead sentinel**: `RelaySessionExpiredAt` is written but has zero readers; its own doc-comment claims consumers ("/settings/health", a doctor probe) that do not exist |
-| R3 | Device mismatch (`reason=device_mismatch`) | `relay/server.go:1091` | ✅ truthful, terminal | ✅ correctly none ("no retry helps", `main.go:11271`) | ❌ `isRelayAuthError` (`DeviceContext.tsx:670`) does not match it → generic offline | ❌ | The one relay-auth failure that can never self-heal is also the one no UI names. Renders as generic unreachable |
+| R3 | Device mismatch (`reason=device_mismatch`) | `relay/server.go:1091` | ✅ truthful, terminal | ✅ correctly none ("no retry helps", `main.go:11271`) | 🔧 named terminal remedy in ladder narration + give-up (`relayDeny.ts` via DeviceContext) | 🔧 named in connect error pick + stops the reconnect ladder (`relayDeny.ts`, `reconnectLadder.ts`) | 🔧 fixed 2026-07-27 (`e3406cdcb`/`a154a87cc`/`3bf874476`) |
 | R4 | Relay password missing (register) | `relay/server.go:1073` | 🟡 | bootstrap log only | ✅ probe ladder `relay-credentials-missing` → repair + re-probe (`deviceStatus.ts:370`) | ✅ `/d/` route regex → repair (`route.ts:183`) | Register-path variant visible only in agent logs + `doctor_transport` |
 | R5 | Convex (auth backend) unavailable — register | `relay/server.go:1068` | ✅ "retry", deliberately not a credential verdict | agent backoff; no strike held | 🟡 generic reconnect banner | 🟡 same | Acceptable: retry IS the remedy |
 | R6 | Convex unavailable — proxy 503 | `relay/server.go:1813` | ✅ | client retry | 🟡 generic 503 hint mislabels as "overloaded" (`quic.ts:1261`) | 🟡 same (`agent-client.ts:22`) | Minor mislabel; body detail usually wins |
@@ -37,8 +37,8 @@ Legend: ✅ good · 🟡 partial · ❌ missing · 🔧 fixed in this audit's fi
 | R10 | Proxy 401 password missing | `relay/server.go:1817` | ✅ "sign in again to fetch it" | ✅ web route + mesh repair | ✅ self-heal patterns match | ✅ purpose-built regex | Well covered |
 | R11 | Proxy 401 invalid password | `relay/server.go:1828` | 🟡 bare statement | ✅ same tripod as R1 | ✅ | ✅ | Well covered |
 | R12 | Proxy 429 brute-force | `relay/server.go:1824` | 🟡 | — | 🟡 generic hint | 🟡 | Adequate |
-| R13 | Proxy 429 free-tier / per-user rate limit | `relay/server.go:1853-1862` | ❌ raw string, no upgrade path or reset time | owner-dev exempt (`server.go:560`) | ❌ generic hint | ❌ | **Monetization boundary rendered as a raw string** — no Relay Pro mention, no reset time, anywhere |
-| R14 | Daily bandwidth cap (incl. mid-stream cut) | `relay/bandwidth.go:161`, cut `server.go:2147` | 🟡 states usage, not remedy | none (by design) | ❌ no meter anywhere | ❌ (`/admin/bandwidth` is relay-admin only) | Mid-stream cut is indistinguishable from a network flap; zero user-facing bandwidth visibility |
+| R13 | Proxy 429 free-tier / per-user rate limit | `relay/server.go:1853-1862` | ❌ raw string from relay | owner-dev exempt (`server.go:560`) | 🔧 named card text in reconnect narration (`classifyRelayLimit`) | 🔧 compact named card on PreviewPane + connect errors | 🔧 client naming fixed 2026-07-27; no meter/upgrade surface yet |
+| R14 | Daily bandwidth cap (incl. mid-stream cut) | `relay/bandwidth.go:161`, cut `server.go:2147` | 🟡 states usage, not remedy | none (by design) | 🔧 card names the cap, reset, unmetered paths, and that a cut stream was the cap | 🔧 same card | 🔧 named 2026-07-27; still no meter anywhere (`/admin/bandwidth` relay-admin only) |
 | R15 | Device not connected to relay (no tunnel) | `relay/server.go:1925,2475` | 🟡 | ✅ liveness watch + agent redial | ✅ topology-refresh rung (`quic.ts:7351-7362`); honest "online · no relay path" pill | ✅ ladder diagnostics | Good post-2026-07 fixes |
 | R16 | Zombie tunnel (registered but blackholed) | `desktop/agent/relay_health.go:51-130` | ✅ doctor remedies (`doctor_transport.go:65-71`) | ✅ ForceReconnect after 2 confirmations; zombies excluded from heartbeat `relayConnected` | 🟡 indirect (honest pill) | 🟡 indirect | Strong |
 | R17 | Sig-path auth failures (asymmetric lane) | `relay/server.go:798-865` | silent fallback by design; counters at `/authmix` | ✅ password-path fallback | n/a | n/a | If password path is ALSO broken, sig reason never reaches the client |
@@ -129,11 +129,11 @@ user's Deliver-callback replay succeeded; terminal `completed`,
 | # | Failure | Detected at | Text quality | Self-heal | Mobile UI | Web UI | Gap |
 |---|---|---|---|---|---|---|---|
 | T1 | Never-reached box, ladder exhausted (5 attempts) | `quic.ts:7305` → `DeviceContext.tsx:2086` | ❌ 🔧 "Could not reach device after 5 attempts" — drops the preserved cause | ❌ | ✅ Retry / Re-auth / View Logs (`tasks.tsx:4228`) | ✅ rich per-leg panel (`page.tsx:3071-3213`) | 🔧 give-up now carries `lastTransportError` |
-| T2 | Previously-reached box down | `quic.ts:7297` | 🟡 "Reconnecting (n/5) — cause" (n clamped; retries are actually infinite) | ✅ repair + topology rungs | ✅ Stop + View Logs | 🟡 web ladder stops silently at 8 attempts, **no repair/topology rungs** (`agent-client.ts:4054`) | Web ladder parity gap |
+| T2 | Previously-reached box down | `quic.ts:7297` | 🟡 "Reconnecting (n/5) — cause" (n clamped; retries are actually infinite) | ✅ repair + topology rungs | ✅ Stop + View Logs | 🔧 repair rung (once/streak) + topology rung (every 3rd) + named give-up in `lastConnectError` (`reconnectLadder.ts`) | 🔧 parity landed 2026-07-27 (`3bf874476`) |
 | T3 | Stale relay password | `quic.ts:7340` | ✅ | ✅ once/streak | ✅ | 🟡 auto-repair only from mounted ProjectsView | See R1 |
 | T4 | Box lost relay registration | `DeviceContext.tsx:2116` | ✅ expectation-setting text | ✅ topology refresh | ✅ | ✅ | Good |
 | T5 | Agent's own Convex session expired (QUIC 401 / runner logout) | `/health` `authExpired` → flag (`quic.ts:1421`) | ✅ | ✅ silent `recoverDeviceAuth` (primary device only, capped) | ✅ banner + Re-auth button + device-details recover | ✅ headline + `yaver auth` copy + browser re-auth; mirrored in 6 views | 🟡 per-request 401s not intercepted — detection waits for next 15s health probe |
-| T6 | Phone's Convex token stale/rotated | `DeviceContext.tsx:1447` | ✅ where strings exist | ✅ extend-only refresh, spurious-401 double-check, network errors never log out | ❌ confirmed-invalid → **silent logout**, no explanation on login screen | ✅ "Your session expired — sign in again." (`page.tsx:2490`) | Mobile logout is unexplained (parity gap) |
+| T6 | Phone's Convex token stale/rotated | `DeviceContext.tsx:1447` | ✅ where strings exist | ✅ extend-only refresh, spurious-401 double-check, network errors never log out | 🔧 confirmed-invalid sets `sessionExpired`; login.tsx renders `SESSION_EXPIRED_NOTICE` | ✅ "Your session expired — sign in again." (`page.tsx:2490`) | 🔧 parity landed 2026-07-27 (`e3406cdcb`/`a154a87cc`) |
 | T7 | Browser lane: no possible transport (RN-web) | `platformTransport.ts:102` `explainNoTransport` | ✅ sentence exists | n/a | ❌ 🔧 **zero production consumers** — the guard written after the 2026-07-25 eternal-spinner incident was dead code | n/a | 🔧 now rendered instead of the reconnect spinner on web builds |
 | T8 | Relay overload (429/413/503) | `quic.ts:1259` | ✅ | backoff | ✅ | ✅ | Fine |
 | T9 | Split-brain focus drift | `DeviceContext.tsx:2284-2354` | prevented | ✅ focus invariant + promotion | transparent | n/a | Residual render-gap throw only |
@@ -148,8 +148,8 @@ user's Deliver-callback replay succeeded; terminal `completed`,
 | D2 | Toolchain missing at spawn ("executable file not found") | `devserver_start_remedy.go:210-235` | ✅ per-framework, validated against real install plans | ❌ offer only | ✅ via compile card | ✅ via status text | 🟡 remedy text promises "use Install on the preview panel" — **no such button exists on any surface** |
 | D3 | Dev server exited before ready / foreign port owner | `devserver.go:1954-1988` | ✅ named (incl. port-bind and port-owned-by-another-process) | ✅ playbook `port-busy-orphan` | ✅ failure overlay + Retry | 🟡 raw text | Adequate |
 | D4 | Web-preview sibling died ("browser preview exited") | `devserver_http.go:1330-1336` | ✅ with false-positive guards (`!Building`, WebPort fallback) | ✅ stale-handle restart | ✅ both implementations | 🟡 text only | Adequate |
-| D5 | Compile failure on healthy server (blank preview, green status) | `devserver.go:1663-1690` + `SetCompileError` | ✅ triple-published (SSE + persisted + custodian) | escalation lane | ✅ named card on both surfaces (`compileFailure.ts`) | ❌ **no web equivalent** — blank iframe + raw console | Web parity gap (large) |
-| D6 | Preview probe phases/timeouts | `previewPhase.ts` | ✅ per-phase narration + per-reason timeout explanations | — | ✅ both implementations | ❌ no probe, no narration | Web parity gap |
+| D5 | Compile failure on healthy server (blank preview, green status) | `devserver.go:1663-1690` + `SetCompileError` | ✅ triple-published (SSE + persisted + custodian) | escalation lane | ✅ named card on both surfaces (`compileFailure.ts`) | 🔧 web port (`web/lib/compileFailure.ts`, regex-parity-tested): card replaces the blank iframe in PreviewPane; SSE-tail card in RuntimeLabView | 🔧 fixed 2026-07-27 (`3bf874476`/`fca3be788`) |
+| D6 | Preview probe phases/timeouts | `previewPhase.ts` | ✅ per-phase narration + per-reason timeout explanations | — | ✅ both implementations | 🔧 status-derived narration via `web/lib/previewPhase.ts` on the PreviewPane overlay; no in-page probe on web (cross-origin iframe), so probe reasons stay mobile-only | 🔧 narration fixed; probe-reason lane N/A on web |
 | D7 | `hotreload.tsx` start failure | `hotreload.tsx:931` | ❌ 🔧 swallowed everything into "Could not start dev server for X" | — | ❌ 🔧 now propagates the agent's message | n/a | The textbook "client drops the truth" defect |
 | D8 | Orphaned dev children | `devserver_child_registry.go` | ✅ | ✅ boot reap + warden | 🟡 via custodian feed — which mobile lacks (L4) | ✅ HousekeepingCard | See L4 |
 
@@ -204,21 +204,25 @@ it), elapsed/liveness narration on all panels, terminal-state honesty,
 and stale-session detection in the Devices modal. Remaining: SSH fallback
 still uses `claude auth login --console` (§2e).
 
-**Item 4 — spread agent-auth recovery beyond Load Targets: PARTIAL.**
-`isAgentAuthErrorMessage` is still file-local to `RuntimeLabView.tsx`;
-ProjectsView inventory, PreviewPane create (plain 401), VibeCodingView
-task/chat sends, and the dev-event stream still set raw messages with no
-reconnect CTA. `WebShellModal` has its own (good) recovery. Remaining
-work: extract to `web/lib/agentAuthError.ts` + wrap those catch paths.
+**Item 4 — spread agent-auth recovery beyond Load Targets: 🔧 DONE
+(2026-07-27, `3bf874476` + `fca3be788`).** `isAgentAuthErrorMessage` hoisted
+to `web/lib/agentAuthError.ts` (with `AGENT_AUTH_REMEDY`); RuntimeLabView's
+private copy deleted; ProjectsView inventory (named + Reconnect-and-retry
+CTA), PreviewPane task-send + dev-start, and VibeCodingView task/chat sends
+(which were also UNHANDLED rejections wedging the busy label) all consume
+it. `agentAuthError.test.ts` pins that no view keeps a private copy.
 
-**Item 5 — OpenCode config first-class: PARTIAL.** Agent probe, Convex
-snapshot with `updatedAt`, web+mobile seeding, and provider-prefix guards
-exist. Missing: no pre-send validation of the chosen `provider/model`
-against the machine's probed list (`ProviderModelNotFoundError` still
-reachable); hardcoded `zai-coding-plan/glm-4.7` defaults on ~6 seams can
-diverge from a box configured differently when the snapshot is stale;
+**Item 5 — OpenCode config first-class: PARTIAL (pre-send validation 🔧
+DONE 2026-07-27, `3bf874476` + `fca3be788`).** Agent probe, Convex snapshot
+with `updatedAt`, web+mobile seeding, and provider-prefix guards exist, and
+`web/lib/opencodeModel.ts` now vetoes a `provider/model` the box's probed
+snapshot cannot serve BEFORE dispatch (RuntimeLab sendPrompt, VibeCoding
+startChatTask + runner-switch fork) with a named error carrying the
+provider roster and snapshot age; ignorance (no/empty snapshot) never
+vetoes. Remaining: hardcoded `zai-coding-plan/glm-4.7` defaults on ~6 seams
+can diverge from a box configured differently when the snapshot is stale;
 the agent does not push its opencode summary in the heartbeat, so
-mobile-only users can serve stale Convex data.
+mobile-only users can serve stale Convex data; mobile has no pre-send veto.
 
 ## 7. Ranked gap list
 
@@ -244,23 +248,47 @@ was surface-exclusive):
    `helpHint` named the wrong install for non-node tools (D1a) — yarn/pnpm/
    bun/bunx got real install recipes so the advertised endpoints resolve.
 
-**P1 — next pass:**
+**P1 — status after the 2026-07-27 fix pass** (commits `e3406cdcb` +
+`a154a87cc` mobile, `3bf874476` + `fca3be788` web):
 
-6. Web preview: no compile-failure card / phase narration / timeout
-   explanation (D5, D6) — blank-iframe-with-green-status still reachable.
-7. Custodian findings invisible on mobile (L4).
-8. Mobile silent logout on confirmed session expiry (T6).
-9. Web reconnect ladder: no repair/topology rungs, silent stop at 8 (T2).
-10. `RelaySessionExpiredAt` dead sentinel (R2) + `device_mismatch` invisible
-    on all UIs (R3).
-11. Free-tier/bandwidth limits as raw strings; no meter, reset time, or
-    upgrade path (R13, R14).
+6. 🔧 **FIXED** (`3bf874476`, `fca3be788`) Web preview compile-failure card +
+   phase narration (D5, D6): `web/lib/compileFailure.ts` + `previewPhase.ts`
+   (ports of the mobile originals, regex-parity-tested), consumed by
+   PreviewPane (card replaces the blank iframe; overlay header narrates the
+   phase) and RuntimeLabView (card over the preview fed by a raw SSE dev-log
+   tail, cleared on the next successful compile). Remaining: no in-page
+   render probe on web (cross-origin iframe), so probe-reason narration and
+   `previewTimeoutExplanation` fire only where a caller can classify.
+7. Custodian findings invisible on mobile (L4). *(untouched — large)*
+8. 🔧 **FIXED** (`e3406cdcb`, `a154a87cc`) Mobile silent logout on confirmed
+   session expiry (T6): `sessionExpired` in AuthContext (both
+   confirmed-invalid paths; never on network errors or user logout),
+   `SESSION_EXPIRED_NOTICE` banner on login.tsx, wording mirrors web.
+   Guard proven by breaking (structural test).
+9. 🔧 **FIXED** (`3bf874476`) Web reconnect ladder parity (T2):
+   `web/lib/reconnectLadder.ts` pure policy — repair rung once per streak,
+   topology rung every 3rd attempt (dashboard registers the Convex re-pull
+   as `setTopologyRefreshHook`), terminal stop on device_mismatch, and a
+   NAMED give-up preserved in `agentClient.lastConnectError` instead of the
+   silent stop at 8. `repairRelayPassword` now also refreshes the cached
+   `relayServers` passwords the ladder actually dials with.
+10. SPLIT: 🔧 `device_mismatch` (R3) now named terminal on BOTH surfaces
+    (`relayDeny.ts` twins, parity-tested; mobile ladder + give-up, web
+    connect error pick + ladder stop). ❌ `RelaySessionExpiredAt` dead
+    sentinel (R2) remains — agent-side, no readers.
+11. 🔧 **LARGELY FIXED** (`e3406cdcb`, `3bf874476`, `fca3be788`) Free-tier/
+    bandwidth limits (R13, R14): `classifyRelayLimit` renders compact named
+    cards (reset behavior, unmetered direct/tunnel alternative, "a cut
+    stream was the cap, not your network") on web PreviewPane + connect
+    errors and in mobile's reconnect narration. Remaining: no usage METER
+    anywhere (relay `/admin/bandwidth` is still admin-only).
 12. CLI headless runner-auth poll drops `account_not_eligible`; SSH fallback
     uses the wrong claude flag (`--console`) (§2e).
 13. Web 412 install affordance + D2's promised-but-missing Install button.
 14. `deviceId already registered` cross-owner collision has no reason code
     (R9).
-15. MCP verb for submit-callback missing (§2e).
+15. MCP verb for submit-callback missing (§2e). *(agent files locked during
+    this pass)*
 
 **P2:** relay-hint table duplicated across quic.ts/agent-client.ts; three
 drifting relay-auth matchers on mobile; WS-fallback streaming constraint
