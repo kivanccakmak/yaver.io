@@ -969,6 +969,10 @@ export default function RuntimeLabView({
   const [mobilePreviewMode, setMobilePreviewMode] = useState<MobilePreviewMode>("phone");
   const [viewportHeight, setViewportHeight] = useState(() => typeof window === "undefined" ? 900 : window.innerHeight);
   const [runtimeProjectDefaultByDevice, setRuntimeProjectDefaultByDevice] = useState<Record<string, RuntimeProjectPreference>>({});
+  // Saved render target rows, per (deviceId, projectName). A row without a
+  // projectName is the machine-wide fallback. Pairs with the default project:
+  // when BOTH resolve, the Vibing tab renders with zero clicks.
+  const [runtimeTargetDefaults, setRuntimeTargetDefaults] = useState<Array<{ deviceId: string; projectName?: string; targetId: string; targetKind?: string }>>([]);
   const [runtimeProjectSaving, setRuntimeProjectSaving] = useState(false);
   const [runtimeProjectNote, setRuntimeProjectNote] = useState<string | null>(null);
 
@@ -1073,6 +1077,9 @@ export default function RuntimeLabView({
       if (row?.deviceId && row?.projectName) defaults[row.deviceId] = row;
     }
     setRuntimeProjectDefaultByDevice(defaults);
+    setRuntimeTargetDefaults(
+      (settings.defaultRuntimeTargetByDevice || []).filter((row: any) => row?.deviceId && row?.targetId),
+    );
     return settings;
   }, [token]);
 
@@ -1086,6 +1093,36 @@ export default function RuntimeLabView({
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `settings: HTTP ${res.status}`);
   }, [token]);
+
+  // Project-scoped row wins over the machine-wide fallback row.
+  const savedRuntimeTargetFor = useCallback((deviceId: string | undefined, projectName: string | undefined) => {
+    if (!deviceId) return undefined;
+    const scoped = runtimeTargetDefaults.find(
+      (row) => row.deviceId === deviceId && !!projectName && row.projectName === projectName,
+    );
+    return scoped ?? runtimeTargetDefaults.find((row) => row.deviceId === deviceId && !row.projectName);
+  }, [runtimeTargetDefaults]);
+
+  const saveRuntimeTargetDefault = useCallback(async (target: { id: string; surface?: string }) => {
+    if (!connectedDevice?.id) return;
+    const row = {
+      deviceId: connectedDevice.id,
+      projectName: selectedProject?.name ?? null,
+      targetId: target.id,
+      targetKind: target.surface ?? null,
+      updatedAt: Date.now(),
+    };
+    try {
+      await postRuntimeSettings({ defaultRuntimeTargetForDevice: row });
+      setRuntimeTargetDefaults((prev) => [
+        ...prev.filter((r) => !(r.deviceId === row.deviceId && (r.projectName || "") === (row.projectName || ""))),
+        { deviceId: row.deviceId, ...(row.projectName ? { projectName: row.projectName } : {}), targetId: row.targetId, ...(row.targetKind ? { targetKind: row.targetKind } : {}) },
+      ]);
+      appendLog(`default target saved: ${target.id}${selectedProject?.name ? ` for ${selectedProject.name}` : ""}`);
+    } catch (err) {
+      appendLog(`default target save failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [appendLog, connectedDevice?.id, postRuntimeSettings, selectedProject?.name]);
 
   const seedRuntimeProjectCatalog = useCallback(async (rows: Project[]) => {
     if (!connectedDevice?.id || !token || rows.length === 0) return;
@@ -2200,6 +2237,28 @@ export default function RuntimeLabView({
     onOpenTmux?.(q);
   }, [appendLog, intent, onOpenTmux]);
 
+  // Zero-click render: when this machine has BOTH a saved default project and
+  // a saved default target for it, opening the Vibing tab starts the preview
+  // by itself (user directive 2026-07-27). Once per mount; an explicit chat
+  // intent wins; never while a session/preview is already up or busy — the
+  // reload queue owns every re-render after the first.
+  const autoRenderedRef = useRef(false);
+  useEffect(() => {
+    if (autoRenderedRef.current || !caps || busy || session || webPreviewPanelOpen) return;
+    if (intent) {
+      autoRenderedRef.current = true;
+      return;
+    }
+    if (!connectedDevice?.id || !selectedProject || !selectedProjectIsSavedDefault) return;
+    const saved = savedRuntimeTargetFor(connectedDevice.id, selectedProject.name);
+    if (!saved) return;
+    const target = caps.targets?.find((t) => t.id === saved.targetId);
+    if (!target || !target.enabled) return;
+    autoRenderedRef.current = true;
+    appendLog(`auto-render: ${target.id} — saved default for ${selectedProject.name} on this machine`);
+    void createSession(target.id);
+  }, [appendLog, busy, caps, connectedDevice?.id, createSession, intent, savedRuntimeTargetFor, selectedProject, selectedProjectIsSavedDefault, session, webPreviewPanelOpen]);
+
   return (
     <div
       className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-3 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] sm:p-4 xl:[grid-template-columns:minmax(0,1fr)_10px_var(--runtime-chat-width)]"
@@ -2319,6 +2378,27 @@ export default function RuntimeLabView({
                         {target.surface || "runtime"} · {target.id} · {target.requiredCli || "tools"}
                       </div>
                     </div>
+                    {target.enabled ? (
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void saveRuntimeTargetDefault(target);
+                        }}
+                        title={
+                          savedRuntimeTargetFor(connectedDevice?.id, selectedProject?.name)?.targetId === target.id
+                            ? "Default target for this project on this machine"
+                            : "Set as default target — with a default project, Vibing renders automatically"
+                        }
+                        aria-label={`Set ${target.label} as the default target`}
+                        className={`shrink-0 rounded-md px-1.5 py-1.5 text-sm ${
+                          savedRuntimeTargetFor(connectedDevice?.id, selectedProject?.name)?.targetId === target.id
+                            ? "text-amber-500"
+                            : "text-[#98a2b3] hover:text-amber-500"
+                        }`}
+                      >
+                        {savedRuntimeTargetFor(connectedDevice?.id, selectedProject?.name)?.targetId === target.id ? "★" : "☆"}
+                      </button>
+                    ) : null}
                     <button
                       disabled={!target.enabled || busy}
                       onClick={(event) => {
