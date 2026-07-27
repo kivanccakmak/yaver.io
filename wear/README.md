@@ -5,6 +5,8 @@
 > counterpart of "Yaver on the wrist" — a voice-first I/O membrane. The
 > directory is **source-only**: it is **not** wired into any build pipeline or CI
 > yet (mirrors `tvos/` and the unregistered `mobile/plugins/withAndroidTV.js`).
+> It *does* compile locally, though — see "Creating / Building" below for the
+> one command that proves it. "Not CI-wired" is not "unverifiable".
 
 ## Why this is a separate, standalone project (not a `:wear` module)
 
@@ -69,23 +71,36 @@ the safe default.)
 
 ## Creating / Building (one-time, LOCAL)
 
-This is source-only and **not CI-wired**. To build locally you need the Android
-SDK with the Wear OS platform + a Gradle wrapper.
+This is **not CI-wired**, but it is not unbuildable either, and the difference
+matters: "no wrapper checked in" was read as "you can't compile this here" for
+long enough that changes shipped unverified. There is no `wear/gradlew` and
+`gradle` is usually not on PATH — but **the phone project's wrapper works on
+this project as-is**, so no wrapper needs generating and no system Gradle needs
+installing:
+
+```bash
+# From the repo root. Verified 2026-07-27: BUILD SUCCESSFUL, ~2 min cold.
+JAVA_HOME=$(/usr/libexec/java_home -v 17) \
+  ./mobile/android/gradlew -p wear :app:compileDebugKotlin
+```
+
+Use that before committing ANY Kotlin change here. `compileDebugKotlin` is the
+fast gate; `:app:assembleDebug` produces the installable APK.
+
+There are **no tests**: `wear/app/src/` contains only `main` — no `test`, no
+`androidTest`, and no test dependencies in `app/build.gradle.kts`. So
+`gradle test` finds nothing to run and a green `test` here proves nothing. A
+compile is currently the only real verification this surface has; do not report
+more than that.
 
 ```bash
 cd wear
 
-# 1. Point Gradle at your SDK (gitignored, machine-local).
+# One-time: point Gradle at your SDK (gitignored, machine-local).
 echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties
 
-# 2. Generate the Gradle wrapper if it isn't present (this scaffold ships
-#    source only — no wrapper jar checked in).
-gradle wrapper --gradle-version 8.7    # or use a system gradle
-
-# 3. Build the debug APK.
-./gradlew :app:assembleDebug
-
-# 4. Install onto a connected Wear OS emulator / watch (adb over Wi-Fi or USB).
+# Full APK + install onto a connected Wear OS emulator / watch.
+JAVA_HOME=$(/usr/libexec/java_home -v 17) ../mobile/android/gradlew -p . :app:assembleDebug
 adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 

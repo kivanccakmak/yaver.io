@@ -232,12 +232,18 @@ object BoxLifecycle {
                     if (!json.optBoolean("ok", true)) return@use HealthResult.UNREACHABLE
                     val lifecycle = json.optJSONObject("lifecycle")
                     val state = lifecycle?.optString("state").orEmpty()
+                    // Every spelling the agent uses, kept in step with
+                    // mobile/src/lib/deviceStatus.ts and
+                    // watch/YaverWatch/BoxLifecycle.swift. `mode` was the one
+                    // missing here: an agent that reports only the flat
+                    // `mode:"bootstrap"` would have marched to Ready.
                     val signedOut =
                         json.optBoolean("authExpired", false) ||
                             json.optBoolean("needsAuth", false) ||
                             lifecycle?.optBoolean("usable", true) == false ||
                             state == "yaver-auth-expired" ||
-                            state == "bootstrap"
+                            state == "bootstrap" ||
+                            json.optString("mode") == "bootstrap"
                     if (signedOut) HealthResult.SIGNED_OUT else HealthResult.USABLE
                 } catch (_: Throwable) {
                     HealthResult.USABLE // 200 but non-JSON — still reachable

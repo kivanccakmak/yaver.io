@@ -93,8 +93,14 @@ private fun AsleepView(onWake: () -> Unit, onDismiss: () -> Unit) {
 
 /**
  * The box is awake but signed out. No spinner and no progress: nothing is
- * happening, and nothing will, until the user signs it in from the phone —
- * which is the only surface that holds a control-plane token.
+ * happening, and nothing will, until the box itself is signed in.
+ *
+ * The sentence used to be "Sign it in from your phone", which is a dead end
+ * dressed as a step — the phone cannot sign a box in by itself. The box has to
+ * run `yaver auth`; the phone's job is to approve the code it prints. A watch
+ * can do neither, and that constraint is exactly what this screen must say
+ * (CLAUDE.md: state it → offer the fix if the fix exists → name the constraint
+ * if it does not). Same wording as watch/YaverWatch/BoxLifecycle.swift.
  */
 @Composable
 private fun NeedsAuthView(onDismiss: () -> Unit) {
@@ -111,7 +117,8 @@ private fun NeedsAuthView(onDismiss: () -> Unit) {
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "The box woke up, but its Yaver session expired. Sign it in from your phone.",
+            text = "The box woke up, but it is signed out. Run `yaver auth` on the box, " +
+                "then approve it in Yaver on your phone.",
             textAlign = TextAlign.Center,
             style = MaterialTheme.typography.caption2,
             color = MaterialTheme.colors.onSurfaceVariant,
