@@ -82,11 +82,20 @@ enum DeviceCodeAuth {
         var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("auth/device-code"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: [
+        var body: [String: Any] = [
             "machineName": machineName,
             "platform": platform,
             "environment": environment,
-        ])
+        ]
+        // Owner hint ("mobil onay"): if this device remembers its last owner,
+        // say so — the owner's signed-in phone then gets a proactive approve
+        // event (number-matched against the code on THIS screen) instead of
+        // needing a QR scan. The hint grants nothing; approval still happens
+        // on the phone's authenticated session.
+        if let ownerHint = DeviceCodeAuth.lastOwnerUserId {
+            body["ownerUserIdHint"] = ownerHint
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw DeviceCodeError.createFailed((resp as? HTTPURLResponse)?.statusCode ?? -1)
@@ -195,7 +204,22 @@ enum DeviceCodeAuth {
               let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             return nil
         }
-        struct Raw: Decodable { let token: String? }
-        return (try? JSONDecoder().decode(Raw.self, from: data))?.token
+        struct Raw: Decodable { let token: String?; let userId: String? }
+        let raw = try? JSONDecoder().decode(Raw.self, from: data)
+        // Remember WHO this TV belongs to (opaque user doc id, grants
+        // nothing). It survives sign-out ON PURPOSE: it is the owner HINT the
+        // next device-code sign-in sends so the owner's phone gets a
+        // proactive approve event instead of requiring a QR scan.
+        if let uid = raw?.userId, !uid.isEmpty {
+            UserDefaults.standard.set(uid, forKey: lastOwnerUserIdKey)
+        }
+        return raw?.token
+    }
+
+    /// UserDefaults key for the remembered owner hint (see refreshSession).
+    static let lastOwnerUserIdKey = "yaver.tv.lastOwnerUserId"
+    static var lastOwnerUserId: String? {
+        let v = UserDefaults.standard.string(forKey: lastOwnerUserIdKey)
+        return (v?.isEmpty == false) ? v : nil
     }
 }

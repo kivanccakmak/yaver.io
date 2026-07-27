@@ -51,6 +51,22 @@ struct SignInView: View {
                 stepText("2. Sign in if asked, then tap Approve")
                 stepText("3. This Apple TV signs in automatically")
 
+                if DeviceCodeAuth.lastOwnerUserId != nil {
+                    // Proactive approve event ("mobil onay"): this TV remembers
+                    // its owner, so their signed-in Yaver app is being offered a
+                    // one-tap approve — say so, and say how to verify (number
+                    // match), instead of leaving the shortcut undiscoverable.
+                    Label {
+                        Text("We've also asked the Yaver app on your phone — approve there and check the code matches this screen.")
+                            .font(.system(size: 17))
+                            .foregroundStyle(.secondary)
+                    } icon: {
+                        Image(systemName: "iphone.gen3.radiowaves.left.and.right")
+                            .foregroundStyle(.blue)
+                    }
+                    .padding(.top, 6)
+                }
+
                 if let code = start?.userCode {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("OR ENTER THIS CODE")

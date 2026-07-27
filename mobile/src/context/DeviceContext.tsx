@@ -20,6 +20,8 @@ import { connectGiveUpMessage } from "../lib/platformTransport";
 import { classifyRelayLimit, explainRelayDeny } from "../lib/relayDeny";
 import { useAuth } from "./AuthContext";
 import { getConvexSiteUrl, getLocalSecret, getUserSettings, saveUserSettings, LOCAL_KEYS, UserSettingsUnavailableError } from "../lib/auth";
+import { approveDeviceCode } from "../lib/deviceCodeApprove";
+import { fetchPendingDeviceApprovals, pendingApprovalDeviceLabel } from "../lib/pendingApprovals";
 import { appLog } from "../lib/logger";
 import { sameDeviceList } from "../lib/deviceListEquality";
 import { beaconListener, type DiscoveredDevice } from "../lib/beacon";
@@ -2751,6 +2753,57 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   // Load all user settings once on startup (single API call instead of 3+ separate ones)
   const settingsLoaded = useRef(false);
+  // Proactive device-approval events ("mobil onay"): a TV/headset re-auth
+  // that remembers this user creates its device code with an owner hint;
+  // this poll surfaces those as a one-tap Approve with a NUMBER MATCH
+  // against the code on the device's screen. Approval requires THIS phone's
+  // authenticated session — the hint itself grants nothing, so a forged
+  // hint is just a prompt the user declines (its code won't match the TV).
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    // Once prompted (approved or ignored), a code stays quiet for this app
+    // session — a 15-min-TTL code must not re-alert every poll.
+    const prompted = new Set<string>();
+    const sweep = async () => {
+      const rows = await fetchPendingDeviceApprovals(token);
+      if (cancelled) return;
+      for (const row of rows) {
+        if (prompted.has(row.userCode)) continue;
+        prompted.add(row.userCode);
+        const name = pendingApprovalDeviceLabel(row);
+        appLog("info", `[approve] pending sign-in from ${name} (${row.userCode})`);
+        Alert.alert(
+          `Approve sign-in on ${name}?`,
+          `Its screen shows code ${row.userCode}. Approve only if the codes match — this signs it in to YOUR account.`,
+          [
+            { text: "Ignore", style: "cancel" },
+            {
+              text: "Approve",
+              onPress: () => {
+                void approveDeviceCode(row.userCode, token).then((r) => {
+                  if (r.ok) {
+                    Alert.alert("Approved", `${name} is signing in now.`);
+                  } else {
+                    Alert.alert("Approval failed", r.error || "Try scanning the QR on its screen instead.");
+                  }
+                });
+              },
+            },
+          ],
+        );
+      }
+    };
+    void sweep();
+    const id = setInterval(() => {
+      if (AppState.currentState === "active") void sweep();
+    }, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [token]);
+
   useEffect(() => {
     if (!token || settingsLoaded.current) return;
     settingsLoaded.current = true;
