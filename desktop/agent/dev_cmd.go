@@ -97,6 +97,13 @@ func runDevStart(args []string) {
 	}
 	resp, err := localAgentRequest("POST", "/dev/start", body)
 	if err != nil {
+		// A missing toolchain is a product requirement, not a user error: name
+		// it and print the command that fixes it, instead of `Error: <one
+		// sentence>` over a route the agent already handed us. Exit 2 (user/
+		// config) rather than 1 (operation failed) — the operation never ran.
+		if printCapabilityGapForError(os.Stderr, "yaver dev start", err) {
+			os.Exit(2)
+		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}

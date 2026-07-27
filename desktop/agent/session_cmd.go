@@ -310,6 +310,16 @@ func localAgentRequestAuth(method, path string, body map[string]interface{}, req
 			if msg == "" {
 				msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
 			}
+			// A refusal that came with a ROUTE gets promoted to a typed error.
+			// This one line is why the CLI could not see a capability gap: the
+			// body was fully parsed right here and everything except `error`
+			// was dropped on the floor, so `yaver dev start` printed a flat
+			// sentence over a `POST /install/flutter` the phone rendered as a
+			// button. Wrapping, not replacing — `%v` on this error still
+			// prints exactly the message it always did.
+			if err := decodeCapabilityGapError(raw, msg); err != nil {
+				return nil, err, false
+			}
 			return nil, fmt.Errorf("%s", msg), false
 		}
 		return result, nil, false

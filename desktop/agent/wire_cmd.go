@@ -727,7 +727,13 @@ func runWirePush(args []string) {
 	fmt.Println()
 
 	if err := dispatchWirePush(ctx, abs, stack, platform, device, opts); err != nil {
-		fmt.Fprintf(os.Stderr, "\nyaver wire push: %v\n", err)
+		fmt.Fprintln(os.Stderr)
+		// A push that failed because the box lacks the toolchain is a gap with
+		// a route, not a build failure. Print the route.
+		if printCapabilityGapForError(os.Stderr, "yaver wire push", err) {
+			os.Exit(2)
+		}
+		fmt.Fprintf(os.Stderr, "yaver wire push: %v\n", err)
 		os.Exit(1)
 	}
 	// Printed only after a SUCCESSFUL push: a companion hand-off is an

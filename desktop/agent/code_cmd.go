@@ -182,6 +182,13 @@ func runCode(args []string) {
 
 	task, remote, err := createCodeTask(enrichedPrompt, *runner, *model, *mode)
 	if err != nil {
+		// `POST /tasks` answers a missing runner with a gap now
+		// (tasks_capability_gap.go): `claude not found in PATH` arrives with
+		// `POST /install/claude` attached. Print the install command instead of
+		// the bare sentence the user cannot act on.
+		if printCapabilityGapForError(os.Stderr, "code", err) {
+			os.Exit(2)
+		}
 		fmt.Fprintf(os.Stderr, "code: %v\n", err)
 		os.Exit(1)
 	}
