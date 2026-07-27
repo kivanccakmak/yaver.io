@@ -15,6 +15,7 @@ import WebShellModal from "@/components/dashboard/WebShellModal";
 import RemoteDesktopModal from "@/components/dashboard/RemoteDesktopModal";
 import { agentClient, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary } from "@/lib/agent-client";
 import { CONVEX_URL } from "@/lib/constants";
+import { useMachineRoles } from "@/lib/useMachineRoles";
 import { fetchGuestHosts, acceptGuestInvitation, type GuestInvitation } from "@/lib/guests";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
@@ -932,6 +933,17 @@ export default function DashboardPage() {
   // Optional secondary slot — auto-connect fallback when primary is
   // offline. Loaded from /settings alongside primaryDeviceId.
   const [secondaryDeviceId, setSecondaryDeviceId] = useState<string | null>(null);
+  // Machine-role split (runner/render). The favorite row drives
+  // agentClient's deviceId-scoped routing: /tasks/* to the runner box,
+  // /dev/* + previews to the render box, over the relay device path.
+  const machineRoles = useMachineRoles(token);
+
+  useEffect(() => {
+    agentClient.setMachineRoleRoutes({
+      runnerDeviceId: machineRoles.favorite?.runnerDeviceId ?? null,
+      renderDeviceId: machineRoles.favorite?.renderDeviceId ?? null,
+    });
+  }, [machineRoles.favorite?.runnerDeviceId, machineRoles.favorite?.renderDeviceId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1040,7 +1052,13 @@ export default function DashboardPage() {
   const chatRunnerChoices = useMemo<Runner[]>(() => {
     const live = runners.filter((runner) => runner.installed && RUNNER_WHITELIST_SET.has(runner.id));
     if (live.length > 0) return live;
-    const cached = (connectedDevice?.runners || []) as Array<{ runnerId?: string; authConfigured?: boolean; needsAuth?: boolean; status?: string }>;
+    // With a machine-role split active, tasks run on the RUNNER box — read
+    // that box's heartbeat snapshot, not the connected (render) box's.
+    const runnerBoxId = machineRoles.favorite?.runnerDeviceId;
+    const runnerBox = runnerBoxId && runnerBoxId !== connectedDevice?.id
+      ? devices.find((d) => d.id === runnerBoxId) || connectedDevice
+      : connectedDevice;
+    const cached = (runnerBox?.runners || []) as Array<{ runnerId?: string; authConfigured?: boolean; needsAuth?: boolean; status?: string }>;
     const seen = new Set<string>();
     const synthetic: Runner[] = [];
     for (const row of cached) {
@@ -1062,7 +1080,7 @@ export default function DashboardPage() {
       });
     }
     return synthetic;
-  }, [runners, connectedDevice]);
+  }, [runners, connectedDevice, devices, machineRoles.favorite?.runnerDeviceId]);
 
   // When the primary runner changes (broadcast from another tab/view),
   // also kick a device refresh so the sidebar's `runners` array
@@ -2186,7 +2204,11 @@ export default function DashboardPage() {
         { role: "user", text },
         {
           role: "assistant",
-          text: `⚠ ${runnerLabel(targetRunner?.id || "")} needs sign-in on this device before it can answer. Opening the sign-in dialog…`,
+          text: `⚠ ${runnerLabel(targetRunner?.id || "")} needs sign-in on ${
+            machineRoles.favorite?.runnerDeviceId && machineRoles.favorite.runnerDeviceId !== connectedDevice?.id
+              ? (devices.find((d) => d.id === machineRoles.favorite?.runnerDeviceId)?.name || "the AI runner machine")
+              : "this device"
+          } before it can answer. Opening the sign-in dialog…`,
         },
       ]);
       setConnectError(authIssue);
@@ -3371,6 +3393,10 @@ export default function DashboardPage() {
               <RuntimeLabView
                 intent={runtimeIntent}
                 connectedDevice={connectedDevice}
+                devices={devices}
+                machineRoles={machineRoles.favorite}
+                onSaveMachineRoles={machineRoles.save}
+                onClearMachineRoles={machineRoles.clear}
                 onReconnect={connectedDevice ? async () => { await connectToDevice(connectedDevice); } : undefined}
                 onOpenTmux={(sessionName) => {
                   if (!connectedDevice) {
@@ -3545,7 +3571,7 @@ export default function DashboardPage() {
               {/* Account plan + relay usage — profile clicks land here. */}
               <PlanUsageCard deviceNames={Object.fromEntries(devices.map((d) => [d.id, d.name]))} />
               {/* Optional runner/render machine slicing — the favorite config. */}
-              <MachineRolesCard token={token} devices={devices.map((d) => ({ id: d.id, name: d.name, platform: d.platform }))} />
+              <MachineRolesCard token={token} devices={devices.map((d) => ({ id: d.id, name: d.name, platform: d.platform }))} roles={machineRoles} />
               {/* Mesh lives here now — set-up-once plumbing, not a nav tab. */}
               <button
                 type="button"

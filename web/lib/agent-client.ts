@@ -1787,6 +1787,88 @@ export class AgentClient {
   private _activeTunnelUrl: string | null = null;
   get activeRelayUrl(): string | null { return this._activeRelayUrl; }
   get activeTunnelUrl(): string | null { return this._activeTunnelUrl; }
+
+  // ── Machine-role routing (runner/render split) ─────────────────────
+  // Optional slicing from userSettings.machineRolesByProject: AI tasks run
+  // on the "runner" box while dev servers / previews / remote-runtime
+  // sessions stay on the "render" box. The dashboard sets these after
+  // loading /settings; whichever role matches the connected device is a
+  // no-op, so the single-box default is byte-identical to before. Routing
+  // rides the relay device path (`/d/<deviceId>/…`): the same bearer token
+  // authenticates the same user on every box they own, and each box
+  // enforces auth per request — a forged route grants nothing.
+  private _runnerRouteDeviceId: string | null = null;
+  private _renderRouteDeviceId: string | null = null;
+
+  setMachineRoleRoutes(routes: { runnerDeviceId?: string | null; renderDeviceId?: string | null }): void {
+    this._runnerRouteDeviceId = routes.runnerDeviceId || null;
+    this._renderRouteDeviceId = routes.renderDeviceId || null;
+  }
+
+  /** Effective runner device /tasks/* traffic routes to, or null when tasks
+   *  run on the connected device (single-box default). */
+  get taskRouteDeviceId(): string | null {
+    const id = this._runnerRouteDeviceId;
+    return id && id !== this.deviceId ? id : null;
+  }
+
+  /** Effective render device /dev/* + preview traffic routes to, or null
+   *  when the connected device renders (single-box default). */
+  get renderRouteDeviceId(): string | null {
+    const id = this._renderRouteDeviceId;
+    return id && id !== this.deviceId ? id : null;
+  }
+
+  private roleBase(deviceId: string | null, role: "AI runner" | "render"): string {
+    if (!deviceId) return this.baseUrl;
+    if (this._activeRelayUrl) return `${this._activeRelayUrl}/d/${deviceId}`;
+    // Primary transport is direct/tunnel (localhost, Tailscale, mesh). Cross-
+    // device role traffic still rides the relay: the relay authorizes each
+    // /d/<id>/ request against the caller's per-user password with backend
+    // ownership scope (relay/server.go handleProxy → validateRelayAccessE),
+    // so the same credential reaches every box the user owns — on the free
+    // relay and Relay Pro identically (entitlement resolves per request).
+    const fallback = this.relayServers[0];
+    if (fallback?.httpUrl) return `${fallback.httpUrl.replace(/\/+$/, "")}/d/${deviceId}`;
+    // Named refusal — never a silent fallback onto the wrong box.
+    throw new Error(
+      `Your configured ${role} machine (${deviceId.slice(0, 8)}…) is only reachable over a relay, ` +
+      `but this session has no relay configured and is connected ${this._activeTunnelUrl ? "through a direct tunnel" : "directly"} to another machine. ` +
+      `Nothing was sent to the wrong box — sign in again to refresh the relay list, or clear the machine-roles split in Settings.`,
+    );
+  }
+
+  /** Relay password usable for role-routed cross-device requests: the active
+   *  transport's when connected via relay, else the highest-priority
+   *  configured relay's (the with/without-Tailscale case — primary transport
+   *  direct, role traffic via relay). */
+  private get routingRelayPassword(): string | null {
+    return this.activeRelayPassword ?? this.relayServers.find((r) => r.password)?.password ?? null;
+  }
+
+  /** Base URL for task dispatch/stream — the runner box when a machine-role
+   *  split is active, else the connected box. Throws a named error rather
+   *  than silently addressing the wrong machine. */
+  private get taskBaseUrl(): string {
+    return this.roleBase(this.taskRouteDeviceId, "AI runner");
+  }
+
+  /** Base URL for dev-server / preview / remote-runtime calls — the render
+   *  box when a machine-role split is active, else the connected box. */
+  private get devBaseUrl(): string {
+    return this.roleBase(this.renderRouteDeviceId, "render");
+  }
+
+  /** Null-returning variant for URL getters used during React render —
+   *  a throw there would crash the tree instead of showing "no preview". */
+  private get devBaseUrlOrNull(): string | null {
+    try { return this.devBaseUrl; } catch { return null; }
+  }
+
+  /** deviceId for same-origin `/d/<id>/…` preview-proxy URLs (iframes). */
+  private get devProxyDeviceId(): string | null {
+    return this.renderRouteDeviceId ?? this.deviceId;
+  }
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   private _lastConnectDiagnostics: ConnectAttemptDiagnostic[] = [];
@@ -1945,7 +2027,7 @@ export class AgentClient {
     // sit in the critical path of the prompt the user is trying to send, and a
     // toast about a failed screen report would be pure noise.
     try {
-      await fetch(`${this.baseUrl}/screen-context`, {
+      await fetch(`${this.taskBaseUrl}/screen-context`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(ctx),
@@ -1961,7 +2043,7 @@ export class AgentClient {
   async clearScreenContext(workDir: string): Promise<void> {
     if (!this.isConnected || !workDir) return;
     try {
-      await fetch(`${this.baseUrl}/screen-context?workDir=${encodeURIComponent(workDir)}`, {
+      await fetch(`${this.taskBaseUrl}/screen-context?workDir=${encodeURIComponent(workDir)}`, {
         method: "DELETE",
         headers: { ...this.authHeaders },
       });
@@ -1977,7 +2059,7 @@ export class AgentClient {
     const body: Record<string, unknown> = { title, description, source: "web" };
     if (opts?.runner) body.runner = opts.runner;
     if (opts?.model) body.model = opts.model;
-    const res = await fetch(`${this.baseUrl}/tasks`, {
+    const res = await fetch(`${this.taskBaseUrl}/tasks`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -2035,7 +2117,7 @@ export class AgentClient {
     allowLocalFallback?: boolean;
   }): Promise<Task> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks`, {
+    const res = await fetch(`${this.taskBaseUrl}/tasks`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(buildCreateTaskBody(params)),
@@ -2054,7 +2136,7 @@ export class AgentClient {
       return this.getCachedTasks();
     }
     try {
-      const url = limit ? `${this.baseUrl}/tasks?limit=${limit}` : `${this.baseUrl}/tasks`;
+      const url = limit ? `${this.taskBaseUrl}/tasks?limit=${limit}` : `${this.taskBaseUrl}/tasks`;
       const res = await fetch(url, {
         headers: this.authHeaders,
       });
@@ -2092,7 +2174,7 @@ export class AgentClient {
 
   async getTask(taskId: string): Promise<Task> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks/${taskId}`, {
+    const res = await fetch(`${this.taskBaseUrl}/tasks/${taskId}`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to get task: ${res.status}`);
@@ -2124,7 +2206,7 @@ export class AgentClient {
 
   async stopTask(taskId: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks/${taskId}/stop`, {
+    const res = await fetch(`${this.taskBaseUrl}/tasks/${taskId}/stop`, {
       method: "POST",
       headers: this.authHeaders,
     });
@@ -2133,7 +2215,7 @@ export class AgentClient {
 
   async continueTask(taskId: string, input: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks/${taskId}/continue`, {
+    const res = await fetch(`${this.taskBaseUrl}/tasks/${taskId}/continue`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ input }),
@@ -2143,7 +2225,7 @@ export class AgentClient {
 
   async completeTask(taskId: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks/${taskId}/complete`, {
+    const res = await fetch(`${this.taskBaseUrl}/tasks/${taskId}/complete`, {
       method: "POST",
       headers: this.authHeaders,
     });
@@ -2162,7 +2244,7 @@ export class AgentClient {
     args: { runner: string; model?: string; mode?: string; input: string; contextWords?: number },
   ): Promise<{ taskId: string; runnerId: string; parentTaskId: string; contextWordsUsed: number }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks/${taskId}/fork`, {
+    const res = await fetch(`${this.taskBaseUrl}/tasks/${taskId}/fork`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -2188,7 +2270,7 @@ export class AgentClient {
 
   async deleteTask(taskId: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks/${taskId}`, {
+    const res = await fetch(`${this.taskBaseUrl}/tasks/${taskId}`, {
       method: "DELETE",
       headers: this.authHeaders,
     });
@@ -2197,7 +2279,7 @@ export class AgentClient {
 
   async stopAllTasks(): Promise<number> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks/stop-all`, {
+    const res = await fetch(`${this.taskBaseUrl}/tasks/stop-all`, {
       method: "POST",
       headers: this.authHeaders,
     });
@@ -2208,7 +2290,7 @@ export class AgentClient {
 
   async deleteAllTasks(): Promise<number> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks`, {
+    const res = await fetch(`${this.taskBaseUrl}/tasks`, {
       method: "DELETE",
       headers: this.authHeaders,
     });
@@ -2403,7 +2485,7 @@ export class AgentClient {
 
   async getRunners(): Promise<Runner[]> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/agent/runners`, {
+    const res = await fetch(`${this.taskBaseUrl}/agent/runners`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to get runners: ${res.status}`);
@@ -2420,7 +2502,7 @@ export class AgentClient {
     this.assertConnected();
     const base = target
       ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner-auth/browser/status`
-      : `${this.baseUrl}/runner-auth/browser/status`;
+      : `${this.taskBaseUrl}/runner-auth/browser/status`;
     const url = `${base}?id=${encodeURIComponent(sessionId)}`;
     const res = await fetch(url, { headers: this.authHeaders });
     if (!res.ok) {
@@ -2435,7 +2517,7 @@ export class AgentClient {
     this.assertConnected();
     const base = target
       ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner-auth/browser/cancel`
-      : `${this.baseUrl}/runner-auth/browser/cancel`;
+      : `${this.taskBaseUrl}/runner-auth/browser/cancel`;
     const url = `${base}?id=${encodeURIComponent(sessionId)}`;
     await fetch(url, { method: "POST", headers: this.authHeaders }).catch(() => {});
   }
@@ -2457,7 +2539,7 @@ export class AgentClient {
     this.assertConnected();
     const base = target
       ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner-auth/browser/submit-code`
-      : `${this.baseUrl}/runner-auth/browser/submit-code`;
+      : `${this.taskBaseUrl}/runner-auth/browser/submit-code`;
     const url = `${base}?id=${encodeURIComponent(sessionId)}`;
     const res = await fetch(url, {
       method: "POST",
@@ -2475,7 +2557,7 @@ export class AgentClient {
     this.assertConnected();
     const base = target
       ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner-auth/browser/submit-callback`
-      : `${this.baseUrl}/runner-auth/browser/submit-callback`;
+      : `${this.taskBaseUrl}/runner-auth/browser/submit-callback`;
     const url = `${base}?id=${encodeURIComponent(sessionId)}`;
     const res = await fetch(url, {
       method: "POST",
@@ -2503,7 +2585,7 @@ export class AgentClient {
     this.assertConnected();
     const timeoutMs = Math.max(1_000, Math.min(opts?.timeoutMs || 25_000, 125_000));
     const res = await this.fetchWithTimeout(
-      `${this.baseUrl}/agent/runners/test`,
+      `${this.taskBaseUrl}/agent/runners/test`,
       {
         method: "POST",
         headers: this.authHeaders,
@@ -2687,7 +2769,7 @@ export class AgentClient {
     this.assertConnected();
     const base = target
       ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner-auth/status`
-      : `${this.baseUrl}/runner-auth/status`;
+      : `${this.taskBaseUrl}/runner-auth/status`;
     const res = await fetch(base, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`Failed to get runner auth status: ${res.status}`);
     const data = await res.json().catch(() => ({}));
@@ -2701,7 +2783,7 @@ export class AgentClient {
     this.assertConnected();
     const base = target
       ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner-auth/set`
-      : `${this.baseUrl}/runner-auth/set`;
+      : `${this.taskBaseUrl}/runner-auth/set`;
     const res = await fetch(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
@@ -2768,7 +2850,7 @@ export class AgentClient {
     this.assertConnected();
     const base = target
       ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner-auth/browser/start`
-      : `${this.baseUrl}/runner-auth/browser/start`;
+      : `${this.taskBaseUrl}/runner-auth/browser/start`;
     const res = await fetch(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
@@ -2797,7 +2879,7 @@ export class AgentClient {
     this.assertConnected();
     const base = target
       ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner-auth/browser/status?id=${encodeURIComponent(id)}`
-      : `${this.baseUrl}/runner-auth/browser/status?id=${encodeURIComponent(id)}`;
+      : `${this.taskBaseUrl}/runner-auth/browser/status?id=${encodeURIComponent(id)}`;
     const res = await fetch(base, { headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
@@ -2811,7 +2893,7 @@ export class AgentClient {
     this.assertConnected();
     const base = target
       ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner-auth/browser/cancel?id=${encodeURIComponent(id)}`
-      : `${this.baseUrl}/runner-auth/browser/cancel?id=${encodeURIComponent(id)}`;
+      : `${this.taskBaseUrl}/runner-auth/browser/cancel?id=${encodeURIComponent(id)}`;
     const res = await fetch(base, { method: "POST", headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
@@ -3093,8 +3175,8 @@ export class AgentClient {
     const since = Number(opts?.since || 0);
     const url =
       since > 0
-        ? `${this.baseUrl}/tasks/${taskId}/output?since=${encodeURIComponent(String(Math.floor(since)))}`
-        : `${this.baseUrl}/tasks/${taskId}/output`;
+        ? `${this.taskBaseUrl}/tasks/${taskId}/output?since=${encodeURIComponent(String(Math.floor(since)))}`
+        : `${this.taskBaseUrl}/tasks/${taskId}/output`;
     let sawDone = false;
     let cancelled = false;
     let endReported = false;
@@ -3189,7 +3271,7 @@ export class AgentClient {
     answer: string,
   ): Promise<{ ok: boolean; error?: string }> {
     try {
-      const res = await fetch(`${this.baseUrl}/tasks/${taskId}/answer`, {
+      const res = await fetch(`${this.taskBaseUrl}/tasks/${taskId}/answer`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ questionId, answer }),
@@ -3222,7 +3304,7 @@ export class AgentClient {
     timeoutSec: number;
   } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/tasks/${taskId}/question`, {
+      const res = await fetch(`${this.taskBaseUrl}/tasks/${taskId}/question`, {
         method: "GET",
         headers: this.authHeaders,
       });
@@ -3468,8 +3550,15 @@ export class AgentClient {
     const h: Record<string, string> = {
       Authorization: `Bearer ${this.token}`,
     };
-    if (this._activeRelayUrl && this.activeRelayPassword) {
-      h["X-Relay-Password"] = this.activeRelayPassword;
+    // Carry the relay password whenever the relay is the active transport OR
+    // a machine-role route may send this request through a relay despite a
+    // direct/tunnel primary transport (Tailscale case). The agent's CORS
+    // allow-list includes X-Relay-Password (httpserver.go), and a box that
+    // receives it directly simply ignores it.
+    const rolesActive = !!(this.taskRouteDeviceId || this.renderRouteDeviceId);
+    const pw = this._activeRelayUrl ? this.activeRelayPassword : rolesActive ? this.routingRelayPassword : null;
+    if (pw) {
+      h["X-Relay-Password"] = pw;
     }
     return h;
   }
@@ -3566,9 +3655,11 @@ export class AgentClient {
     return url;
   }
 
-  private async issueBrowserSession(pathPrefix: string): Promise<string> {
+  private async issueBrowserSession(pathPrefix: string, base?: string): Promise<string> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/auth/browser-session`, {
+    // Browser-session tokens are minted and validated by the SAME box — a
+    // role-routed caller must mint on the box it will talk to.
+    const res = await fetch(`${base ?? this.baseUrl}/auth/browser-session`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ pathPrefix }),
@@ -4384,7 +4475,7 @@ export class AgentClient {
     this.pollInterval = setInterval(async () => {
       try {
         // Only fetch recent tasks (limit=5) to keep payload small through relay
-        const res = await fetch(`${this.baseUrl}/tasks?limit=5`, {
+        const res = await fetch(`${this.taskBaseUrl}/tasks?limit=5`, {
           headers: this.authHeaders,
         });
         if (!res.ok) return;
@@ -4706,7 +4797,7 @@ export class AgentClient {
 
   async getRemoteRuntimeCapabilities(workDir: string, framework: string): Promise<RemoteRuntimeCapabilities> {
     this.assertConnected();
-    const url = new URL(`${this.baseUrl}/remote-runtime/capabilities`);
+    const url = new URL(`${this.devBaseUrl}/remote-runtime/capabilities`);
     url.searchParams.set("workDir", workDir);
     url.searchParams.set("framework", framework);
     const res = await this.fetchWithTimeout(url.toString(), { headers: this.authHeaders }, 90_000);
@@ -4716,7 +4807,7 @@ export class AgentClient {
 
   async startRemoteRuntimeSession(workDir: string, framework: string, targetId: string, transportMode?: string): Promise<RemoteRuntimeSession> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions`, {
+    const res = await fetch(`${this.devBaseUrl}/remote-runtime/sessions`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ workDir, framework, targetId, transportMode }),
@@ -4736,7 +4827,7 @@ export class AgentClient {
     workDir?: string,
   ): Promise<{ ok: boolean; note?: string; protocol?: string; injected?: boolean; status?: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/command`, {
+    const res = await fetch(`${this.devBaseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/command`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ command, source, ...(workDir ? { workDir } : {}) }),
@@ -4748,7 +4839,7 @@ export class AgentClient {
 
   async getRemoteRuntimeSession(sessionId: string): Promise<RemoteRuntimeSession> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}`, { headers: this.authHeaders });
+    const res = await fetch(`${this.devBaseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}`, { headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Failed to load remote runtime session: HTTP ${res.status}`);
     return data as RemoteRuntimeSession;
@@ -4756,7 +4847,7 @@ export class AgentClient {
 
   async closeRemoteRuntimeSession(sessionId: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}`, {
+    const res = await fetch(`${this.devBaseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",
       headers: this.authHeaders,
     });
@@ -4766,7 +4857,7 @@ export class AgentClient {
 
   async fetchRemoteRuntimeTurnCredentials(): Promise<{ iceServers: RTCIceServer[]; ttlSeconds: number }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/turn-credentials`, {
+    const res = await fetch(`${this.devBaseUrl}/remote-runtime/turn-credentials`, {
       headers: this.authHeaders,
       cache: "no-store",
     });
@@ -4785,7 +4876,7 @@ export class AgentClient {
 
   async createRemoteRuntimeWebRTCAnswer(sessionId: string, offer: { sdp?: string; type?: string }): Promise<{ session: RemoteRuntimeSession; answer: { sdp?: string; type?: string }; transport?: string; note?: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/webrtc/offer`, {
+    const res = await fetch(`${this.devBaseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/webrtc/offer`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ sdp: offer.sdp || "", type: offer.type || "offer" }),
@@ -4797,7 +4888,7 @@ export class AgentClient {
 
   async fetchRemoteRuntimeFrame(sessionId: string): Promise<Blob> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/frame?ts=${Date.now()}`, {
+    const res = await fetch(`${this.devBaseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/frame?ts=${Date.now()}`, {
       headers: this.authHeaders,
       cache: "no-store",
     });
@@ -4810,7 +4901,7 @@ export class AgentClient {
 
   async sendRemoteRuntimeControl(sessionId: string, body: { action: "tap" | "swipe" | "text" | "back" | "home" | "key"; x?: number; y?: number; x2?: number; y2?: number; durationMs?: number; text?: string; key?: string }): Promise<RemoteRuntimeSession> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/control`, {
+    const res = await fetch(`${this.devBaseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/control`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -4901,7 +4992,11 @@ export class AgentClient {
   } | null> {
     this.assertConnected();
     try {
-      const res = await this.fetchAgentPath(`/dev/status`, { headers: this.authHeaders });
+      // Role-routed when a render split is active (devBaseUrl); the plain
+      // fetchAgentPath relay-fallback only applies to the connected box.
+      const res = this.renderRouteDeviceId
+        ? await fetch(`${this.devBaseUrl}/dev/status`, { headers: this.authHeaders })
+        : await this.fetchAgentPath(`/dev/status`, { headers: this.authHeaders });
       if (!res.ok) {
         let body: any = null;
         try { body = await res.json(); } catch { body = null; }
@@ -4923,7 +5018,7 @@ export class AgentClient {
   async getDevServerTarget(): Promise<DevTargetPreference | null> {
     this.assertConnected();
     try {
-      const res = await fetch(`${this.baseUrl}/dev/target`, { headers: this.authHeaders });
+      const res = await fetch(`${this.devBaseUrl}/dev/target`, { headers: this.authHeaders });
       if (!res.ok) return null;
       return res.json();
     } catch { return null; }
@@ -4932,7 +5027,7 @@ export class AgentClient {
   async setDevServerTarget(target: DevTargetPreference): Promise<DevTargetPreference | null> {
     this.assertConnected();
     try {
-      const res = await fetch(`${this.baseUrl}/dev/target`, {
+      const res = await fetch(`${this.devBaseUrl}/dev/target`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(target),
@@ -4975,7 +5070,7 @@ export class AgentClient {
   }): Promise<{ id: string; project: string; profile?: { fps: number; name: string } } | null> {
     this.assertConnected();
     try {
-      const res = await fetch(`${this.baseUrl}/vibing/preview/start`, {
+      const res = await fetch(`${this.devBaseUrl}/vibing/preview/start`, {
         method: "POST",
         headers: {
           ...this.authHeaders,
@@ -4993,7 +5088,7 @@ export class AgentClient {
   async stopVibePreview(project: string): Promise<boolean> {
     this.assertConnected();
     try {
-      const res = await fetch(`${this.baseUrl}/vibing/preview/stop`, {
+      const res = await fetch(`${this.devBaseUrl}/vibing/preview/stop`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ project }),
@@ -5005,7 +5100,7 @@ export class AgentClient {
   async listVibePreviewSessions(): Promise<Array<{ project: string; profile: { fps: number; name: string }; mode: string }>> {
     this.assertConnected();
     try {
-      const res = await fetch(`${this.baseUrl}/vibing/preview/status`, { headers: this.authHeaders });
+      const res = await fetch(`${this.devBaseUrl}/vibing/preview/status`, { headers: this.authHeaders });
       if (!res.ok) return [];
       const data = await res.json();
       return Array.isArray(data?.sessions) ? data.sessions : [];
@@ -5019,7 +5114,7 @@ export class AgentClient {
   }): Promise<{ id: string; status: string } | null> {
     this.assertConnected();
     try {
-      const res = await fetch(`${this.baseUrl}/vibing/preview/clip/start`, {
+      const res = await fetch(`${this.devBaseUrl}/vibing/preview/clip/start`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(opts),
@@ -5034,7 +5129,7 @@ export class AgentClient {
     this.assertConnected();
     try {
       const res = await fetch(
-        `${this.baseUrl}/vibing/preview/clips?project=${encodeURIComponent(project)}`,
+        `${this.devBaseUrl}/vibing/preview/clips?project=${encodeURIComponent(project)}`,
         { headers: this.authHeaders },
       );
       if (!res.ok) return [];
@@ -5050,7 +5145,7 @@ export class AgentClient {
   vibeFrameRequest(project: string, hash: string): { url: string; headers: Record<string, string> } | null {
     if (!this.baseUrl) return null;
     return {
-      url: `${this.baseUrl}/vibing/preview/frames/${encodeURIComponent(hash)}?project=${encodeURIComponent(project)}`,
+      url: `${this.devBaseUrl}/vibing/preview/frames/${encodeURIComponent(hash)}?project=${encodeURIComponent(project)}`,
       headers: this.authHeaders,
     };
   }
@@ -5058,7 +5153,7 @@ export class AgentClient {
   vibeClipRequest(clipId: string): { url: string; headers: Record<string, string> } | null {
     if (!this.baseUrl) return null;
     return {
-      url: `${this.baseUrl}/vibing/preview/clip/${encodeURIComponent(clipId)}`,
+      url: `${this.devBaseUrl}/vibing/preview/clip/${encodeURIComponent(clipId)}`,
       headers: this.authHeaders,
     };
   }
@@ -5075,7 +5170,7 @@ export class AgentClient {
     void (async () => {
       try {
         const res = await fetch(
-          `${this.baseUrl}/vibing/preview/events?project=${encodeURIComponent(project)}`,
+          `${this.devBaseUrl}/vibing/preview/events?project=${encodeURIComponent(project)}`,
           { headers: { ...this.authHeaders, Accept: "text/event-stream" }, signal: ctrl.signal },
         );
         if (!res.ok || !res.body) {
@@ -5138,7 +5233,7 @@ export class AgentClient {
     // route mobile-only projects through the static-bundle path
     // instead of returning the legacy 400 "mobile-only" error).
     const body = { ...opts, caller: "web-ui" };
-    const res = await fetch(`${this.baseUrl}/dev/start`, {
+    const res = await fetch(`${this.devBaseUrl}/dev/start`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -5214,7 +5309,7 @@ export class AgentClient {
     error?: string;
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/dev/stop`, { method: "POST", headers: this.authHeaders });
+    const res = await fetch(`${this.devBaseUrl}/dev/stop`, { method: "POST", headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       throw new Error(data?.message || data?.error || "Failed to stop serving preview");
@@ -5251,7 +5346,7 @@ export class AgentClient {
     const mode = opts?.mode ?? "fast";
     if (mode !== "bundle") {
       const wireMode = mode === "full" ? "full" : "fast";
-      const res = await fetch(`${this.baseUrl}/dev/reload`, {
+      const res = await fetch(`${this.devBaseUrl}/dev/reload`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ mode: wireMode }),
@@ -5263,7 +5358,7 @@ export class AgentClient {
       return data;
     }
 
-    const res = await fetch(`${this.baseUrl}/dev/reload-app`, {
+    const res = await fetch(`${this.devBaseUrl}/dev/reload-app`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ mode: "bundle" }),
@@ -5280,7 +5375,7 @@ export class AgentClient {
   // path. Only valid when the active dev server is Expo.
   async startWebPreview(): Promise<{ ok: boolean; port: number; webUrl: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/dev/web-preview/start`, { method: "POST", headers: this.authHeaders });
+    const res = await fetch(`${this.devBaseUrl}/dev/web-preview/start`, { method: "POST", headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || "Failed to start Expo Web preview");
     return data;
@@ -5288,7 +5383,7 @@ export class AgentClient {
 
   async stopWebPreview(): Promise<{ ok: boolean }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/dev/web-preview/stop`, { method: "POST", headers: this.authHeaders });
+    const res = await fetch(`${this.devBaseUrl}/dev/web-preview/stop`, { method: "POST", headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || "Failed to stop Expo Web preview");
     return data;
@@ -5299,6 +5394,13 @@ export class AgentClient {
    *  shape (relay-proxied vs direct) but hits /dev-web/ instead. */
   get devWebPreviewUrl(): string | null {
     if (!this.baseUrl) return null;
+    // Render-route active: always the same-origin /d/<renderId>/ proxy — it
+    // forwards server-side via the relay with the password injected, so it
+    // works regardless of THIS session's primary transport (relay, Tailscale
+    // tunnel, or localhost direct).
+    if (this.renderRouteDeviceId) {
+      return `/d/${encodeURIComponent(this.renderRouteDeviceId)}/dev-web/`;
+    }
     const direct = this.baseUrl.startsWith("http://127.0.0.1") || this.baseUrl.startsWith("http://localhost");
     if (direct) return `${this.baseUrl}/dev-web/`;
     // Same-origin proxy at /d/<deviceId>/[[...path]]/route.ts. The
@@ -5321,6 +5423,11 @@ export class AgentClient {
    *  origin. */
   get devWebBundleUrl(): string | null {
     if (!this.baseUrl) return null;
+    // Render-route active: same-origin proxy to the render box (see
+    // devWebPreviewUrl — transport-independent by construction).
+    if (this.renderRouteDeviceId) {
+      return `/d/${encodeURIComponent(this.renderRouteDeviceId)}/dev/web-bundle/`;
+    }
     const direct = this.baseUrl.startsWith("http://127.0.0.1") || this.baseUrl.startsWith("http://localhost");
     if (direct) return `${this.baseUrl}/dev/web-bundle/`;
     // Same-origin proxy via /d/<deviceId>/[[...path]] — that Next.js
@@ -5389,7 +5496,7 @@ export class AgentClient {
     output?: string;
   }> {
     if (!this.baseUrl) throw new Error("not connected");
-    const res = await this.fetchWithTimeout(`${this.baseUrl}/dev/build-native`, {
+    const res = await this.fetchWithTimeout(`${this.devBaseUrl}/dev/build-native`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -5461,7 +5568,7 @@ export class AgentClient {
   }> {
     if (!this.baseUrl) return { built: false };
     try {
-      const res = await this.fetchWithTimeout(`${this.baseUrl}/dev/web-bundle/info`, {
+      const res = await this.fetchWithTimeout(`${this.devBaseUrl}/dev/web-bundle/info`, {
         headers: this.authHeaders,
       }, 5_000);
       if (!res.ok) return { built: false };
@@ -5489,7 +5596,7 @@ export class AgentClient {
   async ackWebBundleLoaded(msToLoad: number): Promise<void> {
     if (!this.baseUrl) return;
     try {
-      await fetch(`${this.baseUrl}/dev/web-bundle/ack`, {
+      await fetch(`${this.devBaseUrl}/dev/web-bundle/ack`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ ms_to_load: msToLoad }),
@@ -5505,7 +5612,7 @@ export class AgentClient {
   async reportWebBundleError(message: string, stack?: string, source?: string): Promise<void> {
     if (!this.baseUrl) return;
     try {
-      await fetch(`${this.baseUrl}/dev/web-bundle/error`, {
+      await fetch(`${this.devBaseUrl}/dev/web-bundle/error`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ message, stack, source }),
@@ -5517,6 +5624,11 @@ export class AgentClient {
 
   get devPreviewUrl(): string | null {
     if (!this.baseUrl) return null;
+    // Render-route active: same-origin proxy to the render box, independent
+    // of this session's primary transport (relay / Tailscale / direct).
+    if (this.renderRouteDeviceId) {
+      return `/d/${encodeURIComponent(this.renderRouteDeviceId)}/dev/`;
+    }
     // In the browser, route relay-backed previews through our own
     // same-origin proxy so the iframe does not depend on relay query-param
     // auth. That proxy injects X-Relay-Password server-side.
@@ -5545,7 +5657,12 @@ export class AgentClient {
    *  strips before forwarding to the agent. */
   get devEventsUrl(): string | null {
     if (!this.baseUrl) return null;
-    return this.appendStreamAuth(`${this.baseUrl}/dev/events`);
+    // Live-reload events come from the box that actually renders. Null (not
+    // a throw) when the render box is unreachable — this getter runs during
+    // React render.
+    const base = this.devBaseUrlOrNull;
+    if (!base) return null;
+    return this.appendStreamAuth(`${base}/dev/events`);
   }
 
   /** SSE URL for the agent-update progress stream — same query-
@@ -5553,6 +5670,16 @@ export class AgentClient {
   get agentUpdateStreamUrl(): string | null {
     if (!this.baseUrl) return null;
     return this.appendStreamAuth(`${this.baseUrl}/streams/agent-update`);
+  }
+
+  /** Relay password for query-param stream auth (`__rp=`): the active
+   *  transport's when relay-connected, else — when a machine-role route can
+   *  send the stream through a relay despite a direct/tunnel primary
+   *  transport — the configured fallback relay's. The relay strips `__rp`
+   *  before forwarding; a directly-reached agent ignores it. */
+  private get streamRelayPassword(): string | null {
+    if (this._activeRelayUrl) return this.activeRelayPassword;
+    return this.taskRouteDeviceId || this.renderRouteDeviceId ? this.routingRelayPassword : null;
   }
 
   private appendStreamAuth(url: string): string {
@@ -5568,15 +5695,15 @@ export class AgentClient {
     } catch {
       const params: string[] = [];
       if (this.token) params.push(`token=${encodeURIComponent(this.token)}`);
-      if (this._activeRelayUrl && this.activeRelayPassword) {
-        params.push(`__rp=${encodeURIComponent(this.activeRelayPassword)}`);
+      if (this.streamRelayPassword) {
+        params.push(`__rp=${encodeURIComponent(this.streamRelayPassword)}`);
       }
       const join = url.includes("?") ? "&" : "?";
       return params.length ? `${url}${join}${params.join("&")}` : url;
     }
     if (this.token) u.searchParams.set("token", this.token);
-    if (this._activeRelayUrl && this.activeRelayPassword) {
-      u.searchParams.set("__rp", this.activeRelayPassword);
+    if (this.streamRelayPassword) {
+      u.searchParams.set("__rp", this.streamRelayPassword);
     }
     // EventSource can't set custom headers, so we pass the caller
     // surface as ?caller= and the agent treats it equivalently to
@@ -6818,12 +6945,15 @@ export class AgentClient {
     opts?: { launch?: "claude" | "codex" | "opencode"; tmuxSession?: string },
   ): Promise<string> {
     if (opts?.tmuxSession) {
-      const token = await this.issueBrowserSession("/ws/runner");
+      // Task tmux sessions live on the box that runs tasks — the runner box
+      // when a machine-role split is active.
+      const base = this.taskBaseUrl;
+      const token = await this.issueBrowserSession("/ws/runner", base);
       const q = new URLSearchParams({
         browser_session: token,
         name: opts.tmuxSession,
       });
-      return this.appendRelayPwToWs(`${this.baseUrl.replace(/^http/, "ws")}/ws/runner?${q.toString()}`);
+      return this.appendRelayPwToWs(`${base.replace(/^http/, "ws")}/ws/runner?${q.toString()}`);
     }
     const token = await this.issueBrowserSession("/ws/terminal");
     const c = cwd ? `&cwd=${encodeURIComponent(cwd)}` : "";
@@ -6874,9 +7004,10 @@ export class AgentClient {
   }
 
   private appendRelayPwToWs(url: string): string {
-    if (!this._activeRelayUrl || !this.activeRelayPassword) return url;
+    const pw = this.streamRelayPassword;
+    if (!pw) return url;
     const join = url.includes("?") ? "&" : "?";
-    return `${url}${join}__rp=${encodeURIComponent(this.activeRelayPassword)}`;
+    return `${url}${join}__rp=${encodeURIComponent(pw)}`;
   }
 
   // ── Vault (secrets stored encrypted on host disk) ─────────────────

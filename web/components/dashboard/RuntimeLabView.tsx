@@ -38,6 +38,7 @@ import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow
 import { CONVEX_URL } from "@/lib/constants";
 import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
+import { machineRolesSplitActive, type MachineRolesRow } from "@/lib/useMachineRoles";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
 import { ScreenContextChip } from "./ScreenContextChip";
 // Read-aloud must never recite Yaver's own prompt header — see lib/promptFraming.ts.
@@ -843,11 +844,23 @@ export default function RuntimeLabView({
   onOpenTmux,
   onReconnect,
   connectedDevice,
+  devices,
+  machineRoles,
+  onSaveMachineRoles,
+  onClearMachineRoles,
 }: {
   intent?: RuntimeLabIntent | null;
   onOpenTmux?: (sessionName: string) => void;
   onReconnect?: () => Promise<void>;
   connectedDevice?: Device | null;
+  /** Full device list — names for the machine-roles badge + route editor. */
+  devices?: Device[];
+  /** Favorite runner/render split row (userSettings.machineRolesByProject).
+   *  agentClient routing is set by the dashboard shell; this prop is for
+   *  DISPLAY + editing, so the two sources are never silent. */
+  machineRoles?: MachineRolesRow | null;
+  onSaveMachineRoles?: (row: MachineRolesRow) => Promise<void>;
+  onClearMachineRoles?: () => Promise<void>;
 }) {
   const { token } = useAuth();
   const { primaryRunnerByDevice, primaryModelByDevice, opencodeConfigByDevice, setPrimaryRunner, setOpenCodeConfigSnapshot } = usePrimaryRunnerByDevice(token);
@@ -874,6 +887,12 @@ export default function RuntimeLabView({
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
   const [chatRunnerControlsOpen, setChatRunnerControlsOpen] = useState(false);
+  // Machine-roles (runner/render split) route editor in the chat header.
+  const [machinesEditOpen, setMachinesEditOpen] = useState(false);
+  const [machinesDraftRunner, setMachinesDraftRunner] = useState("");
+  const [machinesDraftRender, setMachinesDraftRender] = useState("");
+  const [machinesBusy, setMachinesBusy] = useState(false);
+  const [machinesNote, setMachinesNote] = useState<string | null>(null);
   const [chatPaneWidth, setChatPaneWidth] = useState(() => {
     if (typeof window === "undefined") return defaultRuntimeChatWidth("phone");
     const parsed = Number(window.localStorage.getItem(RUNTIME_CHAT_WIDTH_KEY));
@@ -998,7 +1017,18 @@ export default function RuntimeLabView({
     savedRuntimeProject &&
     runtimeProjectIdentityScore(selectedProject, savedRuntimeProject) > 0
   );
-  const deviceRunnerFallback = useMemo(() => runnersFromDeviceInventory(connectedDevice), [connectedDevice?.id, connectedDevice?.runners]);
+  // Heartbeat-snapshot fallback for the live /agent/runners fetch. With a
+  // machine-role split active, tasks run on the RUNNER box — so the fallback
+  // must read that box's heartbeat row, not the connected (render) box's,
+  // or the auth gate answers for the wrong machine.
+  const runnerFallbackDevice = useMemo(() => {
+    const runnerId = machineRoles?.runnerDeviceId;
+    if (runnerId && runnerId !== connectedDevice?.id) {
+      return (devices || []).find((d) => d.id === runnerId) || connectedDevice;
+    }
+    return connectedDevice;
+  }, [connectedDevice, devices, machineRoles?.runnerDeviceId]);
+  const deviceRunnerFallback = useMemo(() => runnersFromDeviceInventory(runnerFallbackDevice), [runnerFallbackDevice?.id, runnerFallbackDevice?.runners]);
 
   const appendLog = useCallback((line: string) => {
     const stamp = new Date().toLocaleTimeString();
@@ -1222,6 +1252,86 @@ export default function RuntimeLabView({
     const id = window.setInterval(() => void refreshRunners(), 5000);
     return () => window.clearInterval(id);
   }, [refreshRunners]);
+
+  // ── Machine-role split (runner/render) — display + editing ─────────
+  // agentClient routing itself is set by the dashboard shell; here we make
+  // the two sources VISIBLE (badge) and editable, and refresh the seams
+  // that changed sides the moment the roles change: the runner list is now
+  // answered by the runner box, dev events by the render box.
+  const deviceNameById = useMemo(
+    () => new Map((devices || []).map((d) => [d.id, d.name || d.id.slice(0, 8)])),
+    [devices],
+  );
+  const machineSplitActive = machineRolesSplitActive(machineRoles);
+  const runnerBoxName = machineRoles?.runnerDeviceId
+    ? deviceNameById.get(machineRoles.runnerDeviceId) || machineRoles.runnerDeviceId.slice(0, 8)
+    : null;
+  const renderBoxName = (() => {
+    const id = machineRoles?.renderDeviceId || machineRoles?.runnerDeviceId;
+    return id ? deviceNameById.get(id) || id.slice(0, 8) : null;
+  })();
+  const roleEligibleDevices = useMemo(
+    () => (devices || []).filter((d) => !d.isGuest),
+    [devices],
+  );
+
+  useEffect(() => {
+    void refreshRunners();
+    setDevEventsUrl(agentClient.devEventsUrl);
+    // refreshRunners identity churns every render; the roles ids are the
+    // real trigger here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [machineRoles?.runnerDeviceId, machineRoles?.renderDeviceId]);
+
+  const openMachinesEditor = useCallback(() => {
+    setMachinesDraftRunner(machineRoles?.runnerDeviceId || connectedDevice?.id || "");
+    setMachinesDraftRender(machineRoles?.renderDeviceId || machineRoles?.runnerDeviceId || connectedDevice?.id || "");
+    setMachinesNote(null);
+    setMachinesEditOpen((open) => !open);
+  }, [connectedDevice?.id, machineRoles?.renderDeviceId, machineRoles?.runnerDeviceId]);
+
+  const saveMachineRoles = useCallback(async () => {
+    if (!onSaveMachineRoles || !machinesDraftRunner) return;
+    setMachinesBusy(true);
+    setMachinesNote(null);
+    const renderId = machinesDraftRender || machinesDraftRunner;
+    try {
+      await onSaveMachineRoles({
+        runnerDeviceId: machinesDraftRunner,
+        renderDeviceId: renderId,
+        workspace: machineRoles?.workspace || "runner-clone",
+        autoPush: machineRoles?.autoPush || "ask",
+      });
+      const rn = deviceNameById.get(machinesDraftRunner) || machinesDraftRunner.slice(0, 8);
+      const dn = deviceNameById.get(renderId) || renderId.slice(0, 8);
+      const summary = machinesDraftRunner === renderId
+        ? `Saved — ${rn} runs tasks and renders (single-box).`
+        : `Saved — chat streams from ${rn}; previews build and serve on ${dn}.`;
+      setMachinesNote(summary);
+      appendLog(`machine roles: ${machinesDraftRunner === renderId ? `single-box on ${rn}` : `chat→${rn} · render→${dn}`}`);
+      setMachinesEditOpen(false);
+    } catch (err) {
+      setMachinesNote(`Could not save: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setMachinesBusy(false);
+    }
+  }, [appendLog, deviceNameById, machineRoles?.autoPush, machineRoles?.workspace, machinesDraftRender, machinesDraftRunner, onSaveMachineRoles]);
+
+  const clearMachineRoles = useCallback(async () => {
+    if (!onClearMachineRoles) return;
+    setMachinesBusy(true);
+    setMachinesNote(null);
+    try {
+      await onClearMachineRoles();
+      setMachinesNote("Cleared — the connected machine runs and renders (single-box).");
+      appendLog("machine roles cleared: single-box");
+      setMachinesEditOpen(false);
+    } catch (err) {
+      setMachinesNote(`Could not clear: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setMachinesBusy(false);
+    }
+  }, [appendLog, onClearMachineRoles]);
 
   const selectedRunnerRow = useMemo(
     () => runners.find((runner) => runner.id === selectedRunner) || null,
@@ -2878,6 +2988,96 @@ export default function RuntimeLabView({
                   {chatRunnerControlsOpen ? "Fold" : "Edit"}
                 </button>
               </div>
+              {/* Machine-roles badge — two silent sources are two unfalsifiable
+                  states: always NAME which box the chat streams from and which
+                  box builds/serves the preview. */}
+              <div className="mt-2 grid min-h-9 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1.5 dark:border-[#2a3039] dark:bg-[#101318]">
+                <span className="min-w-0 truncate text-[11px] leading-5 text-[#667085] dark:text-[#9aa3af]">
+                  <span className="font-semibold uppercase tracking-wide">Machines</span>
+                  <span className="mx-1.5 text-[#98a2b3]">/</span>
+                  {machineSplitActive ? (
+                    <span className="font-medium text-indigo-700 dark:text-indigo-300">
+                      AI: {runnerBoxName} · Render: {renderBoxName}
+                    </span>
+                  ) : (
+                    <span className="font-medium text-[#344054] dark:text-[#d7dce3]">
+                      {runnerBoxName || connectedDevice?.name || "This machine"} runs and renders
+                    </span>
+                  )}
+                </span>
+                {onSaveMachineRoles ? (
+                  <button
+                    type="button"
+                    onClick={openMachinesEditor}
+                    className="flex h-8 shrink-0 items-center rounded-md border border-[#d7dce3] bg-white px-2 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#d7dce3]"
+                    aria-expanded={machinesEditOpen}
+                  >
+                    {machinesEditOpen ? "Fold" : "Route"}
+                  </button>
+                ) : null}
+              </div>
+              {machinesEditOpen ? (
+                <div className="mt-2 grid gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 dark:border-[#2a3039] dark:bg-[#101318]">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="min-w-0">
+                      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">AI runner (chat streams from)</span>
+                      <select
+                        value={machinesDraftRunner}
+                        onChange={(event) => setMachinesDraftRunner(event.target.value)}
+                        className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
+                      >
+                        <option value="">— pick a machine —</option>
+                        {roleEligibleDevices.map((device) => (
+                          <option key={device.id} value={device.id}>
+                            {device.name || device.id.slice(0, 8)}{device.online === false ? " (offline)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="min-w-0">
+                      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Renderer (builds + previews)</span>
+                      <select
+                        value={machinesDraftRender}
+                        onChange={(event) => setMachinesDraftRender(event.target.value)}
+                        className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
+                      >
+                        <option value="">same as runner</option>
+                        {roleEligibleDevices.map((device) => (
+                          <option key={device.id} value={device.id}>
+                            {device.name || device.id.slice(0, 8)}{device.online === false ? " (offline)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={machinesBusy || !machinesDraftRunner}
+                      onClick={() => void saveMachineRoles()}
+                      className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-emerald-200"
+                    >
+                      Save routing
+                    </button>
+                    {machineRoles && onClearMachineRoles ? (
+                      <button
+                        type="button"
+                        disabled={machinesBusy}
+                        onClick={() => void clearMachineRoles()}
+                        className="rounded-md border border-[#d7dce3] px-2.5 py-1.5 text-xs font-semibold text-[#475467] disabled:opacity-40 hover:text-[#1f2933] dark:border-[#2a3039] dark:text-[#d7dce3]"
+                      >
+                        Single-box
+                      </button>
+                    ) : null}
+                    <span className="text-[10px] text-[#98a2b3] dark:text-[#667085]">
+                      Applies account-wide · also in Settings → Machine roles
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+              {machinesNote ? (
+                <p className="mt-1 text-[11px] leading-4 text-[#667085] dark:text-[#9aa3af]">{machinesNote}</p>
+              ) : null}
               {chatRunnerControlsOpen ? (
                 <div className="mt-2 grid gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 dark:border-[#2a3039] dark:bg-[#101318]">
                   <div className="grid gap-2 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">

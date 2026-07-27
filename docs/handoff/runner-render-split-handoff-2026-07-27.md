@@ -37,9 +37,60 @@ verified vs what a fresh session builds next, in order.
   owner-dev unmetered on every relay lane. Memory files:
   `project_runner_render_split_design`, `vibe-followup-stuck-fixes-2026-07-27`.
 
+## DONE (same day, later session) — P3a + P3b web routing
+
+- **agent-client deviceId-scoped routing** (`web/lib/agent-client.ts`):
+  `setMachineRoleRoutes({runnerDeviceId, renderDeviceId})` + private
+  `taskBaseUrl` / `devBaseUrl` / `devProxyDeviceId`. Routed to the RUNNER
+  box: all `/tasks/*` (create/continue/stream/fork/question/answer/output
+  SSE + the startPolling loop), `/screen-context`, `/agent/runners`,
+  `/agent/runners/test`, non-peer `/runner-auth/*`, and the `/ws/runner`
+  tmux PTY (browser-session token minted on the runner box — mint and
+  validate must be the same box). Routed to the RENDER box: `/dev*`,
+  `/remote-runtime/*`, `/vibing/*`, and the preview URL getters
+  (`devPreviewUrl`, `devWebPreviewUrl`, `devWebBundleUrl`, `devEventsUrl`)
+  via the same-origin `/d/<renderId>/…` proxy. Single-box (roles unset or
+  equal, or matching the connected device) is byte-identical to before.
+  The completed-turn refresh hop needed NO RuntimeLabView change — 
+  `reloadDevServer`/`buildWebJSBundle`/`sendRemoteRuntimeCommand` all ride
+  `devBaseUrl` now, and reload coalescing is untouched.
+- **Relay compliance — verified, no relay change needed.** The relay
+  authorizes each `/d/<id>/` request per-request: password/sig →
+  `validateRelayAccessE(pw, "proxy", deviceID)` → Convex ownership scope
+  (`relay/server.go:1832` handleProxy). Same per-user credential reaches
+  every owned box; free relay and Relay Pro run the same code path with
+  entitlement resolved per request. A hostile tenant still reaches nothing.
+- **With/without Tailscale.** When the primary transport is direct/tunnel,
+  `roleBase` falls back to the highest-priority configured relay for
+  cross-device role traffic; `authHeaders`/`streamRelayPassword`/`__rp`
+  carry the password on those lanes (agent CORS already allows
+  X-Relay-Password — `httpserver.go:2972`). No relay configured at all →
+  named refusal, never a silent wrong-box dispatch.
+- **UI plumbing.** Shared hook `web/lib/useMachineRoles.ts` (one state for
+  Settings card + shell routing + Vibing header — no per-surface copies).
+  `page.tsx`: hook → `agentClient.setMachineRoleRoutes` effect; chat
+  runner-choices fallback + auth-gate message read the RUNNER box's
+  heartbeat row. `RuntimeLabView`: "Machines / AI: X · Render: Y" badge in
+  the chat header + inline Route editor (save/clear, account-wide), runner
+  fallback keyed to the runner box, runner list + dev-events refreshed on
+  role change. `MachineRolesCard` now consumes the shared hook.
+- **Follow-up idea (user, 2026-07-27): tvOS "mobil onay" sign-in** — the
+  unauthenticated Apple TV shows a pending-auth beacon the SIGNED-IN phone
+  can discover and approve (device-code family, `deviceCode.ts` +
+  `yaver auth --headless` short-code flow are the seams). Needs: TV
+  advertises a claim code + the phone resolves "whose TV is this" safely
+  in the unauthenticated state. Not started.
+
 ## MISSING — build in this order
 
-### P3a. Web routing: chat → runner device
+- **P3 leftovers (web):** `workDir` sent to the runner box is still the
+  connected box's absolute path — harmless until P3c ensure-clone resolves
+  per-box paths by projectName (`runtimeProjectCatalogByDevice`). Peer-
+  targeted (`/peer/<id>/runner-auth`) flows still address relative to the
+  connected box; `/ws/terminal` (non-tmux) and `/ws/metrics` stay on the
+  connected box by design.
+
+### P3a. Web routing: chat → runner device — DONE (see above)
 - Resolve roles: favorite row (+ future per-project override) from
   `GET /settings` — read it where the dashboard already loads settings.
 - Task create/continue/stream must address the RUNNER device even while the
@@ -55,7 +106,7 @@ verified vs what a fresh session builds next, in order.
   runner), render the named error — never fall back silently to the
   render box.
 
-### P3b. Web preview → render device + cross-machine reload hop
+### P3b. Web preview → render device + cross-machine reload hop — DONE (see above)
 - Vibing preview (RuntimeLabView `openWebUI` / `createSession` /
   `/dev/*` calls) binds to `renderDeviceId` when roles resolve.
 - The completed-turn refresh ("task finished: refreshing Web UI",

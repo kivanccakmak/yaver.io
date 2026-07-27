@@ -19,63 +19,39 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { CONVEX_URL } from "@/lib/constants";
+import { useMachineRoles, type MachineRolesRow } from "@/lib/useMachineRoles";
 
 type DeviceRow = { id: string; name: string; platform?: string };
-type RolesRow = {
-  projectName?: string;
-  runnerDeviceId: string;
-  renderDeviceId?: string;
-  workspace?: "runner-clone" | "render-ssh";
-  autoPush?: "never" | "ask" | "always";
-};
+type RolesRow = MachineRolesRow;
 
-export function MachineRolesCard({ token, devices }: { token: string | null; devices: DeviceRow[] }) {
-  const [loaded, setLoaded] = useState(false);
+export function MachineRolesCard({
+  token,
+  devices,
+  roles,
+}: {
+  token: string | null;
+  devices: DeviceRow[];
+  /** Shared hook instance from the dashboard shell. When provided, edits
+   *  here update the SAME state that drives agentClient's live routing —
+   *  no per-card fetch, no stale split until reload. */
+  roles?: ReturnType<typeof useMachineRoles>;
+}) {
+  const ownRoles = useMachineRoles(roles ? null : token);
+  const { favorite: savedRow, loaded, save: saveRow, clear: clearRow } = roles ?? ownRoles;
   const [runnerId, setRunnerId] = useState("");
   const [renderId, setRenderId] = useState("");
   const [workspace, setWorkspace] = useState<"runner-clone" | "render-ssh">("runner-clone");
   const [autoPush, setAutoPush] = useState<"never" | "ask" | "always">("ask");
-  const [savedRow, setSavedRow] = useState<RolesRow | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`${CONVEX_URL}/settings`, {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: "no-store",
-        });
-        const data = await res.json().catch(() => ({}));
-        const rows: RolesRow[] = data?.settings?.machineRolesByProject || [];
-        const favorite = rows.find((r) => !r.projectName) || null;
-        if (cancelled) return;
-        setSavedRow(favorite);
-        if (favorite) {
-          setRunnerId(favorite.runnerDeviceId);
-          setRenderId(favorite.renderDeviceId || favorite.runnerDeviceId);
-          setWorkspace(favorite.workspace || "runner-clone");
-          setAutoPush(favorite.autoPush || "ask");
-        }
-      } finally {
-        if (!cancelled) setLoaded(true);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [token]);
-
-  const post = useCallback(async (body: Record<string, unknown>) => {
-    const res = await fetch(`${CONVEX_URL}/settings`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error || `settings: HTTP ${res.status}`);
-  }, [token]);
+    if (!savedRow) return;
+    setRunnerId(savedRow.runnerDeviceId);
+    setRenderId(savedRow.renderDeviceId || savedRow.runnerDeviceId);
+    setWorkspace(savedRow.workspace || "runner-clone");
+    setAutoPush(savedRow.autoPush || "ask");
+  }, [savedRow]);
 
   const save = useCallback(async () => {
     if (!token || !runnerId) return;
@@ -88,8 +64,7 @@ export function MachineRolesCard({ token, devices }: { token: string | null; dev
         workspace,
         autoPush,
       };
-      await post({ machineRolesForProject: { ...row, updatedAt: Date.now() } });
-      setSavedRow(row);
+      await saveRow(row);
       const runnerName = devices.find((d) => d.id === runnerId)?.name || runnerId.slice(0, 8);
       const renderName = devices.find((d) => d.id === (renderId || runnerId))?.name || (renderId || runnerId).slice(0, 8);
       setNote(
@@ -102,22 +77,21 @@ export function MachineRolesCard({ token, devices }: { token: string | null; dev
     } finally {
       setBusy(false);
     }
-  }, [autoPush, devices, post, renderId, runnerId, token, workspace]);
+  }, [autoPush, devices, renderId, runnerId, saveRow, token, workspace]);
 
   const clear = useCallback(async () => {
     if (!token) return;
     setBusy(true);
     setNote(null);
     try {
-      await post({ machineRolesForProject: { runnerDeviceId: null } });
-      setSavedRow(null);
+      await clearRow();
       setNote("Cleared — back to single-box behavior (the connected machine does everything).");
     } catch (err) {
       setNote(`Could not clear: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusy(false);
     }
-  }, [post, token]);
+  }, [clearRow, token]);
 
   const selectCls = "h-9 w-full rounded-md border border-surface-700 bg-surface-900/60 px-2 text-xs text-surface-200";
 
