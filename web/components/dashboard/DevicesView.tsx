@@ -3222,7 +3222,23 @@ export default function DevicesView({
   );
   const actionableDevices = devices.filter((device) => !isDormantUnreachableDevice(device));
   const dormantDevices = devices.filter((device) => isDormantUnreachableDevice(device));
-  const renderedDevices = showDormantDevices ? devices : actionableDevices;
+  // Role-first, deterministic order: primary, AI runner, renderer, fallbacks,
+  // then everything else alphabetically. Fetch order varies per refresh and
+  // reads as random — the machines the account gave meaning to lead the list.
+  const roleRank = (id: string): number => {
+    const fav = machineRoles?.favorite;
+    if (id === primaryDeviceId) return 0;
+    if (id === fav?.runnerDeviceId) return 1;
+    if (id === fav?.renderDeviceId) return 2;
+    if (id === secondaryDeviceId) return 3;
+    if (id === fav?.secondaryRunnerDeviceId || id === fav?.secondaryRenderDeviceId) return 4;
+    return 5;
+  };
+  const renderedDevices = [...(showDormantDevices ? devices : actionableDevices)].sort(
+    (a, b) =>
+      roleRank(a.id) - roleRank(b.id) ||
+      (a.alias || a.name || a.id).localeCompare(b.alias || b.name || b.id),
+  );
   return (
     <div className="mb-6">
       <div className="mb-3 flex items-center justify-between">
@@ -3629,6 +3645,24 @@ export default function DevicesView({
                             <path d="m12 2.75 2.33 4.72 5.21.76-3.77 3.67.89 5.19L12 14.6l-4.66 2.49.89-5.19-3.77-3.67 5.21-.76L12 2.75Z" />
                           </svg>
                           Secondary
+                        </span>
+                      ) : null}
+                      {/* Machine-role chips — the role-first list order must
+                          explain itself on the card, same as Primary. */}
+                      {machineRoles?.favorite?.runnerDeviceId === device.id ? (
+                        <span
+                          className="rounded border border-indigo-400/50 bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-indigo-700 dark:border-indigo-400/40 dark:bg-indigo-500/10 dark:text-indigo-300"
+                          title="AI runner — chat and coding tasks stream from this box"
+                        >
+                          AI runner
+                        </span>
+                      ) : null}
+                      {machineRoles?.favorite?.renderDeviceId === device.id ? (
+                        <span
+                          className="rounded border border-teal-400/50 bg-teal-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-teal-700 dark:border-teal-400/40 dark:bg-teal-500/10 dark:text-teal-300"
+                          title="Renderer — builds, previews, and runtime targets run on this box"
+                        >
+                          Renderer
                         </span>
                       ) : null}
                       <DeviceLifecycleBadge device={device} />

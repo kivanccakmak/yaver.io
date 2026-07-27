@@ -916,6 +916,11 @@ export default function RuntimeLabView({
   const mobilePreviewFrameRef = useRef<HTMLIFrameElement | null>(null);
   const [runtimeConsolePinned, setRuntimeConsolePinned] = useState(true);
   const [taskConsolePinned, setTaskConsolePinned] = useState(true);
+  // The runner bubble shows the TAIL of the stream by default — that is where
+  // the runner narrates what it is doing and states its answer. Raw tool
+  // walls (grep dumps, file lists) fold behind a disclosure instead of
+  // burying the narration. The user's own bubble is untouched.
+  const [taskStreamExpanded, setTaskStreamExpanded] = useState(false);
   const [recentTasks, setRecentTasks] = useState<Task[]>([]);
   const [activeTaskStream, setActiveTaskStream] = useState<{
     id: string;
@@ -1055,6 +1060,11 @@ export default function RuntimeLabView({
   useEffect(() => {
     if (taskConsolePinned) scrollToBottom(taskConsoleRef.current);
   }, [activeTaskStream?.lines, taskConsolePinned, scrollToBottom]);
+
+  // New task → back to tail-only view; an expansion is a per-task choice.
+  useEffect(() => {
+    setTaskStreamExpanded(false);
+  }, [activeTaskStream?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3089,7 +3099,11 @@ export default function RuntimeLabView({
               </div>
             </div>
             <div className="mt-3">
-              <div className="grid min-h-11 min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1.5 dark:border-[#2a3039] dark:bg-[#101318]">
+              {/* One combined status row: runner, model, and machine routing —
+                  two silent sources are two unfalsifiable states, so the
+                  machines segment always NAMES which box the chat streams from
+                  and which box builds/serves the preview. */}
+              <div className="grid min-h-11 min-w-0 grid-cols-[minmax(0,0.8fr)_minmax(0,0.7fr)_minmax(0,1.1fr)_auto] items-center gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1.5 dark:border-[#2a3039] dark:bg-[#101318]">
                 <span className="min-w-0 truncate text-[11px] leading-5 text-[#667085] dark:text-[#9aa3af]">
                   <span className="font-semibold uppercase tracking-wide">Runner</span>
                   <span className="mx-1.5 text-[#98a2b3]">/</span>
@@ -3100,19 +3114,6 @@ export default function RuntimeLabView({
                   <span className="mx-1.5 text-[#98a2b3]">/</span>
                   <span className="font-medium text-[#344054] dark:text-[#d7dce3]">{effectiveChatModel || selectedModel || "runner default"}</span>
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setChatRunnerControlsOpen((open) => !open)}
-                  className="flex h-8 shrink-0 items-center rounded-md border border-[#d7dce3] bg-white px-2 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#d7dce3]"
-                  aria-expanded={chatRunnerControlsOpen}
-                >
-                  {chatRunnerControlsOpen ? "Fold" : "Edit"}
-                </button>
-              </div>
-              {/* Machine-roles badge — two silent sources are two unfalsifiable
-                  states: always NAME which box the chat streams from and which
-                  box builds/serves the preview. */}
-              <div className="mt-2 grid min-h-9 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1.5 dark:border-[#2a3039] dark:bg-[#101318]">
                 <span className="min-w-0 truncate text-[11px] leading-5 text-[#667085] dark:text-[#9aa3af]">
                   <span className="font-semibold uppercase tracking-wide">Machines</span>
                   <span className="mx-1.5 text-[#98a2b3]">/</span>
@@ -3126,16 +3127,26 @@ export default function RuntimeLabView({
                     </span>
                   )}
                 </span>
-                {onSaveMachineRoles ? (
+                <span className="flex shrink-0 items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={openMachinesEditor}
+                    onClick={() => setChatRunnerControlsOpen((open) => !open)}
                     className="flex h-8 shrink-0 items-center rounded-md border border-[#d7dce3] bg-white px-2 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#d7dce3]"
-                    aria-expanded={machinesEditOpen}
+                    aria-expanded={chatRunnerControlsOpen}
                   >
-                    {machinesEditOpen ? "Fold" : "Route"}
+                    {chatRunnerControlsOpen ? "Fold" : "Edit"}
                   </button>
-                ) : null}
+                  {onSaveMachineRoles ? (
+                    <button
+                      type="button"
+                      onClick={openMachinesEditor}
+                      className="flex h-8 shrink-0 items-center rounded-md border border-[#d7dce3] bg-white px-2 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#d7dce3]"
+                      aria-expanded={machinesEditOpen}
+                    >
+                      {machinesEditOpen ? "Fold" : "Route"}
+                    </button>
+                  ) : null}
+                </span>
               </div>
               {machinesEditOpen ? (
                 <div className="mt-2 grid gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 dark:border-[#2a3039] dark:bg-[#101318]">
@@ -3380,13 +3391,38 @@ export default function RuntimeLabView({
                         </div>
                       </div>
                     </div>
-                    <pre
-                      ref={taskConsoleRef}
-                      onScroll={(event) => setTaskConsolePinned(isNearBottom(event.currentTarget))}
-                      className="min-h-[420px] flex-1 overflow-auto whitespace-pre-wrap break-words p-3 text-[11px] leading-5 text-[#344054] dark:text-[#d5dae1]"
-                    >
-                      {activeTaskStream.lines.length ? activeTaskStream.lines.join("\n") : "Waiting for runner output..."}
-                    </pre>
+                    {(() => {
+                      // Tail-first stream: the last lines are where the runner
+                      // narrates and answers; earlier raw tool output (grep
+                      // walls, file lists) folds behind a disclosure so it
+                      // never buries the answer.
+                      const TAIL = 30;
+                      const lines = activeTaskStream.lines;
+                      const folded = !taskStreamExpanded && lines.length > TAIL + 10;
+                      const visible = folded ? lines.slice(-TAIL) : lines;
+                      return (
+                        <>
+                          {folded || taskStreamExpanded ? (
+                            <button
+                              type="button"
+                              onClick={() => setTaskStreamExpanded((open) => !open)}
+                              className="mx-3 mt-2 self-start rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#9aa3af]"
+                            >
+                              {folded
+                                ? `Show earlier output (${lines.length - TAIL} lines)`
+                                : "Collapse to latest output"}
+                            </button>
+                          ) : null}
+                          <pre
+                            ref={taskConsoleRef}
+                            onScroll={(event) => setTaskConsolePinned(isNearBottom(event.currentTarget))}
+                            className="min-h-[420px] flex-1 overflow-auto whitespace-pre-wrap break-words p-3 text-[11px] leading-5 text-[#344054] dark:text-[#d5dae1]"
+                          >
+                            {visible.length ? visible.join("\n") : "Waiting for runner output..."}
+                          </pre>
+                        </>
+                      );
+                    })()}
                   </div>
                   <StreamHealthNotice health={taskStreamHealth} />
                   {!taskConsolePinned ? (
