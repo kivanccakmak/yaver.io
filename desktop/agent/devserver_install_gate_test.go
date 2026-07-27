@@ -70,6 +70,46 @@ func TestDevInstallHelpHintNamesTheRightFix(t *testing.T) {
 	}
 }
 
+// The hint told the caller where to watch the install. It named
+// "/streams/install" — a path that does not exist. handleInstall opens
+// the stream as "install:<tool>" (install_http.go:46) and the route is
+// GET /streams/<name>, so the only correct answer is
+// /streams/install:<tool>. A remedy that names a 404 is the same defect
+// as no remedy: the user follows it, gets nothing, and concludes the
+// install is hung when it is streaming perfectly one path over.
+func TestDevInstallHelpHintNamesTheRealStreamPath(t *testing.T) {
+	for _, tc := range []struct{ endpoint, wantStream string }{
+		{"/install/bun", "/streams/install:bun"},
+		{"/install/mobile", "/streams/install:mobile"},
+		{"/install/flutter", "/streams/install:flutter"},
+	} {
+		hint := devInstallHelpHint([]string{"bun"}, true, tc.endpoint)
+		if !strings.Contains(hint, tc.wantStream) {
+			t.Errorf("endpoint %s: hint must name %s, got %q", tc.endpoint, tc.wantStream, hint)
+		}
+		// The old bare path must not survive anywhere in the sentence.
+		if strings.Contains(hint, "/streams/install ") || strings.HasSuffix(hint, "/streams/install") {
+			t.Errorf("endpoint %s: hint still names the non-existent bare /streams/install: %q", tc.endpoint, hint)
+		}
+	}
+}
+
+// installStreamPathForEndpoint must agree with handleInstall's own
+// naming, not re-derive it by hand.
+func TestInstallStreamPathMatchesHandleInstall(t *testing.T) {
+	// handleInstall: streamName := "install:" + tool, served at /streams/<name>.
+	if got := installStreamPathForEndpoint("/install/flutter"); got != "/streams/install:flutter" {
+		t.Errorf("got %q", got)
+	}
+	// Trailing slash and empty input must not produce a broken path.
+	if got := installStreamPathForEndpoint("/install/bun/"); got != "/streams/install:bun" {
+		t.Errorf("trailing slash: got %q", got)
+	}
+	if got := installStreamPathForEndpoint(""); got != "" {
+		t.Errorf("empty endpoint must yield no stream path, got %q", got)
+	}
+}
+
 func TestMetaInstallPlansForNodeBackedDevTools(t *testing.T) {
 	// The endpoints named above must resolve — installEndpointForTool
 	// promising /install/bun while metaInstallPlan rejects "bun" is the

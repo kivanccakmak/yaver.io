@@ -1003,9 +1003,30 @@ func installEndpointForTool(missing []string) string {
 // hint said "POST /install/node" no matter which tool was missing — a
 // remedy naming the wrong fix costs whole sessions (errSecInternalComponent
 // rule). Pinned by devserver_install_gate_test.go.
+// installStreamPathForEndpoint returns the SSE path that carries the
+// output of POST <endpoint>, derived the same way handleInstall names
+// it: streamName = "install:" + tool, served at GET /streams/<name>
+// (install_http.go, httpserver.go's /streams/ route).
+//
+// This exists because the hint used to say "/streams/install" flat,
+// which is not a stream any install ever opens. A user who followed the
+// remedy watched a 404 and concluded the install was hung while it was
+// streaming perfectly one path over — the same "remedy names a fix the
+// product refuses" defect as the 2026-07-26 `POST /install/flutter` 404.
+func installStreamPathForEndpoint(endpoint string) string {
+	tool := strings.Trim(strings.TrimPrefix(strings.TrimSpace(endpoint), "/install/"), "/")
+	if tool == "" || strings.HasPrefix(tool, "/") {
+		return ""
+	}
+	return "/streams/install:" + tool
+}
+
 func devInstallHelpHint(missing []string, installable bool, endpoint string) string {
 	if installable && endpoint != "" {
-		return fmt.Sprintf("POST %s from any surface (sudo-free, streamed to /streams/install) and retry.", endpoint)
+		if stream := installStreamPathForEndpoint(endpoint); stream != "" {
+			return fmt.Sprintf("POST %s from any surface (sudo-free; watch progress on %s) and retry.", endpoint, stream)
+		}
+		return fmt.Sprintf("POST %s from any surface (sudo-free) and retry.", endpoint)
 	}
 	return fmt.Sprintf("The agent has no install recipe for: %s. Install manually on this machine (see GET /install/list for what the agent can provision), then retry.", strings.Join(missing, ", "))
 }
