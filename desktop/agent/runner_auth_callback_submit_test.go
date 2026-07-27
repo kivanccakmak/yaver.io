@@ -119,3 +119,58 @@ type nopWriteCloser struct {
 }
 
 func (n nopWriteCloser) Close() error { return nil }
+
+// The Deliver-callback lane exists over HTTP for web/mobile, but MCP-driven
+// surfaces (voice, CLI attach, the phone MCP connector) could not use it at
+// all — start/status/submit_code/cancel had MCP verbs, submit-callback did
+// not (2026-07 failure-recovery audit §2e). These tests pin the verb's
+// registration and that every dispatch path funnels into the SAME HTTP
+// handler — so validateRunnerBrowserAuthCallbackURL stays the single
+// validation authority and MCP callers can never get weaker rules.
+func TestRunnerAuthBrowserSubmitCallbackMCPToolRegistered(t *testing.T) {
+	wrapper, ok := (&HTTPServer{}).getMCPToolsList().(map[string]interface{})
+	if !ok {
+		t.Fatal("getMCPToolsList did not return a map wrapper")
+	}
+	tools, ok := wrapper["tools"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("tools list missing")
+	}
+	for _, tool := range tools {
+		if tool["name"] != "runner_auth_browser_submit_callback" {
+			continue
+		}
+		schema, _ := tool["inputSchema"].(map[string]interface{})
+		required, _ := schema["required"].([]string)
+		want := map[string]bool{"session_id": false, "callback_url": false}
+		for _, r := range required {
+			if _, known := want[r]; known {
+				want[r] = true
+			}
+		}
+		for field, seen := range want {
+			if !seen {
+				t.Errorf("runner_auth_browser_submit_callback schema must require %q", field)
+			}
+		}
+		return
+	}
+	t.Fatal("runner_auth_browser_submit_callback not registered in getMCPToolsList")
+}
+
+func TestOpsRunnerAuthSubmitCallbackValidatesPayload(t *testing.T) {
+	for name, payload := range map[string]string{
+		"missingSession":  `{"op":"submit_callback","callbackUrl":"http://localhost:1234/callback?code=x"}`,
+		"missingCallback": `{"op":"submit_callback","sessionId":"claude-123"}`,
+	} {
+		res := opsRunnerAuthHandler(OpsContext{}, json.RawMessage(payload))
+		if res.OK || res.Code != "bad_payload" {
+			t.Errorf("%s: expected bad_payload rejection, got ok=%v code=%q", name, res.OK, res.Code)
+		}
+		// "unknown op" would also be bad_payload — require the op to be
+		// recognized and the MISSING FIELDS to be named.
+		if !strings.Contains(res.Error, "sessionId") || !strings.Contains(res.Error, "callbackUrl") {
+			t.Errorf("%s: error must name the required fields, got %q", name, res.Error)
+		}
+	}
+}

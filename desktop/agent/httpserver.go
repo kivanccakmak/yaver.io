@@ -11651,6 +11651,14 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		json.Unmarshal(call.Arguments, &a)
 		return mcpToolJSON(mcpRunnerBrowserAuthSubmitCode(a.DeviceID, a.SessionID, a.Code))
+	case "runner_auth_browser_submit_callback":
+		var a struct {
+			DeviceID    string `json:"device_id"`
+			SessionID   string `json:"session_id"`
+			CallbackURL string `json:"callback_url"`
+		}
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpRunnerBrowserAuthSubmitCallback(a.DeviceID, a.SessionID, a.CallbackURL))
 	case "runner_auth_browser_cancel":
 		var a struct {
 			DeviceID  string `json:"device_id"`

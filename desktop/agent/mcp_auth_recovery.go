@@ -800,6 +800,35 @@ func mcpRunnerBrowserAuthSubmitCode(deviceID, sessionID, code string) map[string
 	return out
 }
 
+// mcpRunnerBrowserAuthSubmitCallback delivers a localhost OAuth callback URL
+// into a running browser-auth session on the local or a remote machine — the
+// MCP twin of POST /runner-auth/browser/submit-callback. The user finished
+// the OAuth page on THEIR device, the browser landed on
+// http://localhost:<port>/callback?…, and the runner CLI on the target box
+// never saw it; this replays that URL to the CLI's waiting loopback listener.
+//
+// All validation (localhost-only, exact observed-port match, replay) lives in
+// the HTTP handler via validateRunnerBrowserAuthCallbackURL — this wrapper
+// adds NO validation of its own, so MCP-driven surfaces (voice, CLI attach,
+// the phone MCP connector) get exactly the same rules as web/mobile.
+// Privacy: the URL carries an OAuth code; it is forwarded once and never
+// logged, persisted, or sent to Convex.
+func mcpRunnerBrowserAuthSubmitCallback(deviceID, sessionID, callbackURL string) map[string]interface{} {
+	path := "/runner-auth/browser/submit-callback?id=" + urlQueryEscape(strings.TrimSpace(sessionID))
+	if strings.TrimSpace(deviceID) != "" {
+		out, err := proxyToDeviceJSON(context.Background(), "runner_auth_browser_submit_callback", strings.TrimSpace(deviceID), http.MethodPost, path, map[string]string{"callback_url": callbackURL})
+		if err != nil {
+			return map[string]interface{}{"ok": false, "error": err.Error()}
+		}
+		return out
+	}
+	out, err := localAgentRequest(http.MethodPost, path, map[string]interface{}{"callback_url": callbackURL})
+	if err != nil {
+		return map[string]interface{}{"ok": false, "error": err.Error()}
+	}
+	return out
+}
+
 func mcpRunnerBrowserAuthCancel(deviceID, sessionID string) map[string]interface{} {
 	path := "/runner-auth/browser/cancel?id=" + urlQueryEscape(strings.TrimSpace(sessionID))
 	if strings.TrimSpace(deviceID) != "" {

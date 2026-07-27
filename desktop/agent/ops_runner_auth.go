@@ -34,13 +34,15 @@ func init() {
 					"type": "string",
 					"enum": []string{
 						"status", "browser_start", "browser_status",
-						"submit_code", "cancel", "credentials_import",
+						"submit_code", "submit_callback", "cancel",
+						"credentials_import",
 					},
 				},
 				"deviceId":        map[string]interface{}{"type": "string", "description": "Target owned device id (the managed box). Omit for local."},
 				"runner":          map[string]interface{}{"type": "string", "enum": []string{"claude", "claude-code", "codex", "opencode"}},
 				"sessionId":       map[string]interface{}{"type": "string", "description": "From browser_start; for browser_status/submit_code/cancel."},
 				"code":            map[string]interface{}{"type": "string", "description": "Auth code/token for submit_code."},
+				"callbackUrl":     map[string]interface{}{"type": "string", "description": "Full localhost OAuth callback URL for submit_callback (browser finished on a different device than the runner)."},
 				"credentialsJson": map[string]interface{}{"type": "string", "description": "Subscription credentials blob for credentials_import."},
 			},
 			"additionalProperties": false,
@@ -84,6 +86,7 @@ func opsRunnerAuthHandler(_ OpsContext, payload json.RawMessage) OpsResult {
 		Runner          string `json:"runner"`
 		SessionID       string `json:"sessionId"`
 		Code            string `json:"code"`
+		CallbackURL     string `json:"callbackUrl"`
 		CredentialsJSON string `json:"credentialsJson"`
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
@@ -107,6 +110,11 @@ func opsRunnerAuthHandler(_ OpsContext, payload json.RawMessage) OpsResult {
 			return OpsResult{OK: false, Code: "bad_payload", Error: "sessionId and code required"}
 		}
 		return wrapMCPResult(mcpRunnerBrowserAuthSubmitCode(p.DeviceID, p.SessionID, p.Code))
+	case "submit_callback":
+		if strings.TrimSpace(p.SessionID) == "" || strings.TrimSpace(p.CallbackURL) == "" {
+			return OpsResult{OK: false, Code: "bad_payload", Error: "sessionId and callbackUrl required"}
+		}
+		return wrapMCPResult(mcpRunnerBrowserAuthSubmitCallback(p.DeviceID, p.SessionID, p.CallbackURL))
 	case "cancel":
 		if strings.TrimSpace(p.SessionID) == "" {
 			return OpsResult{OK: false, Code: "bad_payload", Error: "sessionId required"}
