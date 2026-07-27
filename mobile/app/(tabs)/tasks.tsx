@@ -591,6 +591,14 @@ function isReloadIntent(text: string): boolean {
   return RELOAD_INTENT.test(text.trim());
 }
 
+function taskStatusAllowsRuntimeRender(status?: TaskStatus | null): boolean {
+  return status === "completed" || status === "review";
+}
+
+function taskStatusMeansRunnerIsCoding(status?: TaskStatus | null): boolean {
+  return status === "queued" || status === "running";
+}
+
 type TaskPhaseTone = "neutral" | "active" | "warm" | "success";
 
 function deriveTaskPhases(task: Task): Array<{ label: string; tone: TaskPhaseTone }> {
@@ -2373,6 +2381,7 @@ export default function TasksScreen() {
   // Listen for streaming output — buffer updates to avoid UI freezing
   const outputBufferRef = useRef<Record<string, string[]>>({});
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRuntimeRenderRef = useRef<{ taskId: string; source: string; workDir?: string } | null>(null);
 
   // SSE stream for the selected running task (full live terminal stream)
   const sseAbortRef = useRef<(() => void) | null>(null);
@@ -2382,7 +2391,7 @@ export default function TasksScreen() {
       sseAbortRef.current();
       sseAbortRef.current = null;
     }
-    if (!selectedTask || (selectedTask.status !== "running" && selectedTask.status !== "queued")) return;
+    if (!selectedTask || !taskStatusMeansRunnerIsCoding(selectedTask.status)) return;
     if (!quicClient.isConnected) return;
 
     const abort = quicClient.streamTaskOutput(
@@ -2429,10 +2438,11 @@ export default function TasksScreen() {
           return;
         }
         if (evt.type === "runtime_render_requested") {
-          void rerenderActiveRemoteRuntimeSurface(
-            `mobile-task-${String(evt.reason || "render")}`,
-            typeof evt.workDir === "string" ? evt.workDir : undefined,
-          );
+          pendingRuntimeRenderRef.current = {
+            taskId: selectedTask.id,
+            source: `mobile-task-finished-${String(evt.reason || "render")}`,
+            workDir: typeof evt.workDir === "string" ? evt.workDir : undefined,
+          };
           return;
         }
         if (evt.type === "agent_question" && evt.question) {
@@ -2487,6 +2497,14 @@ export default function TasksScreen() {
       cancelled = true;
       abort();
     };
+  }, [selectedTask?.id, selectedTask?.status]);
+
+  useEffect(() => {
+    if (!selectedTask || !taskStatusAllowsRuntimeRender(selectedTask.status)) return;
+    const pending = pendingRuntimeRenderRef.current;
+    if (!pending || pending.taskId !== selectedTask.id) return;
+    pendingRuntimeRenderRef.current = null;
+    void rerenderActiveRemoteRuntimeSurface(pending.source, pending.workDir);
   }, [selectedTask?.id, selectedTask?.status]);
 
   // Second half of the same guard: a question that arrived over SSE for
@@ -3065,6 +3083,17 @@ export default function TasksScreen() {
     // when images are attached (clearly a real task) or with no live host.
     if (attachedImages.length === 0 && isEffectivelyConnected && isReloadIntent(newTaskText)) {
       if (isRecording) { try { await stopRecordingAndTranscribe(); } catch {} }
+      if (selectedTask && taskStatusMeansRunnerIsCoding(selectedTask.status)) {
+        pendingRuntimeRenderRef.current = {
+          taskId: selectedTask.id,
+          source: "mobile-user-reload-after-task",
+        };
+        setNewTaskText("");
+        setInputFromSpeech(false);
+        setReloadFlash("Reload queued until the current task finishes.");
+        setTimeout(() => setReloadFlash((cur) => (cur === "Reload queued until the current task finishes." ? null : cur)), 3500);
+        return;
+      }
       await triggerHermesReload();
       return;
     }

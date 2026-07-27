@@ -70,6 +70,22 @@ changing those.
   seriousness as the silence in a log. This session's heartbeat line
   ("2:14 elapsed · last output 3s ago"), the streamed compile logs, and the
   named-cause error panels are that rule in practice.
+  **No surprise re-render while the user is watching or typing.** Preview
+  refreshes are disruptive: they steal focus, reset scroll/state, and can make
+  the whole app feel frozen. Runner/MCP events such as
+  `runtime_render_requested`, output lines that mention "reload", and a user
+  prompt that asks to reload/re-render are only render *intents* while the task
+  is `queued`/`running`. Queue the intent, keep the last good iframe/native
+  surface visible, show only a quiet status line, and refresh exactly once when
+  the task reaches a renderable terminal state (`completed`/`review`) or when
+  the user explicitly taps Fast/Full Reload. First open may show a loading
+  surface; reloads must not replace a working preview with a branded
+  placeholder. Render/reload is atomic: if one reload is in flight, every other
+  trigger is ignored or coalesced until it finishes, and a new coding turn must
+  not start on that surface mid-reload. This is cross-surface policy, not a web
+  preference: web, mobile, tablet, tvOS, watchOS, Wear OS, car, AR/VR, and CLI
+  companion surfaces must all follow the same queue → quiet status → one final
+  render pattern.
 - **Every incident must leave the product harder than it found it.** When you
   debug a real failure — yours, a user's, or a past session's — fixing the
   immediate symptom is only half the job. Before you call it done, ask: *"what

@@ -68,6 +68,32 @@ broken heartbeat, dropped SSE frames, and a dead shake gesture on one screen
 while the other was fine. Cross-surface parity is this same rule wearing a
 different hat.
 
+## Cross-Surface Task / Render UX Contract
+
+Tasks, Vibing, render pages, browser previews, native previews, remote-runtime
+surfaces, and runner OAuth must follow the same product rule on every surface:
+web, mobile, tablet, tvOS, watchOS, Wear OS, car, AR/VR, and companion CLI.
+
+- **Runner coding state is explicit.** A task in `queued` or `running` means the
+  runner is coding. Do not infer reload permission from output text, spinner
+  state, or a dev server saying "ready".
+- **Render/reload intent is not render/reload execution.** MCP events such as
+  `runtime_render_requested`, agent output that mentions reload, and user
+  prompts like "reload", "re-render", "show it", or "refresh" are queued intents
+  while the runner is coding.
+- **Do not reload while coding.** Let the runner finish. Then render exactly
+  once when the task reaches a renderable terminal state (`completed` or
+  `review`), unless the user explicitly taps Fast/Full Reload when no task is
+  coding.
+- **Reload is atomic.** If a render/reload is already in flight, coalesce or
+  ignore new triggers until it finishes. Do not start another coding turn on the
+  same surface mid-reload.
+- **Keep the last good surface visible.** First open may show a loading surface;
+  a reload must not replace a working iframe/native preview with a branded
+  placeholder. Show a quiet status line such as "reload queued" or "refreshing
+  after task completion" instead of a modal, overlay, focus steal, or spinner
+  that blocks interaction.
+
 ## Browser transport contract (RN-web / Selenium lane)
 
 The mobile app also runs as RN-web so a browser can drive the REAL app. A

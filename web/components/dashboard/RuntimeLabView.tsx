@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type WheelEvent } from "react";
 import {
   agentClient,
   type RemoteRuntimeCapabilities,
@@ -55,6 +55,22 @@ const mobilePreviewDevices: Record<MobilePreviewMode, { label: string; width: nu
   phone: { label: "Mobile", width: 393, height: 852, radius: 34 },
   tablet: { label: "Tablet", width: 820, height: 1180, radius: 26 },
 };
+
+const RUNTIME_CHAT_WIDTH_KEY = "yaver.runtime.chatPaneWidth";
+const RUNTIME_CHAT_WIDTH_MIN = 340;
+const RUNTIME_CHAT_WIDTH_MAX = 1100;
+
+function defaultRuntimeChatWidth(mode: MobilePreviewMode = "phone") {
+  if (mode === "tablet") return 420;
+  if (typeof window === "undefined") return 720;
+  return Math.min(RUNTIME_CHAT_WIDTH_MAX, Math.max(620, Math.round(window.innerWidth * 0.42)));
+}
+
+function clampRuntimeChatWidth(width: number) {
+  const viewportMax = typeof window === "undefined" ? RUNTIME_CHAT_WIDTH_MAX : Math.max(RUNTIME_CHAT_WIDTH_MIN, window.innerWidth - 560);
+  const max = Math.min(RUNTIME_CHAT_WIDTH_MAX, viewportMax);
+  return Math.min(max, Math.max(RUNTIME_CHAT_WIDTH_MIN, Math.round(width)));
+}
 
 function RuntimePreviewLoadingScreen({
   note,
@@ -490,6 +506,10 @@ function taskStatusAllowsRender(status: TaskStatus): boolean {
   return status === "completed" || status === "review";
 }
 
+function taskStatusMeansRunnerIsCoding(status?: TaskStatus | null): boolean {
+  return status === "queued" || status === "running";
+}
+
 function canRunGuestOnRemoteTarget(targetId?: string): boolean {
   return [
     "ios-simulator",
@@ -682,10 +702,19 @@ export default function RuntimeLabView({
   const [runnerAuthCodeBusy, setRunnerAuthCodeBusy] = useState(false);
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
+  const [chatRunnerControlsOpen, setChatRunnerControlsOpen] = useState(false);
+  const [chatPaneWidth, setChatPaneWidth] = useState(() => {
+    if (typeof window === "undefined") return defaultRuntimeChatWidth("phone");
+    const parsed = Number(window.localStorage.getItem(RUNTIME_CHAT_WIDTH_KEY));
+    if (!Number.isFinite(parsed)) return defaultRuntimeChatWidth("phone");
+    return clampRuntimeChatWidth(parsed);
+  });
   const taskStreamStopRef = useRef<(() => void) | null>(null);
   const taskPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recognitionRef = useRef<any>(null);
   const autoRenderRef = useRef<string>("");
+  const webPreviewReloadInFlightRef = useRef(false);
+  const chatPaneResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const runtimeConsoleRef = useRef<HTMLPreElement | null>(null);
   const taskConsoleRef = useRef<HTMLPreElement | null>(null);
   const runnerSelectRef = useRef<HTMLSelectElement | null>(null);
@@ -787,7 +816,9 @@ export default function RuntimeLabView({
   }, []);
 
   useEffect(() => {
-    if (selectedProjectIsMobile) setMobilePreviewMode("phone");
+    if (!selectedProjectIsMobile) return;
+    setMobilePreviewMode("phone");
+    setChatPaneWidth(clampRuntimeChatWidth(defaultRuntimeChatWidth("phone")));
   }, [selectedPath, selectedProjectIsMobile]);
 
   const stopActiveTaskStream = useCallback(() => {
@@ -883,6 +914,42 @@ export default function RuntimeLabView({
       : activeTaskStream
         ? "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-200"
         : "border-[#d7dce3] bg-[#f2f4f7] text-[#667085] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#9aa3af]";
+  const runtimeGridStyle = {
+    "--runtime-chat-width": `${chatPaneWidth}px`,
+  } as CSSProperties;
+
+  const chooseMobilePreviewMode = useCallback((mode: MobilePreviewMode) => {
+    setMobilePreviewMode(mode);
+    setChatPaneWidth(clampRuntimeChatWidth(defaultRuntimeChatWidth(mode)));
+  }, []);
+
+  const beginChatPaneResize = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    chatPaneResizeRef.current = { startX: event.clientX, startWidth: chatPaneWidth };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, [chatPaneWidth]);
+
+  const moveChatPaneResize = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    const active = chatPaneResizeRef.current;
+    if (!active) return;
+    setChatPaneWidth(clampRuntimeChatWidth(active.startWidth - (event.clientX - active.startX)));
+  }, []);
+
+  const endChatPaneResize = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    chatPaneResizeRef.current = null;
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture may already be released by the browser.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(RUNTIME_CHAT_WIDTH_KEY, String(chatPaneWidth));
+    } catch {
+      // Best-effort layout preference.
+    }
+  }, [chatPaneWidth]);
 
   useEffect(() => {
     if (!connectedDevice?.id || normalizeRunnerId(selectedRunner) !== "opencode") return;
@@ -1180,6 +1247,10 @@ export default function RuntimeLabView({
   const sendPrompt = useCallback(async () => {
     const prompt = composer.trim();
     if (!prompt || sending) return;
+    if (webPreviewReloadInFlightRef.current) {
+      appendLog("send paused: preview reload is still finishing");
+      return;
+    }
     setSending(true);
     try {
       const existingTaskId = activeTaskStream?.id;
@@ -1412,15 +1483,20 @@ export default function RuntimeLabView({
    *  the same mode — Flutter maps fast→"r" (hot reload) and full→"R"
    *  (hot restart). Either way the iframe is re-mounted afterwards. */
   const reloadWebPreview = useCallback(async (kind: "fast" | "full") => {
-    if (!selectedProject || webPreviewBusy) return;
+    if (!selectedProject || webPreviewBusy || webPreviewReloadInFlightRef.current) return;
+    if (taskStatusMeansRunnerIsCoding(activeTaskStream?.status)) {
+      setWebPreviewNote(`${kind === "fast" ? "Fast reload" : "Full reload"} queued until the current task finishes.`);
+      appendLog(`${kind} reload queued until task ${activeTaskStream?.id || "current"} finishes`);
+      return;
+    }
+    webPreviewReloadInFlightRef.current = true;
     const framework = browserPreviewFrameworkForProject(selectedProject);
     const staticBundleFramework = ["expo", "react-native"].includes(framework);
     appendLog(`${kind} reload ${selectedProject.name}`);
     setRuntimeConsoleOpen(true);
     setError(null);
+    setWebPreviewBusy(true);
     if (staticBundleFramework) {
-      setWebPreviewBusy(true);
-      setWebPreviewFrameReady(false);
       setWebPreviewNote(kind === "fast" ? "Fast reload: checking bundle freshness..." : "Full reload: re-exporting web bundle...");
       try {
         const built = await agentClient.buildWebJSBundle({
@@ -1444,19 +1520,26 @@ export default function RuntimeLabView({
         setError(message);
         appendLog(`${kind} reload failed: ${message}`);
       } finally {
+        webPreviewReloadInFlightRef.current = false;
         setWebPreviewBusy(false);
       }
       return;
     }
     try {
+      setWebPreviewNote(kind === "fast" ? "Fast reload: notifying dev server..." : "Full reload: notifying dev server...");
       await agentClient.reloadDevServer({ mode: kind });
       appendLog(`${kind} reload sent to dev server`);
+      setWebPreviewNote(kind === "fast" ? "Fast reload sent." : "Full reload sent.");
     } catch (err) {
       appendLog(`${kind} reload failed: ${err instanceof Error ? err.message : String(err)}`);
+      setWebPreviewNote(err instanceof Error ? err.message : `${kind} reload failed`);
+      setError(err instanceof Error ? err.message : `${kind} reload failed`);
+    } finally {
+      webPreviewReloadInFlightRef.current = false;
+      setWebPreviewBusy(false);
     }
-    setWebPreviewFrameReady(false);
     setWebPreviewNonce((n) => n + 1);
-  }, [appendLog, selectedProject, webPreviewBusy]);
+  }, [activeTaskStream?.id, activeTaskStream?.status, appendLog, selectedProject, webPreviewBusy]);
 
   const closeWebPreview = useCallback(() => {
     setWebPreviewPanelOpen(false);
@@ -1471,7 +1554,6 @@ export default function RuntimeLabView({
     if (!activeTaskStream || !selectedProject) return;
     const structuredRequest = agentRenderRequest?.taskId === activeTaskStream.id ? agentRenderRequest : null;
     if (!taskStatusAllowsRender(activeTaskStream.status)) return;
-    if (!structuredRequest && !taskOutputSuggestsRender(activeTaskStream.lines, activeTaskStream.status)) return;
     const key = [
       activeTaskStream.id,
       activeTaskStream.status,
@@ -1579,7 +1661,10 @@ export default function RuntimeLabView({
   }, [appendLog, intent, onOpenTmux]);
 
   return (
-    <div className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-3 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] sm:p-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+    <div
+      className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-3 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] sm:p-4 xl:[grid-template-columns:minmax(0,1fr)_10px_var(--runtime-chat-width)]"
+      style={runtimeGridStyle}
+    >
       <div className="min-h-0 min-w-0 space-y-3 overflow-y-auto">
         {!webPreviewPanelOpen ? (
         <div className="flex flex-wrap items-end gap-2">
@@ -1750,7 +1835,7 @@ export default function RuntimeLabView({
                                   <button
                                     key={mode}
                                     type="button"
-                                    onClick={() => setMobilePreviewMode(mode)}
+                                    onClick={() => chooseMobilePreviewMode(mode)}
                                     className={`rounded px-2 py-1 text-[11px] font-medium ${
                                       selected
                                         ? "bg-[#1f2933] text-white dark:bg-[#e6e8ec] dark:text-[#101318]"
@@ -1872,7 +1957,7 @@ export default function RuntimeLabView({
                                 title={`${mobilePreviewDevice.label} Web UI preview`}
                                 onLoad={() => window.setTimeout(() => setWebPreviewFrameReady(true), 900)}
                               />
-                              {!webPreviewFrameReady ? (
+                              {!webPreviewFrameReady && !webPreviewBusy ? (
                                 <div className="absolute inset-0">
                                   <RuntimePreviewLoadingScreen
                                     note={webPreviewNote || "Starting mobile web preview..."}
@@ -1892,7 +1977,7 @@ export default function RuntimeLabView({
                             title="Project Web UI preview"
                             onLoad={() => window.setTimeout(() => setWebPreviewFrameReady(true), 900)}
                           />
-                          {!webPreviewFrameReady ? (
+                          {!webPreviewFrameReady && !webPreviewBusy ? (
                             <div className="absolute inset-0">
                               <RuntimePreviewLoadingScreen
                                 note={webPreviewNote || "Starting web preview..."}
@@ -1983,7 +2068,20 @@ export default function RuntimeLabView({
         ) : null}
       </div>
 
-      <aside className="flex min-h-0 flex-col gap-3 overflow-hidden border-t border-[#d7dce3] pt-3 dark:border-[#2a3039] xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
+      <button
+        type="button"
+        className="group hidden min-h-0 cursor-col-resize items-stretch justify-center rounded-md border border-transparent py-1 hover:border-[#d7dce3] focus:outline-none focus:ring-2 focus:ring-[#7c5cff]/40 dark:hover:border-[#2a3039] xl:flex"
+        onPointerDown={beginChatPaneResize}
+        onPointerMove={moveChatPaneResize}
+        onPointerUp={endChatPaneResize}
+        onPointerCancel={endChatPaneResize}
+        title="Drag to resize Chat"
+        aria-label="Resize Chat pane"
+      >
+        <span className="h-full w-1 rounded-full bg-[#d7dce3] transition-colors group-hover:bg-[#98a2b3] dark:bg-[#2a3039] dark:group-hover:bg-[#667085]" />
+      </button>
+
+      <aside className="flex min-h-0 flex-col gap-3 overflow-hidden border-t border-[#d7dce3] pt-3 dark:border-[#2a3039] xl:border-l-0 xl:border-t-0 xl:pt-0">
         <div className="flex min-h-[420px] flex-1 flex-col overflow-hidden rounded-md border border-[#d7dce3] bg-white shadow-sm dark:border-[#2a3039] dark:bg-[#141820]">
           <div className="border-b border-[#e4e7ec] px-4 py-3 dark:border-[#242b35]">
             <div className="flex items-start justify-between gap-3">
@@ -2018,70 +2116,91 @@ export default function RuntimeLabView({
                 </span>
               </div>
             </div>
-            <div className="mt-3 grid gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 dark:border-[#2a3039] dark:bg-[#101318]">
-              <div className="grid gap-2 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-                <label className="min-w-0">
-                  <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Runner</span>
-                  <select
-                    ref={runnerSelectRef}
-                    value={selectedRunner}
-                    onChange={(event) => setSelectedRunner(event.target.value)}
-                    className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
-                  >
-                    {runners.length === 0 ? <option value="">No runners detected</option> : null}
-                    {runners.map((runner) => (
-                      <option key={runner.id} value={runner.id}>
-                        {runner.name}{runner.ready === false ? " (sign-in needed)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {availableModels.length > 0 ? (
-                  <label className="min-w-0">
-                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Model</span>
-                    <select
-                      ref={modelSelectRef}
-                      value={selectedModel}
-                      onChange={(event) => setSelectedModel(event.target.value)}
-                      className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
-                    >
-                      {availableModels.map((model) => (
-                        <option key={model.id} value={model.id}>{model.name || model.id}</option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  <div className="min-w-0">
-                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Model</span>
-                    <div className="truncate rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#667085] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#9aa3af]">
-                      runner default
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
+            <div className="mt-3">
+              <div className="flex min-w-0 items-center gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1.5 dark:border-[#2a3039] dark:bg-[#101318]">
+                <span className="min-w-0 flex-1 truncate text-[11px] text-[#667085] dark:text-[#9aa3af]">
+                  <span className="font-semibold uppercase tracking-wide">Runner</span>
+                  <span className="mx-1.5 text-[#98a2b3]">/</span>
+                  <span className="font-medium text-[#344054] dark:text-[#d7dce3]">{selectedRunnerRow?.name || selectedRunner || "No runner"}</span>
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[11px] text-[#667085] dark:text-[#9aa3af]">
+                  <span className="font-semibold uppercase tracking-wide">Model</span>
+                  <span className="mx-1.5 text-[#98a2b3]">/</span>
+                  <span className="font-medium text-[#344054] dark:text-[#d7dce3]">{effectiveChatModel || selectedModel || "runner default"}</span>
+                </span>
                 <button
                   type="button"
-                  disabled={!connectedDevice?.id || !selectedRunner}
-                  onClick={() => void saveRunnerChoice()}
-                  className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-emerald-200"
+                  onClick={() => setChatRunnerControlsOpen((open) => !open)}
+                  className="shrink-0 rounded-md border border-[#d7dce3] bg-white px-2 py-1 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#d7dce3]"
+                  aria-expanded={chatRunnerControlsOpen}
                 >
-                  Save for machine
+                  {chatRunnerControlsOpen ? "Fold" : "Edit"}
                 </button>
-                {selectedRunnerRow?.supportsBrowserAuth && selectedRunnerRow.ready === false ? (
-                  <button
-                    type="button"
-                    disabled={runnerAuthBusy}
-                    onClick={() => void startSelectedRunnerSignIn()}
-                    className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-xs font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
-                  >
-                    {runnerAuthBusy ? "Opening..." : "Remote OAuth"}
-                  </button>
-                ) : null}
-                <span className="min-w-0 truncate text-[11px] text-[#667085] dark:text-[#9aa3af]">
-                  {selectedRunnerRow?.name || selectedRunner || "No runner"} / {safeModelForRunner(selectedRunner, selectedModel, availableModels) || selectedModel || "runner default"}
-                </span>
               </div>
+              {chatRunnerControlsOpen ? (
+                <div className="mt-2 grid gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 dark:border-[#2a3039] dark:bg-[#101318]">
+                  <div className="grid gap-2 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                    <label className="min-w-0">
+                      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Runner</span>
+                      <select
+                        ref={runnerSelectRef}
+                        value={selectedRunner}
+                        onChange={(event) => setSelectedRunner(event.target.value)}
+                        className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
+                      >
+                        {runners.length === 0 ? <option value="">No runners detected</option> : null}
+                        {runners.map((runner) => (
+                          <option key={runner.id} value={runner.id}>
+                            {runner.name}{runner.ready === false ? " (sign-in needed)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {availableModels.length > 0 ? (
+                      <label className="min-w-0">
+                        <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Model</span>
+                        <select
+                          ref={modelSelectRef}
+                          value={selectedModel}
+                          onChange={(event) => setSelectedModel(event.target.value)}
+                          className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
+                        >
+                          {availableModels.map((model) => (
+                            <option key={model.id} value={model.id}>{model.name || model.id}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <div className="min-w-0">
+                        <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Model</span>
+                        <div className="truncate rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#667085] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#9aa3af]">
+                          runner default
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={!connectedDevice?.id || !selectedRunner}
+                      onClick={() => void saveRunnerChoice()}
+                      className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-emerald-200"
+                    >
+                      Save for machine
+                    </button>
+                    {selectedRunnerRow?.supportsBrowserAuth && selectedRunnerRow.ready === false ? (
+                      <button
+                        type="button"
+                        disabled={runnerAuthBusy}
+                        onClick={() => void startSelectedRunnerSignIn()}
+                        className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-xs font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
+                      >
+                        {runnerAuthBusy ? "Opening..." : "Remote OAuth"}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
             </div>
             <div className="mt-3 flex min-w-0 items-center gap-2">
               <div className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -2273,7 +2392,7 @@ export default function RuntimeLabView({
                     )}
                   </button>
                   <button
-                    disabled={!composer.trim() || sending}
+                    disabled={!composer.trim() || sending || webPreviewBusy}
                     onClick={() => void sendPrompt()}
                     className="h-9 shrink-0 rounded-md bg-[#7c5cff] px-4 text-xs font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-[#d7dce3] disabled:text-[#98a2b3] dark:disabled:bg-[#242b35]"
                   >

@@ -13,6 +13,7 @@ const FEEDBACK_KEY_FALLBACK = "@yaver/feedback_config";
 let activeRemoteRuntimeSessionID: string | null = null;
 let activeRemoteRuntimeSession: Pick<RemoteRuntimeSession, "id" | "workDir" | "targetId" | "targetLabel"> | null = null;
 let cooldownUntil = 0;
+let remoteRuntimeRenderInFlight = false;
 
 // The active preview lane. Set by DevPreview (browser) / remote-runtime (webrtc)
 // so a shake routes to the RIGHT place. In the Hermes lane the native container
@@ -93,7 +94,12 @@ export async function rerenderActiveRemoteRuntimeSurface(source = "mobile-auto-r
   const session = activeRemoteRuntimeSession;
   if (!session?.id) return false;
   if (session.targetId && !canRunGuestOnRemoteTarget(session.targetId)) return false;
+  if (remoteRuntimeRenderInFlight) {
+    appLog("info", `remote runtime render already in flight; skipped ${source}`);
+    return false;
+  }
   const effectiveWorkDir = workDir || session.workDir || undefined;
+  remoteRuntimeRenderInFlight = true;
   try {
     const result = await quicClient.sendRemoteRuntimeCommand(session.id, "run-guest", source, effectiveWorkDir);
     if (result.session) setActiveRemoteRuntimeSession(result.session);
@@ -102,6 +108,8 @@ export async function rerenderActiveRemoteRuntimeSurface(source = "mobile-auto-r
   } catch (err) {
     appLog("warn", `remote runtime auto-render failed: ${err instanceof Error ? err.message : String(err)}`);
     return false;
+  } finally {
+    remoteRuntimeRenderInFlight = false;
   }
 }
 
