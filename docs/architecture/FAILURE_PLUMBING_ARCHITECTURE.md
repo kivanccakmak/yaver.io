@@ -539,6 +539,16 @@ that Yaver does not know. It is that knowing stops at the process boundary.
 12. **Advisory content may never win over the route** — not in time (a blocking
     preflight, §2b) and not in pixels (an unbounded diagnostics wall, §2c).
     Cap it, bound it, and give the route a floor.
+13. **A fix must be POSSIBLE here before it is offered** — resolved per
+    GOOS/GOARCH, `Constraint` instead of `Fix` when it is not. See §8b.
+14. **A fix must FIT here before it is started** — real free bytes on the volume
+    it writes to, real RAM. `ok` / `tight` (warn, keep the button) /
+    `insufficient` (refuse with numbers). See §8b.
+15. **A refusal that is only a refusal is a dead end** — when space blocks it,
+    ship the reclaim route with it. See §8b.
+16. **A fix that dies half-way must leave the box unstuck** — partial state is
+    self-clearing or self-describing, never a tree that makes every future
+    attempt report success. See §8b.
 
 ### Seams that already implement it well
 
@@ -709,6 +719,219 @@ a path no install ever opens. Now derives the real path from the endpoint
 (`installStreamPathForEndpoint`, `devserver_http.go:1011-1022`), pinned by
 `TestDevInstallHelpHintNamesTheRealStreamPath` +
 `TestInstallStreamPathMatchesHandleInstall`, **guard proven by breaking it.**
+
+---
+
+## 8b. PLATFORM + RESOURCE — "don't give hope if it isn't possible"
+
+*Landed 2026-07-27. Producer: `desktop/agent/capability_platform.go`,
+`capability_resources.go`, `capability_partial.go`. Renderers:
+`mobile/src/lib/capabilityGap.ts` = `web/lib/capabilityGap.ts` (byte-identical),
+`web/components/dashboard/ReclaimPanel.tsx`, `desktop/agent/capability_gap_client.go`.*
+
+### 8b.1 The defect: the inventory answering for the operation, one layer up
+
+§7 rule 5 already said *resolve the fix per os/arch before claiming anything*.
+Until this pass the producer did not: `capabilityGapForMissingTools` asked
+**"does `yaver install <tool>` have a recipe?"** and treated a yes as a yes
+everywhere. That is `commandExists` wearing a different hat — a recipe is an
+inventory fact; whether it works on **this** GOOS/GOARCH with **this** much free
+disk is the operation.
+
+Two concrete, opposite failures it produced:
+
+| Direction | What shipped | Why it is worse than a refusal |
+|---|---|---|
+| **False offer** | `POST /install/flutter` has a recipe ⇒ a Windows box rendered "Install Flutter". `runFlutterInstall` on `GOOS=windows` git-clones, then writes `~/.profile` — a file no Windows shell reads. | The install reports **success** and `flutter` is still absent. A green fix over an unchanged failure teaches the user that Yaver's buttons do not work. |
+| **False constraint** | Reading `flutterStableTarball` alone ("no linux/arm64 tarball") ⇒ "Flutter is impossible on arm64". | `flutter_install.go` has git-cloned there the whole time. Declaring impossible what the product supports **withholds a working capability**. |
+
+**Getting this backwards in EITHER direction is the defect.** Both are pinned:
+`TestFlutterIsInstallableOnLinuxArm64ViaGitClone` and
+`TestProducerRefusesAFixItsPlatformCannotRun`.
+
+The resource half is the same shape one step later: the button was honest about
+the **size** (`~1.2 GB`) and silent about the **headroom**. On a box with 340 MB
+free the user waits eight minutes for a real download that ends in ENOSPC —
+after the partial SDK has eaten the last of the disk. A box at zero free cannot
+write a log line, so it cannot report why it stopped (the fact that forced
+`autorun_resources.go` on 2026-07-16).
+
+### 8b.2 The contract, added to §7
+
+> **13. A fix must be possible HERE before it is offered.** Resolve per
+> GOOS/GOARCH (and OS version where it matters). When the fix cannot work on
+> this machine, emit `Constraint` **instead of** `Fix` — never a button that
+> will fail, and never a disabled button with no reason. `Constraint` is a
+> first-class state on every renderer: not an error, not a spinner. It ENDS a
+> wait.
+>
+> **14. A fix must FIT here before it is started.** Probe real free bytes on the
+> volume the install writes to (not `/`, not the agent's CWD) and real RAM.
+> Three verdicts, not two:
+> `ok` → start, put the headroom on the button anyway;
+> `tight` → start, **and** warn — a warning is not a refusal, the button stays;
+> `insufficient` → refuse with the numbers, and ship a **reclaim route**.
+>
+> **15. A refusal that is only a refusal is a dead end.** Whenever space blocks
+> (or nearly blocks) an operation, the gap carries `Reclaim` — the route to the
+> caches that would fix it, with sizes.
+>
+> **16. A fix that dies half-way must not leave the box stuck.** Partial state is
+> self-clearing or self-describing with a route, never a tree that makes every
+> future attempt report success over a broken install.
+
+### 8b.3 The per-tool matrix (`capabilityToolMatrix`)
+
+One row per tool declares **name, platform predicate, honest constraint, install
+bytes, first-build bytes, RAM floor, install root, partial paths**. Adding a
+toolchain is one row; nothing else in the product learns about its limits.
+
+Every predicate mirrors a fact an installer in this repo already encodes — the
+rule is **cite the file or do not add the row**.
+
+| Tool | Supported | Refused where | Named constraint routes to | Install / first build / RAM | Source of truth |
+|---|---|---|---|---|---|
+| `flutter` | darwin (any), linux **amd64 + arm64** | native windows | WSL2 | 2 GB / 2 GB / 2 GB | `flutter_install.go` — tarball on amd64, **git-clone on arm64** |
+| `android-sdk` | darwin, linux | windows | WSL2 | 5 GB / 3 GB / 4 GB | `android_sdk_install.go` refuses non-linux/darwin outright |
+| `emulator` | **not** linux/arm64 | linux/arm64 | **redroid**, or a physical phone via `yaver wire` | 3 GB / 2 GB / 8 GB | `emulatorHostSupported()` — reused, not copied |
+| `redroid` | linux only | darwin, windows | Linux box / managed cloud / physical phone | 4 GB / – / 4 GB | `android_resource.go` (binder in kernel) |
+| `node`, `mobile` | linux+darwin × amd64+arm64 | windows, other arches | nodejs.org, or WSL2 | 0.4–0.6 GB / 0.5–1 GB / 1–2 GB | `nodeTarballForPlatform()` — exactly four pairs |
+| `hermesc` | darwin, linux (arm64 builds from source) | windows | WSL2; browser preview needs no Hermes | 1 GB / 0.5 GB / 4 GB | `hermesc_embedded.go` (3 prebuilts) + `hermesc_resolver.go` (from-source) |
+| `chrome` | darwin, linux/**amd64**, windows | **linux/arm64** | install `chromium` instead | 1 GB / – / 2 GB | `chrome_install.go` — Google's apt/rpm repos are x86_64 only |
+| `docker` | darwin, linux | windows | WSL2 | 3 GB / – / 4 GB | `install_cmd.go` docker plan |
+| `xcodebuild`, `xcrun`, `simctl`, `pod`, `xcodegen`, `cliclick`, `wda` | **darwin only** | everything else | a Mac (`yaver primary set`) **or** the WebRTC native-preview lane | up to 40 GB / 10 GB / 8 GB | Apple ships no Xcode or simulator runtime off macOS |
+| `carton` (SwiftWasm) | darwin, linux | windows | WSL2 | – / – / 4 GB | no recipe in either install table ⇒ constraint either way |
+| `ffmpeg`, `tmux` | darwin, linux | windows | WSL2 | 0.3 GB / 20 MB | package-manager plans |
+| `claude`, `codex`, `opencode` | anywhere Node runs | – | – | 0.4 GB / – / 2 GB | npm-backed, `install_cmd.go` |
+
+A tool **absent** from the table is not "unsupported" — it declares no limit
+beyond the install registry, which is the right default for npm-backed CLIs.
+
+### 8b.4 What now renders as an honest Constraint instead of a false button
+
+- iOS simulator / Xcode / CocoaPods / WDA on any Linux or Windows box — a
+  spinner over these could never end.
+- Android emulator on linux/arm64 — and the sentence names **redroid**, the path
+  that does work there.
+- Google Chrome on linux/arm64 — and the sentence names **chromium**.
+- Flutter / Android SDK / Docker / ffmpeg / tmux / Node on **native** Windows —
+  and the sentence names **WSL2**, Yaver's supported Windows path.
+- Any tool on a box that cannot hold it — a **different reason code**
+  (`capability.insufficient_disk`), because installing is not the remedy for a
+  full disk and rendering an Install button there sends the user to press
+  something that cannot help.
+
+And, equally load-bearing, what still renders as a **button**: Flutter on
+linux/arm64, hermesc on linux/arm64, Chrome on linux/amd64. Withholding those
+would be the same defect facing the other way.
+
+### 8b.5 Resource awareness — three verdicts, one measurement
+
+`probeMachineHeadroom(path)` reuses `statfsGB` and `getSystemMemoryMB` — no
+third way to ask the same kernel. It measures the volume the install **writes
+to**, walking up to the nearest existing ancestor because the install root does
+not exist yet (that is the point) and `statfs` on it is ENOENT.
+
+| Verdict | Condition | Product behaviour |
+|---|---|---|
+| `ok` | free ≥ install + 1 GB floor + first-build | start; headroom still appended to `Fix.Est` |
+| `tight` | fits the install but not the first build, **or** RAM below the row's floor | **fix stays**; `Warning` rides beside it; `Reclaim` offered pre-emptively |
+| `insufficient` | free < install + 1 GB floor | refuse with the numbers; `Reclaim` shipped; code flips to `capability.insufficient_disk` |
+
+Two deliberate asymmetries:
+
+- **A failed probe refuses nothing.** An unmeasured volume is not a full volume;
+  turning a broken measurement into a broken product is the false-green rule
+  pointing the other way (`TestAnUnmeasuredVolumeRefusesNothing`).
+- **RAM warns, never refuses.** RAM cannot be reclaimed and the install itself
+  almost always succeeds. Telling a 2 GB box it will swap through an Android
+  build is honest; refusing the download is not.
+
+The **1 GB surviving floor** is not taste: a machine at zero free cannot log why
+it stopped, which is indistinguishable from a hang — on a box the user is not
+sitting in front of.
+
+### 8b.6 Pre-emptive reclaim — the route, and the two hard limits
+
+`Reclaim` is `GapFix`-shaped, so every surface renders it with the code it
+already has. It delegates entirely to the reclaim engine this repo already ships
+(`storage_reclaim.go`, `GET /storage/scan` + `POST /storage/reclaim`) — nothing
+about *what is safe to delete* is re-implemented in the gap layer.
+
+1. **SHOW BEFORE DELETE.** `GapFix.Confirm` names the preview route; the client
+   must fetch it and render every path, its size, and **what regenerating it
+   costs**. Nothing is pre-selected. The agent refuses an apply without
+   `{"confirm":true}` regardless of what any client does — the gate is
+   server-side, because a client-side gate is a suggestion.
+2. **ONLY PROVABLY-REGENERABLE PATHS.** `reclaimPathAllowed()` refuses the
+   filesystem root, `$HOME` itself, anything outside `$HOME`, and any directory
+   containing a `.git`. Per-OS catalogue: Gradle caches, `.android/build-cache`,
+   `.expo`, the Go build cache, Docker dangling layers, Yaver's own task history
+   (all OSes); Xcode DerivedData **attributed per project**, Archives, iOS
+   DeviceSupport, CoreSimulator caches, CocoaPods/npm/Yarn/Homebrew caches
+   (macOS); npm/Yarn/pip/go-build under `~/.cache` (Linux);
+   `LOCALAPPDATA` npm/Yarn/pnpm/go-build/NuGet/pip (Windows). Plus the new
+   stranded-download sweep in `capability_partial.go`.
+
+**Sizing stays off the critical path.** A scan is a 45-second IO storm, so the
+gap reads only a **warm** cache (`cachedReclaimableBytes`) and kicks a background
+scan — at most one, at most every five minutes — when there is none. First
+failure gets the route without the number; the next poll gets both. Advisory
+work that blocks the operation it annotates is the §2b defect.
+
+### 8b.7 Stuck-state audit — what a half-finished fix used to leave behind
+
+| Stuck state | Found where | Now |
+|---|---|---|
+| **Partial SDK reads as installed.** Kill the agent during `tar -xJf`: `bin/flutter` is near the front of the archive and executable, so `runFlutterInstall`'s `os.Stat(flutterBin)` check announced *"Flutter already installed — skipping download"* and returned **success** over a 15%-extracted tree. Re-running could never help; only `rm -rf /opt/flutter` escaped, and that person is not on a phone. | `flutter_install.go` | A **completion marker** (`.yaver-install-complete`), written last. Root without marker **and** failing a real usability probe ⇒ provably partial ⇒ `beginToolInstall` removes it and **says so on the stream**. Pinned by `TestAPartiallyExtractedTreeIsNotMistakenForAnInstall`, guard proven by breaking it. |
+| **Pre-marker trees.** A box that installed Flutter before this existed has a good SDK and no marker. | — | Adopted, never deleted: absence of a marker only means partial when the tree **also** fails `flutterSDKLooksComplete`. Then the marker is stamped so the next check is cheap. `TestAPreMarkerButWorkingTreeIsAdoptedNotDeleted`. |
+| **Stranded downloads.** `defer os.Remove(tmpArchive)` does not run through SIGKILL, so a killed install leaves a 1.2 GB archive in `/tmp` forever — on a small volume, itself the next failure. | `flutter_install.go`, `node_install.go`, `android_sdk_install.go` | `strandedInstallDebris` sweeps them, matching **only** the exact archive names our own installers download. `TestStrandedDownloadsAreClearedAndNarrowlyMatched` asserts a user's own `my-backup-2026.tar.xz` in `/tmp` is untouched — a glob wide enough to catch "anything big in /tmp" is a glob wide enough to delete user data. |
+| **Silent cleanup.** | — | Every removal streams a line naming the path and why. A silent 800 MB delete is as unfalsifiable as a silent `serve`. |
+| **A repeat "isn't installed" with no explanation** after the user already pressed Install once. | `capability_gap.go` | `partialInstallSummary` prepends *"A previous Flutter install was interrupted and left a partial tree at /opt/flutter — Yaver will remove it and start clean"*. Self-describing, with the route. |
+| **Held install PTY.** | `install_registry.go` | Already bounded: 15-minute TTL, superseded on re-install. No change needed. |
+| **Orphaned dev-server children.** | `devserver_child_registry.go` | Already solved (2026-07-25 incident): persisted PIDs, reaped on next start, never trusting a recycled PID. Installs are *not* process-group-isolated, so they die with the agent — their stuck state is on-disk, which is what the rows above cover. |
+| **Destructive-path safety on cleanup.** | `capability_partial.go` | `partialRemovalAllowed` refuses the filesystem root, `$HOME`, relative paths, and top-level paths like `/opt`. Explicit rather than "obvious from construction" — the construction argument is exactly what wiped a repo once. |
+
+### 8b.8 Renderer contract (both twins, byte-identical)
+
+`gapState()` collapses the field combinations into four states so no surface
+guesses: `fixable` · `fixable-with-warning` · `constrained` · `unknown`.
+
+- `gapConstraint()` — the sentence, or `null`. **Never render an empty string as
+  a state.** A constraint is not an error: render it plainly and **stop
+  spinning**.
+- `gapWarning()` — the advisory that rides beside a surviving button.
+- `gapHeadroomLine()` — built from the agent's **pre-formatted** strings. A
+  second byte formatter per surface is how one app showed "1.2 GB" on one screen
+  and "1288490188" on the next.
+- `gapIsDiskBlocked()`, `gapReclaimLabel()`, `gapConfirmPreview()` — the reclaim
+  lane. `gapConfirmPreview` returning non-null is the client's instruction that
+  it **must** fetch and display the plan first.
+- `parseGapFix()` still refuses a fix with no path. A fix with **no stream** is
+  refused too — the "silent 1.2 GB download" rule — *unless* it is
+  confirm-gated, which answers synchronously and is made visible by its preview.
+  A `confirm` with an empty preview path fails the whole fix rather than render
+  a review affordance that reviews nothing.
+
+Surfaces landed in the same change (rule 11 — a signal with no consumer is not
+shipped): `mobile/src/components/DevPreview.tsx`, `mobile/app/(tabs)/apps.tsx`
+(both browser-preview implementations — the parity rule), `web/.../PreviewPane.tsx`
++ `ReclaimPanel.tsx`, and the CLI via `capability_gap_client.go`.
+
+### 8b.9 Guards, each proven by breaking it
+
+| Guard | Break it by | Then |
+|---|---|---|
+| `TestFlutterIsInstallableOnLinuxArm64ViaGitClone` | making the flutter row `linux/amd64` only (the "no tarball ⇒ impossible" misreading) | fails ✔ observed |
+| `TestProducerStillOffersTheFixWherePlatformAllowsIt` | same | fails ✔ observed |
+| `TestInstallIsRefusedWhenTheVolumeCannotHoldIt` | flipping `h.FreeBytes < need` to `>` | fails ✔ observed |
+| `TestVerdictIsOKWhenTheBoxHasRoom` | same flip (the opposite direction) | fails ✔ observed |
+| `TestProducerRefusesOnDiskAndOffersReclaim` | dropping the insufficient branch | fails ✔ observed |
+| `TestAPartiallyExtractedTreeIsNotMistakenForAnInstall` | restoring the old "root exists ⇒ installed" logic | fails ✔ observed |
+| `TestBeginToolInstallClearsAPartialTreeAndSaysSo` | same | fails ✔ observed |
+| `TestEveryUnsupportedPlatformNamesItsConstraint` | deleting any row's `Constraint` func | fails |
+| `TestAndroidEmulatorMatchesTheInstallersOwnTruth` | copying the predicate instead of calling `emulatorHostSupported` | fails |
+| `TestStrandedDownloadsAreClearedAndNarrowlyMatched` | widening the debris glob | fails |
 
 ---
 
