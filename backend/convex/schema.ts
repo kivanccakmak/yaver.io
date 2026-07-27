@@ -379,6 +379,24 @@ export default defineSchema({
     // paths (they carry the home-dir username), versions, secret names, or
     // reason strings. The detail lives behind the device's own P2P
     // GET /deploy/capabilities and never reaches our servers.
+    runtimeProjectCatalog: v.optional(v.array(v.object({
+      projectName: v.string(),
+      repoName: v.optional(v.string()),
+      gitProvider: v.optional(v.string()),
+      gitRemote: v.optional(v.string()),
+      branch: v.optional(v.string()),
+      framework: v.optional(v.string()),
+      updatedAt: v.number(),
+    }))),
+    defaultRuntimeProject: v.optional(v.object({
+      projectName: v.string(),
+      repoName: v.optional(v.string()),
+      gitProvider: v.optional(v.string()),
+      gitRemote: v.optional(v.string()),
+      branch: v.optional(v.string()),
+      framework: v.optional(v.string()),
+      updatedAt: v.number(),
+    })),
     // Connectivity shape + intent, published only on CHANGE (see
     // desktop/agent/conn_status.go). Scalars only — endpoints and candidate
     // addresses are volatile AND forbidden here; they travel peer-to-peer over
@@ -990,6 +1008,43 @@ export default defineSchema({
             isBuiltin: v.optional(v.boolean()),
           }))),
           diagnostics: v.optional(v.array(v.string())),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
+    // Privacy-limited runtime project memory. Convex stores only the project
+    // display name and remote repository identity per machine so Settings can
+    // pick a default across web/mobile/tablet/etc. Absolute local paths stay on
+    // the machine and are resolved from the live agent inventory at runtime.
+    defaultRuntimeProjectByDevice: v.optional(
+      v.array(
+        v.object({
+          deviceId: v.string(),
+          projectName: v.string(),
+          repoName: v.optional(v.string()),
+          gitProvider: v.optional(v.string()),
+          gitRemote: v.optional(v.string()),
+          branch: v.optional(v.string()),
+          framework: v.optional(v.string()),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
+    runtimeProjectCatalogByDevice: v.optional(
+      v.array(
+        v.object({
+          deviceId: v.string(),
+          projects: v.array(
+            v.object({
+              projectName: v.string(),
+              repoName: v.optional(v.string()),
+              gitProvider: v.optional(v.string()),
+              gitRemote: v.optional(v.string()),
+              branch: v.optional(v.string()),
+              framework: v.optional(v.string()),
+              updatedAt: v.number(),
+            }),
+          ),
           updatedAt: v.number(),
         }),
       ),

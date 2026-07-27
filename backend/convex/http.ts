@@ -4904,11 +4904,16 @@ http.route({
       // details immediately on startup. API keys are not accepted by the
       // Convex validator and must stay on the machine.
       opencodeConfigForDevice: body.opencodeConfigForDevice,
+      // Runtime project memory is privacy-limited: project name plus remote
+      // repo identity per machine, never local absolute paths.
+      defaultRuntimeProjectForDevice: body.defaultRuntimeProjectForDevice,
+      runtimeProjectCatalogForDevice: body.runtimeProjectCatalogForDevice,
       // Per-subsystem managed toggle. Client sends only the
       // subsystem(s) it's changing; backend merges the patch into
       // the existing record so other subsystems' toggles are
       // preserved. null on any key clears that subsystem.
       managed: body.managed,
+      deployPreferences: body.deployPreferences,
     });
     return jsonResponse({ ok: true });
   }),

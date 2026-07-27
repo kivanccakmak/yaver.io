@@ -58,6 +58,31 @@ const openCodeConfigSnapshotPatchValidator = v.object({
   updatedAt: v.optional(v.number()),
 });
 
+const runtimeProjectPreferenceValidator = v.object({
+  deviceId: v.string(),
+  projectName: v.optional(v.union(v.string(), v.null())),
+  repoName: v.optional(v.union(v.string(), v.null())),
+  gitProvider: v.optional(v.union(v.string(), v.null())),
+  gitRemote: v.optional(v.union(v.string(), v.null())),
+  branch: v.optional(v.union(v.string(), v.null())),
+  framework: v.optional(v.union(v.string(), v.null())),
+  updatedAt: v.optional(v.number()),
+});
+
+const runtimeProjectCatalogValidator = v.object({
+  deviceId: v.string(),
+  projects: v.array(v.object({
+    projectName: v.string(),
+    repoName: v.optional(v.union(v.string(), v.null())),
+    gitProvider: v.optional(v.union(v.string(), v.null())),
+    gitRemote: v.optional(v.union(v.string(), v.null())),
+    branch: v.optional(v.union(v.string(), v.null())),
+    framework: v.optional(v.union(v.string(), v.null())),
+    updatedAt: v.optional(v.number()),
+  })),
+  updatedAt: v.optional(v.number()),
+});
+
 type OpenCodeConfigSnapshotPatch = {
   deviceId: string;
   model?: string | null;
@@ -70,6 +95,40 @@ type OpenCodeConfigSnapshotPatch = {
   agents?: Array<{ name: string; model?: string; description?: string; isBuiltin?: boolean }>;
   diagnostics?: string[];
   updatedAt?: number;
+};
+
+type RuntimeProjectPreferencePatch = {
+  deviceId: string;
+  projectName?: string | null;
+  repoName?: string | null;
+  gitProvider?: string | null;
+  gitRemote?: string | null;
+  branch?: string | null;
+  framework?: string | null;
+  updatedAt?: number;
+};
+
+type RuntimeProjectPreferenceRow = {
+  deviceId: string;
+  projectName: string;
+  repoName?: string;
+  gitProvider?: string;
+  gitRemote?: string;
+  branch?: string;
+  framework?: string;
+  updatedAt: number;
+};
+
+type RuntimeProjectCatalogPatch = {
+  deviceId: string;
+  projects: Array<Omit<RuntimeProjectPreferencePatch, "deviceId">>;
+  updatedAt?: number;
+};
+
+type RuntimeProjectCatalogRow = {
+  deviceId: string;
+  projects: Array<Omit<RuntimeProjectPreferenceRow, "deviceId">>;
+  updatedAt: number;
 };
 
 type OpenCodeConfigSnapshotRow = {
@@ -85,6 +144,89 @@ type OpenCodeConfigSnapshotRow = {
   diagnostics?: string[];
   updatedAt: number;
 };
+
+function cleanRuntimeText(value: string | null | undefined, max = 180): string | undefined {
+  const text = String(value ?? "").trim();
+  if (!text) return undefined;
+  return text.slice(0, max);
+}
+
+function sanitizeRuntimeGitRemote(value: string | null | undefined): string | undefined {
+  const raw = cleanRuntimeText(value, 300);
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    url.username = "";
+    url.password = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    // SCP-style SSH remotes (git@github.com:owner/repo.git) are not URLs and
+    // contain no bearer credential. If a caller sends a token-like HTTPS remote
+    // without a parseable scheme, drop it instead of guessing.
+    if (/^https?:/i.test(raw) || /\/\/[^/\s]+@/.test(raw)) return undefined;
+    return raw;
+  }
+}
+
+function sanitizeRuntimeProjectPreference(
+  payload: RuntimeProjectPreferencePatch,
+): RuntimeProjectPreferenceRow | undefined {
+  const deviceId = cleanRuntimeText(payload.deviceId, 120);
+  const projectName = cleanRuntimeText(payload.projectName, 160);
+  if (!deviceId || !projectName) return undefined;
+  const row: RuntimeProjectPreferenceRow = {
+    deviceId,
+    projectName,
+    updatedAt: payload.updatedAt ?? Date.now(),
+  };
+  const repoName = cleanRuntimeText(payload.repoName, 180);
+  const gitProvider = cleanRuntimeText(payload.gitProvider, 60);
+  const gitRemote = sanitizeRuntimeGitRemote(payload.gitRemote);
+  const branch = cleanRuntimeText(payload.branch, 120);
+  const framework = cleanRuntimeText(payload.framework, 80);
+  if (repoName) row.repoName = repoName;
+  if (gitProvider) row.gitProvider = gitProvider;
+  if (gitRemote) row.gitRemote = gitRemote;
+  if (branch) row.branch = branch;
+  if (framework) row.framework = framework;
+  return row;
+}
+
+function mergeRuntimeProjectPreference(
+  existing: RuntimeProjectPreferenceRow[] | undefined,
+  payload: RuntimeProjectPreferencePatch,
+): RuntimeProjectPreferenceRow[] | undefined {
+  const deviceId = cleanRuntimeText(payload.deviceId, 120);
+  if (!deviceId) return existing;
+  const filtered = (existing ?? []).filter((row) => row.deviceId !== deviceId);
+  const row = sanitizeRuntimeProjectPreference(payload);
+  const next = row ? [...filtered, row] : filtered;
+  return next.length > 0 ? next : undefined;
+}
+
+function mergeRuntimeProjectCatalog(
+  existing: RuntimeProjectCatalogRow[] | undefined,
+  payload: RuntimeProjectCatalogPatch,
+): RuntimeProjectCatalogRow[] | undefined {
+  const deviceId = cleanRuntimeText(payload.deviceId, 120);
+  if (!deviceId) return existing;
+  const seen = new Set<string>();
+  const projects = payload.projects
+    .map((project) => sanitizeRuntimeProjectPreference({ ...project, deviceId }))
+    .filter((row): row is RuntimeProjectPreferenceRow => !!row)
+    .map(({ deviceId: _deviceId, ...project }) => project)
+    .filter((project) => {
+      const key = `${project.gitRemote || ""}|${project.repoName || ""}|${project.projectName}`.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 200);
+  const filtered = (existing ?? []).filter((row) => row.deviceId !== deviceId);
+  const next = [...filtered, { deviceId, projects, updatedAt: payload.updatedAt ?? Date.now() }];
+  return next.length > 0 ? next : undefined;
+}
 
 function sanitizeOpenCodeConfigSnapshot(payload: OpenCodeConfigSnapshotPatch): OpenCodeConfigSnapshotRow {
   const row: OpenCodeConfigSnapshotRow = {
@@ -290,6 +432,43 @@ async function normalizeOwnedDeviceId(
   return next;
 }
 
+async function patchOwnedDeviceRuntimeProjectCache(
+  ctx: any,
+  userId: any,
+  args: {
+    defaultRuntimeProjectForDevice?: RuntimeProjectPreferencePatch;
+    runtimeProjectCatalogForDevice?: RuntimeProjectCatalogPatch;
+  },
+) {
+  const touched = new Set<string>();
+  if (args.defaultRuntimeProjectForDevice?.deviceId) touched.add(args.defaultRuntimeProjectForDevice.deviceId);
+  if (args.runtimeProjectCatalogForDevice?.deviceId) touched.add(args.runtimeProjectCatalogForDevice.deviceId);
+  for (const deviceId of touched) {
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q: any) => q.eq("deviceId", deviceId))
+      .first();
+    if (!device || String(device.userId) !== String(userId)) {
+      throw new Error("runtime project device must refer to one of the caller's devices");
+    }
+    const patch: Record<string, unknown> = {};
+    if (args.defaultRuntimeProjectForDevice?.deviceId === deviceId) {
+      const row = sanitizeRuntimeProjectPreference(args.defaultRuntimeProjectForDevice);
+      if (row) {
+        const { deviceId: _deviceId, ...project } = row;
+        patch.defaultRuntimeProject = project;
+      } else {
+        patch.defaultRuntimeProject = undefined;
+      }
+    }
+    if (args.runtimeProjectCatalogForDevice?.deviceId === deviceId) {
+      const row = mergeRuntimeProjectCatalog([], args.runtimeProjectCatalogForDevice)?.[0];
+      patch.runtimeProjectCatalog = row?.projects ?? [];
+    }
+    if (Object.keys(patch).length > 0) await ctx.db.patch(device._id, patch);
+  }
+}
+
 export const get = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
@@ -360,6 +539,8 @@ export const set = internalMutation({
       }),
     ),
     opencodeConfigForDevice: v.optional(openCodeConfigSnapshotPatchValidator),
+    defaultRuntimeProjectForDevice: v.optional(runtimeProjectPreferenceValidator),
+    runtimeProjectCatalogForDevice: v.optional(runtimeProjectCatalogValidator),
     // Per-subsystem managed: true (Yaver-hosted) | false (user-hosted)
     // | null (unset → use legacy default). Clients send only the
     // subsystem(s) they're changing; unspecified keys retain their
@@ -469,6 +650,22 @@ export const set = internalMutation({
       );
       if (seeded !== undefined) patch.primaryRunnerByDevice = seeded;
     }
+    if (args.defaultRuntimeProjectForDevice !== undefined) {
+      patch.defaultRuntimeProjectByDevice = mergeRuntimeProjectPreference(
+        existing?.defaultRuntimeProjectByDevice as RuntimeProjectPreferenceRow[] | undefined,
+        args.defaultRuntimeProjectForDevice as RuntimeProjectPreferencePatch,
+      );
+    }
+    if (args.runtimeProjectCatalogForDevice !== undefined) {
+      patch.runtimeProjectCatalogByDevice = mergeRuntimeProjectCatalog(
+        existing?.runtimeProjectCatalogByDevice as RuntimeProjectCatalogRow[] | undefined,
+        args.runtimeProjectCatalogForDevice as RuntimeProjectCatalogPatch,
+      );
+    }
+    await patchOwnedDeviceRuntimeProjectCache(ctx, args.userId, {
+      defaultRuntimeProjectForDevice: args.defaultRuntimeProjectForDevice as RuntimeProjectPreferencePatch | undefined,
+      runtimeProjectCatalogForDevice: args.runtimeProjectCatalogForDevice as RuntimeProjectCatalogPatch | undefined,
+    });
     if (args.managed !== undefined) {
       patch.managed = mergeManagedPatch(
         existing?.managed as Record<string, boolean | undefined> | undefined,
@@ -526,6 +723,8 @@ export const setByToken = mutation({
       }),
     ),
     opencodeConfigForDevice: v.optional(openCodeConfigSnapshotPatchValidator),
+    defaultRuntimeProjectForDevice: v.optional(runtimeProjectPreferenceValidator),
+    runtimeProjectCatalogForDevice: v.optional(runtimeProjectCatalogValidator),
     managed: v.optional(managedPatchValidator),
     deployPreferences: v.optional(deployPreferencePatchValidator),
     // Which tab the mobile app opens on. Stored here so the choice follows the
@@ -634,6 +833,22 @@ export const setByToken = mutation({
       );
       if (seeded !== undefined) patch.primaryRunnerByDevice = seeded;
     }
+    if (args.defaultRuntimeProjectForDevice !== undefined) {
+      patch.defaultRuntimeProjectByDevice = mergeRuntimeProjectPreference(
+        existing?.defaultRuntimeProjectByDevice as RuntimeProjectPreferenceRow[] | undefined,
+        args.defaultRuntimeProjectForDevice as RuntimeProjectPreferencePatch,
+      );
+    }
+    if (args.runtimeProjectCatalogForDevice !== undefined) {
+      patch.runtimeProjectCatalogByDevice = mergeRuntimeProjectCatalog(
+        existing?.runtimeProjectCatalogByDevice as RuntimeProjectCatalogRow[] | undefined,
+        args.runtimeProjectCatalogForDevice as RuntimeProjectCatalogPatch,
+      );
+    }
+    await patchOwnedDeviceRuntimeProjectCache(ctx, userId, {
+      defaultRuntimeProjectForDevice: args.defaultRuntimeProjectForDevice as RuntimeProjectPreferencePatch | undefined,
+      runtimeProjectCatalogForDevice: args.runtimeProjectCatalogForDevice as RuntimeProjectCatalogPatch | undefined,
+    });
     if (args.managed !== undefined) {
       patch.managed = mergeManagedPatch(
         existing?.managed as Record<string, boolean | undefined> | undefined,

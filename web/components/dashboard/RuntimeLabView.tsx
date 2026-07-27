@@ -27,6 +27,7 @@ import { validateOpenCodeModel } from "@/lib/opencodeModel";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 import { formatDevProgressLine } from "@/lib/devEventLine";
 import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
+import { CONVEX_URL } from "@/lib/constants";
 import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
@@ -42,6 +43,9 @@ type Project = {
   tags?: string[];
   monorepoRoot?: string;
   monorepoApp?: string;
+  branch?: string;
+  remote?: string;
+  gitRemote?: string;
 };
 
 type WorkspaceRepo = {
@@ -58,6 +62,17 @@ type WorkspaceRepo = {
 };
 
 type MobilePreviewMode = "phone" | "tablet";
+
+type RuntimeProjectPreference = {
+  deviceId: string;
+  projectName: string;
+  repoName?: string;
+  gitProvider?: string;
+  gitRemote?: string;
+  branch?: string;
+  framework?: string;
+  updatedAt?: number;
+};
 
 const mobilePreviewDevices: Record<MobilePreviewMode, { label: string; width: number; height: number; radius: number }> = {
   phone: { label: "Mobile", width: 393, height: 852, radius: 34 },
@@ -122,11 +137,13 @@ function RuntimePreviewLoadingScreen({
 function RuntimePreviewLoadingSurface({
   mobile,
   device,
+  scale = 1,
   note,
   projectName,
 }: {
   mobile: boolean;
   device: { label: string; width: number; height: number; radius: number };
+  scale?: number;
   note?: string | null;
   projectName?: string;
 }) {
@@ -141,13 +158,19 @@ function RuntimePreviewLoadingSurface({
   }
 
   return (
-    <div className="flex min-h-[640px] w-full justify-center overflow-auto rounded-md border border-[#d7dce3] bg-[#0b0d11] p-4 dark:border-[#2a3039]">
+    <div
+      className="flex w-full justify-center overflow-hidden rounded-md border border-[#d7dce3] bg-[#0b0d11] p-3 dark:border-[#2a3039]"
+      style={{ minHeight: Math.round((device.height + 20) * scale) + 24 }}
+    >
+      <div style={{ width: (device.width + 20) * scale, height: (device.height + 20) * scale }}>
       <div
         className="shrink-0 overflow-hidden bg-[#1f2933] p-[10px] shadow-2xl"
         style={{
           borderRadius: device.radius,
           width: device.width + 20,
           height: device.height + 20,
+          transform: `scale(${scale})`,
+          transformOrigin: "top left",
         }}
       >
         <div
@@ -160,6 +183,7 @@ function RuntimePreviewLoadingSurface({
         >
           {body}
         </div>
+      </div>
       </div>
     </div>
   );
@@ -212,6 +236,80 @@ function projectTerms(project: Project | null): Set<string> {
     for (const part of value.split(/[^a-z0-9]+/).filter(Boolean)) terms.add(part);
   }
   return terms;
+}
+
+function sanitizeRuntimeRemote(remote?: string | null): string | undefined {
+  const raw = String(remote || "").trim();
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    url.username = "";
+    url.password = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    if (/^https?:/i.test(raw) || /\/\/[^/\s]+@/.test(raw)) return undefined;
+    return raw.slice(0, 300);
+  }
+}
+
+function gitProviderFromRemote(remote?: string): string | undefined {
+  const value = String(remote || "").toLowerCase();
+  if (!value) return undefined;
+  if (value.includes("github.com")) return "github";
+  if (value.includes("gitlab.com")) return "gitlab";
+  if (value.includes("bitbucket.org")) return "bitbucket";
+  if (/^https?:\/\//.test(value)) return "git-http";
+  if (value.includes("@") && value.includes(":")) return "git-ssh";
+  return "git";
+}
+
+function repoNameFromRemote(remote?: string): string | undefined {
+  const value = String(remote || "").trim().replace(/\.git$/i, "");
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    const parts = url.pathname.split("/").filter(Boolean);
+    return parts.length >= 2 ? parts.slice(-2).join("/") : parts[0];
+  } catch {
+    const scp = value.match(/^[^@]+@[^:]+:(.+)$/);
+    const path = (scp?.[1] || value).replace(/\\/g, "/");
+    const parts = path.split("/").filter(Boolean);
+    return parts.length >= 2 ? parts.slice(-2).join("/") : parts[0];
+  }
+}
+
+function runtimeProjectPreferenceFor(project: Project, deviceId: string): RuntimeProjectPreference {
+  const gitRemote = sanitizeRuntimeRemote(project.gitRemote || project.remote);
+  const repoName = repoNameFromRemote(gitRemote) || project.name;
+  return {
+    deviceId,
+    projectName: project.name,
+    ...(repoName ? { repoName } : {}),
+    ...(gitRemote ? { gitRemote, gitProvider: gitProviderFromRemote(gitRemote) } : {}),
+    ...(project.branch ? { branch: project.branch } : {}),
+    ...(project.framework ? { framework: project.framework } : {}),
+    updatedAt: Date.now(),
+  };
+}
+
+function runtimeProjectIdentityScore(project: Project, pref?: RuntimeProjectPreference): number {
+  if (!pref) return 0;
+  const meta = runtimeProjectPreferenceFor(project, pref.deviceId || "device");
+  let score = 0;
+  if (pref.gitRemote && meta.gitRemote && pref.gitRemote === meta.gitRemote) score += 8;
+  if (pref.repoName && meta.repoName && pref.repoName.toLowerCase() === meta.repoName.toLowerCase()) score += 4;
+  if (pref.projectName && pref.projectName === project.name) score += 3;
+  if (pref.branch && project.branch && pref.branch === project.branch) score += 1;
+  return score;
+}
+
+function resolveRuntimeProjectPreference(rows: Project[], pref?: RuntimeProjectPreference): Project | null {
+  if (!pref) return null;
+  return rows
+    .map((project) => ({ project, score: runtimeProjectIdentityScore(project, pref) }))
+    .filter((row) => row.score > 0)
+    .sort((a, b) => b.score - a.score)[0]?.project || null;
 }
 
 function termsContain(terms: Set<string>, candidates: string[]): boolean {
@@ -315,6 +413,9 @@ async function expandMonorepoProjects(rows: Project[]): Promise<Project[]> {
         tags: [app.kind, app.framework, app.stack, app.name].filter(Boolean) as string[],
         monorepoRoot: project.path,
         monorepoApp: app.name,
+        remote: project.remote || project.gitRemote,
+        gitRemote: project.gitRemote || project.remote,
+        branch: project.branch,
       });
     }
   }
@@ -616,6 +717,9 @@ function projectFromRepo(repo: WorkspaceRepo): Project {
     surfaces: Array.from(surfaces),
     executionMode: actions.includes("hot-reload") ? "native-webrtc" : actions.includes("dev-server") ? "web" : undefined,
     tags: [stackType, ...frameworks, ...actions].filter(Boolean) as string[],
+    remote: repo.remote,
+    gitRemote: repo.remote,
+    branch: repo.branch,
   };
 }
 
@@ -625,7 +729,19 @@ function mergeProjectInventory(projects: Project[], repos: WorkspaceRepo[]): Pro
     if (project.path) byPath.set(project.path, project);
   }
   for (const repo of repos) {
-    if (!repo.path || byPath.has(repo.path)) continue;
+    if (!repo.path) continue;
+    const existing = byPath.get(repo.path);
+    if (existing) {
+      byPath.set(repo.path, {
+        ...existing,
+        remote: existing.remote || repo.remote,
+        gitRemote: existing.gitRemote || repo.remote,
+        branch: existing.branch || repo.branch,
+        frameworks: existing.frameworks?.length ? existing.frameworks : repo.stack?.frameworks,
+        stack: existing.stack || repo.stack?.type,
+      });
+      continue;
+    }
     byPath.set(repo.path, projectFromRepo(repo));
   }
   return Array.from(byPath.values()).sort((a, b) => {
@@ -775,6 +891,7 @@ export default function RuntimeLabView({
   const [speaking, setSpeaking] = useState(false);
   const [webPreviewFrameReady, setWebPreviewFrameReady] = useState(false);
   const [webPreviewBusy, setWebPreviewBusy] = useState(false);
+  const [webPreviewStopping, setWebPreviewStopping] = useState(false);
   const [webPreviewNote, setWebPreviewNote] = useState<string | null>(null);
   // Raw dev-server output tail feeding the compile-failure card (gap D5).
   // Cleared on every "ready" event so a fixed compile drops the card.
@@ -784,6 +901,10 @@ export default function RuntimeLabView({
   // re-served the existing fresh bundle.
   const [webPreviewNonce, setWebPreviewNonce] = useState(0);
   const [mobilePreviewMode, setMobilePreviewMode] = useState<MobilePreviewMode>("phone");
+  const [viewportHeight, setViewportHeight] = useState(() => typeof window === "undefined" ? 900 : window.innerHeight);
+  const [runtimeProjectDefaultByDevice, setRuntimeProjectDefaultByDevice] = useState<Record<string, RuntimeProjectPreference>>({});
+  const [runtimeProjectSaving, setRuntimeProjectSaving] = useState(false);
+  const [runtimeProjectNote, setRuntimeProjectNote] = useState<string | null>(null);
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.path === selectedPath) || null,
@@ -791,6 +912,22 @@ export default function RuntimeLabView({
   );
   const selectedProjectIsMobile = useMemo(() => isMobileRuntimeProject(selectedProject), [selectedProject]);
   const mobilePreviewDevice = mobilePreviewDevices[mobilePreviewMode];
+  const mobilePreviewOuterWidth = mobilePreviewDevice.width + 20;
+  const mobilePreviewOuterHeight = mobilePreviewDevice.height + 20;
+  const mobilePreviewScale = selectedProjectIsMobile
+    ? Math.min(1, Math.max(0.58, (viewportHeight - 250) / mobilePreviewOuterHeight))
+    : 1;
+  const runtimeCapabilitySummary = caps
+    ? `${caps.framework} · ${caps.executionMode} · ${caps.primarySurface} · ${caps.currentHostClass || "host unknown"}${
+        caps.cached ? " · cached" : caps.probeDurationMs ? ` · probed in ${Math.round(caps.probeDurationMs / 1000)}s` : ""
+      }`
+    : "";
+  const savedRuntimeProject = connectedDevice?.id ? runtimeProjectDefaultByDevice[connectedDevice.id] : undefined;
+  const selectedProjectIsSavedDefault = !!(
+    selectedProject &&
+    savedRuntimeProject &&
+    runtimeProjectIdentityScore(selectedProject, savedRuntimeProject) > 0
+  );
   const deviceRunnerFallback = useMemo(() => runnersFromDeviceInventory(connectedDevice), [connectedDevice?.id, connectedDevice?.runners]);
 
   const appendLog = useCallback((line: string) => {
@@ -849,22 +986,94 @@ export default function RuntimeLabView({
     try { window.speechSynthesis?.cancel(); } catch {}
   }, [appendLog, stopActiveTaskStream]);
 
+  useEffect(() => {
+    const onResize = () => setViewportHeight(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const loadRuntimeSettings = useCallback(async () => {
+    if (!token) return null;
+    const res = await fetch(`${CONVEX_URL}/settings`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `settings: HTTP ${res.status}`);
+    const settings = data?.settings || {};
+    const defaults: Record<string, RuntimeProjectPreference> = {};
+    for (const row of settings.defaultRuntimeProjectByDevice || []) {
+      if (row?.deviceId && row?.projectName) defaults[row.deviceId] = row;
+    }
+    setRuntimeProjectDefaultByDevice(defaults);
+    return settings;
+  }, [token]);
+
+  const postRuntimeSettings = useCallback(async (body: Record<string, unknown>) => {
+    if (!token) return;
+    const res = await fetch(`${CONVEX_URL}/settings`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `settings: HTTP ${res.status}`);
+  }, [token]);
+
+  const seedRuntimeProjectCatalog = useCallback(async (rows: Project[]) => {
+    if (!connectedDevice?.id || !token || rows.length === 0) return;
+    const projects = rows.map((project) => {
+      const { deviceId: _deviceId, ...meta } = runtimeProjectPreferenceFor(project, connectedDevice.id);
+      return meta;
+    });
+    await postRuntimeSettings({
+      runtimeProjectCatalogForDevice: {
+        deviceId: connectedDevice.id,
+        projects,
+        updatedAt: Date.now(),
+      },
+    });
+  }, [connectedDevice?.id, postRuntimeSettings, token]);
+
+  const saveRuntimeProjectDefault = useCallback(async () => {
+    if (!connectedDevice?.id || !selectedProject) return;
+    const next = runtimeProjectPreferenceFor(selectedProject, connectedDevice.id);
+    setRuntimeProjectSaving(true);
+    setRuntimeProjectNote(null);
+    try {
+      await postRuntimeSettings({ defaultRuntimeProjectForDevice: next });
+      setRuntimeProjectDefaultByDevice((prev) => ({ ...prev, [connectedDevice.id]: next }));
+      setRuntimeProjectNote("Default saved for this machine.");
+    } catch (err) {
+      setRuntimeProjectNote(err instanceof Error ? err.message : "Could not save default project.");
+    } finally {
+      setRuntimeProjectSaving(false);
+    }
+  }, [connectedDevice?.id, postRuntimeSettings, selectedProject]);
+
   const loadProjects = useCallback(async () => {
     setError(null);
     try {
-      const [projectRows, repoRows, mobileRows] = await Promise.all([
+      const [projectRows, repoRows, mobileRows, settings] = await Promise.all([
         agentClient.listProjects(),
         agentClient.listWorkspaceRepos(),
         agentClient.listProjectsByCapability("mobile").catch(() => []),
+        loadRuntimeSettings().catch(() => null),
       ]);
       const rows = await expandMonorepoProjects(mergeProjectInventory([...(projectRows as Project[]), ...(mobileRows as Project[])], repoRows));
       setProjects(rows);
-      if (!selectedPath && rows[0]?.path) setSelectedPath(rows[0].path);
+      void seedRuntimeProjectCatalog(rows).catch((err) => appendLog(`runtime project sync failed: ${err instanceof Error ? err.message : String(err)}`));
+      if (!selectedPath && rows[0]?.path) {
+        const saved = connectedDevice?.id
+          ? (settings?.defaultRuntimeProjectByDevice || []).find((row: RuntimeProjectPreference) => row.deviceId === connectedDevice.id)
+          : undefined;
+        setSelectedPath(resolveRuntimeProjectPreference(rows, saved)?.path || rows[0].path);
+      }
       appendLog(`projects loaded: ${rows.length}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load projects.");
     }
-  }, [appendLog, selectedPath]);
+  }, [appendLog, connectedDevice?.id, loadRuntimeSettings, seedRuntimeProjectCatalog, selectedPath]);
 
   const refreshRunners = useCallback(async () => {
     const deviceFallback = deviceRunnerFallback;
@@ -1596,6 +1805,30 @@ export default function RuntimeLabView({
     setWebPreviewNote(null);
   }, []);
 
+  const stopWebPreview = useCallback(async () => {
+    if (webPreviewStopping) return;
+    setWebPreviewStopping(true);
+    setRuntimeConsoleOpen(true);
+    setWebPreviewNote("Stopping preview...");
+    appendLog("stopping active preview");
+    try {
+      const result = await agentClient.stopDevServer();
+      const message = result.message || (result.verified ? "Preview stopped." : "Stop sent.");
+      appendLog(`stop preview: ${message}`);
+      setWebPreviewUrl(null);
+      setWebPreviewFrameReady(false);
+      setWebPreviewNote(message);
+      if (result.buildsCancelled) appendLog(`cancelled ${result.buildsCancelled} in-flight build(s)`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Stop preview failed.";
+      appendLog(`stop preview failed: ${message}`);
+      setError(message);
+      setWebPreviewNote(message);
+    } finally {
+      setWebPreviewStopping(false);
+    }
+  }, [appendLog, webPreviewStopping]);
+
   useEffect(() => {
     if (!activeTaskStream || !selectedProject) return;
     const structuredRequest = agentRenderRequest?.taskId === activeTaskStream.id ? agentRenderRequest : null;
@@ -1718,7 +1951,7 @@ export default function RuntimeLabView({
             <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Project</span>
             <select
               value={selectedPath}
-              onChange={(e) => { setSelectedPath(e.target.value); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
+              onChange={(e) => { setSelectedPath(e.target.value); setRuntimeProjectNote(null); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
               className="h-10 w-full rounded-md border border-[#d7dce3] bg-white px-3 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec]"
             >
               {projects.map((p) => (
@@ -1735,6 +1968,18 @@ export default function RuntimeLabView({
           >
             {busy ? "Loading targets..." : "Load Targets"}
           </button>
+          <button
+            type="button"
+            disabled={!connectedDevice?.id || !selectedProject || runtimeProjectSaving || selectedProjectIsSavedDefault}
+            onClick={() => void saveRuntimeProjectDefault()}
+            className="inline-flex h-10 shrink-0 items-center rounded-md border border-[#d7dce3] bg-white px-3 text-xs font-semibold text-[#475467] disabled:cursor-not-allowed disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#d7dce3]"
+            title="Save this project as the default runtime target for this machine"
+          >
+            {runtimeProjectSaving ? "Saving..." : selectedProjectIsSavedDefault ? "Default" : "Save default"}
+          </button>
+          {runtimeProjectNote ? (
+            <span className="min-w-[160px] text-xs text-[#667085] dark:text-[#9aa3af]">{runtimeProjectNote}</span>
+          ) : null}
         </div>
         ) : null}
 
@@ -1778,10 +2023,6 @@ export default function RuntimeLabView({
 
         {caps ? (
           <div className="space-y-3">
-            <div className="text-xs text-[#667085] dark:text-[#9aa3af]">
-              {caps.framework} · {caps.executionMode} · {caps.primarySurface} · {caps.currentHostClass || "host unknown"}
-              {caps.cached ? " · cached" : caps.probeDurationMs ? ` · probed in ${Math.round(caps.probeDurationMs / 1000)}s` : ""}
-            </div>
             {(() => {
               const enabledTargets = caps.targets.filter((target) => target.enabled);
               const groupedTargets = enabledTargets.reduce<Record<string, RemoteRuntimeTarget[]>>((acc, target) => {
@@ -1922,7 +2163,7 @@ export default function RuntimeLabView({
                           <button
                             type="button"
                             onClick={() => void reloadWebPreview("fast")}
-                            disabled={webPreviewBusy}
+                            disabled={webPreviewBusy || webPreviewStopping}
                             title="Fast Reload — re-serve the fresh bundle instantly, or hot-reload the dev server"
                             aria-label="Fast Reload"
                             className="rounded-md bg-[#1f2933] px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-40 dark:bg-[#e6e8ec] dark:text-[#101318]"
@@ -1932,12 +2173,22 @@ export default function RuntimeLabView({
                           <button
                             type="button"
                             onClick={() => void reloadWebPreview("full")}
-                            disabled={webPreviewBusy}
+                            disabled={webPreviewBusy || webPreviewStopping}
                             title="Full Reload — force a re-export / hot restart (warm cache, never a cold start)"
                             aria-label="Full Reload"
                             className="rounded-md border border-[#d7dce3] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#475467] hover:text-[#1f2933] disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
                           >
                             Full Reload
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void stopWebPreview()}
+                            disabled={webPreviewStopping}
+                            title="Stop the active preview on this machine"
+                            aria-label="Stop preview"
+                            className="rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-rose-700 disabled:opacity-40 dark:text-rose-200"
+                          >
+                            {webPreviewStopping ? "Stopping..." : "Stop"}
                           </button>
                           <button
                             type="button"
@@ -1995,17 +2246,24 @@ export default function RuntimeLabView({
                         <RuntimePreviewLoadingSurface
                           mobile={selectedProjectIsMobile}
                           device={mobilePreviewDevice}
+                          scale={mobilePreviewScale}
                           note={webPreviewNote}
                           projectName={selectedProject?.name}
                         />
                       ) : selectedProjectIsMobile ? (
-                        <div className="flex min-h-[640px] w-full justify-center overflow-auto rounded-md border border-[#d7dce3] bg-[#0b0d11] p-4 dark:border-[#2a3039]">
+                        <div
+                          className="flex w-full justify-center overflow-hidden rounded-md border border-[#d7dce3] bg-[#0b0d11] p-3 dark:border-[#2a3039]"
+                          style={{ minHeight: Math.round(mobilePreviewOuterHeight * mobilePreviewScale) + 24 }}
+                        >
+                          <div style={{ width: mobilePreviewOuterWidth * mobilePreviewScale, height: mobilePreviewOuterHeight * mobilePreviewScale }}>
                           <div
                             className="shrink-0 overflow-hidden bg-[#1f2933] p-[10px] shadow-2xl"
                             style={{
                               borderRadius: mobilePreviewDevice.radius,
-                              width: mobilePreviewDevice.width + 20,
-                              height: mobilePreviewDevice.height + 20,
+                              width: mobilePreviewOuterWidth,
+                              height: mobilePreviewOuterHeight,
+                              transform: `scale(${mobilePreviewScale})`,
+                              transformOrigin: "top left",
                             }}
                           >
                             <div
@@ -2038,6 +2296,7 @@ export default function RuntimeLabView({
                               ) : null}
                             </div>
                           </div>
+                          </div>
                         </div>
                       ) : (
                         <div className="relative h-[520px] w-full overflow-hidden rounded-md border border-[#d7dce3] bg-[#0b0d11]">
@@ -2069,7 +2328,7 @@ export default function RuntimeLabView({
                         <label className="min-w-[260px] flex-1">
                           <select
                             value={selectedPath}
-                            onChange={(e) => { setSelectedPath(e.target.value); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
+                            onChange={(e) => { setSelectedPath(e.target.value); setRuntimeProjectNote(null); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
                             className="h-10 w-full rounded-md border border-[#d7dce3] bg-white px-3 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
                           >
                             {projects.map((p) => (
@@ -2084,7 +2343,18 @@ export default function RuntimeLabView({
                         >
                           {busy ? "Loading..." : "Load Targets"}
                         </button>
+                        <button
+                          type="button"
+                          disabled={!connectedDevice?.id || !selectedProject || runtimeProjectSaving || selectedProjectIsSavedDefault}
+                          onClick={() => void saveRuntimeProjectDefault()}
+                          className="inline-flex h-10 shrink-0 items-center rounded-md border border-[#d7dce3] bg-white px-3 text-xs font-semibold text-[#475467] disabled:cursor-not-allowed disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                        >
+                          {runtimeProjectSaving ? "Saving..." : selectedProjectIsSavedDefault ? "Default" : "Save default"}
+                        </button>
                       </div>
+                      {runtimeProjectNote ? (
+                        <div className="mt-2 text-xs text-[#667085] dark:text-[#9aa3af]">{runtimeProjectNote}</div>
+                      ) : null}
                     </div>
                   ) : null}
                   {primaryTargets.length === 0 && enabledTargets.length > 0 ? (
@@ -2161,6 +2431,11 @@ export default function RuntimeLabView({
                 <div className="mt-1 min-w-0 truncate text-sm font-semibold text-[#1f2933] dark:text-[#e6e8ec]">
                   {selectedProject?.name || "No project selected"}
                 </div>
+                {runtimeCapabilitySummary ? (
+                  <div className="mt-1 max-w-[320px] truncate text-[11px] font-medium text-[#667085] dark:text-[#9aa3af]">
+                    {runtimeCapabilitySummary}
+                  </div>
+                ) : null}
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
                 <button
