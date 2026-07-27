@@ -2131,6 +2131,13 @@ export default function AppsScreen() {
     const path = devStatus?.workDir || "";
     setWebRuntimeLogOpen(false);
     setPreviewFullScreen(false);
+    // Dismiss the preview modal FIRST. The Vibing <Modal> is a sibling
+    // declared before the presentationStyle="fullScreen" WebView <Modal>, and
+    // iOS cannot present a second modal over an already-presented full-screen
+    // one — so setting vibingState while showWebView is true flipped state but
+    // rendered nothing (the mic "did nothing"). This is why the same
+    // setVibingState works from the project list, where showWebView is false.
+    setShowWebView(false);
     try {
       const state = await quicClient.getVibingState(project);
       setVibingState(state || { project, path, suggestions: [], quickActions: [], history: [] });

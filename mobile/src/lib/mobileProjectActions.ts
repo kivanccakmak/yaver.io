@@ -119,13 +119,33 @@ export function applyPreviewCapabilities(
     };
   });
 
+  // Preferred default lane order: Browser Reload first (the universal lane —
+  // works for every framework and needs no native toolchain), then Hermes
+  // (RN/Expo only), then WebRTC, then the compile step. A stable sort by this
+  // rank so same-rank lanes keep the agent's relative order. The agent's
+  // explicit `primary` still overrides the lead below.
+  const laneRank: Record<string, number> = {
+    "dev-server": 0, // Browser Reload
+    "open-native": 1, // Hermes Reload
+    "remote-runtime": 2, // WebRTC Reload
+    "compile-hermes": 3, // Compile Hermes bundle
+  };
+  const ordered = composed
+    .map((a, i) => ({ a, i }))
+    .sort((x, y) => {
+      const rx = laneRank[x.a.type] ?? 99;
+      const ry = laneRank[y.a.type] ?? 99;
+      return rx !== ry ? rx - ry : x.i - y.i; // stable within a rank
+    })
+    .map((x) => x.a);
+
   // Lead with whatever the agent marked primary (stable otherwise).
   const primaryID = caps.options.find((o) => o.primary)?.id;
-  if (!primaryID) return composed;
-  const idx = composed.findIndex((a) => a.type === primaryID);
-  if (idx <= 0) return composed;
-  const [primary] = composed.splice(idx, 1);
-  return [primary, ...composed];
+  if (!primaryID) return ordered;
+  const idx = ordered.findIndex((a) => a.type === primaryID);
+  if (idx <= 0) return ordered;
+  const [primary] = ordered.splice(idx, 1);
+  return [primary, ...ordered];
 }
 
 /** One app row from the agent's /workspace/apps projection (monorepo
