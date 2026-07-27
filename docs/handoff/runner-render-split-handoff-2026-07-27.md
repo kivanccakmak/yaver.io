@@ -107,6 +107,19 @@ verified vs what a fresh session builds next, in order.
   render box.
 
 ### P3b. Web preview → render device + cross-machine reload hop — DONE (see above)
+
+### P3c + P4 — LANDED same day (third session). Full state + remaining gaps:
+`docs/audits/remote-resource-slicing-surface-audit-2026-07.md`. Summary:
+agent ensure-clone + autoPush (`desktop/agent/task_ensure_clone.go`, owner-only,
+tested); web sends gitRemote/gitBranch/autoPush on split tasks + sidebar
+dual-role pill; mobile (phone/tablet/car/glass) parses machineRolesByProject,
+routes the whole task lane to the runner box, keys runner/model by the runner
+box, hops reload to the render box, pools BOTH role boxes; tvOS decodes roles,
+routes sessions/tasks→runner and previews/streams/reload→render with named
+refusals + badges. NOT yet: mobile render-lane full repoint + settings card,
+watch/wear (need transport legs first — see audit §5/6), render-ssh mode.
+Agent release for the Go half: needs the next `cli/v*` release train
+(version bump → release-cli.yml → npm publish from the Mac).
 - Vibing preview (RuntimeLabView `openWebUI` / `createSession` /
   `/dev/*` calls) binds to `renderDeviceId` when roles resolve.
 - The completed-turn refresh ("task finished: refreshing Web UI",
