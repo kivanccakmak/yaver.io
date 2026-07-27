@@ -2524,132 +2524,28 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// coding-agent framing, terminal narration, decision/scheduling preambles,
 	// or this prompt. So chat mode gets its own clean contract and skips all the
 	// coding-agent context blocks below.
-	chatMode := task.runner.Mode == "chat" || strings.HasPrefix(task.runner.Mode, "chat:")
+	chatMode := isChatTaskMode(task.runner.Mode)
 
-	// System prompt: behave as a remote terminal agent, tailored to the task source.
-	if rawRunnerCommand {
-		// Runner-native slash commands (/goal, /exit, /resume, ...) must pass
-		// through apart from leading whitespace. Adding Yaver source, policy,
-		// viewport, image, or echo-sentinel blocks changes runner behavior.
-	} else if chatMode {
-		prompt += chatTaskResponseContext(task.runner.Mode)
-	} else {
-		prompt += taskSourcePromptSuffix(task.Source)
-	}
-
-	contextDir := tm.workDir
-	if task.WorkDir != "" {
-		contextDir = task.WorkDir
-	}
-
-	// No-questions decision policy + vault-name hints. Default ON; opt-out
-	// per task via Task.AskFreely (audit / risky-change reviews). Inserted
-	// AFTER taskSourcePromptSuffix so the source-specific framing is read
-	// first, then the policy clarifies "and don't ask in prose."
-	// Skipped entirely for chat mode — "operate autonomously / schedule_self"
-	// framing is wrong for a conversational Q&A turn.
-	if rawRunnerCommand {
-		// no Yaver prompt policy for runner-native commands
-	} else if chatMode {
-		// no coding-agent preambles for embedded chat
-	} else if task.AskMode {
-		// Ask mode reframes the run as explain-first deep analysis with a
-		// confirm gate before acting — the opposite stance from the
-		// no-questions preamble, so it replaces (not augments) it.
-		prompt += askModePreamble()
-	} else if !task.AskFreely {
-		project := DetectProjectInfo(contextDir).Name
-		hints := renderVaultHintsForTask(currentRuntimeVaultStore(), project)
-		prompt += noQuestionsPreamble(hints)
-		// Runner-agnostic "future work" contract: confirm cadence, then
-		// schedule_self instead of looping. Skipped for scheduler-spawned
-		// runs so a recurring task doesn't keep re-proposing its own
-		// schedule on every fire.
-		if task.Source != "scheduler" {
-			prompt += schedulingPreamble()
-		}
-	}
-
-	// "mobile-code" is the mobile UI's "yaver code mode" toggle: same
-	// /tasks endpoint, same TaskManager, but the runner sees the
-	// terminal-style prompt prefix (no markdown headings by default,
-	// no canned bullet framing) instead of the mobile dev-server
-	// hot-reload prefix. See mobile/src/lib/quic.ts::sendTask for the
-	// caller-side documentation.
-	if !rawRunnerCommand && (task.Source == "mcp" || task.Source == terminalLocalTaskSource || task.Source == terminalRemoteTaskSource || task.Source == "attach" || task.Source == "cli" || task.Source == "console" || task.Source == "connect" || task.Source == "mobile-code" || task.Source == "ask" || task.Source == "voice") {
-		prompt += yaverWrapperCapabilityContext(contextDir, task.Source)
-	}
-
-	if !rawRunnerCommand {
-		prompt += formatTaskSliceContract(task.SliceContract)
-	}
-
-	// Only mobile-style tasks need the dev-server transport instructions.
-	// "mobile-code" tasks deliberately skip this — they want CLI-style
-	// runner output, not the Hermes / Metro / dev-server scaffold.
-	if !rawRunnerCommand && task.Source == "mobile" {
-		prompt += yaverDevServerContext(contextDir)
-	}
-
-	// Screen context — WHICH SCREEN the user is looking at right now.
+	// The whole prompt frame — armed, because startProcess starts a NEW task's
+	// runner: the first turn of a task, a chain step, an auto-retry, a crash
+	// restart, a fork. Follow-ups go through startResume, which arms only when
+	// the resume cannot actually carry the conversation. See
+	// task_prompt_frame.go for the rule.
 	//
-	// Not gated on Source. A live preview is a live preview whether the user is
-	// on web, phone, or a car HUD, and gating on source is how the last three
-	// context blocks in this function ended up reaching one surface each. The
-	// gate that matters is the one inside the store: a context exists only if a
-	// surface reported it, and it is served only while it is fresh.
-	//
-	// Opting out is done at the SOURCE — the surface stops reporting and clears
-	// what it already reported (DELETE /screen-context) — so "off" means the
-	// agent is not holding the user's screen at all, rather than holding it and
-	// promising not to look.
-	if !rawRunnerCommand {
-		if sc, ok := globalScreenContexts.Get(contextDir, time.Now()); ok {
-			if block := FormatScreenContextBlock(sc); block != "" {
-				prompt += block
-				log.Printf("[task %s] screen context attached: %s", task.ID, sc.Summary())
-			}
-		}
+	// The warm-session and ResumeLast paths below can attach this spawn to an
+	// EARLIER session for rate-limit or recurring-schedule reasons. They stay
+	// armed on purpose: that session belongs to a different task (a different
+	// workDir, source, viewport and verbosity), so its briefing is not this
+	// task's briefing. Cheap relative to being wrong about what the runner knows.
+	chatModeArg := ""
+	if chatMode {
+		chatModeArg = task.runner.Mode
 	}
-
-	// Viewport hint — tells Claude what surface this output will be
-	// read on (HUD vs desktop vs tmux split vs voice readback) so the
-	// response shape matches. Built from the Voice/mobile/web/spatial
-	// /MentraOS caller's runtime context.
-	if !rawRunnerCommand {
-		if vp := task.TaskViewport; vp != nil {
-			prompt += formatViewportHint(vp)
-		}
-	}
-
-	// Verbosity level (0-10)
-	if !rawRunnerCommand {
-		if vc := task.TaskVerbosity; vc != nil && vc.Verbosity != nil {
-			v := *vc.Verbosity
-			var line string
-			switch {
-			case v <= 2:
-				line = fmt.Sprintf("\n[Verbosity: %d/10] The user prefers very brief responses. Just confirm what was done, report any errors, skip all implementation details.", v)
-			case v <= 4:
-				line = fmt.Sprintf("\n[Verbosity: %d/10] The user prefers concise responses. Summarize what you did in 2-3 sentences.", v)
-			case v <= 6:
-				line = fmt.Sprintf("\n[Verbosity: %d/10] The user prefers moderate detail. Show key changes, explain reasoning briefly.", v)
-			case v <= 8:
-				line = fmt.Sprintf("\n[Verbosity: %d/10] The user wants detailed responses. Show code changes, explain your approach.", v)
-			default:
-				line = fmt.Sprintf("\n[Verbosity: %d/10] The user wants full detail. Stream everything: all code changes, diffs, reasoning, alternatives.", v)
-			}
-			prompt += line
-		}
-	}
-
-	// Append image file paths so the AI agent can read them
-	if !rawRunnerCommand && len(task.ImagePaths) > 0 {
-		prompt += "\n\n[Attached images — use the Read tool to examine these files]\n"
-		for i, p := range task.ImagePaths {
-			prompt += fmt.Sprintf("Image %d: %s\n", i+1, p)
-		}
-	}
+	prompt = tm.composeTurnPrompt(task, prompt, promptFramePolicy{
+		ArmPreamble:      true,
+		RawRunnerCommand: rawRunnerCommand,
+		ChatMode:         chatModeArg,
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
@@ -2682,37 +2578,6 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// workspace-write sandbox treats the project path as Read-only and
 	// rejects apply_patch / sed inplace edits.
 	taskDirForArgs := tm.effectiveTaskWorkDir(task)
-	// Yaver-action sentinel instruction: tells the runner it can emit
-	// `<<yaver-action: reload <slug>>>` to drive the user's paired
-	// phone. Only relevant when the user is actually talking through
-	// the mobile app (Tasks tab) — CLI / connect / autodev sessions
-	// don't have a phone to talk to and don't need the noise. Prepended
-	// rather than threaded as a flag because codex / opencode don't
-	// have a clean --append-system-prompt; one channel for all
-	// runners keeps the dispatch path simple.
-	if !rawRunnerCommand && (task.Source == "mobile" || task.Source == "mobile-code") {
-		prompt = YaverActionSystemPrompt + "\n\n---\n\n" + prompt
-	}
-	// Company dataPolicy.redactPII: scrub PII/secrets from the fully-assembled
-	// prompt as the LAST step before it reaches the runner (Claude Code / Codex
-	// / OpenCode / a local model). No-op unless the task is under a redaction
-	// policy. This is the on-runtime enforcement of the resolved data policy.
-	if !rawRunnerCommand && task.RedactPII {
-		if redacted, n := RedactPII(prompt); n > 0 {
-			log.Printf("[task %s] dataPolicy.redactPII: scrubbed %d PII/secret span(s) from prompt", task.ID, n)
-			prompt = redacted
-		}
-	}
-	// Deterministic prompt-echo boundary. Runners like codex echo the ENTIRE
-	// prompt to stdout before answering; appending this sentinel as the final
-	// line lets stripPromptEcho slice everything up to (and including) its last
-	// occurrence, so no injected system context can survive into ResultText —
-	// regardless of which context blocks were assembled above (the old cleaner
-	// keyed off three hardcoded end-sentences a talos-web prompt never had). If a
-	// runner doesn't echo the prompt, the slice simply no-ops.
-	if !rawRunnerCommand {
-		prompt += "\n\n" + promptEchoSentinel + "\n"
-	}
 	args := buildRunnerArgsWithWorkDir(runner, prompt, taskDirForArgs)
 
 	// Recurring-schedule resume: when the scheduler re-fires a schedule with
@@ -4062,38 +3927,43 @@ func (tm *TaskManager) ResumeTaskWithOptions(id, input string, images []ImageAtt
 	return task, nil
 }
 
-// buildResumePrompt is the prompt for a FOLLOW-UP turn. Unlike the first turn,
-// it carries the user's message VERBATIM: the session already received the
-// source contract and capability context in turn 1 (and keeps it via session
-// resume), and the Yaver MCP supplies live context on demand. Re-wrapping every
-// follow-up buried the user's actual ask under boilerplate the runner had
-// already read — so the only addition allowed here is attachment paths, which
-// are data the runner cannot discover on its own.
-func buildResumePrompt(task *Task, prompt string) string {
-	if isRawRunnerCommand(prompt) {
-		return strings.TrimLeft(prompt, " \t\r\n")
-	}
-	if len(task.ImagePaths) > 0 {
-		prompt += "\n\n[Attached images — use the Read tool to examine these files]\n"
-		for i, p := range task.ImagePaths {
-			prompt += fmt.Sprintf("Image %d: %s\n", i+1, p)
-		}
-	}
-	return prompt
-}
-
 // startResume spawns the runner resuming the task's existing session (if supported).
+//
+// This is the FOLLOW-UP path — the second and every later message of one
+// conversation, from mobile, web, CLI, or the pending-follow-up drain. Its
+// defining property: when the runner really is resuming, the process already
+// read the Yaver preamble on turn 1 and still has it, so the user's words go
+// through essentially verbatim. See task_prompt_frame.go for the rule and for
+// what "essentially" leaves in (attachments, per-turn context, the boundary).
 func (tm *TaskManager) startResume(task *Task, prompt string) error {
-	prompt = buildResumePrompt(task, prompt)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	task.cancel = cancel
-
 	// Use task's runner if set, otherwise fall back to global
 	runner := task.runner
 	if runner.Command == "" {
 		runner = tm.runner
 	}
+
+	// The one decision. Not "is this the first message" (the UI cannot know
+	// what the runner process holds) but "will the process we are about to
+	// spawn still carry this conversation". When it will not — no captured
+	// session id, a runner switch, a CLI that cannot resume — the follow-up is
+	// really a cold first message and must be briefed like one.
+	carriesContext := resumeCanCarryContext(runner, task.SessionID)
+	if !carriesContext {
+		log.Printf("[task %s] follow-up spawns a COLD %s process (session=%q cannot be resumed) — re-arming the Yaver preamble",
+			task.ID, runner.RunnerID, task.SessionID)
+	}
+	chatModeArg := ""
+	if isChatTaskMode(task.runner.Mode) {
+		chatModeArg = task.runner.Mode
+	}
+	prompt = tm.composeTurnPrompt(task, prompt, promptFramePolicy{
+		ArmPreamble:      !carriesContext,
+		RawRunnerCommand: isRawRunnerCommand(prompt),
+		ChatMode:         chatModeArg,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	task.cancel = cancel
 
 	// Resume reuses the same workDir resolution as initial spawn so
 	// codex's -C sandbox allowlist stays consistent across follow-ups.

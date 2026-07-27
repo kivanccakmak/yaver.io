@@ -5,28 +5,49 @@ import (
 	"testing"
 )
 
-func TestResumeTransform_ClaudeAndGLM(t *testing.T) {
-	for _, id := range []string{"claude", "glm"} {
-		runner := RunnerConfig{RunnerID: id, Command: "claude"}
-		base := []string{"-p", "{prompt}", "--no-session-persistence", "--tools", "Bash"}
+func TestResumeTransform_Claude(t *testing.T) {
+	runner := RunnerConfig{RunnerID: "claude", Command: "claude"}
+	base := []string{"-p", "{prompt}", "--no-session-persistence", "--tools", "Bash"}
 
-		// With a session id → --resume appended, --no-session-persistence stripped.
-		out, ok := resumeTransform(runner, base, "go on", "/w", "sess-123")
-		if !ok {
-			t.Fatalf("%s: expected resume ok with session id", id)
-		}
-		joined := strings.Join(out, " ")
-		if !strings.Contains(joined, "--resume sess-123") {
-			t.Errorf("%s: missing --resume, got %v", id, out)
-		}
-		if strings.Contains(joined, "--no-session-persistence") {
-			t.Errorf("%s: --no-session-persistence must be stripped, got %v", id, out)
-		}
+	// With a session id → --resume appended, --no-session-persistence stripped.
+	out, ok := resumeTransform(runner, base, "go on", "/w", "sess-123")
+	if !ok {
+		t.Fatalf("claude: expected resume ok with session id")
+	}
+	joined := strings.Join(out, " ")
+	if !strings.Contains(joined, "--resume sess-123") {
+		t.Errorf("claude: missing --resume, got %v", out)
+	}
+	if strings.Contains(joined, "--no-session-persistence") {
+		t.Errorf("claude: --no-session-persistence must be stripped, got %v", out)
+	}
 
-		// Without a session id → cannot resume.
-		if _, ok := resumeTransform(runner, base, "go on", "/w", ""); ok {
-			t.Errorf("%s: must not resume without a session id", id)
-		}
+	// Without a session id → cannot resume.
+	if _, ok := resumeTransform(runner, base, "go on", "/w", ""); ok {
+		t.Errorf("claude: must not resume without a session id")
+	}
+}
+
+// TestResumeTransform_RetiredGLMCannotResume pins a red this suite has been
+// carrying since 5b0990e0c retired the `glm` runner: that commit dropped "glm"
+// from the claude resume case but left the test asserting glm still resumed
+// like claude, so the assertion described a runner that no longer exists.
+//
+// The behaviour is now the correct one and worth stating: an unknown/retired
+// runner with no ResumeArgs template CANNOT resume, so a follow-up on it spawns
+// a cold process — which is exactly why resumeCanCarryContext must report false
+// there and the prompt composer must re-arm the Yaver preamble
+// (task_prompt_frame.go). A silent "yes it resumed" here would have shipped a
+// briefing-less runner.
+func TestResumeTransform_RetiredGLMCannotResume(t *testing.T) {
+	runner := RunnerConfig{RunnerID: "glm", Command: "claude"}
+	base := []string{"-p", "{prompt}", "--tools", "Bash"}
+
+	if _, ok := resumeTransform(runner, base, "go on", "/w", "sess-123"); ok {
+		t.Error("glm is retired and has no ResumeArgs — it must not claim it can resume")
+	}
+	if resumeCanCarryContext(runner, "sess-123") {
+		t.Error("a runner that cannot resume cannot carry prior context; the follow-up must re-arm the preamble")
 	}
 }
 

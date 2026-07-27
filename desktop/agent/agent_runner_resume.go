@@ -33,11 +33,15 @@ import (
 //     blind.
 //   - any other runner with ResumeArgs: append the template (needs an id).
 func resumeTransform(runner RunnerConfig, baseArgs []string, prompt, workDir, sessionID string) ([]string, bool) {
+	// Single oracle, shared with the prompt composer — see
+	// resumeCanCarryContext. The argv we build and the decision to re-arm the
+	// Yaver preamble MUST agree, or a cold process gets a bare follow-up and
+	// no briefing.
+	if !resumeCanCarryContext(runner, sessionID) {
+		return baseArgs, false
+	}
 	switch normalizeRunnerID(runner.RunnerID) {
 	case "claude":
-		if sessionID == "" {
-			return baseArgs, false
-		}
 		out := make([]string, 0, len(baseArgs)+2)
 		for _, a := range baseArgs {
 			if a == "--no-session-persistence" {
@@ -53,9 +57,6 @@ func resumeTransform(runner RunnerConfig, baseArgs []string, prompt, workDir, se
 		return append(append([]string{}, baseArgs...), "--continue"), true
 
 	case "codex":
-		if sessionID == "" {
-			return baseArgs, false
-		}
 		// codex --dangerously-bypass-approvals-and-sandbox
 		// [-C <dir>] exec resume <id> <prompt>. The sandbox/approval globals
 		// replicate `exec --full-auto`, which `exec resume` rejects.
@@ -67,14 +68,42 @@ func resumeTransform(runner RunnerConfig, baseArgs []string, prompt, workDir, se
 		return out, true
 
 	default:
-		if sessionID == "" || len(runner.ResumeArgs) == 0 {
-			return baseArgs, false
-		}
 		out := append([]string{}, baseArgs...)
 		for _, ra := range runner.ResumeArgs {
 			out = append(out, strings.ReplaceAll(ra, "{sessionId}", sessionID))
 		}
 		return out, true
+	}
+}
+
+// resumeCanCarryContext answers the one question that decides both the resume
+// argv AND whether a follow-up must re-arm the Yaver preamble: will the process
+// we are about to spawn still hold the earlier turns of this conversation?
+//
+// It is deliberately a property of the RUNNER + what we captured, not of the
+// UI. A phone typing a second message looks identical either way; the
+// difference is whether `claude --resume <id>` has an id to resume, and only
+// this layer knows that. When it returns false the next process starts COLD —
+// the same state as a crash restart, a runner switch, or a fork — and a cold
+// runner that never read the preamble does not know it is inside Yaver.
+//
+// Per runner:
+//   - claude / codex: resume is id-addressed. No captured id, no context.
+//   - opencode: `--continue` resumes the most recent session in the work dir,
+//     and by construction a resume means this task already ran one there. We
+//     do NOT gate this on a captured session id: opencode's id capture is
+//     best-effort regex over raw output, so gating on it would put the full
+//     preamble back on every opencode follow-up — the exact waste
+//     task_prompt_frame.go exists to remove.
+//   - any other runner: needs both a captured id and a ResumeArgs template.
+func resumeCanCarryContext(runner RunnerConfig, sessionID string) bool {
+	switch normalizeRunnerID(runner.RunnerID) {
+	case "claude", "codex":
+		return strings.TrimSpace(sessionID) != ""
+	case "opencode":
+		return true
+	default:
+		return strings.TrimSpace(sessionID) != "" && len(runner.ResumeArgs) > 0
 	}
 }
 
