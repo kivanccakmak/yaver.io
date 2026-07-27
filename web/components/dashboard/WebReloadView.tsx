@@ -19,6 +19,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { agentClient, type Runner, type TaskStatus, type WorkspaceAppView } from "@/lib/agent-client";
 import { previewProxyErrorMessage } from "@/lib/preview-proxy";
 import type { Device } from "@/lib/use-devices";
+import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskStreamWithRecovery";
+import { StreamHealthNotice } from "./StreamHealthNotice";
 import { WebAppSelector } from "./WebAppSelector";
 import { WebPreviewFrame, WEB_PREVIEW_VIEWPORTS, type ViewportId } from "./WebPreviewFrame";
 
@@ -159,6 +161,9 @@ export function WebReloadView({
     status: TaskStatus;
     lines: string[];
   } | null>(null);
+  // Live-output stream health — a cut stream used to freeze this console on
+  // its last line with no way to tell "finished" from "tunnel died".
+  const [taskStreamHealth, setTaskStreamHealth] = useState<TaskStreamHealth>(null);
   const taskStreamStopRef = useRef<(() => void) | null>(null);
   const taskPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -545,6 +550,7 @@ export function WebReloadView({
       clearInterval(taskPollRef.current);
       taskPollRef.current = null;
     }
+    setTaskStreamHealth(null);
   }, []);
 
   useEffect(() => {
@@ -976,7 +982,9 @@ export function WebReloadView({
         status: task.status,
         lines: [],
       });
-      taskStreamStopRef.current = agentClient.streamTaskOutput(task.id, (line) => {
+      // Recovery-wrapped — see lib/taskStreamWithRecovery.ts. Without onEnd a
+      // severed stream ends in silence and this console freezes.
+      taskStreamStopRef.current = streamTaskOutputWithRecovery(agentClient, task.id, (line) => {
         const trimmed = String(line || "").trimEnd();
         if (!trimmed) return;
         setActiveTaskStream((prev) => {
@@ -988,7 +996,7 @@ export function WebReloadView({
             lines: next.length > 200 ? next.slice(-200) : next,
           };
         });
-      });
+      }, undefined, { onHealth: setTaskStreamHealth });
       taskPollRef.current = setInterval(() => {
         void agentClient.getTask(task.id)
           .then((fresh) => {
@@ -1090,7 +1098,7 @@ export function WebReloadView({
             workDir,
           });
           setActiveTaskStream({ id: task.id, title: task.title, status: task.status, lines: [] });
-          taskStreamStopRef.current = agentClient.streamTaskOutput(task.id, (line) => {
+          taskStreamStopRef.current = streamTaskOutputWithRecovery(agentClient, task.id, (line) => {
             const trimmed = String(line || "").trimEnd();
             if (!trimmed) return;
             setActiveTaskStream((prev) => {
@@ -1098,7 +1106,7 @@ export function WebReloadView({
               const next = [...prev.lines, trimmed];
               return { ...prev, status: "running", lines: next.length > 200 ? next.slice(-200) : next };
             });
-          });
+          }, undefined, { onHealth: setTaskStreamHealth });
         } catch (taskErr) {
           setCommitStatus(`Couldn't start runner task: ${taskErr instanceof Error ? taskErr.message : String(taskErr)}`);
         }
@@ -1964,6 +1972,7 @@ export function WebReloadView({
                       <pre className="whitespace-pre-wrap font-mono text-[10px] leading-5 text-surface-300">
                         {activeTaskStream.lines.length === 0 ? "(waiting for output…)" : activeTaskStream.lines.join("\n")}
                       </pre>
+                      <StreamHealthNotice health={taskStreamHealth} />
                     </div>
                   ) : (
                     <div className="text-[11px] text-surface-500">Start a task and the runner stream will stay here.</div>

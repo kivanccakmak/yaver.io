@@ -24,7 +24,9 @@ import {
   type CapabilityGap,
 } from "@/lib/capabilityGap";
 import { validateOpenCodeModel } from "@/lib/opencodeModel";
+import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskStreamWithRecovery";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
+import { StreamHealthNotice } from "./StreamHealthNotice";
 import { formatDevProgressLine } from "@/lib/devEventLine";
 import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
 import { CONVEX_URL } from "@/lib/constants";
@@ -853,6 +855,9 @@ export default function RuntimeLabView({
     status: TaskStatus;
     lines: string[];
   } | null>(null);
+  // Live-output stream health. A cut stream used to end in silence, freezing
+  // this console on its last line under a "running" badge.
+  const [taskStreamHealth, setTaskStreamHealth] = useState<TaskStreamHealth>(null);
   const [caps, setCaps] = useState<RemoteRuntimeCapabilities | null>(null);
   const [session, setSession] = useState<RemoteRuntimeSession | null>(null);
   const [log, setLog] = useState<string[]>([]);
@@ -977,6 +982,7 @@ export default function RuntimeLabView({
     taskStreamStopRef.current = null;
     if (taskPollRef.current) clearInterval(taskPollRef.current);
     taskPollRef.current = null;
+    setTaskStreamHealth(null);
   }, []);
 
   useEffect(() => () => {
@@ -1365,7 +1371,10 @@ export default function RuntimeLabView({
       return taskRowsEqual(prev, next) ? prev : next;
     });
     if (task.status !== "queued" && task.status !== "running") return;
-    taskStreamStopRef.current = agentClient.streamTaskOutput(
+    // Recovery-wrapped: a severed stream is named + reattached instead of
+    // freezing this transcript on its last line. lib/taskStreamWithRecovery.ts.
+    taskStreamStopRef.current = streamTaskOutputWithRecovery(
+      agentClient,
       task.id,
       (line) => {
         const trimmed = String(line || "").trimEnd();
@@ -1388,6 +1397,7 @@ export default function RuntimeLabView({
         });
         appendLog(`agent requested render: ${reason}`);
       },
+      { onHealth: setTaskStreamHealth },
     );
     taskPollRef.current = setInterval(() => {
       void agentClient.getTask(task.id).then((fresh) => {
@@ -2670,6 +2680,7 @@ export default function RuntimeLabView({
                       {activeTaskStream.lines.length ? activeTaskStream.lines.join("\n") : "Waiting for runner output..."}
                     </pre>
                   </div>
+                  <StreamHealthNotice health={taskStreamHealth} />
                   {!taskConsolePinned ? (
                     <button
                       type="button"

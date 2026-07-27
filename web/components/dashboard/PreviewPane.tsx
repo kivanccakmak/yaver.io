@@ -18,7 +18,9 @@ import {
   type CapabilityGap,
 } from "@/lib/capabilityGap";
 import pkg from "../../package.json";
+import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskStreamWithRecovery";
 import { CommandCard } from "./CommandCard";
+import { StreamHealthNotice } from "./StreamHealthNotice";
 import {
   isCommandEvent,
   reduceCommandEvent,
@@ -230,6 +232,10 @@ export default function PreviewPane({
     lines: string[];
     commands: Record<string, CommandCardModel>;
   } | null>(null);
+  // The live-output stream's health. Before this, a stream cut mid-render
+  // ended in silence and this panel froze on its last line with no way to
+  // tell a finished task from a severed tunnel.
+  const [taskStreamHealth, setTaskStreamHealth] = useState<TaskStreamHealth>(null);
   // Runner + model surfacing: the device card already shows
   // `runner: <name>`, but during a vibing session the user is staring
   // at this panel, not the device card. Surface the active runner and
@@ -281,6 +287,7 @@ export default function PreviewPane({
       clearInterval(taskPollRef.current);
       taskPollRef.current = null;
     }
+    setTaskStreamHealth(null);
   }, []);
 
   useEffect(() => {
@@ -1044,7 +1051,12 @@ export default function PreviewPane({
         lines: [],
         commands: {},
       });
-      taskStreamStopRef.current = agentClient.streamTaskOutput(
+      // Recovery-wrapped: a dropped stream is named + reattached instead of
+      // freezing this panel's transcript on its last frame. lib/
+      // taskStreamWithRecovery.ts owns the ladder; the policy lives in
+      // lib/taskStreamRecovery.ts.
+      taskStreamStopRef.current = streamTaskOutputWithRecovery(
+        agentClient,
         task.id,
         (line) => {
           const trimmed = String(line || "").trimEnd();
@@ -1071,6 +1083,7 @@ export default function PreviewPane({
             };
           });
         },
+        { onHealth: setTaskStreamHealth },
       );
       taskPollRef.current = setInterval(() => {
         void agentClient.getTask(task.id)
@@ -1791,6 +1804,7 @@ export default function PreviewPane({
                         ))}
                     </div>
                   )}
+                  <StreamHealthNotice health={taskStreamHealth} className="mb-2" />
                   <pre className="min-h-[180px] overflow-auto whitespace-pre-wrap break-all rounded border border-surface-800 bg-surface-950 px-3 py-2 font-mono text-[10px] leading-4 text-surface-300">
                     {activeTaskStream.lines.length === 0 ? (
                       <span className="text-surface-600">

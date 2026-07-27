@@ -9,6 +9,8 @@ import {
   deriveDeviceLifecycleState,
   type DeviceLifecycleState,
 } from "@/lib/device-lifecycle";
+import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskStreamWithRecovery";
+import { StreamHealthNotice } from "@/components/dashboard/StreamHealthNotice";
 import WebShellModal from "@/components/dashboard/WebShellModal";
 import RemoteDesktopModal from "@/components/dashboard/RemoteDesktopModal";
 import { agentClient, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary } from "@/lib/agent-client";
@@ -980,6 +982,10 @@ export default function DashboardPage() {
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const outputRef = useRef<HTMLDivElement>(null);
+  // Live-output stream health. Without this, a dropped SSE stream left the
+  // transcript frozen on its last chunk with the composer still disabled —
+  // indistinguishable from a task that had simply gone quiet.
+  const [taskStreamHealth, setTaskStreamHealth] = useState<TaskStreamHealth>(null);
   const placementStatusSyncRef = useRef<Set<string>>(new Set());
   const relayReadyPromiseRef = useRef<Promise<void> | null>(null);
   const previousActiveTabRef = useRef<string | null>(null);
@@ -1326,11 +1332,15 @@ export default function DashboardPage() {
     }
     if (activeTask.status !== "running" && activeTask.status !== "queued") {
       sseActiveTaskRef.current = null;
+      setTaskStreamHealth(null);
       return;
     }
     const tid = activeTask.id;
     sseActiveTaskRef.current = tid;
-    const stop = agentClient.streamTaskOutput(
+    // Recovery-wrapped — see lib/taskStreamWithRecovery.ts. Without onEnd a
+    // severed stream ends in silence and the transcript freezes mid-answer.
+    const stop = streamTaskOutputWithRecovery(
+      agentClient,
       tid,
       (chunk) => {
         appendAssistantChunk(tid, chunk);
@@ -1358,6 +1368,7 @@ export default function DashboardPage() {
           setAgentQuestion(null);
         }
       },
+      { onHealth: setTaskStreamHealth },
     );
     // Late-join replay: if the agent already asked while no client
     // was subscribed, the SSE writer replays on connect — but also
@@ -1371,6 +1382,7 @@ export default function DashboardPage() {
     });
     return () => {
       stop();
+      setTaskStreamHealth(null);
       if (sseActiveTaskRef.current === tid) sseActiveTaskRef.current = null;
     };
   }, [activeTask?.id, activeTask?.status, appendAssistantChunk]);
@@ -3568,6 +3580,7 @@ export default function DashboardPage() {
                         ) : null}
                       </div>
                       <div ref={outputRef} className="flex-1 overflow-y-auto bg-surface-950 px-4 py-5">
+                        <StreamHealthNotice health={taskStreamHealth} className="mx-auto mb-4 max-w-3xl" />
                         {activeRunnerAuthIssue ? (
                           <div className="mx-auto mb-4 max-w-3xl rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-100">
                             <div className="font-medium">{runnerLabel(activeRunnerId)} needs sign-in on {connectedDevice?.name || "this machine"}</div>
