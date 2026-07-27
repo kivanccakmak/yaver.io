@@ -893,6 +893,13 @@ export default function RuntimeLabView({
   const [machinesDraftRender, setMachinesDraftRender] = useState("");
   const [machinesBusy, setMachinesBusy] = useState(false);
   const [machinesNote, setMachinesNote] = useState<string | null>(null);
+  // Per-role reachability test in the Route editor — saving a routing you
+  // cannot reach is the "inventory says yes" trap; the probe attempts the
+  // operation before you commit to it.
+  const [machinesTest, setMachinesTest] = useState<{
+    runner: { pinging?: boolean; ok?: boolean; rttMs?: number; error?: string };
+    render: { pinging?: boolean; ok?: boolean; rttMs?: number; error?: string };
+  }>({ runner: {}, render: {} });
   // Failure note for the Load-Targets-row render-machine picker — the chat
   // aside's machinesNote is off-screen from that row, and a save that fails
   // silently is an unfalsifiable state.
@@ -1310,6 +1317,7 @@ export default function RuntimeLabView({
     setMachinesDraftRunner(machineRoles?.runnerDeviceId || connectedDevice?.id || "");
     setMachinesDraftRender(machineRoles?.renderDeviceId || machineRoles?.runnerDeviceId || connectedDevice?.id || "");
     setMachinesNote(null);
+    setMachinesTest({ runner: {}, render: {} });
     setMachinesEditOpen((open) => !open);
   }, [connectedDevice?.id, machineRoles?.renderDeviceId, machineRoles?.runnerDeviceId]);
 
@@ -1341,6 +1349,49 @@ export default function RuntimeLabView({
       setMachinesBusy(false);
     }
   }, [appendLog, deviceNameById, machineRoles?.autoPush, machineRoles?.secondaryRenderDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.workspace, machinesDraftRender, machinesDraftRunner, onSaveMachineRoles]);
+
+  const testMachineRole = useCallback(async (role: "runner" | "render") => {
+    const id = role === "runner" ? machinesDraftRunner : (machinesDraftRender || machinesDraftRunner);
+    const device = (devices || []).find((d) => d.id === id);
+    if (!id || !device || !token) {
+      setMachinesTest((prev) => ({
+        ...prev,
+        [role]: { ok: false, error: !id ? "pick a machine first" : !device ? "unknown device" : "not signed in" },
+      }));
+      return;
+    }
+    setMachinesTest((prev) => ({ ...prev, [role]: { pinging: true } }));
+    const started = Date.now();
+    try {
+      const probe = await agentClient.probeDeviceStatus({
+        host: device.host,
+        port: device.port,
+        token,
+        deviceId: device.id,
+        tunnelUrls: Array.from(
+          new Set(
+            [
+              ...(Array.isArray(device.publicEndpoints) ? device.publicEndpoints : []),
+              ...(device.tunnelUrl ? [device.tunnelUrl] : []),
+            ]
+              .map((u) => String(u || "").trim())
+              .filter(Boolean),
+          ),
+        ),
+      });
+      setMachinesTest((prev) => ({
+        ...prev,
+        [role]: probe.ok
+          ? { ok: true, rttMs: Date.now() - started }
+          : { ok: false, error: probe.error || "unreachable" },
+      }));
+    } catch (err) {
+      setMachinesTest((prev) => ({
+        ...prev,
+        [role]: { ok: false, error: err instanceof Error ? err.message : String(err) },
+      }));
+    }
+  }, [devices, machinesDraftRender, machinesDraftRunner, token]);
 
   const clearMachineRoles = useCallback(async () => {
     if (!onClearMachineRoles) return;
@@ -3157,7 +3208,10 @@ export default function RuntimeLabView({
                       <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">AI runner (chat streams from)</span>
                       <select
                         value={machinesDraftRunner}
-                        onChange={(event) => setMachinesDraftRunner(event.target.value)}
+                        onChange={(event) => {
+                          setMachinesDraftRunner(event.target.value);
+                          setMachinesTest((prev) => ({ ...prev, runner: {} }));
+                        }}
                         className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
                       >
                         <option value="">— pick a machine —</option>
@@ -3167,12 +3221,32 @@ export default function RuntimeLabView({
                           </option>
                         ))}
                       </select>
+                      <span className="mt-1 flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={machinesBusy || !!machinesTest.runner.pinging || !machinesDraftRunner}
+                          onClick={() => void testMachineRole("runner")}
+                          className="rounded border border-[#d7dce3] bg-white px-1.5 py-0.5 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] disabled:cursor-not-allowed disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#d7dce3]"
+                        >
+                          {machinesTest.runner.pinging ? "Testing…" : "Test connection"}
+                        </button>
+                        {machinesTest.runner.ok === true ? (
+                          <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">✓ {machinesTest.runner.rttMs}ms</span>
+                        ) : machinesTest.runner.ok === false ? (
+                          <span className="min-w-0 truncate text-[10px] text-rose-600 dark:text-rose-300" title={machinesTest.runner.error}>
+                            {machinesTest.runner.error}
+                          </span>
+                        ) : null}
+                      </span>
                     </label>
                     <label className="min-w-0">
                       <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Renderer (builds + previews)</span>
                       <select
                         value={machinesDraftRender}
-                        onChange={(event) => setMachinesDraftRender(event.target.value)}
+                        onChange={(event) => {
+                          setMachinesDraftRender(event.target.value);
+                          setMachinesTest((prev) => ({ ...prev, render: {} }));
+                        }}
                         className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
                       >
                         <option value="">same as runner</option>
@@ -3182,6 +3256,23 @@ export default function RuntimeLabView({
                           </option>
                         ))}
                       </select>
+                      <span className="mt-1 flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={machinesBusy || !!machinesTest.render.pinging || (!machinesDraftRender && !machinesDraftRunner)}
+                          onClick={() => void testMachineRole("render")}
+                          className="rounded border border-[#d7dce3] bg-white px-1.5 py-0.5 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] disabled:cursor-not-allowed disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#d7dce3]"
+                        >
+                          {machinesTest.render.pinging ? "Testing…" : "Test connection"}
+                        </button>
+                        {machinesTest.render.ok === true ? (
+                          <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">✓ {machinesTest.render.rttMs}ms</span>
+                        ) : machinesTest.render.ok === false ? (
+                          <span className="min-w-0 truncate text-[10px] text-rose-600 dark:text-rose-300" title={machinesTest.render.error}>
+                            {machinesTest.render.error}
+                          </span>
+                        ) : null}
+                      </span>
                     </label>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
