@@ -2649,12 +2649,17 @@ export default function AppsScreen() {
               </Text>
             )}
             {!!actionSheet?.compatibility?.errors?.length && (
-              <Text style={[s.actionSheetSubtitle, { color: "#fca5a5", marginTop: -8 }]}>
+              /* numberOfLines: this can be a multi-KB per-module wall (seen
+                 live in build 482 for yaver/mobile) — unbounded, it consumed
+                 the WHOLE sheet and squeezed the action lanes to zero height,
+                 so "Browser Reload" existed but could never be seen. The
+                 diagnostics summarize; the lanes are the point of the sheet. */
+              <Text numberOfLines={4} style={[s.actionSheetSubtitle, { color: "#fca5a5", marginTop: -8 }]}>
                 {actionSheet.compatibility.errors[0]}
               </Text>
             )}
             {!!actionSheet?.compatibility?.warnings?.length && !actionSheet?.compatibility?.errors?.length && (
-              <Text style={[s.actionSheetSubtitle, { color: "#fcd34d", marginTop: -8 }]}>
+              <Text numberOfLines={4} style={[s.actionSheetSubtitle, { color: "#fcd34d", marginTop: -8 }]}>
                 {actionSheet.compatibility.warnings[0]}
               </Text>
             )}
@@ -2675,7 +2680,7 @@ export default function AppsScreen() {
               </Text>
             ) : null}
             {actionSheet?.compatibility?.lastBuildError && actionSheet.compatibility.buildState === "build_failed" ? (
-              <Text style={[s.actionSheetSubtitle, { color: "#fca5a5", marginTop: -8 }]}>
+              <Text numberOfLines={4} style={[s.actionSheetSubtitle, { color: "#fca5a5", marginTop: -8 }]}>
                 {actionSheet.compatibility.lastBuildError}
               </Text>
             ) : null}
@@ -3659,7 +3664,10 @@ const s = StyleSheet.create({
   actionSheetHandle: { width: 36, height: 4, backgroundColor: "#333", borderRadius: 2, alignSelf: "center", marginBottom: 16 },
   actionSheetTitle: { fontSize: 20, fontWeight: "700", marginBottom: 2 },
   actionSheetSubtitle: { fontSize: 13, marginBottom: 16 },
-  actionSheetScroll: {},
+  // minHeight: the lanes are the sheet's reason to exist — whatever the
+  // diagnostics above do, the action list keeps enough room to show and
+  // scroll its entries (the 482 regression rendered ZERO visible lanes).
+  actionSheetScroll: { minHeight: 200 },
   actionSheetItem: { flexDirection: "row", alignItems: "center", paddingVertical: 14, borderBottomWidth: 1, gap: 12 },
   actionSheetIcon: { fontSize: 22 },
   actionSheetLabel: { fontSize: 15, fontWeight: "600" },
