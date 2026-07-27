@@ -66,6 +66,7 @@ import WebviewView from "@/components/dashboard/WebviewView";
 import RuntimeLabView, { type RuntimeLabIntent } from "@/components/dashboard/RuntimeLabView";
 import DevicesView, { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice, RUNNER_WHITELIST_SET, OPENCODE_PROVIDER_CATALOGUE, MODEL_OPTIONS_BY_RUNNER } from "@/components/dashboard/DevicesView";
 import { CapabilityShelf } from "@/components/dashboard/CapabilityShelf";
+import RawFailureBanner from "@/components/dashboard/RawFailureBanner";
 import { HIDE_PAID_UI } from "@/lib/launchFlags";
 import { parseDashboardChatIntent } from "@/lib/dashboard-chat-intent";
 import {
@@ -2593,6 +2594,10 @@ export default function DashboardPage() {
 
   return (
     <div className="dashboard-shell relative flex min-h-[100vh] flex-col md:h-[100vh] md:min-h-0 md:flex-row">
+      {/* Names any failure that would otherwise reach the user as a bare
+          `TypeError: Failed to fetch` — including the unhandled rejections
+          that `void someAsync()` call sites produce. See RawFailureBanner. */}
+      <RawFailureBanner onSignOut={logout} />
       <div className="pointer-events-none absolute inset-y-0 left-0 hidden w-60 border-r border-white/5 md:block" />
       {/* Mobile top bar — visible only below md */}
       <div className="dashboard-mobilebar md:hidden">

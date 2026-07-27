@@ -4865,6 +4865,24 @@ http.route({
   }),
 });
 
+/** POST /settings — write user settings.
+ *
+ *  GUARDED ON PURPOSE (incident 2026-07-27). `userSettings.setByToken` throws
+ *  a plain `Error("Unauthorized")` when the bearer token no longer validates.
+ *  An uncaught throw inside an httpAction becomes Convex's own 500 envelope,
+ *  and that envelope carries NO `Access-Control-Allow-Origin` — so a browser
+ *  cannot read the status at all and reports the whole exchange as
+ *  `TypeError: Failed to fetch`. That is exactly what a user saw on Vibing →
+ *  Runtime → "Save for machine": an expired session rendered as a network
+ *  error, on a page where GET /settings still answered 200 with defaults, so
+ *  nothing upstream hinted that the session was dead.
+ *
+ *  Verified live before the fix:
+ *    curl -i -X POST .../settings -H 'Origin: https://yaver.io' \
+ *         -H 'Authorization: Bearer <invalid>' -d '{}'
+ *      → HTTP/2 500, no access-control-allow-origin
+ *  Every reply must go through jsonResponse/errorResponse, which set the
+ *  header, so the client always gets a readable status to act on. */
 http.route({
   path: "/settings",
   method: "POST",
@@ -4872,49 +4890,65 @@ http.route({
     const authHeader = request.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
     const tokenHash = await sha256Hex(authHeader.slice(7));
-    const body = await request.json();
-    await ctx.runMutation(api.userSettings.setByToken, {
-      tokenHash,
-      forceRelay: body.forceRelay,
-      runnerId: body.runnerId,
-      customRunnerCommand: body.customRunnerCommand,
-      relayUrl: body.relayUrl,
-      relayPassword: body.relayPassword,
-      tunnelUrl: body.tunnelUrl,
-      speechProvider: body.speechProvider,
-      ttsEnabled: body.ttsEnabled,
-      ttsProvider: body.ttsProvider,
-      verbosity: body.verbosity,
-      keyStorage: body.keyStorage,
-      multiTargetMode: body.multiTargetMode,
-      moreOptionalTools: body.moreOptionalTools,
-      // Client sends null to clear the preference, undefined to leave untouched.
-      primaryDeviceId: body.primaryDeviceId,
-      secondaryDeviceId: body.secondaryDeviceId,
-      // Per-device coding agent — forwarded to the mutation's
-      // primaryRunnerByDevice merge logic. Without this forward the
-      // field was silently dropped at the HTTP boundary, every
-      // Confirm click no-op'd, and the sidebar kept falling back
-      // to whichever runner was first in device.runners[]
-      // (= Claude Code on a Linux box that happens to have it
-      // installed).
-      primaryRunnerForDevice: body.primaryRunnerForDevice,
-      // Non-secret OpenCode config metadata cache. The live agent remains the
-      // source of truth; this just lets clients render provider/model/agent
-      // details immediately on startup. API keys are not accepted by the
-      // Convex validator and must stay on the machine.
-      opencodeConfigForDevice: body.opencodeConfigForDevice,
-      // Runtime project memory is privacy-limited: project name plus remote
-      // repo identity per machine, never local absolute paths.
-      defaultRuntimeProjectForDevice: body.defaultRuntimeProjectForDevice,
-      runtimeProjectCatalogForDevice: body.runtimeProjectCatalogForDevice,
-      // Per-subsystem managed toggle. Client sends only the
-      // subsystem(s) it's changing; backend merges the patch into
-      // the existing record so other subsystems' toggles are
-      // preserved. null on any key clears that subsystem.
-      managed: body.managed,
-      deployPreferences: body.deployPreferences,
-    });
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      return errorResponse("Body must be JSON", 400);
+    }
+    try {
+      await ctx.runMutation(api.userSettings.setByToken, {
+        tokenHash,
+        forceRelay: body.forceRelay,
+        runnerId: body.runnerId,
+        customRunnerCommand: body.customRunnerCommand,
+        relayUrl: body.relayUrl,
+        relayPassword: body.relayPassword,
+        tunnelUrl: body.tunnelUrl,
+        speechProvider: body.speechProvider,
+        ttsEnabled: body.ttsEnabled,
+        ttsProvider: body.ttsProvider,
+        verbosity: body.verbosity,
+        keyStorage: body.keyStorage,
+        multiTargetMode: body.multiTargetMode,
+        moreOptionalTools: body.moreOptionalTools,
+        // Client sends null to clear the preference, undefined to leave untouched.
+        primaryDeviceId: body.primaryDeviceId,
+        secondaryDeviceId: body.secondaryDeviceId,
+        // Per-device coding agent — forwarded to the mutation's
+        // primaryRunnerByDevice merge logic. Without this forward the
+        // field was silently dropped at the HTTP boundary, every
+        // Confirm click no-op'd, and the sidebar kept falling back
+        // to whichever runner was first in device.runners[]
+        // (= Claude Code on a Linux box that happens to have it
+        // installed).
+        primaryRunnerForDevice: body.primaryRunnerForDevice,
+        // Non-secret OpenCode config metadata cache. The live agent remains the
+        // source of truth; this just lets clients render provider/model/agent
+        // details immediately on startup. API keys are not accepted by the
+        // Convex validator and must stay on the machine.
+        opencodeConfigForDevice: body.opencodeConfigForDevice,
+        // Runtime project memory is privacy-limited: project name plus remote
+        // repo identity per machine, never local absolute paths.
+        defaultRuntimeProjectForDevice: body.defaultRuntimeProjectForDevice,
+        runtimeProjectCatalogForDevice: body.runtimeProjectCatalogForDevice,
+        // Per-subsystem managed toggle. Client sends only the
+        // subsystem(s) it's changing; backend merges the patch into
+        // the existing record so other subsystems' toggles are
+        // preserved. null on any key clears that subsystem.
+        managed: body.managed,
+        deployPreferences: body.deployPreferences,
+      });
+    } catch (err) {
+      // Name the cause with a status the browser is allowed to READ. An
+      // unhandled throw here would return Convex's CORS-less 500 and every
+      // client would print "failed to fetch" for an expired session.
+      const message = err instanceof Error ? err.message : String(err);
+      if (/unauthorized/i.test(message)) {
+        return errorResponse("Session expired — sign in again", 401);
+      }
+      return errorResponse(`Could not save settings: ${message}`, 500);
+    }
     return jsonResponse({ ok: true });
   }),
 });
