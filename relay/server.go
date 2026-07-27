@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1516,6 +1517,7 @@ func (s *RelayServer) runHTTPProxy(ctx context.Context) error {
 	mux.HandleFunc("/admin/selftest", s.handleAdminSelftest)
 	mux.HandleFunc("/authmix", s.handleAuthMix)
 	mux.HandleFunc("/admin/bandwidth", s.handleBandwidthStats)
+	mux.HandleFunc("/my/bandwidth", s.handleMyBandwidth)
 	// P2P bus — per-user fanout (see relay/bus.go). Not a broker;
 	// relay holds no topic state, just forwards events.
 	mux.HandleFunc("/bus/publish", s.handleBusPublish)
@@ -2546,6 +2548,7 @@ func (s *RelayServer) tryExposeProxy(w http.ResponseWriter, r *http.Request) boo
 		strings.HasPrefix(r.URL.Path, "/bus/"),
 		strings.HasPrefix(r.URL.Path, "/agent/"),
 		strings.HasPrefix(r.URL.Path, "/admin/"),
+		strings.HasPrefix(r.URL.Path, "/my/"),
 		r.URL.Path == "/health",
 		r.URL.Path == "/presence",
 		r.URL.Path == "/tunnels",
@@ -2702,6 +2705,54 @@ func (s *RelayServer) logTunnels(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// handleMyBandwidth is the PER-TENANT usage view the dashboard settings page
+// renders: the caller's Convex-verified plan plus usage rows for exactly the
+// devices whose tunnels the caller's account registered. /admin/bandwidth
+// stays admin-tier and returns every tenant's rows; this endpoint exists so
+// the product surface never needs that reach. Owner-dev accounts still get
+// their real usage numbers — "no limit" and "how much am I moving" are both
+// things the owner asked to see (2026-07-27).
+func (s *RelayServer) handleMyBandwidth(w http.ResponseWriter, r *http.Request) {
+	pw := strings.TrimSpace(r.Header.Get("X-Relay-Password"))
+	if pw == "" {
+		writeRelayError(w, http.StatusUnauthorized, "relay password required")
+		return
+	}
+	userID, ok, err := s.validateRelayAccessE(pw, "", "", "")
+	if err != nil {
+		writeRelayError(w, http.StatusServiceUnavailable, "auth backend unavailable — retry")
+		return
+	}
+	if !ok || userID == "" {
+		if !s.abuseGuard.allowInvalidAuth(s.abuseGuard.clientIP(r)) {
+			writeRelayError(w, http.StatusTooManyRequests, "too many invalid auth attempts")
+			return
+		}
+		writeRelayError(w, http.StatusUnauthorized, "invalid relay password")
+		return
+	}
+	isPaid, plan := s.relayAccessEntitlement("", "", pw, "")
+
+	s.mu.RLock()
+	var mine []string
+	for id, t := range s.tunnels {
+		if t.userID == userID {
+			mine = append(mine, id)
+		}
+	}
+	s.mu.RUnlock()
+	sort.Strings(mine)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":        true,
+		"plan":      plan,
+		"isPaid":    isPaid,
+		"unmetered": planBandwidthExempt(plan),
+		"devices":   s.bandwidth.SummaryFor(mine),
+	})
 }
 
 func (s *RelayServer) handleBandwidthStats(w http.ResponseWriter, r *http.Request) {

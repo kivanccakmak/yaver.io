@@ -111,6 +111,7 @@ import StudioPanel from "@/components/dashboard/StudioPanel";
 import QAPanel from "@/components/dashboard/QAPanel";
 import WebTestsPanel from "@/components/dashboard/WebTestsPanel";
 import SettingsView from "@/components/dashboard/SettingsView";
+import { PlanUsageCard } from "@/components/dashboard/PlanUsageCard";
 import type { RunnerBrowserAuthSession } from "@/lib/agent-client";
 import webPkg from "../../package.json";
 
@@ -1077,6 +1078,24 @@ export default function DashboardPage() {
   const probedForCurrentTabOpenRef = useRef(false);
 
   const isConnected = connState === "connected";
+
+  // Initial landing (user directive 2026-07-27): a box already connected means
+  // the user came to work — open Vibing. No box connected → stay on Devices,
+  // which is where connecting happens. Runs once, never over an explicit
+  // ?tab= deep link, and never after the user has navigated (activeTab is
+  // read through a ref so a manual click before connect wins).
+  const autoLandedRef = useRef(false);
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
+  useEffect(() => {
+    if (autoLandedRef.current || !isConnected) return;
+    autoLandedRef.current = true;
+    if (typeof window !== "undefined") {
+      const urlTab = new URLSearchParams(window.location.search).get("tab");
+      if (isDashboardTab(urlTab)) return; // deep link wins
+    }
+    if (activeTabRef.current === "devices") setActiveTab("runtime");
+  }, [isConnected]);
 
   // Sidebar tmux list: refresh on connect and every 20s after. Errors degrade to
   // an empty list (the section hides) — a stale roster that outlives the box is
@@ -2582,9 +2601,12 @@ export default function DashboardPage() {
   // mirrors the daemon-side gate (mcp_owner_gate.go).
   const isOwnerAccount = user?.isOwner === true;
   const OWNER_ONLY_TABS = new Set(["arm", "appletv", "robot", "circuit", "printer"]);
+  // Mesh moved out of the primary nav into Settings (user directive
+  // 2026-07-27): it's set-up-once plumbing, not a daily destination. The
+  // "network" tab itself stays a valid DashboardTab \u2014 Settings and ?tab=
+  // deep links still open it.
   const tabs: { id: typeof activeTab; label: string; icon: string; badge?: number }[] = ([
     { id: "devices", label: "Devices", icon: "\uD83D\uDCBB" },
-    { id: "network", label: "Mesh", icon: "\uD83D\uDD78\uFE0F" },
     { id: "chat", label: "Chat", icon: "\uD83D\uDCAC" },
     { id: "projects", label: "Projects", icon: "\uD83D\uDCC1" },
     { id: "runtime", label: "Vibing", icon: "\u25A3" },
@@ -2651,7 +2673,6 @@ export default function DashboardPage() {
           <nav className="flex flex-col gap-[2px]">
 	            {([
 	              { id: "devices",  label: "Devices",  icon: "💻" },
-	              { id: "network",  label: "Mesh",     icon: "🕸️" },
 	              { id: "chat",     label: "Chat",     icon: "💬" },
 	              { id: "projects", label: "Projects", icon: "📁" },
 	              { id: "runtime", label: "Vibing", icon: "▣" },
@@ -3491,6 +3512,20 @@ export default function DashboardPage() {
             <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full"><TwoFactorView token={token} autoStart={autoStart2faSetup} /></div>
           ) : activeTab === "settings" ? (
             <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full">
+              {/* Account plan + relay usage — profile clicks land here. */}
+              <PlanUsageCard deviceNames={Object.fromEntries(devices.map((d) => [d.id, d.name]))} />
+              {/* Mesh lives here now — set-up-once plumbing, not a nav tab. */}
+              <button
+                type="button"
+                onClick={() => setActiveTab("network")}
+                className="mb-4 flex w-full items-center justify-between rounded-lg border border-surface-800 bg-surface-900/60 px-4 py-3 text-left transition-colors hover:border-surface-700 hover:bg-surface-800/60"
+              >
+                <span className="flex items-center gap-2 text-sm text-surface-200">
+                  <span aria-hidden>🕸️</span> Mesh network
+                  <span className="text-[11px] text-surface-500">device-to-device WireGuard mesh</span>
+                </span>
+                <span aria-hidden className="text-surface-500">→</span>
+              </button>
               <SettingsView user={user as any} onLogout={logout} />
             </div>
           ) : activeTab === "storage" ? (

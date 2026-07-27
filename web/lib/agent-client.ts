@@ -3499,6 +3499,27 @@ export class AgentClient {
     return h;
   }
 
+  /** Per-tenant relay plan + usage — the settings "Plan & usage" card.
+   *  Answered by the relay's /my/bandwidth: the caller's Convex-verified plan
+   *  plus usage rows scoped to the caller's OWN devices (never another
+   *  tenant's). Returns null when this session isn't relay-connected; the
+   *  password stays private to this class. */
+  async fetchMyRelayUsage(): Promise<{
+    plan: string;
+    isPaid: boolean;
+    unmetered: boolean;
+    devices: Array<{ deviceId: string; usedMb: number; limitMb: number; isPaid: boolean; unmetered?: boolean }>;
+  } | null> {
+    if (!this._activeRelayUrl || !this.activeRelayPassword) return null;
+    const base = this._activeRelayUrl.replace(/\/+$/, "");
+    const res = await fetch(`${base}/my/bandwidth`, {
+      headers: { "X-Relay-Password": this.activeRelayPassword },
+      cache: "no-store",
+    });
+    if (!res.ok) throw new Error(`usage fetch failed: HTTP ${res.status}`);
+    return res.json();
+  }
+
   /**
    * Fetch an arbitrary agent path with the active auth headers + base
    * URL applied. Use this instead of `(agentClient as any).baseUrl` /

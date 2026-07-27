@@ -33,8 +33,8 @@ type BandwidthManager struct {
 // BandwidthConfig controls bandwidth allocation.
 type BandwidthConfig struct {
 	// Per-device limits (per day)
-	FreeDeviceLimitMB  int `json:"freeDeviceLimitMb"`  // default: 500MB/day for free tier
-	PaidDeviceLimitMB  int `json:"paidDeviceLimitMb"`  // default: 20000MB/day for paid tier
+	FreeDeviceLimitMB int `json:"freeDeviceLimitMb"` // default: 500MB/day for free tier
+	PaidDeviceLimitMB int `json:"paidDeviceLimitMb"` // default: 20000MB/day for paid tier
 
 	// Global server limits
 	MaxBandwidthMbps int `json:"maxBandwidthMbps"` // total server bandwidth cap
@@ -49,15 +49,15 @@ type BandwidthConfig struct {
 
 // DeviceBandwidth tracks a single device's bandwidth usage.
 type DeviceBandwidth struct {
-	DeviceID   string `json:"deviceId"`
-	IsPaid     bool   `json:"isPaid"`
+	DeviceID string `json:"deviceId"`
+	IsPaid   bool   `json:"isPaid"`
 	// Unmetered exempts the device from the daily cap entirely (usage is
 	// still RECORDED for stats). Granted per-request from the caller's
 	// Convex-verified plan (owner-dev) — never from anything client-sent.
-	Unmetered  bool   `json:"unmetered,omitempty"`
-	BytesIn    int64  `json:"bytesIn"`    // today
-	BytesOut   int64  `json:"bytesOut"`   // today
-	ResetDate  string `json:"resetDate"`  // "2026-03-22"
+	Unmetered  bool      `json:"unmetered,omitempty"`
+	BytesIn    int64     `json:"bytesIn"`   // today
+	BytesOut   int64     `json:"bytesOut"`  // today
+	ResetDate  string    `json:"resetDate"` // "2026-03-22"
 	LastActive time.Time `json:"-"`
 
 	// Rate tracking (per minute window)
@@ -67,14 +67,14 @@ type DeviceBandwidth struct {
 
 // BandwidthStats is returned by the /bandwidth endpoint.
 type BandwidthStats struct {
-	TotalDevices    int                `json:"totalDevices"`
-	ActiveDevices   int                `json:"activeDevices"`
-	TotalBytesIn    int64              `json:"totalBytesIn"`
-	TotalBytesOut   int64              `json:"totalBytesOut"`
-	LoadPercent     float64            `json:"loadPercent"`
-	LimitsRelaxed   bool               `json:"limitsRelaxed"`
-	CurrentMultiplier float64          `json:"currentMultiplier"`
-	TopDevices      []DeviceBandwidthSummary `json:"topDevices"`
+	TotalDevices      int                      `json:"totalDevices"`
+	ActiveDevices     int                      `json:"activeDevices"`
+	TotalBytesIn      int64                    `json:"totalBytesIn"`
+	TotalBytesOut     int64                    `json:"totalBytesOut"`
+	LoadPercent       float64                  `json:"loadPercent"`
+	LimitsRelaxed     bool                     `json:"limitsRelaxed"`
+	CurrentMultiplier float64                  `json:"currentMultiplier"`
+	TopDevices        []DeviceBandwidthSummary `json:"topDevices"`
 }
 
 type DeviceBandwidthSummary struct {
@@ -90,12 +90,12 @@ type DeviceBandwidthSummary struct {
 // DefaultBandwidthConfig returns sensible defaults.
 func DefaultBandwidthConfig() BandwidthConfig {
 	return BandwidthConfig{
-		FreeDeviceLimitMB:  500,    // 500MB/day free
-		PaidDeviceLimitMB:  20000,  // 20GB/day paid
-		MaxBandwidthMbps:   1000,   // 1Gbps server cap
-		LowLoadThreshold:   0.3,    // 30%
-		HighLoadThreshold:  0.8,    // 80%
-		RelaxMultiplier:    3.0,    // 3x when idle
+		FreeDeviceLimitMB: 500,   // 500MB/day free
+		PaidDeviceLimitMB: 20000, // 20GB/day paid
+		MaxBandwidthMbps:  1000,  // 1Gbps server cap
+		LowLoadThreshold:  0.3,   // 30%
+		HighLoadThreshold: 0.8,   // 80%
+		RelaxMultiplier:   3.0,   // 3x when idle
 	}
 }
 
@@ -201,6 +201,37 @@ func (bm *BandwidthManager) RecordBytes(deviceID string, bytesIn, bytesOut int64
 	bm.totalBytesOut += bytesOut
 }
 
+// SummaryFor returns usage rows for exactly the given devices — the
+// per-tenant slice behind /my/bandwidth. Unlike GetStats/TopDevices this
+// never sees another tenant's rows, so the caller-side filter can't be
+// forgotten.
+func (bm *BandwidthManager) SummaryFor(deviceIDs []string) []DeviceBandwidthSummary {
+	bm.mu.RLock()
+	defer bm.mu.RUnlock()
+	var out []DeviceBandwidthSummary
+	for _, id := range deviceIDs {
+		dev, ok := bm.devices[id]
+		if !ok {
+			// No traffic recorded yet today — still report the device so the
+			// UI shows "0 MB used" instead of silently omitting it.
+			out = append(out, DeviceBandwidthSummary{DeviceID: id, LimitMB: bm.config.FreeDeviceLimitMB})
+			continue
+		}
+		limitMB := bm.config.FreeDeviceLimitMB
+		if dev.IsPaid {
+			limitMB = bm.config.PaidDeviceLimitMB
+		}
+		out = append(out, DeviceBandwidthSummary{
+			DeviceID:  dev.DeviceID,
+			IsPaid:    dev.IsPaid,
+			Unmetered: dev.Unmetered,
+			LimitMB:   limitMB,
+			UsedMB:    int((dev.BytesIn + dev.BytesOut) / (1024 * 1024)),
+		})
+	}
+	return out
+}
+
 // GetStats returns current bandwidth statistics.
 func (bm *BandwidthManager) GetStats() BandwidthStats {
 	bm.mu.RLock()
@@ -258,7 +289,7 @@ func (bm *BandwidthManager) GetStats() BandwidthStats {
 		stats.TopDevices = append(stats.TopDevices, DeviceBandwidthSummary{
 			DeviceID: sorted[i].id,
 			BytesIn:  0, BytesOut: 0, // simplified
-			IsPaid:   sorted[i].isPaid,
+			IsPaid: sorted[i].isPaid,
 			// "paid" and "no cap at all" are different verdicts; an admin
 			// view that can't tell them apart re-derives today's incident.
 			Unmetered: sorted[i].unmetered,
@@ -436,7 +467,6 @@ func (bm *BandwidthManager) LogUsage() {
 		stats.TotalDevices, stats.ActiveDevices, stats.LoadPercent,
 		stats.CurrentMultiplier, stats.TotalBytesIn/(1024*1024), stats.TotalBytesOut/(1024*1024))
 }
-
 
 // shortDeviceRef is a log/error-safe device prefix: never panics, never
 // leaks more than a recognisable stub.
