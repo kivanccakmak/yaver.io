@@ -390,11 +390,17 @@ func (s *RelayServer) authorizeAdmin(w http.ResponseWriter, r *http.Request) boo
 		}
 	}
 
-	// 2. Relay password via X-Relay-Password header (or per-user via Convex).
-	//    We DON'T accept the ?__rp= query fallback here on purpose —
-	//    these are admin-tier endpoints, not iframe-served content.
+	// 2. Relay password via X-Relay-Password header — but ONLY the relay's
+	//    OWN shared admin password, NEVER a per-user Convex password.
+	//    validatePassword() falls back to validatePasswordViaConvex, which
+	//    accepts ANY tenant's per-user relay password — so every free signup
+	//    could read /tunnels, /admin/bandwidth, every tenant's deviceId
+	//    prefixes + peer IPs (and, chained with the prefix hole, reach their
+	//    boxes). Admin tier is the shared secret or the bearer token, full
+	//    stop. We DON'T accept the ?__rp= query fallback here either — these
+	//    are admin endpoints, not iframe-served content.
 	relayPw := r.Header.Get("X-Relay-Password")
-	if relayPw != "" && s.validatePassword(relayPw) {
+	if sp := s.getPassword(); sp != "" && relayPw != "" && secretEqual(relayPw, sp) {
 		return true
 	}
 
@@ -2001,22 +2007,25 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the tunnel
+	// Find the tunnel. EXACT match only — a prefix match here was a
+	// cross-tenant hole: authorization at :1886 validates the exact URL
+	// string against the caller's OWN devices row, but a prefix fallback
+	// could then resolve that authorized 8-char string to a DIFFERENT
+	// tenant's full-UUID tunnel and deliver the request there. Every real
+	// client sends the full deviceId; short IDs are not a supported input.
 	s.mu.RLock()
 	tunnel, ok := s.tunnels[deviceID]
 	s.mu.RUnlock()
 
-	// Try prefix match if exact match fails (mobile might send short ID)
-	if !ok && len(deviceID) >= 8 {
-		s.mu.RLock()
-		for id, t := range s.tunnels {
-			if strings.HasPrefix(id, deviceID) {
-				tunnel = t
-				ok = true
-				break
-			}
-		}
-		s.mu.RUnlock()
+	// Ownership backstop: even on an exact match, the tunnel's registered
+	// owner MUST equal the authorized caller. This is the same same-owner
+	// check mesh.go already enforces; the /d/ proxy path was missing it, so
+	// any future resolution mismatch can never bridge tenants. Empty userID
+	// (self-hosted shared-password relay with no Convex) skips the check —
+	// there is no access graph to scope to in that deployment.
+	if ok && userID != "" && tunnel.userID != "" && tunnel.userID != userID {
+		writeRelayError(w, http.StatusBadGateway, "device not connected to relay")
+		return
 	}
 
 	if !ok {
@@ -2517,9 +2526,15 @@ func (s *RelayServer) handleExposeUnregister(msg ExposeUnregisterMsg, deviceID s
 // Returns true if handled, false to fall through to normal routing.
 func (s *RelayServer) tryExposeProxy(w http.ResponseWriter, r *http.Request) bool {
 	host := r.Host
-	// Check X-Forwarded-Host (when behind nginx/Caddy)
-	if fh := r.Header.Get("X-Forwarded-Host"); fh != "" {
-		host = fh
+	// Check X-Forwarded-Host — but ONLY from the trusted front proxy. nginx
+	// never clears a client-supplied X-Forwarded-Host, so honoring it from
+	// anyone let a raw internet request set `<victimDeviceId>.<exposeDomain>`
+	// and reach that agent's control port with zero relay auth. The
+	// trusted-proxy allowlist is the same one clientIP uses.
+	if s.abuseGuard.isTrustedProxy(s.abuseGuard.remoteIP(r)) {
+		if fh := r.Header.Get("X-Forwarded-Host"); fh != "" {
+			host = fh
+		}
 	}
 	// Strip port
 	if h, _, err := net.SplitHostPort(host); err == nil {

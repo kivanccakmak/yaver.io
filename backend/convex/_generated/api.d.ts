@@ -86,6 +86,7 @@ import type * as provisionRelay from "../provisionRelay.js";
 import type * as provisioning from "../provisioning.js";
 import type * as publishJobs from "../publishJobs.js";
 import type * as pushNotifications from "../pushNotifications.js";
+import type * as rateLimiter from "../rateLimiter.js";
 import type * as relayPool from "../relayPool.js";
 import type * as relaySourceIntents from "../relaySourceIntents.js";
 import type * as runnerUsage from "../runnerUsage.js";
@@ -196,6 +197,7 @@ declare const fullApi: ApiFromModules<{
   provisioning: typeof provisioning;
   publishJobs: typeof publishJobs;
   pushNotifications: typeof pushNotifications;
+  rateLimiter: typeof rateLimiter;
   relayPool: typeof relayPool;
   relaySourceIntents: typeof relaySourceIntents;
   runnerUsage: typeof runnerUsage;
