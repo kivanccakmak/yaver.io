@@ -39,6 +39,7 @@ import { CONVEX_URL } from "@/lib/constants";
 import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
+import { ScreenContextChip } from "./ScreenContextChip";
 
 type Project = {
   name: string;
@@ -2783,6 +2784,16 @@ export default function RuntimeLabView({
               )}
               </div>
             <div className="border-t border-[#e4e7ec] bg-white p-3 dark:border-[#242b35] dark:bg-[#141820]">
+              {/* What the runner is told about the screen you're looking at.
+                  Shown, not implied: a prompt this surface silently enriches
+                  is a prompt the user cannot reason about — and the toggle
+                  DELETES what was reported, so "off" means the agent is not
+                  holding your screen. */}
+              <ScreenContextChip
+                agentClient={agentClient}
+                workDir={selectedProject?.path}
+                className="mb-2"
+              />
               <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 focus-within:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#101318]">
                 <textarea
                   value={composer}
