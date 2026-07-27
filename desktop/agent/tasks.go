@@ -186,7 +186,16 @@ var builtinRunners = map[string]RunnerConfig{
 		// correctly. Verified: this same prompt that previously failed
 		// patched app/index.tsx (#0f172a → #22c55e) on yaver-test-
 		// ephemeral once the flag was removed.
-		Args: []string{"exec", "--full-auto", "{prompt}"},
+		// `--full-auto` was REMOVED from `codex exec` in 0.144.x: it mapped to
+		// approval policy "on-failure", which the current binary rejects —
+		//   error: invalid value 'on-failure' for '--ask-for-approval …'
+		// so EVERY codex task failed on a flag parse the user cannot act on
+		// (observed live 2026-07-27, codex-cli 0.144.1). `--sandbox
+		// workspace-write` is the same non-interactive policy in the flag set
+		// that version actually offers [read-only|workspace-write|
+		// danger-full-access], and it keeps the workspace-write sandbox the
+		// -C splice below depends on.
+		Args: []string{"exec", "--sandbox", "workspace-write", "{prompt}"},
 		// Keep this aligned with the backend model catalogue used by
 		// /agent/runners. Older "gpt-5.3-codex" ChatGPT-account runs now
 		// fail with "model is not supported"; the current default exposed
@@ -604,6 +613,7 @@ func (tm *TaskManager) GetRunnerInfos() []RunnerInfo {
 	infos := make([]RunnerInfo, 0) // never nil — Convex expects [] not null
 	seenRunner := map[string]bool{}
 	decorate := func(info *RunnerInfo, id string) {
+		info.CheckedAt = time.Now().UnixMilli()
 		cfg, ok := builtinRunners[id]
 		if !ok {
 			return
@@ -963,6 +973,12 @@ type TaskCreateOptions struct {
 	// `policy:redactPII` scope) — never from a client body, so a caller cannot
 	// turn the privacy control off.
 	RedactPII bool
+
+	// RawRunnerCommand sends a slash-command prompt directly to the selected
+	// runner. No Yaver project/context/policy prompt is appended. This is for
+	// runner-native commands like /goal and /exit, where adding instructions
+	// changes the command semantics.
+	RawRunnerCommand bool
 }
 
 type TaskResumeOptions struct {
@@ -1074,6 +1090,10 @@ type Task struct {
 	// runner sees it. Set only from the server-stamped header (token scope),
 	// never persisted as a client-settable field.
 	RedactPII bool `json:"-"`
+
+	// RawRunnerCommand bypasses every Yaver prompt wrapper for runner-native
+	// slash commands. See TaskCreateOptions.RawRunnerCommand.
+	RawRunnerCommand bool `json:"rawRunnerCommand,omitempty"`
 
 	PendingFollowUps []PendingFollowUp `json:"pendingFollowUps,omitempty"`
 
@@ -1734,6 +1754,10 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		}
 	}
 	initialTurns = append(initialTurns, ConversationTurn{Role: "user", Content: initialTurnContent, Timestamp: now})
+	rawRunnerCommand := opts.RawRunnerCommand ||
+		isRawRunnerCommand(initialTurnContent) ||
+		isRawRunnerCommand(description) ||
+		isRawRunnerCommand(title)
 	task := &Task{
 		ID:                          id,
 		Title:                       title,
@@ -1763,6 +1787,7 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		AskFreely:                   opts.AskFreely,
 		AskMode:                     opts.AskMode,
 		RedactPII:                   opts.RedactPII,
+		RawRunnerCommand:            rawRunnerCommand,
 		ResumeLast:                  opts.ResumeLast,
 		SessionID:                   opts.ResumeSessionID,
 		Turns:                       initialTurns,
@@ -1824,6 +1849,26 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 // isRootProcess reports whether the agent runs as uid 0. os.Geteuid returns -1
 // on Windows, so this is false there (correct — the root caveat is Unix-only).
 func isRootProcess() bool { return os.Geteuid() == 0 }
+
+func isRawRunnerCommand(input string) bool {
+	return strings.HasPrefix(strings.TrimLeft(input, " \t\r\n"), "/")
+}
+
+func rawRunnerPromptForTask(task *Task, fallback string) string {
+	if task != nil {
+		for i := len(task.Turns) - 1; i >= 0; i-- {
+			if strings.EqualFold(task.Turns[i].Role, "user") && isRawRunnerCommand(task.Turns[i].Content) {
+				return strings.TrimLeft(task.Turns[i].Content, " \t\r\n")
+			}
+		}
+		for _, candidate := range []string{task.Description, task.Title} {
+			if isRawRunnerCommand(candidate) {
+				return strings.TrimLeft(candidate, " \t\r\n")
+			}
+		}
+	}
+	return strings.TrimLeft(fallback, " \t\r\n")
+}
 
 func taskEnv(task *Task) []string {
 	env := append([]string{}, os.Environ()...)
@@ -2439,6 +2484,10 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	if task.Description != "" && task.Description != task.Title {
 		prompt = task.Title + "\n\n" + task.Description
 	}
+	rawRunnerCommand := task.RawRunnerCommand || isRawRunnerCommand(prompt)
+	if rawRunnerCommand {
+		prompt = rawRunnerPromptForTask(task, prompt)
+	}
 
 	// Auto-detect project from task text and switch workDir if needed.
 	// This enables "start BentoApp" from Yaver mobile when serving from ~.
@@ -2458,7 +2507,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// workspace-write sandbox treated the actual project as outside
 	// the writable root, and apply_patch failed with "Read-only file
 	// system". Five user iterations later we figured it out.
-	if task.GuestUserID == "" && strings.TrimSpace(task.WorkDir) == "" {
+	if !rawRunnerCommand && task.GuestUserID == "" && strings.TrimSpace(task.WorkDir) == "" {
 		tm.autoSwitchProject(task, prompt)
 	}
 
@@ -2471,7 +2520,11 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	chatMode := task.runner.Mode == "chat" || strings.HasPrefix(task.runner.Mode, "chat:")
 
 	// System prompt: behave as a remote terminal agent, tailored to the task source.
-	if chatMode {
+	if rawRunnerCommand {
+		// Runner-native slash commands (/goal, /exit, /resume, ...) must pass
+		// through apart from leading whitespace. Adding Yaver source, policy,
+		// viewport, image, or echo-sentinel blocks changes runner behavior.
+	} else if chatMode {
 		prompt += chatTaskResponseContext(task.runner.Mode)
 	} else {
 		prompt += taskSourcePromptSuffix(task.Source)
@@ -2488,7 +2541,9 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// first, then the policy clarifies "and don't ask in prose."
 	// Skipped entirely for chat mode — "operate autonomously / schedule_self"
 	// framing is wrong for a conversational Q&A turn.
-	if chatMode {
+	if rawRunnerCommand {
+		// no Yaver prompt policy for runner-native commands
+	} else if chatMode {
 		// no coding-agent preambles for embedded chat
 	} else if task.AskMode {
 		// Ask mode reframes the run as explain-first deep analysis with a
@@ -2514,16 +2569,18 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// no canned bullet framing) instead of the mobile dev-server
 	// hot-reload prefix. See mobile/src/lib/quic.ts::sendTask for the
 	// caller-side documentation.
-	if task.Source == "mcp" || task.Source == terminalLocalTaskSource || task.Source == terminalRemoteTaskSource || task.Source == "attach" || task.Source == "cli" || task.Source == "console" || task.Source == "connect" || task.Source == "mobile-code" || task.Source == "ask" || task.Source == "voice" {
+	if !rawRunnerCommand && (task.Source == "mcp" || task.Source == terminalLocalTaskSource || task.Source == terminalRemoteTaskSource || task.Source == "attach" || task.Source == "cli" || task.Source == "console" || task.Source == "connect" || task.Source == "mobile-code" || task.Source == "ask" || task.Source == "voice") {
 		prompt += yaverWrapperCapabilityContext(contextDir, task.Source)
 	}
 
-	prompt += formatTaskSliceContract(task.SliceContract)
+	if !rawRunnerCommand {
+		prompt += formatTaskSliceContract(task.SliceContract)
+	}
 
 	// Only mobile-style tasks need the dev-server transport instructions.
 	// "mobile-code" tasks deliberately skip this — they want CLI-style
 	// runner output, not the Hermes / Metro / dev-server scaffold.
-	if task.Source == "mobile" {
+	if !rawRunnerCommand && task.Source == "mobile" {
 		prompt += yaverDevServerContext(contextDir)
 	}
 
@@ -2531,31 +2588,35 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// read on (HUD vs desktop vs tmux split vs voice readback) so the
 	// response shape matches. Built from the Voice/mobile/web/spatial
 	// /MentraOS caller's runtime context.
-	if vp := task.TaskViewport; vp != nil {
-		prompt += formatViewportHint(vp)
+	if !rawRunnerCommand {
+		if vp := task.TaskViewport; vp != nil {
+			prompt += formatViewportHint(vp)
+		}
 	}
 
 	// Verbosity level (0-10)
-	if vc := task.TaskVerbosity; vc != nil && vc.Verbosity != nil {
-		v := *vc.Verbosity
-		var line string
-		switch {
-		case v <= 2:
-			line = fmt.Sprintf("\n[Verbosity: %d/10] The user prefers very brief responses. Just confirm what was done, report any errors, skip all implementation details.", v)
-		case v <= 4:
-			line = fmt.Sprintf("\n[Verbosity: %d/10] The user prefers concise responses. Summarize what you did in 2-3 sentences.", v)
-		case v <= 6:
-			line = fmt.Sprintf("\n[Verbosity: %d/10] The user prefers moderate detail. Show key changes, explain reasoning briefly.", v)
-		case v <= 8:
-			line = fmt.Sprintf("\n[Verbosity: %d/10] The user wants detailed responses. Show code changes, explain your approach.", v)
-		default:
-			line = fmt.Sprintf("\n[Verbosity: %d/10] The user wants full detail. Stream everything: all code changes, diffs, reasoning, alternatives.", v)
+	if !rawRunnerCommand {
+		if vc := task.TaskVerbosity; vc != nil && vc.Verbosity != nil {
+			v := *vc.Verbosity
+			var line string
+			switch {
+			case v <= 2:
+				line = fmt.Sprintf("\n[Verbosity: %d/10] The user prefers very brief responses. Just confirm what was done, report any errors, skip all implementation details.", v)
+			case v <= 4:
+				line = fmt.Sprintf("\n[Verbosity: %d/10] The user prefers concise responses. Summarize what you did in 2-3 sentences.", v)
+			case v <= 6:
+				line = fmt.Sprintf("\n[Verbosity: %d/10] The user prefers moderate detail. Show key changes, explain reasoning briefly.", v)
+			case v <= 8:
+				line = fmt.Sprintf("\n[Verbosity: %d/10] The user wants detailed responses. Show code changes, explain your approach.", v)
+			default:
+				line = fmt.Sprintf("\n[Verbosity: %d/10] The user wants full detail. Stream everything: all code changes, diffs, reasoning, alternatives.", v)
+			}
+			prompt += line
 		}
-		prompt += line
 	}
 
 	// Append image file paths so the AI agent can read them
-	if len(task.ImagePaths) > 0 {
+	if !rawRunnerCommand && len(task.ImagePaths) > 0 {
 		prompt += "\n\n[Attached images — use the Read tool to examine these files]\n"
 		for i, p := range task.ImagePaths {
 			prompt += fmt.Sprintf("Image %d: %s\n", i+1, p)
@@ -2601,14 +2662,14 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// rather than threaded as a flag because codex / opencode don't
 	// have a clean --append-system-prompt; one channel for all
 	// runners keeps the dispatch path simple.
-	if task.Source == "mobile" || task.Source == "mobile-code" {
+	if !rawRunnerCommand && (task.Source == "mobile" || task.Source == "mobile-code") {
 		prompt = YaverActionSystemPrompt + "\n\n---\n\n" + prompt
 	}
 	// Company dataPolicy.redactPII: scrub PII/secrets from the fully-assembled
 	// prompt as the LAST step before it reaches the runner (Claude Code / Codex
 	// / OpenCode / a local model). No-op unless the task is under a redaction
 	// policy. This is the on-runtime enforcement of the resolved data policy.
-	if task.RedactPII {
+	if !rawRunnerCommand && task.RedactPII {
 		if redacted, n := RedactPII(prompt); n > 0 {
 			log.Printf("[task %s] dataPolicy.redactPII: scrubbed %d PII/secret span(s) from prompt", task.ID, n)
 			prompt = redacted
@@ -2621,7 +2682,9 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// regardless of which context blocks were assembled above (the old cleaner
 	// keyed off three hardcoded end-sentences a talos-web prompt never had). If a
 	// runner doesn't echo the prompt, the slice simply no-ops.
-	prompt += "\n\n" + promptEchoSentinel + "\n"
+	if !rawRunnerCommand {
+		prompt += "\n\n" + promptEchoSentinel + "\n"
+	}
 	args := buildRunnerArgsWithWorkDir(runner, prompt, taskDirForArgs)
 
 	// Recurring-schedule resume: when the scheduler re-fires a schedule with
@@ -3973,18 +4036,23 @@ func (tm *TaskManager) ResumeTaskWithOptions(id, input string, images []ImageAtt
 
 // startResume spawns the runner resuming the task's existing session (if supported).
 func (tm *TaskManager) startResume(task *Task, prompt string) error {
-	prompt += taskSourcePromptSuffix(task.Source)
+	rawRunnerCommand := isRawRunnerCommand(prompt)
+	if rawRunnerCommand {
+		prompt = strings.TrimLeft(prompt, " \t\r\n")
+	} else {
+		prompt += taskSourcePromptSuffix(task.Source)
+	}
 
 	contextDir := tm.workDir
 	if task.WorkDir != "" {
 		contextDir = task.WorkDir
 	}
-	if task.Source == "mcp" || task.Source == terminalLocalTaskSource || task.Source == terminalRemoteTaskSource || task.Source == "attach" || task.Source == "cli" || task.Source == "console" || task.Source == "connect" || task.Source == "mobile-code" || task.Source == "ask" || task.Source == "voice" {
+	if !rawRunnerCommand && (task.Source == "mcp" || task.Source == terminalLocalTaskSource || task.Source == terminalRemoteTaskSource || task.Source == "attach" || task.Source == "cli" || task.Source == "console" || task.Source == "connect" || task.Source == "mobile-code" || task.Source == "ask" || task.Source == "voice") {
 		prompt += yaverWrapperCapabilityContext(contextDir, task.Source)
 	}
 
 	// Append image file paths so the AI agent can read them
-	if len(task.ImagePaths) > 0 {
+	if !rawRunnerCommand && len(task.ImagePaths) > 0 {
 		prompt += "\n\n[Attached images — use the Read tool to examine these files]\n"
 		for i, p := range task.ImagePaths {
 			prompt += fmt.Sprintf("Image %d: %s\n", i+1, p)
