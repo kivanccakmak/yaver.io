@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	urlpkg "net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -137,13 +139,100 @@ type RunnerInfo struct {
 	Installed      bool   `json:"installed"`
 	Ready          bool   `json:"ready"`
 	AuthConfigured bool   `json:"authConfigured"`
-	// AuthVerified means the runner itself verified the account/token, not
-	// merely that a credentials file exists. The dashboard must not render a
-	// green "signed in" chip when this is explicitly false.
-	AuthVerified bool   `json:"authVerified"`
-	AuthSource   string `json:"authSource,omitempty"`
-	Warning      string `json:"warning,omitempty"`
-	Error        string `json:"error,omitempty"`
+	// AuthPresent means the runner's own CLI reports a credential on this
+	// machine. Local evidence — it cannot see a server-side revocation.
+	AuthPresent bool `json:"authPresent"`
+	// AuthVerified means the credential was exercised against the PROVIDER and
+	// the provider answered (a completed turn / OAuth exchange), or was
+	// explicitly refused by it. The dashboard must not render a green "signed
+	// in" chip when this is explicitly false.
+	// See RunnerRuntimeStatus.AuthVerified for why these are two fields.
+	AuthVerified bool `json:"authVerified"`
+	// AuthVerifiedAt is when the PROVIDER last spoke about this credential
+	// (epoch ms) — a completed turn, a completed OAuth, or a rejection. It is
+	// NOT the same as CheckedAt, which is when the agent last looked at local
+	// state. A consumer reading the Convex row needs both: CheckedAt says how
+	// stale the row is, AuthVerifiedAt says how stale the VERDICT is.
+	//
+	// Without this, persisting "authenticated" to Convex would just relocate
+	// the false green from the agent's memory into the database.
+	AuthVerifiedAt int64  `json:"authVerifiedAt,omitempty"`
+	AuthSource     string `json:"authSource,omitempty"`
+	Warning        string `json:"warning,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+// sanitizeRunnerInfosForConvex strips host-identifying detail from runner rows
+// before they ride the heartbeat into Convex.
+//
+// AuthSource is the offender. For claude/codex/opencode the detectors set it to
+// the CREDENTIAL FILE PATH they matched — `/home/pokayoke/.codex/auth.json`,
+// `/Users/<name>/.claude/.credentials.json`. Those are absolute filesystem
+// paths, and the privacy contract forbids them in Convex precisely because they
+// leak the user's home-directory username. They have been riding the heartbeat
+// since AuthSource was added; carrying MORE per-runner auth state into Convex
+// is exactly the wrong moment to leave that in place.
+//
+// The label a surface needs is "which store is this credential in", not "where
+// on this disk". `~/.codex/auth.json` answers the first and not the second.
+func sanitizeRunnerInfosForConvex(runners []RunnerInfo) []RunnerInfo {
+	if len(runners) == 0 {
+		return runners
+	}
+	out := make([]RunnerInfo, len(runners))
+	copy(out, runners)
+	for i := range out {
+		out[i].AuthSource = sanitizeAuthSourceForConvex(out[i].AuthSource)
+		out[i].Warning = redactHomePaths(out[i].Warning)
+		out[i].Error = redactHomePaths(out[i].Error)
+	}
+	return out
+}
+
+func sanitizeAuthSourceForConvex(src string) string {
+	src = strings.TrimSpace(src)
+	if src == "" {
+		return ""
+	}
+	if !strings.ContainsAny(src, `/\`) {
+		return src // a label like "codex login status" / "claude.ai · max"
+	}
+	if redacted := redactHomePaths(src); redacted != src {
+		return redacted
+	}
+	if filepath.IsAbs(src) {
+		// An absolute path outside HOME (CODEX_HOME on a shared volume, a
+		// container tenant root). Keep the file identity, drop the location.
+		return filepath.Base(src)
+	}
+	return src
+}
+
+// redactHomePaths rewrites this machine's home directory to "~" and neutralizes
+// the generic /Users/<name> and /home/<name> shapes, which are what the
+// privacy test scans for.
+func redactHomePaths(s string) string {
+	if s == "" {
+		return s
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" && home != "/" {
+		s = strings.ReplaceAll(s, home, "~")
+	}
+	for _, prefix := range []string{"/Users/", "/home/", "/root/"} {
+		for {
+			idx := strings.Index(s, prefix)
+			if idx < 0 {
+				break
+			}
+			rest := s[idx+len(prefix):]
+			end := strings.IndexAny(rest, `/ \t"',)`)
+			if end < 0 {
+				end = len(rest)
+			}
+			s = s[:idx] + "~" + rest[end:]
+		}
+	}
+	return s
 }
 
 // newBearerRequest creates an HTTP request with Authorization: Bearer header.
@@ -1810,7 +1899,7 @@ type HeartbeatResult struct {
 func SendHeartbeat(baseURL, token, deviceID string, runners []RunnerInfo, installedRunnerIDs []string, quicHost string, localIps []string, publicEndpoints []string, recoveryPosture *RecoveryTransportPosture, connectionPreferences []ConnectionPreference, metrics []DeviceMetricsSample) (*HeartbeatResult, error) {
 	payload := map[string]interface{}{
 		"deviceId":           deviceID,
-		"runners":            runners,
+		"runners":            sanitizeRunnerInfosForConvex(runners),
 		"installedRunnerIds": installedRunnerIDs,
 		"hardwareId":         HardwareID(),
 		"agentVersion":       version,

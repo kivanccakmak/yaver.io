@@ -17,6 +17,9 @@ import (
 const (
 	terminalSessionReplayLimit = 128 * 1024
 	terminalSessionIdleTTL     = 90 * time.Second
+	// Big enough that a runner's multi-line auth error survives a chunk split,
+	// small enough that scanning it on every PTY read stays free.
+	terminalAuthTailLimit = 8 * 1024
 )
 
 type terminalSession struct {
@@ -31,13 +34,21 @@ type terminalSession struct {
 	// mirror session, which belongs to the tmux server, not to this pty.
 	onClose func()
 
-	mu             sync.Mutex
-	conn           *websocket.Conn
-	wsMu           sync.Mutex
-	replay         []byte
-	promptTail     []byte
-	lastPromptAt   time.Time
-	closed         bool
+	mu           sync.Mutex
+	conn         *websocket.Conn
+	wsMu         sync.Mutex
+	replay       []byte
+	promptTail   []byte
+	lastPromptAt time.Time
+	closed       bool
+	// authTail is a rolling window of the runner's own output, used ONLY for
+	// auth-rejection classification. It exists separately from promptTail
+	// because that buffer is consumed and re-sliced by the sudo-prompt matcher,
+	// and because a 4 KiB PTY read can split
+	// "…401 OAuth access token has been revoked." across two chunks — matching
+	// per-chunk means the one message that mattered is the one you miss.
+	authTail       []byte
+	authFlagged    bool
 	detachTimer    *time.Timer
 	hostShareID    string
 	guestUserID    string
@@ -261,6 +272,12 @@ func (ts *terminalSession) readLoop() {
 				ts.promptTail = ts.promptTail[len(ts.promptTail)-512:]
 			}
 			promptTail := append([]byte(nil), ts.promptTail...)
+			ts.authTail = append(ts.authTail, chunk...)
+			if len(ts.authTail) > terminalAuthTailLimit {
+				ts.authTail = ts.authTail[len(ts.authTail)-terminalAuthTailLimit:]
+			}
+			authTail := append([]byte(nil), ts.authTail...)
+			authFlagged := ts.authFlagged
 			shouldPrompt := false
 			if loc := sudoPromptPattern.FindIndex(promptTail); loc != nil && time.Since(ts.lastPromptAt) > 500*time.Millisecond {
 				ts.lastPromptAt = time.Now()
@@ -273,8 +290,34 @@ func (ts *terminalSession) readLoop() {
 			if ts.onTouch != nil {
 				ts.onTouch(false)
 			}
-			if ts.runnerID != "" && IsRunnerAuthFailureOutput(string(chunk)) == ts.runnerID {
-				MarkRunnerAuthInvalid(ts.runnerID)
+			// THE SAME LIE TWICE. Before 2026-07-27 this matched
+			// IsRunnerAuthFailureOutput against a single 4 KiB chunk, and that
+			// classifier had no pattern for what Claude Code actually prints.
+			// So the user opened the web PTY, Claude answered
+			// "Please run /login · API Error: 401 OAuth access token has been
+			// revoked.", and the runner chip beside the terminal stayed green.
+			// A PTY that WATCHES the runner announce its own auth death and
+			// keeps rendering "signed in" is not a display bug — it is the
+			// product declining to believe its own eyes.
+			//
+			// Now: classify over a rolling tail (chunk boundaries cannot hide
+			// the message), scoped to this session's runner so the generic
+			// 401 patterns are usable, once per session, and push the verdict
+			// to the client immediately rather than waiting for it to poll.
+			if ts.runnerID != "" && !authFlagged {
+				if rejected, reason := ClassifyRunnerAuthFailureFor(ts.runnerID, string(authTail)); rejected {
+					ts.mu.Lock()
+					ts.authFlagged = true
+					ts.mu.Unlock()
+					MarkRunnerAuthInvalidReason(ts.runnerID, reason)
+					frame, _ := json.Marshal(map[string]any{
+						"type":   "runner_auth_invalid",
+						"runner": normalizeRunnerID(ts.runnerID),
+						"reason": reason,
+						"hint":   "This terminal stays open — the runner will keep asking for a login until you sign in again.",
+					})
+					_ = ts.writeWS(websocket.TextMessage, frame)
+				}
 			}
 			_ = ts.writeWS(websocket.BinaryMessage, chunk)
 			if shouldPrompt {

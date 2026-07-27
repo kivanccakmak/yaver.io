@@ -67,26 +67,30 @@ func TestIsRunnerAuthFailureOutput_NoMatch(t *testing.T) {
 
 func TestRunnerAuthFailureRecent_LifecycleAndTTL(t *testing.T) {
 	// Confidence checks for the override map: set / read / clear / expire.
+	recent := func(id string) bool {
+		_, ok := runnerAuthFailureRecent(id)
+		return ok
+	}
 	ClearRunnerAuthInvalid("claude") // start clean
-	if runnerAuthFailureRecent("claude") {
+	if recent("claude") {
 		t.Fatal("expected no failure recorded initially")
 	}
 	MarkRunnerAuthInvalid("claude")
-	if !runnerAuthFailureRecent("claude") {
+	if !recent("claude") {
 		t.Fatal("expected MarkRunnerAuthInvalid to be observed")
 	}
-	if runnerAuthFailureRecent("codex") {
+	if recent("codex") {
 		t.Fatal("setting claude must not affect codex")
 	}
 	ClearRunnerAuthInvalid("claude")
-	if runnerAuthFailureRecent("claude") {
+	if recent("claude") {
 		t.Fatal("expected ClearRunnerAuthInvalid to drop the entry")
 	}
 	// Expiry — directly poke the map to set an old timestamp, then probe.
 	lastRunnerAuthFailure.Lock()
-	lastRunnerAuthFailure.at["claude"] = time.Now().Add(-2 * runnerAuthFailureTTL)
+	lastRunnerAuthFailure.at["claude"] = runnerAuthMark{at: time.Now().Add(-2 * runnerAuthFailureTTL)}
 	lastRunnerAuthFailure.Unlock()
-	if runnerAuthFailureRecent("claude") {
+	if recent("claude") {
 		t.Fatal("expected expired entry to drop on probe")
 	}
 }
@@ -127,7 +131,7 @@ func TestDetectRunnerRuntimeStatus_OpenCodeOverrideFlipsConfigured(t *testing.T)
 	if got.AuthConfigured {
 		t.Errorf("expected opencode AuthConfigured=false after MarkRunnerAuthInvalid; got AuthConfigured=true")
 	}
-	if !strings.Contains(got.Warning, "Token rejected") {
-		t.Fatalf("expected warning to mention token rejection, got %q", got.Warning)
+	if !strings.Contains(got.Warning, "rejected") {
+		t.Fatalf("expected warning to mention rejection, got %q", got.Warning)
 	}
 }

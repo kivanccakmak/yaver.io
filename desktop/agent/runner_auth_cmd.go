@@ -188,10 +188,15 @@ type runnerAuthStatusRow struct {
 	Installed      bool   `json:"installed"`
 	Ready          bool   `json:"ready"`
 	AuthConfigured bool   `json:"authConfigured"`
-	// AuthVerified distinguishes "the runner told us it is signed in" from
-	// "a credentials file exists". Absent on agents older than 1.99.278,
-	// which is why remote callers must treat a missing value as "unknown"
-	// rather than "unverified but fine". See RunnerRuntimeStatus.AuthVerified.
+	// AuthPresent — "the runner's own CLI says a credential is here", as
+	// opposed to "a credentials file exists on disk". Absent on agents older
+	// than 1.99.384, where this meaning lived in AuthVerified.
+	AuthPresent bool `json:"authPresent"`
+	// AuthVerified — "the credential was exercised against the provider".
+	// Absent on agents older than 1.99.278; between 1.99.278 and 1.99.384 it
+	// carried AuthPresent's meaning, which is why remote callers must treat a
+	// missing value as "unknown" rather than "unverified but fine".
+	// See RunnerRuntimeStatus.AuthVerified for the incident that split them.
 	AuthVerified bool   `json:"authVerified"`
 	AuthSource   string `json:"authSource,omitempty"`
 	Warning      string `json:"warning,omitempty"`
@@ -263,6 +268,7 @@ func collectRunnerAuthStatusRows() ([]runnerAuthStatusRow, error) {
 		status := DetectRunnerRuntimeStatus(cfg, wd)
 		row.Ready = status.Ready
 		row.AuthConfigured = status.AuthConfigured
+		row.AuthPresent = status.AuthPresent
 		row.AuthVerified = status.AuthVerified
 		row.AuthSource = status.AuthSource
 		row.Warning = status.Warning

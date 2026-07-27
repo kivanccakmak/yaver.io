@@ -626,7 +626,9 @@ func (tm *TaskManager) GetRunnerInfos() []RunnerInfo {
 		info.Installed = true
 		info.Ready = rs.Ready
 		info.AuthConfigured = rs.AuthConfigured
+		info.AuthPresent = rs.AuthPresent
 		info.AuthVerified = rs.AuthVerified
+		info.AuthVerifiedAt = runnerAuthVerifiedAtMillis(id)
 		info.AuthSource = rs.AuthSource
 		info.Warning = rs.Warning
 		info.Error = rs.Error
@@ -689,24 +691,35 @@ func (tm *TaskManager) GetRunnerInfos() []RunnerInfo {
 				healthStatus = "down"
 			}
 		case !rs.AuthConfigured && (id == "codex" || id == "claude" || id == "opencode"):
-			// Claude's keychain-backed auth can't be probed on macOS so
-			// AuthConfigured stays false even when the user is signed in —
-			// don't force "needs-auth" there; codex/opencode probes are
-			// filesystem/provider-config based and should be downgraded after
-			// a recent API rejection.
-			if id == "codex" || id == "opencode" {
-				healthStatus = "needs-auth"
-			}
+			// Claude USED to be excluded here, on the grounds that its
+			// keychain-backed auth could not be probed on macOS so
+			// AuthConfigured stayed false even for a signed-in user. That
+			// exemption is now a bug in the other direction: detectClaudeStatus
+			// asks `claude auth status --json`, which answers on every
+			// platform, and MarkRunnerAuthInvalidReason clears AuthConfigured
+			// on an observed 401. Keeping claude out of this branch meant a
+			// REVOKED claude still shipped status:"ready" to Convex — the
+			// heartbeat half of the same false green.
+			healthStatus = "needs-auth"
 		}
 		infos = append(infos, RunnerInfo{
-			TaskID:         "",
-			RunnerID:       id,
-			Status:         healthStatus,
-			Title:          "",
+			TaskID:   "",
+			RunnerID: id,
+			Status:   healthStatus,
+			Title:    "",
+			// CheckedAt was set only on rows decorated for a LIVE task, so
+			// every synthetic row — i.e. every row on an idle box, which is
+			// most of them — reached Convex with no timestamp at all. A
+			// consumer could not tell a verdict measured a second ago from one
+			// measured at boot. Persisting auth state without a clock is how a
+			// false green moves from memory into the database.
+			CheckedAt:      time.Now().UnixMilli(),
 			Installed:      true,
 			Ready:          rs.Ready,
 			AuthConfigured: rs.AuthConfigured,
+			AuthPresent:    rs.AuthPresent,
 			AuthVerified:   rs.AuthVerified,
+			AuthVerifiedAt: runnerAuthVerifiedAtMillis(id),
 			AuthSource:     rs.AuthSource,
 			Warning:        rs.Warning,
 			Error:          rs.Error,
@@ -3153,9 +3166,9 @@ func (tm *TaskManager) startProcess(task *Task) error {
 					// instead of waiting for the user to discover the
 					// stale state by failing another task. Mirrors the
 					// mobile ErrorMessage.detectRunnerAuthFailure patterns.
-					if hitRunner := IsRunnerAuthFailureOutput(task.Output); hitRunner != "" {
-						MarkRunnerAuthInvalid(hitRunner)
-						log.Printf("[task %s] auth-failure pattern detected for runner %q — invalidated runner auth status", task.ID, hitRunner)
+					if hitRunner, reason := ClassifyRunnerAuthFailure(task.Output); hitRunner != "" {
+						MarkRunnerAuthInvalidReason(hitRunner, reason)
+						log.Printf("[task %s] auth-failure pattern detected for runner %q — invalidated runner auth status: %s", task.ID, hitRunner, reason)
 						// Next periodic heartbeat (~30s) propagates the
 						// new state to Convex; mobile/web pick up the
 						// flipped pill on their next /runner-auth/status
@@ -3196,6 +3209,14 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			}
 			finishNow := time.Now()
 			task.FinishedAt = &finishNow
+			// EVERY terminal outcome passes through here — failed, soft-failed,
+			// empty-reply, and succeeded. The auth classifier above only ran in
+			// the hard-failure branch, which is precisely why the 2026-07-27
+			// revocation went unseen: Claude Code printed
+			// "Please run /login · API Error: 401 OAuth access token has been
+			// revoked." and exited ZERO. A runner that reports its own auth
+			// death politely must not be believed about everything else.
+			ObserveRunnerAuthFromOutput(task.RunnerID, task.Output+"\n"+task.ResultText, string(task.Status))
 			// Save assistant response as conversation turn
 			if task.ResultText != "" {
 				task.Turns = append(task.Turns, ConversationTurn{

@@ -26,13 +26,22 @@ func TestDetectRunnerRuntimeStatusCodexAuthFile(t *testing.T) {
 	// Precedence: we ask `codex login status` before trusting a file, because a
 	// credentials file proves a login happened once, not that it still works.
 	// So the source depends on whether the codex binary is here to answer —
-	// and only its answer may claim AuthVerified.
-	if status.AuthVerified {
+	// and only its answer may claim AuthPresent.
+	//
+	// AuthPresent, NOT AuthVerified. `codex login status` reads ~/.codex and
+	// checks the token's shape and expiry LOCALLY; it never asks OpenAI. It
+	// therefore cannot see a server-side revocation, which is precisely how
+	// claude's equivalent probe reported loggedIn:true off a revoked token on
+	// 2026-07-27. Only an observed operation sets AuthVerified.
+	if status.AuthPresent {
 		if status.AuthSource != "codex login status" {
-			t.Fatalf("a verified codex answer must name the live probe, got %q", status.AuthSource)
+			t.Fatalf("a CLI-sourced codex answer must name the live probe, got %q", status.AuthSource)
 		}
 	} else if !strings.HasSuffix(status.AuthSource, "auth.json") {
 		t.Fatalf("without a live probe the source must be the credentials file, got %q", status.AuthSource)
+	}
+	if status.AuthVerified {
+		t.Fatal("a local `codex login status` must never claim AuthVerified — it never asked the provider")
 	}
 }
 

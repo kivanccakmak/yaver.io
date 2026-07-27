@@ -3278,6 +3278,15 @@ func runServe(args []string) {
 	httpServer := NewHTTPServer(*httpPort, cfg.AuthToken, ownerUserID, cfg.DeviceID, cfg.ConvexSiteURL, hostname, taskMgr)
 	httpServer.agentGraphMgr = NewAgentGraphManager(taskMgr)
 	globalAgentGraphMgr = httpServer.agentGraphMgr
+	// PUSH ON TRANSITION, NOT ON A TIMER. The runner-auth ledger is package
+	// state written from task output, the PTY read loop and the browser-auth
+	// handlers — none of which hold a server. Registering TriggerHeartbeat here
+	// means a revocation observed in a terminal at 12:00:00 reaches the Convex
+	// device row about a second later, so surfaces with NO live connection to
+	// this box (phone on cellular, the device LIST before a machine is picked,
+	// tvOS, watch) stop rendering that runner green immediately, instead of up
+	// to 30 s later on the next tick. No new polling loop.
+	SetRunnerAuthChangeHook(httpServer.TriggerHeartbeat)
 
 	// Start heartbeat loop (needs httpServer for authExpired flag)
 	// Owner self-heal: if we booted before the network was ready (ownerUserID

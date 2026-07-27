@@ -27,19 +27,55 @@ type RunnerRuntimeStatus struct {
 	// asks politely. A negative answer must travel over the wire; silence must
 	// never be mistaken for consent.
 	AuthConfigured bool `json:"authConfigured"`
-	// AuthVerified is set only when AuthConfigured was established by asking
-	// the runner itself (`claude auth status`, `codex login status`) or by
-	// finding an explicit API key — never by merely spotting a credentials
-	// file on disk.
+	// AuthPresent is set when AuthConfigured was established by asking the
+	// runner itself (`claude auth status`, `codex login status`) or by finding
+	// an explicit API key — never by merely spotting a credentials file on
+	// disk.
 	//
 	// The distinction is load-bearing. `~/.claude/.credentials.json` also
 	// holds MCP plugin OAuth tokens, so on a Mac whose Claude subscription
 	// token lives in the Keychain the file exists while Claude is signed
 	// OUT of it. Mirroring that file verbatim onto a headless box produced a
 	// machine that reported "signed in" and then greeted the user with a
-	// browser login screen it had no browser to satisfy. Callers that are
-	// about to open a TUI (or skip a headless sign-in) must gate on this
-	// field, not on AuthConfigured.
+	// browser login screen it had no browser to satisfy.
+	//
+	// AuthPresent carries EXACTLY the meaning the field named AuthVerified
+	// carried before 2026-07-27. It was renamed because the name was a lie:
+	// see AuthVerified below.
+	AuthPresent bool `json:"authPresent"`
+	// AuthVerified means the credential was EXERCISED against the provider and
+	// the provider answered — not that a local store says a credential exists.
+	//
+	// THE INCIDENT THAT FORCED THE SPLIT (2026-07-27, user's own box, agent
+	// 1.99.383): `/runner-auth/status` reported claude as
+	//
+	//     authConfigured:true authVerified:true authSource:"claude.ai · max" ready:true
+	//
+	// while the very next PTY turn answered
+	//
+	//     Please run /login · API Error: 401 OAuth access token has been revoked.
+	//
+	// Nothing was broken in the probe: `claude auth status --json` reads the
+	// LOCAL credential store, and a revoked token is still a perfectly
+	// well-formed local credential. The probe answered the question it was
+	// asked ("is a credential here?") and the field name promised the answer
+	// to a different one ("does the credential work?"). Green chip, ready:true,
+	// tasks dispatched, and the web launch gate fast-pathed a terminal onto a
+	// dead session.
+	//
+	// So the two questions now have two fields, and only ONE of them can be
+	// answered by looking at this machine:
+	//   AuthPresent  — local evidence. Cheap, always available, never proof.
+	//   AuthVerified — the provider spoke. Set by observing a real operation:
+	//                  a completed runner turn, a completed OAuth exchange
+	//                  (positive), or a 401/revoked in a task or PTY stream
+	//                  (negative — AuthVerified stays TRUE, AuthConfigured
+	//                  goes false; a rejection is the strongest evidence there
+	//                  is, it is just evidence of the negative).
+	//
+	// Callers about to spend the user's time or money (open a remote TUI, skip
+	// a headless sign-in, dispatch a task) must gate on AuthVerified. Callers
+	// deciding whether to bother OFFERING sign-in may read AuthPresent.
 	AuthVerified bool   `json:"authVerified"`
 	AuthSource   string `json:"authSource,omitempty"`
 	Warning      string `json:"warning,omitempty"`
@@ -150,14 +186,30 @@ func DetectRunnerRuntimeStatus(runner RunnerConfig, workDir string) RunnerRuntim
 	default:
 		return status
 	}
-	if status.AuthConfigured && runnerAuthFailureRecent(normalizeRunnerID(runner.RunnerID)) {
+	id := normalizeRunnerID(runner.RunnerID)
+
+	// A PROVEN credential — one whose last exercise against the provider
+	// succeeded — is the only thing that may set AuthVerified positive. This is
+	// deliberately the ONLY positive writer: no local probe, however
+	// authoritative-looking, is allowed to claim it (that is the whole point of
+	// the 2026-07-27 split; see RunnerRuntimeStatus.AuthVerified).
+	if status.AuthConfigured && runnerAuthProofRecent(id) {
+		status.AuthVerified = true
+	}
+
+	// An observed provider rejection outranks every local signal, including a
+	// `claude auth status` that cheerfully reports loggedIn:true off a revoked
+	// token. Checked AFTER the proof above so a rejection always wins.
+	if reason, rejected := runnerAuthFailureRecent(id); rejected {
 		status.AuthConfigured = false
 		// A 401 from the provider is the strongest possible evidence, so the
 		// answer stays verified — just negative.
 		status.AuthVerified = true
 		status.AuthSource = ""
-		if strings.TrimSpace(status.Warning) == "" {
-			status.Warning = "Token rejected by API on the last task — sign in again to refresh."
+		if strings.TrimSpace(reason) != "" {
+			status.Warning = reason
+		} else if strings.TrimSpace(status.Warning) == "" {
+			status.Warning = "Token rejected by the provider on the last run — sign in again to refresh."
 		}
 	}
 
@@ -187,51 +239,210 @@ func DetectRunnerRuntimeStatus(runner RunnerConfig, workDir string) RunnerRuntim
 // (e.g. they SSH'd to the box and ran `claude /login` themselves), the
 // override would otherwise stick forever. 30 min lets the next status poll
 // re-check via DetectRunnerRuntimeStatus's normal file/keychain probe.
+type runnerAuthMark struct {
+	at     time.Time
+	reason string
+}
+
 var (
 	lastRunnerAuthFailure = struct {
 		sync.Mutex
+		at map[string]runnerAuthMark
+	}{at: make(map[string]runnerAuthMark)}
+	runnerAuthFailureTTL = 30 * time.Minute
+
+	// lastRunnerAuthProof is the POSITIVE half of the same ledger: the last
+	// time this runner's credential was exercised against the provider and the
+	// provider answered normally. Only this makes AuthVerified true.
+	//
+	// TTL is long (12 h) on purpose. The cost of a stale positive is bounded —
+	// the moment a real rejection lands, MarkRunnerAuthInvalidReason overrides
+	// it — while the cost of a short TTL is that every user drops back to
+	// "present but unconfirmed" all day, which trains people to ignore the
+	// distinction.
+	lastRunnerAuthProof = struct {
+		sync.Mutex
 		at map[string]time.Time
 	}{at: make(map[string]time.Time)}
-	runnerAuthFailureTTL = 30 * time.Minute
+	runnerAuthProofTTL = 12 * time.Hour
+
+	// runnerAuthChangeHook is nudged whenever a runner's auth verdict FLIPS.
+	// Registered by the HTTP server as TriggerHeartbeat, so a revocation
+	// observed in a PTY at 12:00:00 is in the Convex device row — and therefore
+	// on every surface, including ones with no live connection to this box —
+	// about a second later, instead of up to 30 s later on the next tick.
+	//
+	// A hook rather than a *HTTPServer field because the ledger is package
+	// state reached from tasks.go, terminal_session.go and the browser-auth
+	// handlers, none of which hold the server.
+	runnerAuthChangeHook = struct {
+		sync.Mutex
+		fn func()
+	}{}
 )
 
+// SetRunnerAuthChangeHook registers the callback fired when a runner's auth
+// verdict changes. Idempotent; pass nil to unregister (tests do).
+func SetRunnerAuthChangeHook(fn func()) {
+	runnerAuthChangeHook.Lock()
+	runnerAuthChangeHook.fn = fn
+	runnerAuthChangeHook.Unlock()
+}
+
+func notifyRunnerAuthChanged() {
+	runnerAuthChangeHook.Lock()
+	fn := runnerAuthChangeHook.fn
+	runnerAuthChangeHook.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 // MarkRunnerAuthInvalid records that the named runner just produced an
-// auth-error on a task spawn. Called from tasks.go/watchProcess. Safe to
-// call from any goroutine.
+// auth-error. Retained for callers that have no reason string.
 func MarkRunnerAuthInvalid(runnerID string) {
+	MarkRunnerAuthInvalidReason(runnerID, "")
+}
+
+// MarkRunnerAuthInvalidReason records an observed provider rejection, together
+// with the sentence to show the user. Called from task output, the PTY stream,
+// and the browser-auth session output — every place the runner TELLS us the
+// token is dead. Safe to call from any goroutine.
+//
+// Kicks the heartbeat on a real transition so Convex (and therefore every
+// surface, connected or not) stops rendering the runner green.
+func MarkRunnerAuthInvalidReason(runnerID, reason string) {
 	id := normalizeRunnerID(runnerID)
 	if id == "" {
 		return
 	}
+	reason = strings.TrimSpace(reason)
 	lastRunnerAuthFailure.Lock()
-	defer lastRunnerAuthFailure.Unlock()
-	lastRunnerAuthFailure.at[id] = time.Now()
+	prev, existed := lastRunnerAuthFailure.at[id]
+	fresh := !existed || time.Since(prev.at) > runnerAuthFailureTTL
+	lastRunnerAuthFailure.at[id] = runnerAuthMark{at: time.Now(), reason: reason}
+	lastRunnerAuthFailure.Unlock()
+
+	// A rejection also destroys any standing proof: the credential that worked
+	// an hour ago is the credential that just got refused.
+	lastRunnerAuthProof.Lock()
+	_, hadProof := lastRunnerAuthProof.at[id]
+	delete(lastRunnerAuthProof.at, id)
+	lastRunnerAuthProof.Unlock()
+
+	if fresh || hadProof {
+		invalidateRunnerAuthProbeCaches(id)
+		notifyRunnerAuthChanged()
+	}
 }
 
-// ClearRunnerAuthInvalid removes the override for a runner. Called from the
-// browser-auth flow when a fresh OAuth completes successfully.
+// MarkRunnerAuthProven records that this runner's credential was just
+// exercised against the provider successfully — a completed turn, a completed
+// OAuth exchange. This is the only positive writer of AuthVerified.
+func MarkRunnerAuthProven(runnerID string) {
+	id := normalizeRunnerID(runnerID)
+	if id == "" {
+		return
+	}
+	lastRunnerAuthProof.Lock()
+	_, existed := lastRunnerAuthProof.at[id]
+	lastRunnerAuthProof.at[id] = time.Now()
+	lastRunnerAuthProof.Unlock()
+
+	lastRunnerAuthFailure.Lock()
+	_, hadFailure := lastRunnerAuthFailure.at[id]
+	delete(lastRunnerAuthFailure.at, id)
+	lastRunnerAuthFailure.Unlock()
+
+	if !existed || hadFailure {
+		invalidateRunnerAuthProbeCaches(id)
+		notifyRunnerAuthChanged()
+	}
+}
+
+// ClearRunnerAuthInvalid removes the rejection override for a runner. Called
+// from the browser-auth flow when a fresh OAuth completes successfully.
+//
+// It deliberately does NOT set proof: dropping a stale negative and asserting a
+// positive are different claims. Callers that genuinely completed an OAuth
+// exchange call MarkRunnerAuthProven as well.
 func ClearRunnerAuthInvalid(runnerID string) {
 	id := normalizeRunnerID(runnerID)
 	if id == "" {
 		return
 	}
 	lastRunnerAuthFailure.Lock()
-	defer lastRunnerAuthFailure.Unlock()
+	_, existed := lastRunnerAuthFailure.at[id]
 	delete(lastRunnerAuthFailure.at, id)
+	lastRunnerAuthFailure.Unlock()
+	if existed {
+		invalidateRunnerAuthProbeCaches(id)
+		notifyRunnerAuthChanged()
+	}
 }
 
-func runnerAuthFailureRecent(runnerID string) bool {
+// ClearRunnerAuthProven drops the positive half. Test seam, and used when a
+// credential is replaced on disk (a mirrored token is present, not proven).
+func ClearRunnerAuthProven(runnerID string) {
+	id := normalizeRunnerID(runnerID)
+	if id == "" {
+		return
+	}
+	lastRunnerAuthProof.Lock()
+	delete(lastRunnerAuthProof.at, id)
+	lastRunnerAuthProof.Unlock()
+}
+
+func invalidateRunnerAuthProbeCaches(id string) {
+	switch id {
+	case "claude", "glm":
+		invalidateClaudeAuthStatusCache()
+	case "codex":
+		invalidateCodexLoginStatusCache()
+	}
+}
+
+// runnerAuthFailureRecent reports whether an observed provider rejection is
+// still in force, and the sentence to show for it.
+func runnerAuthFailureRecent(runnerID string) (string, bool) {
 	lastRunnerAuthFailure.Lock()
 	defer lastRunnerAuthFailure.Unlock()
-	at, ok := lastRunnerAuthFailure.at[runnerID]
+	mark, ok := lastRunnerAuthFailure.at[runnerID]
+	if !ok {
+		return "", false
+	}
+	if time.Since(mark.at) > runnerAuthFailureTTL {
+		delete(lastRunnerAuthFailure.at, runnerID)
+		return "", false
+	}
+	return mark.reason, true
+}
+
+func runnerAuthProofRecent(runnerID string) bool {
+	lastRunnerAuthProof.Lock()
+	defer lastRunnerAuthProof.Unlock()
+	at, ok := lastRunnerAuthProof.at[runnerID]
 	if !ok {
 		return false
 	}
-	if time.Since(at) > runnerAuthFailureTTL {
-		delete(lastRunnerAuthFailure.at, runnerID)
+	if time.Since(at) > runnerAuthProofTTL {
+		delete(lastRunnerAuthProof.at, runnerID)
 		return false
 	}
 	return true
+}
+
+// RunnerAuthProofAge returns how long ago this runner's credential was last
+// proven against the provider. ok=false means never (within the TTL).
+func RunnerAuthProofAge(runnerID string) (time.Duration, bool) {
+	id := normalizeRunnerID(runnerID)
+	lastRunnerAuthProof.Lock()
+	defer lastRunnerAuthProof.Unlock()
+	at, ok := lastRunnerAuthProof.at[id]
+	if !ok || time.Since(at) > runnerAuthProofTTL {
+		return 0, false
+	}
+	return time.Since(at), true
 }
 
 // IsRunnerAuthFailureOutput matches stdout/stderr from a runner spawn
@@ -242,36 +453,126 @@ func runnerAuthFailureRecent(runnerID string) bool {
 //
 // Returns the runner id ("claude" / "codex") on match, "" otherwise.
 func IsRunnerAuthFailureOutput(output string) string {
+	id, _ := ClassifyRunnerAuthFailure(output)
+	return id
+}
+
+// ClassifyRunnerAuthFailure matches a runner's output against SELF-IDENTIFYING
+// provider-rejection patterns — ones that name the runner or use its own
+// distinctive wording — and returns the runner id plus the sentence to show the
+// user.
+//
+// WHY THE REASON IS PART OF THE RETURN (2026-07-27): the previous version
+// answered only "which runner", and every caller then wrote its own generic
+// "Token rejected by API on the last task". The user's actual failure was
+//
+//	Please run /login · API Error: 401 OAuth access token has been revoked.
+//
+// which is a *different* fault from an expired token (a revoked grant cannot be
+// refreshed — re-login is the only fix) and needs a different sentence. Naming
+// the cause is the difference between a chip that says "sign in again" and one
+// that says why.
+//
+// THE PATTERNS THIS AUDIT ADDED, AND WHAT THEY MISSED BEFORE: the string above
+// matched NOTHING here. "not logged in" was required for every claude branch,
+// and Claude Code does not say that — it says "Please run /login". So the
+// canonical revocation message sailed past the classifier, the PTY stayed
+// green, and `/runner-auth/status` kept reporting authVerified:true. A
+// classifier that does not match the error your users actually see is a
+// classifier that does not exist.
+func ClassifyRunnerAuthFailure(output string) (string, string) {
 	m := strings.ToLower(output)
 	if m == "" {
-		return ""
+		return "", ""
 	}
-	looksLikeClaude := (strings.Contains(m, "not logged in") &&
+
+	// Claude Code — its own wording, in the order of how conclusive it is.
+	// A revoked grant is terminal: no refresh token can rescue it.
+	if strings.Contains(m, "oauth access token has been revoked") ||
+		strings.Contains(m, "access token has been revoked") ||
+		strings.Contains(m, "token has been revoked") {
+		return "claude", "Claude Code's OAuth access token has been REVOKED by the provider — a refresh cannot recover it. Sign in again to issue a new one."
+	}
+	if strings.Contains(m, "please run /login") || strings.Contains(m, "run /login") {
+		return "claude", "Claude Code answered `Please run /login` — this machine's credential is no longer accepted. Sign in again."
+	}
+	if (strings.Contains(m, "not logged in") &&
 		(strings.Contains(m, "/login") || strings.Contains(m, "please run"))) ||
 		strings.Contains(m, "invalid bearer token") ||
 		strings.Contains(m, "invalid authentication credentials") ||
-		strings.Contains(m, "claude code-credentials")
-	if looksLikeClaude {
-		return "claude"
+		strings.Contains(m, "claude code-credentials") {
+		return "claude", "Claude Code reported it is not logged in on this machine. Sign in again."
 	}
-	looksLikeCodex := (strings.Contains(m, "sign in required") &&
+
+	// Codex.
+	if strings.Contains(m, "codex login --device-auth") ||
+		strings.Contains(m, "please run `codex login`") ||
+		strings.Contains(m, "please run codex login") ||
+		strings.Contains(m, "run `codex login`") {
+		return "codex", "Codex asked for `codex login` — this machine's ChatGPT credential is no longer accepted. Sign in again."
+	}
+	if strings.Contains(m, "refresh_token_reused") {
+		return "codex", "Codex's refresh token was rejected as already-used (refresh_token_reused). Sign in again to issue a fresh one."
+	}
+	if strings.Contains(m, "token_expired") {
+		return "codex", "Codex's token has expired and could not be refreshed. Sign in again."
+	}
+	if (strings.Contains(m, "sign in required") &&
 		(strings.Contains(m, "codex") || strings.Contains(m, "chatgpt"))) ||
-		strings.Contains(m, "codex login --device-auth") ||
-		(strings.Contains(m, "not authenticated") && strings.Contains(m, "codex")) ||
-		(strings.Contains(m, "model is not supported") && strings.Contains(m, "chatgpt account")) ||
-		strings.Contains(m, "refresh_token_reused") ||
-		strings.Contains(m, "token_expired")
-	if looksLikeCodex {
-		return "codex"
+		(strings.Contains(m, "not authenticated") && strings.Contains(m, "codex")) {
+		return "codex", "Codex reported it is not authenticated on this machine. Sign in again."
 	}
-	looksLikeOpenCode := strings.Contains(m, "opencode") && (strings.Contains(m, "ai_apicallerror") ||
+	if strings.Contains(m, "model is not supported") && strings.Contains(m, "chatgpt account") {
+		return "codex", "Codex's ChatGPT account does not carry the configured model. Sign in with an account on a plan that includes it, or change the model."
+	}
+
+	// OpenCode — its failures name themselves.
+	if strings.Contains(m, "opencode") && (strings.Contains(m, "ai_apicallerror") ||
 		strings.Contains(m, "failedtoopensocket") ||
 		strings.Contains(m, "stream error") ||
-		strings.Contains(m, "providerid="))
-	if looksLikeOpenCode {
-		return "opencode"
+		strings.Contains(m, "providerid=")) {
+		return "opencode", "OpenCode's provider rejected the call — check the provider key for the configured model."
 	}
-	return ""
+	return "", ""
+}
+
+// ClassifyRunnerAuthFailureFor answers the same question when the caller
+// ALREADY KNOWS which runner produced the stream — a PTY bound to a runner, a
+// task with a runner attached.
+//
+// That extra knowledge buys the generic patterns. A bare `API Error: 401` or
+// `401 Unauthorized` names no runner, so ClassifyRunnerAuthFailure must not
+// guess from it (a task that curls a third-party API would be misattributed).
+// Scoped to a known runner it is exactly the evidence we want, and it is the
+// half of the user's real message that carried the HTTP status.
+func ClassifyRunnerAuthFailureFor(runnerID, output string) (bool, string) {
+	want := normalizeRunnerID(runnerID)
+	if want == "" || strings.TrimSpace(output) == "" {
+		return false, ""
+	}
+	if id, reason := ClassifyRunnerAuthFailure(output); id != "" {
+		if id == want {
+			return true, reason
+		}
+		// glm runs the claude binary; a claude-shaped rejection there is real.
+		if want == "glm" && id == "claude" {
+			return true, reason
+		}
+		return false, ""
+	}
+	m := strings.ToLower(output)
+	switch {
+	case strings.Contains(m, "api error: 401"), strings.Contains(m, "401 unauthorized"),
+		strings.Contains(m, "error 401"), strings.Contains(m, "status 401"),
+		strings.Contains(m, "http 401"):
+		return true, runnerCapabilityName(want) + " was refused by the provider with HTTP 401 (unauthorized) on this machine. Sign in again."
+	case strings.Contains(m, "invalid_grant"):
+		return true, runnerCapabilityName(want) + "'s refresh grant was rejected (invalid_grant) — it cannot be refreshed. Sign in again."
+	case strings.Contains(m, "oauth token expired"), strings.Contains(m, "session has expired"),
+		strings.Contains(m, "your session has expired"):
+		return true, runnerCapabilityName(want) + "'s session has expired on this machine. Sign in again."
+	}
+	return false, ""
 }
 
 func capabilityForRunner(runnerID, workDir string) CapabilityTargetReadiness {
@@ -408,7 +709,12 @@ func detectClaudeStatus() RunnerRuntimeStatus {
 	// parse stdout.
 	if st, ok := probeClaudeAuthStatus(); ok {
 		status.AuthConfigured = st.LoggedIn
-		status.AuthVerified = true
+		// PRESENT, not VERIFIED. `claude auth status` reads the local store; a
+		// REVOKED token is still a well-formed local credential, so this call
+		// answers loggedIn:true for a session the provider has already killed.
+		// That exact false green is the 2026-07-27 incident. Only an observed
+		// operation may set AuthVerified.
+		status.AuthPresent = true
 		if st.LoggedIn {
 			status.AuthSource = claudeAuthSourceLabel(st)
 		} else {
@@ -770,13 +1076,13 @@ func detectGLMStatus() RunnerRuntimeStatus {
 	// An explicit key needs no OAuth and no probe: its presence IS the answer.
 	if cfg := runnerProviderConfigFor("glm"); cfg.apiKey != "" {
 		status.AuthConfigured = true
-		status.AuthVerified = true
+		status.AuthPresent = true
 		status.AuthSource = "z.ai key (" + cfg.baseURL + ")"
 		return status
 	}
 	if value, source := hostSecretValue("ZAI_API_KEY"); value != "" {
 		status.AuthConfigured = true
-		status.AuthVerified = true
+		status.AuthPresent = true
 		status.AuthSource = source
 		return status
 	}
@@ -856,7 +1162,10 @@ func detectCodexStatus() RunnerRuntimeStatus {
 	// what let a stale token report "signed in" and strand the caller.
 	if codexLoginStatusOK() {
 		status.AuthConfigured = true
-		status.AuthVerified = true
+		// `codex login status` reads ~/.codex/auth.json and checks shape/expiry
+		// locally. Same limit as claude's: it cannot see a server-side
+		// revocation. PRESENT, not VERIFIED.
+		status.AuthPresent = true
 		status.AuthSource = "codex login status"
 		return status
 	}
@@ -1390,25 +1699,30 @@ func applyLiveRunnerAuthProbe(rows []runnerAuthStatusRow, runner string) []runne
 		if normalizeRunnerID(rows[i].ID) != "claude" || !rows[i].Installed {
 			continue
 		}
-		// detectClaudeStatus directly, NOT DetectRunnerRuntimeStatus: the
-		// latter overlays lastRunnerAuthFailure, and a live answer from the
-		// CLI is strictly better evidence than a task that 401'd 20 minutes
-		// ago. Here the live result *decides* the override rather than
-		// inheriting it.
-		fresh := detectClaudeStatus()
+		// DetectRunnerRuntimeStatus, NOT detectClaudeStatus.
+		//
+		// This used to call detectClaudeStatus directly and then, on a positive
+		// answer, `ClearRunnerAuthInvalid("claude")` — i.e. a LOCAL probe was
+		// allowed to overturn an OBSERVED PROVIDER REJECTION. That inverts the
+		// evidence order and it is exactly how the 2026-07-27 incident would
+		// have survived the fix: a PTY sees `401 OAuth access token has been
+		// revoked`, marks the runner invalid, and the very next `?live=1` poll
+		// asks `claude auth status`, gets loggedIn:true off the same dead
+		// token, and clears the mark. Green again, within seconds, forever.
+		//
+		// A local store cannot see a server-side revocation, so it may never
+		// vote against one. Going through DetectRunnerRuntimeStatus keeps the
+		// rejection override applied; only a real sign-in clears it.
+		fresh := DetectRunnerRuntimeStatus(GetRunnerConfig("claude"), "")
 		rows[i].Ready = fresh.Ready
 		rows[i].AuthConfigured = fresh.AuthConfigured
+		rows[i].AuthPresent = fresh.AuthPresent
 		rows[i].AuthVerified = fresh.AuthVerified
 		rows[i].AuthSource = fresh.AuthSource
 		rows[i].Warning = fresh.Warning
 		rows[i].Error = fresh.Error
 		if detail := firstNonEmptyBrowserAuth(fresh.Error, fresh.Warning); detail != "" {
 			rows[i].Detail = detail
-		}
-		if fresh.AuthConfigured {
-			ClearRunnerAuthInvalid("claude")
-		} else if fresh.AuthVerified {
-			MarkRunnerAuthInvalid("claude")
 		}
 	}
 	return rows
