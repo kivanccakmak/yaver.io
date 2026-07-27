@@ -2531,7 +2531,7 @@ func (s *RelayServer) tryExposeProxy(w http.ResponseWriter, r *http.Request) boo
 	// anyone let a raw internet request set `<victimDeviceId>.<exposeDomain>`
 	// and reach that agent's control port with zero relay auth. The
 	// trusted-proxy allowlist is the same one clientIP uses.
-	if s.abuseGuard.isTrustedProxy(s.abuseGuard.remoteIP(r)) {
+	if s.abuseGuard.isTrustedProxy(net.ParseIP(s.abuseGuard.remoteIP(r.RemoteAddr))) {
 		if fh := r.Header.Get("X-Forwarded-Host"); fh != "" {
 			host = fh
 		}
