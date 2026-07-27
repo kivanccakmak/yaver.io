@@ -3290,7 +3290,25 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 			LastFailedAt: time.Now().UTC().Format(time.RFC3339),
 			LastError:    errMsg,
 		})
-		jsonReply(w, http.StatusInternalServerError, map[string]string{"error": errMsg})
+		// SAME refusal body as the /dev/start 412 — missingTools,
+		// installEndpoint, installable, helpHint AND the typed capabilityGap.
+		// This is byte-for-byte the failure /dev/start already routes; the
+		// Hermes lane answered it with one prose string, so the phone showed
+		// "Required build tools are missing" with no tap while POST
+		// /install/<tool> worked and streamed. Two producers for one refusal
+		// is exactly how the Node lane got an Install button and the Flutter
+		// lane got a spinner.
+		//
+		// Status stays 500: shipped clients parse the body, not the code, and
+		// changing it would be a behaviour change dressed as a fix.
+		jsonReply(w, http.StatusInternalServerError, devStartGapRefusal(
+			DetectCapabilityGap(CapabilityGapContext{
+				Framework:    "react-native",
+				WorkDir:      workDir,
+				MissingTools: prep.MissingTools,
+			}),
+			prep.MissingTools,
+		))
 		return
 	}
 
@@ -3305,6 +3323,27 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 				LastFailedAt: time.Now().UTC().Format(time.RFC3339),
 				LastError:    errMsg,
 			})
+			// "cannot be auto-installed with pnpm" IS a capability gap — the
+			// thing this machine lacks is the package manager, and pnpm/yarn/
+			// bun all have real streamed recipes. Emitting the same refusal
+			// body means the phone renders "pnpm isn't installed on this
+			// machine" with an Install button instead of a sentence about
+			// auto-installation the user can do nothing with.
+			//
+			// When the package manager is unknown or has no recipe, the body
+			// degrades to exactly what it was: {error: errMsg}. Never
+			// advertise a remedy the product refuses.
+			if pm := strings.TrimSpace(prep.PackageManager); pm != "" && installableViaAgent(pm) {
+				jsonReply(w, http.StatusInternalServerError, devStartGapRefusal(
+					DetectCapabilityGap(CapabilityGapContext{
+						Framework:    "react-native",
+						WorkDir:      workDir,
+						MissingTools: []string{pm},
+					}),
+					[]string{pm},
+				))
+				return
+			}
 			jsonReply(w, http.StatusInternalServerError, map[string]string{"error": errMsg})
 			return
 		}
