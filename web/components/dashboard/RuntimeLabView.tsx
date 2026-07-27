@@ -39,6 +39,7 @@ import { CONVEX_URL } from "@/lib/constants";
 import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
 import { machineRolesSplitActive, type MachineRolesRow } from "@/lib/useMachineRoles";
+import { classifyRuntimeTargetProbeFailure } from "@/lib/runtimeTargetProbeFailure";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
 import { ScreenContextChip } from "./ScreenContextChip";
 // Read-aloud must never recite Yaver's own prompt header — see lib/promptFraming.ts.
@@ -71,6 +72,12 @@ type WorkspaceRepo = {
     services?: string[];
     actions?: string[];
   };
+};
+
+type MachineRolesDoctorInitial = {
+  ready?: boolean;
+  code?: string;
+  summary?: string;
 };
 
 type MobilePreviewMode = "phone" | "tablet";
@@ -893,6 +900,7 @@ export default function RuntimeLabView({
   const [machinesDraftRender, setMachinesDraftRender] = useState("");
   const [machinesBusy, setMachinesBusy] = useState(false);
   const [machinesNote, setMachinesNote] = useState<string | null>(null);
+  const [machineRecoverBusy, setMachineRecoverBusy] = useState(false);
   // Per-role reachability test in the Route editor — saving a routing you
   // cannot reach is the "inventory says yes" trap; the probe attempts the
   // operation before you commit to it.
@@ -1408,6 +1416,48 @@ export default function RuntimeLabView({
       setMachinesBusy(false);
     }
   }, [appendLog, onClearMachineRoles]);
+
+  const ensureMachineRolesReady = useCallback(async (surface: "targets" | "web preview") => {
+    if (!machineSplitActive) return true;
+    try {
+      const result = await agentClient.callOps("machine_roles_doctor", {
+        projectName: selectedProject?.name || undefined,
+        timeoutMs: 2500,
+      });
+      const initial = (result.initial || {}) as MachineRolesDoctorInitial;
+      const code = String(initial.code || result.code || "");
+      // /ops answers unknown verbs with HTTP 200 {ok:false, code:"unknown_verb"},
+      // so a released agent without this verb lands HERE, not in the catch.
+      if (code === "unknown_verb") {
+        appendLog("machine roles doctor unavailable on this agent; continuing with direct probe");
+        return true;
+      }
+      if (initial.ready === false || result.ok === false) {
+        const summary = initial.summary || result.error || "runner/render split is not reachable";
+        // Only an unreachable RENDER box blocks a render surface. Runner
+        // trouble and doctor-infrastructure failures (auth_required,
+        // settings_unreachable, timeouts) must not gate a capability that
+        // may already work — the direct probe stays the oracle.
+        if (code === "render_unreachable") {
+          const message = `${surface} blocked [${code}]: ${summary}`;
+          appendLog(`machine roles doctor: ${code} - ${summary}`);
+          setError(message);
+          if (surface === "web preview") setWebPreviewNote(message);
+          return false;
+        }
+        appendLog(`machine roles doctor warning (${code || "not_ready"}): ${summary} — continuing with direct probe`);
+        return true;
+      }
+      appendLog(`machine roles doctor: ${initial.code || "ready"}`);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // The doctor is advisory; its own failure must never sit in the
+      // critical path of the operation it annotates.
+      appendLog(`machine roles doctor failed (${message}); continuing with direct probe`);
+      return true;
+    }
+  }, [appendLog, machineSplitActive, selectedProject?.name]);
 
   const selectedRunnerRow = useMemo(
     () => runners.find((runner) => runner.id === selectedRunner) || null,
@@ -2087,6 +2137,7 @@ export default function RuntimeLabView({
     const runtimeFramework = runtimeFrameworkForProject(project);
     appendLog(`probing render targets for ${project.name} ${runtimeFramework || "unknown"}`);
     try {
+      if (!(await ensureMachineRolesReady("targets"))) return;
       const next = await agentClient.getRemoteRuntimeCapabilities(project.path, runtimeFramework);
       next.targets = [...(next.targets || [])].sort(targetSort);
       setCaps(next);
@@ -2103,7 +2154,35 @@ export default function RuntimeLabView({
     } finally {
       setBusy(false);
     }
-  }, [appendLog, selectedProject]);
+  }, [appendLog, ensureMachineRolesReady, selectedProject]);
+
+  const recoverRenderMachine = useCallback(async () => {
+    const deviceId = machineRoles?.renderDeviceId || machineRoles?.runnerDeviceId;
+    if (!deviceId) return;
+    setMachineRecoverBusy(true);
+    setError(null);
+    setWebPreviewNote(null);
+    appendLog(`recover renderer ${deviceNameById.get(deviceId) || deviceId.slice(0, 8)}`);
+    try {
+      const result = await agentClient.callOps("machine_repair", {
+        action: "restart_agent",
+        deviceId,
+      });
+      const outcome = result.initial?.outcome || result.error || "repair attempted";
+      appendLog(`machine repair: ${result.code || (result.ok ? "ok" : "failed")} - ${outcome}`);
+      if (!result.ok) {
+        setError(`Renderer recovery failed: ${outcome}`);
+        return;
+      }
+      await loadCapabilities();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      appendLog(`machine repair failed: ${message}`);
+      setError(`Renderer recovery failed: ${message}`);
+    } finally {
+      setMachineRecoverBusy(false);
+    }
+  }, [appendLog, deviceNameById, loadCapabilities, machineRoles?.renderDeviceId, machineRoles?.runnerDeviceId]);
 
   // Render-machine picker on the Load Targets row: save the chosen box as the
   // account favorite, re-point agentClient in the same breath, then re-probe.
@@ -2196,6 +2275,7 @@ export default function RuntimeLabView({
     setError(null);
     appendLog(`web ui ${selectedProject.name}`);
     try {
+      if (!(await ensureMachineRolesReady("web preview"))) return;
       const framework = browserPreviewFrameworkForProject(selectedProject);
       const staticBundleFramework = ["expo", "react-native"].includes(framework);
       if (staticBundleFramework) {
@@ -2256,7 +2336,7 @@ export default function RuntimeLabView({
     } finally {
       setWebPreviewBusy(false);
     }
-  }, [appendLog, selectedProject]);
+  }, [appendLog, ensureMachineRolesReady, selectedProject]);
 
   /** Fast/Full Reload for the open web preview (agent 1.99.374+).
    *
@@ -2495,6 +2575,8 @@ export default function RuntimeLabView({
     void createSession(target.id);
   }, [appendLog, busy, caps, connectedDevice?.id, createSession, intent, savedRuntimeTargetFor, selectedProject, selectedProjectIsSavedDefault, session, webPreviewPanelOpen]);
 
+  const targetProbeFailurePlan = error ? classifyRuntimeTargetProbeFailure(error) : null;
+
   return (
     <div
       className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-3 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] sm:p-4 xl:[grid-template-columns:minmax(0,1fr)_10px_var(--runtime-chat-width)]"
@@ -2599,13 +2681,13 @@ export default function RuntimeLabView({
                   </span>
                 ) : null}
               </div>
-            ) : /device not connected to relay|only reachable over a relay/i.test(error) ? (
+            ) : targetProbeFailurePlan && !targetProbeFailurePlan.showFixWithRunner ? (
               // Relay-presence failure: the relay answered FOR the render box —
               // it has no live tunnel. A coding agent cannot fix an offline
               // machine, so this branch names the box and offers deterministic
               // routes instead of "Fix with <runner>".
               <div className="mt-2 space-y-2">
-                {/device not connected to relay/i.test(error) ? (
+                {targetProbeFailurePlan.kind === "relay-presence" ? (
                   // The routing-config throw ("only reachable over a relay…")
                   // already names its own cause + remedy; this sentence is for
                   // the relay-presence 502 only.
@@ -2616,19 +2698,31 @@ export default function RuntimeLabView({
                   </div>
                 ) : null}
                 <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void loadCapabilities()}
-                    disabled={busy || machinesBusy}
-                    className="rounded-md border border-[#d7dce3] bg-white px-3 py-1.5 text-xs font-semibold text-[#475467] disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
-                  >
-                    Retry probe
-                  </button>
-                  {machineSplitActive && machineRoles?.runnerDeviceId ? (
+                  {targetProbeFailurePlan.retry ? (
+                    <button
+                      type="button"
+                      onClick={() => void loadCapabilities()}
+                      disabled={busy || machinesBusy || machineRecoverBusy}
+                      className="rounded-md border border-[#d7dce3] bg-white px-3 py-1.5 text-xs font-semibold text-[#475467] disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                    >
+                      Retry probe
+                    </button>
+                  ) : null}
+                  {machineSplitActive && (machineRoles?.renderDeviceId || machineRoles?.runnerDeviceId) ? (
+                    <button
+                      type="button"
+                      onClick={() => void recoverRenderMachine()}
+                      disabled={busy || machinesBusy || machineRecoverBusy}
+                      className="rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-800 disabled:opacity-40 dark:text-amber-100"
+                    >
+                      {machineRecoverBusy ? "Recovering renderer..." : `Recover ${effectiveRenderBoxName || "renderer"}`}
+                    </button>
+                  ) : null}
+                  {targetProbeFailurePlan.useRunnerFallback && machineSplitActive && machineRoles?.runnerDeviceId ? (
                     <button
                       type="button"
                       onClick={() => void setRenderDeviceAndReprobe(machineRoles.runnerDeviceId)}
-                      disabled={busy || machinesBusy}
+                      disabled={busy || machinesBusy || machineRecoverBusy}
                       className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-700 disabled:opacity-40 dark:text-emerald-200"
                     >
                       Render on {runnerBoxName} instead

@@ -15,6 +15,26 @@ const BLOCKED_RESP_HEADERS = new Set([
   "transfer-encoding",
 ]);
 
+// Answers CORS preflights locally — an OPTIONS request carries no cookies or
+// Authorization, so proxying it upstream 401s and kills every cross-origin
+// browser-lane call. SECURITY: this echoes any Origin but deliberately never
+// sets Access-Control-Allow-Credentials; adding it would turn the echo into a
+// CSRF hole against the cookie fallback in readAuthToken. Never add it.
+function preflightResponse(request: NextRequest) {
+  const headers = new Headers();
+  const origin = request.headers.get("origin");
+  if (origin) headers.set("Access-Control-Allow-Origin", origin);
+  headers.set("Vary", "Origin");
+  headers.set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS");
+  headers.set(
+    "Access-Control-Allow-Headers",
+    request.headers.get("access-control-request-headers") ||
+      "Authorization, Content-Type, X-Relay-Password, X-Client-Platform",
+  );
+  headers.set("Access-Control-Max-Age", "600");
+  return new NextResponse(null, { status: 204, headers });
+}
+
 type RelayServer = {
   httpUrl?: string;
   password?: string;
@@ -232,5 +252,5 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
 }
 
 export async function OPTIONS(request: NextRequest, context: { params: Promise<{ deviceId: string; path?: string[] }> }) {
-  return handle(request, context);
+  return preflightResponse(request);
 }
