@@ -70,7 +70,7 @@ type legVerdict struct {
 	Label     string          `json:"label,omitempty"`
 	IPLayer   string          `json:"ipLayer,omitempty"` // same-lan|tailscale|mesh|relay-gateway|public|hostname
 	OK        bool            `json:"ok"`
-	Class     string          `json:"class"` // reachable|refused|timeout|dns|tls|http_error|error
+	Class     string          `json:"class"` // reachable|refused|timeout|dns|tls|auth_error|http_error|error
 	Status    int             `json:"status,omitempty"`
 	LatencyMs int64           `json:"latencyMs"`
 	Detail    string          `json:"detail,omitempty"`
@@ -304,7 +304,7 @@ func probeLeg(ctx context.Context, cand RemoteAgentCandidate, token string, perL
 		v.OK, v.Class = true, "reachable"
 	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
 		// Reachable, but this token isn't welcome. Not a transport bug.
-		v.Class = "http_error"
+		v.Class = "auth_error"
 		v.Detail = "answered but rejected the token (agent is alive; auth is the problem)"
 	default:
 		v.Class = "http_error"
@@ -528,11 +528,14 @@ func summarizeUnreachable(legs []legVerdict) (summary, advice string) {
 	}
 	// An answered-but-rejected leg means the box is FINE and the token isn't.
 	// Say so, loudly — it's the single most misdiagnosed case.
-	if counts["http_error"] > 0 {
+	if counts["auth_error"] > 0 {
 		return "Machine is reachable but rejected the token — this is an AUTH problem, not a network one.",
 			"Re-authenticate: `yaver auth` on that box, or check it's signed in as the same user."
 	}
 	switch {
+	case counts["http_error"] > 0 && counts["refused"] == 0 && counts["timeout"] == 0:
+		return "Every HTTP leg answered with an error — the route exists, but the remote service is not usable.",
+			"Read the HTTP status on each leg. A relay 502 usually means the device is not connected to the relay; restart `yaver serve` on the box."
 	case counts["refused"] > 0 && counts["timeout"] == 0:
 		return "Every leg was refused — the agent is not listening.",
 			"The box is up but `yaver serve` isn't running (or is bound to another port). Start the agent."

@@ -78,7 +78,13 @@ func verifyRunnerBinarySignature(runnerID, path string) (bool, string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), runnerSignatureProbeTimeout)
 	defer cancel()
-	out, err := osexec.CommandContext(ctx, path, "--version").CombinedOutput()
+	cmd := osexec.CommandContext(ctx, path, "--version")
+	// Node CLIs (claude/codex) fork children; without WaitDelay a killed
+	// parent leaves a grandchild holding the pipe and CombinedOutput blocks
+	// forever — this probe runs on every heartbeat (heartbeat wedge class,
+	// docs/audits/agent-fork-exhaustion-deep-analysis-2026-07.md §1).
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.CombinedOutput()
 	ok := false
 	version := ""
 	if err == nil {

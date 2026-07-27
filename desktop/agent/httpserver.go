@@ -4514,6 +4514,18 @@ func (s *HTTPServer) enrichTaskInfoVideo(info *TaskInfo, r *http.Request) {
 }
 
 func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
+	// Admission control (doctrine law 7): a critically starved box refuses
+	// NEW work with a NAMED reason + route instead of accepting a task the
+	// kernel will kill mid-flight. 503 so callers retry elsewhere/later;
+	// degraded (non-critical) boxes still accept — they shed their own load.
+	if msg := ResourceAdmissionError(); msg != "" {
+		jsonReply(w, http.StatusServiceUnavailable, map[string]interface{}{
+			"ok":     false,
+			"reason": ReasonBoxResourcePressure,
+			"error":  msg,
+		})
+		return
+	}
 	var body struct {
 		Title              string             `json:"title"`
 		Description        string             `json:"description"`
@@ -8195,6 +8207,27 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 
 	case "machine_doctor":
 		return mcpToolJSON(machineDoctorHandler(OpsContext{
+			Ctx:    context.Background(),
+			Server: s,
+			Caller: "owner",
+		}, call.Arguments))
+
+	case "machine_roles_doctor":
+		return mcpToolJSON(machineRolesDoctorHandler(OpsContext{
+			Ctx:    context.Background(),
+			Server: s,
+			Caller: "owner",
+		}, call.Arguments))
+
+	case "machine_roles":
+		return mcpToolJSON(machineRolesHandler(OpsContext{
+			Ctx:    context.Background(),
+			Server: s,
+			Caller: "owner",
+		}, call.Arguments))
+
+	case "machine_repair":
+		return mcpToolJSON(machineRepairHandler(OpsContext{
 			Ctx:    context.Background(),
 			Server: s,
 			Caller: "owner",

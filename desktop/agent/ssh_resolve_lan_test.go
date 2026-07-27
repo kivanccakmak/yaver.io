@@ -196,6 +196,44 @@ func TestFirstDialablePrivateIP_ReachableWins(t *testing.T) {
 	}
 }
 
+func TestFirstDialableSameSubnetLanIPRequiresOpenPort(t *testing.T) {
+	locals, err := localInterfacePrivateIPv4s()
+	if err != nil || len(locals) == 0 {
+		t.Skip("no RFC1918 interface available to bind a listener")
+	}
+	ip := locals[0].String()
+	ln, err := net.Listen("tcp", net.JoinHostPort(ip, "0"))
+	if err != nil {
+		t.Skipf("cannot bind listener on %s: %v", ip, err)
+	}
+	defer ln.Close()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+
+	if got := firstDialableSameSubnetLanIP([]string{ip}, port, 300*time.Millisecond); got != ip {
+		t.Fatalf("firstDialableSameSubnetLanIP = %q; want reachable same-subnet %q", got, ip)
+	}
+
+	_ = ln.Close()
+	if got := firstDialableSameSubnetLanIP([]string{ip}, port, 100*time.Millisecond); got != "" {
+		t.Fatalf("firstDialableSameSubnetLanIP returned %q after listener closed; want empty", got)
+	}
+}
+
+func TestTCPPortDialable(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, port, _ := net.SplitHostPort(ln.Addr().String())
+	if !tcpPortDialable(host, port, 300*time.Millisecond) {
+		t.Fatalf("tcpPortDialable(%s,%s) = false; want true", host, port)
+	}
+	_ = ln.Close()
+	if tcpPortDialable(host, port, 100*time.Millisecond) {
+		t.Fatalf("tcpPortDialable(%s,%s) = true after close; want false", host, port)
+	}
+}
+
 func TestSplitDestUserHost(t *testing.T) {
 	cases := []struct {
 		dest     string

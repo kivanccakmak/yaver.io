@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -110,5 +111,28 @@ func TestParsePingLatencyMs(t *testing.T) {
 	}
 	if got := parsePingLatencyMs("no timing"); got != 0 {
 		t.Fatalf("parsePingLatencyMs(no timing) = %d, want 0", got)
+	}
+}
+
+func TestSummarizeUnreachableDoesNotCallRelay502Auth(t *testing.T) {
+	summary, advice := summarizeUnreachable([]legVerdict{
+		{Class: "http_error", Status: 502, Detail: "Bad Gateway"},
+		{Class: "refused", Detail: "nothing is listening"},
+		{Class: "timeout", Detail: "no reply"},
+	})
+	text := strings.ToLower(summary + " " + advice)
+	if strings.Contains(text, "auth") || strings.Contains(text, "token") {
+		t.Fatalf("relay 502/dead direct legs must not be diagnosed as auth: %q / %q", summary, advice)
+	}
+}
+
+func TestSummarizeUnreachableStillCalls401Auth(t *testing.T) {
+	summary, advice := summarizeUnreachable([]legVerdict{
+		{Class: "auth_error", Status: 401, Detail: "answered but rejected the token"},
+		{Class: "timeout", Detail: "no reply"},
+	})
+	text := strings.ToLower(summary + " " + advice)
+	if !strings.Contains(text, "auth") && !strings.Contains(text, "token") {
+		t.Fatalf("401/403 must still be diagnosed as auth: %q / %q", summary, advice)
 	}
 }

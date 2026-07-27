@@ -3315,6 +3315,11 @@ func runServe(args []string) {
 	}
 
 	go heartbeatLoop(ctx, cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID, taskMgr, httpServer)
+	// The agent's own resource watchdog (resource_warden.go): observes the
+	// box without forking, sheds under pressure, reaps zombies under fork
+	// exhaustion, and self-restarts (supervised) if the heartbeat wedges —
+	// the in-process floor of the recovery ladder (FAILURE_HEALING_DOCTRINE).
+	startResourceWatchdog(ctx)
 
 	// Instant git provisioning: a fresh MANAGED box with no git creds pulls
 	// the owner's gh/glab creds from their primary device (P2P over the relay)
@@ -3980,7 +3985,7 @@ func runServe(args []string) {
 	// box that came up relay-less could never self-heal. Leaving it empty lets
 	// the next watchConfig tick re-resolve.
 	if userSettings != nil && userSettings.RelayUrl != "" && len(relayServers) > 0 {
-		relayMgr.lastSettingsRelay = userSettings.RelayUrl
+		relayMgr.setLastSettingsRelay(userSettings.RelayUrl)
 	}
 	// Share the relay expose manager with the HTTP server so /expose/relay/* endpoints work.
 	httpServer.relayExposeMgr = relayMgr.relayExposeMgr
@@ -8357,11 +8362,19 @@ func sshArgsWithSurvivability(dest string, passthrough []string) []string {
 	args := []string{
 		"-o", "ServerAliveInterval=30",
 		"-o", "ServerAliveCountMax=3",
+		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "ControlMaster=auto",
 		"-o", "ControlPath=~/.ssh/cm-%C",
 		"-o", "ControlPersist=10m",
-		dest,
 	}
+	// IdentitiesOnly is watchdog-scoped, NOT default: it fixes "Too many
+	// authentication failures" on the unattended recovery leg, but for an
+	// interactive `yaver ssh` it silently drops agent-held keys (1Password,
+	// hardware tokens) that plain ssh would offer — a user-facing regression.
+	if os.Getenv("YAVER_SSH_IDENTITIES_ONLY") == "1" {
+		args = append(args, "-o", "IdentitiesOnly=yes")
+	}
+	args = append(args, dest)
 	return append(args, passthrough...)
 }
 
@@ -8614,11 +8627,12 @@ func resolveSSHHost(target string) string {
 		}
 	}
 
-	// 2. LAN IP on our /24 wins over everything. Faster than the
-	//    Tailscale overlay, doesn't depend on tailscaled, survives
-	//    `tailscale down` / Wi-Fi roams.
+	// 2. LAN IP on our /24 wins over everything, but only when TCP/22
+	//    actually answers. A stale same-subnet row is worse than an overlay:
+	//    OpenSSH will sit on it for tens of seconds and never reach the working
+	//    route.
 	if dev != nil {
-		if ip := pickReachableLanIP(dev.LocalIps); ip != "" {
+		if ip := firstDialableSameSubnetLanIP(dev.LocalIps, "22", 800*time.Millisecond); ip != "" {
 			return ip
 		}
 	}
@@ -8670,6 +8684,16 @@ func resolveSSHHost(target string) string {
 	// 4. Tailscale via device alias / canonical name (same gate).
 	if tsUp {
 		if ip := lookupTailscaleIP(tsPath, dev.Alias, dev.Name, strings.TrimSuffix(dev.Name, ".local")); ip != "" {
+			return ip
+		}
+	}
+
+	// 4.5 Tailscale CGNAT addresses from the device row. Prefer a proven
+	//     overlay ssh port over public HTTP endpoints, which usually describe
+	//     the agent API and not ssh. This is the Mac mini split-renderer
+	//     recovery case: LAN timed out, 100.x:22 answered.
+	if dev != nil {
+		if ip := firstDialableTailscaleIP(dev.LocalIps, "22", 800*time.Millisecond); ip != "" {
 			return ip
 		}
 	}
@@ -10042,7 +10066,13 @@ func openBrowser(url string) {
 
 func execOpen(name string, args ...string) {
 	cmd := osexec.Command(name, args...)
-	cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	// Reap. An un-Waited child is a permanent zombie holding a process-table
+	// slot — one per open_url/auth-browser call, forever. Zombie accumulation
+	// is how the mac mini reached fork exhaustion (audit §2 rank 6).
+	go func() { _ = cmd.Wait() }()
 }
 
 func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr *TaskManager, httpServer *HTTPServer) {
@@ -10640,10 +10670,21 @@ func anyRelayTunnelLive() bool { return atomic.LoadInt32(&relayTunnelsLive) > 0 
 func relayDataPathUsable() bool { return anyRelayTunnelLive() && !anyRelayTunnelZombie() }
 
 type relayManager struct {
-	parentCtx         context.Context
-	deviceID          string
-	authToken         string
-	agentAddr         string
+	parentCtx context.Context
+	deviceID  string
+	authToken string
+	agentAddr string
+	// mu guards activeTunnels, healthStatus, lastSettingsRelay and
+	// globalPassword. watchConfig (2-min ticker) and healthCheckLoop
+	// (60-s ticker → watchdogRelayTunnel → reloadNow → applyRelayServers)
+	// BOTH write these maps, and their writes collide exactly when tunnels
+	// are already down — the degraded state. An unguarded collision is
+	// `fatal error: concurrent map writes`: unrecoverable, skips defers,
+	// leaves no flight record, and on a box that cannot fork() launchd
+	// cannot respawn the corpse. Prime suspect for the mac-mini 3-hour
+	// silence on 2026-07-27 (docs/audits/agent-fork-exhaustion-deep-
+	// analysis-2026-07.md).
+	mu                sync.Mutex
 	globalPassword    string
 	convexSiteURL     string
 	activeTunnels     map[string]context.CancelFunc // keyed by QuicAddr
@@ -10729,7 +10770,12 @@ func (rm *relayManager) ForceReconnect(quicAddr string) bool {
 }
 
 // applyRelayServers starts new tunnels and stops removed ones.
+// Callable from watchConfig AND reloadNow (via watchdogRelayTunnel) — the
+// whole body holds rm.mu; it only mutates maps and spawns goroutines, no
+// blocking I/O.
 func (rm *relayManager) applyRelayServers(servers []RelayServerInfo, passwords map[string]string) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
 	// Build desired set
 	desired := make(map[string]string) // QuicAddr -> password
 	for _, rs := range servers {
@@ -10761,6 +10807,38 @@ func (rm *relayManager) applyRelayServers(servers []RelayServerInfo, passwords m
 	}
 }
 
+// Locked accessors — see rm.mu. Cross-goroutine reads/writes of the guarded
+// fields go through these; direct access is only legal while holding rm.mu.
+func (rm *relayManager) tunnelCount() int {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	return len(rm.activeTunnels)
+}
+
+func (rm *relayManager) getLastSettingsRelay() string {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	return rm.lastSettingsRelay
+}
+
+func (rm *relayManager) setLastSettingsRelay(v string) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.lastSettingsRelay = v
+}
+
+func (rm *relayManager) setGlobalPassword(pw string) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.globalPassword = pw
+}
+
+func (rm *relayManager) setHealthStatus(httpURL string, status *RelayHealthStatus) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.healthStatus[httpURL] = status
+}
+
 // reloadNow triggers an immediate config reload (called on SIGHUP).
 func (rm *relayManager) reloadNow() {
 	cfg, err := LoadConfig()
@@ -10774,9 +10852,9 @@ func (rm *relayManager) reloadNow() {
 	}
 	servers, passwords := relayInfosFromConfig(relayCfg)
 	if cfg.RelayPassword != "" {
-		rm.globalPassword = cfg.RelayPassword
+		rm.setGlobalPassword(cfg.RelayPassword)
 	} else if cfg.CachedRelayPassword != "" {
-		rm.globalPassword = cfg.CachedRelayPassword
+		rm.setGlobalPassword(cfg.CachedRelayPassword)
 	}
 	rm.applyRelayServers(servers, passwords)
 	log.Printf("[RELAY] Config reloaded: %d relay server(s)", len(servers))
@@ -10813,7 +10891,7 @@ func (rm *relayManager) watchConfig(ctx context.Context) {
 					}
 				}
 				if cfg.RelayPassword != "" {
-					rm.globalPassword = cfg.RelayPassword
+					rm.setGlobalPassword(cfg.RelayPassword)
 				}
 				rm.applyRelayServers(servers, passwords)
 				continue
@@ -10829,7 +10907,7 @@ func (rm *relayManager) watchConfig(ctx context.Context) {
 			if rm.convexSiteURL == "" {
 				continue
 			}
-			noTunnels := len(rm.activeTunnels) == 0
+			noTunnels := rm.tunnelCount() == 0
 			settings, err := FetchUserSettings(rm.convexSiteURL, rm.authToken)
 			if err != nil {
 				continue
@@ -10837,10 +10915,10 @@ func (rm *relayManager) watchConfig(ctx context.Context) {
 			if settings.RelayUrl == "" {
 				continue
 			}
-			if settings.RelayUrl == rm.lastSettingsRelay && !noTunnels {
+			if settings.RelayUrl == rm.getLastSettingsRelay() && !noTunnels {
 				continue
 			}
-			log.Printf("[RELAY] Reconciling relay from user settings: %s (live tunnels=%d)", settings.RelayUrl, len(rm.activeTunnels))
+			log.Printf("[RELAY] Reconciling relay from user settings: %s (live tunnels=%d)", settings.RelayUrl, rm.tunnelCount())
 			// Build a DIALABLE relay entry: match the platform list first (real
 			// QUIC addr + id), else synth host:4433 from the URL. The old path
 			// built an entry with an empty QuicAddr, which could never dial.
@@ -10866,9 +10944,9 @@ func (rm *relayManager) watchConfig(ctx context.Context) {
 				continue // couldn't resolve a dialable relay; retry next tick
 			}
 			if settings.RelayPassword != "" {
-				rm.globalPassword = settings.RelayPassword
+				rm.setGlobalPassword(settings.RelayPassword)
 			}
-			rm.lastSettingsRelay = settings.RelayUrl
+			rm.setLastSettingsRelay(settings.RelayUrl)
 			rm.applyRelayServers(servers, passwords)
 		}
 	}
@@ -11038,7 +11116,7 @@ func (rm *relayManager) checkRelayHealth(client *http.Client) {
 			}
 		}
 
-		rm.healthStatus[rs.HttpURL] = status
+		rm.setHealthStatus(rs.HttpURL, status)
 	}
 
 	// Persist to file for `yaver status`
@@ -11098,10 +11176,12 @@ func (rm *relayManager) saveHealth() {
 	if path == "" {
 		return
 	}
+	rm.mu.Lock()
 	statuses := make([]RelayHealthStatus, 0, len(rm.healthStatus))
 	for _, s := range rm.healthStatus {
 		statuses = append(statuses, *s)
 	}
+	rm.mu.Unlock()
 	data, err := json.MarshalIndent(statuses, "", "  ")
 	if err != nil {
 		return

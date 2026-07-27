@@ -57,6 +57,18 @@ export interface Device {
    *  knows which project's caches are fat, but paths and project names stay on
    *  the device (they'd leak the home-dir username into Convex). */
   storage?: DeviceStorage;
+  /** Resource envelope from the agent's in-process watchdog
+   *  (desktop/agent/resource_warden.go): the box says "I'm starving"
+   *  BEFORE it goes dark. Level + counters only. */
+  resourcePressure?: {
+    level: "ok" | "degraded" | "critical";
+    canFork?: boolean;
+    availableMb?: number;
+    agentRssMb?: number;
+    children?: number;
+    reasons?: string[];
+    at?: number;
+  };
   localIps?: string[];
   /** Deploy targets this box PROBED as ready ("npm","testflight","convex",…).
    *  Distinct from a platform guess: the agent ran the toolchain. Refreshed
@@ -609,6 +621,7 @@ export function useDevices(token: string | null): DevicesState & { hiddenIds: Se
         publicKey: d.publicKey,
         hardwareId: d.hardwareId ?? d.hwid,
         hardwareProfile: d.hardwareProfile ?? undefined,
+        resourcePressure: d.resourcePressure ?? undefined,
         localIps: Array.isArray(d.localIps) ? d.localIps : undefined,
         deployCapabilities: Array.isArray(d.deployCapabilities) ? d.deployCapabilities : undefined,
         deployCapabilitiesBlocked: Array.isArray(d.deployCapabilitiesBlocked)

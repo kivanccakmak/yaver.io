@@ -2561,6 +2561,27 @@ http.route({
       // separate /devices/metrics 60s poll). Validated by the mutation's
       // array schema; only forwarded when it's actually an array.
       metricsSamples: Array.isArray(body.metricsSamples) ? body.metricsSamples : undefined,
+      // Resource envelope from the agent's in-process watchdog
+      // (desktop/agent/resource_warden.go): level + counters only, allowlist
+      // rebuilt here so nothing beyond these fields can ride the payload.
+      // This is how a phone learns "the box is starving" BEFORE it goes
+      // dark (2026-07-27 double box-death).
+      resourcePressure:
+        body.resourcePressure && typeof body.resourcePressure === "object" &&
+        ["ok", "degraded", "critical"].includes(body.resourcePressure.level)
+          ? {
+              level: body.resourcePressure.level as "ok" | "degraded" | "critical",
+              canFork: typeof body.resourcePressure.canFork === "boolean" ? body.resourcePressure.canFork : undefined,
+              availableMb: typeof body.resourcePressure.availableMb === "number" ? body.resourcePressure.availableMb : undefined,
+              swapUsedMb: typeof body.resourcePressure.swapUsedMb === "number" ? body.resourcePressure.swapUsedMb : undefined,
+              agentRssMb: typeof body.resourcePressure.agentRssMb === "number" ? body.resourcePressure.agentRssMb : undefined,
+              children: typeof body.resourcePressure.children === "number" ? body.resourcePressure.children : undefined,
+              reasons: Array.isArray(body.resourcePressure.reasons)
+                ? body.resourcePressure.reasons.slice(0, 4).map((r: unknown) => String(r).slice(0, 160))
+                : undefined,
+              at: Date.now(),
+            }
+          : undefined,
     });
 
     return jsonResponse({

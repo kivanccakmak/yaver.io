@@ -90,6 +90,66 @@ func firstDialablePrivateIP(candidates []string, port string, timeout time.Durat
 	return ""
 }
 
+// firstDialableSameSubnetLanIP keeps the "LAN first" policy honest: a
+// same-/24 address is only better than Tailscale if ssh can actually open TCP.
+// Without this, stale LAN rows make `yaver ssh` hang on OpenSSH's long timeout
+// before the resolver ever reaches a working overlay route.
+func firstDialableSameSubnetLanIP(candidates []string, port string, timeout time.Duration) string {
+	locals, err := localInterfacePrivateIPv4s()
+	if err != nil || len(locals) == 0 {
+		return ""
+	}
+	for _, raw := range candidates {
+		ip := strings.TrimSpace(raw)
+		parsed := net.ParseIP(ip).To4()
+		if parsed == nil || !isPrivateLanIPv4(parsed) || isLikelyDockerBridgeIP(ip) {
+			continue
+		}
+		sameSubnet := false
+		for _, local := range locals {
+			if sameIPv4Slash24(parsed, local) {
+				sameSubnet = true
+				break
+			}
+		}
+		if !sameSubnet {
+			continue
+		}
+		if tcpPortDialable(ip, port, timeout) {
+			return ip
+		}
+	}
+	return ""
+}
+
+// firstDialableTailscaleIP returns a device-row Tailscale address only after
+// proving ssh's TCP port answers. A 100.x interface on this host means the route
+// can exist; it does not prove the target accepts ssh.
+func firstDialableTailscaleIP(candidates []string, port string, timeout time.Duration) string {
+	if !localTailscaleUp() {
+		return ""
+	}
+	for _, raw := range candidates {
+		ip := strings.TrimSpace(raw)
+		if !isCGNATTailscaleIP(ip) {
+			continue
+		}
+		if tcpPortDialable(ip, port, timeout) {
+			return ip
+		}
+	}
+	return ""
+}
+
+func tcpPortDialable(host, port string, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), timeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
 // localInterfacePrivateIPv4s collects RFC1918 IPv4 addresses on every
 // non-loopback interface that's UP. Used as the "what subnet am I
 // on?" probe for pickReachableLanIP.

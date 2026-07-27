@@ -66,6 +66,7 @@ const (
 	flightKindUncleanStop = "unclean_stop" // inferred at boot: a previous session never wrote `shutdown`
 	flightKindSleep       = "sleep"        // OS reported a sleep, recovered post-hoc from the OS log
 	flightKindWake        = "wake"         // OS reported a wake, recovered post-hoc from the OS log
+	flightKindDegraded    = "degraded"     // resource warden observed a pressure-level TRANSITION (never per-tick)
 )
 
 // FlightEvent is one record. The field set is deliberately narrow so it stays

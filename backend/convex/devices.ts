@@ -1120,6 +1120,20 @@ export const heartbeat = mutation({
     // Coarse egress region (eu|us|ap|...) for the multi-vantage device picker.
     // Region only — never the egress IP.
     geoRegion: v.optional(v.string()),
+    // Resource envelope from the agent's watchdog: level + counters only —
+    // never a path, command, or process name (privacy contract).
+    resourcePressure: v.optional(
+      v.object({
+        level: v.union(v.literal("ok"), v.literal("degraded"), v.literal("critical")),
+        canFork: v.optional(v.boolean()),
+        availableMb: v.optional(v.number()),
+        swapUsedMb: v.optional(v.number()),
+        agentRssMb: v.optional(v.number()),
+        children: v.optional(v.number()),
+        reasons: v.optional(v.array(v.string())),
+        at: v.optional(v.number()),
+      }),
+    ),
     // Optional batch of CPU/RAM samples piggybacked onto the heartbeat —
     // replaces the standalone /devices/metrics 60s poll. Each sample carries
     // its own capture time so 60s sparkline resolution is preserved while the
@@ -1263,6 +1277,9 @@ export const heartbeat = mutation({
     // an absent field must never blank a good status.
     if (args.connStatus !== undefined) {
       patch.connStatus = args.connStatus;
+    }
+    if (args.resourcePressure !== undefined) {
+      patch.resourcePressure = args.resourcePressure;
     }
     if (args.deployCapabilities !== undefined) {
       patch.deployCapabilities = args.deployCapabilities;
@@ -1822,6 +1839,7 @@ export const listMyDevices = query({
       platform: d.platform,
       publishCapabilities: d.publishCapabilities,
       connStatus: d.connStatus,
+      resourcePressure: d.resourcePressure,
       deployCapabilities: d.deployCapabilities,
       deployCapabilitiesBlocked: d.deployCapabilitiesBlocked,
       deployCapabilitiesAt: d.deployCapabilitiesAt,

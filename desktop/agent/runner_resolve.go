@@ -39,10 +39,13 @@ import (
 	"time"
 )
 
-// runnerResolveCache memoizes a successful lookup for ~30s so the
-// /agent/runners polling endpoint doesn't fork bash every 1.5 seconds
-// when the binary lives outside PATH. Empty results are NOT cached so
-// "you just installed claude, refresh" works without a daemon restart.
+// runnerResolveCache memoizes lookups for ~30s so the /agent/runners
+// polling endpoint doesn't fork bash every 1.5 seconds. NEGATIVE results
+// are cached too (same TTL): a box missing any one runner used to fork a
+// login shell per poll AND per heartbeat, and `bash -lc` sources the
+// user's profile whose grandchildren hold the stdout pipe — the exact
+// wedge that froze SendHeartbeat for 40 minutes on the mac mini
+// (2026-07-25). "You just installed claude" still surfaces within 30s.
 var (
 	runnerResolveCache   sync.Map // map[string]runnerResolveEntry
 	runnerResolveTTL     = 30 * time.Second
@@ -61,8 +64,8 @@ func resolveRunnerBinary(name string) string {
 	}
 	if v, ok := runnerResolveCache.Load(name); ok {
 		entry, _ := v.(runnerResolveEntry)
-		if time.Since(entry.at) < runnerResolveTTL && entry.path != "" {
-			return entry.path
+		if time.Since(entry.at) < runnerResolveTTL {
+			return entry.path // "" is a valid, cached "not installed"
 		}
 	}
 
@@ -85,6 +88,9 @@ func resolveRunnerBinary(name string) string {
 		}
 	}
 
+	// Cache the miss — see the cache comment: an uncached miss forks a
+	// login shell at dashboard-poll rate forever.
+	runnerResolveCache.Store(name, runnerResolveEntry{path: "", at: time.Now()})
 	return ""
 }
 
@@ -159,6 +165,11 @@ func loginShellLookup(name string) string {
 	defer cancel()
 	cmd := osexec.CommandContext(ctx, bash, "-lc", "command -v "+shellEscape(name))
 	cmd.Env = append(os.Environ(), "BASH_ENV=")
+	// Without WaitDelay, the deadline kills bash but .Output() blocks in
+	// awaitGoroutines while a profile-spawned grandchild (nvm, direnv…)
+	// holds the pipe — the 2026-07-25 heartbeat wedge. WaitDelay abandons
+	// the pipe after the grace period.
+	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.Output()
 	if err != nil {
 		return ""

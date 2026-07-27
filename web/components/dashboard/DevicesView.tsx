@@ -3647,6 +3647,22 @@ export default function DevicesView({
                           Secondary
                         </span>
                       ) : null}
+                      {/* Resource-pressure chip: the box says "I'm starving"
+                          BEFORE it goes dark. Both 2026-07-27 box-deaths were
+                          invisible until fatal; this is the surface the
+                          agent's resource warden reports to. */}
+                      {device.resourcePressure && device.resourcePressure.level !== "ok" ? (
+                        <span
+                          className={
+                            device.resourcePressure.level === "critical"
+                              ? "rounded border border-rose-400/50 bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-300"
+                              : "rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300"
+                          }
+                          title={`${(device.resourcePressure.reasons || []).join("; ") || "resource pressure"} · agent ${device.resourcePressure.agentRssMb ?? "?"} MB · ${device.resourcePressure.availableMb ?? "?"} MB free — the agent is shedding load${device.resourcePressure.level === "critical" ? " and refusing new tasks" : ""}`}
+                        >
+                          {device.resourcePressure.level === "critical" ? "⚠ Starving" : "Low resources"}
+                        </span>
+                      ) : null}
                       {/* Machine-role chips — the role-first list order must
                           explain itself on the card, same as Primary. */}
                       {machineRoles?.favorite?.runnerDeviceId === device.id ? (

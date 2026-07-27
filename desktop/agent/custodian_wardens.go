@@ -79,6 +79,9 @@ var agentCustodian = NewCustodian()
 func StartAgentCustodian(stop <-chan struct{}) *Custodian {
 	agentCustodian.Register(devChildWarden{})
 	agentCustodian.Register(diskHygieneWarden{})
+	// Surfaces the resource watchdog's non-ok state as a finding the user can
+	// SEE (resource_warden.go does the acting; this row is the telling).
+	agentCustodian.Register(resourcePressureWarden{})
 	agentCustodian.Start(stop)
 	// The disk warden's cadence is 6h and runWarden fires on the ticker, not at
 	// registration — but the boxes that need reclaiming most are the ones that

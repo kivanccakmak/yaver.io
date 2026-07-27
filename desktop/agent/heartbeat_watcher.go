@@ -43,9 +43,9 @@ import (
 type PeerState struct {
 	DeviceID            string `json:"deviceId"`
 	Name                string `json:"name,omitempty"`
-	LastSeen            string `json:"lastSeen"`       // from Convex device.lastHeartbeat
-	ObservedAt          string `json:"observedAt"`     // when we last saw the Convex record
-	State               string `json:"state"`          // "online" | "stale" | "offline"
+	LastSeen            string `json:"lastSeen"`   // from Convex device.lastHeartbeat
+	ObservedAt          string `json:"observedAt"` // when we last saw the Convex record
+	State               string `json:"state"`      // "online" | "stale" | "offline"
 	AlertedAt           string `json:"alertedAt,omitempty"`
 	StaleSince          string `json:"staleSince,omitempty"`
 	LastRecoveryAt      string `json:"lastRecoveryAt,omitempty"`
@@ -398,6 +398,10 @@ func attemptPeerRecovery(deviceID, hostname string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	cmd := osexec.CommandContext(ctx, yaverPath, "ssh", target, "--", "sh", "-c", script)
+	// Unattended leg: offer only default on-disk identities so a keyring full
+	// of agent keys can't trip the server's MaxAuthTries ("Too many
+	// authentication failures"). Interactive `yaver ssh` keeps agent keys.
+	cmd.Env = append(os.Environ(), "YAVER_SSH_IDENTITIES_ONLY=1")
 	out, err := cmd.CombinedOutput()
 	outStr := strings.TrimSpace(string(out))
 

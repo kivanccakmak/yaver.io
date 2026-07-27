@@ -1897,6 +1897,13 @@ type HeartbeatResult struct {
 // can race them in parallel during connect, and an optional CPU/RAM sample.
 // Returns ErrAuthExpired if the server returns 401.
 func SendHeartbeat(baseURL, token, deviceID string, runners []RunnerInfo, installedRunnerIDs []string, quicHost string, localIps []string, publicEndpoints []string, recoveryPosture *RecoveryTransportPosture, connectionPreferences []ConnectionPreference, metrics []DeviceMetricsSample) (*HeartbeatResult, error) {
+	// Attempt bracketing for the resource warden's wedge detector
+	// (resource_warden.go): the defer runs on EVERY exit — success, fast
+	// failure, panic — so "started without finished" can only mean this call
+	// is stuck inside (the tailscale exec-hang class), never that the network
+	// is merely down.
+	noteHeartbeatAttemptStarted()
+	defer noteHeartbeatAttemptFinished()
 	payload := map[string]interface{}{
 		"deviceId":           deviceID,
 		"runners":            sanitizeRunnerInfosForConvex(runners),
@@ -2002,6 +2009,21 @@ func SendHeartbeat(baseURL, token, deviceID string, runners []RunnerInfo, instal
 	}
 	if recoveryPosture != nil {
 		payload["recoveryPosture"] = recoveryPosture
+	}
+	// Resource envelope from the in-process watchdog (resource_warden.go) —
+	// pure-Go sample, zero exec on this path. Level + numbers only: this is
+	// how a phone learns "the box is starving" BEFORE the box goes dark
+	// (doctrine law 4; both 2026-07-27 box-deaths were invisible until fatal).
+	if rp := ResourcePressureNow(); !rp.At.IsZero() {
+		payload["resourcePressure"] = map[string]interface{}{
+			"level":       rp.Level,
+			"canFork":     rp.CanFork,
+			"availableMb": rp.AvailableMb,
+			"swapUsedMb":  rp.SwapUsedMb,
+			"agentRssMb":  rp.AgentRSSMb,
+			"children":    rp.Children,
+			"reasons":     rp.Reasons,
+		}
 	}
 	// Piggyback the batched CPU/RAM samples onto the heartbeat instead of a
 	// separate /devices/metrics call. The backend records + prunes them in

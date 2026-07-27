@@ -411,6 +411,23 @@ export default defineSchema({
         at: v.optional(v.number()),
       }),
     ),
+    // Resource envelope from the agent's in-process watchdog
+    // (desktop/agent/resource_warden.go): pressure level + counters only —
+    // never a path, command, or process name. Lets every surface say "this
+    // box is starving" BEFORE it goes dark instead of after (2026-07-27
+    // fork-exhaustion + OOM double box-death).
+    resourcePressure: v.optional(
+      v.object({
+        level: v.union(v.literal("ok"), v.literal("degraded"), v.literal("critical")),
+        canFork: v.optional(v.boolean()),
+        availableMb: v.optional(v.number()),
+        swapUsedMb: v.optional(v.number()),
+        agentRssMb: v.optional(v.number()),
+        children: v.optional(v.number()),
+        reasons: v.optional(v.array(v.string())),
+        at: v.optional(v.number()),
+      }),
+    ),
     deployCapabilities: v.optional(v.array(v.string())),
     deployCapabilitiesBlocked: v.optional(v.array(v.string())),
     // RFC3339, when the probe last ran. Refreshed every ~6h, so the UI must

@@ -1041,6 +1041,80 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			},
 		},
 		{
+			"name":        "machine_roles_doctor",
+			"description": "Validate the saved runner/render split before dispatching work. Reads userSettings.machineRolesByProject, probes the configured AI runner and renderer with bounded transport checks, and returns a stable ready/code verdict so previews do not wait silently on an unreachable render box.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"projectName": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional project-scoped role row. Empty uses the account-wide favorite.",
+					},
+					"timeout_ms": map[string]interface{}{
+						"type":        "integer",
+						"description": "Per-candidate probe timeout. Default 4000. Runner and renderer checks are bounded.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "machine_roles",
+			"description": "Read, set, or clear the user's primary AI runner and primary renderer. Writes the same machineRolesForProject setting used by web/mobile, so Claude Code, Codex, task chats, and MCP clients share one runner/render routing source.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"action": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"get", "set", "clear"},
+						"description": "get current split, set runner/render, or clear back to single-box.",
+					},
+					"runner": map[string]interface{}{
+						"type":        "string",
+						"description": "Runner selector: deviceId, unique prefix, name, or alias.",
+					},
+					"runnerDeviceId": map[string]interface{}{
+						"type":        "string",
+						"description": "Runner device selector.",
+					},
+					"render": map[string]interface{}{
+						"type":        "string",
+						"description": "Renderer selector. Defaults to runner.",
+					},
+					"renderDeviceId": map[string]interface{}{
+						"type":        "string",
+						"description": "Renderer device selector.",
+					},
+					"secondaryRunner": map[string]interface{}{"type": "string"},
+					"secondaryRender": map[string]interface{}{"type": "string"},
+					"projectName":     map[string]interface{}{"type": "string"},
+					"workspace":       map[string]interface{}{"type": "string", "enum": []string{"runner-clone", "render-ssh"}},
+					"autoPush":        map[string]interface{}{"type": "string", "enum": []string{"never", "ask", "always"}},
+				},
+			},
+		},
+		{
+			"name":        "machine_repair",
+			"description": "Deterministically repair an owned machine. restart_agent asks this connected watchdog agent to use Yaver's backup SSH/mesh channel to restart the target's Yaver agent, then callers should re-run machine_doctor or machine_roles_doctor.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"deviceId": map[string]interface{}{
+						"type":        "string",
+						"description": "Target device ID, alias, or name.",
+					},
+					"device": map[string]interface{}{
+						"type":        "string",
+						"description": "Alias or name for the target device.",
+					},
+					"action": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"restart_agent"},
+						"description": "restart_agent is currently the only supported repair.",
+					},
+				},
+			},
+		},
+		{
 			"name":        "agent_shutdown",
 			"description": "Gracefully shut down the Yaver agent. All running tasks will be stopped.",
 			"inputSchema": map[string]interface{}{

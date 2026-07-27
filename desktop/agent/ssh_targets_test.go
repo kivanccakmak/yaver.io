@@ -7,9 +7,9 @@ import (
 
 func TestParseUserHostPort(t *testing.T) {
 	cases := []struct {
-		in               string
-		user, host       string
-		port             int
+		in         string
+		user, host string
+		port       int
 	}{
 		{"kivi@10.0.0.45", "kivi", "10.0.0.45", 0},
 		{"kivi@10.0.0.45:2222", "kivi", "10.0.0.45", 2222},
@@ -66,5 +66,30 @@ func TestRememberSSHHostNoClobber(t *testing.T) {
 	rememberSSHHost(cfg, "newbox", "1.2.3.4") // new entry, host only
 	if lookupSSHTarget(cfg, "newbox") == nil {
 		t.Fatalf("rememberSSHHost didn't add new entry")
+	}
+}
+
+func TestSSHArgsWithSurvivabilityAcceptsNewHostKeys(t *testing.T) {
+	args := strings.Join(sshArgsWithSurvivability("kivi@100.64.0.5", []string{"true"}), " ")
+	if !strings.Contains(args, "StrictHostKeyChecking=accept-new") {
+		t.Fatalf("watchdog ssh must learn first-contact host keys non-interactively, got %s", args)
+	}
+	// IdentitiesOnly is watchdog-scoped, NOT default: for an interactive
+	// `yaver ssh` it would silently drop agent-held keys (1Password, hardware
+	// tokens) that plain ssh offers — a user whose key exists only in an
+	// agent would get Permission denied where ssh works.
+	if strings.Contains(args, "IdentitiesOnly=yes") {
+		t.Fatalf("interactive ssh must keep agent-held identities, got %s", args)
+	}
+	if strings.Contains(args, "StrictHostKeyChecking=no") || strings.Contains(args, "UserKnownHostsFile=/dev/null") {
+		t.Fatalf("watchdog ssh must still refuse changed host keys, got %s", args)
+	}
+
+	// The unattended watchdog leg (attemptPeerRecovery sets this env) DOES
+	// pin identities so a keyring full of agent keys can't trip MaxAuthTries.
+	t.Setenv("YAVER_SSH_IDENTITIES_ONLY", "1")
+	watchdogArgs := strings.Join(sshArgsWithSurvivability("kivi@100.64.0.5", []string{"true"}), " ")
+	if !strings.Contains(watchdogArgs, "IdentitiesOnly=yes") {
+		t.Fatalf("watchdog ssh must not fail after offering unrelated agent keys, got %s", watchdogArgs)
 	}
 }
