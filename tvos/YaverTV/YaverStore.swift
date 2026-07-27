@@ -25,6 +25,79 @@ final class YaverStore: ObservableObject {
     private var autoConnectStarted = false
     private var autoConnectCancelled = false
 
+    // Runner/render machine split — the account-wide favorite row from
+    // userSettings.machineRolesByProject (same Convex rows web + mobile use;
+    // key off the config, never a per-surface copy). Nil = single-box.
+    @Published var machineRoles: MachineRegistry.MachineRolesRow?
+    /// deviceId → display name, cached from the registry fetches so the split
+    /// badge can name boxes without a second network call.
+    @Published var deviceNamesById: [String: String] = [:]
+
+    /// True when the favorite row genuinely splits work across two machines.
+    var machineSplitActive: Bool {
+        guard let r = machineRoles else { return false }
+        guard let render = r.renderDeviceId, !render.isEmpty else { return false }
+        return render != r.runnerDeviceId
+    }
+
+    /// "AI: ubuntu · Render: mac mini" — nil when no split. Render on the
+    /// dashboard + runtime rows; a split with no badge is two silent sources.
+    var machineRolesBadge: String? {
+        guard machineSplitActive, let r = machineRoles else { return nil }
+        let runner = deviceNamesById[r.runnerDeviceId] ?? String(r.runnerDeviceId.prefix(8))
+        let renderId = r.renderDeviceId ?? r.runnerDeviceId
+        let render = deviceNamesById[renderId] ?? String(renderId.prefix(8))
+        return "AI: \(runner) · Render: \(render)"
+    }
+
+    func adoptSettings(_ settings: MachineRegistry.UserSettings?, devices: [RegisteredDevice] = []) {
+        if let rows = settings?.machineRolesByProject {
+            machineRoles = rows.first(where: { ($0.projectName ?? "").isEmpty && !$0.runnerDeviceId.isEmpty })
+        }
+        if !devices.isEmpty {
+            var names = deviceNamesById
+            for d in devices { names[d.deviceId] = d.displayName }
+            deviceNamesById = names
+        }
+    }
+
+    /// Box addressed as the AI-task RUNNER: the machine-roles runner when a
+    /// split is active, else the selected box. Cross-machine addressing rides
+    /// the relay `/d/<deviceId>` path ONLY — host is cleared so a stale LAN
+    /// address can never hit the wrong machine first. Returns nil (refuse by
+    /// name at the call site) when a split is active but no relay is wired.
+    func runnerBox() -> BoxTarget? { roleBox(machineRoles?.runnerDeviceId) }
+
+    /// Box addressed for previews/streams/builds — the render machine.
+    func renderBox() -> BoxTarget? { roleBox(machineRoles?.renderDeviceId) }
+
+    private func roleBox(_ roleDeviceId: String?) -> BoxTarget? {
+        guard let box = selectedBox else { return nil }
+        guard let id = roleDeviceId, !id.isEmpty, id != box.id else { return box }
+        guard let relay = box.relayBaseUrl, !relay.isEmpty else { return nil }
+        return BoxTarget(id: id,
+                         name: deviceNamesById[id] ?? String(id.prefix(8)),
+                         host: "", // relay-only: never let a stale LAN host win
+                         port: box.port,
+                         managed: box.managed,
+                         machineId: nil,
+                         relayBaseUrl: relay,
+                         relayPassword: box.relayPassword)
+    }
+
+    /// Client for AI-task dispatch (sessions/tasks). Nil when signed out or a
+    /// split is configured but unreachable — callers surface the named cause.
+    func runnerClient() -> AgentClient? {
+        guard isAuthenticated, let box = runnerBox() else { return nil }
+        return AgentClient(token: token, box: box)
+    }
+
+    /// Client for preview/stream/build flows — the render box.
+    func renderClient() -> AgentClient? {
+        guard isAuthenticated, let box = renderBox() else { return nil }
+        return AgentClient(token: token, box: box)
+    }
+
     var isAuthenticated: Bool { !token.isEmpty }
 
     init() {
@@ -120,6 +193,7 @@ final class YaverStore: ObservableObject {
         guard isAuthenticated, let box = selectedBox else { return }
         let list = (try? await MachineRegistry.fetch(token: token)) ?? []
         let settings = try? await MachineRegistry.fetchSettings(token: token)
+        adoptSettings(settings, devices: list)
         guard let dev = list.first(where: { $0.deviceId == box.id }) else { return }
         let host = await MachineRegistry.firstReachable(dev.addressCandidates, port: dev.port, token: token)
         guard let host, !host.isEmpty, host != box.host else { return }
@@ -138,6 +212,7 @@ final class YaverStore: ObservableObject {
         guard isAuthenticated, let box = selectedBox else { return }
         guard box.relayBaseUrl?.isEmpty != false || box.relayPassword?.isEmpty != false else { return }
         guard let settings = try? await MachineRegistry.fetchSettings(token: token) else { return }
+        adoptSettings(settings)
         guard settings.relayUrl?.isEmpty == false || settings.relayPassword?.isEmpty == false else { return }
         let updated = BoxTarget(id: box.id, name: box.name, host: box.host, port: box.port,
                                 managed: box.managed, machineId: box.machineId,
@@ -199,6 +274,7 @@ final class YaverStore: ObservableObject {
         }
         let list = (try? await MachineRegistry.fetch(token: token)) ?? []
         let settings = try? await MachineRegistry.fetchSettings(token: token)
+        adoptSettings(settings, devices: list)
         if autoConnectCancelled { return }
         let nowMs = Date().timeIntervalSince1970 * 1000
         func isLive(_ d: RegisteredDevice) -> Bool {

@@ -64,7 +64,9 @@ struct SessionView: View {
     }
 
     private var client: SessionClient? {
-        guard let box = store.selectedBox else { return nil }
+        // Runner/render split: AI turns go to the machine-roles RUNNER box
+        // (relay-addressed) when a split is active; else the selected box.
+        guard let box = store.runnerBox() else { return nil }
         return SessionClient(token: store.token, box: box)
     }
 

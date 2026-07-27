@@ -254,7 +254,13 @@ struct WebPreviewStreamView: View {
     }
 
     private func run() async {
-        guard let client = store.client() else { error = "No machine selected"; return }
+        // Runner/render split: previews build + stream from the RENDER box.
+        guard let client = store.renderClient() else {
+            error = store.machineSplitActive
+                ? "Your render machine needs the relay to be reachable from this TV."
+                : "No machine selected"
+            return
+        }
         startLogStream(client)
         do {
             status = "Starting \(project.name)…"

@@ -130,7 +130,12 @@ struct TasksView: View {
         loading = true
         error = nil
         do {
-            guard let client = store.client() else { throw AgentError(message: "No machine selected") }
+            // Runner/render split: the task list lives on the RUNNER box.
+            guard let client = store.runnerClient() else {
+                throw AgentError(message: store.machineSplitActive
+                    ? "Your AI runner machine needs the relay to be reachable from this TV — nothing was read from the wrong box."
+                    : "No machine selected")
+            }
             tasks = try await client.listTasks()
         } catch {
             self.error = error.localizedDescription

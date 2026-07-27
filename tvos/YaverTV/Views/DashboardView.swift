@@ -184,6 +184,9 @@ struct DashboardView: View {
         var parts = [box.host]
         if box.wakeable { parts.append("wakeable") }
         if box.relayBaseUrl?.isEmpty == false { parts.append("relay fallback") }
+        // Runner/render split badge — two silent sources are two
+        // unfalsifiable states; the dashboard names both boxes.
+        if let badge = store.machineRolesBadge { parts.append(badge) }
         return parts.joined(separator: " · ")
     }
 

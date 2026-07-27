@@ -68,7 +68,13 @@ struct DroidStreamView: View {
     }
 
     private func poll() async {
-        guard let client = store.client() else { error = "No machine selected"; return }
+        // Runner/render split: the droid frame streams from the RENDER box.
+        guard let client = store.renderClient() else {
+            error = store.machineSplitActive
+                ? "Your render machine needs the relay to be reachable from this TV."
+                : "No machine selected"
+            return
+        }
         var consecutiveFailures = 0
         while !Task.isCancelled {
             do {

@@ -47,6 +47,9 @@ struct RuntimeDashboardView: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
                             RuntimeRow("Machine", store.selectedBox?.name ?? "Not selected")
+                            if let badge = store.machineRolesBadge {
+                                RuntimeRow("Roles", badge)
+                            }
                             RuntimeRow("Preview", status?.devServer?.running == true ? "Running" : "Waiting")
                             RuntimeRow("Sessions", "\(runners?.count ?? runners?.sessions?.count ?? 0)")
                         }
@@ -359,7 +362,9 @@ struct RuntimeDashboardView: View {
         async let nextVoice = client.voiceStatus()
         async let nextRunners = client.runnerSessions()
         async let nextPlatformMatrix = client.platformMatrix()
-        async let nextRuntimeTurns = SessionClient(token: store.token, box: box).runtimeTurns(limit: 8)
+        // Runner turns live on the machine-roles RUNNER box when a split is
+        // active (falls back to the selected box otherwise).
+        async let nextRuntimeTurns = SessionClient(token: store.token, box: store.runnerBox() ?? box).runtimeTurns(limit: 8)
 
         var coreError: String?
         do {
@@ -520,7 +525,9 @@ struct RuntimeDashboardView: View {
     }
 
     private func triggerReload(mode: String) async {
-        guard let client = store.client() else { return }
+        // Runner/render split: the reload lands on the RENDER box — it holds
+        // and serves the app; the runner's push reaches it via pre-build-pull.
+        guard let client = store.renderClient() ?? store.client() else { return }
         reloading = true
         defer { reloading = false }
         do {

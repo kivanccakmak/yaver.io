@@ -104,6 +104,22 @@ enum MachineRegistry {
     struct UserSettings: Decodable {
         let relayUrl: String?
         let relayPassword: String?
+        /// Runner/render machine split rows (same Convex rows the web edits).
+        /// Additive decode — older payload shapes leave it nil.
+        let machineRolesByProject: [MachineRolesRow]?
+    }
+
+    /// One runner/render split row. Row without projectName = the account-wide
+    /// favorite; per-project rows override. Mirrors web/lib/useMachineRoles.ts
+    /// and mobile DeviceContext's MachineRolesRow — key off the Convex config,
+    /// never a per-surface copy.
+    struct MachineRolesRow: Decodable, Equatable {
+        let projectName: String?
+        let runnerDeviceId: String
+        let renderDeviceId: String?
+        let workspace: String?
+        let autoPush: String?
+        let updatedAt: Double?
     }
 
     /// One guest on the HOST side of sharing (`GET /guests/list`).
@@ -176,7 +192,7 @@ enum MachineRegistry {
             throw AgentError(message: "Couldn't load relay settings (\(http.statusCode)).")
         }
         return (try? JSONDecoder().decode(UserSettingsEnvelope.self, from: data).settings)
-            ?? UserSettings(relayUrl: nil, relayPassword: nil)
+            ?? UserSettings(relayUrl: nil, relayPassword: nil, machineRolesByProject: nil)
     }
 
     /// GET /guests/list — who this account has shared with. The host-side TV
