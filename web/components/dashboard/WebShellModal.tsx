@@ -25,15 +25,42 @@
 //     the real reason with a retry.
 //   - ready: mount TerminalView. WebSocket is created/torn down with
 //     the modal lifecycle (mount on open, dispose on close).
+//
+// RUNNER LAUNCH GATE (claude / codex) — see lib/runnerLaunchGate.ts for the
+// decision table and its tests. Short version of why it was rewritten on
+// 2026-07-27: clicking Codex on a remote box parked this modal on
+// "CHECKING RUNNER AUTH · 12s…" with the PTY closed, because the gate called
+// `POST /agent/runners/test`, which for codex spawns a REAL `codex exec`
+// generation. Measured on the live box: 5.3 s and 6,212 tokens of the user's
+// paid quota per click, under a 20 s client budget, plus relay RTT — to
+// rediscover what `/runner-auth/status` answered in 0.20 s for free
+// (`authVerified: true`), and what the device heartbeat row was already
+// carrying before the click happened.
+//
+// The contract now: a device row that proves the runner signed in opens the
+// PTY with zero network; a row that proves it signed out routes straight to
+// RunnerAuthModal; anything unknown gets ONE cheap /runner-auth/status check
+// bounded at RUNNER_VERIFY_BUDGET_MS, narrated, and failing OPEN with a named
+// banner. Once the terminal is mounted it is never yanked back — a late
+// contradicting answer raises the sign-in modal OVER the live session instead.
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import TerminalView from "./TerminalView";
 import { agentClient, type ConnectAttemptDiagnostic } from "@/lib/agent-client";
 import { getLastFailure, subscribeLastFailure } from "@/lib/probe-backoff";
 import { deriveBrowserReach, type BrowserReach } from "@/lib/device-lifecycle";
-import { diagnoseRunnerFailure } from "@/lib/runnerFailure";
+import {
+  RUNNER_VERIFY_BUDGET_MS,
+  decideRunnerLaunchGate,
+  decisionOpensTerminal,
+  findRunnerRow,
+  isGatedRunner,
+  probeFromStatusRow,
+  type RunnerLaunchDecision,
+  type RunnerProbeOutcome,
+} from "@/lib/runnerLaunchGate";
 import type { Device } from "@/lib/use-devices";
 
 // A connect attempt that hasn't resolved by now is not going to. attemptConnect
@@ -41,8 +68,6 @@ import type { Device } from "@/lib/use-devices";
 // page.tsx may run one auto-reauth + a second full pass. 90s covers the whole
 // worst case with headroom; past that we stop claiming progress.
 const CONNECT_STALL_MS = 90_000;
-const RUNNER_PREFLIGHT_TIMEOUT_MS = 20_000;
-const RUNNER_PREFLIGHT_STALL_MS = RUNNER_PREFLIGHT_TIMEOUT_MS + 5_000;
 function useAgentConnectionState(): string {
   const [state, setState] = useState<string>(() => agentClient.connectionState);
   useEffect(() => {
@@ -97,16 +122,14 @@ export default function WebShellModal({
   onTmuxClosed?: () => void;
 }) {
   const [maximized, setMaximized] = useState(false);
-  const [launchGate, setLaunchGate] = useState<{
+  const [gateCheck, setGateCheck] = useState<{
     key: string;
-    state: "checking" | "allowed" | "blocked";
-    message?: string;
-    startedAt?: number;
-    output?: string;
-    error?: string;
-    model?: string;
-    probe?: string;
+    startedAt: number;
+    probe: RunnerProbeOutcome | null;
   } | null>(null);
+  // Keys the user (or a converged decision) has already opened a terminal for.
+  // Latched so a late answer cannot unmount a session someone is typing in.
+  const [openedKey, setOpenedKey] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const connState = useAgentConnectionState();
   const reach = useBrowserReach(device);
@@ -160,86 +183,81 @@ export default function WebShellModal({
       : launch === "opencode"
         ? "OpenCode"
         : "Shell";
-  const authSensitiveLaunch = launch === "claude" || launch === "codex";
+  const authSensitiveLaunch = isGatedRunner(launch);
+  const gateKey = state === "ready" && authSensitiveLaunch ? `${device.id}:${launch}` : null;
 
+  // The cheap check. `/runner-auth/status` reads each runner's own login state
+  // (for codex: a cached `codex login status`; measured 0.20s on the live box)
+  // and spends no tokens. It runs even on the fast path — but only as
+  // BACKGROUND corroboration, because decideRunnerLaunchGate already answered
+  // from the device row and never waits on this.
   useEffect(() => {
-    if (state !== "ready" || !authSensitiveLaunch) {
-      setLaunchGate(null);
+    if (!gateKey || !launch) {
+      setGateCheck(null);
       return;
     }
-    const key = `${device.id}:${launch}`;
-    if (launchGate?.key === key) return;
     let cancelled = false;
-    setLaunchGate({ key, state: "checking", startedAt: Date.now() });
-    const timeout = setTimeout(() => {
-      if (cancelled) return;
-      setLaunchGate((current) => current?.key === key && current.state === "checking"
-        ? {
-            ...current,
-            state: "blocked",
-            message: `${title} preflight did not finish within ${Math.round(RUNNER_PREFLIGHT_STALL_MS / 1000)}s. The runner may be hung even though auth inventory says signed in.`,
-          }
-        : current);
-    }, RUNNER_PREFLIGHT_STALL_MS);
+    setGateCheck({ key: gateKey, startedAt: Date.now(), probe: null });
     (async () => {
+      let outcome: RunnerProbeOutcome;
       try {
-        const result = await agentClient.testRunner(launch, { timeoutMs: RUNNER_PREFLIGHT_TIMEOUT_MS });
-        if (cancelled) return;
-        if (result.ok) {
-          setLaunchGate({ key, state: "allowed" });
-          return;
-        }
-        if (result.needsAuth && result.supportsBrowserAuth) {
-          setLaunchGate({ key, state: "blocked", message: result.error || "Runner needs sign-in.", output: result.output, error: result.error, model: result.model, probe: result.probe });
-          onRunnerNeedsAuth?.(launch);
-          return;
-        }
-        setLaunchGate({
-          key,
-          state: "blocked",
-          message: result.error || `${launch} did not pass its preflight.`,
-          output: result.output,
-          error: result.error,
-          model: result.model,
-          probe: result.probe,
-        });
+        const rows = await agentClient.runnerAuthStatus();
+        outcome = probeFromStatusRow(findRunnerRow(rows, launch), launch);
       } catch (err) {
-        if (cancelled) return;
-        setLaunchGate({
-          key,
-          state: "blocked",
-          message: err instanceof Error ? err.message : String(err),
-        });
+        outcome = { state: "error", reason: err instanceof Error ? err.message : String(err) };
       }
+      if (cancelled) return;
+      setGateCheck((cur) => (cur?.key === gateKey ? { ...cur, probe: outcome } : cur));
     })();
     return () => {
       cancelled = true;
-      clearTimeout(timeout);
     };
-  }, [authSensitiveLaunch, device.id, launch, launchGate?.key, launchGate?.state, onRunnerNeedsAuth, state, title]);
+  }, [gateKey, launch]);
 
-  const launchGateDiagnosis = useMemo(() => {
-    if (!launchGate || launchGate.state !== "blocked") return null;
-    return diagnoseRunnerFailure({
+  const gateDecision: RunnerLaunchDecision = useMemo(() => {
+    const live = gateCheck?.key === gateKey ? gateCheck : null;
+    return decideRunnerLaunchGate({
       runner: launch,
-      model: launchGate.model,
-      probe: launchGate.probe,
-      output: launchGate.output,
-      error: launchGate.error || launchGate.message,
-      failedAt: Date.now(),
+      deviceRunners: device.runners,
+      probe: live?.probe ?? null,
+      elapsedMs: live ? now - live.startedAt : 0,
     });
-  }, [launch, launchGate]);
-  const launchGateElapsedSec = launchGate?.startedAt ? Math.max(0, Math.round((now - launchGate.startedAt) / 1000)) : 0;
-  const launchGateRemainingSec = launchGate?.state === "checking"
-    ? Math.max(0, Math.ceil((RUNNER_PREFLIGHT_STALL_MS - (now - (launchGate.startedAt || now))) / 1000))
-    : 0;
+  }, [device.runners, gateCheck, gateKey, launch, now]);
 
-  const terminalLaunch = authSensitiveLaunch
-    ? launchGate?.state === "allowed" ? launch : undefined
-    : launch;
+  // Latch: the instant any decision opens a terminal, that key stays open. A
+  // slow answer arriving afterwards must never unmount a live PTY.
+  const terminalOpen = !authSensitiveLaunch || openedKey === gateKey || decisionOpensTerminal(gateDecision);
+  useEffect(() => {
+    if (!gateKey) {
+      setOpenedKey(null);
+      return;
+    }
+    if (decisionOpensTerminal(gateDecision) && openedKey !== gateKey) setOpenedKey(gateKey);
+  }, [gateDecision, gateKey, openedKey]);
+
+  // Route into the existing runner sign-in flow (RunnerAuthModal → browser
+  // OAuth, Claude's code/token submission, the Deliver callback lane). Fires
+  // once per key, and also when a BACKGROUND check contradicts a fast-path
+  // open — in that case the modal simply appears over the live terminal.
+  const signInRaisedFor = useRef<string | null>(null);
+  const backgroundNeedsAuth =
+    gateCheck?.key === gateKey && gateCheck.probe?.state === "needs-auth";
+  useEffect(() => {
+    if (!gateKey || !launch || !isGatedRunner(launch)) return;
+    if (gateDecision.kind !== "sign-in" && !backgroundNeedsAuth) return;
+    if (signInRaisedFor.current === gateKey) return;
+    signInRaisedFor.current = gateKey;
+    onRunnerNeedsAuth?.(launch);
+  }, [backgroundNeedsAuth, gateDecision, gateKey, launch, onRunnerNeedsAuth]);
+  useEffect(() => {
+    if (signInRaisedFor.current && signInRaisedFor.current !== gateKey) signInRaisedFor.current = null;
+  }, [gateKey]);
+
+  const terminalLaunch = authSensitiveLaunch ? (terminalOpen ? launch : undefined) : launch;
+  const degradedBanner =
+    terminalOpen && gateDecision.kind === "open-degraded" ? gateDecision.banner : null;
   const openRunnerPtyAnyway = () => {
-    if (!authSensitiveLaunch || !launch) return;
-    setLaunchGate({ key: `${device.id}:${launch}:manual`, state: "allowed" });
+    if (gateKey) setOpenedKey(gateKey);
   };
 
   return (
@@ -285,36 +303,31 @@ export default function WebShellModal({
         </div>
         <div className={`flex-1 overflow-hidden ${state === "ready" ? "bg-[#0b0d10]" : "bg-slate-50/70 dark:bg-transparent p-2"}`}>
           {state === "ready" ? (
-            authSensitiveLaunch && launchGate?.state !== "allowed" ? (
+            authSensitiveLaunch && !terminalOpen ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-slate-700 dark:text-surface-300">
                 <div className="rounded-full border border-sky-300 bg-sky-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200">
-                  {launchGate?.state === "checking" ? "Checking runner auth" : "Runner needs attention"}
+                  {gateDecision.kind === "verify" ? "Checking runner auth" : "Runner needs attention"}
                 </div>
                 <p className="max-w-md text-[13px] leading-5">
-                  {launchGate?.state === "checking"
-                    ? `Checking whether ${title} can run on ${device.alias ? `@${device.alias}` : device.name} before opening the PTY · ${launchGateElapsedSec}s.`
-                    : launchGate?.message || `${title} is not ready on this machine.`}
+                  {gateDecision.kind === "verify"
+                    ? `${gateDecision.detail} · ${gateDecision.elapsedSec}s, ${gateDecision.remainingSec}s left.`
+                    : gateDecision.kind === "sign-in"
+                      ? gateDecision.reason
+                      : `${title} is not ready on this machine.`}
                 </p>
-                {launchGate?.state === "checking" ? (
+                {gateDecision.kind === "verify" ? (
                   <div className="w-full max-w-md rounded-md border border-sky-300 bg-sky-50 p-3 text-left text-[12px] leading-5 text-sky-800 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-100">
-                    <div className="font-semibold">Running live runner probe</div>
+                    <div className="font-semibold">Checking cached runner login</div>
                     <div>
-                      POST <code className="rounded bg-white/70 px-1 py-0.5 font-mono dark:bg-surface-950/70">/agent/runners/test</code>{" "}
-                      with <code className="rounded bg-white/70 px-1 py-0.5 font-mono dark:bg-surface-950/70">{title.toLowerCase()}</code>.
+                      Reading <code className="rounded bg-white/70 px-1 py-0.5 font-mono dark:bg-surface-950/70">/runner-auth/status</code>{" "}
+                      instead of spawning a paid runner subprocess.
                     </div>
                     <div className="mt-1 opacity-80">
-                      This checks a real CLI subprocess, not only the signed-in badge. It will stop in {launchGateRemainingSec}s and then show the fix.
+                      If this does not answer in time, the terminal opens anyway and {title} can show its own prompt.
                     </div>
                   </div>
                 ) : null}
-                {launchGateDiagnosis ? (
-                  <div className="max-w-md rounded-md border border-rose-300 bg-rose-50 p-3 text-left text-[12px] leading-5 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-100">
-                    <div className="font-semibold">{launchGateDiagnosis.title}</div>
-                    <div>{launchGateDiagnosis.reason}</div>
-                    <div className="mt-1 opacity-80">{launchGateDiagnosis.remedy}</div>
-                  </div>
-                ) : null}
-                {launchGate?.state === "blocked" && authSensitiveLaunch ? (
+                {gateDecision.kind === "sign-in" ? (
                   <div className="flex flex-wrap items-center justify-center gap-2">
                     <button
                       onClick={() => onRunnerNeedsAuth?.(launch)}
@@ -332,14 +345,21 @@ export default function WebShellModal({
                 ) : null}
               </div>
             ) : (
-              <TerminalView
-                launch={terminalLaunch}
-                tmuxSession={tmuxSession}
-                tmuxTaskId={tmuxTaskId}
-                onRunnerNeedsAuth={onRunnerNeedsAuth}
-                onCloseTerminal={onClose}
-                onTmuxClosed={onTmuxClosed}
-              />
+              <>
+                {degradedBanner ? (
+                  <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[12px] leading-5 text-amber-800 dark:text-amber-100">
+                    {degradedBanner}
+                  </div>
+                ) : null}
+                <TerminalView
+                  launch={terminalLaunch}
+                  tmuxSession={tmuxSession}
+                  tmuxTaskId={tmuxTaskId}
+                  onRunnerNeedsAuth={onRunnerNeedsAuth}
+                  onCloseTerminal={onClose}
+                  onTmuxClosed={onTmuxClosed}
+                />
+              </>
             )
           ) : state === "needs-reauth" ? (
             <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center text-slate-700 dark:text-surface-300">

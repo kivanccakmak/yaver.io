@@ -367,6 +367,45 @@ function runnersFromDeviceInventory(device?: Device | null): Runner[] {
     .filter((row): row is Runner => Boolean(row));
 }
 
+function runnerRowsEqual(a: Runner[], b: Runner[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const left = a[i];
+    const right = b[i];
+    if (
+      left.id !== right.id ||
+      left.name !== right.name ||
+      left.installed !== right.installed ||
+      left.active !== right.active ||
+      left.isDefault !== right.isDefault ||
+      left.ready !== right.ready ||
+      left.authConfigured !== right.authConfigured ||
+      left.authSource !== right.authSource ||
+      left.warning !== right.warning ||
+      left.error !== right.error ||
+      (left.models || []).map((m) => m.id).join("|") !== (right.models || []).map((m) => m.id).join("|")
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function taskRowsEqual(a: Task[], b: Task[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (
+      a[i].id !== b[i].id ||
+      a[i].title !== b[i].title ||
+      a[i].status !== b[i].status ||
+      a[i].updatedAt !== b[i].updatedAt
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function isModelCompatibleWithRunner(modelId: string | null | undefined, runnerId: string | null | undefined): boolean {
   const model = String(modelId || "").trim().toLowerCase();
   const runner = normalizeRunnerId(runnerId);
@@ -656,6 +695,7 @@ export default function RuntimeLabView({
   const [webPreviewPanelOpen, setWebPreviewPanelOpen] = useState(false);
   const [runtimeControlsOpen, setRuntimeControlsOpen] = useState(false);
   const [vibingSettingsOpen, setVibingSettingsOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const [runtimeConsoleOpen, setRuntimeConsoleOpen] = useState(true);
   const [runtimeConsoleCopied, setRuntimeConsoleCopied] = useState(false);
   const [taskConsoleCopied, setTaskConsoleCopied] = useState(false);
@@ -691,6 +731,7 @@ export default function RuntimeLabView({
   );
   const selectedProjectIsMobile = useMemo(() => isMobileRuntimeProject(selectedProject), [selectedProject]);
   const mobilePreviewDevice = mobilePreviewDevices[mobilePreviewMode];
+  const deviceRunnerFallback = useMemo(() => runnersFromDeviceInventory(connectedDevice), [connectedDevice?.id, connectedDevice?.runners]);
 
   const appendLog = useCallback((line: string) => {
     const stamp = new Date().toLocaleTimeString();
@@ -716,10 +757,10 @@ export default function RuntimeLabView({
 
   useEffect(() => {
     let cancelled = false;
-    const refresh = async () => {
-      const rows = await agentClient.listTasks(8).catch(() => []);
-      if (!cancelled) setRecentTasks(rows);
-    };
+      const refresh = async () => {
+        const rows = await agentClient.listTasks(8).catch(() => []);
+      if (!cancelled) setRecentTasks((prev) => taskRowsEqual(prev, rows) ? prev : rows);
+      };
     void refresh();
     const id = window.setInterval(() => void refresh(), 6000);
     return () => {
@@ -764,7 +805,7 @@ export default function RuntimeLabView({
   }, [appendLog, selectedPath]);
 
   const refreshRunners = useCallback(async () => {
-    const deviceFallback = runnersFromDeviceInventory(connectedDevice);
+    const deviceFallback = deviceRunnerFallback;
     try {
       const rows = (await agentClient.getRunners()).filter((runner) => {
         if (!runner.installed) return false;
@@ -772,7 +813,7 @@ export default function RuntimeLabView({
         return !id.includes("aider") && !id.includes("ollama");
       });
       const merged = rows.length ? rows : deviceFallback;
-      setRunners(merged);
+      setRunners((prev) => runnerRowsEqual(prev, merged) ? prev : merged);
       const explicitRunner = connectedDevice?.id ? primaryRunnerByDevice[connectedDevice.id] : "";
       const preferred =
         merged.find((runner) => runner.id === explicitRunner) ||
@@ -784,14 +825,14 @@ export default function RuntimeLabView({
         setSelectedRunner(preferred.id);
       }
     } catch {
-      setRunners(deviceFallback);
+      setRunners((prev) => runnerRowsEqual(prev, deviceFallback) ? prev : deviceFallback);
       if (deviceFallback.length && (!selectedRunner || !deviceFallback.some((runner) => runner.id === selectedRunner))) {
         const explicitRunner = connectedDevice?.id ? primaryRunnerByDevice[connectedDevice.id] : "";
         const preferred = deviceFallback.find((runner) => runner.id === explicitRunner) || deviceFallback.find((runner) => runner.ready) || deviceFallback[0];
         setSelectedRunner(preferred.id);
       }
     }
-  }, [connectedDevice, primaryRunnerByDevice, selectedRunner]);
+  }, [connectedDevice?.id, deviceRunnerFallback, primaryRunnerByDevice, selectedRunner]);
 
   useEffect(() => {
     void refreshRunners();
@@ -1930,23 +1971,70 @@ export default function RuntimeLabView({
                 {activeTaskStream?.status || "Ready"}
               </span>
             </div>
-            <div className="mt-3 flex min-w-0 flex-wrap gap-1.5 text-[11px] text-[#667085] dark:text-[#9aa3af]">
-              <button
-                type="button"
-                onClick={() => openRunnerControls("runner")}
-                className="rounded-full border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 text-left hover:border-[#98a2b3] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:hover:border-[#475467] dark:hover:text-[#e6e8ec]"
-                title="Change runner"
-              >
-                {selectedRunnerName}
-              </button>
-              <button
-                type="button"
-                onClick={() => openRunnerControls("model")}
-                className="min-w-0 max-w-full truncate rounded-full border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 text-left font-mono hover:border-[#98a2b3] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:hover:border-[#475467] dark:hover:text-[#e6e8ec]"
-                title="Change model"
-              >
-                {effectiveChatModel || "runner default"}
-              </button>
+            <div className="mt-3 grid gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 dark:border-[#2a3039] dark:bg-[#101318]">
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                <label className="min-w-0">
+                  <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Runner</span>
+                  <select
+                    ref={runnerSelectRef}
+                    value={selectedRunner}
+                    onChange={(event) => setSelectedRunner(event.target.value)}
+                    className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
+                  >
+                    {runners.length === 0 ? <option value="">No runners detected</option> : null}
+                    {runners.map((runner) => (
+                      <option key={runner.id} value={runner.id}>
+                        {runner.name}{runner.ready === false ? " (sign-in needed)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {availableModels.length > 0 ? (
+                  <label className="min-w-0">
+                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Model</span>
+                    <select
+                      ref={modelSelectRef}
+                      value={selectedModel}
+                      onChange={(event) => setSelectedModel(event.target.value)}
+                      className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
+                    >
+                      {availableModels.map((model) => (
+                        <option key={model.id} value={model.id}>{model.name || model.id}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <div className="min-w-0">
+                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Model</span>
+                    <div className="truncate rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#667085] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#9aa3af]">
+                      runner default
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!connectedDevice?.id || !selectedRunner}
+                  onClick={() => void saveRunnerChoice()}
+                  className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-emerald-200"
+                >
+                  Save for machine
+                </button>
+                {selectedRunnerRow?.supportsBrowserAuth && selectedRunnerRow.ready === false ? (
+                  <button
+                    type="button"
+                    disabled={runnerAuthBusy}
+                    onClick={() => void startSelectedRunnerSignIn()}
+                    className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-xs font-semibold text-sky-700 disabled:opacity-40 dark:text-sky-200"
+                  >
+                    {runnerAuthBusy ? "Opening..." : "Remote OAuth"}
+                  </button>
+                ) : null}
+                <span className="min-w-0 truncate text-[11px] text-[#667085] dark:text-[#9aa3af]">
+                  {selectedRunnerRow?.name || selectedRunner || "No runner"} / {safeModelForRunner(selectedRunner, selectedModel, availableModels) || selectedModel || "runner default"}
+                </span>
+              </div>
             </div>
             <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
               <button
@@ -1984,10 +2072,17 @@ export default function RuntimeLabView({
               )}
             </div>
             {recentTasks.length ? (
-              <div className="mt-3 flex min-w-0 items-center gap-1.5 overflow-x-auto pb-0.5">
-                <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">
-                  Sessions
-                </span>
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={() => setSessionsOpen((open) => !open)}
+                  className="rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#667085] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#9aa3af] dark:hover:text-[#e6e8ec]"
+                  aria-expanded={sessionsOpen}
+                >
+                  Sessions · {recentTasks.length} {sessionsOpen ? "hide" : "show"}
+                </button>
+                {sessionsOpen ? (
+                  <div className="mt-2 flex min-w-0 items-center gap-1.5 overflow-x-auto pb-0.5">
                 {recentTasks.slice(0, 5).map((task) => {
                   const selected = activeTaskStream?.id === task.id;
                   return (
@@ -2009,6 +2104,8 @@ export default function RuntimeLabView({
                     </button>
                   );
                 })}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -2201,7 +2298,16 @@ export default function RuntimeLabView({
               >
                 Expand
               </button>
-            ) : !runtimeConsolePinned ? (
+            ) : (
+              <button
+                type="button"
+                onClick={() => setRuntimeConsoleOpen(false)}
+                className="rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+              >
+                Fold
+              </button>
+            )}
+            {runtimeConsoleOpen && !runtimeConsolePinned ? (
               <button
                 type="button"
                 onClick={() => {
@@ -2228,7 +2334,7 @@ export default function RuntimeLabView({
             </pre>
           ) : null}
         </div>
-        <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+        <div className="hidden rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
           <div className="mb-2 flex items-center justify-between gap-3">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Vibing</div>
             <button
@@ -2245,7 +2351,6 @@ export default function RuntimeLabView({
               <label className="min-w-0">
                 <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Runner</span>
                 <select
-                  ref={runnerSelectRef}
                   value={selectedRunner}
                   onChange={(event) => setSelectedRunner(event.target.value)}
                   className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
@@ -2262,7 +2367,6 @@ export default function RuntimeLabView({
                 <label className="min-w-0">
                   <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Model</span>
                   <select
-                    ref={modelSelectRef}
                     value={selectedModel}
                     onChange={(event) => setSelectedModel(event.target.value)}
                     className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
