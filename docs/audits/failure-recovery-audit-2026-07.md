@@ -602,9 +602,35 @@ Rank: **P0** renders as a spinner/lie or has no route to a fix that exists.
 | V1 | Box drops mid-turn | 🔧 named + reattach ladder + "the task is still running on the box" | 🔧 same | 🔧 |
 | V2 | Relay bounces mid-turn | 🔧 cause preserved into the reattach line | 🔧 same | 🔧 |
 | V3 | Runner logs out mid-task | ✅ route (`ErrorMessage.tsx` → RunnerAuthModal) | 🟡 CTA gated to `claude/codex/kimi`; opencode is text-only | **P1** |
-| V4 | Menu the runner is waiting on | agent sends `409 {awaitingChoice, options[]}`; `vibe.tsx:141` **keeps `options` and renders only `error`** | not consumed | **P0** (unchanged from arch doc R6) |
+| V4 | Menu the runner is waiting on | ✅ **works** — traced end to end this pass (see 9.2d); the arch doc's R6 row is **stale** | n/a — web has no session-turn lane at all | ✅ / **P2** (web) |
 | V5 | Prompt typed into tmux, never submitted | `200 {ok:true, pane}` — nothing compares the pane tail | n/a | **P0** (unchanged, R5) |
 | V6 | Dev server dies mid-render during a turn | ✅ failure overlay + Retry | 🟡 raw text | **P1** |
+
+### 9.2d Correction — the arch doc's R6 ("dropped menu options") is STALE
+
+`FAILURE_PLUMBING_ARCHITECTURE.md` §6c R6 ranks P0: *"`vibe.tsx:143` keeps
+`options` on the object and **renders only `error`** — the user sees 'error'
+instead of the menu they must answer."* **Traced end to end this pass; it does
+not happen.** The chain, every hop re-read at this commit:
+
+| Hop | File | What it does with `options` |
+|---|---|---|
+| 1 | `runner_session_turn.go:238-244` | 409 body carries `AwaitingChoice:true` + `Options` + `Pane` **and** an `Error` sentence |
+| 2 | `quic.ts:9850` | `if (res.ok \|\| res.status === 409) return data` — the 409 body is returned verbatim, **not** thrown |
+| 3 | `vibe.tsx:140-143` | maps `awaitingChoice` + `options` onto the adapter result |
+| 4 | `carSessionTurn.ts:174-185` | **checks `awaitingChoice` BEFORE the error branch** and formats `Choose: a. b. c.` |
+| 5 | `runnerChannel.ts:33-38` → `conversationCore.ts:346` | speaks that line and sets `pendingChoice` so the next utterance is mapped to a digit (`parseSpokenChoice`) |
+| 6 | `vibe.tsx onVoiceEvent` | renders the same text as the turn summary |
+
+The ordering at hop 4 is the whole ballgame: because `awaitingChoice` is tested
+*before* `!result.ok`, the 409's `Error` sentence never wins. Had the branches
+been ordered the other way, R6 would be exactly right — so the row was a
+plausible reading of a real 409-plus-error payload, not a fabrication. Web is
+**n/a**, not "not consumed": it has no session-turn lane at all
+(`grep runnerSessionTurn web/` is empty).
+
+*Rule applied: when the doc and the code disagree, the doc is the bug. Flagged
+here rather than edited into the architecture doc, which another thread owns.*
 
 ### 9.2c Transport / session rows re-verified at this commit
 
@@ -654,28 +680,24 @@ Three corollaries, each earned by a row above:
 
 **P0 — still open (not touched this pass):**
 
-1. **V4** — the runner is blocked on a menu; the agent ships the exact options
-   in a `409`, `vibe.tsx:141` keeps them on the object and renders only
-   `error`. The user sees the word "error" instead of the choices they must
-   answer. Smallest P0 in the tree by fix size.
-2. **V5** — a prompt typed into a tmux pane but never submitted returns
+1. **V5** — a prompt typed into a tmux pane but never submitted returns
    `200 {ok:true}`. The response already carries the `pane` tail that would
    prove it; nothing compares it. Unfalsifiable by construction.
 
 **P1 — ranked:**
 
-3. **S7** — four remaining `streamTaskOutput` call sites on web (`PreviewPane`,
+2. **S7** — four remaining `streamTaskOutput` call sites on web (`PreviewPane`,
    `RuntimeLabView`, `WebReloadView`, `dashboard/page.tsx`) still pass no
    `onEnd`. The transport reports now; these do not listen, so they keep the
    old freeze. Mechanical follow-up: the seam and the policy already exist.
    *(Three of the four are owned by the concurrent render/dependency thread —
    coordinate before editing.)*
-4. **V3** — opencode auth failure is text-only on web while mobile routes it.
-5. **S6** — dev-events frame drops to a slow subscriber have no counter and no
+3. **V3** — opencode auth failure is text-only on web while mobile routes it.
+4. **S6** — dev-events frame drops to a slow subscriber have no counter and no
    gap marker, so a *partial* stream is indistinguishable from a complete one.
-6. **R2/R9** — dead `RelaySessionExpiredAt` sentinel; cross-owner registration
+5. **R2/R9** — dead `RelaySessionExpiredAt` sentinel; cross-owner registration
    collision with no reason code (both unchanged since the first pass).
-7. **N3** — three drifting relay-auth matchers on mobile, no set a superset of
+6. **N3** — three drifting relay-auth matchers on mobile, no set a superset of
    another.
 
 **Cross-surface parity note:** the reattach ladder now exists on mobile and web
