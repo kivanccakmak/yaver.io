@@ -9,6 +9,8 @@
 import { getYaverCloudBaseUrl } from "@/lib/yaver-cloud";
 import { CONVEX_URL } from "@/lib/constants";
 import { decodeCloudWorkspaceRequiredError } from "@/lib/cloud-workspace-required";
+import { classifyRelayLimit, explainRelayDeny } from "./relayDeny";
+import { planReconnect } from "./reconnectLadder";
 import webPkg from "../package.json";
 import type { MachineResourceReport, VibeParticipant, VibeSession } from "./machine-resources";
 
@@ -1722,6 +1724,27 @@ export class AgentClient {
   private reconnectAttempt = 0;
   private readonly maxReconnectAttempt = 8;
   private readonly baseBackoffMs = 1000;
+  // Last connect failure, preserved through the ladder so the give-up (and
+  // any terminal verdict) can state the CAUSE instead of a bare count
+  // (audit gap T2 — the web ladder used to stop silently at 8).
+  private _lastConnectError: string | null = null;
+  // Repair rung fired once per failure streak (mobile quic.ts parity);
+  // reset on every successful connect.
+  private reconnectRepairAttempted = false;
+  // Topology-refresh rung: re-pulls relay list + passwords from Convex so a
+  // relay restart / box move doesn't strand the ladder on stale coordinates.
+  // Wired by the dashboard shell (which owns the Convex fetch).
+  private topologyRefreshHook: (() => Promise<void>) | null = null;
+
+  /** Last connect failure (or named give-up / terminal verdict). Readable by
+   *  UI surfaces so "not connected" can say why. */
+  get lastConnectError(): string | null {
+    return this._lastConnectError;
+  }
+
+  setTopologyRefreshHook(hook: (() => Promise<void>) | null): void {
+    this.topologyRefreshHook = hook;
+  }
 
   // Browser network event listeners
   private onlineHandler: (() => void) | null = null;
@@ -1793,6 +1816,8 @@ export class AgentClient {
     this._activeTunnelUrl = null;
     this.tunnelCandidates = Array.from(new Set((opts?.tunnelUrls || []).map((url) => String(url || "").trim()).filter(Boolean)));
     this.reconnectAttempt = 0;
+    this.reconnectRepairAttempted = false;
+    this._lastConnectError = null;
 
     this.setupNetworkListeners();
     await this.attemptConnect();
@@ -4035,24 +4060,41 @@ export class AgentClient {
       this._lastConnectDiagnostics = diagnostics;
 
       if (!connected) {
-        // Pick the most informative error: prefer "auth expired" over raw transport
-        // errors so the UI can guide the user to `yaver auth` on the box.
+        // Pick the most informative error, most-terminal first:
+        // 1. device_mismatch (audit R3) — the box belongs to a DIFFERENT
+        //    account; no retry, repair, or auth on this side can change the
+        //    verdict, so it must never render as generic unreachability.
+        const denyMsg = diagnostics
+          .map((d) => explainRelayDeny(d.error))
+          .find((m): m is string => !!m);
+        if (denyMsg) {
+          throw new Error(denyMsg);
+        }
+        // 2. "auth expired" over raw transport errors so the UI can guide
+        //    the user to `yaver auth` on the box.
         const authExpired = diagnostics.some((d) => d.authExpired);
         if (authExpired) {
           throw new Error("Agent reached, but its Convex session is expired — run `yaver auth` on the remote device");
         }
+        // 3. Relay limit verdicts (audit R13/R14) carry their compact named
+        //    explanation — reset behavior + unmetered alternatives — instead
+        //    of the relay's raw string.
         const relayLimit = diagnostics.find((d) => d.status === 429 || d.status === 413 || d.status === 503);
         if (relayLimit?.error) {
-          throw new Error(relayLimit.error);
+          const card = classifyRelayLimit(relayLimit.error);
+          throw new Error(card ? `${card.title} — ${card.detail}` : relayLimit.error);
         }
         throw new Error("Could not reach agent (direct, tunnel, or relay)");
       }
 
       this.reconnectAttempt = 0;
+      this.reconnectRepairAttempted = false;
+      this._lastConnectError = null;
       this.setConnectionState("connected");
       this.startPolling();
     } catch (err) {
       this._lastConnectDiagnostics = diagnostics;
+      this._lastConnectError = err instanceof Error ? err.message : String(err);
       this.setConnectionState("error");
       // Read this BEFORE scheduleReconnect(), which increments reconnectAttempt.
       // Reading it after meant the check below was never true, so the first
@@ -4067,7 +4109,35 @@ export class AgentClient {
 
   private scheduleReconnect(): void {
     if (!this.host || !this.port || !this.token) return;
-    if (this.reconnectAttempt >= this.maxReconnectAttempt) return;
+
+    // Policy lives in reconnectLadder.ts (pure, tested); this executes it.
+    const plan = planReconnect({
+      attempt: this.reconnectAttempt,
+      maxAttempts: this.maxReconnectAttempt,
+      lastCause: this._lastConnectError,
+      repairAttemptedThisStreak: this.reconnectRepairAttempted,
+    });
+
+    if (plan.action === "stop-terminal" || plan.action === "give-up") {
+      // The ladder used to stop SILENTLY here (audit gap T2). State the
+      // verdict where consumers can read it; connection state is already
+      // "error" from attemptConnect.
+      this._lastConnectError = plan.message;
+      console.warn("[AgentClient] reconnect stopped:", plan.message);
+      return;
+    }
+
+    if (plan.repairRelay) {
+      // Repair rung (mobile parity): refresh the per-user relay password
+      // once per failure streak, so the next attempt runs with fresh creds.
+      this.reconnectRepairAttempted = true;
+      void this.repairRelayPassword().catch(() => {});
+    }
+    if (plan.refreshTopology && this.topologyRefreshHook) {
+      // Topology rung (mobile parity): re-pull relay list + device
+      // coordinates so a relay restart doesn't loop us on stale state.
+      void this.topologyRefreshHook().catch(() => {});
+    }
 
     const delay = Math.min(
       this.baseBackoffMs * Math.pow(2, this.reconnectAttempt),
@@ -5329,6 +5399,14 @@ export class AgentClient {
             this.activeRelayPassword = relay.password || null;
             break;
           }
+        }
+        // Also refresh the cached relayServers passwords: the reconnect
+        // ladder's next attemptConnect() reads relay.password from THAT
+        // list, so repairing only activeRelayPassword left the ladder
+        // retrying with the stale credential it just proved dead.
+        for (const cached of this.relayServers) {
+          const fresh = relays.find((r) => r.httpUrl === cached.httpUrl);
+          if (fresh?.password) cached.password = fresh.password;
         }
       }
       return { ok: true };
