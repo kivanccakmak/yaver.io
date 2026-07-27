@@ -1013,12 +1013,25 @@ func installEndpointForTool(missing []string) string {
 // remedy watched a 404 and concluded the install was hung while it was
 // streaming perfectly one path over — the same "remedy names a fix the
 // product refuses" defect as the 2026-07-26 `POST /install/flutter` 404.
-func installStreamPathForEndpoint(endpoint string) string {
+// installStreamNameForEndpoint returns the stream NAME handleInstall opens
+// for POST <endpoint> ("install:flutter"). CapabilityGap.Fix.Stream carries
+// this name; installStreamPathForEndpoint below turns it into the URL. One
+// derivation, two consumers — a hand-typed second copy is how the bare
+// "/streams/install" got shipped in the first place.
+func installStreamNameForEndpoint(endpoint string) string {
 	tool := strings.Trim(strings.TrimPrefix(strings.TrimSpace(endpoint), "/install/"), "/")
 	if tool == "" || strings.HasPrefix(tool, "/") {
 		return ""
 	}
-	return "/streams/install:" + tool
+	return "install:" + tool
+}
+
+func installStreamPathForEndpoint(endpoint string) string {
+	name := installStreamNameForEndpoint(endpoint)
+	if name == "" {
+		return ""
+	}
+	return "/streams/" + name
 }
 
 func devInstallHelpHint(missing []string, installable bool, endpoint string) string {
@@ -1029,6 +1042,33 @@ func devInstallHelpHint(missing []string, installable bool, endpoint string) str
 		return fmt.Sprintf("POST %s from any surface (sudo-free) and retry.", endpoint)
 	}
 	return fmt.Sprintf("The agent has no install recipe for: %s. Install manually on this machine (see GET /install/list for what the agent can provision), then retry.", strings.Join(missing, ", "))
+}
+
+// devStartGapRefusal is the ONE body of a /dev/start 412.
+//
+// Additive by construction: the legacy keys (missingTools, installEndpoint,
+// installable, helpHint) are unchanged, so every shipped client keeps working
+// bit-for-bit, and `capabilityGap` carries the typed route for the clients
+// that read it. Two producers for one refusal is how the Node lane got an
+// Install button and the Flutter lane got a spinner.
+func devStartGapRefusal(gap *CapabilityGap, missing []string) map[string]interface{} {
+	installable := canInstallMissingTool(missing)
+	endpoint := installEndpointForTool(missing)
+	message := fmt.Sprintf("Cannot start dev server: %s missing on this machine.", strings.Join(missing, ", "))
+	if gap != nil && strings.TrimSpace(gap.Summary) != "" {
+		message = gap.Summary
+	}
+	payload := map[string]interface{}{
+		"error":           message,
+		"missingTools":    missing,
+		"installEndpoint": endpoint,
+		"installable":     installable,
+		"helpHint":        devInstallHelpHint(missing, installable, endpoint),
+	}
+	if gap != nil {
+		payload["capabilityGap"] = gap
+	}
+	return payload
 }
 
 func installProjectDependencies(workDir string, prep projectPreparationStatus) error {
@@ -1824,6 +1864,41 @@ func (s *HTTPServer) handleDevServerStart(w http.ResponseWriter, r *http.Request
 	// structured payload so the phone can offer a one-tap install
 	// instead of surfacing a raw "executable not found" error after
 	// a long timeout. The mobile client knows to render this shape.
+	//
+	// FIRST, the toolchain gate that does NOT need a package.json.
+	//
+	// The Node preflight below is gated on readProjectPackageManifest, so for
+	// a pubspec-only Flutter project (and for Go, Rust, Python, Swift, Kotlin)
+	// it never runs — the only structured refusal in the product was welded to
+	// the Node ecosystem. Meanwhile mgr.Start returns before the process is
+	// spawned, so /dev/start answered 200 OK on a start that was already
+	// doomed, and the phone rendered "Waiting for the dev server to report its
+	// address…" over a fact the agent already knew. Measured 2026-07-26 on
+	// e-mobile against a box without Flutter.
+	//
+	// Probing the operation, not an inventory proxy: commandExists resolves
+	// through lookPathWithRuntimes, which is the SAME resolution
+	// resolveSpawnPath uses when Start execs the binary — including the
+	// agent-installed SDK root. A tool this says is present is a tool the
+	// spawn will find.
+	if req.WorkDir != "" {
+		framework := strings.TrimSpace(req.Framework)
+		if framework == "" {
+			if ds := detectDevServer(req.WorkDir); ds != nil {
+				framework = ds.Name()
+			}
+		}
+		if tool := devStartToolchainBinary(framework); tool != "" && !commandExists(tool) {
+			missing := []string{tool}
+			gap := DetectCapabilityGap(CapabilityGapContext{
+				Framework:    framework,
+				WorkDir:      req.WorkDir,
+				MissingTools: missing,
+			})
+			jsonReply(w, http.StatusPreconditionFailed, devStartGapRefusal(gap, missing))
+			return
+		}
+	}
 	if req.WorkDir != "" {
 		if manifest, err := readProjectPackageManifest(req.WorkDir); err == nil {
 			prep := detectProjectPreparation(req.WorkDir, manifest)
@@ -1834,17 +1909,17 @@ func (s *HTTPServer) handleDevServerStart(w http.ResponseWriter, r *http.Request
 			// toolchain is missing (bun / pnpm / yarn / hermesc, etc.)
 			// that we can't fix ourselves.
 			if len(prep.MissingTools) > 0 && !isOnlyNodeMissing(prep.MissingTools) {
-				installable := canInstallMissingTool(prep.MissingTools)
-				endpoint := installEndpointForTool(prep.MissingTools)
-				jsonReply(w, http.StatusPreconditionFailed, map[string]interface{}{
-					"error":           fmt.Sprintf("Cannot start dev server: %s missing on this machine.", strings.Join(prep.MissingTools, ", ")),
-					"missingTools":    prep.MissingTools,
-					"packageManager":  prep.PackageManager,
-					"hermesCompiler":  prep.HermesCompiler,
-					"installEndpoint": endpoint,
-					"installable":     installable,
-					"helpHint":        devInstallHelpHint(prep.MissingTools, installable, endpoint),
-				})
+				payload := devStartGapRefusal(
+					DetectCapabilityGap(CapabilityGapContext{
+						Framework:    req.Framework,
+						WorkDir:      req.WorkDir,
+						MissingTools: prep.MissingTools,
+					}),
+					prep.MissingTools,
+				)
+				payload["packageManager"] = prep.PackageManager
+				payload["hermesCompiler"] = prep.HermesCompiler
+				jsonReply(w, http.StatusPreconditionFailed, payload)
 				return
 			}
 		}

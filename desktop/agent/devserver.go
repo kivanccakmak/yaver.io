@@ -91,20 +91,26 @@ type DevServerStatus struct {
 	PreferredPort int `json:"preferredPort,omitempty"`
 	// VibeSessionID ties this dev server to the co-vibe session holding it, so a
 	// client can fetch the roster for the project it is looking at.
-	VibeSessionID     string `json:"vibeSessionId,omitempty"`
-	DirectURL         string `json:"directUrl,omitempty"`
-	DeepLink          string `json:"deepLink,omitempty"`
-	DevMode           string `json:"devMode,omitempty"` // "dev-client", "web", "expo-go", "" (for non-Expo)
-	StartedAt         string `json:"startedAt,omitempty"`
-	Error             string `json:"error,omitempty"`
-	PID               int    `json:"pid,omitempty"`
-	WorkDir           string `json:"workDir,omitempty"`
-	HotReload         bool   `json:"hotReload"`
-	TargetDeviceID    string `json:"targetDeviceId,omitempty"`
-	TargetDeviceName  string `json:"targetDeviceName,omitempty"`
-	TargetDeviceClass string `json:"targetDeviceClass,omitempty"`
-	IOSInstallMethod  string `json:"iosInstallMethod,omitempty"`
-	IOSInstallReason  string `json:"iosInstallReason,omitempty"`
+	VibeSessionID string `json:"vibeSessionId,omitempty"`
+	DirectURL     string `json:"directUrl,omitempty"`
+	DeepLink      string `json:"deepLink,omitempty"`
+	DevMode       string `json:"devMode,omitempty"` // "dev-client", "web", "expo-go", "" (for non-Expo)
+	StartedAt     string `json:"startedAt,omitempty"`
+	Error         string `json:"error,omitempty"`
+	// CapabilityGap mirrors the SSE error frame's Gap for clients that poll
+	// status instead of holding the stream open. DevPreview gates its
+	// /dev/events subscription on running||building, so on a hard start
+	// failure the stream is closed exactly when the gap is emitted — the
+	// route would be invisible on that surface without this field.
+	CapabilityGap     *CapabilityGap `json:"capabilityGap,omitempty"`
+	PID               int            `json:"pid,omitempty"`
+	WorkDir           string         `json:"workDir,omitempty"`
+	HotReload         bool           `json:"hotReload"`
+	TargetDeviceID    string         `json:"targetDeviceId,omitempty"`
+	TargetDeviceName  string         `json:"targetDeviceName,omitempty"`
+	TargetDeviceClass string         `json:"targetDeviceClass,omitempty"`
+	IOSInstallMethod  string         `json:"iosInstallMethod,omitempty"`
+	IOSInstallReason  string         `json:"iosInstallReason,omitempty"`
 	// WebPort is non-zero when a sibling Expo Web preview is running
 	// alongside Metro (--dev-client). Browser iframe routes through
 	// /dev-web/* to this port while /dev/index.bundle?platform=...
@@ -194,6 +200,19 @@ type DevServerEvent struct {
 	// reconnecting consumer rebuild full UI state from one event
 	// instead of replaying the entire history.
 	Snapshot *DevServerSnapshot `json:"snapshot,omitempty"`
+
+	// Gap is set on type="error" when the start failed because this machine
+	// is missing a capability — and it carries the ROUTE to the fix
+	// (method + path + stream), not a sentence about it.
+	//
+	// This one field closes the case no 412 can ever catch: mgr.Start returns
+	// BEFORE the process is spawned (see "Launch start in background" below),
+	// so a start that dies on `exec flutter: executable file not found` has
+	// already answered 200 OK. The failure is ASYNCHRONOUS by construction,
+	// and /dev/events is the channel every preview surface is already
+	// subscribed to. Produced by the one detector (capability_gap.go) so a
+	// new gap needs no new client code.
+	Gap *CapabilityGap `json:"gap,omitempty"`
 }
 
 // DevServerSnapshot is a complete picture of every active topic + the
@@ -489,6 +508,10 @@ type devServerSession struct {
 	// session around so Status() still reports the failure. A
 	// subsequent Start() on the same framework clears it.
 	failed bool
+	// gap is the structured capability gap behind `failed`, when the failure
+	// was one (missing toolchain). Held on the session, not globally, so a
+	// new Start on another project cannot inherit a stale route.
+	gap *CapabilityGap
 }
 
 type DevServerTarget struct {
@@ -768,10 +791,21 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 			// recognises the text; anything it does not becomes evidence for a
 			// runner. See custodian_playbook.go.
 			ReportFailureToCustodian("dev-start", filepath.Base(opts.WorkDir), annotated)
+			// The one detector. `annotated` already contains the raw spawn
+			// error, so a missing toolchain is recognised here even though
+			// nothing synchronous ever saw it. nil for every other failure
+			// shape (compile error, port clash, missing pubspec asset) — a
+			// bogus gap would send the user to install what they already have.
+			gap := DetectCapabilityGap(CapabilityGapContext{
+				Framework: ds.Name(),
+				WorkDir:   opts.WorkDir,
+				Err:       annotated,
+			})
 			m.mu.Lock()
 			if m.active != nil && m.active.server == ds {
 				m.active.cancel()
 				m.active.failed = true
+				m.active.gap = gap
 				// The process is dead; holding its port would shrink the pool
 				// for every other project on the machine.
 				m.releasePortLocked()
@@ -782,6 +816,7 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 				Framework: ds.Name(),
 				Message:   fmt.Sprintf("Failed to start %s: %s", ds.Name(), annotated),
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Gap:       gap,
 			})
 			return
 		}
@@ -1014,6 +1049,8 @@ func (m *DevServerManager) Status() *DevServerStatus {
 			s.ServingLabel = fmt.Sprintf("Starting %s preview…", m.active.server.Name())
 		}
 	}
+	// The route, on the polled channel too — see the field's comment.
+	s.CapabilityGap = m.active.gap
 	// One shape for "what does this session hold", shared with /vibe/sessions.
 	s.Resources = resourcesForOwner(m.resourceOwnerTag())
 	s.VibeSessionID = m.VibeSessionID
