@@ -145,7 +145,18 @@ export const lightTokens = {
 } as const;
 
 export const darkTokens = {
-  background: "#FF6B00",
+  // Yaver's dark theme is BLACK-first. This one value is the app's largest
+  // painted area: `DarkColors.bg` (every screen root + list background) and
+  // `DarkColors.bgTabBar` both read it, so a wrong value here repaints the
+  // header strip, the Projects/Tasks lists and the tab bar all at once.
+  //
+  // It was flipped to "#FF6B00" (orange) in 55510579e "Fix runtime preview
+  // target handling" — an unrelated change that carried a debug/probe colour
+  // into the shipped palette and reached TestFlight 482/483. Nothing type-checks
+  // a hex, and no screen references it by name, so the regression was invisible
+  // to `tsc` and to review; only a human looking at the phone could see it.
+  // `tokens.test.mts` now asserts this is black so the same slip fails a test.
+  background: "#000000",
   surface: "#15151A",
   surfaceElevated: "#1F1F26",
   surfaceMuted: "#0E0E12",
