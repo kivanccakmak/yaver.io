@@ -34,6 +34,10 @@ function resolveWakeMachineId(devices: any[], activeDevice: any | null, explicit
 }
 
 function pickDeviceId(devices: any[], activeDevice: any | null): string {
+  // Runner/render split: watch-dictated tasks run on the configured AI
+  // runner box first — same precedence every other dispatch surface uses.
+  const roleRunner = connectionManager.roleDeviceId("runner");
+  if (roleRunner) return roleRunner;
   const focused = connectionManager.focusedDeviceId();
   if (focused) return focused;
   const activeId = activeDevice?.id || activeDevice?.deviceId;

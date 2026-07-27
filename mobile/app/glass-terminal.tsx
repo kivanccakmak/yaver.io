@@ -51,6 +51,7 @@ import { AppBackButton } from "../src/components/AppBackButton";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useDevice, type Device } from "../src/context/DeviceContext";
 import { describeDevReloadResult, devReloadReachedTarget, quicClient } from "../src/lib/quic";
+import { connectionManager } from "../src/lib/connectionManager";
 import { HIDE_PAID_UI } from "../src/lib/launchFlags";
 import {
   runYaverAgent,
@@ -320,8 +321,11 @@ export default function GlassTerminalScreen() {
   // behind a spoken confirm. Coexists with the two text modes + push-to-talk.
   const devicesRef = useRef(devices);
   devicesRef.current = devices;
-  const deviceIdRef = useRef(primaryDeviceId);
-  deviceIdRef.current = primaryDeviceId;
+  // Runner/render split: glass voice turns land on the configured AI runner
+  // box when one is set; primaryDeviceId stays the single-box fallback.
+  const glassRunnerId = connectionManager.roleDeviceId("runner");
+  const deviceIdRef = useRef(glassRunnerId || primaryDeviceId);
+  deviceIdRef.current = glassRunnerId || primaryDeviceId;
 
   const makeVoiceOptions = useCallback(
     (): Omit<CreateVoiceCoreOptions, "listener"> => ({

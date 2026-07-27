@@ -25,6 +25,7 @@ import {
   updateDogfoodItem,
 } from "../lib/dogfoodThread";
 import { DogfoodAnnotateModal, type DogfoodAnnotateResult } from "./DogfoodAnnotateModal";
+import { connectionManager } from "../lib/connectionManager";
 
 interface Pending extends DogfoodShot {
   breadcrumbs?: string;
@@ -83,7 +84,8 @@ export function DogfoodCaptureHost() {
       const res = await dispatchDogfoodItems({
         items: [{ ...item, status: "sent" }],
         mode: result.mode,
-        deviceId: activeDevice.id,
+        // Runner/render split: the fix task runs on the AI runner box.
+        deviceId: connectionManager.roleDeviceId("runner") || activeDevice.id,
         deviceName: activeDevice.name,
         repoDir,
         basePrompt: config?.prompt ?? "",

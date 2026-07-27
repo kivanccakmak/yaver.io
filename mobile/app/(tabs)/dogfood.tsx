@@ -26,6 +26,7 @@ import * as ImagePicker from "expo-image-picker";
 import { AppScreenHeader } from "../../src/components/AppScreenHeader";
 import { DogfoodAnnotateModal, type DogfoodAnnotateResult } from "../../src/components/DogfoodAnnotateModal";
 import { classifyStreamEnd, planStreamRecovery } from "../../src/lib/taskStreamRecovery";
+import { connectionManager } from "../../src/lib/connectionManager";
 import { useColors } from "../../src/context/ThemeContext";
 import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
@@ -184,7 +185,8 @@ export default function DogfoodScreen() {
       const res = await dispatchDogfoodItems({
         items: toSend.map((it) => ({ ...it, status: "sent", mode })),
         mode,
-        deviceId: activeDevice.id,
+        // Runner/render split: dogfood coding turns run on the AI runner box.
+        deviceId: connectionManager.roleDeviceId("runner") || activeDevice.id,
         deviceName: activeDevice.name,
         repoDir,
         basePrompt: config?.prompt ?? "",
