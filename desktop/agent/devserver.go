@@ -1428,6 +1428,42 @@ func (m *DevServerManager) EmitLog(line string) {
 	})
 }
 
+// EmitCapabilityGap puts a NAMED, ROUTED capability gap on /dev/events.
+//
+// THE PROBLEM THIS SOLVES. The gap object reaches every surface today only
+// from the dev-SERVER lane: the /dev/start 412 body, this SSE stream's start
+// failure, and /dev/status. Sibling lanes that refuse for exactly the same
+// reason — /dev/build-native's "missing required tools on this machine",
+// most of all — answer an HTTP body that no shipped client decorates, because
+// each client's transport only lifts `capabilityGap` off the /dev/start 412
+// (mobile/src/lib/quic.ts, web/lib/agent-client.ts). A correct gap in a body
+// nobody parses is a signal with no consumer, which the audit's rule 11 counts
+// as not shipped.
+//
+// /dev/events is the channel every preview surface is ALREADY subscribed to,
+// and all four renderers already call capabilityGapFromDevEvent on each frame
+// (apps.tsx, DevPreview.tsx, PreviewPane.tsx, RuntimeLabView.tsx). Emitting
+// here therefore needs no client change to land on all of them.
+//
+// Transient by design: an SSE frame cannot go stale the way a /dev/status
+// field can, so a gap raised by a failed build cannot keep accusing a machine
+// that has since been fixed.
+func (m *DevServerManager) EmitCapabilityGap(framework, message string, gap *CapabilityGap) {
+	if gap == nil {
+		return
+	}
+	if strings.TrimSpace(message) == "" {
+		message = gap.Summary
+	}
+	m.emit(DevServerEvent{
+		Type:      "error",
+		Framework: framework,
+		Message:   message,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Gap:       gap,
+	})
+}
+
 // EmitReloadDone emits an explicit terminal event that
 // /dev/reload-app SSE consumers (feedback-overlay reload chip)
 // can use to clear their progress spinner without waiting on a

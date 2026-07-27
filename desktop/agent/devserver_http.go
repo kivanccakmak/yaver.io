@@ -3301,14 +3301,18 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 		//
 		// Status stays 500: shipped clients parse the body, not the code, and
 		// changing it would be a behaviour change dressed as a fix.
-		jsonReply(w, http.StatusInternalServerError, devStartGapRefusal(
-			DetectCapabilityGap(CapabilityGapContext{
-				Framework:    "react-native",
-				WorkDir:      workDir,
-				MissingTools: prep.MissingTools,
-			}),
-			prep.MissingTools,
-		))
+		gap := DetectCapabilityGap(CapabilityGapContext{
+			Framework:    "react-native",
+			WorkDir:      workDir,
+			MissingTools: prep.MissingTools,
+		})
+		// AND on /dev/events — the channel every preview surface is already
+		// subscribed to and already parses with capabilityGapFromDevEvent.
+		// The body alone would be a signal with no consumer: each client's
+		// transport lifts `capabilityGap` only off the /dev/start 412, so a
+		// correct object in a build-native body renders nowhere.
+		s.devServerMgr.EmitCapabilityGap("react-native", errMsg, gap)
+		jsonReply(w, http.StatusInternalServerError, devStartGapRefusal(gap, prep.MissingTools))
 		return
 	}
 
@@ -3334,14 +3338,13 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 			// degrades to exactly what it was: {error: errMsg}. Never
 			// advertise a remedy the product refuses.
 			if pm := strings.TrimSpace(prep.PackageManager); pm != "" && installableViaAgent(pm) {
-				jsonReply(w, http.StatusInternalServerError, devStartGapRefusal(
-					DetectCapabilityGap(CapabilityGapContext{
-						Framework:    "react-native",
-						WorkDir:      workDir,
-						MissingTools: []string{pm},
-					}),
-					[]string{pm},
-				))
+				gap := DetectCapabilityGap(CapabilityGapContext{
+					Framework:    "react-native",
+					WorkDir:      workDir,
+					MissingTools: []string{pm},
+				})
+				s.devServerMgr.EmitCapabilityGap("react-native", errMsg, gap)
+				jsonReply(w, http.StatusInternalServerError, devStartGapRefusal(gap, []string{pm}))
 				return
 			}
 			jsonReply(w, http.StatusInternalServerError, map[string]string{"error": errMsg})
