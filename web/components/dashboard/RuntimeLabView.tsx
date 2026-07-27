@@ -368,6 +368,16 @@ function taskOutputLines(task: Pick<Task, "output" | "resultText" | "status" | "
   return [];
 }
 
+function taskTimeLabel(task: Pick<Task, "createdAt" | "updatedAt">): string {
+  const ts = task.updatedAt || task.createdAt;
+  if (!ts) return "";
+  const deltaMs = Date.now() - ts;
+  if (deltaMs < 60_000) return "now";
+  if (deltaMs < 3_600_000) return `${Math.max(1, Math.round(deltaMs / 60_000))}m`;
+  if (deltaMs < 86_400_000) return `${Math.max(1, Math.round(deltaMs / 3_600_000))}h`;
+  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 async function waitForDevPreviewUrl(bundleUrl?: string): Promise<{ url: string; note: string }> {
   const signedUrl = signedBundlePreviewUrl(bundleUrl);
   if (signedUrl) return { url: signedUrl, note: "Web UI bundle ready." };
@@ -557,11 +567,13 @@ export default function RuntimeLabView({
   const [sending, setSending] = useState(false);
   const taskStreamStopRef = useRef<(() => void) | null>(null);
   const taskPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recognitionRef = useRef<any>(null);
   const runtimeConsoleRef = useRef<HTMLPreElement | null>(null);
   const taskConsoleRef = useRef<HTMLPreElement | null>(null);
   const mobilePreviewFrameRef = useRef<HTMLIFrameElement | null>(null);
   const [runtimeConsolePinned, setRuntimeConsolePinned] = useState(true);
   const [taskConsolePinned, setTaskConsolePinned] = useState(true);
+  const [recentTasks, setRecentTasks] = useState<Task[]>([]);
   const [activeTaskStream, setActiveTaskStream] = useState<{
     id: string;
     title: string;
@@ -580,6 +592,16 @@ export default function RuntimeLabView({
   const [webPreviewPanelOpen, setWebPreviewPanelOpen] = useState(false);
   const [runtimeControlsOpen, setRuntimeControlsOpen] = useState(false);
   const [vibingSettingsOpen, setVibingSettingsOpen] = useState(false);
+  const [runtimeConsoleOpen, setRuntimeConsoleOpen] = useState(true);
+  const [runtimeConsoleCopied, setRuntimeConsoleCopied] = useState(false);
+  const [sttAvailable] = useState(
+    () => typeof window !== "undefined" && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition),
+  );
+  const [ttsAvailable] = useState(
+    () => typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window,
+  );
+  const [dictating, setDictating] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
   const [webPreviewFrameReady, setWebPreviewFrameReady] = useState(false);
   const [webPreviewBusy, setWebPreviewBusy] = useState(false);
   const [webPreviewNote, setWebPreviewNote] = useState<string | null>(null);
@@ -612,11 +634,25 @@ export default function RuntimeLabView({
 
   useEffect(() => {
     if (runtimeConsolePinned) scrollToBottom(runtimeConsoleRef.current);
-  }, [log, runtimeConsolePinned, scrollToBottom]);
+  }, [log, runtimeConsoleOpen, runtimeConsolePinned, scrollToBottom]);
 
   useEffect(() => {
     if (taskConsolePinned) scrollToBottom(taskConsoleRef.current);
   }, [activeTaskStream?.lines, taskConsolePinned, scrollToBottom]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const rows = await agentClient.listTasks(8).catch(() => []);
+      if (!cancelled) setRecentTasks(rows);
+    };
+    void refresh();
+    const id = window.setInterval(() => void refresh(), 6000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
 
   useEffect(() => {
     if (selectedProjectIsMobile) setMobilePreviewMode("phone");
@@ -629,7 +665,12 @@ export default function RuntimeLabView({
     taskPollRef.current = null;
   }, []);
 
-  useEffect(() => () => stopActiveTaskStream(), [stopActiveTaskStream]);
+  useEffect(() => () => {
+    stopActiveTaskStream();
+    try { recognitionRef.current?.stop?.(); } catch {}
+    recognitionRef.current = null;
+    try { window.speechSynthesis?.cancel(); } catch {}
+  }, [stopActiveTaskStream]);
 
   const loadProjects = useCallback(async () => {
     setError(null);
@@ -831,12 +872,143 @@ export default function RuntimeLabView({
     appendLog(`runner set: ${selectedRunner}${selectedModel ? ` ${selectedModel}` : ""}`);
   }, [appendLog, connectedDevice?.id, selectedModel, selectedRunner, setPrimaryRunner]);
 
+  const attachTaskSession = useCallback((task: Task) => {
+    stopActiveTaskStream();
+    setActiveTaskStream({ id: task.id, title: task.title, status: task.status, lines: taskOutputLines(task) });
+    setRecentTasks((prev) => [task, ...prev.filter((row) => row.id !== task.id)].slice(0, 8));
+    if (task.status !== "queued" && task.status !== "running") return;
+    taskStreamStopRef.current = agentClient.streamTaskOutput(task.id, (line) => {
+      const trimmed = String(line || "").trimEnd();
+      if (!trimmed) return;
+      setActiveTaskStream((prev) => {
+        if (!prev || prev.id !== task.id) return prev;
+        const lines = [...prev.lines, trimmed];
+        return { ...prev, status: "running", lines: lines.slice(-240) };
+      });
+    });
+    taskPollRef.current = setInterval(() => {
+      void agentClient.getTask(task.id).then((fresh) => {
+        setActiveTaskStream((prev) => {
+          if (!prev || prev.id !== task.id) return prev;
+          const lines = taskOutputLines(fresh, prev.lines);
+          return { ...prev, status: fresh.status, lines };
+        });
+        setRecentTasks((prev) => [fresh, ...prev.filter((row) => row.id !== fresh.id)].slice(0, 8));
+        if (fresh.status !== "queued" && fresh.status !== "running") stopActiveTaskStream();
+      }).catch(() => {});
+    }, 2000);
+  }, [stopActiveTaskStream]);
+
+  const openTaskHistoryItem = useCallback(async (taskId: string) => {
+    if (!taskId) return;
+    try {
+      const task = await agentClient.getTask(taskId);
+      attachTaskSession(task);
+    } catch (err) {
+      appendLog(`task history failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [appendLog, attachTaskSession]);
+
+  const closeChatSession = useCallback(() => {
+    stopActiveTaskStream();
+    setActiveTaskStream(null);
+    setTaskConsolePinned(true);
+  }, [stopActiveTaskStream]);
+
+  const deleteChatSession = useCallback(async () => {
+    if (!activeTaskStream?.id) return;
+    const confirmed = typeof window === "undefined" || window.confirm(`Delete chat session "${activeTaskStream.title}"?`);
+    if (!confirmed) return;
+    const taskId = activeTaskStream.id;
+    try {
+      stopActiveTaskStream();
+      await agentClient.deleteTask(taskId);
+      setActiveTaskStream(null);
+      setRecentTasks((prev) => prev.filter((task) => task.id !== taskId));
+      appendLog(`deleted chat session ${taskId}`);
+    } catch (err) {
+      appendLog(`delete chat session failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [activeTaskStream?.id, activeTaskStream?.title, appendLog, stopActiveTaskStream]);
+
+  const startNewChatSession = useCallback(() => {
+    closeChatSession();
+    setComposer("");
+  }, [closeChatSession]);
+
+  const toggleDictation = useCallback(() => {
+    if (!sttAvailable) return;
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch {}
+      recognitionRef.current = null;
+      setDictating(false);
+      return;
+    }
+    const Ctor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const rec = new Ctor();
+    rec.lang = navigator.language || "en-US";
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    rec.onresult = (ev: any) => {
+      const text = String(ev.results?.[0]?.[0]?.transcript || "").trim();
+      if (!text) return;
+      setComposer((prev) => {
+        const base = prev.trimEnd();
+        return base ? `${base} ${text}` : text;
+      });
+    };
+    rec.onend = () => {
+      recognitionRef.current = null;
+      setDictating(false);
+    };
+    rec.onerror = () => {
+      recognitionRef.current = null;
+      setDictating(false);
+    };
+    recognitionRef.current = rec;
+    setDictating(true);
+    try {
+      rec.start();
+    } catch {
+      recognitionRef.current = null;
+      setDictating(false);
+    }
+  }, [sttAvailable]);
+
+  const toggleSpeakSession = useCallback(() => {
+    if (!ttsAvailable) return;
+    if (speaking) {
+      window.speechSynthesis.cancel();
+      setSpeaking(false);
+      return;
+    }
+    const lines = activeTaskStream?.lines || [];
+    const text = (lines.length ? lines.slice(-40).join("\n") : activeTaskStream?.title || "").trim();
+    if (!text) return;
+    const utterance = new SpeechSynthesisUtterance(text.slice(-3500));
+    utterance.lang = navigator.language || "en-US";
+    utterance.rate = 1;
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+    window.speechSynthesis.cancel();
+    setSpeaking(true);
+    window.speechSynthesis.speak(utterance);
+  }, [activeTaskStream?.lines, activeTaskStream?.title, speaking, ttsAvailable]);
+
   const sendPrompt = useCallback(async () => {
     const prompt = composer.trim();
     if (!prompt || sending) return;
     setSending(true);
     try {
-      stopActiveTaskStream();
+      const existingTaskId = activeTaskStream?.id;
+      if (existingTaskId) {
+        await agentClient.continueTask(existingTaskId, prompt);
+        const fresh = await agentClient.getTask(existingTaskId);
+        attachTaskSession(fresh);
+        appendLog(`continued chat session ${existingTaskId}`);
+        setComposer("");
+        return;
+      }
       const effectiveModel = safeModelForRunner(selectedRunner, selectedModel, availableModels);
       if (selectedModel && selectedRunner && effectiveModel !== selectedModel) {
         appendLog(`model corrected for ${selectedRunner}: ${selectedModel} -> ${effectiveModel || "runner default"}`);
@@ -849,34 +1021,26 @@ export default function RuntimeLabView({
         projectName: selectedProject?.name,
         workDir: selectedProject?.path,
       });
-      setActiveTaskStream({ id: task.id, title: task.title, status: task.status, lines: taskOutputLines(task) });
+      attachTaskSession(task);
       appendLog(`task ${task.id} started with ${selectedRunner || "default runner"}${effectiveModel ? ` ${effectiveModel}` : ""}`);
-      taskStreamStopRef.current = agentClient.streamTaskOutput(task.id, (line) => {
-        const trimmed = String(line || "").trimEnd();
-        if (!trimmed) return;
-        setActiveTaskStream((prev) => {
-          if (!prev || prev.id !== task.id) return prev;
-          const lines = [...prev.lines, trimmed];
-          return { ...prev, status: "running", lines: lines.slice(-240) };
-        });
-      });
-      taskPollRef.current = setInterval(() => {
-        void agentClient.getTask(task.id).then((fresh) => {
-          setActiveTaskStream((prev) => {
-            if (!prev || prev.id !== task.id) return prev;
-            const lines = taskOutputLines(fresh, prev.lines);
-            return { ...prev, status: fresh.status, lines };
-          });
-          if (fresh.status !== "queued" && fresh.status !== "running") stopActiveTaskStream();
-        }).catch(() => {});
-      }, 2000);
       setComposer("");
     } catch (err) {
       appendLog(`task failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSending(false);
     }
-  }, [appendLog, availableModels, composer, selectedModel, selectedProject, selectedRunner, sending, stopActiveTaskStream]);
+  }, [activeTaskStream?.id, appendLog, attachTaskSession, availableModels, composer, selectedModel, selectedProject, selectedRunner, sending]);
+
+  const copyRuntimeConsole = useCallback(async () => {
+    const text = log.length ? log.join("\n") : "No runtime operations yet.";
+    try {
+      await navigator.clipboard.writeText(text);
+      setRuntimeConsoleCopied(true);
+      window.setTimeout(() => setRuntimeConsoleCopied(false), 1400);
+    } catch (err) {
+      appendLog(`copy runtime console failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [appendLog, log]);
 
   useEffect(() => {
     void loadProjects();
@@ -962,6 +1126,7 @@ export default function RuntimeLabView({
     if (!selectedProject) return;
     setWebPreviewPanelOpen(true);
     setRuntimeControlsOpen(false);
+    setRuntimeConsoleOpen(true);
     setWebPreviewUrl(null);
     setWebPreviewFrameReady(false);
     setWebPreviewBusy(true);
@@ -1047,6 +1212,7 @@ export default function RuntimeLabView({
     const framework = browserPreviewFrameworkForProject(selectedProject);
     const staticBundleFramework = ["expo", "react-native"].includes(framework);
     appendLog(`${kind} reload ${selectedProject.name}`);
+    setRuntimeConsoleOpen(true);
     setError(null);
     if (staticBundleFramework) {
       setWebPreviewBusy(true);
@@ -1091,6 +1257,7 @@ export default function RuntimeLabView({
   const closeWebPreview = useCallback(() => {
     setWebPreviewPanelOpen(false);
     setRuntimeControlsOpen(false);
+    setRuntimeConsoleOpen(true);
     setWebPreviewUrl(null);
     setWebPreviewFrameReady(false);
     setWebPreviewNote(null);
@@ -1126,6 +1293,10 @@ export default function RuntimeLabView({
     }
     setWebPreviewFrameReady(false);
   }, [webPreviewUrl]);
+
+  useEffect(() => {
+    if (webPreviewPanelOpen && webPreviewFrameReady) setRuntimeConsoleOpen(false);
+  }, [webPreviewFrameReady, webPreviewPanelOpen]);
 
   useEffect(() => {
     if (!intent || intent.kind !== "runtime" || projects.length === 0) return;
@@ -1551,7 +1722,7 @@ export default function RuntimeLabView({
         ) : null}
       </div>
 
-      <aside className="flex min-h-0 flex-col gap-3 overflow-y-auto border-t border-[#d7dce3] pt-3 dark:border-[#2a3039] xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
+      <aside className="flex min-h-0 flex-col gap-3 overflow-hidden border-t border-[#d7dce3] pt-3 dark:border-[#2a3039] xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
         <div className="flex min-h-[420px] flex-1 flex-col overflow-hidden rounded-md border border-[#d7dce3] bg-white shadow-sm dark:border-[#2a3039] dark:bg-[#141820]">
           <div className="border-b border-[#e4e7ec] px-4 py-3 dark:border-[#242b35]">
             <div className="flex items-start justify-between gap-3">
@@ -1573,17 +1744,80 @@ export default function RuntimeLabView({
                 {effectiveChatModel || "runner default"}
               </span>
             </div>
+            <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={startNewChatSession}
+                disabled={!activeTaskStream}
+                className="rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 text-[10px] font-semibold text-[#475467] disabled:cursor-not-allowed disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+              >
+                New session
+              </button>
+              {activeTaskStream ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={closeChatSession}
+                    className="rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 text-[10px] font-semibold text-[#475467] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void deleteChatSession()}
+                    className="rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[10px] font-semibold text-rose-700 dark:text-rose-200"
+                  >
+                    Delete
+                  </button>
+                  <span className="min-w-0 truncate font-mono text-[10px] text-[#667085] dark:text-[#9aa3af]">
+                    session {activeTaskStream.id}
+                  </span>
+                </>
+              ) : (
+                <span className="text-[10px] text-[#667085] dark:text-[#9aa3af]">
+                  next send starts one persistent session
+                </span>
+              )}
+            </div>
+            {recentTasks.length ? (
+              <div className="mt-3 flex min-w-0 items-center gap-1.5 overflow-x-auto pb-0.5">
+                <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">
+                  Sessions
+                </span>
+                {recentTasks.slice(0, 5).map((task) => {
+                  const selected = activeTaskStream?.id === task.id;
+                  return (
+                    <button
+                      key={task.id}
+                      type="button"
+                      onClick={() => void openTaskHistoryItem(task.id)}
+                      title={task.title}
+                      className={`min-w-[92px] max-w-[132px] shrink-0 rounded-md border px-2 py-1 text-left text-[10px] ${
+                        selected
+                          ? "border-[#7c5cff]/50 bg-[#7c5cff]/10 text-[#5b3ee4] dark:text-[#c9bfff]"
+                          : "border-[#d7dce3] bg-[#f8fafc] text-[#667085] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#9aa3af] dark:hover:text-[#e6e8ec]"
+                      }`}
+                    >
+                      <span className="block truncate font-semibold">{task.title || task.id}</span>
+                      <span className="mt-0.5 block truncate font-mono opacity-80">
+                        {task.status} · {taskTimeLabel(task)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
           <div className="flex min-h-0 flex-1 flex-col bg-[#f8fafc] dark:bg-[#0f1218]">
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
           {activeTaskStream ? (
-                <div className="space-y-3">
+                <div className="flex h-full min-h-0 flex-col space-y-3">
                   <div className="flex justify-end">
                     <div className="max-w-[88%] rounded-2xl rounded-br-md bg-[#7c5cff] px-3 py-2 text-sm leading-5 text-white shadow-sm">
                       {activeTaskStream.title}
                     </div>
                   </div>
-                  <div className="rounded-2xl rounded-bl-md border border-[#e4e7ec] bg-white shadow-sm dark:border-[#242b35] dark:bg-[#171b23]">
+                  <div className="flex min-h-0 flex-1 flex-col rounded-2xl rounded-bl-md border border-[#e4e7ec] bg-white shadow-sm dark:border-[#242b35] dark:bg-[#171b23]">
                     <div className="flex items-center justify-between gap-2 border-b border-[#eef1f5] px-3 py-2 dark:border-[#242b35]">
                       <div className="min-w-0 truncate text-xs font-semibold text-[#344054] dark:text-[#d7dce3]">
                         {selectedRunnerName}
@@ -1595,7 +1829,7 @@ export default function RuntimeLabView({
                     <pre
                       ref={taskConsoleRef}
                       onScroll={(event) => setTaskConsolePinned(isNearBottom(event.currentTarget))}
-                      className="max-h-[360px] overflow-auto whitespace-pre-wrap break-words p-3 text-[11px] leading-5 text-[#344054] dark:text-[#d5dae1]"
+                      className="min-h-[420px] flex-1 overflow-auto whitespace-pre-wrap break-words p-3 text-[11px] leading-5 text-[#344054] dark:text-[#d5dae1]"
                     >
                       {activeTaskStream.lines.length ? activeTaskStream.lines.join("\n") : "Waiting for runner output..."}
                     </pre>
@@ -1644,6 +1878,57 @@ export default function RuntimeLabView({
                   placeholder={selectedProject ? `Ask ${selectedRunner || "the runner"} to change ${selectedProject.name}` : "Pick a project first"}
                   className="max-h-40 min-h-[76px] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-5 text-[#1f2933] outline-none placeholder:text-[#98a2b3] dark:text-[#e6e8ec] dark:placeholder:text-[#667085]"
                 />
+                <div className="flex shrink-0 flex-col gap-1">
+                  <button
+                    type="button"
+                    onClick={toggleDictation}
+                    disabled={!sttAvailable}
+                    title={sttAvailable ? "Dictate prompt" : "Speech recognition is not available in this browser"}
+                    aria-label={dictating ? "Stop dictation" : "Dictate prompt"}
+                    className={`rounded-md border p-2 disabled:cursor-not-allowed disabled:opacity-40 ${
+                      dictating
+                        ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-700 dark:text-emerald-200"
+                        : "border-[#d7dce3] bg-white text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                    }`}
+                  >
+                    {dictating ? (
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <rect x="6" y="6" width="12" height="12" rx="1.5" />
+                      </svg>
+                    ) : (
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                        <line x1="12" y1="19" x2="12" y2="22" />
+                      </svg>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={toggleSpeakSession}
+                    disabled={!ttsAvailable || !activeTaskStream}
+                    title={ttsAvailable ? "Read session output" : "Text to speech is not available in this browser"}
+                    aria-label={speaking ? "Stop speaking" : "Read session output"}
+                    className={`rounded-md border p-2 disabled:cursor-not-allowed disabled:opacity-40 ${
+                      speaking
+                        ? "border-sky-500/50 bg-sky-500/15 text-sky-700 dark:text-sky-200"
+                        : "border-[#d7dce3] bg-white text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                    }`}
+                  >
+                    {speaking ? (
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <rect x="5" y="6" width="5" height="12" rx="1" />
+                        <rect x="14" y="6" width="5" height="12" rx="1" />
+                      </svg>
+                    ) : (
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M11 5 6 9H2v6h4l5 4V5Z" />
+                        <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+                        <path d="M19 5a9 9 0 0 1 0 14" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
                 <button
                   disabled={!composer.trim() || sending}
                   onClick={() => void sendPrompt()}
@@ -1656,12 +1941,43 @@ export default function RuntimeLabView({
           </div>
         </div>
         <div className="min-w-0 rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#141820]">
-          <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+          <div className={`${runtimeConsoleOpen ? "mb-2" : ""} flex min-w-0 items-center justify-between gap-2`}>
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Runtime Console</div>
               <div className="mt-0.5 text-[11px] text-[#667085] dark:text-[#9aa3af]">{log.length} events</div>
             </div>
-            {!runtimeConsolePinned ? (
+            <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => void copyRuntimeConsole()}
+              title="Copy runtime console"
+              aria-label="Copy runtime console"
+              className="rounded-md border border-[#d7dce3] bg-white p-1.5 text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+            >
+              {runtimeConsoleCopied ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="9" y="9" width="13" height="13" rx="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+              )}
+            </button>
+            {!runtimeConsoleOpen ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setRuntimeConsoleOpen(true);
+                  setRuntimeConsolePinned(true);
+                  window.setTimeout(() => scrollToBottom(runtimeConsoleRef.current), 0);
+                }}
+                className="rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+              >
+                Expand
+              </button>
+            ) : !runtimeConsolePinned ? (
               <button
                 type="button"
                 onClick={() => {
@@ -1673,17 +1989,20 @@ export default function RuntimeLabView({
                 Follow logs
               </button>
             ) : null}
+            </div>
           </div>
           {/* whitespace-pre + overflow-x-auto: long unbroken lines (file
               paths, URLs from expo export) scroll INSIDE this box; they
               must never push the pane wider. Ancestors carry min-w-0. */}
-          <pre
-            ref={runtimeConsoleRef}
-            onScroll={(event) => setRuntimeConsolePinned(isNearBottom(event.currentTarget))}
-            className="h-52 min-w-0 overflow-y-auto overflow-x-auto whitespace-pre rounded-md border border-[#1f2933] bg-[#0b0d11] p-3 text-[11px] leading-5 text-[#d5dae1]"
-          >
-            {log.length ? log.join("\n") : "No runtime operations yet."}
-          </pre>
+          {runtimeConsoleOpen ? (
+            <pre
+              ref={runtimeConsoleRef}
+              onScroll={(event) => setRuntimeConsolePinned(isNearBottom(event.currentTarget))}
+              className="h-52 min-w-0 overflow-y-auto overflow-x-auto whitespace-pre rounded-md border border-[#1f2933] bg-[#0b0d11] p-3 text-[11px] leading-5 text-[#d5dae1]"
+            >
+              {log.length ? log.join("\n") : "No runtime operations yet."}
+            </pre>
+          ) : null}
         </div>
         <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
           <div className="mb-2 flex items-center justify-between gap-3">
@@ -1809,7 +2128,21 @@ export default function RuntimeLabView({
                       Waiting on localhost:{runnerAuthStatus.callbackPort}. If the auth tab ends on a localhost callback page, paste its address below.
                     </div>
                   ) : null}
-                  {runnerAuthStatus.code ? <div className="mt-1 font-mono">Code: {runnerAuthStatus.code}</div> : null}
+                  {runnerAuthStatus.code ? (
+                    /* Codex/kimi device-auth code — the ONE thing the user
+                       must carry to the provider tab. Plain text with no
+                       copy affordance forced hand-selection of XXXX-XXXX. */
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="font-mono">Code: {runnerAuthStatus.code}</span>
+                      <button
+                        type="button"
+                        onClick={() => { void navigator.clipboard?.writeText(runnerAuthStatus.code || ""); }}
+                        className="rounded border border-[#d7dce3] px-2 py-0.5 text-[10px] font-semibold text-[#475467] dark:border-[#2a3039] dark:text-[#d7dce3]"
+                      >
+                        Copy code
+                      </button>
+                    </div>
+                  ) : null}
                   {runnerAuthStatus.openUrl ? (
                     <div className="mt-1 space-y-1">
                       <a href={runnerAuthStatus.openUrl} target="_blank" rel="noreferrer" className="inline-block text-sky-700 underline dark:text-sky-300">

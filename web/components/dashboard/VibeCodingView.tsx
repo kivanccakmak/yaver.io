@@ -1989,7 +1989,21 @@ export default function VibeCodingView({
                             return line ? <div className="mt-1 text-surface-500">{line}</div> : null;
                           })()
                         : null}
-                      {runnerAuthStatus.code ? <div className="mt-1 break-all font-mono text-surface-200">Code: {runnerAuthStatus.code}</div> : null}
+                      {runnerAuthStatus.code ? (
+                        /* Codex/kimi device-auth code — give it one-tap copy
+                           like the URL below; hand-selecting XXXX-XXXX from
+                           a 10px mono line was the only option before. */
+                        <div className="mt-1 flex items-center gap-2">
+                          <span className="break-all font-mono text-surface-200">Code: {runnerAuthStatus.code}</span>
+                          <button
+                            type="button"
+                            onClick={() => { void navigator.clipboard?.writeText(runnerAuthStatus.code || ""); }}
+                            className="shrink-0 rounded-lg border border-surface-700 bg-surface-950 px-2 py-1 text-[10px] font-semibold text-surface-200 hover:border-surface-600"
+                          >
+                            Copy code
+                          </button>
+                        </div>
+                      ) : null}
                       {/* The CLI prints "If the browser didn't open, visit:
                           <url>" as ONE line. Split at the first URL so the
                           prose reads normally and the URL sits on its own
