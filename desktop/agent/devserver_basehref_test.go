@@ -87,6 +87,26 @@ func TestModifyResponseOnlyTouchesHTML(t *testing.T) {
 	if string(got) != jsBody {
 		t.Fatalf("JS body was modified — the rewrite must be HTML-only:\n%s", got)
 	}
+	// The one header EVERY dev-proxied response must carry, bundles included:
+	// Metro serves changed bundles under the same URL, so a cached 200 makes
+	// every edit→reload cycle serve a stale preview that looks healthy
+	// (measured 2026-07-27: direct fetch fresh, Chromium cache stale).
+	if resp.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("dev-proxied response missing Cache-Control: no-store (got %q)", resp.Header.Get("Cache-Control"))
+	}
+}
+
+func TestModifyResponseSetsNoStoreOnHTMLToo(t *testing.T) {
+	resp := &http.Response{
+		Header: http.Header{"Content-Type": []string{"text/html"}},
+		Body:   io.NopCloser(strings.NewReader(`<head></head>`)),
+	}
+	if err := rewriteDevIndexBaseHref(resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("HTML dev response missing Cache-Control: no-store (got %q)", resp.Header.Get("Cache-Control"))
+	}
 }
 
 func TestModifyResponseRewritesHTMLBody(t *testing.T) {

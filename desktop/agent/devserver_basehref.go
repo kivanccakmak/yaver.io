@@ -179,6 +179,13 @@ func rewriteDevIndexBaseHref(resp *http.Response) error {
 	if resp == nil || resp.Body == nil {
 		return nil
 	}
+	// Dev previews must never be HTTP-cached: Metro serves CHANGED bundles
+	// under the SAME URL, so a cached 200 turns every edit→reload cycle into
+	// a stale preview that looks healthy. Measured 2026-07-27: after a task's
+	// edit, a direct fetch returned the new bundle while Chromium's cache
+	// kept re-serving the old one through page reloads. Setting no-store on
+	// the proxy fixes every surface at once (web iframe, WebView, e2e).
+	resp.Header.Set("Cache-Control", "no-store")
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	if !strings.Contains(ct, "text/html") {
 		return nil
