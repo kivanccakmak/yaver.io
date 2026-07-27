@@ -16,6 +16,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -123,5 +124,75 @@ func TestRunnerBrowserAuthCancelDoesNotClobberTerminal(t *testing.T) {
 	}
 	if st.Status != "cancelled" || st.Detail == "" || st.CompletedAt == 0 {
 		t.Fatalf("cancel: got status=%q detail=%q completedAt=%d", st.Status, st.Detail, st.CompletedAt)
+	}
+}
+
+// Audit CX5: a codex hard failure rendered the Go-side "exit status 1" and
+// nothing else — the CLI almost always said WHY on its way down, and those
+// words were dropped. Same principle as the kimi Login-failed verbatim rule:
+// the CLI's own words must survive into the session error.
+func TestRunnerBrowserAuthExitQuotesCLIWords(t *testing.T) {
+	st := &runnerBrowserAuthSession{
+		Status: "awaiting_browser",
+		Runner: "codex",
+		recentOutput: []string{
+			"Open this URL to sign in: https://auth.openai.com/oauth/authorize?x=y",
+			"XKCD-4217",
+			"ERROR: device authorization failed: access_denied",
+		},
+	}
+	applyRunnerBrowserAuthExit(st, errors.New("exit status 1"), false)
+	if st.Status != "failed" {
+		t.Fatalf("want failed, got %q", st.Status)
+	}
+	if !strings.Contains(st.Error, "exit status 1") {
+		t.Errorf("exit code lost: %q", st.Error)
+	}
+	if !strings.Contains(st.Error, "access_denied") {
+		t.Errorf("CLI's own words lost from error: %q", st.Error)
+	}
+	if strings.Contains(st.Error, "https://") {
+		t.Errorf("sign-in URL is flow narration, not a failure reason: %q", st.Error)
+	}
+
+	// No captured output → the bare exit error stands (the shape the
+	// pre-existing TestRunnerBrowserAuthExitNormalTransitions pins).
+	st = &runnerBrowserAuthSession{Status: "awaiting_browser", Runner: "codex"}
+	applyRunnerBrowserAuthExit(st, errors.New("exit status 2"), false)
+	if st.Error != "exit status 2" {
+		t.Errorf("without output the error must stay bare, got %q", st.Error)
+	}
+}
+
+func TestLastMeaningfulRunnerAuthOutput(t *testing.T) {
+	cases := []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{"empty", nil, ""},
+		{"skipsURLOnly", []string{"error: token exchange failed", "https://auth.openai.com/device"}, "error: token exchange failed"},
+		{"skipsDeviceCodeOnly", []string{"Login failed: 403 from token endpoint", "ABCD-1234"}, "Login failed: 403 from token endpoint"},
+		{"skipsBlanks", []string{"real reason", "", "   "}, "real reason"},
+		{"allNoise", []string{"https://example.com/auth", "WXYZ-0987", ""}, ""},
+		{"lastWins", []string{"first error", "second error"}, "second error"},
+	}
+	for _, tc := range cases {
+		if got := lastMeaningfulRunnerAuthOutput(tc.lines); got != tc.want {
+			t.Errorf("%s: got %q want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestAppendRunnerAuthRecentOutputCaps(t *testing.T) {
+	var lines []string
+	for i := 0; i < 20; i++ {
+		lines = appendRunnerAuthRecentOutput(lines, fmt.Sprintf("line-%d", i))
+	}
+	if len(lines) > runnerAuthRecentOutputMax {
+		t.Fatalf("recent output must stay bounded, got %d lines", len(lines))
+	}
+	if lines[len(lines)-1] != "line-19" {
+		t.Fatalf("must keep the TAIL, got %q", lines[len(lines)-1])
 	}
 }

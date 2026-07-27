@@ -66,6 +66,12 @@ type runnerBrowserAuthSession struct {
 	// "starting" means the CLI has said nothing at all (the silence
 	// watchdog's territory). remained.md P0 contract.
 	LastOutputAt int64 `json:"lastOutputAt,omitempty"`
+	// recentOutput is the tail of the CLI's sanitized stdout/stderr lines,
+	// kept so a hard exit can quote the CLI's own words instead of the
+	// bare Go "exit status N" (audit CX5 — same verbatim principle as the
+	// kimi Login-failed rule). Unexported on purpose: it never serializes
+	// into snapshots; only the exit transition reads it.
+	recentOutput []string
 }
 
 type runnerBrowserAuthSessionState struct {
@@ -250,6 +256,42 @@ func runnerBrowserAuthTerminal(status string) bool {
 	return false
 }
 
+// runnerAuthRecentOutputMax bounds the per-session output tail. Five lines is
+// enough to skip past a trailing URL/device-code and still find the CLI's
+// actual complaint; the pasted token never appears here (it goes to stdin,
+// which is never scanned).
+const runnerAuthRecentOutputMax = 5
+
+// appendRunnerAuthRecentOutput keeps the LAST runnerAuthRecentOutputMax lines.
+func appendRunnerAuthRecentOutput(lines []string, line string) []string {
+	lines = append(lines, line)
+	if len(lines) > runnerAuthRecentOutputMax {
+		lines = lines[len(lines)-runnerAuthRecentOutputMax:]
+	}
+	return lines
+}
+
+// lastMeaningfulRunnerAuthOutput returns the most recent CLI line worth
+// quoting in an exit error. Lines carrying the sign-in URL or a bare
+// device code are flow narration, not a failure reason — quoting them
+// would tell the user to re-open the link that already didn't work.
+func lastMeaningfulRunnerAuthOutput(lines []string) string {
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if urlPattern.MatchString(line) {
+			continue
+		}
+		if codexCodePattern.FindString(line) == line {
+			continue
+		}
+		return line
+	}
+	return ""
+}
+
 // applyRunnerBrowserAuthExit encodes the process-exit transition
 // (pure — pinned by runner_auth_browser_state_test.go). The rule that
 // was violated in production: a process exit NEVER downgrades a session
@@ -275,7 +317,15 @@ func applyRunnerBrowserAuthExit(state *runnerBrowserAuthSession, exitErr error, 
 		}
 	default:
 		state.Status = "failed"
-		state.Error = strings.TrimSpace(exitErr.Error())
+		msg := strings.TrimSpace(exitErr.Error())
+		// "exit status 1" alone gives the user nothing to act on. The CLI
+		// almost always said WHY on its way down — carry its last
+		// meaningful line verbatim (audit CX5; the codex twin of the kimi
+		// Login-failed rule).
+		if quote := lastMeaningfulRunnerAuthOutput(state.recentOutput); quote != "" && !strings.Contains(msg, quote) {
+			msg = msg + " — " + state.Runner + " said: " + quote
+		}
+		state.Error = msg
 		if state.Detail == "" {
 			state.Detail = state.Error
 		}
@@ -489,6 +539,7 @@ func scanRunnerBrowserAuthOutput(sess *runnerBrowserAuthSessionState, reader io.
 		sess.update(func(state *runnerBrowserAuthSession) {
 			state.Detail = line
 			state.LastOutputAt = time.Now().UnixMilli()
+			state.recentOutput = appendRunnerAuthRecentOutput(state.recentOutput, line)
 			if state.OpenURL == "" {
 				if url := urlPattern.FindString(line); url != "" {
 					state.OpenURL = strings.TrimRight(url, ".)")
