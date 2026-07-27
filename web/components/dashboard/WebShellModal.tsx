@@ -305,32 +305,46 @@ export default function WebShellModal({
           {state === "ready" ? (
             authSensitiveLaunch && !terminalOpen ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-slate-700 dark:text-surface-300">
-                <div className="rounded-full border border-sky-300 bg-sky-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200">
-                  {gateDecision.kind === "verify" ? "Checking runner auth" : "Runner needs attention"}
+                <div
+                  className={
+                    gateDecision.kind === "verify"
+                      ? "rounded-full border border-sky-300 bg-sky-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200"
+                      : "rounded-full border border-indigo-300 bg-indigo-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200"
+                  }
+                >
+                  {gateDecision.kind === "verify" ? "Confirming login" : `Sign in to ${title}`}
                 </div>
                 <p className="max-w-md text-[13px] leading-5">
                   {gateDecision.kind === "verify"
-                    ? `${gateDecision.detail} · ${gateDecision.elapsedSec}s, ${gateDecision.remainingSec}s left.`
+                    ? `${gateDecision.detail} · ${gateDecision.elapsedSec}s — the terminal opens either way in ${gateDecision.remainingSec}s.`
                     : gateDecision.kind === "sign-in"
                       ? gateDecision.reason
                       : `${title} is not ready on this machine.`}
                 </p>
                 {gateDecision.kind === "verify" ? (
                   <div className="w-full max-w-md rounded-md border border-sky-300 bg-sky-50 p-3 text-left text-[12px] leading-5 text-sky-800 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-100">
-                    <div className="font-semibold">Checking cached runner login</div>
+                    <div className="font-semibold">Reading the cached runner login</div>
                     <div>
-                      Reading <code className="rounded bg-white/70 px-1 py-0.5 font-mono dark:bg-surface-950/70">/runner-auth/status</code>{" "}
-                      instead of spawning a paid runner subprocess.
+                      <code className="rounded bg-white/70 px-1 py-0.5 font-mono dark:bg-surface-950/70">/runner-auth/status</code>{" "}
+                      asks the {title} CLI about its own sign-in. It spends none of your {title} quota — unlike the
+                      probe this replaced, which billed a real generation on every click.
                     </div>
                     <div className="mt-1 opacity-80">
-                      If this does not answer in time, the terminal opens anyway and {title} can show its own prompt.
+                      We only check because the last heartbeat from this box did not carry a confirmed {title} login.
+                      If it does not answer in time the terminal opens anyway and {title} shows its own prompt.
                     </div>
                   </div>
-                ) : null}
+                ) : (
+                  <div className="w-full max-w-md rounded-md border border-indigo-300 bg-indigo-50 p-3 text-left text-[12px] leading-5 text-indigo-800 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-100">
+                    Sign-in runs on {device.alias ? `@${device.alias}` : device.name} itself — the browser OAuth opens
+                    from here and the callback is delivered back to that box.
+                    {launch === "claude" ? " You can also paste a code or token if the browser round-trip is blocked." : ""}
+                  </div>
+                )}
                 {gateDecision.kind === "sign-in" ? (
                   <div className="flex flex-wrap items-center justify-center gap-2">
                     <button
-                      onClick={() => onRunnerNeedsAuth?.(launch)}
+                      onClick={() => { if (isGatedRunner(launch)) onRunnerNeedsAuth?.(launch); }}
                       className="rounded-md border border-indigo-300 bg-indigo-50 px-4 py-2 text-[12px] font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-200 dark:hover:bg-indigo-500/15"
                     >
                       Sign in to {title}
@@ -342,24 +356,45 @@ export default function WebShellModal({
                       Open {title} PTY anyway
                     </button>
                   </div>
-                ) : null}
+                ) : (
+                  <button
+                    onClick={openRunnerPtyAnyway}
+                    className="rounded-md border border-slate-300 bg-white px-4 py-2 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-200 dark:hover:bg-surface-800"
+                  >
+                    Skip the check — open {title} now
+                  </button>
+                )}
               </div>
             ) : (
-              <>
+              <div className="flex h-full flex-col">
+                {/* Failing open is only honest if it SAYS what it could not
+                    confirm. A silent degraded terminal is the same defect as
+                    the spinner it replaced, one step later. */}
                 {degradedBanner ? (
-                  <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[12px] leading-5 text-amber-800 dark:text-amber-100">
-                    {degradedBanner}
+                  <div className="flex shrink-0 items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-left text-[11px] leading-4 text-amber-800 dark:text-amber-100">
+                    <span aria-hidden>⚠️</span>
+                    <span className="min-w-0 flex-1">{degradedBanner}</span>
+                    {isGatedRunner(launch) ? (
+                      <button
+                        onClick={() => onRunnerNeedsAuth?.(launch)}
+                        className="shrink-0 rounded border border-amber-500/50 px-2 py-0.5 font-semibold hover:bg-amber-500/20"
+                      >
+                        Sign in
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
-                <TerminalView
-                  launch={terminalLaunch}
-                  tmuxSession={tmuxSession}
-                  tmuxTaskId={tmuxTaskId}
-                  onRunnerNeedsAuth={onRunnerNeedsAuth}
-                  onCloseTerminal={onClose}
-                  onTmuxClosed={onTmuxClosed}
-                />
-              </>
+                <div className="min-h-0 flex-1">
+                  <TerminalView
+                    launch={terminalLaunch}
+                    tmuxSession={tmuxSession}
+                    tmuxTaskId={tmuxTaskId}
+                    onRunnerNeedsAuth={onRunnerNeedsAuth}
+                    onCloseTerminal={onClose}
+                    onTmuxClosed={onTmuxClosed}
+                  />
+                </div>
+              </div>
             )
           ) : state === "needs-reauth" ? (
             <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center text-slate-700 dark:text-surface-300">
