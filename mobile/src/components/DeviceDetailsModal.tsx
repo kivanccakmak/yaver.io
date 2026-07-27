@@ -18,6 +18,7 @@ import { ScreenlogSection } from "./ScreenlogSection";
 import { NetCaptureSection } from "./NetCaptureSection";
 import { StorageSection } from "./StorageSection";
 import { ProcessMonitorSection } from "./ProcessMonitorSection";
+import { DevicePowerSheet } from "./DevicePowerSheet";
 
 const CODING_AGENTS: ReadonlyArray<{ id: "claude" | "codex" | "opencode"; label: string }> = [
   { id: "claude", label: "Claude Code" },
@@ -582,6 +583,11 @@ function ShellActionRow({ device, onClose }: { device: Device; onClose: () => vo
   const isActive = Boolean(activeDevice && activeDevice.id === device.id && connectionStatus === "connected");
   const sshCommand = sshCommandForDevice(device);
   const directSSHHost = directSSHHostForDevice(device);
+  // Power lives in a sheet, not behind a bare button: what "reboot" means
+  // differs per machine (a container cannot reboot its host at all), so the
+  // action row never claims it can — the sheet asks the box and renders its
+  // answer, then takes a typed confirmation.
+  const [powerOpen, setPowerOpen] = useState(false);
 
   return (
     <View style={{
@@ -660,6 +666,27 @@ function ShellActionRow({ device, onClose }: { device: Device; onClose: () => vo
           📺  Apple TV
         </Text>
       </Pressable>
+      {/* Power — reboot the machine, or restart just the agent when a host
+          reboot is impossible. Owner-only, like every other action here. */}
+      <Pressable
+        onPress={() => setPowerOpen(true)}
+        style={{
+          flexDirection: "row", alignItems: "center", gap: 6,
+          paddingHorizontal: 12, paddingVertical: 8,
+          borderRadius: 8,
+          backgroundColor: "rgba(244,63,94,0.10)",
+          borderWidth: 1,
+          borderColor: "rgba(244,63,94,0.35)",
+        }}
+      >
+        <Text style={{ color: "#fda4af", fontSize: 13, fontWeight: "700" }}>⏻  Power</Text>
+      </Pressable>
+      <DevicePowerSheet
+        visible={powerOpen}
+        deviceId={device.id}
+        deviceName={device.alias || device.name || device.id}
+        onClose={() => setPowerOpen(false)}
+      />
       <Pressable
         onPress={async () => {
           try {

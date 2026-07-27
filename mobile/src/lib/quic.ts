@@ -731,6 +731,49 @@ export interface InfraSummary {
   rebootGrant?: RebootGrantState;
 }
 
+/** One row of the power capability report — the agent's answer to "what would
+ *  this action ACTUALLY do on this machine?".
+ *
+ *  `available` is the ONLY field that may enable a control. A container reports
+ *  host_reboot as unavailable even when running as root, because there is no
+ *  host to reboot from inside one; `means` says so in words the user reads.
+ *  Never re-derive availability on the client — the agent probed the box, the
+ *  phone did not. Mirrors desktop/agent/power_capability.go. */
+export interface PowerAction {
+  id: "host_reboot" | "agent_restart" | "agent_shutdown";
+  label: string;
+  available: boolean;
+  destructive: boolean;
+  scope: "machine" | "agent" | "none";
+  /** What this action really does on THIS machine, in one sentence. */
+  means: string;
+  /** What it destroys. Rendered in the confirm step. */
+  loses?: string[];
+  /** Why it is unavailable. Empty when available. */
+  reason?: string;
+  /** The specific fix — a command or a named flow, never "check your config". */
+  remedy?: string;
+  /** The command the agent would run. The dry-run answer. */
+  command?: string;
+  /** Bounded recovery expectation, in seconds. */
+  etaSeconds?: number;
+  /** The achievable action to offer instead when this one is unavailable. */
+  alternative?: PowerAction["id"];
+}
+
+export interface PowerReport {
+  facts: {
+    goos: string;
+    isRoot: boolean;
+    passwordlessSudo: boolean;
+    container?: string;
+    wslVersion?: number;
+    serviceManager?: string;
+    agentUser?: string;
+  };
+  actions: PowerAction[];
+}
+
 export interface RebootGrantState {
   canReboot: boolean;
   /** true when reboot is not permitted but a sudo grant on this box could fix it. */
@@ -4555,14 +4598,35 @@ export class QuicClient {
     return res.json();
   }
 
-  async infraPower(action: "agent_shutdown" | "host_reboot"): Promise<any> {
+  async infraPower(
+    action: "agent_shutdown" | "host_reboot" | "agent_restart",
+    target?: string,
+  ): Promise<any> {
     if (!this.isConnected && !this.hasConnectionInfo) throw new Error("Not connected");
-    const res = await fetch(`${this.baseUrl}/infra/power`, {
+    const res = await fetch(this.peerEndpoint(target, "/infra/power"), {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ action, confirm: true }),
     });
-    return res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      // The agent refuses with reason + remedy in one sentence. Surface it
+      // verbatim: a generic "request failed" would throw away the only text
+      // that tells the user what they CAN do instead.
+      throw new Error(data?.error || `power action failed: ${res.status}`);
+    }
+    return data;
+  }
+
+  /** Read-only dry run: what power actions this machine can ACTUALLY perform.
+   *  Asking must never require agreeing to do anything, so this is a GET and
+   *  takes no confirm. Call it before rendering any power control. */
+  async infraPowerReport(target?: string): Promise<PowerReport> {
+    if (!this.isConnected && !this.hasConnectionInfo) throw new Error("Not connected");
+    const res = await fetch(this.peerEndpoint(target, "/infra/power"), { headers: this.authHeaders });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `power report failed: ${res.status}`);
+    return data as PowerReport;
   }
 
   /** Grant (or revoke) host-reboot permission with the owner's sudo password.

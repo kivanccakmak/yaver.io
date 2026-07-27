@@ -1339,6 +1339,49 @@ export interface InfraCapabilities {
   hostReboot: boolean;
 }
 
+/** One row of the power capability report — the agent's answer to "what would
+ *  this action ACTUALLY do on this machine?".
+ *
+ *  `available` is the ONLY field that may enable a control. A container reports
+ *  host_reboot as unavailable even when it is running as root, because there is
+ *  no host to reboot from inside one; `means` says so in words the user reads.
+ *  Never re-derive availability on the client — the agent probed the box, the
+ *  browser did not. */
+export interface PowerAction {
+  id: "host_reboot" | "agent_restart" | "agent_shutdown";
+  label: string;
+  available: boolean;
+  destructive: boolean;
+  scope: "machine" | "agent" | "none";
+  /** What this action really does on THIS machine, in one sentence. */
+  means: string;
+  /** What it destroys. Rendered in the confirm dialog. */
+  loses?: string[];
+  /** Why it is unavailable. Empty when available. */
+  reason?: string;
+  /** The specific fix — a command or a named flow, never "check your config". */
+  remedy?: string;
+  /** The command the agent would run. This is the dry-run answer. */
+  command?: string;
+  /** Bounded recovery expectation, in seconds. */
+  etaSeconds?: number;
+  /** The achievable action to offer instead when this one is unavailable. */
+  alternative?: PowerAction["id"];
+}
+
+export interface PowerReport {
+  facts: {
+    goos: string;
+    isRoot: boolean;
+    passwordlessSudo: boolean;
+    container?: string;
+    wslVersion?: number;
+    serviceManager?: string;
+    agentUser?: string;
+  };
+  actions: PowerAction[];
+}
+
 export interface InfraSummary {
   machine: MachineInfo;
   metrics?: {
@@ -6559,14 +6602,41 @@ export class AgentClient {
     return res.json();
   }
 
-  async infraPower(action: "agent_shutdown" | "host_reboot"): Promise<any> {
+  async infraPower(
+    action: "agent_shutdown" | "host_reboot" | "agent_restart",
+    target?: string,
+  ): Promise<any> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/infra/power`, {
+    const res = await fetch(this.infraPowerUrl(target), {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ action, confirm: true }),
     });
-    return res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      // The agent refuses with reason + remedy in one sentence. Surface it
+      // verbatim: a generic "request failed" would throw away the only text
+      // that tells the user what to do instead.
+      throw new Error(data?.error || `power action failed: ${res.status}`);
+    }
+    return data;
+  }
+
+  /** Read-only dry run: what power actions this machine can ACTUALLY perform.
+   *  Asking must never require agreeing to do anything, so this is a GET and
+   *  takes no confirm. Call it before rendering any power control. */
+  async infraPowerReport(target?: string): Promise<PowerReport> {
+    this.assertConnected();
+    const res = await fetch(this.infraPowerUrl(target), { headers: this.authHeaders });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `power report failed: ${res.status}`);
+    return data as PowerReport;
+  }
+
+  private infraPowerUrl(target?: string): string {
+    return target
+      ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/infra/power`
+      : `${this.baseUrl}/infra/power`;
   }
 
   // Grant (or revoke) host-reboot with the owner's sudo password. Sent once over

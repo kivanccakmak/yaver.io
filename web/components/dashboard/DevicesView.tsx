@@ -8,6 +8,7 @@ import { DeviceStorageFold } from "./DeviceStorageFold";
 import { DeviceDeployCapabilities } from "./DeviceDeployCapabilities";
 import WebShellModal from "@/components/dashboard/WebShellModal";
 import { RecycleBoxDialog } from "@/components/dashboard/RecycleBoxDialog";
+import { DevicePowerModal } from "@/components/dashboard/DevicePowerModal";
 import { ManagedCloudSummary } from "@/components/dashboard/ManagedCloudPanel";
 import WakeProgress, { ParkedSummary } from "@/components/dashboard/WakeProgress";
 import { HIDE_PAID_UI } from "@/lib/launchFlags";
@@ -3136,6 +3137,10 @@ export default function DevicesView({
   // heartbeat polls Convex on a separate path). Tracks which device's
   // panel is open + the latest queued command for status feedback.
   const [rescueOpenDeviceId, setRescueOpenDeviceId] = useState<string | null>(null);
+  // Power control for one device. A modal rather than an inline fold: a reboot
+  // is destructive and outward-facing, so it gets the user's whole attention
+  // and a typed confirmation — never a stray tap in a list.
+  const [powerFor, setPowerFor] = useState<{ id: string; name: string } | null>(null);
   // Browser-shell modal state. Lives at the DevicesView level so the
   // Shell item in each card's "⋯" menu opens the same modal as the
   // home tab, including the reauth-required guidance when the agent's
@@ -3780,6 +3785,9 @@ export default function DevicesView({
                       }}
                       onRecycle={() => setRecycleFor({ id: device.id, name: device.alias || device.name || device.id })}
                       onRescue={() => setRescueOpenDeviceId(rescueOpenDeviceId === device.id ? null : device.id)}
+                      onPower={() =>
+                        setPowerFor({ id: device.id, name: device.alias || device.name || device.id })
+                      }
                       onShell={() => setShellSession({ device })}
                       onLaunchRunner={(launch) => setShellSession({ device, launch })}
                       onSignIn={(runnerId) => setAuthModal({ device, runner: runnerId })}
@@ -4059,6 +4067,14 @@ export default function DevicesView({
           })}
         </div>
       )}
+      {powerFor ? (
+        <DevicePowerModal
+          deviceId={powerFor.id}
+          deviceName={powerFor.name}
+          agentClient={agentClient}
+          onClose={() => setPowerFor(null)}
+        />
+      ) : null}
       {shellSession ? (
         <WebShellModal
           device={shellSession.device}
@@ -4679,6 +4695,7 @@ function DeviceActionsMenu({
   onSetSecondary,
   onRecycle,
   onRescue,
+  onPower,
   onShell,
   onLaunchRunner,
   onSignIn,
@@ -4698,6 +4715,7 @@ function DeviceActionsMenu({
   onSetSecondary: () => void;
   onRecycle: () => void;
   onRescue: () => void;
+  onPower: () => void;
   onShell: () => void;
   onLaunchRunner: (runner: TerminalLaunchRunner) => void;
   onSignIn: (runnerId: string) => void;
@@ -4881,6 +4899,16 @@ function DeviceActionsMenu({
               <button className={itemClass} onClick={() => { onRescue(); setOpen(false); }}>
                 <span>{rescueOpen ? "Hide rescue" : "Rescue"}</span>
                 <span className={hintClass}>wedged agent</span>
+              </button>
+            ) : null}
+            {/* Power. Opens the capability report rather than acting: what
+                "reboot" means differs per machine (a container cannot reboot its
+                host at all), so the menu never claims it can — the panel asks
+                the box and renders its answer. Owner-only, like Rescue. */}
+            {!device.isGuest ? (
+              <button className={itemClass} onClick={() => { onPower(); setOpen(false); }}>
+                <span>Power&hellip;</span>
+                <span className={hintClass}>reboot · restart agent</span>
               </button>
             ) : null}
             {/* Guest-side exit. The host's own revoke lives in Guests; this is
