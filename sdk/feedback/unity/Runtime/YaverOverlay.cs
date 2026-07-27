@@ -27,6 +27,19 @@ namespace Yaver.Feedback
         private Vector2 _noteScroll;
         private Vector2 _promptScroll;
         private Vector2 _activityScroll;
+
+        /// <summary>
+        /// Last known dev-server state behind the reload buttons. Null means
+        /// "we have not been able to ask" — rendered as "not connected",
+        /// which is a different sentence from "no dev server is running".
+        /// </summary>
+        private YaverDevServerSnapshot _devSnapshot;
+
+        /// <summary>Label of the reload action currently in flight, if any.</summary>
+        private string _reloadInFlight;
+
+        /// <summary>Wall-clock of the last /dev/status poll (Time.realtimeSinceStartup).</summary>
+        private float _devSnapshotCheckedAt = -100f;
         private readonly System.Collections.Generic.List<string> _activity = new System.Collections.Generic.List<string>(MaxActivityCount);
 
         internal static YaverOverlay Ensure(YaverFeedbackConfig config)
@@ -65,6 +78,23 @@ namespace Yaver.Feedback
             {
                 _expanded = !_expanded;
                 _windowRect.height = _expanded ? ExpandedHeight : CollapsedHeight;
+            }
+
+            // Poll the dev server while the panel is open. A reload button
+            // whose enabled state was decided once, when the overlay opened,
+            // goes stale the moment the user starts the dev server from
+            // another surface — and a stale "no dev server is running" reads
+            // as the product being broken.
+            if (_expanded &&
+                YaverFeedback.IsDevBuild &&
+                YaverFeedback.Client != null &&
+                Time.realtimeSinceStartup - _devSnapshotCheckedAt > 5f)
+            {
+                _devSnapshotCheckedAt = Time.realtimeSinceStartup;
+                StartCoroutine(YaverFeedback.Client.DevServerStatusCoroutine(snapshot =>
+                {
+                    _devSnapshot = snapshot;
+                }));
             }
         }
 
@@ -241,6 +271,53 @@ namespace Yaver.Feedback
             GUI.enabled = true;
             lineY += 36f;
 
+            // ── Dev-server reload row ────────────────────────────────────────
+            //
+            // WHICH buttons appear here is decided by the shared
+            // YaverReloadActions seam, never inline: a RELEASE player renders
+            // none of them, and a blocked one renders greyed WITH its reason
+            // on the line below instead of vanishing.
+            //
+            // This is separate from the button above, which is Unity's OWN
+            // in-place refresh (scene reload / Addressables content refresh).
+            // These two hit the machine's dev server.
+            var reloadRow = YaverReloadActions.Build(
+                _devSnapshot,
+                YaverFeedback.IsDevBuild,
+                _devSnapshot != null || YaverFeedback.Client != null,
+                YaverFeedback.Client != null ? YaverFeedback.Client.BaseUrl : null);
+            if (reloadRow.Count > 0)
+            {
+                var buttonX = 8f;
+                for (var i = 0; i < reloadRow.Count; i++)
+                {
+                    var reloadAction = reloadRow[i];
+                    // Greyed but still CLICKABLE when blocked — the click is
+                    // how we get to say why. A control that silently does
+                    // nothing is the defect we are fixing.
+                    GUI.enabled = !_busy;
+                    var label = _reloadInFlight == reloadAction.Label ? "…" : reloadAction.Label;
+                    if (GUI.Button(new Rect(buttonX, lineY, 108f, 26f), label))
+                    {
+                        if (!reloadAction.Enabled)
+                        {
+                            SetStatus(reloadAction.DisabledReason);
+                        }
+                        else
+                        {
+                            StartCoroutine(RequestDevReload(reloadAction));
+                        }
+                    }
+                    buttonX += 116f;
+                }
+                GUI.enabled = true;
+                lineY += 28f;
+
+                var note = reloadRow[0].Enabled ? reloadRow[0].Hint : reloadRow[0].DisabledReason;
+                GUI.Label(new Rect(8f, lineY, 344f, 32f), note);
+                lineY += 34f;
+            }
+
             GUI.Label(new Rect(8f, lineY, 120f, 20f), "Vibing");
             lineY += 18f;
             _promptScroll = GUI.BeginScrollView(new Rect(8f, lineY, 344f, 56f), _promptScroll, new Rect(0f, 0f, 324f, 72f));
@@ -370,6 +447,36 @@ namespace Yaver.Feedback
                 onError: error => { SetStatus(error); }
             );
             _busy = false;
+        }
+
+        private IEnumerator RequestDevReload(YaverReloadAction reloadAction)
+        {
+            _busy = true;
+            _reloadInFlight = reloadAction.Label;
+            SetStatus(reloadAction.Label + "…");
+            YaverBlackBox.State("overlay-dev-reload-" + reloadAction.Mode);
+
+            var client = YaverFeedback.Client;
+            if (client == null)
+            {
+                SetStatus("Not connected to a machine yet — pick one first.");
+            }
+            else
+            {
+                yield return client.ReloadWithModeCoroutine(
+                    reloadAction.Mode,
+                    _devSnapshot,
+                    ack => { SetStatus(ack != null && !string.IsNullOrEmpty(ack.message) ? ack.message : reloadAction.Label + " requested."); },
+                    // DescribeFailure already produced a named cause upstream.
+                    // Surface it verbatim rather than replacing it with
+                    // "Reload failed".
+                    error => { SetStatus(error); }
+                );
+            }
+
+            _reloadInFlight = null;
+            _busy = false;
+            _devSnapshotCheckedAt = -100f; // force a refresh on the next tick
         }
 
         private IEnumerator ConnectAgent()

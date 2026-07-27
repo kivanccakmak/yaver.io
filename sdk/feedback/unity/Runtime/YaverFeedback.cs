@@ -24,6 +24,16 @@ namespace Yaver.Feedback
         public static YaverP2PClient Client => _client;
         public static bool IsAuthenticated => YaverAuth.IsAuthenticated;
         public static string AuthToken => YaverAuth.StoredToken;
+        /// <summary>
+        /// Is this a DEVELOPMENT player (or the Editor)?
+        ///
+        /// Gates the overlay's dev-server reload buttons, which must never
+        /// appear in a shipped game. Unity sets Debug.isDebugBuild for a
+        /// "Development Build" player and false for a release one; the Editor
+        /// is always a dev context.
+        /// </summary>
+        public static bool IsDevBuild => Debug.isDebugBuild || Application.isEditor;
+
         public static bool IsDesktopRuntime =>
             Application.platform == RuntimePlatform.WindowsPlayer ||
             Application.platform == RuntimePlatform.OSXPlayer ||
