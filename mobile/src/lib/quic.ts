@@ -1338,6 +1338,13 @@ async function responseErrorMessage(res: Response, fallback?: string): Promise<s
       typeof data?.error === "string" ? data.error :
       "";
     if (detail) {
+      // The daily bandwidth cap is NOT a "wait a moment" failure — waiting
+      // minutes doesn't help a counter that resets at midnight UTC. Name the
+      // cause and the two real routes (2026-07-27: a burned cap rendered as
+      // the generic retry hint and read like an outage/hack to the user).
+      if (res.status === 429 && /bandwidth limit exceeded/i.test(detail)) {
+        return `${detail}. This is the relay's daily data cap — it resets at midnight UTC. On the same Wi-Fi or LAN the app connects directly and skips the relay entirely; Relay Pro lifts the cap.`;
+      }
       const hint = relayStatusHint(res.status);
       return hint === `HTTP ${res.status}` ? detail : `${hint} ${detail}`;
     }
