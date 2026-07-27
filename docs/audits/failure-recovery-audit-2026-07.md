@@ -345,3 +345,189 @@ means unattended):
 
 Gap (L4): `PlaybookCatalog()` exports this table for surfaces to render;
 only web consumes it.
+
+---
+
+## 8. The runner launch gate — "CHECKING RUNNER AUTH · 12s" (2026-07-27)
+
+Reported live: web dashboard → Devices → click **Codex** on a remote Linux box.
+The PTY never opened. A modal sat on *"CHECKING RUNNER AUTH — Checking whether
+Codex can run on @linux before opening the PTY · 12s"* and kept counting.
+
+This is the audit's own thesis reproduced exactly: **the inventory said yes
+while the product went and asked again, at the user's expense.**
+
+### 8.1 What the gate actually did
+
+`web/components/dashboard/WebShellModal.tsx:165-219` (pre-fix) fired, on every
+open of an auth-sensitive launch:
+
+```
+agentClient.testRunner(launch, { timeoutMs: 20_000 })
+  → POST /agent/runners/test        (web/lib/agent-client.ts:2418)
+  → desktop/agent/runner_test_http.go:111 handleRunnerTest
+```
+
+Step 4 of that handler (`runner_test_http.go:194-199` → `runRunnerProbe`
+`:232-282`) spawns, for codex:
+
+```
+codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check \
+      --model <model> "Reply with the single word OK and nothing else."
+```
+
+That is a **real LLM generation**. Measured against the live box on 2026-07-27:
+
+| Call | Latency | Cost |
+|---|---|---|
+| `GET /runner-auth/status` | **0.20 s** | none |
+| `POST /agent/runners/test` (codex) | **5.30 s** | **6,212 tokens** of the user's paid quota |
+
+…and `/runner-auth/status` was *already* returning the answer the gate was
+paying to rediscover:
+
+```json
+{"id":"codex","installed":true,"ready":true,
+ "authConfigured":true,"authVerified":true,"authSource":"codex login status"}
+```
+
+The same `authVerified` flag was **already in the browser** before the click —
+`a63d16ead` ("Carry verified runner auth in device status") plumbed it from
+`tasks.go::GetRunnerInfos` → Convex heartbeat → `Device["runners"][n]`
+(`web/lib/use-devices.ts:113`). `DevicesView.tsx:517` reads it to colour the
+chip. The gate ignored it entirely.
+
+Add relay RTT and a slower model and the 5.3 s becomes the user's 12 s.
+
+### 8.2 State machine BEFORE
+
+```
+open modal (launch = claude|codex)
+        │
+        └─► checking ──────────────────────────────────┐  ~5–20 s, PAID
+              │                                        │
+              ├─ result.ok ─────────────► allowed ─────► mount TerminalView
+              ├─ needsAuth+browserAuth ─► blocked  ─────► "Runner needs attention"
+              ├─ any other failure ─────► blocked  ─────► "Runner needs attention"
+              └─ 25 s stall timer ──────► blocked  ─────► "preflight did not finish"
+```
+
+Three defects, not one:
+
+1. **It blocked the terminal on a question already answered.** The device row
+   said verified before any network call happened.
+2. **It billed the user to re-ask.** Every click of the chip = one paid codex
+   generation. A UI affordance must not be a metered API call.
+3. **Its only non-`allowed` exit was a dead end.** `blocked` rendered "Runner
+   needs attention" — for a signed-in runner whose probe merely ran long. There
+   was no state in which a slow or unavailable check still yields a terminal.
+   `terminalLaunch` (`:237-239`) was `undefined` unless `allowed`, so the PTY
+   was withheld, not merely un-prefilled.
+
+The user's own framing is the correct contract and the code did not implement
+it: *if the runner is authenticated, just open the terminal — like an ssh
+session with the bypass-permissions command.*
+
+### 8.3 State machine AFTER
+
+The decision is now a pure function, `decideRunnerLaunchGate`, in
+`web/lib/runnerLaunchGate.ts` — testable without a clock or a network:
+
+```
+                    ┌─ not claude/codex ──────────────► open        (ungated)
+                    │
+ device.runners row ├─ authVerified && installed && ready ─► open   (device-verified)   0 ms, 0 tokens
+   (already in the  ├─ authConfigured===false | status needs-auth ─► sign-in
+    browser)        └─ installed===false ────────────► open-degraded (named banner)
+                    │
+                    ▼ unknown → ONE cheap GET /runner-auth/status, budget 4 s
+                    ├─ verified ──────────────────────► open        (probe-verified)
+                    ├─ needs-auth ────────────────────► sign-in     → RunnerAuthModal
+                    ├─ check errored ─────────────────► open-degraded (names the error)
+                    └─ elapsed ≥ 4 s ─────────────────► open-degraded (names the timeout)
+```
+
+Contract implemented:
+
+- **Fast path, zero cost.** A row carrying `authVerified` opens the PTY on the
+  first render. No request is awaited. This is the everyday case.
+- **Bounded slow path.** Only when the row is silent (agent older than
+  `a63d16ead`, or `authConfigured` without verification) do we check — against
+  `/runner-auth/status`, which asks each CLI about its own login (`codex login
+  status`, cached 60 s at `runner_auth.go:930`) and **spends no quota**. The
+  bound lives in the decision function, not in a `setTimeout`, so a cancelled
+  effect cannot lose it.
+- **Fails OPEN, always named.** Timeout or broken check mounts the terminal
+  behind an amber banner stating what could not be confirmed, plus a **Sign in**
+  button. Failing open is right here: the session already carries the runner's
+  bypass-permissions flag, and the runner TUI states its own login need in the
+  pane. A spinner states nothing.
+- **Not-authenticated routes to sign-in immediately**, from the row alone, with
+  no probe first — into the existing `RunnerAuthModal`
+  (`DevicesView.tsx:4072`), i.e. browser OAuth on the target box, Claude's
+  code/token submission, and the Deliver callback lane.
+- **The terminal is never yanked back.** `openedKey` latches the moment any
+  decision opens a PTY. A late contradicting answer raises the sign-in modal
+  *over* the live session instead of unmounting something the user is typing in.
+- **Background corroboration still runs.** The cheap check fires even on the
+  fast path; if it contradicts the heartbeat, `onRunnerNeedsAuth` raises the
+  sign-in modal over the already-open terminal. Verification never gates.
+
+The load-bearing property is negative and is tested by exhaustive sweep:
+**no combination of (runner × row × probe × elapsed) returns "keep waiting"
+past the budget, and every terminal state either opens a PTY or hands over a
+sign-in with a stated reason.** Proven by breaking it — deleting the fast-path
+clause fails 5 tests; restoring it passes 20/20.
+
+### 8.4 Second defect found while verifying — the web PTY died as root
+
+Verifying scope item 4 ("does the PTY carry the yolo flag") surfaced a separate,
+independently user-visible bug on the *same* box.
+
+`desktop/agent/console_terminal.go:22` built the `/ws/terminal?launch=claude`
+command as a bare `claude --dangerously-skip-permissions`. Measured on the live
+root-owned box:
+
+```
+# claude --dangerously-skip-permissions -p 'say hi'
+--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons
+# IS_SANDBOX=1 claude --dangerously-skip-permissions -p 'say hi'
+Hi! 👋 How can I help you today?
+```
+
+Every default VPS/Hetzner agent runs as root. So clicking **Claude** in the web
+dashboard opened a terminal that instantly refused — and the refusal blamed the
+*user's privileges* for *our* missing environment variable.
+
+The `/ws/runner` path has carried `IS_SANDBOX=1` the whole time
+(`runner_pty.go:208-216`, whose own comment records losing it once already).
+`/ws/terminal` — the path the web dashboard actually uses — never had it. Same
+cross-surface drift the audit keeps finding: **a fix that landed in one of two
+implementations is not landed.** `terminalLaunchCommandFor(runner, euid)` now
+takes euid explicitly so the root behaviour is testable without running the
+suite as root; `console_terminal_launch_test.go` asserts both branches of the
+`if command -v tmux` line carry it (the tmux branch is the one that runs, and
+the easy one to forget). Proven by breaking it.
+
+### 8.5 What would have told us in ten seconds
+
+Nothing did, and that is the finding. The gate's own narration named the wrong
+thing with total confidence: *"This checks a real CLI subprocess, not only the
+signed-in badge"* — presented as rigour, when it was the defect. The badge was
+right, cheap, and already on screen; the subprocess was slow, billed, and
+redundant.
+
+The generalisable rule, and the one this audit keeps re-deriving: **"probe the
+real capability, never the proxy" does not license probing it on the click
+path.** When a verified answer is already in hand, re-proving it *is* the
+regression. Verification belongs in the background or in the heartbeat that
+already carries it — never between the user and the thing they asked for.
+
+| Item | File | State |
+|---|---|---|
+| Gate decision table + tests | `web/lib/runnerLaunchGate.ts`, `.test.ts` | 🔧 |
+| Modal rewired to fast path | `web/components/dashboard/WebShellModal.tsx` | 🔧 |
+| Paid probe off the click path | was `agent-client.ts:2418 testRunner` | 🔧 |
+| Root `IS_SANDBOX=1` on `/ws/terminal` | `desktop/agent/console_terminal.go` | 🔧 |
+| Mobile shell has no equivalent gate | `mobile/app/shell.tsx` | ❌ untouched — no gate to fix, but no fast-path narration either |
+| `/agent/runners/test` still spawns a paid generation | `runner_test_http.go:194` | 🟡 correct for an explicit "Test" button; must never be on a launch path again |
