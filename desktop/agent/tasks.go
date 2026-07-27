@@ -1010,6 +1010,12 @@ type TaskCreateOptions struct {
 	// runner-native commands like /goal and /exit, where adding instructions
 	// changes the command semantics.
 	RawRunnerCommand bool
+
+	// Runner/render split fields — see the same-named Task fields and
+	// task_ensure_clone.go. Stripped for guests in the createTask handler.
+	GitRemote string
+	GitBranch string
+	AutoPush  string
 }
 
 type TaskResumeOptions struct {
@@ -1076,7 +1082,14 @@ type Task struct {
 	StartedAt    *time.Time         `json:"started_at,omitempty"`
 	FinishedAt   *time.Time         `json:"finished_at,omitempty"`
 
-	WorkDir         string `json:"workDir,omitempty"`       // per-task workDir (auto-detected from prompt)
+	WorkDir string `json:"workDir,omitempty"` // per-task workDir (auto-detected from prompt)
+	// Runner/render machine split (task_ensure_clone.go): git identity the
+	// surface passed so THIS box can materialize its own clone when it was
+	// chosen as the runner but lacks the source, and the push policy that
+	// converges the result back through git afterwards.
+	GitRemote       string `json:"gitRemote,omitempty"`
+	GitBranch       string `json:"gitBranch,omitempty"`
+	AutoPush        string `json:"autoPush,omitempty"`      // never|ask|always ("" = no policy)
 	TmuxSession     string `json:"tmuxSession,omitempty"`   // tmux session name (for adopted sessions)
 	TmuxSessionID   string `json:"tmuxSessionId,omitempty"` // tmux session_id, e.g. "$1"
 	TmuxWindowIndex string `json:"tmuxWindowIndex,omitempty"`
@@ -1180,6 +1193,9 @@ type Task struct {
 	eventCh    chan map[string]interface{}
 	doneCh     chan struct{}
 	retryCount int // Number of auto-restart attempts so far
+	// autoPushFired guards the once-per-task converge hook in fireTaskDone
+	// (a restart path may reach a terminal state more than once).
+	autoPushFired bool
 }
 
 func (tm *TaskManager) effectiveTaskWorkDir(task *Task) string {
@@ -1414,6 +1430,14 @@ func NewTaskManager(workDir string, store taskStore, runner RunnerConfig) *TaskM
 
 // fireTaskDone calls the OnTaskDone callback if set (non-blocking).
 func (tm *TaskManager) fireTaskDone(task *Task) {
+	// Runner/render split converge hook: a task reaching a RENDERABLE
+	// terminal state (completed/review) with a push policy commits/pushes
+	// per that policy (task_ensure_clone.go) — the push is what lets the
+	// render box's pre-build-pull pick the work up. Once per task.
+	if (task.Status == TaskStatusFinished || task.Status == TaskStatusReview) && task.AutoPush != "" && !task.autoPushFired {
+		task.autoPushFired = true
+		go tm.autoPushAfterTask(task)
+	}
 	if tm.OnTaskDone != nil {
 		// Copy fields under lock to avoid races
 		t := *task
@@ -1842,6 +1866,9 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		eventCh:                     make(chan map[string]interface{}, 32),
 		doneCh:                      make(chan struct{}),
 		WorkDir:                     strings.TrimSpace(opts.WorkDir),
+		GitRemote:                   strings.TrimSpace(opts.GitRemote),
+		GitBranch:                   strings.TrimSpace(opts.GitBranch),
+		AutoPush:                    strings.TrimSpace(opts.AutoPush),
 		SliceContract:               opts.SliceContract,
 		Placement:                   opts.Placement,
 		TaskViewport:                opts.Viewport,
@@ -1878,6 +1905,15 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 	if tm.DummyMode {
 		log.Printf("[task %s] DUMMY MODE — streaming fake response for: %s", id, title)
 		go tm.runDummyTask(task)
+		return task, nil
+	}
+
+	// Runner/render split: if this box was picked as the runner but the
+	// project isn't materialized here yet, clone first — asynchronously,
+	// narrated into the task stream — then spawn (task_ensure_clone.go).
+	if plan := tm.clonePlanForTask(task); plan != nil {
+		log.Printf("[task %s] workDir missing — ensure-clone of %s into %s before spawn", id, sanitizeRemoteForLog(plan.Remote), plan.Dest)
+		go tm.runCloneThenStart(task, plan)
 		return task, nil
 	}
 

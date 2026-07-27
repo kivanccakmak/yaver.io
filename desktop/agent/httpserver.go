@@ -4490,6 +4490,14 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		Images             []ImageAttachment  `json:"images,omitempty"`
 		WorkDir            string             `json:"workDir,omitempty"`
 		SliceContract      *TaskSliceContract `json:"sliceContract,omitempty"`
+		// Runner/render machine split (task_ensure_clone.go): the surface
+		// passes the project's git identity so a runner box without the
+		// source can materialize its own clone, plus the push policy that
+		// converges the result back through git. Owner-only — stripped for
+		// guests below.
+		GitRemote string `json:"gitRemote,omitempty"`
+		GitBranch string `json:"gitBranch,omitempty"`
+		AutoPush  string `json:"autoPush,omitempty"` // never|ask|always
 		// Video summary toggle. When videoEnabled is true, after the
 		// task finishes the agent auto-records a short MP4 of the
 		// running result via vibe-preview. videoSource picks the
@@ -4697,6 +4705,11 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		// Ask mode is owner-only too: a guest shouldn't be able to flip a
 		// scoped work task into a free-roaming repo-analysis run.
 		taskOpts.AskMode = body.AskMode
+		// Runner/render split fields are owner-only: a guest prompt must not
+		// make this box clone arbitrary remotes or push anywhere.
+		taskOpts.GitRemote = strings.TrimSpace(body.GitRemote)
+		taskOpts.GitBranch = strings.TrimSpace(body.GitBranch)
+		taskOpts.AutoPush = strings.TrimSpace(body.AutoPush)
 		// Console auto-detect: when a console surface (the attach terminal,
 		// web console, mobile code-mode) sends a plain natural-language
 		// QUESTION with no yaver verb/command in it, treat it as an ask
