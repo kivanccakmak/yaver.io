@@ -2165,15 +2165,13 @@ export default function DashboardPage() {
     e?.preventDefault();
     const text = input.trim(); if (!text || sending) return;
     if (handleDashboardChatIntent(text)) return;
-    // Task already running → enqueue the follow-up locally and clear
-    // the input so the user can keep typing. Dispatch happens in the
-    // effect below when activeTask.status leaves running/queued.
-    if (activeTask && (activeTask.status === "running" || activeTask.status === "queued")) {
-      setPendingFollowUps((prev) => [...prev, text]);
-      setChatMsgs((prev) => [...prev, { role: "user", text, queued: true }]);
-      setInput("");
-      return;
-    }
+    // Mid-run sends go STRAIGHT to the agent — it queues follow-ups on the
+    // running task (PendingFollowUps) and drains them when the current
+    // response finishes, Claude-Desktop style. The old client-side hold
+    // ("dispatch when the task leaves running") predates that and meant the
+    // second message never reached the box until the turn ended — and never
+    // appeared as a blue bubble at all when the transcript was later rebuilt
+    // from a turns-stripped list row (2026-07-27).
     const targetRunner = runners.find((r) => r.id === (activeTask?.runnerId || selectedRunner)) || runners.find((r) => r.id === selectedRunner) || null;
     const authIssue = runnerAuthIssue(targetRunner);
     if (authIssue) {
@@ -2485,19 +2483,32 @@ export default function DashboardPage() {
     // Prefer the task's recorded turns (every user continue + agent reply)
     // so multi-turn history survives a sidebar navigation. Fall back to
     // [initial prompt, flattened output] when the agent didn't expose turns.
-    let msgs: ChatMsg[];
-    if (t.turns && t.turns.length > 0) {
-      msgs = t.turns.map(tn => ({ role: tn.role, text: tn.content }));
-    } else {
-      msgs = [];
-      const userText = displayTaskTitle(t.title || "");
+    const msgsFromTask = (task: Task): ChatMsg[] => {
+      if (task.turns && task.turns.length > 0) {
+        return task.turns.map(tn => ({ role: tn.role, text: tn.content }));
+      }
+      const msgs: ChatMsg[] = [];
+      const userText = displayTaskTitle(task.title || "");
       if (userText) msgs.push({ role: "user", text: userText });
-      const out = (t.output || []).join("\n");
+      const out = (task.output || []).join("\n");
       if (out) msgs.push({ role: "assistant", text: out });
-      else if (t.status === "running") msgs.push({ role: "assistant", text: "" });
-    }
-    setChatMsgs(msgs);
+      else if (task.status === "running") msgs.push({ role: "assistant", text: "" });
+      return msgs;
+    };
+    setChatMsgs(msgsFromTask(t));
     setActiveTab("chat");
+    // The sidebar hands us a LIST row, and the list endpoint STRIPS turns to
+    // bound its payload — so building only from `t` loses every follow-up the
+    // user sent (their second message existed solely as the runner's prompt
+    // echo, which grooming rightly dedupes). Mobile guards this with
+    // keepTurns; web now hydrates the full detail and upgrades in place.
+    void agentClient.getTask(t.id).then((full) => {
+      setActiveTask((cur) => (cur && cur.id === full.id ? { ...cur, ...full } : cur));
+      setChatMsgs((prev) => {
+        const upgraded = msgsFromTask(full);
+        return upgraded.length >= prev.length ? upgraded : prev;
+      });
+    }).catch(() => {});
   };
   const onTaskCreated = () => { setActiveTab("chat"); agentClient.listTasks().then(setTasks).catch(() => {}); };
   const handleSelectPreviewTarget = async (deviceId: string | null) => {
@@ -3671,8 +3682,13 @@ export default function DashboardPage() {
                                   </div>
                                 </div>
                               ) : (
+                                // The runner's stream flows UNBOXED (user directive
+                                // 2026-07-27): a bubble around a long tool-heavy
+                                // stream reads as a box that can't contain its
+                                // content. Only the user's messages keep bubbles —
+                                // same shape as the codex / Claude Code UIs.
                                 <div key={i} className="flex justify-start">
-                                  <div className="max-w-[90%] rounded-2xl rounded-bl-sm bg-surface-800 px-3.5 py-2 text-[12px] leading-5 text-surface-100 break-words shadow-sm">
+                                  <div className="w-full px-1 py-1 text-[12px] leading-5 text-surface-100 break-words">
                                     {m.text ? (
                                       // Render assistant prose as markdown so
                                       // `**$ <cmd>**` shell pills + ```fenced```

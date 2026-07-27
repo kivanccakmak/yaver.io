@@ -4931,6 +4931,9 @@ http.route({
         // Runtime project memory is privacy-limited: project name plus remote
         // repo identity per machine, never local absolute paths.
         defaultRuntimeProjectForDevice: body.defaultRuntimeProjectForDevice,
+        // Saved render target per (device, project) — pairs with the default
+        // project to auto-render the Vibing tab. Identity only, never URLs.
+        defaultRuntimeTargetForDevice: body.defaultRuntimeTargetForDevice,
         runtimeProjectCatalogForDevice: body.runtimeProjectCatalogForDevice,
         // Per-subsystem managed toggle. Client sends only the
         // subsystem(s) it's changing; backend merges the patch into

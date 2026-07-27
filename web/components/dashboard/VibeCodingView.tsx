@@ -197,13 +197,15 @@ const ChatBubble = memo(function ChatBubble({ turn }: { turn: ChatTurn }) {
   // vocabulary (lib/runnerTranscript.ts).
   const groomed = isUser ? null : groomRunnerTranscript(sliceAfterFrameBoundary(stripAnsi(turn.content)));
   const content = isUser ? turn.content : (groomed?.body ?? "");
+  // The runner's stream flows UNBOXED (user directive 2026-07-27): only the
+  // user's messages keep bubbles, matching the codex / Claude Code UIs.
   return (
     <div
-      className={`max-w-[88%] rounded-2xl border px-4 py-3 ${
+      className={
         isUser
-          ? "ml-auto border-indigo-500/30 bg-indigo-500/10 text-surface-100"
-          : "border-surface-800 bg-surface-900/70 text-surface-200"
-      }`}
+          ? "ml-auto max-w-[88%] rounded-2xl border border-indigo-500/30 bg-indigo-500/10 px-4 py-3 text-surface-100"
+          : "w-full px-1 py-2 text-surface-200"
+      }
     >
       <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-surface-500">
         {isUser ? "You" : "Agent"}

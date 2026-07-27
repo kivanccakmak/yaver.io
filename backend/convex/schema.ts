@@ -1051,6 +1051,21 @@ export default defineSchema({
         }),
       ),
     ),
+    // Saved render target per (device, project) — with a default project this
+    // lets the Vibing tab render without a click. Stable target identity only
+    // (targetId like "browser-iframe" / "android-device"), never URLs, ports
+    // or device serials. Row without projectName = machine-wide fallback.
+    defaultRuntimeTargetByDevice: v.optional(
+      v.array(
+        v.object({
+          deviceId: v.string(),
+          projectName: v.optional(v.string()),
+          targetId: v.string(),
+          targetKind: v.optional(v.string()),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
     runtimeProjectCatalogByDevice: v.optional(
       v.array(
         v.object({

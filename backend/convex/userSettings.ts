@@ -84,6 +84,63 @@ const runtimeProjectCatalogValidator = v.object({
   updatedAt: v.optional(v.number()),
 });
 
+// The saved render target completes the auto-vibe pair: when a machine has
+// BOTH a default project and a default target, the Vibing tab renders without
+// a click. Keyed per (deviceId, projectName) so one box can prefer the
+// browser iframe for a web app and a physical phone for an RN app; a row
+// without projectName is the machine-wide fallback. Only the stable target
+// identity is stored — no URLs, ports or device serials.
+const runtimeTargetPreferenceValidator = v.object({
+  deviceId: v.string(),
+  projectName: v.optional(v.union(v.string(), v.null())),
+  // null clears the saved target for this (device, project) scope.
+  targetId: v.union(v.string(), v.null()),
+  targetKind: v.optional(v.union(v.string(), v.null())),
+  updatedAt: v.optional(v.number()),
+});
+
+type RuntimeTargetPreferenceRow = {
+  deviceId: string;
+  projectName?: string;
+  targetId: string;
+  targetKind?: string;
+  updatedAt: number;
+};
+
+type RuntimeTargetPreferencePatch = {
+  deviceId: string;
+  projectName?: string | null;
+  targetId: string | null;
+  targetKind?: string | null;
+  updatedAt?: number;
+};
+
+function mergeRuntimeTargetPreference(
+  existing: RuntimeTargetPreferenceRow[] | undefined,
+  payload: RuntimeTargetPreferencePatch,
+): RuntimeTargetPreferenceRow[] | undefined {
+  const deviceId = cleanRuntimeText(payload.deviceId, 120);
+  if (!deviceId) return existing;
+  const projectName = cleanRuntimeText(payload.projectName ?? undefined, 200);
+  const filtered = (existing ?? []).filter(
+    (row) => !(row.deviceId === deviceId && (row.projectName || "") === (projectName || "")),
+  );
+  const targetId = cleanRuntimeText(payload.targetId ?? undefined, 120);
+  if (!targetId) return filtered.length > 0 ? filtered : undefined;
+  const row: RuntimeTargetPreferenceRow = {
+    deviceId,
+    ...(projectName ? { projectName } : {}),
+    targetId,
+    ...(cleanRuntimeText(payload.targetKind ?? undefined, 120)
+      ? { targetKind: cleanRuntimeText(payload.targetKind ?? undefined, 120) }
+      : {}),
+    updatedAt: payload.updatedAt ?? Date.now(),
+  };
+  // Bounded like the project catalog: preferences are per (device, project)
+  // and a runaway writer must not grow the settings doc without limit.
+  return [...filtered, row].slice(-200);
+}
+
 type OpenCodeConfigSnapshotPatch = {
   deviceId: string;
   model?: string | null;
@@ -524,6 +581,7 @@ export const set = internalMutation({
     ),
     opencodeConfigForDevice: v.optional(openCodeConfigSnapshotPatchValidator),
     defaultRuntimeProjectForDevice: v.optional(runtimeProjectPreferenceValidator),
+    defaultRuntimeTargetForDevice: v.optional(runtimeTargetPreferenceValidator),
     runtimeProjectCatalogForDevice: v.optional(runtimeProjectCatalogValidator),
     // Per-subsystem managed: true (Yaver-hosted) | false (user-hosted)
     // | null (unset → use legacy default). Clients send only the
@@ -640,6 +698,12 @@ export const set = internalMutation({
         args.defaultRuntimeProjectForDevice as RuntimeProjectPreferencePatch,
       );
     }
+    if (args.defaultRuntimeTargetForDevice !== undefined) {
+      patch.defaultRuntimeTargetByDevice = mergeRuntimeTargetPreference(
+        existing?.defaultRuntimeTargetByDevice as RuntimeTargetPreferenceRow[] | undefined,
+        args.defaultRuntimeTargetForDevice as RuntimeTargetPreferencePatch,
+      );
+    }
     if (args.runtimeProjectCatalogForDevice !== undefined) {
       patch.runtimeProjectCatalogByDevice = mergeRuntimeProjectCatalog(
         existing?.runtimeProjectCatalogByDevice as RuntimeProjectCatalogRow[] | undefined,
@@ -708,6 +772,7 @@ export const setByToken = mutation({
     ),
     opencodeConfigForDevice: v.optional(openCodeConfigSnapshotPatchValidator),
     defaultRuntimeProjectForDevice: v.optional(runtimeProjectPreferenceValidator),
+    defaultRuntimeTargetForDevice: v.optional(runtimeTargetPreferenceValidator),
     runtimeProjectCatalogForDevice: v.optional(runtimeProjectCatalogValidator),
     managed: v.optional(managedPatchValidator),
     deployPreferences: v.optional(deployPreferencePatchValidator),
@@ -821,6 +886,12 @@ export const setByToken = mutation({
       patch.defaultRuntimeProjectByDevice = mergeRuntimeProjectPreference(
         existing?.defaultRuntimeProjectByDevice as RuntimeProjectPreferenceRow[] | undefined,
         args.defaultRuntimeProjectForDevice as RuntimeProjectPreferencePatch,
+      );
+    }
+    if (args.defaultRuntimeTargetForDevice !== undefined) {
+      patch.defaultRuntimeTargetByDevice = mergeRuntimeTargetPreference(
+        existing?.defaultRuntimeTargetByDevice as RuntimeTargetPreferenceRow[] | undefined,
+        args.defaultRuntimeTargetForDevice as RuntimeTargetPreferencePatch,
       );
     }
     if (args.runtimeProjectCatalogForDevice !== undefined) {
