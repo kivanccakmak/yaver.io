@@ -1113,35 +1113,47 @@ export default function DashboardPage() {
     let resolve: () => void;
     relayReadyPromiseRef.current = new Promise<void>(r => { resolve = r; });
 
+    const refreshRelayTopology = async (opts?: { syncPrimary?: boolean }) => {
+      // Fetch platform relay servers (already includes password)
+      const r = await fetch(`${CONVEX_URL}/config`);
+      let relays: any[] = [];
+      if (r.ok) { const d = await r.json(); relays = d.relayServers || []; }
+
+      // Fetch user settings to get relay password override + primary device
+      if (token) {
+        try {
+          const sr = await fetch(`${CONVEX_URL}/settings`, { headers: { Authorization: `Bearer ${token}` } });
+          if (sr.ok) {
+            const sd = await sr.json();
+            const pw = sd.settings?.relayPassword || sd.relayPassword;
+            if (pw) { relays = relays.map((r: any) => ({ ...r, password: pw })); }
+            if (!cancelled && opts?.syncPrimary) {
+              setPrimaryDeviceId(sd.settings?.primaryDeviceId ?? null);
+              setSecondaryDeviceId(sd.settings?.secondaryDeviceId ?? null);
+            }
+          }
+        } catch {}
+      }
+
+      if (!cancelled && relays.length > 0) agentClient.setRelayServers(relays);
+    };
+
     (async () => {
       try {
-        // Fetch platform relay servers (already includes password)
-        const r = await fetch(`${CONVEX_URL}/config`);
-        let relays: any[] = [];
-        if (r.ok) { const d = await r.json(); relays = d.relayServers || []; }
-
-        // Fetch user settings to get relay password override + primary device
-        if (token) {
-          try {
-            const sr = await fetch(`${CONVEX_URL}/settings`, { headers: { Authorization: `Bearer ${token}` } });
-            if (sr.ok) {
-              const sd = await sr.json();
-              const pw = sd.settings?.relayPassword || sd.relayPassword;
-              if (pw) { relays = relays.map((r: any) => ({ ...r, password: pw })); }
-              if (!cancelled) {
-                setPrimaryDeviceId(sd.settings?.primaryDeviceId ?? null);
-                setSecondaryDeviceId(sd.settings?.secondaryDeviceId ?? null);
-              }
-            }
-          } catch {}
-        }
-
-        if (!cancelled && relays.length > 0) agentClient.setRelayServers(relays);
+        await refreshRelayTopology({ syncPrimary: true });
       } catch {}
       if (!cancelled) setRelayReady(true);
       resolve!();
     })();
-    return () => { cancelled = true; };
+    // Topology-refresh rung for the reconnect ladder (audit gap T2, mobile
+    // parity): every 3rd failed attempt the AgentClient asks us to re-pull
+    // the relay list + passwords so a relay restart / password rotation
+    // doesn't strand the ladder on the coordinates it was born with.
+    agentClient.setTopologyRefreshHook(() => refreshRelayTopology());
+    return () => {
+      cancelled = true;
+      agentClient.setTopologyRefreshHook(null);
+    };
   }, [token]);
 
   useEffect(() => {

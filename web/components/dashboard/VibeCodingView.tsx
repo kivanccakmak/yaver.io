@@ -5,6 +5,8 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { capStreamText } from "@/lib/streamBuffer";
 import { agentClient, isRunnerBrowserAuthTerminal, type AgentGraphRun, type ConnectionState, type GitCommitRow, type GitProviderStatusRow, type GitRemoteRepo, type GitStatusRow, type MachineInfo, type Runner, type Task } from "@/lib/agent-client";
+import { AGENT_AUTH_REMEDY, isAgentAuthErrorMessage } from "@/lib/agentAuthError";
+import { validateOpenCodeModel } from "@/lib/opencodeModel";
 import type { Device } from "@/lib/use-devices";
 import { useAuth } from "@/lib/use-auth";
 import { detectAskBreadth, detectAskIntent } from "@/lib/ask-intent";
@@ -316,7 +318,7 @@ export default function VibeCodingView({
   onSelectPreviewTarget: (deviceId: string | null) => void;
 }) {
   const { token, user } = useAuth();
-  const { primaryRunnerByDevice, primaryModelByDevice } = usePrimaryRunnerByDevice(token);
+  const { primaryRunnerByDevice, primaryModelByDevice, opencodeConfigByDevice } = usePrimaryRunnerByDevice(token);
   const [projects, setProjects] = useState<Project[]>([]);
   const [runners, setRunners] = useState<Runner[]>([]);
   const [selectedProjectPath, setSelectedProjectPath] = useState("");
@@ -941,9 +943,36 @@ export default function VibeCodingView({
     return { projectSlug, appCount, hasNativeMobile, hasDocker };
   }
 
+  // Both send paths are invoked as `void startChatTask()` — an error thrown
+  // mid-dispatch (agent 401, relay down) used to be an unhandled rejection:
+  // the busy label wedged on "Starting coding task…" with the truth in the
+  // console only. Name it, and name the auth remedy when it's auth-shaped
+  // (audit §6 item 4).
+  function sendFailureLabel(err: unknown): string {
+    const m = err instanceof Error ? err.message : String(err);
+    return isAgentAuthErrorMessage(m) ? `${AGENT_AUTH_REMEDY} (${m})` : `Send failed: ${m}`;
+  }
+
+  // Pre-send OpenCode model validation (audit §6 item 5): veto a
+  // provider/model the box's probed opencode config cannot serve BEFORE the
+  // task leaves the composer, instead of letting it die minutes later as
+  // ProviderModelNotFoundError buried in task output. Returns the named
+  // error, or null when the dispatch may proceed.
+  function opencodeModelVeto(): string | null {
+    if ((selectedRunner || "").trim() !== "opencode" || !selectedModel) return null;
+    const snapshot = connectedDevice?.id ? opencodeConfigByDevice[connectedDevice.id] : undefined;
+    const validation = validateOpenCodeModel(snapshot, selectedModel);
+    return validation.ok ? null : validation.error;
+  }
+
   async function startChatTask() {
     if (!selectedProject || !composer.trim()) {
       setBusy("Pick a project and enter a prompt.");
+      return;
+    }
+    const modelVeto = opencodeModelVeto();
+    if (modelVeto) {
+      setBusy(modelVeto);
       return;
     }
     const promptText = composer.trim();
@@ -1215,6 +1244,11 @@ export default function VibeCodingView({
       try {
         analyticsAgentSwitch("agent_switch_requested", { from: parentRunner, to: desiredRunner });
       } catch { /* analytics is best-effort */ }
+      const forkVeto = opencodeModelVeto();
+      if (forkVeto) {
+        setBusy(forkVeto);
+        return;
+      }
       setBusy(`Switching ${activeTask.title} to ${niceName}…`);
       try {
         const result = await agentClient.forkTask(activeTask.id, {
@@ -2679,14 +2713,14 @@ export default function VibeCodingView({
                     Refresh Preview
                   </button>
                   <button
-                    onClick={() => void continueChatTask()}
+                    onClick={() => void continueChatTask().catch((err) => setBusy(sendFailureLabel(err)))}
                     disabled={!activeTask || !composer.trim() || selectedRunnerRow?.ready === false}
                     className="rounded-xl border border-surface-700 bg-surface-950 px-4 py-2 text-sm font-semibold text-surface-200 hover:border-surface-600 disabled:opacity-40"
                   >
                     Continue
                   </button>
                   <button
-                    onClick={() => void startChatTask()}
+                    onClick={() => void startChatTask().catch((err) => setBusy(sendFailureLabel(err)))}
                     disabled={!selectedProject || !composer.trim() || selectedRunnerRow?.ready === false}
                     className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-40"
                   >

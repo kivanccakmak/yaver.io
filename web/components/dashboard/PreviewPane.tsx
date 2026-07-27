@@ -2,6 +2,10 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { agentClient, type MobileWorkerPreviewSession, type Runner, type TaskStatus } from "@/lib/agent-client";
+import { AGENT_AUTH_REMEDY, isAgentAuthErrorMessage } from "@/lib/agentAuthError";
+import { detectCompileFailure } from "@/lib/compileFailure";
+import { previewPhaseTitle } from "@/lib/previewPhase";
+import { classifyRelayLimit } from "@/lib/relayDeny";
 import pkg from "../../package.json";
 import { CommandCard } from "./CommandCard";
 import {
@@ -161,6 +165,10 @@ export default function PreviewPane({
     workDir?: string;
     port?: number;
     targetDeviceName?: string;
+    serving?: boolean;
+    /** Agent-persisted failure — including SetCompileError's "running but
+     *  nothing to serve" detail. The compile-failure card reads this. */
+    error?: string;
   } | null>(null);
   const [workerSession, setWorkerSession] = useState<MobileWorkerPreviewSession | null>(null);
   const [projects, setProjects] = useState<Project[] | null>(null);
@@ -745,6 +753,17 @@ export default function PreviewPane({
     }
   }, [previewUrl, reloadNonce]);
 
+  // Compile-failure card (audit gap D5, ported from mobile): a Flutter/Vite
+  // server that keeps listening after a failed compile reports running=true,
+  // the iframe mounts blank, and the only statement of the truth was the
+  // agent's status.error or the "Failed to compile" lines buried in the log
+  // tail. Promote it to a compact card that REPLACES the blank iframe; the
+  // full log stays in the panel below.
+  const compileCard = useMemo(
+    () => detectCompileFailure(devStatus?.error, logLines),
+    [devStatus?.error, logLines],
+  );
+
   const frame = useMemo(() => {
     if (skin.plain) return { width: 0, height: 0 };
     const w = orientation === "portrait" ? skin.width : skin.height;
@@ -1047,7 +1066,10 @@ export default function PreviewPane({
       setComposer("");
       setSendStatus(`✓ started “${task.title}”`);
     } catch (e: any) {
-      setSendStatus(`✗ ${e?.message || e}`);
+      const msg = String(e?.message || e);
+      // A plain 401/403 here means the AGENT's session died, not the task —
+      // name the auth remedy instead of dumping the status code (audit §6.4).
+      setSendStatus(isAgentAuthErrorMessage(msg) ? `✗ ${AGENT_AUTH_REMEDY} (${msg})` : `✗ ${msg}`);
     }
     setSending(false);
   }, [composer, sending, devStatus?.workDir, stopActiveTaskStream]);
@@ -1149,7 +1171,8 @@ export default function PreviewPane({
         setLogLines((prev) => [...prev, `[ui] ✓ /dev/start accepted, waiting for "ready" event…`]);
         // status poll will pick up running=true shortly
       } catch (e: any) {
-        const msg = e?.message || "Failed to start dev server";
+        const raw = e?.message || "Failed to start dev server";
+        const msg = isAgentAuthErrorMessage(raw) ? `${AGENT_AUTH_REMEDY} (${raw})` : raw;
         setStartError(msg);
         setLogLines((prev) => [...prev, `[ui] ✗ /dev/start failed: ${msg}`]);
       }
@@ -1240,6 +1263,29 @@ export default function PreviewPane({
           </button>
         )}
       </div>
+    </div>
+  ) : devStatus?.running && compileCard ? (
+    // Compile failure on a healthy server (audit gap D5): the dev server is
+    // running and listening, but the app it serves failed to build — the
+    // iframe would paint blank over a green status pill. Lead with the
+    // agent's own words; the full log stays in the panel below.
+    <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-surface-950 p-6 text-center">
+      <div className="text-3xl" aria-hidden>🧱</div>
+      <p className="text-[13px] font-semibold text-rose-600 dark:text-rose-300">{compileCard.title}</p>
+      <pre className="max-h-[45%] w-full max-w-[520px] overflow-auto whitespace-pre-wrap break-words rounded border border-rose-500/25 bg-rose-500/5 p-3 text-left font-mono text-[11px] leading-4 text-rose-700 dark:text-rose-200/90">
+        {compileCard.detail}
+      </pre>
+      <p className="max-w-[380px] text-[10px] text-surface-500">
+        The dev server is still running — fix the error above (or ask the agent to)
+        and the preview reloads on the next successful compile. Full output is in
+        the log panel.
+      </p>
+      <button
+        onClick={() => { setIframeKey((k) => k + 1); setReloadNonce((n) => n + 1); }}
+        className="rounded border border-surface-700 bg-surface-900 px-3 py-1 text-[11px] text-surface-300 hover:border-surface-600"
+      >
+        Retry preview
+      </button>
     </div>
   ) : devStatus?.running && previewFrameUrl && isMobileDevClient(devStatus) ? (
     // Metro in --dev-client mode returns a JSON manifest at /, not HTML.
@@ -1432,17 +1478,42 @@ export default function PreviewPane({
       )}
 
       {previewError ? (
-        <div className="flex items-start gap-2 border-b border-red-500/20 bg-red-500/5 px-3 py-1.5 text-[10px] text-red-700 dark:text-red-300">
-          <span className="font-mono">preview error:</span>
-          <span className="flex-1 truncate">{previewError}</span>
-          <button
-            onClick={() => void handleReconnect()}
-            disabled={recovering}
-            className="shrink-0 rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-red-700 dark:text-red-200 hover:bg-red-500/20 disabled:opacity-50"
-          >
-            {recovering ? "…" : "Recover"}
-          </button>
-        </div>
+        (() => {
+          // Relay free-tier / bandwidth verdicts (audit R13/R14) get a
+          // compact NAMED card — reset behavior + unmetered alternatives —
+          // instead of a truncated raw string.
+          const limitCard = classifyRelayLimit(previewError);
+          if (limitCard) {
+            return (
+              <div className="border-b border-amber-500/25 bg-amber-500/5 px-3 py-2 text-[10px] text-amber-800 dark:text-amber-200">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold">{limitCard.title}</span>
+                  <button
+                    onClick={() => void handleReconnect()}
+                    disabled={recovering}
+                    className="ml-auto shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 hover:bg-amber-500/20 disabled:opacity-50"
+                  >
+                    {recovering ? "…" : "Retry"}
+                  </button>
+                </div>
+                <p className="mt-1 leading-4 text-amber-800/80 dark:text-amber-200/80">{limitCard.detail}</p>
+              </div>
+            );
+          }
+          return (
+            <div className="flex items-start gap-2 border-b border-red-500/20 bg-red-500/5 px-3 py-1.5 text-[10px] text-red-700 dark:text-red-300">
+              <span className="font-mono">preview error:</span>
+              <span className="flex-1 truncate">{previewError}</span>
+              <button
+                onClick={() => void handleReconnect()}
+                disabled={recovering}
+                className="shrink-0 rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-red-700 dark:text-red-200 hover:bg-red-500/20 disabled:opacity-50"
+              >
+                {recovering ? "…" : "Recover"}
+              </button>
+            </div>
+          );
+        })()
       ) : null}
 
       {/* Target picker (mobile workers) */}
@@ -1660,7 +1731,10 @@ export default function PreviewPane({
             <div className="pointer-events-auto absolute top-3 right-3 z-10 w-72 max-w-[40%] rounded border border-amber-500/30 bg-surface-950/95 shadow-lg backdrop-blur">
               <div className="flex items-center justify-between px-2 py-1 text-[10px] uppercase tracking-widest text-amber-400 border-b border-amber-500/20">
                 <span>
-                  {recovering ? "Recovery · running" : recoveryLog.length > 0 ? "Recovery · last run" : "Dev server · starting"}
+                  {/* Phase-accurate narration (audit gap D6): "starting" was a
+                      static lie once /dev/status said running — name the phase
+                      that is actually in flight. */}
+                  {recovering ? "Recovery · running" : recoveryLog.length > 0 ? "Recovery · last run" : previewPhaseTitle(devStatus, null)}
                   {/* Tag the running web bundle version so the user
                        can tell at a glance whether they're on the
                        latest deploy or stuck on a stale Cloudflare

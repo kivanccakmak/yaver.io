@@ -14,6 +14,8 @@ import {
 } from "@/lib/agent-client";
 import { isRunnerBrowserAuthTerminal } from "@/lib/agent-client";
 import { isAgentAuthErrorMessage } from "@/lib/agentAuthError";
+import { detectCompileFailure } from "@/lib/compileFailure";
+import { validateOpenCodeModel } from "@/lib/opencodeModel";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 import { formatDevProgressLine } from "@/lib/devEventLine";
 import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
@@ -625,6 +627,9 @@ export default function RuntimeLabView({
   const [webPreviewFrameReady, setWebPreviewFrameReady] = useState(false);
   const [webPreviewBusy, setWebPreviewBusy] = useState(false);
   const [webPreviewNote, setWebPreviewNote] = useState<string | null>(null);
+  // Raw dev-server output tail feeding the compile-failure card (gap D5).
+  // Cleared on every "ready" event so a fixed compile drops the card.
+  const [devLogTail, setDevLogTail] = useState<string[]>([]);
   // Bumped by Fast/Full Reload to re-mount the preview iframe even when
   // the (signed) bundle URL is unchanged — e.g. a fast reload that
   // re-served the existing fresh bundle.
@@ -812,18 +817,28 @@ export default function RuntimeLabView({
   useEffect(() => {
     if (!devEventsUrl) return;
     const es = new EventSource(devEventsUrl);
+    // Rolling raw tail for the compile-failure detector (audit gap D5):
+    // the runtime console prefixes lines for humans, but the detector wants
+    // the agent's raw words. A "ready" event means a successful (re)compile —
+    // clear the tail so a fixed error doesn't keep the card up.
+    const pushTail = (line: string) => {
+      setDevLogTail((prev) => {
+        const next = [...prev, line];
+        return next.length > 120 ? next.slice(-120) : next;
+      });
+    };
     es.onmessage = (msg) => {
       try {
         const ev = JSON.parse(msg.data);
-        if (ev.type === "log" && typeof ev.message === "string") appendLog(`dev: ${ev.message}`);
+        if (ev.type === "log" && typeof ev.message === "string") { appendLog(`dev: ${ev.message}`); pushTail(ev.message); }
         else if (ev.type === "phase" && ev.topic && ev.phase) appendLog(`${ev.topic}: ${ev.phase}`);
         // Agent pct is already 0..100 (devserver.go Pct) — multiplying by
         // 100 here printed "1575% streaming". formatDevProgressLine clamps.
         else if (ev.type === "progress" && ev.topic) appendLog(formatDevProgressLine(ev.topic, ev.pct, ev.phase));
-        else if (ev.type === "ready") appendLog("dev server ready");
-        else if (ev.type === "error" && ev.error) appendLog(`dev error: ${ev.error}`);
+        else if (ev.type === "ready") { appendLog("dev server ready"); setDevLogTail([]); }
+        else if (ev.type === "error" && ev.error) { appendLog(`dev error: ${ev.error}`); pushTail(String(ev.error)); }
         else if (ev.type === "snapshot" && ev.snapshot?.recentLogs?.length) {
-          for (const line of ev.snapshot.recentLogs.slice(-3)) appendLog(`dev: ${line}`);
+          for (const line of ev.snapshot.recentLogs.slice(-3)) { appendLog(`dev: ${line}`); pushTail(String(line)); }
         }
       } catch {
         if (msg.data) appendLog(`dev: ${String(msg.data).slice(0, 240)}`);
@@ -832,6 +847,8 @@ export default function RuntimeLabView({
     es.onerror = () => appendLog("dev events stream interrupted");
     return () => es.close();
   }, [appendLog, devEventsUrl]);
+
+  const runtimeCompileCard = useMemo(() => detectCompileFailure(null, devLogTail), [devLogTail]);
 
   const startSelectedRunnerSignIn = useCallback(async () => {
     if (!selectedRunnerRow || !["claude", "codex"].includes(selectedRunnerRow.id)) return;
@@ -1047,6 +1064,14 @@ export default function RuntimeLabView({
       if (selectedModel && selectedRunner && effectiveModel !== selectedModel) {
         appendLog(`model corrected for ${selectedRunner}: ${selectedModel} -> ${effectiveModel || "runner default"}`);
       }
+      // Pre-send validation against the box's probed opencode config
+      // (audit §6 item 5): a model the box has no provider for used to
+      // travel all the way to the runner and die minutes later as
+      // ProviderModelNotFoundError buried in task output.
+      if (normalizeRunnerId(selectedRunner) === "opencode") {
+        const validation = validateOpenCodeModel(opencodeSnapshot, effectiveModel);
+        if (!validation.ok) throw new Error(validation.error);
+      }
       const task = await agentClient.createTask({
         title: prompt.slice(0, 80),
         description: prompt,
@@ -1063,7 +1088,7 @@ export default function RuntimeLabView({
     } finally {
       setSending(false);
     }
-  }, [activeTaskStream?.id, appendLog, attachTaskSession, availableModels, composer, selectedModel, selectedProject, selectedRunner, sending]);
+  }, [activeTaskStream?.id, appendLog, attachTaskSession, availableModels, composer, opencodeSnapshot, selectedModel, selectedProject, selectedRunner, sending]);
 
   const copyRuntimeConsole = useCallback(async () => {
     const text = log.length ? log.join("\n") : "No runtime operations yet.";
@@ -1666,6 +1691,19 @@ export default function RuntimeLabView({
                           </button>
                         </div>
                       </div>
+                      {runtimeCompileCard ? (
+                        // Compile failure on a healthy server (audit gap D5):
+                        // without this, a broken build renders as a blank
+                        // iframe under a green status. Lead with the agent's
+                        // words; full output stays in the runtime console.
+                        <div className="mb-2 rounded-md border border-rose-500/30 bg-rose-500/10 p-3">
+                          <div className="text-xs font-semibold text-rose-700 dark:text-rose-300">{runtimeCompileCard.title}</div>
+                          <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-4 text-rose-700/90 dark:text-rose-200/90">{runtimeCompileCard.detail}</pre>
+                          <div className="mt-1 text-[10px] text-rose-700/70 dark:text-rose-200/60">
+                            The dev server is still running — the preview stays blank until the next successful compile. Full output is in the runtime console.
+                          </div>
+                        </div>
+                      ) : null}
                       {!webPreviewUrl ? (
                         <RuntimePreviewLoadingSurface
                           mobile={selectedProjectIsMobile}

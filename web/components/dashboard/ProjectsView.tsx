@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { agentClient } from "@/lib/agent-client";
+import { AGENT_AUTH_REMEDY, isAgentAuthErrorMessage } from "@/lib/agentAuthError";
 import EnvironmentSwitcher from "./EnvironmentSwitcher";
 import ProjectDetailView from "./ProjectDetailView";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
@@ -604,11 +605,24 @@ export default function ProjectsView({
                 <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
               </svg>
             }
-            title={loadError ? "Couldn't load projects" : "No projects yet"}
-            description={loadError || "Projects on the remote machine will appear here once they're discovered."}
+            title={loadError ? (isAgentAuthErrorMessage(loadError) ? "Agent auth needs refresh" : "Couldn't load projects") : "No projects yet"}
+            description={
+              loadError
+                ? (isAgentAuthErrorMessage(loadError) ? `${AGENT_AUTH_REMEDY} (${loadError})` : loadError)
+                : "Projects on the remote machine will appear here once they're discovered."
+            }
             action={
               <div className="flex gap-2 justify-center">
                 <Button variant="secondary" size="sm" onClick={loadProjects}>Retry</Button>
+                {onReconnect && loadError && isAgentAuthErrorMessage(loadError) ? (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => { void onReconnect().then(loadProjects).catch(() => {}); }}
+                  >
+                    Reconnect &amp; retry
+                  </Button>
+                ) : null}
                 {onRepairRelay && loadError && /invalid relay password/i.test(loadError) ? (
                   <Button
                     variant="primary"
