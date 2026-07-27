@@ -17,6 +17,7 @@ import { CONVEX_URL } from "@/lib/constants";
 import { agentClient } from "@/lib/agent-client";
 import WakeProgress from "@/components/dashboard/WakeProgress";
 import { listRecentWakeRuns, type CloudWakeRun } from "@/lib/task-placement";
+import { HIDE_PAID_UI } from "@/lib/launchFlags";
 
 interface ManagedMachine {
   id: string;            // /subscription returns the machine id as `id` (NOT _id)
@@ -44,9 +45,9 @@ interface ManagedMachine {
   runnersAuthorized?: boolean;
 }
 
-// Web-only checkout is allowed here. Mobile surfaces may control existing
-// machines, but must not initiate purchases.
-const HIDE_PAID_UI = false;
+// HIDE_PAID_UI comes from @/lib/launchFlags (the ONE launch flag) — never a
+// local shadow, which is how the paid panel would reappear after the master
+// switch was flipped off.
 
 type PaidProductId = "relay-pro" | "cloud-workspace";
 
