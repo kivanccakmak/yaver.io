@@ -1,26 +1,46 @@
 /**
- * screenContext.ts — the browser half of "the agent knows which screen you're
- * looking at".
+ * screenContext.ts — the PHONE half of "the agent knows which screen you're
+ * looking at". Twin of web/lib/screenContext.ts.
  *
- * The agent injects a probe into every HTML document it serves for a preview
- * (desktop/agent/screen_context_probe.js). The probe cannot talk to the agent
- * directly: the `/dev/` preview route is deliberately unauthenticated, so a
- * page writing straight into the agent would be an unkeyed prompt-injection
- * channel. Instead it `postMessage`s its observation to whoever embedded it —
- * this dashboard — and we forward it over the session's own authenticated
- * channel.
+ * ── Why this file exists ──────────────────────────────────────────────────
+ *
+ * The agent injects one probe into every HTML document it serves for a preview
+ * (desktop/agent/screen_context_probe.js), and that probe has ALWAYS had an
+ * explicit React Native branch:
+ *
+ *     lane: window.ReactNativeWebView ? "webview" : "browser"
+ *     if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage)
+ *
+ * Code written for exactly one consumer — this phone. Until this file landed,
+ * that consumer did not exist: the message arrived at both mobile WebView
+ * previews and fell into a bare `catch {}`. The phone paid for the probe (the
+ * bytes, the poll, the postMessage) and got nothing, while the web dashboard
+ * got the feature. That is the "inventory says yes / operation says no" shape
+ * this repo keeps finding, wearing a cross-surface hat.
+ *
+ * ── The security path, which is NOT negotiable ────────────────────────────
+ *
+ * The probe cannot talk to the agent directly: `/dev/` is deliberately
+ * unauthenticated, so a page writing straight into the agent would be an
+ * unkeyed prompt-injection channel — anyone who can reach :18080 could dictate
+ * text into somebody else's AI prompt. So the probe posts to its HOST SURFACE
+ * and the surface forwards over its own authenticated channel. On the phone
+ * that means `quicClient` (bearer token, relay/direct as usual) — never a bare
+ * fetch to the dev-server origin. See screenContextBridge.ts.
  *
  * This module is the pure part: validating a message that arrived from a
- * cross-origin frame, clamping it, and describing it to the user. It has no
- * React and no network, so all of it is testable (screenContext.test.ts).
+ * WebView running a third-party app, clamping it, and describing it to the
+ * user. No React, no React Native, no network — so all of it runs under
+ * `node --experimental-strip-types --test` (screenContext.test.mts).
  *
- * TRUST NOTE: everything arriving through `window.onmessage` is untrusted
- * input. The preview frame renders a THIRD-PARTY app — the user's own project,
- * but not our code — and any page on the internet can post to any window. So
- * `parseScreenContextMessage` is a validating parser, not a cast: unknown
- * fields are dropped, every string is clamped, and the agent re-normalises and
- * re-clamps everything again on receipt (NormalizeScreenContext). Two
- * independent clamps because this text ends up adjacent to a user's prompt.
+ * TRUST NOTE: everything arriving through the WebView's `onMessage` is
+ * untrusted input. The preview renders a THIRD-PARTY app — the user's own
+ * project, but not our code — and any script in that page can post any string
+ * it likes. So `parseScreenContextMessage` is a validating parser, not a cast:
+ * unknown fields are dropped, every string is clamped, and the agent
+ * re-normalises and re-clamps everything again on receipt
+ * (NormalizeScreenContext). Two independent clamps because this text ends up
+ * adjacent to a user's prompt.
  */
 
 /** Mirrors the Go `ScreenContext` wire shape (desktop/agent/screen_context.go). */
@@ -43,7 +63,7 @@ export const MAX_SCREEN_ROUTE = 200;
 export const SCREEN_CONTEXT_MESSAGE = "yaver-screen-context";
 export const SCREEN_CONTEXT_SOURCE = "yaver-screen";
 
-/** localStorage key for the user's opt-out. Per-browser, not per-project: the
+/** Storage key for the user's opt-out. Per-device, not per-project: the
  *  setting is a privacy preference about this machine's screen, not a project
  *  attribute. */
 export const SCREEN_CONTEXT_PREF_KEY = "yaver.screenContext.enabled";
@@ -174,29 +194,36 @@ export function sameScreenContext(a: ScreenContext | null, b: ScreenContext | nu
 
 // ── PLATFORM STORAGE ──────────────────────────────────────────────────────
 //
-// Everything ABOVE this line is pure and is byte-identical to the mobile twin
-// (mobile/src/lib/screenContext.ts); the parity test in that file pins it, and
-// it is the half a hostile postMessage actually meets. Everything BELOW is
-// where the two surfaces legitimately differ: the browser has a synchronous
-// localStorage, React Native does not. Same exported names, same defaults, same
-// meaning of "off" — different store. Move a function across this line and the
-// parity test fails, which is the point.
+// Everything ABOVE this line is pure and is byte-identical to the web twin
+// (web/lib/screenContext.ts) — pinned by the parity test in screenContext.test.mts.
+// Everything BELOW is where the two surfaces legitimately differ: the browser
+// has a synchronous localStorage, React Native does not. Same exported names,
+// same defaults, same meaning of "off" — different store.
 
-/** Read the opt-out. Default ON, and safe on the server (no localStorage). */
+// The pref is held in memory here and PERSISTED BY screenContextBridge.ts.
+//
+// It is split that way for one concrete reason: React Native's only storage is
+// asynchronous (AsyncStorage), and `isScreenContextEnabled()` is called on the
+// hot path — once per probe post, inside a WebView message handler — where an
+// await would mean the first observations of every preview race the read and
+// get forwarded under a default the user may have turned off. A synchronous
+// read of a hydrated cache cannot do that.
+//
+// It also keeps this file import-free, which is what lets the whole parser run
+// under `node --test` with no React Native runtime. Importing AsyncStorage here
+// would make the parser — the part that meets hostile input — untestable, and
+// an untested validating parser is just a cast with a comment.
+//
+// The consequence to know about: calling `setScreenContextEnabled` DIRECTLY
+// changes this session only. UI must go through `screenContextBridge.setEnabled`,
+// which writes the store AND deletes what the agent is already holding.
+let screenContextEnabled = true;
+
+/** Read the opt-out. Default ON. Synchronous by design — see above. */
 export function isScreenContextEnabled(): boolean {
-  try {
-    if (typeof window === "undefined" || !window.localStorage) return true;
-    return window.localStorage.getItem(SCREEN_CONTEXT_PREF_KEY) !== "0";
-  } catch {
-    return true;
-  }
+  return screenContextEnabled;
 }
 
 export function setScreenContextEnabled(on: boolean): void {
-  try {
-    if (typeof window === "undefined" || !window.localStorage) return;
-    window.localStorage.setItem(SCREEN_CONTEXT_PREF_KEY, on ? "1" : "0");
-  } catch {
-    /* private mode — the in-memory state still applies for this session */
-  }
+  screenContextEnabled = on;
 }

@@ -24,6 +24,7 @@ import { PREVIEW_READY_SCRIPT } from "../lib/previewReadyScript";
 import { detectCompileFailure } from "../lib/compileFailure";
 import { previewBundlePath } from "../lib/previewBundlePath";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../lib/previewPhase";
+import { handlePreviewScreenMessage } from "../lib/screenContextBridge";
 import {
   capabilityGapFromDevEvent,
   capabilityGapFromStatus,
@@ -1027,6 +1028,13 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                 onMessage={(e) => {
                   try {
                     const m = JSON.parse(e.nativeEvent.data);
+                    // Screen context FIRST — this is the message the agent's
+                    // injected probe posts through its RN branch
+                    // (window.ReactNativeWebView.postMessage). It used to land
+                    // in the catch below and die, so the phone paid for the
+                    // probe and got none of the feature. Forwarded over the
+                    // authed quicClient, never straight from the page.
+                    if (handlePreviewScreenMessage(m, status?.workDir)) return;
                     if (m && (m.t === "yaver-preview-probe" || m.t === "yaver-preview-timeout")) {
                       setPreviewProbe((m.state || null) as PreviewProbeState | null);
                       if (m.t === "yaver-preview-timeout") {

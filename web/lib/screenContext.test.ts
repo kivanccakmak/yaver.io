@@ -88,6 +88,38 @@ test("clamps label length and control count", () => {
   }
 });
 
+/** A high surrogate with no low after it, or a low with no high before it. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+test("truncation is rune-safe — the 2026-07-27 mojibake bug", () => {
+  // THE BUG THIS PINS: `clamp` used `flat.slice(0, max - 1)`, which counts
+  // UTF-16 units. "😀".repeat(60) sliced at 79 ends on the HIGH half of a
+  // surrogate pair, and that lone surrogate becomes "�" the instant the report
+  // is JSON-encoded as UTF-8 and POSTed to the agent. Go had guarded this from
+  // the start (screen_context.go::truncateRunes); both JS twins had not.
+  //
+  // Offsets are swept because the defect only fires when the cut lands on an
+  // odd boundary — a single fixture passes on a broken parser half the time.
+  for (let pad = 0; pad < 6; pad++) {
+    const label = parseScreenContextMessage(
+      sfmgMessage({ controls: ["a".repeat(pad) + "😀".repeat(60)] }),
+    )!.controls![0];
+    assert.ok(!LONE_SURROGATE.test(label), `pad=${pad}: label ends mid-surrogate`);
+    assert.equal(Buffer.from(label, "utf8").toString("utf8"), label, `pad=${pad}: mojibake`);
+    assert.ok(!label.includes("�"), `pad=${pad}: replacement character`);
+    // Capped on CODE POINTS, matching Go's []rune cap.
+    assert.ok([...label].length <= MAX_SCREEN_LABEL, `pad=${pad}: not capped`);
+  }
+  // Turkish — the language of the incident. BMP, so UTF-16-safe already, but it
+  // must still say that it truncated and survive a UTF-8 round trip.
+  const tr = parseScreenContextMessage(
+    sfmgMessage({ controls: ["İleri düğmesine bastığınızda kaydedilir — çünkü şöyle ".repeat(8)] }),
+  )!.controls![0];
+  assert.ok(tr.startsWith("İleri"), `Turkish head mangled: ${tr}`);
+  assert.ok(tr.endsWith("…"), "truncated label does not say it was truncated");
+  assert.equal(Buffer.from(tr, "utf8").toString("utf8"), tr);
+});
+
 test("drops non-string controls and dedupes case-insensitively", () => {
   const ctx = parseScreenContextMessage(
     sfmgMessage({ controls: ["Delete", "delete", null, 7, { evil: true }, "  İleri \n → "] }),

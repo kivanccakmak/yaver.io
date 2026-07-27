@@ -47,6 +47,7 @@ import { shouldPollDevStatus } from "../../src/lib/devStatusPolling";
 import { detectCompileFailure } from "../../src/lib/compileFailure";
 import { previewBundlePath } from "../../src/lib/previewBundlePath";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../../src/lib/previewPhase";
+import { handlePreviewScreenMessage } from "../../src/lib/screenContextBridge";
 import {
   capabilityGapFromDevEvent,
   capabilityGapFromError,
@@ -3328,6 +3329,14 @@ export default function AppsScreen() {
               onMessage={(e) => {
                 try {
                   const m = JSON.parse(e.nativeEvent.data);
+                  // Screen context FIRST — the agent's injected probe has always
+                  // had an RN branch (window.ReactNativeWebView.postMessage)
+                  // written for exactly this handler, and until this line
+                  // existed the message fell into the catch below. The phone
+                  // paid for the probe and web got the feature. Forwarded over
+                  // the authed quicClient, never straight from the page (/dev/
+                  // is unauthenticated by design).
+                  if (handlePreviewScreenMessage(m, devStatus?.workDir)) return;
                   if (m && (m.t === "yaver-preview-probe" || m.t === "yaver-preview-timeout")) {
                     setWebPreviewProbe((m.state || null) as PreviewProbeState | null);
                     if (m.t === "yaver-preview-timeout") {

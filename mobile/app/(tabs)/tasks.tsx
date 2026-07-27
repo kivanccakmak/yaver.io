@@ -97,6 +97,7 @@ import { transcribe, initWhisper, isWhisperReady, startRealtimeTranscribe, SPEEC
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { DevPreview } from "../../src/components/DevPreview";
 import { Badge } from "../../src/components/Badge";
+import { ScreenContextChip } from "../../src/components/ScreenContextChip";
 import RunnerAuthModal from "../../src/components/RunnerAuthModal";
 import { OpenCodeConfigModal } from "../../src/components/OpenCodeConfigModal";
 import {
@@ -5358,6 +5359,12 @@ export default function TasksScreen() {
                   )}
                 </View>
               </View>
+              {/* Screen context — states, in plain language, that the agent is
+                  about to prepend a description of the screen you're previewing
+                  to what you type, names WHICH screen, and lets you switch it
+                  off (which deletes what was already reported). Silent prompt
+                  mutation is a defect; this is the disclosure. */}
+              <ScreenContextChip workDir={projectDir} style={{ marginBottom: 8 }} />
               <View
                 style={[
                   s.composerShell,
@@ -6411,6 +6418,12 @@ export default function TasksScreen() {
                       </Pressable>
                       {isRunning && <ActivityIndicator size="small" color={c.accent} />}
                     </View>
+                    {/* What the agent is holding about the screen you're
+                        previewing. Follow-ups are exactly the turn where "make
+                        THIS screen red" gets said, and screen_context_turn.go
+                        attaches on every turn — so the disclosure has to be
+                        here too, not only on the first message. */}
+                    <ScreenContextChip workDir={projectDir} style={{ marginBottom: 8 }} />
                     <TextInput
                       // testIDs on the composer exist so the follow-up loop can
                       // be driven by maestro (mobile/maestro/followup-visible.yaml).

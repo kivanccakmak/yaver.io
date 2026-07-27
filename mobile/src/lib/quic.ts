@@ -453,6 +453,20 @@ export interface OpenCodeConfigSummary {
   diagnostics?: string[];
 }
 
+/** Wire shape of POST /screen-context (desktop/agent/screen_context.go).
+ *  Mirrors web/lib/agent-client.ts::ScreenContextReport. `workDir` is required:
+ *  the agent stores screen context per project and answers 400 without it,
+ *  rather than accepting a report it could never serve back. */
+export interface ScreenContextReport {
+  workDir: string;
+  route?: string;
+  title?: string;
+  heading?: string;
+  controls?: string[];
+  component?: string;
+  lane?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -3801,6 +3815,51 @@ export class QuicClient {
     });
     if (!res.ok) throw new Error(`Failed to implement todo: ${res.status}`);
     return res.json();
+  }
+
+  // ── Screen context ─────────────────────────────────────────────────
+  //
+  // Forwarding half of "the agent knows which screen you're looking at". The
+  // probe the agent injects into a preview posts its observation to this app
+  // (window.ReactNativeWebView.postMessage) because it CANNOT call the agent
+  // itself — the /dev/ preview route is unauthenticated by design, so a direct
+  // post would be an unkeyed prompt-injection channel. We relay it over this
+  // client's own authenticated channel: same bearer token, same relay-or-direct
+  // routing, same boundary as every other call here. Never a bare fetch to the
+  // dev-server origin.
+  //
+  // See src/lib/screenContextBridge.ts, desktop/agent/screen_context_http.go.
+
+  /** Report the screen currently rendered in the preview for `workDir`. */
+  async reportScreenContext(ctx: ScreenContextReport): Promise<void> {
+    if (!this.isConnected || !ctx.workDir) return;
+    // Deliberately swallow failures. This is ADVISORY context: it must never
+    // sit in the critical path of the prompt the user is trying to send, and a
+    // toast about a failed screen report would be pure noise.
+    try {
+      await fetch(`${this.baseUrl}/screen-context`, {
+        method: 'POST',
+        headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify(ctx),
+      });
+    } catch {
+      /* advisory only */
+    }
+  }
+
+  /** Drop what we already reported. Called when the user opts out or the
+   *  preview closes, so "off" means the agent is not holding their screen —
+   *  not that it holds it and promises not to look. */
+  async clearScreenContext(workDir: string): Promise<void> {
+    if (!this.isConnected || !workDir) return;
+    try {
+      await fetch(`${this.baseUrl}/screen-context?workDir=${encodeURIComponent(workDir)}`, {
+        method: 'DELETE',
+        headers: this.authHeaders,
+      });
+    } catch {
+      /* advisory only */
+    }
   }
 
   /** Toggle auto-consume mode. */
