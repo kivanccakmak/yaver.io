@@ -121,11 +121,38 @@ test("no web surface subscribes to task output without an end handler", () => {
     const src = readFileSync(join(WEB, rel), "utf8");
     const bare = src.split("agentClient.streamTaskOutput(").length - 1;
     const wrapped = src.split("streamTaskOutputWithRecovery(").length - 1;
-    const hasOwnOnEnd = /onEnd:\s*\(/.test(src);
+    // COUNT the onEnd handlers, do not merely detect one. This assertion used
+    // to be `bare === 0 || /onEnd:\s*\(/.test(src)` — a FILE-level test — and
+    // VibeCodingView.tsx passed it while carrying two bare call sites and one
+    // onEnd: the hand-wired transcript stream satisfied the regex and the graph
+    // node's tail rode along unguarded, freezing on its last line with nothing
+    // said. A per-file boolean cannot express a per-call-site obligation.
+    const guarded = src.split(/onEnd:\s*\(/).length - 1;
     assert.ok(
-      bare === 0 || hasOwnOnEnd,
-      `${rel} calls agentClient.streamTaskOutput directly with no onEnd — a severed stream freezes this surface on its last frame ` +
-        `(wrapped=${wrapped}, bare=${bare}). Use streamTaskOutputWithRecovery.`,
+      bare <= guarded,
+      `${rel} has ${bare} direct agentClient.streamTaskOutput call(s) but only ${guarded} onEnd handler(s) — ` +
+        `at least one severed stream freezes this surface on its last frame (wrapped=${wrapped}). ` +
+        "Use streamTaskOutputWithRecovery, or give every call site its own onEnd.",
+    );
+  }
+});
+
+test("mobile's hand-wired stream call sites each carry since + onEnd", () => {
+  // Mobile has no streamTaskOutputWithRecovery wrapper — every screen wires the
+  // ladder itself, so the obligation is per call site and nothing was checking
+  // it at all. dogfood.tsx streamed a whole session tail with neither `since`
+  // nor `onEnd` for exactly that reason.
+  const repoRoot = join(WEB, "..");
+  const sites = ["mobile/app/(tabs)/tasks.tsx", "mobile/app/(tabs)/dogfood.tsx"];
+  for (const rel of sites) {
+    const src = readFileSync(join(repoRoot, rel), "utf8");
+    const bare = src.split("quicClient.streamTaskOutput(").length - 1;
+    if (bare === 0) continue;
+    const guarded = src.split(/onEnd:\s*\(/).length - 1;
+    assert.ok(
+      bare <= guarded,
+      `${rel} has ${bare} streamTaskOutput call(s) but only ${guarded} onEnd handler(s) — ` +
+        "a dropped stream leaves that view frozen on its last line with nothing said.",
     );
   }
 });

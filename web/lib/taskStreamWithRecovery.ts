@@ -33,7 +33,9 @@ export type TaskStreamHealth = {
 export interface TaskStreamSource {
   streamTaskOutput(
     taskId: string,
-    onChunk: (chunk: string) => void,
+    /** `offset` is the agent's authoritative byte cursor for `?since=`; it is
+     *  optional because an agent older than that field does not send it. */
+    onChunk: (chunk: string, offset?: number) => void,
     onEvent?: (event: Record<string, unknown>) => void,
     opts?: {
       since?: number;

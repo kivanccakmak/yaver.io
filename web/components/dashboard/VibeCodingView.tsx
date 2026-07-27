@@ -358,6 +358,19 @@ export default function VibeCodingView({
   const [projects, setProjects] = useState<Project[]>([]);
   const [runners, setRunners] = useState<Runner[]>([]);
   const [selectedProjectPath, setSelectedProjectPath] = useState("");
+  // Deep link from the Projects wizard: /dashboard?tab=vibe&project=<path>
+  // [&app=<monorepo-app>][&preview=web]. Read once at mount — the wizard's
+  // "Vibe in browser" routes here so the user lands with the project
+  // preselected and the web preview starting, instead of the first project
+  // in the list and a cold preview.
+  const deepLinkRef = useRef<{ project: string; app: string; preview: string } | null>(
+    (() => {
+      if (typeof window === "undefined") return null;
+      const params = new URLSearchParams(window.location.search);
+      const project = params.get("project") || "";
+      return project ? { project, app: params.get("app") || "", preview: params.get("preview") || "" } : null;
+    })(),
+  );
   const [selectedRunner, setSelectedRunner] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
   // OpenCode-specific: which agent (build / plan / custom) drives the
@@ -750,7 +763,27 @@ export default function VibeCodingView({
         );
 
         if (!selectedProjectPath && projectRows.length > 0) {
-          setSelectedProjectPath(projectRows[0].path);
+          const wanted = deepLinkRef.current;
+          const tail = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() || p;
+          const match = wanted
+            ? projectRows.find((row) => row.path === wanted.project) ||
+              projectRows.find((row) => tail(row.path) === tail(wanted.project))
+            : null;
+          setSelectedProjectPath((match || projectRows[0]).path);
+          if (wanted && match && wanted.preview === "web") {
+            // Start the web preview the Projects wizard promised — the same
+            // request shape as startPreview()/the projects tab, monorepo-aware
+            // via app+root when the wizard named a workspace app.
+            deepLinkRef.current = null;
+            void agentClient
+              .startDevServer(
+                wanted.app
+                  ? { app: wanted.app, root: match.path, platform: "web", surface: "web-reload" }
+                  : { framework: match.framework || "", workDir: match.path, platform: "web", surface: "web-reload" },
+              )
+              .then(() => setRefreshNonce((value) => value + 1))
+              .catch(() => {});
+          }
         }
         const installed = (runnerRows || []).filter((runner) => runner.installed);
         const ready = installed.filter((runner) => runner.ready);
@@ -1007,10 +1040,49 @@ export default function VibeCodingView({
       return;
     }
     setGraphNodeOutput("");
-    const stop = agentClient.streamTaskOutput(runningGraphNode.taskId, (chunk) => {
-      setGraphNodeOutput((prev) => capStreamText(prev + extractOutputText(chunk)));
-    });
-    return stop;
+    // Resume + narrate, like every other transcript on this page. This call
+    // site passed no `since` and no `onEnd`, so a relay bounce left the graph
+    // node's output frozen on its last line with nothing said — the reader
+    // cannot tell a finished step from a dropped stream, which is the original
+    // silent-freeze defect surviving in a second window.
+    let received = 0;
+    let attempt = 0;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stop: (() => void) | null = null;
+
+    const subscribe = (since: number) => {
+      if (disposed) return;
+      stop = agentClient.streamTaskOutput(
+        runningGraphNode!.taskId!,
+        (chunk, offset) => {
+          if (typeof offset === "number") received = offset;
+          else received += String(chunk || "").length;
+          attempt = 0;
+          setGraphNodeOutput((prev) => capStreamText(prev + extractOutputText(chunk)));
+        },
+        undefined,
+        {
+          since,
+          onEnd: (info) => {
+            if (disposed) return;
+            const plan = planStreamRecovery({ end: classifyStreamEnd(info), attempt, cause: info.error });
+            if (plan.action === "idle") return;
+            setGraphNodeOutput((prev) => capStreamText(`${prev}\n[${plan.message}]\n`));
+            if (plan.action === "give-up") return;
+            attempt += 1;
+            timer = setTimeout(() => subscribe(received), plan.delayMs);
+          },
+        },
+      );
+    };
+
+    subscribe(0);
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      stop?.();
+    };
   }, [runningGraphNode?.taskId]);
 
   useEffect(() => {

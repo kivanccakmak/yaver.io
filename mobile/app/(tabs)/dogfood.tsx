@@ -25,6 +25,7 @@ import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { AppScreenHeader } from "../../src/components/AppScreenHeader";
 import { DogfoodAnnotateModal, type DogfoodAnnotateResult } from "../../src/components/DogfoodAnnotateModal";
+import { classifyStreamEnd, planStreamRecovery } from "../../src/lib/taskStreamRecovery";
 import { useColors } from "../../src/context/ThemeContext";
 import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
@@ -563,19 +564,56 @@ function DogfoodSession({ item, c, onOpenTasks }: { item: DogfoodItem; c: any; o
 
   React.useEffect(() => {
     if (!item.taskId) return;
-    const abort = quicClient.streamTaskOutput(
-      item.taskId,
-      (text: string) => {
-        const incoming = text.split("\n").filter(Boolean);
-        bufRef.current = [...bufRef.current, ...incoming].slice(-120);
-        setLines(bufRef.current.slice());
-      },
-      (st: string) => {
-        setStatus(st);
-        const done = st === "completed" || st === "review";
-        void updateDogfoodItem(item.id, { status: done ? "done" : st === "failed" ? "failed" : item.status });
-      },
-    );
+    // Resume + narrate. This call site passed no `since` and no `onEnd`, so a
+    // relay bounce or a backgrounded phone left the session tail frozen on its
+    // last line saying nothing — indistinguishable from a run that finished
+    // quietly. That is the silent-freeze defect the recovery ladder exists to
+    // remove, surviving here because this screen was wired by hand.
+    let received = 0;
+    let attempt = 0;
+    let disposed = false;
+    let reattachTimer: ReturnType<typeof setTimeout> | undefined;
+    let abortFn: (() => void) | null = null;
+
+    const subscribe = (since: number) => {
+      if (disposed) return;
+      abortFn = quicClient.streamTaskOutput(
+        item.taskId!,
+        (text: string, offset?: number) => {
+          if (typeof offset === "number") received = offset;
+          else received += text.length;
+          attempt = 0;
+          const incoming = text.split("\n").filter(Boolean);
+          bufRef.current = [...bufRef.current, ...incoming].slice(-120);
+          setLines(bufRef.current.slice());
+        },
+        (st: string) => {
+          setStatus(st);
+          const done = st === "completed" || st === "review";
+          void updateDogfoodItem(item.id, { status: done ? "done" : st === "failed" ? "failed" : item.status });
+        },
+        undefined,
+        {
+          since,
+          onEnd: (info) => {
+            if (disposed) return;
+            const plan = planStreamRecovery({ end: classifyStreamEnd(info), attempt, cause: info.error });
+            if (plan.action === "idle") return;
+            bufRef.current = [...bufRef.current, `[${plan.message}]`].slice(-120);
+            setLines(bufRef.current.slice());
+            if (plan.action === "give-up") return;
+            attempt += 1;
+            reattachTimer = setTimeout(() => subscribe(received), plan.delayMs);
+          },
+        },
+      );
+    };
+    subscribe(0);
+    const abort = () => {
+      disposed = true;
+      if (reattachTimer) clearTimeout(reattachTimer);
+      abortFn?.();
+    };
     return () => {
       try {
         abort();
