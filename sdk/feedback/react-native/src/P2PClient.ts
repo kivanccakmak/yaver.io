@@ -12,6 +12,9 @@ import {
   TestSession,
   VoiceCapability,
 } from './types';
+import { AGENT_ENDPOINTS } from './_core/endpoints';
+import { RELOAD_PATH, describeReloadFailure } from './reloadActions';
+import type { DevServerSnapshot, ReloadWireMode } from './reloadActions';
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   const maybeNodeTimer = timer as unknown as { unref?: () => void };
@@ -699,6 +702,82 @@ export class P2PClient {
    * via the BlackBox command channel.
    * @param mode - "dev" for hot reload, "bundle" for native bundle rebuild
    */
+  /**
+   * Read the dev server's state so the overlay can decide WHICH reload
+   * actions to offer, and disable the rest with a reason.
+   *
+   * Returns null when the machine cannot be reached at all — which the
+   * caller must render as "not connected", never as "no dev server".
+   * Those are two different problems with two different fixes.
+   */
+  async getDevServerStatus(): Promise<DevServerSnapshot | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}${AGENT_ENDPOINTS.devStatus}`, {
+        headers: this.authHeaders(),
+      });
+      if (!resp.ok) return null;
+      const data = await resp.json().catch(() => ({} as Record<string, unknown>));
+      return {
+        running: data.running === true,
+        building: data.building === true,
+        framework: typeof data.framework === 'string' ? data.framework : undefined,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Trigger a reload with an EXPLICIT fast/full mode — no bundle fallback.
+   *
+   * `reloadApp('dev')` silently falls through to a bundle rebuild when the
+   * dev server is down, which is right for a one-button UX and wrong the
+   * moment the user picks between two named actions: someone who pressed
+   * "Full Reload" must not get a 60-second bundle rebuild without being
+   * told. So this method reports the failure instead, with a named cause.
+   *
+   * Auth: the SAME bearer used for the feedback POST. `/dev/reload` is
+   * registered under `authSDKOrGuest` in desktop/agent/httpserver.go and is
+   * already in the `guest-reload` SDK-token scope list — nothing widens.
+   */
+  async reloadWithMode(
+    mode: ReloadWireMode,
+    snapshot?: DevServerSnapshot | null,
+  ): Promise<ReloadAck> {
+    if (mode === 'bundle') return this.reloadApp('bundle');
+
+    let resp: Response;
+    try {
+      resp = await fetch(`${this.baseUrl}${RELOAD_PATH}`, {
+        method: 'POST',
+        headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ mode }),
+      });
+    } catch (err) {
+      throw new Error(
+        describeReloadFailure(0, err instanceof Error ? err.message : '', snapshot),
+      );
+    }
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(describeReloadFailure(resp.status, text, snapshot));
+    }
+    const payload = await resp.json().catch(() => ({} as Record<string, unknown>));
+    const nativeChangesDetected = payload.nativeChangesDetected === true;
+    return {
+      ok: true,
+      mode: 'dev',
+      acknowledged: true,
+      nativeChangesDetected,
+      changeClass: typeof payload.changeClass === 'string' ? payload.changeClass : undefined,
+      message: nativeChangesDetected
+        ? 'Reload accepted, but native files changed — a rebuild is required.'
+        : mode === 'full'
+          ? 'Full reload requested.'
+          : 'Hot reload requested.',
+    };
+  }
+
   async reloadApp(
     mode: 'dev' | 'bundle' = 'bundle',
     opts?: { projectName?: string; bundleId?: string; projectPath?: string },

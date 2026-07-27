@@ -38,6 +38,8 @@ import { QuickActionIcon } from './QuickActionIcon';
 import { VibeChatScreen } from './VibeChatScreen';
 import { DeployPanel } from './DeployPanel';
 import { listReachableDevices, RemoteDevice } from './auth';
+import { reloadActions } from './reloadActions';
+import type { DevServerSnapshot, ReloadAction } from './reloadActions';
 import {
   QUICK_ICON_COLOR_PRESETS,
   QuickIconColorPreset,
@@ -196,6 +198,11 @@ export const FeedbackModal: React.FC = () => {
   // is our guaranteed UI for bringing the icon back — we surface a
   // small "Show quick icon" row when this is true.
   const [quickIconHidden, setQuickIconHidden] = useState(false);
+  // Dev-server snapshot behind the reload buttons. `null` means "we have not
+  // been able to ask" — rendered as "not connected", never as "no dev server".
+  const [devSnapshot, setDevSnapshot] = useState<DevServerSnapshot | null>(null);
+  // Which reload action is in flight, so only that button spins.
+  const [reloadingId, setReloadingId] = useState<string | null>(null);
   const [runnerAuthModal, setRunnerAuthModal] = useState<string | null>(null);
   // Vibing-input mode: same expand-on-tap pattern as email login.
   // Tap "Vibing" once → the button reveals an input + Send; that lets
@@ -226,6 +233,28 @@ export const FeedbackModal: React.FC = () => {
   const [preferredModel, setPreferredModelState] = useState('');
   const [showOpenCodeConfig, setShowOpenCodeConfig] = useState(false);
   const mountedRef = useRef(true);
+
+  /**
+   * Ask the machine what its dev server is doing, so the reload actions can
+   * be enabled/disabled against reality rather than against a guess.
+   *
+   * Best-effort and deliberately null-on-failure: null means "we could not
+   * ask", which the seam renders as "not connected to a machine yet" — a
+   * different sentence from "no dev server is running", because they have
+   * different fixes.
+   */
+  const refreshDevSnapshot = useCallback(async () => {
+    try {
+      const client = YaverFeedback.getP2PClient();
+      if (!client) {
+        setDevSnapshot(null);
+        return;
+      }
+      setDevSnapshot(await client.getDevServerStatus());
+    } catch {
+      setDevSnapshot(null);
+    }
+  }, []);
 
   const loadSelectedMachine = useCallback(async () => {
     const cfg = YaverFeedback.getConfig();
@@ -449,12 +478,18 @@ export const FeedbackModal: React.FC = () => {
 
   useEffect(() => {
     if (!visible) return;
+    // Poll the dev server alongside the machine + runners. A reload button
+    // whose enabled state was decided once, when the sheet opened, goes
+    // stale the moment the user starts Metro from another surface — and a
+    // stale "no dev server is running" reads as the product being broken.
+    void refreshDevSnapshot();
     const interval = setInterval(() => {
       void loadSelectedMachine();
       void loadRunnerStatuses();
+      void refreshDevSnapshot();
     }, 5000);
     return () => clearInterval(interval);
-  }, [loadRunnerStatuses, loadSelectedMachine, visible]);
+  }, [loadRunnerStatuses, loadSelectedMachine, refreshDevSnapshot, visible]);
 
   useEffect(() => {
     if (!visible) {
@@ -543,7 +578,87 @@ export const FeedbackModal: React.FC = () => {
     [],
   );
 
-  // ─── 1. Hot reload ─────────────────────────────────────────────────
+  // ─── 1. Reload ─────────────────────────────────────────────────────
+  //
+  // Three actions now, not one: Hot Reload (mode=fast), Full Reload
+  // (mode=full — Flutter's hot RESTART), and Rebuild Bundle
+  // (/dev/reload-app, the only one that works with Metro down).
+  //
+  // WHICH of them render, and which are disabled with what reason, is
+  // decided by the pure `reloadActions()` seam — never inline here, so the
+  // same policy holds on web, Flutter, Unity, Swift and Kotlin. In
+  // particular: a production build (`__DEV__ === false`) gets NONE of them.
+
+  const availableReloadActions = reloadActions(devSnapshot, {
+    // __DEV__ is React Native's own build flag. A release bundle sets it
+    // false, so a shipped app renders no reload UI at all — which is the
+    // point, and is what reloadActions.test.ts pins.
+    isDevBuild: typeof __DEV__ !== 'undefined' && __DEV__ === true,
+    connected: devSnapshot !== null,
+    machineLabel: machineCard.device?.name || undefined,
+    includeRebuild: true,
+  });
+
+  const handleReloadAction = useCallback(
+    async (reloadAction: ReloadAction) => {
+      if (!reloadAction.enabled) {
+        // Pressing a disabled action must SAY why. A row that does nothing
+        // is the same defect as a spinner that never resolves.
+        setToast(reloadAction.disabledReason || 'Reload is unavailable right now.');
+        setError(reloadAction.disabledReason || null);
+        return;
+      }
+      setReloadingId(reloadAction.id);
+      setAction('hot-reloading');
+      setError(null);
+      setProgress(0);
+      setToast(`${reloadAction.label}…`);
+      try {
+        await loadSelectedMachine();
+        const selected = await YaverFeedback.getSelectedRemoteDevice();
+        if (!selected) {
+          YaverFeedback.showMachinePicker();
+          throw new Error('No machine selected. Pick a machine and try again.');
+        }
+        if (selected.needsAuth) {
+          YaverFeedback.showMachinePicker();
+          throw new Error('Selected machine needs pairing again.');
+        }
+        if (!selected.isOnline) {
+          throw new Error('Selected machine is offline. Start `yaver serve` on it first.');
+        }
+
+        let ackMessage = `${reloadAction.label} requested.`;
+        await runWithReconnect(async (client) => {
+          const ack = await client.reloadWithMode(reloadAction.mode, devSnapshot);
+          ackMessage = ack.message;
+          setToast(ack.message);
+          setProgress(0.2);
+        });
+        setToast(ackMessage);
+        if (reloadAction.mode === 'bundle') closeSoon(2500);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        setError(message);
+        setToast(
+          message.toLowerCase().indexOf('session expired') >= 0
+            ? 'Session expired. Sign in again.'
+            : message,
+        );
+        await loadSelectedMachine();
+        setProgress(null);
+      } finally {
+        if (mountedRef.current) {
+          setAction('idle');
+          setReloadingId(null);
+          void refreshDevSnapshot();
+        }
+      }
+    },
+    [closeSoon, devSnapshot, loadSelectedMachine, refreshDevSnapshot, runWithReconnect],
+  );
+
+  /** Kept for the legacy one-tap path (BlackBox command, chat Reload button). */
   const handleHotReload = useCallback(async () => {
     setAction('hot-reloading');
     setError(null);
@@ -1133,16 +1248,36 @@ export const FeedbackModal: React.FC = () => {
                 </View>
               </View>
 
-              {/* 1. Hot Reload — the common path */}
-              <ActionRow
-                label={
-                  action === 'hot-reloading' ? 'Reloading…' : 'Hot Reload'
-                }
-                tint="#fbbf24"
-                onPress={handleHotReload}
-                disabled={busy}
-                busy={action === 'hot-reloading'}
-              />
+              {/* 1. Reload — Hot / Full / Rebuild Bundle.
+                   Rendered from the shared decision seam, so a production
+                   build (__DEV__ false) renders nothing here at all, and a
+                   blocked action shows greyed WITH its reason underneath
+                   rather than vanishing. */}
+              {availableReloadActions.map((reloadAction) => (
+                <View key={reloadAction.id} style={styles.reloadRow}>
+                  <ActionRow
+                    label={
+                      reloadingId === reloadAction.id
+                        ? `${reloadAction.label}…`
+                        : reloadAction.label
+                    }
+                    tint={reloadAction.id === 'rebuild' ? '#38bdf8' : '#fbbf24'}
+                    onPress={() => {
+                      void handleReloadAction(reloadAction);
+                    }}
+                    // Never `disabled` at the Pressable level for a blocked
+                    // action: we WANT the tap so we can say why. Only a
+                    // genuinely busy modal blocks the press.
+                    disabled={busy && reloadingId !== reloadAction.id}
+                    busy={reloadingId === reloadAction.id}
+                  />
+                  <Text style={styles.reloadHint}>
+                    {reloadAction.enabled
+                      ? reloadAction.hint
+                      : reloadAction.disabledReason}
+                  </Text>
+                </View>
+              ))}
 
               {/* 3. Vibing — expands to an input box on first tap
                    so the user says WHAT they want to vibe on, just
@@ -1311,6 +1446,15 @@ const ActionRow: React.FC<ActionRowProps> = ({
 );
 
 const styles = StyleSheet.create({
+  reloadRow: {
+    gap: 4,
+  },
+  reloadHint: {
+    color: '#8b8b93',
+    fontSize: 11,
+    lineHeight: 15,
+    paddingHorizontal: 4,
+  },
   vibeInputRow: {
     backgroundColor: 'rgba(129,140,248,0.08)',
     borderColor: 'rgba(129,140,248,0.4)',

@@ -41,6 +41,21 @@ export type { YaverUpdatesConfig, PendingUpdate } from './YaverUpdates';
 export { initExpo } from './expo';
 export { YaverDiscovery } from './Discovery';
 export { P2PClient } from './P2PClient';
+export {
+  reloadActions,
+  reloadRequest,
+  reloadFrameworkFamily,
+  describeReloadFailure,
+  RELOAD_PATH,
+  RELOAD_APP_PATH,
+} from './reloadActions';
+export type {
+  ReloadAction,
+  ReloadActionId,
+  ReloadActionsOptions,
+  ReloadWireMode,
+  DevServerSnapshot,
+} from './reloadActions';
 export { YaverConnectionScreen } from './ConnectionScreen';
 export { YaverLoginScreen } from './LoginScreen';
 export type { YaverLoginScreenProps } from './LoginScreen';
