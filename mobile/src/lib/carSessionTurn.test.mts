@@ -79,3 +79,41 @@ test("dispatchSessionTurn speaks menu options when the session awaits a choice",
   assert.equal(result.awaitingChoice, true);
   assert.match(result.spoken, /Choose: 1\. Yes, continue\. 2\. No, exit\./);
 });
+
+test("dispatchSessionTurn refuses to summarize a prompt the agent could not confirm", async () => {
+  // The agent answered `200 {ok:true}` on any `tmux send-keys` exit 0, so a
+  // prompt typed into a pane that then did nothing summarized into a cheerful
+  // sentence and the user waited on a turn that never started. When the agent
+  // says it could not confirm delivery, the spoken line must say so too.
+  const result = await dispatchSessionTurn(
+    "fix the header",
+    async () => ({
+      ok: true,
+      session: "codex",
+      sent: "prompt",
+      awaitingChoice: false,
+      pane: "$ codex\n> ",
+      delivered: "unconfirmed",
+      deliveryNote: "The prompt was typed into the session, but the pane did not change afterwards.",
+    }),
+    false,
+  );
+  assert.match(result.spoken, /did not change|could not confirm/i);
+  assert.equal(result.awaitingChoice, false);
+});
+
+test("dispatchSessionTurn summarizes normally when delivery was observed", async () => {
+  const result = await dispatchSessionTurn(
+    "fix the header",
+    async () => ({
+      ok: true,
+      session: "codex",
+      sent: "prompt",
+      awaitingChoice: false,
+      pane: "Fixed the header.",
+      delivered: "observed",
+    }),
+    false,
+  );
+  assert.equal(result.spoken, "Fixed the header.");
+});

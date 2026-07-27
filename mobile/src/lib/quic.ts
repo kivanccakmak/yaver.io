@@ -9819,6 +9819,12 @@ export class QuicClient {
     awaitingChoice?: boolean;
     options?: string[];
     pane?: string;
+    /** "observed" | "unconfirmed" — what the agent could PROVE about a prompt
+     *  it typed. `tmux send-keys` exiting 0 never proved the runner received
+     *  it, so this endpoint used to assert ok:true with no evidence and the
+     *  caller span forever. Absent for a choice. */
+    delivered?: string;
+    deliveryNote?: string;
     error?: string;
   }> {
     if (!this.token) return { ok: false, error: "not signed in" };

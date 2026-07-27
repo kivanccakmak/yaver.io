@@ -64,8 +64,43 @@ type runnerSessionTurnResponse struct {
 	Options        []string `json:"options,omitempty"`
 	// Pane is the visible tail — enough for a TV to render and for a watch to
 	// summarize, without shipping a whole scrollback over a cellular link.
-	Pane  string `json:"pane,omitempty"`
-	Error string `json:"error,omitempty"`
+	Pane string `json:"pane,omitempty"`
+	// Delivered reports what we could OBSERVE about a prompt we typed:
+	// "observed" (the pane changed, so the keystrokes landed) or "unconfirmed"
+	// (it did not change at all). tmux exiting 0 only proves send-keys was
+	// accepted, never that the runner received or submitted anything — so
+	// `ok:true` alone was an assertion we had no evidence for. Empty for a
+	// choice, which confirms itself by advancing the menu.
+	Delivered string `json:"delivered,omitempty"`
+	// DeliveryNote is the plain-language sentence for an "unconfirmed" verdict,
+	// for a surface to render or speak instead of implying the prompt ran.
+	DeliveryNote string `json:"deliveryNote,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+// classifyPromptDelivery turns a before/after pane pair into an honest verdict
+// about a prompt we just typed.
+//
+// The defect it closes: this endpoint answered `200 {ok:true, sent:"prompt"}`
+// whenever `tmux send-keys` exited 0 — which proves only that tmux accepted the
+// keystrokes, never that the runner got them. A prompt typed into a pane that
+// then does nothing is the single most unfalsifiable state in the product
+// (arch doc R5): the surface shows a spinner forever and the response it is
+// spinning on already claimed success.
+//
+// We deliberately claim only what a pane diff can prove. Typing text into ANY
+// runner TUI paints it into the composer, so a pane that is byte-identical
+// after the text + Enter + settle is proof the keystrokes did not land. The
+// converse is not proof of submission — a composer holding unsubmitted text
+// also counts as "changed" — so the positive verdict is named "observed", not
+// "submitted". Overclaiming here would just relocate the original lie.
+func classifyPromptDelivery(paneBefore, paneAfter string) (verdict string, note string) {
+	if paneBefore != paneAfter {
+		return "observed", ""
+	}
+	return "unconfirmed", "The prompt was typed into the session, but the pane did not change afterwards — " +
+		"so it is not confirmed the runner received it. Open the session to check before re-sending; " +
+		"sending again could submit the same instruction twice."
 }
 
 const (
@@ -210,6 +245,9 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 	}
 
 	reply := runnerSessionTurnResponse{Session: sessionName, Runner: runnerID}
+	// Set only on the prompt path; a choice confirms itself by advancing the menu.
+	var paneBeforePrompt string
+	var sentPrompt bool
 
 	// Read the pane only once it has stopped redrawing. A TUI that is mid-paint
 	// can show neither the menu it is about to render nor the prompt it just
@@ -242,6 +280,12 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 			reply.Error = "session is waiting on a choice — answer it with `choice` before sending a prompt"
 			return reply, http.StatusConflict
 		}
+		// Snapshot the pane BEFORE typing so the response can report what was
+		// observed rather than what tmux merely accepted. See
+		// classifyPromptDelivery — we are already settled here, so this is one
+		// cheap capture, not a new wait.
+		paneBeforePrompt = capturePaneTail(sessionName, runnerTurnPaneLines)
+		sentPrompt = true
 		if err := sendTmuxLine(sessionName, text); err != nil {
 			reply.Error = err.Error()
 			return reply, http.StatusInternalServerError
@@ -267,6 +311,9 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 		reply.Options = nowOptions
 	}
 	reply.Pane = capturePaneTail(sessionName, runnerTurnPaneLines)
+	if sentPrompt {
+		reply.Delivered, reply.DeliveryNote = classifyPromptDelivery(paneBeforePrompt, reply.Pane)
+	}
 	reply.OK = true
 	return reply, http.StatusOK
 }

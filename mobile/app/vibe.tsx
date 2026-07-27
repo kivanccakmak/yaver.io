@@ -140,6 +140,10 @@ export default function VibeScreen() {
           awaitingChoice: r.awaitingChoice === true,
           options: r.options,
           pane: r.pane,
+          // What the agent could PROVE about a prompt it typed. Dropping this
+          // is how "typed but never submitted" became a permanent spinner.
+          delivered: r.delivered,
+          deliveryNote: r.deliveryNote,
           error: r.error,
         };
       },

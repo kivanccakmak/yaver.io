@@ -36,6 +36,13 @@ export interface SessionTurnResult {
   /** Plain text pane tail (ANSI stripped). Enough for a TV to render and
    *  for a car to summarize. */
   pane?: string;
+  /** "observed" | "unconfirmed" — what the agent could PROVE about a prompt
+   *  it typed. `tmux send-keys` exiting 0 never proved the runner got it, so
+   *  the endpoint used to assert ok:true with no evidence. Absent for a
+   *  choice, which confirms itself by advancing the menu. */
+  delivered?: string;
+  /** Plain-language sentence for an "unconfirmed" verdict. */
+  deliveryNote?: string;
   error?: string;
 }
 
@@ -193,6 +200,22 @@ export async function dispatchSessionTurn(
       options: [],
       pane: result.pane ?? "",
       error: result.error,
+    };
+  }
+
+  // A prompt the agent could not confirm reached the runner must SAY so.
+  // Otherwise this summarizes an unchanged pane into a cheerful sentence and
+  // the user waits on a turn that never started — the exact spinner-over-a-
+  // known-fact this lane exists to prevent.
+  if (result.delivered === "unconfirmed") {
+    return {
+      spoken:
+        result.deliveryNote ||
+        "I typed that into the session, but could not confirm it went through. Check the session before re-sending.",
+      session: result.session,
+      awaitingChoice: false,
+      options: [],
+      pane: result.pane ?? "",
     };
   }
 
