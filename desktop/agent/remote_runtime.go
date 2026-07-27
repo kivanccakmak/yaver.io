@@ -1768,11 +1768,38 @@ func (s *HTTPServer) handleRemoteRuntimeSessionCommand(w http.ResponseWriter, r 
 			jsonError(w, http.StatusBadRequest, fmt.Sprintf("run-guest not supported for target %q", session.TargetID))
 			return
 		}
+		// In-flight guard: web Runtime Lab and the mobile Tasks tab both
+		// auto-fire run-guest on every runtime_render_requested event, and a
+		// runner transcript can emit render markers on many consecutive
+		// output chunks. A cold build is minutes; without this claim each
+		// chunk would spawn ANOTHER concurrent xcodebuild/gradle goroutine
+		// on the same workDir. The claim is atomic (inside Update, under the
+		// manager lock) and cannot wedge: the build goroutine below always
+		// flips status off "building" within its 20-minute context, and
+		// sessions are in-memory so a crash clears the state anyway.
+		alreadyBuilding := false
 		mgr.Update(session.ID, func(current *RemoteRuntimeSession) {
+			if current.Status == "building" && current.LastCommand == "run-guest" {
+				alreadyBuilding = true
+				return
+			}
 			current.Status = "building"
 			current.LastCommand = "run-guest"
 			current.Note = "Building the guest app into the simulator (dev mode, Fast Refresh)…"
 		})
+		if alreadyBuilding {
+			current, _ := mgr.Get(session.ID)
+			jsonReply(w, http.StatusAccepted, map[string]interface{}{
+				"ok":        true,
+				"sessionId": session.ID,
+				"command":   "run-guest",
+				"status":    "building",
+				"deduped":   true,
+				"note":      "A guest build is already in flight for this session; not starting another.",
+				"session":   current,
+			})
+			return
+		}
 		go func() {
 			bctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 20*time.Minute)
 			defer cancel()

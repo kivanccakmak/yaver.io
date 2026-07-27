@@ -14024,6 +14024,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			SessionID string `json:"sessionId"`
 			Command   string `json:"command"`
 			BundleID  string `json:"bundleId"`
+			WorkDir   string `json:"workDir"`
 			Source    string `json:"source"`
 		}
 		json.Unmarshal(call.Arguments, &args)
@@ -14033,6 +14034,9 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		payload := map[string]interface{}{"command": args.Command}
 		if args.BundleID != "" {
 			payload["bundleId"] = args.BundleID
+		}
+		if args.WorkDir != "" {
+			payload["workDir"] = args.WorkDir
 		}
 		if args.Source != "" {
 			payload["source"] = args.Source

@@ -3400,6 +3400,9 @@ func (tm *TaskManager) emit(task *Task, output *strings.Builder, text string) {
 	case task.outputCh <- text:
 	default:
 	}
+	if reason := runtimeRenderReasonFromTaskOutput(text); reason != "" {
+		emitRuntimeRenderRequested(task, reason, text)
+	}
 	// Fallback question detection: when the runner ignores the
 	// yaver_ask_user MCP tool and asks in prose anyway, this catches
 	// the question and re-presents it through the same Q&A surface

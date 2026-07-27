@@ -3443,14 +3443,15 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "runtime_command",
-			"description": "Run a session-level command (boot re-attach, launch-app, launch-feedback). launch-app requires bundleId; boot is idempotent.",
+			"description": "Run a session-level command (boot re-attach, run-guest rerender/relaunch, launch-app, launch-feedback). run-guest rebuilds and relaunches the selected RN/Expo guest into the active simulator/emulator stream, including tvOS when available; launch-app requires bundleId; boot is idempotent.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"sessionId", "command"},
 				"properties": map[string]interface{}{
 					"sessionId": map[string]interface{}{"type": "string"},
-					"command":   map[string]interface{}{"type": "string", "description": "boot | launch-app | launch-feedback"},
+					"command":   map[string]interface{}{"type": "string", "description": "boot | run-guest | launch-app | launch-feedback"},
 					"bundleId":  map[string]interface{}{"type": "string", "description": "iOS/Android app bundle id for launch-app."},
+					"workDir":   map[string]interface{}{"type": "string", "description": "Project root for run-guest when the session does not already carry workDir."},
 					"source":    map[string]interface{}{"type": "string", "description": "Optional trigger source label (e.g. shake, tap-menu)."},
 				},
 			},

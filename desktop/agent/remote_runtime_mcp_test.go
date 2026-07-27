@@ -135,15 +135,17 @@ func TestHandleRemoteRuntimeSessionCommand_BootIsIdempotentOnAttachedSession(t *
 	}
 }
 
-func TestRuntimeCommandRequestParsesBundleId(t *testing.T) {
+func TestRuntimeCommandRequestParsesBundleIdAndWorkDir(t *testing.T) {
 	// The struct rename in P1 must not drop BundleID on the wire — a
 	// runner-authored MCP payload contains it and the handler must
-	// see it before dispatching to launchAppOnRuntimeTarget.
-	raw := []byte(`{"command":"launch-app","bundleId":"io.yaver.mobile","source":"mcp"}`)
+	// see it before dispatching to launchAppOnRuntimeTarget. P2 added
+	// WorkDir for run-guest so MCP agents can re-render simulator streams.
+	raw := []byte(`{"command":"run-guest","bundleId":"io.yaver.mobile","workDir":"/tmp/yaver-mobile","source":"mcp"}`)
 	var req struct {
 		Command  string `json:"command"`
 		Source   string `json:"source,omitempty"`
 		BundleID string `json:"bundleId,omitempty"`
+		WorkDir  string `json:"workDir,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &req); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -151,7 +153,47 @@ func TestRuntimeCommandRequestParsesBundleId(t *testing.T) {
 	if req.BundleID != "io.yaver.mobile" {
 		t.Fatalf("bundleId lost in transit: %+v", req)
 	}
-	if req.Command != "launch-app" || req.Source != "mcp" {
+	if req.WorkDir != "/tmp/yaver-mobile" {
+		t.Fatalf("workDir lost in transit: %+v", req)
+	}
+	if req.Command != "run-guest" || req.Source != "mcp" {
 		t.Fatalf("command/source lost in transit: %+v", req)
+	}
+}
+
+func TestHandleRemoteRuntimeSessionCommand_RunGuestDedupesWhileBuilding(t *testing.T) {
+	// runtime_render_requested makes BOTH clients (web Runtime Lab and the
+	// mobile Tasks tab) auto-fire run-guest on every render-marker output
+	// chunk, and a cold RN build takes minutes. Without an in-flight guard
+	// each chunk spawns ANOTHER 20-minute xcodebuild/gradle goroutine on the
+	// same workDir — a concurrent-rebuild storm the handoff doc wrongly
+	// claimed was already prevented by "daemon command idempotence".
+	// The guard: while the session is status=building from a prior
+	// run-guest, further run-guest commands are acknowledged (202,
+	// deduped:true) without starting a second build.
+	srv := &HTTPServer{remoteRuntimeMgr: NewRemoteRuntimeManager()}
+	sess := newTestRemoteRuntimeSession("rr_p2_dedupe", "ios-simulator", "SIM-UDID")
+	sess.Status = "building"
+	sess.LastCommand = "run-guest"
+	sess.Note = "Building the guest app into the simulator (dev mode, Fast Refresh)…"
+	srv.remoteRuntimeMgr.sessions[sess.ID] = sess
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/remote-runtime/sessions/"+sess.ID+"/command",
+		strings.NewReader(`{"command":"run-guest","workDir":"/tmp/swift-app","source":"web-auto-render"}`))
+	rec := httptest.NewRecorder()
+	srv.handleRemoteRuntimeSessionCommand(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("run-guest while building should 202, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["deduped"] != true {
+		t.Fatalf("second run-guest while building must report deduped:true (no second build spawned), got %s", rec.Body.String())
+	}
+	if body["status"] != "building" {
+		t.Fatalf("status = %#v, want building", body["status"])
 	}
 }
