@@ -13,6 +13,7 @@ import {
   type WorkspaceAppView,
 } from "@/lib/agent-client";
 import { isRunnerBrowserAuthTerminal } from "@/lib/agent-client";
+import { isAgentAuthErrorMessage } from "@/lib/agentAuthError";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 import { formatDevProgressLine } from "@/lib/devEventLine";
 import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
@@ -378,6 +379,28 @@ function taskTimeLabel(task: Pick<Task, "createdAt" | "updatedAt">): string {
   return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function taskOutputSuggestsRender(lines: string[], status: TaskStatus): boolean {
+  if (status === "completed" || status === "review") return true;
+  const recent = lines.slice(-30).join("\n").toLowerCase();
+  return /\b(web bundle re-exported|web ui ready|hot reload|fast refresh|reload sent|run-guest|launch-app|yaver_web_preview_start|files? changed|saved|patched|updated)\b/.test(recent);
+}
+
+function canRunGuestOnRemoteTarget(targetId?: string): boolean {
+  return [
+    "ios-simulator",
+    "ipados-simulator",
+    "watchos-simulator",
+    "tvos-simulator",
+    "visionos-simulator",
+    "android-emulator",
+    "android-wear",
+    "android-tv",
+    "android-xr",
+    "android-auto",
+    "android-redroid",
+  ].includes(String(targetId || ""));
+}
+
 async function waitForDevPreviewUrl(bundleUrl?: string): Promise<{ url: string; note: string }> {
   const signedUrl = signedBundlePreviewUrl(bundleUrl);
   if (signedUrl) return { url: signedUrl, note: "Web UI bundle ready." };
@@ -515,19 +538,8 @@ function runtimeTargetGroup(target: RemoteRuntimeTarget): "browser" | "simulator
   return "advanced";
 }
 
-function isAgentAuthErrorMessage(message: string | null | undefined): boolean {
-  const lower = String(message || "").toLowerCase();
-  return (
-    lower.includes("invalid token") ||
-    lower.includes("session expired") ||
-    lower.includes("agent auth expired") ||
-    lower.includes("convex session is expired") ||
-    lower.includes("http 401") ||
-    lower.includes("http 403") ||
-    lower.includes("unauthorized") ||
-    lower.includes("forbidden")
-  );
-}
+// isAgentAuthErrorMessage was file-local here until 2026-07 (audit §6 item 4);
+// it now lives in @/lib/agentAuthError so every dashboard view shares it.
 
 const runtimeGroupLabels: Record<ReturnType<typeof runtimeTargetGroup>, string> = {
   browser: "Browser",
@@ -568,6 +580,7 @@ export default function RuntimeLabView({
   const taskStreamStopRef = useRef<(() => void) | null>(null);
   const taskPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recognitionRef = useRef<any>(null);
+  const autoRenderRef = useRef<string>("");
   const runtimeConsoleRef = useRef<HTMLPreElement | null>(null);
   const taskConsoleRef = useRef<HTMLPreElement | null>(null);
   const mobilePreviewFrameRef = useRef<HTMLIFrameElement | null>(null);
@@ -594,6 +607,13 @@ export default function RuntimeLabView({
   const [vibingSettingsOpen, setVibingSettingsOpen] = useState(false);
   const [runtimeConsoleOpen, setRuntimeConsoleOpen] = useState(true);
   const [runtimeConsoleCopied, setRuntimeConsoleCopied] = useState(false);
+  const [taskConsoleCopied, setTaskConsoleCopied] = useState(false);
+  const [agentRenderRequest, setAgentRenderRequest] = useState<{
+    id: string;
+    taskId: string;
+    reason: string;
+    workDir?: string;
+  } | null>(null);
   const [sttAvailable] = useState(
     () => typeof window !== "undefined" && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition),
   );
@@ -670,7 +690,7 @@ export default function RuntimeLabView({
     try { recognitionRef.current?.stop?.(); } catch {}
     recognitionRef.current = null;
     try { window.speechSynthesis?.cancel(); } catch {}
-  }, [stopActiveTaskStream]);
+  }, [appendLog, stopActiveTaskStream]);
 
   const loadProjects = useCallback(async () => {
     setError(null);
@@ -877,15 +897,29 @@ export default function RuntimeLabView({
     setActiveTaskStream({ id: task.id, title: task.title, status: task.status, lines: taskOutputLines(task) });
     setRecentTasks((prev) => [task, ...prev.filter((row) => row.id !== task.id)].slice(0, 8));
     if (task.status !== "queued" && task.status !== "running") return;
-    taskStreamStopRef.current = agentClient.streamTaskOutput(task.id, (line) => {
-      const trimmed = String(line || "").trimEnd();
-      if (!trimmed) return;
-      setActiveTaskStream((prev) => {
-        if (!prev || prev.id !== task.id) return prev;
-        const lines = [...prev.lines, trimmed];
-        return { ...prev, status: "running", lines: lines.slice(-240) };
-      });
-    });
+    taskStreamStopRef.current = agentClient.streamTaskOutput(
+      task.id,
+      (line) => {
+        const trimmed = String(line || "").trimEnd();
+        if (!trimmed) return;
+        setActiveTaskStream((prev) => {
+          if (!prev || prev.id !== task.id) return prev;
+          const lines = [...prev.lines, trimmed];
+          return { ...prev, status: "running", lines: lines.slice(-240) };
+        });
+      },
+      (event) => {
+        if (event?.type !== "runtime_render_requested") return;
+        const reason = String(event.reason || "task-output");
+        setAgentRenderRequest({
+          id: `${task.id}:${String(event.ts || Date.now())}:${reason}`,
+          taskId: task.id,
+          reason,
+          workDir: typeof event.workDir === "string" ? event.workDir : undefined,
+        });
+        appendLog(`agent requested render: ${reason}`);
+      },
+    );
     taskPollRef.current = setInterval(() => {
       void agentClient.getTask(task.id).then((fresh) => {
         setActiveTaskStream((prev) => {
@@ -1041,6 +1075,20 @@ export default function RuntimeLabView({
       appendLog(`copy runtime console failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [appendLog, log]);
+
+  const copyTaskConsole = useCallback(async () => {
+    const text = activeTaskStream?.lines.length
+      ? activeTaskStream.lines.join("\n")
+      : activeTaskStream?.title || "";
+    if (!text.trim()) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setTaskConsoleCopied(true);
+      window.setTimeout(() => setTaskConsoleCopied(false), 1400);
+    } catch (err) {
+      appendLog(`copy chat output failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [activeTaskStream?.lines, activeTaskStream?.title, appendLog]);
 
   useEffect(() => {
     void loadProjects();
@@ -1262,6 +1310,50 @@ export default function RuntimeLabView({
     setWebPreviewFrameReady(false);
     setWebPreviewNote(null);
   }, []);
+
+  useEffect(() => {
+    if (!activeTaskStream || !selectedProject) return;
+    const structuredRequest = agentRenderRequest?.taskId === activeTaskStream.id ? agentRenderRequest : null;
+    if (!structuredRequest && !taskOutputSuggestsRender(activeTaskStream.lines, activeTaskStream.status)) return;
+    const key = [
+      activeTaskStream.id,
+      activeTaskStream.status,
+      activeTaskStream.lines.length,
+      structuredRequest?.id || "",
+      webPreviewPanelOpen ? "web" : "",
+      session?.id || "",
+      session?.targetId || "",
+    ].join(":");
+    if (autoRenderRef.current === key) return;
+    autoRenderRef.current = key;
+
+    if (webPreviewPanelOpen && webPreviewUrl && !webPreviewBusy) {
+      appendLog(structuredRequest ? `auto-render: refreshing Web UI (${structuredRequest.reason})` : "auto-render: refreshing Web UI after coding output");
+      void reloadWebPreview("fast");
+    }
+    if (session?.id && canRunGuestOnRemoteTarget(session.targetId)) {
+      appendLog(structuredRequest
+        ? `auto-render: refreshing ${session.targetLabel || session.targetId} stream (${structuredRequest.reason})`
+        : `auto-render: refreshing ${session.targetLabel || session.targetId} stream`);
+      void agentClient.sendRemoteRuntimeCommand(session.id, "run-guest", "web-auto-render", structuredRequest?.workDir || selectedProject.path)
+        .then((result) => {
+          if ((result as any)?.session) setSession((result as any).session as RemoteRuntimeSession);
+        })
+        .catch((err) => appendLog(`auto-render remote surface failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+  }, [
+    activeTaskStream,
+    agentRenderRequest,
+    appendLog,
+    reloadWebPreview,
+    selectedProject,
+    session?.id,
+    session?.targetId,
+    session?.targetLabel,
+    webPreviewBusy,
+    webPreviewPanelOpen,
+    webPreviewUrl,
+  ]);
 
   const scrollMobilePreviewFrame = useCallback((event: WheelEvent<HTMLDivElement>) => {
     const frame = mobilePreviewFrameRef.current;
@@ -1822,8 +1914,28 @@ export default function RuntimeLabView({
                       <div className="min-w-0 truncate text-xs font-semibold text-[#344054] dark:text-[#d7dce3]">
                         {selectedRunnerName}
                       </div>
-                      <div className="shrink-0 text-[10px] uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">
-                        {activeTaskStream.status}
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => void copyTaskConsole()}
+                          title="Copy chat output"
+                          aria-label="Copy chat output"
+                          className="rounded-md border border-[#d7dce3] bg-white p-1.5 text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                        >
+                          {taskConsoleCopied ? (
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <path d="M20 6 9 17l-5-5" />
+                            </svg>
+                          ) : (
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <rect x="9" y="9" width="13" height="13" rx="2" />
+                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                            </svg>
+                          )}
+                        </button>
+                        <div className="text-[10px] uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">
+                          {activeTaskStream.status}
+                        </div>
                       </div>
                     </div>
                     <pre
