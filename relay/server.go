@@ -80,6 +80,13 @@ type RelayServer struct {
 	validatedPwMu       sync.RWMutex
 	validatedPw         map[string]time.Time           // password/access cache key -> cache expiry
 	validatedAccessMeta map[string]validatedAccessMeta // access cache key -> entitlement metadata
+	// userEntitlements caches the last RESOLVED plan per owner account. The
+	// exemption belongs to the OWNER, so it must reach every device that
+	// owner has — including requests that resolve nothing themselves
+	// (webview-cookie subresources), which are looked up by the tunnel's
+	// registered userID rather than left to default to free tier.
+	userEntitlements  map[string]deviceEntitlement
+	userEntitlementMu sync.RWMutex
 
 	startedAt time.Time // server start time for uptime tracking
 
@@ -260,6 +267,7 @@ func NewRelayServer(quicPort, httpPort int, password, convexURL, exposeDomain st
 		convexURL:           convexURL,
 		validatedPw:         make(map[string]time.Time),
 		validatedAccessMeta: make(map[string]validatedAccessMeta),
+		userEntitlements:    make(map[string]deviceEntitlement),
 		startedAt:           time.Now(),
 		tunnels:             make(map[string]*agentTunnel),
 		meshStreams:         make(map[string]*meshStreamHandle),
@@ -559,6 +567,46 @@ func (s *RelayServer) relayAccessEntitlement(action, deviceID, pw, token string)
 // row or header participates.
 func planBandwidthExempt(plan string) bool {
 	return plan == "owner-dev"
+}
+
+// rememberUserEntitlement records a RESOLVED plan for an account so sibling
+// devices and unknowing requests inherit it. Unresolved verdicts are ignored:
+// silence is not a free-tier verdict.
+func (s *RelayServer) rememberUserEntitlement(userID string, ent deviceEntitlement) {
+	if strings.TrimSpace(userID) == "" || !ent.Known {
+		return
+	}
+	s.userEntitlementMu.Lock()
+	if s.userEntitlements == nil {
+		s.userEntitlements = make(map[string]deviceEntitlement)
+	}
+	s.userEntitlements[userID] = ent
+	s.userEntitlementMu.Unlock()
+}
+
+// entitlementForUser returns the account's last resolved plan, or unknown.
+func (s *RelayServer) entitlementForUser(userID string) deviceEntitlement {
+	if strings.TrimSpace(userID) == "" {
+		return entitlementUnknown
+	}
+	s.userEntitlementMu.RLock()
+	ent, ok := s.userEntitlements[userID]
+	s.userEntitlementMu.RUnlock()
+	if !ok {
+		return entitlementUnknown
+	}
+	return ent
+}
+
+// ownerOfTunnel reports the account that registered a device's tunnel — the
+// only identity available on a request that authenticated by cookie.
+func (s *RelayServer) ownerOfTunnel(deviceID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if t, ok := s.tunnels[deviceID]; ok && t != nil {
+		return t.userID
+	}
+	return ""
 }
 
 // validateRelayAccessE is validateRelayAccess plus an honest reason.
@@ -1845,7 +1893,25 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// owner-dev (Convex owner allowlist) is exempt from the per-user rate
 	// limit and the bandwidth cap below. The verdict came from Convex about
 	// the AUTHENTICATED caller — nothing client-sent can claim it.
-	relayUnmetered := planBandwidthExempt(relayPlan)
+	// Entitlement is the ACCOUNT's, not this request's. A request that
+	// resolved a plan teaches the account cache; one that could not (the
+	// webview-cookie path carries no password and no signature — and preview
+	// subresources ARE that traffic) inherits the owner's, resolved via the
+	// tunnel's registered userID. Before this, an unknowing request wrote
+	// "free tier" over a verified exemption, so the owner's own browser lane
+	// refused itself at 1911MB while the store said unmetered (2026-07-27).
+	entitlement := entitlementUnknown
+	if relayPlan != "" || relayPaid {
+		entitlement = deviceEntitlement{Known: true, IsPaid: relayPaid, Unmetered: planBandwidthExempt(relayPlan)}
+		s.rememberUserEntitlement(userID, entitlement)
+	} else {
+		owner := userID
+		if owner == "" {
+			owner = s.ownerOfTunnel(deviceID)
+		}
+		entitlement = s.entitlementForUser(owner)
+	}
+	relayUnmetered := entitlement.Known && entitlement.Unmetered
 	// The middleware defers the per-IP proxy verdict to HERE, where the
 	// ACCOUNT is known: an over-budget request survives only when the
 	// authenticated account's Convex-verified plan is bandwidth-exempt.
@@ -1892,7 +1958,7 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if bytesRequested < 0 {
 		bytesRequested = 0
 	}
-	s.bandwidth.SetDeviceTier(deviceID, relayPaid, relayUnmetered)
+	s.bandwidth.ApplyEntitlement(deviceID, entitlement)
 
 	// Check bandwidth limit
 	if err := s.bandwidth.CheckAllowed(deviceID, bytesRequested); err != nil {

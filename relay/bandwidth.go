@@ -158,8 +158,10 @@ func (bm *BandwidthManager) CheckAllowed(deviceID string, bytesRequested int64) 
 
 	totalUsed := dev.BytesIn + dev.BytesOut
 	if totalUsed+bytesRequested > effectiveLimitBytes {
+		// deviceID[:8] panicked for any id shorter than 8 bytes — a crash in
+		// a request path, reachable by a device that registers a short id.
 		return fmt.Errorf("bandwidth limit exceeded: %dMB used of %dMB daily limit (device %s)",
-			totalUsed/(1024*1024), int64(float64(limitMB)*multiplier), deviceID[:8])
+			totalUsed/(1024*1024), int64(float64(limitMB)*multiplier), shortDeviceRef(deviceID))
 	}
 
 	return nil
@@ -269,11 +271,34 @@ func (bm *BandwidthManager) SetDevicePaid(deviceID string, isPaid bool) {
 	bm.SetDeviceTier(deviceID, isPaid, false)
 }
 
-// SetDeviceTier applies the caller's Convex-verified entitlement for this
-// request: paid (bigger allowance) and/or unmetered (no cap — owner-dev
-// plan). Called per proxy request, so the flags always reflect the LATEST
-// authenticated caller; a free-tier guest hitting the same box re-meters it
-// for their own traffic.
+// deviceEntitlement is what a request managed to LEARN about the caller's
+// plan. Known=false means "this request could not resolve one" — which is
+// not the same as "free tier", and must never be written as if it were.
+//
+// The webview-cookie auth path carries no password and no signature, so it
+// resolves nothing; preview subresources are exactly that traffic. Treating
+// its silence as a free-tier verdict is what refused the owner's own
+// browser lane at 1911MB while the store recorded them as exempt.
+type deviceEntitlement struct {
+	Known     bool
+	IsPaid    bool
+	Unmetered bool
+}
+
+var entitlementUnknown = deviceEntitlement{}
+
+// ApplyEntitlement records a RESOLVED verdict and ignores an unresolved one.
+// A resolved downgrade still applies, so a cancelled plan stops being exempt.
+func (bm *BandwidthManager) ApplyEntitlement(deviceID string, ent deviceEntitlement) {
+	if !ent.Known {
+		return
+	}
+	bm.SetDeviceTier(deviceID, ent.IsPaid, ent.Unmetered)
+}
+
+// SetDeviceTier applies a resolved entitlement: paid (bigger allowance)
+// and/or unmetered (no cap — owner-dev plan). Prefer ApplyEntitlement at
+// call sites that may not know the answer.
 func (bm *BandwidthManager) SetDeviceTier(deviceID string, isPaid, unmetered bool) {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
@@ -405,4 +430,14 @@ func (bm *BandwidthManager) LogUsage() {
 	log.Printf("[bandwidth] %d devices (%d active), load: %.1f%%, multiplier: %.1fx, total: %dMB in / %dMB out",
 		stats.TotalDevices, stats.ActiveDevices, stats.LoadPercent,
 		stats.CurrentMultiplier, stats.TotalBytesIn/(1024*1024), stats.TotalBytesOut/(1024*1024))
+}
+
+
+// shortDeviceRef is a log/error-safe device prefix: never panics, never
+// leaks more than a recognisable stub.
+func shortDeviceRef(deviceID string) string {
+	if len(deviceID) <= 8 {
+		return deviceID
+	}
+	return deviceID[:8]
 }
