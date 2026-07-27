@@ -1269,9 +1269,7 @@ export default function HomePage() {
           <p className="sr-only">{LANDING_TAGLINE}</p>
 
           <p className="mx-auto max-w-2xl text-sm leading-relaxed text-surface-300 sm:text-base md:text-[17px]">
-            AI writes code in seconds; the loop around it still takes hours.
-            Yaver closes it: every prompt you send becomes the real app in
-            your hand.
+            Every prompt you send becomes the real app in your hand.
           </p>
 
           <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-surface-300 sm:text-base md:text-[17px]">
