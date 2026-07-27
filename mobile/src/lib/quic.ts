@@ -3417,12 +3417,24 @@ export class QuicClient {
     return data as RemoteRuntimeSession;
   }
 
-  async sendRemoteRuntimeCommand(sessionId: string, command: "launch-feedback", source: string = "mobile"): Promise<{ ok: boolean; note?: string; protocol?: string }> {
+  async sendRemoteRuntimeCommand(
+    sessionId: string,
+    command: "boot" | "run-guest" | "launch-app" | "launch-feedback",
+    source: string = "mobile",
+    opts?: string | { workDir?: string; bundleId?: string },
+  ): Promise<{ ok: boolean; note?: string; protocol?: string; session?: RemoteRuntimeSession }> {
     this.assertConnected();
+    const body: Record<string, unknown> = { command, source };
+    if (typeof opts === "string" && opts.trim()) {
+      body.workDir = opts.trim();
+    } else if (opts && typeof opts === "object") {
+      if (opts.workDir) body.workDir = opts.workDir;
+      if (opts.bundleId) body.bundleId = opts.bundleId;
+    }
     const res = await fetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/command`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ command, source }),
+      body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Failed to send remote runtime command: ${res.status}`);

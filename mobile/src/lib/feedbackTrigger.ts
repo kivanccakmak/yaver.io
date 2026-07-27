@@ -1,7 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Accelerometer } from "expo-sensors";
 import { AppState, type AppStateStatus, NativeEventEmitter, NativeModules, Platform } from "react-native";
-import { quicClient } from "./quic";
+import { quicClient, type RemoteRuntimeSession } from "./quic";
+import { appLog } from "./logger";
 
 type FeedbackLaunchSource = "shake" | "native-guest-shake" | "remote-runtime";
 
@@ -10,6 +11,7 @@ type FeedbackLaunchListener = (payload: { source: FeedbackLaunchSource }) => voi
 const listeners = new Set<FeedbackLaunchListener>();
 const FEEDBACK_KEY_FALLBACK = "@yaver/feedback_config";
 let activeRemoteRuntimeSessionID: string | null = null;
+let activeRemoteRuntimeSession: Pick<RemoteRuntimeSession, "id" | "workDir" | "targetId" | "targetLabel"> | null = null;
 let cooldownUntil = 0;
 
 // The active preview lane. Set by DevPreview (browser) / remote-runtime (webrtc)
@@ -47,8 +49,60 @@ export function triggerFeedbackLaunch(source: FeedbackLaunchSource): void {
   for (const listener of listeners) listener({ source });
 }
 
-export function setActiveRemoteRuntimeSession(sessionId: string | null): void {
-  activeRemoteRuntimeSessionID = sessionId;
+export function setActiveRemoteRuntimeSession(session: RemoteRuntimeSession | string | null): void {
+  if (!session) {
+    activeRemoteRuntimeSessionID = null;
+    activeRemoteRuntimeSession = null;
+    return;
+  }
+  if (typeof session === "string") {
+    activeRemoteRuntimeSessionID = session;
+    activeRemoteRuntimeSession = { id: session, workDir: "", targetId: "", targetLabel: "" };
+    return;
+  }
+  activeRemoteRuntimeSessionID = session.id;
+  activeRemoteRuntimeSession = {
+    id: session.id,
+    workDir: session.workDir || "",
+    targetId: session.targetId || "",
+    targetLabel: session.targetLabel || session.targetId || "",
+  };
+}
+
+export function getActiveRemoteRuntimeSession(): Pick<RemoteRuntimeSession, "id" | "workDir" | "targetId" | "targetLabel"> | null {
+  return activeRemoteRuntimeSession;
+}
+
+function canRunGuestOnRemoteTarget(targetId?: string): boolean {
+  return [
+    "ios-simulator",
+    "ipados-simulator",
+    "watchos-simulator",
+    "tvos-simulator",
+    "visionos-simulator",
+    "android-emulator",
+    "android-wear",
+    "android-tv",
+    "android-xr",
+    "android-auto",
+    "android-redroid",
+  ].includes(String(targetId || ""));
+}
+
+export async function rerenderActiveRemoteRuntimeSurface(source = "mobile-auto-render", workDir?: string): Promise<boolean> {
+  const session = activeRemoteRuntimeSession;
+  if (!session?.id) return false;
+  if (session.targetId && !canRunGuestOnRemoteTarget(session.targetId)) return false;
+  const effectiveWorkDir = workDir || session.workDir || undefined;
+  try {
+    const result = await quicClient.sendRemoteRuntimeCommand(session.id, "run-guest", source, effectiveWorkDir);
+    if (result.session) setActiveRemoteRuntimeSession(result.session);
+    appLog("info", `remote runtime auto-render requested for ${session.targetLabel || session.targetId || session.id}`);
+    return true;
+  } catch (err) {
+    appLog("warn", `remote runtime auto-render failed: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
 }
 
 async function currentFeedbackConfig(userId?: string | null): Promise<{ enabled?: boolean; trigger?: string } | null> {

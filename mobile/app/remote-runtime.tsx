@@ -95,9 +95,9 @@ export default function RemoteRuntimeScreen() {
   useEffect(() => () => clearConnectionTimers(), [clearConnectionTimers]);
 
   useEffect(() => {
-    setActiveRemoteRuntimeSession(session?.id || null);
+    setActiveRemoteRuntimeSession(session);
     return () => setActiveRemoteRuntimeSession(null);
-  }, [session?.id]);
+  }, [session]);
 
   const createSession = useCallback(async (target: { id: string; label: string }) => {
     setBusyTargetId(target.id);

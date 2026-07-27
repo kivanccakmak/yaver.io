@@ -52,6 +52,7 @@ import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { appTag } from "../../src/lib/appVersion";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
+import { rerenderActiveRemoteRuntimeSurface } from "../../src/lib/feedbackTrigger";
 import {
   AgentStatus,
   CloudWorkspaceRequiredError,
@@ -2384,6 +2385,13 @@ export default function TasksScreen() {
             ...prev,
             [tid]: reduceCommandEvent(prev[tid] || {}, evt),
           }));
+          return;
+        }
+        if (evt.type === "runtime_render_requested") {
+          void rerenderActiveRemoteRuntimeSurface(
+            `mobile-task-${String(evt.reason || "render")}`,
+            typeof evt.workDir === "string" ? evt.workDir : undefined,
+          );
           return;
         }
         if (evt.type === "agent_question" && evt.question) {
