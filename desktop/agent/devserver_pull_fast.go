@@ -199,6 +199,20 @@ func executePullDecision(workDir string, d preBuildPullDecision) (string, error)
 			}
 			return fmt.Sprintf("git pull --rebase --autostash failed: %s", strings.TrimSpace(out)), err
 		}
+		// INVENTORY vs OPERATION: `git pull --rebase --autostash` EXITS 0
+		// when the rebase succeeds but the autostash re-apply conflicts —
+		// git parks the stash (stash@{0}: autostash), leaves `<<<<<<<`
+		// conflict markers + unmerged (UU) index entries, prints a warning,
+		// and reports success via exit code. Reading the exit code alone
+		// logged "succeeded" over a conflicted tree and let Metro burn ~11 s
+		// to die on the conflict markers (incident 2026-07-27). Probe the
+		// TREE, not the exit code.
+		if files := unmergedTreeFiles(workDir); len(files) > 0 {
+			summary := fmt.Sprintf(
+				"git pull --rebase --autostash exited 0 but the autostash re-apply left conflicts in: %s — resolve them (or git checkout --ours <file> && git add <file>; the autostash is kept in git stash) before building",
+				strings.Join(files, ", "))
+			return summary, fmt.Errorf("autostash re-apply left %d conflicted file(s): %s", len(files), strings.Join(files, ", "))
+		}
 		return "git pull --rebase --autostash succeeded", nil
 	case pullActionRebasePublish:
 		// 1. Commit current working changes as a checkpoint.
@@ -229,6 +243,34 @@ func executePullDecision(workDir string, d preBuildPullDecision) (string, error)
 	return "", nil
 }
 
+// unmergedTreeFiles returns the paths `git status --porcelain` reports as
+// unmerged (conflicted) in workDir: any XY code containing U, plus AA
+// (both added) and DD (both deleted). These are the entries a
+// zero-exit-code `git pull --rebase --autostash` can leave behind when the
+// autostash re-apply conflicts — the tree carries `<<<<<<<` markers while
+// the exit code says "fine".
+//
+// Advisory by design: returns nil when workDir is not a git repo or git
+// itself is missing/unavailable — a probe must never block an operation it
+// cannot judge.
+func unmergedTreeFiles(workDir string) []string {
+	out, err := runGit(workDir, "status", "--porcelain")
+	if err != nil {
+		return nil // not a repo, or no git — skip, don't block
+	}
+	var files []string
+	for _, line := range strings.Split(out, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		x, y := line[0], line[1]
+		if x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D') {
+			files = append(files, strings.TrimSpace(line[3:]))
+		}
+	}
+	return files
+}
+
 func isUntrackedOverwritePullFailure(out string) bool {
 	lower := strings.ToLower(out)
 	return strings.Contains(lower, "untracked working tree files would be overwritten by merge")
@@ -250,6 +292,15 @@ func executePullWithUntrackedStash(workDir, firstFailure string) (string, error)
 	applyOut, applyErr := runGit(workDir, "stash", "apply")
 	if applyErr != nil {
 		return fmt.Sprintf("git pull succeeded after stashing untracked files; stash kept because re-apply needs attention: %s", strings.TrimSpace(applyOut)), nil
+	}
+	// Same inventory-vs-operation trap as the autostash path: a stash
+	// re-apply can exit 0 (or "succeed") while leaving unmerged entries.
+	// Probe the tree before claiming success — and keep the stash.
+	if files := unmergedTreeFiles(workDir); len(files) > 0 {
+		summary := fmt.Sprintf(
+			"git pull exited 0 but the stash re-apply left conflicts in: %s — resolve them (or git checkout --ours <file> && git add <file>; the stash is kept in git stash) before building",
+			strings.Join(files, ", "))
+		return summary, fmt.Errorf("stash re-apply left %d conflicted file(s): %s", len(files), strings.Join(files, ", "))
 	}
 	dropOut, dropErr := runGit(workDir, "stash", "drop")
 	if dropErr != nil {

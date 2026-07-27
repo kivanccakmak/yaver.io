@@ -41,6 +41,25 @@ type webBundlePreflightReport struct {
 func preflightWebBundle(projectPath string) webBundlePreflightReport {
 	report := webBundlePreflightReport{OK: true}
 
+	// Check 0: unmerged (conflicted) git tree. A `git pull --rebase
+	// --autostash` whose autostash re-apply conflicts EXITS 0 but leaves
+	// `<<<<<<<` conflict markers + unmerged (UU) index entries in the
+	// tree; Metro then burns ~11 s to die with a cryptic "Unexpected
+	// token" (incident 2026-07-27). Refuse the build BEFORE spawning the
+	// bundler and name the files + the fix. Degrades gracefully:
+	// unmergedTreeFiles returns nil when projectPath is not a git repo or
+	// git is missing — advisory work must not block the operation it
+	// annotates.
+	if conflicted := unmergedTreeFiles(projectPath); len(conflicted) > 0 {
+		report.OK = false
+		report.Errors = append(report.Errors,
+			fmt.Sprintf("git tree has unresolved merge conflicts in: %s — "+
+				"Metro would fail on the '<<<<<<<' conflict markers. "+
+				"Resolve them (or git checkout --ours <file> && git add <file>; "+
+				"the autostash is kept in git stash) before building",
+				strings.Join(conflicted, ", ")))
+	}
+
 	react, _ := readInstalledPackageVersion(projectPath, "react")
 	reactDom, _ := readInstalledPackageVersion(projectPath, "react-dom")
 	report.ReactVersion = react
