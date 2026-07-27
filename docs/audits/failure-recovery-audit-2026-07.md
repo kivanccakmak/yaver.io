@@ -603,7 +603,7 @@ Rank: **P0** renders as a spinner/lie or has no route to a fix that exists.
 | V2 | Relay bounces mid-turn | 🔧 cause preserved into the reattach line | 🔧 same | 🔧 |
 | V3 | Runner logs out mid-task | ✅ route (`ErrorMessage.tsx` → RunnerAuthModal) | 🟡 CTA gated to `claude/codex/kimi`; opencode is text-only | **P1** |
 | V4 | Menu the runner is waiting on | ✅ **works** — traced end to end this pass (see 9.2d); the arch doc's R6 row is **stale** | n/a — web has no session-turn lane at all | ✅ / **P2** (web) |
-| V5 | Prompt typed into tmux, never submitted | `200 {ok:true, pane}` — nothing compares the pane tail | n/a | **P0** (unchanged, R5) |
+| V5 | Prompt typed into tmux, never submitted | 🔧 `classifyPromptDelivery` compares the pane before/after; `delivered`+`deliveryNote` ride the wire and are spoken | n/a | 🔧 **partial** — see 9.5 |
 | V6 | Dev server dies mid-render during a turn | ✅ failure overlay + Retry | 🟡 raw text | **P1** |
 
 ### 9.2d Correction — the arch doc's R6 ("dropped menu options") is STALE
@@ -649,6 +649,7 @@ here rather than edited into the architecture doc, which another thread owns.*
 | Agent `?since=` resume + `resume` frame | `093a70670` (swept by a concurrent session) | `httpserver_task_output_resume_test.go` — 4 cases |
 | `taskStreamRecovery.ts` twins + both transports report stream end + mobile/web vibing reattach UI + web task-list wipe | `dba683364` | `web/lib/taskStreamRecovery.test.ts` — 10 cases incl. twin parity |
 | `/dev/events` reattach + health line | `3e512df6f` | same suite, `/dev/events` case |
+| Prompt-delivery verdict (`delivered`/`deliveryNote`) wired agent → quic → vibe → spoken line | `9f4713cab` | `runner_session_turn_delivery_test.go` + 2 `carSessionTurn.test.mts` cases |
 
 **Guards proven by breaking them**, both required by the brief:
 
@@ -657,6 +658,8 @@ here rather than edited into the architecture doc, which another thread owns.*
   the exact defect, stated by the test.
 - Deleting the `onError` wiring from `subscribeDevEvents` fails
   `subscribeDevEvents must observe stream errors`.
+- Disabling the `delivered === "unconfirmed"` branch fails
+  `refuses to summarize a prompt the agent could not confirm`.
 
 ## 9.4 The design rule this pass adds
 
@@ -678,11 +681,17 @@ Three corollaries, each earned by a row above:
 
 ## 9.5 Ranked remainder
 
-**P0 — still open (not touched this pass):**
+**P0 — the surviving half of V5:**
 
-1. **V5** — a prompt typed into a tmux pane but never submitted returns
-   `200 {ok:true}`. The response already carries the `pane` tail that would
-   prove it; nothing compares it. Unfalsifiable by construction.
+1. **V5 residual.** The pane diff now catches the case it can PROVE — keystrokes
+   that never landed at all — and says so in the spoken line. What it still
+   cannot separate is text that reached the **composer** and was never
+   **submitted**: that pane changed, so it reports `observed`. Closing it needs
+   per-runner TUI knowledge (where each runner draws its composer, and what an
+   empty one looks like), and a heuristic wrong in either direction on this hot
+   path trades a silent lie for a noisy one. The honest intermediate — claim
+   `observed`, never `submitted` — is what shipped, and the wording is pinned by
+   a test so a future pass cannot quietly upgrade the claim without evidence.
 
 **P1 — ranked:**
 
