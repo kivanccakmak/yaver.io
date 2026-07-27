@@ -2,6 +2,7 @@ import { mutation, query, internalMutation, internalQuery } from "./_generated/s
 import { v } from "convex/values";
 import { validateSessionInternal, randomHex } from "./auth";
 import { isOwner } from "./ownerAllowlist";
+import { sanitizeRuntimeGitRemote } from "./runtimeGitRemote";
 
 // Shared validator for the per-subsystem managed toggle. Each field
 // accepts boolean (true=Yaver-managed, false=self-hosted) or null
@@ -151,23 +152,6 @@ function cleanRuntimeText(value: string | null | undefined, max = 180): string |
   return text.slice(0, max);
 }
 
-function sanitizeRuntimeGitRemote(value: string | null | undefined): string | undefined {
-  const raw = cleanRuntimeText(value, 300);
-  if (!raw) return undefined;
-  try {
-    const url = new URL(raw);
-    url.username = "";
-    url.password = "";
-    url.hash = "";
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    // SCP-style SSH remotes (git@github.com:owner/repo.git) are not URLs and
-    // contain no bearer credential. If a caller sends a token-like HTTPS remote
-    // without a parseable scheme, drop it instead of guessing.
-    if (/^https?:/i.test(raw) || /\/\/[^/\s]+@/.test(raw)) return undefined;
-    return raw;
-  }
-}
 
 function sanitizeRuntimeProjectPreference(
   payload: RuntimeProjectPreferencePatch,
