@@ -1244,7 +1244,14 @@ type TaskInfo struct {
 	// TurnCount lets a list view show "12 turns" without shipping the
 	// transcript to render a number. The list handler nils Turns and sets this;
 	// the detail endpoint leaves Turns intact and this stays 0.
-	TurnCount       int                    `json:"turnCount,omitempty"`
+	TurnCount int `json:"turnCount,omitempty"`
+	// TranscriptTruncated is set when ResultText or turn contents were
+	// tail-capped for transport. Output was already capped at 10KB, but
+	// ResultText and Turns shipped whole — after one long analysis turn the
+	// task detail grew to 3.5MB and the web UI polled it every 2s over the
+	// relay (2026-07-27, ubuntu-4gb box), which is what "stuck" looked like
+	// from the browser. Surfaces render tails anyway (web keeps 240 lines).
+	TranscriptTruncated bool `json:"transcriptTruncated,omitempty"`
 	Source          string                 `json:"source,omitempty"`
 	TmuxSession     string                 `json:"tmuxSession,omitempty"`
 	TmuxSessionID   string                 `json:"tmuxSessionId,omitempty"`
@@ -4055,30 +4062,29 @@ func (tm *TaskManager) ResumeTaskWithOptions(id, input string, images []ImageAtt
 	return task, nil
 }
 
-// startResume spawns the runner resuming the task's existing session (if supported).
-func (tm *TaskManager) startResume(task *Task, prompt string) error {
-	rawRunnerCommand := isRawRunnerCommand(prompt)
-	if rawRunnerCommand {
-		prompt = strings.TrimLeft(prompt, " \t\r\n")
-	} else {
-		prompt += taskSourcePromptSuffix(task.Source)
+// buildResumePrompt is the prompt for a FOLLOW-UP turn. Unlike the first turn,
+// it carries the user's message VERBATIM: the session already received the
+// source contract and capability context in turn 1 (and keeps it via session
+// resume), and the Yaver MCP supplies live context on demand. Re-wrapping every
+// follow-up buried the user's actual ask under boilerplate the runner had
+// already read — so the only addition allowed here is attachment paths, which
+// are data the runner cannot discover on its own.
+func buildResumePrompt(task *Task, prompt string) string {
+	if isRawRunnerCommand(prompt) {
+		return strings.TrimLeft(prompt, " \t\r\n")
 	}
-
-	contextDir := tm.workDir
-	if task.WorkDir != "" {
-		contextDir = task.WorkDir
-	}
-	if !rawRunnerCommand && (task.Source == "mcp" || task.Source == terminalLocalTaskSource || task.Source == terminalRemoteTaskSource || task.Source == "attach" || task.Source == "cli" || task.Source == "console" || task.Source == "connect" || task.Source == "mobile-code" || task.Source == "ask" || task.Source == "voice") {
-		prompt += yaverWrapperCapabilityContext(contextDir, task.Source)
-	}
-
-	// Append image file paths so the AI agent can read them
-	if !rawRunnerCommand && len(task.ImagePaths) > 0 {
+	if len(task.ImagePaths) > 0 {
 		prompt += "\n\n[Attached images — use the Read tool to examine these files]\n"
 		for i, p := range task.ImagePaths {
 			prompt += fmt.Sprintf("Image %d: %s\n", i+1, p)
 		}
 	}
+	return prompt
+}
+
+// startResume spawns the runner resuming the task's existing session (if supported).
+func (tm *TaskManager) startResume(task *Task, prompt string) error {
+	prompt = buildResumePrompt(task, prompt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel

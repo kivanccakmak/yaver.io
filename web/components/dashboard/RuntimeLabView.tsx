@@ -826,6 +826,10 @@ export default function RuntimeLabView({
   const [selectedRunner, setSelectedRunner] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
   const [runnerAuthBusy, setRunnerAuthBusy] = useState(false);
+  // "Save for machine" used to answer only into the runtime log pane, which
+  // the chat surface never shows — the user clicked and got NOTHING, on a save
+  // that also never verified the runner was signed in on the box (2026-07-27).
+  const [runnerSaveNotice, setRunnerSaveNotice] = useState<{ tone: "ok" | "warn" | "error"; text: string } | null>(null);
   const [runnerAuthStatus, setRunnerAuthStatus] = useState<RunnerBrowserAuthSession | null>(null);
   const [runnerAuthError, setRunnerAuthError] = useState<string | null>(null);
   const [runnerAuthCallbackUrl, setRunnerAuthCallbackUrl] = useState("");
@@ -1364,9 +1368,33 @@ export default function RuntimeLabView({
     const provider = normalizeRunnerId(selectedRunner) === "opencode" && selectedModel.includes("/")
       ? selectedModel.split("/")[0]
       : null;
-    await setPrimaryRunner(connectedDevice.id, selectedRunner, selectedModel || null, undefined, provider);
-    appendLog(`runner set: ${selectedRunner}${selectedModel ? ` ${selectedModel}` : ""}`);
-  }, [appendLog, connectedDevice?.id, selectedModel, selectedRunner, setPrimaryRunner]);
+    setRunnerSaveNotice({ tone: "warn", text: "Saving…" });
+    const runnerName = selectedRunnerRow?.name || selectedRunner;
+    const chosen = `${runnerName}${selectedModel ? ` · ${selectedModel}` : ""}`;
+    const target = connectedDevice.name || "this machine";
+    try {
+      await setPrimaryRunner(connectedDevice.id, selectedRunner, selectedModel || null, undefined, provider);
+      // Saving the preference is the inventory; whether the runner can take
+      // the next task is the operation. The box's own runner row carries that
+      // answer — say it, and when sign-in is missing, route straight into the
+      // remote OAuth flow instead of leaving a dead end.
+      if (selectedRunnerRow && selectedRunnerRow.ready === false) {
+        setRunnerSaveNotice({
+          tone: "warn",
+          text: `Saved ${chosen} for ${target} — but it is not signed in on that machine yet.`,
+        });
+        if (selectedRunnerRow.supportsBrowserAuth) void startSelectedRunnerSignIn();
+      } else {
+        setRunnerSaveNotice({ tone: "ok", text: `Saved ${chosen} for ${target} — signed in and ready.` });
+      }
+      appendLog(`runner set: ${selectedRunner}${selectedModel ? ` ${selectedModel}` : ""}`);
+    } catch (err) {
+      setRunnerSaveNotice({
+        tone: "error",
+        text: `Save failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  }, [appendLog, connectedDevice?.id, connectedDevice?.name, selectedModel, selectedRunner, selectedRunnerRow, setPrimaryRunner, startSelectedRunnerSignIn]);
 
   const attachTaskSession = useCallback((task: Task) => {
     stopActiveTaskStream();
@@ -1405,8 +1433,19 @@ export default function RuntimeLabView({
       },
       { onHealth: setTaskStreamHealth },
     );
+    // The poll is the status chip's only source of truth, so its failures must
+    // narrate themselves. With errors swallowed, a dropped relay left the chip
+    // on "running" forever while the box finished the turn — the exact
+    // "stuck in running" the stream ladder above already fixed for output.
+    let pollFailureStreak = 0;
+    let pollSetHealth = false;
     taskPollRef.current = setInterval(() => {
       void agentClient.getTask(task.id).then((fresh) => {
+        pollFailureStreak = 0;
+        if (pollSetHealth) {
+          pollSetHealth = false;
+          setTaskStreamHealth(null);
+        }
         setActiveTaskStream((prev) => {
           if (!prev || prev.id !== task.id) return prev;
           const lines = taskOutputLines(fresh, prev.lines);
@@ -1418,7 +1457,16 @@ export default function RuntimeLabView({
           return taskRowsEqual(prev, next) ? prev : next;
         });
         if (fresh.status !== "queued" && fresh.status !== "running") stopActiveTaskStream();
-      }).catch(() => {});
+      }).catch(() => {
+        pollFailureStreak += 1;
+        if (pollFailureStreak === 3 && !pollSetHealth) {
+          pollSetHealth = true;
+          setTaskStreamHealth({
+            kind: "reattaching",
+            message: "The machine stopped answering status checks — retrying. The task keeps running on the box.",
+          });
+        }
+      });
     }, 2000);
   }, [stopActiveTaskStream]);
 
@@ -1523,10 +1571,12 @@ export default function RuntimeLabView({
     // user's message structure and must reach the runner untouched.
     const prompt = normalizeComposerPrompt(composer);
     if (!prompt || sending) return;
-    if (webPreviewReloadInFlightRef.current) {
-      appendLog("send paused: preview reload is still finishing");
-      return;
-    }
+    // A send is NEVER refused while the runner or a reload is busy: the agent
+    // queues mid-run follow-ups (PendingFollowUps) and drains them when the
+    // current response finishes, Claude-Desktop style. The old silent
+    // early-return here ("send paused: preview reload…") went to a log pane
+    // the user never sees — from the chat it read as "secondary prompts don't
+    // work at all" (2026-07-27).
     setSending(true);
     try {
       const existingTaskId = activeTaskStream?.id;
@@ -1534,6 +1584,13 @@ export default function RuntimeLabView({
         await agentClient.continueTask(existingTaskId, prompt);
         const fresh = await agentClient.getTask(existingTaskId);
         attachTaskSession(fresh);
+        // The agent clears task output for the new turn, so without this the
+        // transcript blanks and the user's own follow-up is invisible (same
+        // family as the mobile silent-fork bug). Echo it locally.
+        setActiveTaskStream((prev) =>
+          prev && prev.id === existingTaskId
+            ? { ...prev, lines: [...prev.lines, `» ${prompt}`] }
+            : prev);
         appendLog(`continued chat session ${existingTaskId}`);
         setComposer("");
         return;
@@ -2568,6 +2625,11 @@ export default function RuntimeLabView({
                       </button>
                     ) : null}
                   </div>
+                  {runnerSaveNotice ? (
+                    <p className={`text-[11px] leading-4 ${runnerSaveNotice.tone === "ok" ? "text-emerald-600 dark:text-emerald-300" : runnerSaveNotice.tone === "warn" ? "text-amber-600 dark:text-amber-300" : "text-rose-600 dark:text-rose-300"}`}>
+                      {runnerSaveNotice.text}
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -2952,6 +3014,11 @@ export default function RuntimeLabView({
                 {selectedRunnerRow?.name || selectedRunner || "No runner"} / {safeModelForRunner(selectedRunner, selectedModel, availableModels) || selectedModel || "runner default"}
               </button>
             </div>
+            {runnerSaveNotice ? (
+              <p className={`mt-1 text-[11px] leading-4 ${runnerSaveNotice.tone === "ok" ? "text-emerald-600 dark:text-emerald-300" : runnerSaveNotice.tone === "warn" ? "text-amber-600 dark:text-amber-300" : "text-rose-600 dark:text-rose-300"}`}>
+                {runnerSaveNotice.text}
+              </p>
+            ) : null}
           </div>
           {vibingSettingsOpen || runnerAuthStatus || runnerAuthError ? (
             <div className="mt-3 grid gap-2">

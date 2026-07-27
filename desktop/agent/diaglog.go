@@ -105,6 +105,13 @@ type diagLogger struct {
 	// a read-only or full disk degrades to "no logging" instead of erroring on
 	// every request. Logging must never be the thing that breaks the agent.
 	disabled bool
+	// journal mirrors lines to stderr when the process runs under systemd, so
+	// `journalctl -u yaver` carries the same tagged trace as agent.log —
+	// bounded by journald's own retention instead of ours. Mirrored lines skip
+	// the file-health check on purpose: a FULL disk kills the file writer, and
+	// that is precisely the run whose trace must survive somewhere.
+	journal    bool
+	journalMin diagLevel
 }
 
 var (
@@ -127,6 +134,21 @@ func diag() *diagLogger {
 			return
 		}
 		diagInst = &diagLogger{path: filepath.Join(dir, "agent.log"), min: lvl}
+		// Under systemd, stderr is wired into journald (JOURNAL_STREAM), so
+		// mirroring there makes the trace visible to `journalctl -u yaver`
+		// with journald's own size/age caps doing the periodic clearing.
+		// INFO+ by default — the DEBUG request firehose (a 2s status poll is
+		// ~1800 lines/hour) belongs in the ring-capped file, not the journal.
+		// YAVER_JOURNAL_LEVEL=debug opts a box into the full trace.
+		if os.Getenv("JOURNAL_STREAM") != "" || os.Getenv("INVOCATION_ID") != "" {
+			diagInst.journal = true
+			diagInst.journalMin = diagInfo
+			if v := os.Getenv("YAVER_JOURNAL_LEVEL"); v != "" {
+				if parsed, ok := parseDiagLevel(v); ok {
+					diagInst.journalMin = parsed
+				}
+			}
+		}
 		diagInst.pruneAged()
 	})
 	return diagInst
@@ -136,7 +158,21 @@ func diag() *diagLogger {
 // panics — a diagnostic facility that can take the process down is worse than
 // no diagnostic facility.
 func (d *diagLogger) logf(lvl diagLevel, tag, format string, args ...interface{}) {
-	if d == nil || d.disabled || lvl < d.min {
+	if d == nil {
+		return
+	}
+	mirror := d.journal && lvl >= d.journalMin
+	if (d.disabled || lvl < d.min) && !mirror {
+		return
+	}
+	line := fmt.Sprintf("%s %-5s [%s] %s\n",
+		time.Now().Format("2006-01-02T15:04:05.000Z07:00"), lvl, tag,
+		fmt.Sprintf(format, args...))
+	if mirror {
+		// journald line — survives a full disk, bounded by journald retention.
+		_, _ = os.Stderr.WriteString(line)
+	}
+	if d.disabled || lvl < d.min {
 		return
 	}
 	d.mu.Lock()
@@ -144,9 +180,6 @@ func (d *diagLogger) logf(lvl diagLevel, tag, format string, args ...interface{}
 	if d.f == nil && !d.openLocked() {
 		return
 	}
-	line := fmt.Sprintf("%s %-5s [%s] %s\n",
-		time.Now().Format("2006-01-02T15:04:05.000Z07:00"), lvl, tag,
-		fmt.Sprintf(format, args...))
 	n, err := d.f.WriteString(line)
 	if err != nil {
 		// Most likely the disk filled. Stop rather than spin on every request.

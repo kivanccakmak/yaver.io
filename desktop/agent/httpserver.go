@@ -4385,8 +4385,52 @@ func (s *HTTPServer) taskInfoFromTask(task *Task, r *http.Request) TaskInfo {
 		VideoStatus:     task.VideoStatus,
 		AskFreely:       task.AskFreely,
 	}
+	capTaskTranscript(&info)
 	s.enrichTaskInfoVideo(&info, r)
 	return info
+}
+
+// Transport caps for a single task detail response. Output was always capped
+// (10KB above), but ResultText and Turns shipped whole — one long runner turn
+// made GET /tasks/{id} a 3.5MB body that the web UI re-downloaded every 2s
+// through the relay (2026-07-27). Every surface renders a tail of the
+// transcript, so the wire carries a tail: the full text stays in the task
+// store and the SSE stream delivers live output incrementally.
+const (
+	taskWireResultTextCap  = 64 * 1024
+	taskWireTurnContentCap = 16 * 1024
+	taskWireMaxTurns       = 50
+)
+
+func capTaskTranscript(info *TaskInfo) {
+	if len(info.ResultText) > taskWireResultTextCap {
+		info.ResultText = info.ResultText[len(info.ResultText)-taskWireResultTextCap:]
+		info.TranscriptTruncated = true
+	}
+	if len(info.Turns) > taskWireMaxTurns {
+		info.Turns = info.Turns[len(info.Turns)-taskWireMaxTurns:]
+		info.TranscriptTruncated = true
+	}
+	oversized := false
+	for _, t := range info.Turns {
+		if len(t.Content) > taskWireTurnContentCap {
+			oversized = true
+			break
+		}
+	}
+	if !oversized {
+		return
+	}
+	// Copy before trimming — info.Turns aliases the task's live slice.
+	turns := make([]ConversationTurn, len(info.Turns))
+	copy(turns, info.Turns)
+	for i := range turns {
+		if len(turns[i].Content) > taskWireTurnContentCap {
+			turns[i].Content = turns[i].Content[len(turns[i].Content)-taskWireTurnContentCap:]
+		}
+	}
+	info.Turns = turns
+	info.TranscriptTruncated = true
 }
 
 func (s *HTTPServer) enrichTaskInfoVideo(info *TaskInfo, r *http.Request) {

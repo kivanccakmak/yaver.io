@@ -466,7 +466,71 @@ func diskGuardClasses() []diskGuardClass {
 			// mtime FIFO here would fight it.
 			KeepNewest: 0,
 		},
+		{
+			Name: "yaver-tmp-dirs",
+			Why: "yaver-* scratch trees in the system temp dir (expo-web exports, preview bundles, repo seeds, hot-swap staging). Each is re-created on demand by the operation that owns it; a crash strands them forever — 2026-07-27 found ~600MB of them on a box at 95%. Only trees whose NEWEST file is older than 7 days qualify, so a live dev server's dir is never taken.",
+			Collect: func(time.Duration) ([]diskGuardCandidate, error) {
+				return diskGuardCollectYaverTemp()
+			},
+			KeepNewest: 0,
+		},
 	}
+}
+
+// yaverTempMaxAge is deliberately much longer than diskGuardDefaultMinAge:
+// scratch dirs back live dev servers and previews for hours, and the cost of
+// deleting one mid-session (a broken preview) outweighs a week of parked bytes.
+const yaverTempMaxAge = 7 * 24 * time.Hour
+
+func diskGuardCollectYaverTemp() ([]diskGuardCandidate, error) {
+	tmp := os.TempDir()
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		return nil, err
+	}
+	cutoff := time.Now().Add(-yaverTempMaxAge)
+	var out []diskGuardCandidate
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "yaver-") {
+			continue
+		}
+		full := filepath.Join(tmp, e.Name())
+		newest := diskGuardNewestMTime(full)
+		if newest.After(cutoff) {
+			continue
+		}
+		var size int64
+		if e.IsDir() {
+			size, _ = dirSizeDG(full)
+		} else if info, err := e.Info(); err == nil {
+			size = info.Size()
+		}
+		out = append(out, diskGuardCandidate{Path: full, Bytes: size, ModTime: newest})
+	}
+	return out, nil
+}
+
+// diskGuardNewestMTime is the newest modification time anywhere in the tree.
+// The root dir's own mtime is not enough: writing into an existing subdir does
+// not touch the root, so a tree a dev server is actively filling can look old
+// from the outside.
+func diskGuardNewestMTime(root string) time.Time {
+	var newest time.Time
+	_ = filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil
+		}
+		if info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+		return nil
+	})
+	if newest.IsZero() {
+		if info, err := os.Stat(root); err == nil {
+			newest = info.ModTime()
+		}
+	}
+	return newest
 }
 
 // diskGuardApplyFIFO drops the KeepNewest most recent candidates from the

@@ -78,7 +78,20 @@ var agentCustodian = NewCustodian()
 // agent, because the only wiring lived inside ensureRemoteRuntimeManager.)
 func StartAgentCustodian(stop <-chan struct{}) *Custodian {
 	agentCustodian.Register(devChildWarden{})
+	agentCustodian.Register(diskHygieneWarden{})
 	agentCustodian.Start(stop)
+	// The disk warden's cadence is 6h and runWarden fires on the ticker, not at
+	// registration — but the boxes that need reclaiming most are the ones that
+	// just crashed full and restarted. Sweep once shortly after boot, off the
+	// startup path so serve latency is untouched.
+	go func() {
+		select {
+		case <-stop:
+			return
+		case <-time.After(2 * time.Minute):
+			agentCustodian.SweepOne(diskHygieneWarden{}, time.Now())
+		}
+	}()
 	return agentCustodian
 }
 
