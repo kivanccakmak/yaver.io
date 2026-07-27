@@ -64,8 +64,28 @@ type GapFix struct {
 	Method string `json:"method"`        // "POST"
 	Path   string `json:"path"`          // "/install/flutter"
 	Stream string `json:"stream"`        // "install:flutter" → GET /streams/<stream>
-	Est    string `json:"est,omitempty"` // "~1.2 GB · usually 3–10 min"
+	Est    string `json:"est,omitempty"` // "~1.2 GB · usually 3–10 min · 42 GB free on /opt"
 	Retry  bool   `json:"retry"`         // re-issue the original request on success
+
+	// Confirm marks a DESTRUCTIVE fix as two-step. Set only by the reclaim
+	// route today (capability_resources.go): the client must call the preview
+	// first and show the user exactly what would be deleted, with sizes,
+	// before the apply route will do anything. The gate is enforced
+	// server-side too — this field tells the UI to render the preview, it does
+	// not grant permission.
+	//
+	// A confirm-gated fix is the one legal case of an empty Stream: it answers
+	// synchronously and its preview is what makes it visible, so the "no
+	// stream = a 1.2 GB download nobody can watch" rule does not apply.
+	Confirm *GapConfirm `json:"confirm,omitempty"`
+}
+
+// GapConfirm is the preview half of a destructive route.
+type GapConfirm struct {
+	Method string `json:"method"` // "GET"
+	Path   string `json:"path"`   // "/storage/scan"
+	Field  string `json:"field"`  // the JSON key the apply body must set true
+	Prompt string `json:"prompt"` // the sentence shown above the preview list
 }
 
 // CapabilityGap is a capability the operation needs and this machine does not
@@ -82,6 +102,24 @@ type CapabilityGap struct {
 	Detail     string  `json:"detail,omitempty"`     // what tapping Fix will do
 	Fix        *GapFix `json:"fix,omitempty"`        // nil ⇒ no fixer; Constraint MUST be set
 	Constraint string  `json:"constraint,omitempty"` // why no fix exists on THIS machine
+
+	// Warning is a named advisory that rides BESIDE a Fix: the operation can
+	// start, and here is what may still go wrong. Added 2026-07-27 for the
+	// resource lane — "3.1 GB free, the SDK needs 1.2 GB and the first build
+	// another 2 GB" is a thing the user must hear BEFORE waiting ten minutes,
+	// not a reason to refuse. Warning and Fix are both set; Warning and
+	// Constraint never are (a constrained gap has nothing to warn about).
+	Warning string `json:"warning,omitempty"`
+
+	// Resource is the headroom measurement behind Warning/Constraint, in bytes
+	// AND pre-formatted, so no surface invents its own byte formatter.
+	Resource *CapabilityResource `json:"resource,omitempty"`
+
+	// Reclaim is the space-freeing route offered whenever disk is the blocker
+	// or nearly is. A refusal that is only a refusal is a dead end with a
+	// sentence — the exact thing CapabilityGap exists to make impossible — so
+	// "not enough space" ships with the caches that would fix it.
+	Reclaim *GapFix `json:"reclaim,omitempty"`
 }
 
 // CapabilityGapContext is everything the detector may look at. Callers fill
@@ -168,27 +206,23 @@ func devStartToolchainBinary(framework string) string {
 
 // capabilityDisplayName is how a tool is named to a human. Falls back to the
 // raw tool name, which is right for lowercase CLI names (bun, pnpm, adb).
+// Display names now come from capabilityToolMatrix (capability_platform.go) —
+// ONE row per tool declaring its name, its platform limits and its cost. The
+// hand-maintained switch this replaced was the second table, and a second table
+// is how a tool ends up platform-aware in one place and not the other.
 func capabilityDisplayName(tool string) string {
-	switch strings.ToLower(strings.TrimSpace(tool)) {
+	key := strings.ToLower(strings.TrimSpace(tool))
+	switch key {
 	case "claude", "codex", "opencode", "glm":
 		// ONE source of truth for how a runner is named to a human. A second
 		// spelling here would put "claude isn't installed" on the Tasks card
 		// next to "Claude Code" everywhere else in the same app.
 		return runnerCapabilityName(tool)
-	case "flutter":
-		return "Flutter"
-	case "carton":
-		return "carton (the SwiftWasm toolchain)"
-	case "node":
-		return "Node.js"
-	case "mobile":
-		return "the mobile toolchain"
-	case "android-sdk":
-		return "the Android SDK"
 	case "java":
 		return "Java"
-	case "docker":
-		return "Docker"
+	}
+	if spec, ok := capabilityToolSpecFor(key); ok && strings.TrimSpace(spec.Display) != "" {
+		return spec.Display
 	}
 	return strings.TrimSpace(tool)
 }
@@ -198,19 +232,8 @@ func capabilityDisplayName(tool string) string {
 // silent serve — the user cannot tell fetching from hung." Empty when we have
 // no defensible number; a made-up estimate is worse than none.
 func installEstimateForTool(tool string) string {
-	switch strings.ToLower(strings.TrimSpace(tool)) {
-	case "flutter":
-		return "~1.2 GB SDK · usually 3–10 min"
-	case "android-sdk":
-		return "~2 GB · usually 5–15 min"
-	case "mobile", "node":
-		return "~60 MB · usually under a minute"
-	case "claude", "codex", "opencode":
-		// npm-backed CLIs (install_cmd.go ensureRunnerInstalledStream). Small,
-		// but the number is the difference between "fetching" and "hung".
-		return "~50 MB · usually under a minute"
-	case "ffmpeg", "tmux":
-		return "package-manager install · usually under a minute"
+	if spec, ok := capabilityToolSpecFor(tool); ok {
+		return spec.Est
 	}
 	return ""
 }
@@ -341,6 +364,22 @@ func capabilityGapForMissingTools(tools []string) *CapabilityGap {
 		Summary:    capabilityGapSummary(tools),
 	}
 
+	// PLATFORM FIRST — before we ever ask whether an install recipe exists.
+	// A recipe that cannot work on THIS GOOS/GOARCH is not a fix, and the
+	// registry does not know that: it answers "is there a recipe", which is the
+	// inventory, not the operation. Refusing here is what keeps "Install
+	// Flutter" off a Windows box whose install would report success and leave
+	// nothing on PATH, and — just as importantly — what keeps it ON a
+	// linux/arm64 box, where the git-clone path works and the naive "no
+	// tarball ⇒ impossible" reading would have withheld it.
+	for _, t := range tools {
+		if ok, constraint := capabilityFixSupportedHere(t); !ok {
+			gap.Constraint = constraint
+			gap.Detail = constraint
+			return gap
+		}
+	}
+
 	endpoint := installEndpointForTool(tools)
 	if !canInstallMissingTool(tools) || endpoint == "" {
 		// No fix on THIS machine — say which one specifically, and say what
@@ -368,19 +407,62 @@ func capabilityGapForMissingTools(tools []string) *CapabilityGap {
 	}
 
 	endpointTool := installToolFromEndpoint(endpoint)
+
+	// RESOURCES SECOND — measure the volume the install will actually write
+	// to, not "/" and not the agent's CWD. Three outcomes, and only one of them
+	// is a refusal (see capability_resources.go's header for why fits/doesn't
+	// is the wrong shape).
+	verdict := evaluateCapabilityResources(endpointTool, probeHeadroomFn(capabilityInstallRoot(endpointTool)))
+	gap.Resource = verdict.Resource
+	if verdict.Level == capabilityResourceInsufficient {
+		gap.Code = ReasonCapabilityInsufficientDisk
+		gap.Constraint = verdict.Refusal
+		gap.Detail = verdict.Refusal
+		gap.Reclaim = capabilityReclaimFix(verdict.Resource)
+		return gap
+	}
+
 	gap.Fix = &GapFix{
 		Label:  "Install " + capabilityDisplayName(primary),
 		Method: "POST",
 		Path:   endpoint,
 		Stream: streamName,
-		Est:    installEstimateForTool(endpointTool),
+		Est:    joinEstimate(installEstimateForTool(endpointTool), verdict.EstSuffix),
 		Retry:  true,
 	}
 	gap.Detail = fmt.Sprintf(
 		"Yaver can install it here, no sudo needed. The download streams into this panel, and "+
 			"the preview starts by itself when it finishes. Same thing from a terminal: "+
 			"`yaver install %s`.", endpointTool)
+
+	// A user who already pressed Install once and is reading "isn't installed"
+	// a second time deserves to know WHY. A partial tree from a killed install
+	// is the commonest reason, and silence about it is how someone concludes
+	// the button does nothing (capability_partial.go).
+	if partial := partialInstallSummary(endpointTool, detectPartialInstall(endpointTool, nil)); partial != "" {
+		gap.Detail = partial + " " + gap.Detail
+	}
+
+	if verdict.Level == capabilityResourceTight {
+		// Warning is NOT refusal: the button stays, the wait is narrated. A
+		// user told "you may run out mid-build" before a ten-minute download
+		// can decide; a user told nothing finds out at minute nine.
+		gap.Warning = verdict.Warning
+		gap.Reclaim = capabilityReclaimFix(verdict.Resource)
+	}
 	return gap
+}
+
+// joinEstimate puts the headroom on the button next to the size. Both halves
+// are optional: an unmeasured volume contributes nothing rather than "unknown".
+func joinEstimate(parts ...string) string {
+	kept := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, " · ")
 }
 
 // capabilityGapSummary is the sentence the user reads. Deliberately about the

@@ -22,4 +22,12 @@ const (
 	// regex-matched — by mobile/src/lib/capabilityGap.ts and
 	// web/lib/capabilityGap.ts. First client-read reason code in the file.
 	ReasonCapabilityToolchainMissing = "capability.toolchain_missing"
+	// ReasonCapabilityInsufficientDisk is "the tool is installable here, and
+	// this machine does not have the room". A DIFFERENT code from
+	// toolchain_missing on purpose: the remedy is not an install, it is
+	// reclaiming space, and a client that renders one for the other sends the
+	// user to press a button that cannot help. Carried with
+	// CapabilityGap.Resource (the numbers) and CapabilityGap.Reclaim (the
+	// route that frees them).
+	ReasonCapabilityInsufficientDisk = "capability.insufficient_disk"
 )
