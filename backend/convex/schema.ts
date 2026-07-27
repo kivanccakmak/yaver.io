@@ -446,11 +446,32 @@ export default defineSchema({
       pid: v.number(),
       status: v.string(),
       title: v.string(),
+      // checkedAt — when the AGENT last looked at local state (epoch ms).
+      // Freshness of the ROW.
       checkedAt: v.optional(v.number()),
       installed: v.optional(v.boolean()),
       ready: v.optional(v.boolean()),
       authConfigured: v.optional(v.boolean()),
+      // authPresent — the runner's own CLI says a credential is on that
+      // machine. LOCAL evidence: it cannot see a server-side revocation.
+      authPresent: v.optional(v.boolean()),
+      // authVerified — the credential was EXERCISED against the provider and
+      // the provider answered (a completed turn / OAuth exchange), or was
+      // explicitly refused by it (in which case authConfigured is false).
+      //
+      // These are two fields because on 2026-07-27 they were one, and it
+      // claimed a revoked Claude token was verified. See
+      // RunnerRuntimeStatus.AuthVerified in desktop/agent/runner_auth.go.
       authVerified: v.optional(v.boolean()),
+      // authVerifiedAt — when the PROVIDER last spoke (epoch ms). Freshness of
+      // the VERDICT, which is NOT the same as freshness of the row. Without
+      // it, persisting "authenticated" would just relocate the false green
+      // from the agent's memory into this table.
+      authVerifiedAt: v.optional(v.number()),
+      // authSource — a LABEL ("claude.ai · max", "codex login status", or a
+      // home-relative "~/.codex/auth.json"). Never an absolute path: the agent
+      // sanitizes these in sanitizeRunnerInfosForConvex because an absolute
+      // path leaks the user's home-directory username.
       authSource: v.optional(v.string()),
       warning: v.optional(v.string()),
       error: v.optional(v.string()),

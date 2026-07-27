@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -979,5 +980,64 @@ func TestDeployCapabilitySummary_carriesNoDetail(t *testing.T) {
 		if strings.Contains(strings.ToUpper(name), "KEY") || strings.Contains(strings.ToUpper(name), "TOKEN") {
 			t.Errorf("target name %q looks like a secret name — reasons must never be summarised into Convex", name)
 		}
+	}
+}
+
+// TestHeartbeatRunnerAuthPayloadIsLabelsBooleansAndTimestampsOnly guards the
+// per-(device × runner) auth state added 2026-07-27.
+//
+// WHY IT NEEDS ITS OWN TEST: every other case in this file walks a
+// `callMutation` payload, and the device heartbeat does not go that way — it
+// POSTs `/devices/heartbeat` directly. So the runner rows, which have carried
+// `authSource` since it was introduced, were never scanned by the path-leak
+// walker above. And `authSource` is set to the matched CREDENTIAL FILE PATH by
+// the codex and opencode detectors: `/home/<user>/.codex/auth.json`. That is a
+// home-directory username, in Convex, which the privacy contract forbids
+// outright.
+//
+// The contract for the new fields is the same as for the old: labels, booleans
+// and timestamps ONLY. Never a token, never a credential path.
+func TestHeartbeatRunnerAuthPayloadIsLabelsBooleansAndTimestampsOnly(t *testing.T) {
+	rows := sanitizeRunnerInfosForConvex([]RunnerInfo{
+		{
+			RunnerID:       "codex",
+			Status:         "needs-auth",
+			Installed:      true,
+			AuthConfigured: false,
+			AuthPresent:    true,
+			AuthVerified:   true,
+			AuthVerifiedAt: 1753600000000,
+			CheckedAt:      1753600001000,
+			AuthSource:     "/Users/kivanc/.codex/auth.json",
+			Warning:        "token rejected; creds at /home/kivanc/.codex/auth.json",
+		},
+		{
+			RunnerID:   "opencode",
+			AuthSource: "/home/pokayoke/.config/opencode/opencode.json",
+		},
+	})
+	blob, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(blob)
+	for _, leak := range []string{"/Users/", "/home/", "/root/", "C:\\Users\\"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("heartbeat runner payload leaks %q: %s", leak, body)
+		}
+	}
+	// And the new keys must not be a smuggling route for anything secret.
+	for _, forbidden := range fieldsWeForbidInAnyConvexPayload {
+		if strings.Contains(body, `"`+forbidden+`":`) {
+			t.Fatalf("heartbeat runner payload carries forbidden key %q: %s", forbidden, body)
+		}
+	}
+	// Freshness must actually travel — a verdict with no age relocates the
+	// false green into the database instead of fixing it.
+	if !strings.Contains(body, `"authVerifiedAt":1753600000000`) {
+		t.Fatalf("authVerifiedAt was dropped: %s", body)
+	}
+	if !strings.Contains(body, `"checkedAt":1753600001000`) {
+		t.Fatalf("checkedAt was dropped: %s", body)
 	}
 }
