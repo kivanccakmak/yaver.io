@@ -7,9 +7,12 @@
 // apps.tsx). The web runtime console multiplied it by 100 again, printing
 // "1575% streaming" for a 15.75% compile. Keep this a pure function so the
 // scale contract stays pinned by a test.
-export function formatDevProgressLine(topic: string, pct: unknown, phase?: unknown): string {
+export function clampDevPct(pct: unknown): number {
   const raw = typeof pct === "number" && Number.isFinite(pct) ? pct : 0;
-  const clamped = Math.min(100, Math.max(0, Math.round(raw)));
+  return Math.min(100, Math.max(0, Math.round(raw)));
+}
+
+export function formatDevProgressLine(topic: string, pct: unknown, phase?: unknown): string {
   const phaseText = typeof phase === "string" ? phase : "";
-  return `${topic}: ${clamped}% ${phaseText}`.trim();
+  return `${topic}: ${clampDevPct(pct)}% ${phaseText}`.trim();
 }

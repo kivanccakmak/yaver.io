@@ -33,7 +33,7 @@ import {
 import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskStreamWithRecovery";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 import { StreamHealthNotice } from "./StreamHealthNotice";
-import { formatDevProgressLine } from "@/lib/devEventLine";
+import { clampDevPct, formatDevProgressLine } from "@/lib/devEventLine";
 import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
 import { CONVEX_URL } from "@/lib/constants";
 import { useAuth } from "@/lib/use-auth";
@@ -450,6 +450,34 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function formatBuildElapsed(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, "0")}`;
+}
+
+type RuntimeConsoleRow = { stamp: string; text: string; count: number };
+
+// Collapse CONSECUTIVE duplicate messages (ignoring their timestamps) into one
+// row with a ×N counter. Content is never altered — build/dev lines stay
+// verbatim; a multi-line payload (stack trace) folds behind an explicit
+// per-row toggle in the console renderer.
+function groupRuntimeConsoleLines(lines: readonly string[]): RuntimeConsoleRow[] {
+  const rows: RuntimeConsoleRow[] = [];
+  for (const raw of lines) {
+    const match = raw.match(/^\[([^\]]*)\]\s?([\s\S]*)$/);
+    const stamp = match ? match[1] : "";
+    const text = match ? match[2] : raw;
+    const last = rows[rows.length - 1];
+    if (last && last.text === text) {
+      last.count += 1;
+      last.stamp = stamp; // show the latest occurrence's time
+    } else {
+      rows.push({ stamp, text, count: 1 });
+    }
+  }
+  return rows;
+}
+
 function normalizeRunnerId(runnerId?: string | null): string {
   const normalized = String(runnerId || "").trim().toLowerCase();
   if (normalized === "claude-code") return "claude";
@@ -858,7 +886,7 @@ export default function RuntimeLabView({
   const autoRenderRef = useRef<string>("");
   const webPreviewReloadInFlightRef = useRef(false);
   const chatPaneResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
-  const runtimeConsoleRef = useRef<HTMLPreElement | null>(null);
+  const runtimeConsoleRef = useRef<HTMLDivElement | null>(null);
   const taskConsoleRef = useRef<HTMLPreElement | null>(null);
   const runnerSelectRef = useRef<HTMLSelectElement | null>(null);
   const modelSelectRef = useRef<HTMLSelectElement | null>(null);
@@ -918,6 +946,22 @@ export default function RuntimeLabView({
   // Raw dev-server output tail feeding the compile-failure card (gap D5).
   // Cleared on every "ready" event so a fixed compile drops the card.
   const [devLogTail, setDevLogTail] = useState<string[]>([]);
+  // ONE lean heartbeat row while a build runs, fed by structured `progress`
+  // dev events (real 0-100 pct): bar + percent + elapsed + last-output age.
+  // Console lines stay verbatim underneath. Cleared on ready/error.
+  const [buildProgress, setBuildProgress] = useState<{
+    topic: string;
+    pct: number;
+    phase?: string;
+    startedAt: number;
+    lastOutputAt: number;
+  } | null>(null);
+  const [buildNowTick, setBuildNowTick] = useState(() => Date.now());
+  // Runtime-console rows expanded to show their full multi-line payload.
+  const [expandedLogRows, setExpandedLogRows] = useState<Set<string>>(new Set());
+  // "Fix with <runner>" dispatch state — one fix task in flight per box, ever.
+  const [fixTaskBusy, setFixTaskBusy] = useState(false);
+  const [fixTaskId, setFixTaskId] = useState<string | null>(null);
   // Bumped by Fast/Full Reload to re-mount the preview iframe even when
   // the (signed) bundle URL is unchanged — e.g. a fast reload that
   // re-served the existing fresh bundle.
@@ -1257,24 +1301,41 @@ export default function RuntimeLabView({
         return next.length > 120 ? next.slice(-120) : next;
       });
     };
+    // Any dev output while a build is running refreshes the heartbeat row's
+    // "last output Ns ago" — the reader must be able to tell fetching from hung.
+    const touchBuildOutput = () => {
+      setBuildProgress((prev) => (prev ? { ...prev, lastOutputAt: Date.now() } : prev));
+    };
     es.onmessage = (msg) => {
       try {
         const ev = JSON.parse(msg.data);
-        if (ev.type === "log" && typeof ev.message === "string") { appendLog(`dev: ${ev.message}`); pushTail(ev.message); }
-        else if (ev.type === "phase" && ev.topic && ev.phase) appendLog(`${ev.topic}: ${ev.phase}`);
+        if (ev.type === "log" && typeof ev.message === "string") { appendLog(`dev: ${ev.message}`); pushTail(ev.message); touchBuildOutput(); }
+        else if (ev.type === "phase" && ev.topic && ev.phase) { appendLog(`${ev.topic}: ${ev.phase}`); touchBuildOutput(); }
         // Agent pct is already 0..100 (devserver.go Pct) — multiplying by
         // 100 here printed "1575% streaming". formatDevProgressLine clamps.
-        else if (ev.type === "progress" && ev.topic) appendLog(formatDevProgressLine(ev.topic, ev.pct, ev.phase));
-        else if (ev.type === "ready") { appendLog("dev server ready"); setDevLogTail([]); }
+        else if (ev.type === "progress" && ev.topic) {
+          appendLog(formatDevProgressLine(ev.topic, ev.pct, ev.phase));
+          const pct = clampDevPct(ev.pct);
+          setBuildProgress((prev) => ({
+            topic: String(ev.topic),
+            pct,
+            phase: typeof ev.phase === "string" ? ev.phase : prev?.phase,
+            startedAt: prev?.startedAt ?? Date.now(),
+            lastOutputAt: Date.now(),
+          }));
+        }
+        else if (ev.type === "ready") { appendLog("dev server ready"); setDevLogTail([]); setBuildProgress(null); }
         else if (ev.type === "error") {
           if (ev.error) { appendLog(`dev error: ${ev.error}`); pushTail(String(ev.error)); }
           if (ev.message) { appendLog(`dev error: ${ev.message}`); pushTail(String(ev.message)); }
+          setBuildProgress(null);
           // The route. Same object mobile renders, same code lookup.
           const gap = capabilityGapFromDevEvent(ev);
           if (gap) setRuntimeGap(gap);
         }
         else if (ev.type === "snapshot" && ev.snapshot?.recentLogs?.length) {
           for (const line of ev.snapshot.recentLogs.slice(-3)) { appendLog(`dev: ${line}`); pushTail(String(line)); }
+          touchBuildOutput();
         }
       } catch {
         if (msg.data) appendLog(`dev: ${String(msg.data).slice(0, 240)}`);
@@ -1285,6 +1346,16 @@ export default function RuntimeLabView({
   }, [appendLog, devEventsUrl]);
 
   const runtimeCompileCard = useMemo(() => detectCompileFailure(null, devLogTail), [devLogTail]);
+
+  // 1 Hz tick for the build heartbeat row — only while a build is running,
+  // so a working preview never gets a surprise re-render from an idle timer.
+  const buildProgressActive = buildProgress !== null;
+  useEffect(() => {
+    if (!buildProgressActive) return;
+    setBuildNowTick(Date.now());
+    const id = window.setInterval(() => setBuildNowTick(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [buildProgressActive]);
 
   /** POST the gap's fix and stream it into the runtime console the user is
    *  already reading. Driven entirely by the typed route the agent shipped. */
@@ -1657,6 +1728,83 @@ export default function RuntimeLabView({
     }
   }, [activeTaskStream?.id, appendLog, attachTaskSession, availableModels, composer, opencodeSnapshot, selectedModel, selectedProject, selectedRunner, sending]);
 
+  // "Fix with <runner>" — the route-to-fix on a failed build/preview. It
+  // dispatches a coding task on the SAME box+project through the EXACT path
+  // the chat composer uses (agentClient.createTask + attachTaskSession, same
+  // runner/model resolution) — no new endpoint. attachTaskSession is what the
+  // chat send already does, so the fix streams into the same chat pane.
+  const fixTaskRunning = !!(fixTaskId && activeTaskStream?.id === fixTaskId && taskStatusMeansRunnerIsCoding(activeTaskStream?.status));
+  const dispatchBuildFix = useCallback(async (errorText: string) => {
+    if (fixTaskBusy || !selectedProject) return;
+    if (selectedRunnerRow && selectedRunnerRow.ready === false) {
+      // Say so instead of failing silently — route into the sign-in flow.
+      setChatRunnerControlsOpen(true);
+      if (selectedRunnerRow.supportsBrowserAuth) void startSelectedRunnerSignIn();
+      return;
+    }
+    setFixTaskBusy(true);
+    try {
+      // Bounded: keep the END of the captured output — that is where the
+      // compiler states the failure.
+      const bounded = errorText.trim().slice(-4000);
+      const prompt = `The dev preview build failed. Fix the underlying cause, then verify the build compiles. Build error follows:\n\n${bounded}`;
+      const effectiveModel = safeModelForRunner(selectedRunner, selectedModel, availableModels);
+      const task = await agentClient.createTask({
+        title: prompt.replace(/\s+/g, " ").slice(0, 80),
+        description: prompt,
+        runner: selectedRunner || undefined,
+        model: effectiveModel,
+        projectName: selectedProject?.name,
+        workDir: selectedProject?.path,
+      });
+      setFixTaskId(task.id);
+      attachTaskSession(task);
+      appendLog(`fix task ${task.id} started with ${selectedRunner || "default runner"}`);
+    } catch (err) {
+      appendLog(`fix task failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setFixTaskBusy(false);
+    }
+  }, [appendLog, attachTaskSession, availableModels, fixTaskBusy, selectedModel, selectedProject, selectedRunner, selectedRunnerRow, startSelectedRunnerSignIn]);
+
+  const runnerNotReadyForFix = !!(selectedRunnerRow && selectedRunnerRow.ready === false);
+  const fixWithRunnerLabel = fixTaskBusy
+    ? "Dispatching fix…"
+    : fixTaskRunning
+      ? `${selectedRunnerName} is fixing…`
+      : runnerNotReadyForFix
+        ? `Sign in ${selectedRunnerName} to fix`
+        : `Fix with ${selectedRunnerName}`;
+  // Rendered INSIDE the failure boxes, directly under the title and ABOVE any
+  // log dump — the route to the fix must never be crowded out by advisory
+  // content, in pixels or in order.
+  const renderFixWithRunnerRow = (errorText: string) => (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        disabled={fixTaskBusy || fixTaskRunning || !selectedProject || !selectedRunner}
+        onClick={() => void dispatchBuildFix(errorText)}
+        className="rounded-md bg-[#7c5cff] px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {fixWithRunnerLabel}
+      </button>
+      {fixTaskRunning ? (
+        <span className="text-[11px] text-[#667085] dark:text-[#9aa3af]">Streaming in the chat pane.</span>
+      ) : null}
+    </div>
+  );
+
+  const toggleLogRow = useCallback((key: string) => {
+    setExpandedLogRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const runtimeConsoleRows = useMemo(() => groupRuntimeConsoleLines(log), [log]);
+
   const copyRuntimeConsole = useCallback(async () => {
     const text = log.length ? log.join("\n") : "No runtime operations yet.";
     try {
@@ -1771,6 +1919,7 @@ export default function RuntimeLabView({
     setWebPreviewFrameReady(false);
     setWebPreviewBusy(true);
     setWebPreviewNote(null);
+    setBuildProgress(null);
     setError(null);
     appendLog(`web ui ${selectedProject.name}`);
     try {
@@ -1913,6 +2062,7 @@ export default function RuntimeLabView({
     setWebPreviewUrl(null);
     setWebPreviewFrameReady(false);
     setWebPreviewNote(null);
+    setBuildProgress(null);
   }, []);
 
   const stopWebPreview = useCallback(async () => {
@@ -1928,6 +2078,7 @@ export default function RuntimeLabView({
       setWebPreviewUrl(null);
       setWebPreviewFrameReady(false);
       setWebPreviewNote(message);
+      setBuildProgress(null);
       if (result.buildsCancelled) appendLog(`cancelled ${result.buildsCancelled} in-flight build(s)`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Stop preview failed.";
@@ -2127,7 +2278,12 @@ export default function RuntimeLabView({
                   </span>
                 ) : null}
               </div>
-            ) : null}
+            ) : (
+              // Non-auth failure (target probe / web ui failed): the route to
+              // the fix, in place — dispatch the selected runner on this
+              // box+project with the captured error.
+              renderFixWithRunnerRow(error)
+            )}
           </div>
         ) : null}
 
@@ -2143,20 +2299,34 @@ export default function RuntimeLabView({
               const unavailableTargets = caps.targets.filter((target) => !target.enabled);
               const primaryTargets = caps.targets.filter(isPrimaryRuntimeTarget);
               const groupOrder: ReturnType<typeof runtimeTargetGroup>[] = ["browser", "simulator", "container", "device", "advanced"];
+              // Whole card is clickable (same handler as Open); the visible
+              // button stays for affordance + keyboard access and stops
+              // propagation so a button click never fires the card twice.
               const renderTarget = (target: RemoteRuntimeTarget, compact = false) => (
-                <div key={target.id} className={`rounded-md border p-3 ${target.enabled ? "border-[#d7dce3] bg-white dark:border-[#2a3039] dark:bg-[#161b22]" : "border-[#e1e5eb] bg-[#f8fafc] dark:border-[#252b33] dark:bg-[#121720]"}`}>
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className={`text-sm font-medium ${target.enabled ? "text-[#1f2933] dark:text-[#e6e8ec]" : "text-[#667085] dark:text-[#8b949e]"}`}>{target.label}</div>
-                      <div className="mt-1 text-xs text-[#667085] dark:text-[#9aa3af]">
+                <div
+                  key={target.id}
+                  onClick={() => {
+                    if (target.enabled && !busy) void createSession(target.id);
+                  }}
+                  className={`rounded-md border p-3 ${target.enabled ? "cursor-pointer border-[#d7dce3] bg-white transition-colors hover:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#161b22] dark:hover:border-[#3d4551]" : "border-[#e1e5eb] bg-[#f8fafc] dark:border-[#252b33] dark:bg-[#121720]"}`}
+                >
+                  {/* No flex-wrap: the Open button holds a consistent
+                      top-right on every card; text truncates instead. */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className={`truncate text-sm font-medium ${target.enabled ? "text-[#1f2933] dark:text-[#e6e8ec]" : "text-[#667085] dark:text-[#8b949e]"}`}>{target.label}</div>
+                      <div className="mt-1 truncate text-xs text-[#667085] dark:text-[#9aa3af]">
                         {target.surface || "runtime"} · {target.id} · {target.requiredCli || "tools"}
                       </div>
                     </div>
                     <button
                       disabled={!target.enabled || busy}
-                      onClick={() => void createSession(target.id)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void createSession(target.id);
+                      }}
                       aria-label={targetActionLabel(target)}
-                      className="rounded-md bg-amber-500/15 px-3 py-1.5 text-xs font-semibold text-amber-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-amber-200"
+                      className="shrink-0 rounded-md bg-amber-500/15 px-3 py-1.5 text-xs font-semibold text-amber-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-amber-200"
                     >
                       {target.enabled ? "Open" : "Unavailable"}
                     </button>
@@ -2187,19 +2357,29 @@ export default function RuntimeLabView({
                       Browser
                     </div>
                     <div className="grid gap-2 md:grid-cols-2">
-                      <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+                      <div
+                        onClick={() => {
+                          if (selectedProject && !webPreviewBusy) void openWebUI();
+                        }}
+                        className={`rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22] ${
+                          selectedProject && !webPreviewBusy ? "cursor-pointer transition-colors hover:border-[#98a2b3] dark:hover:border-[#3d4551]" : ""
+                        }`}
+                      >
                         <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-medium text-[#1f2933] dark:text-[#e6e8ec]">Web UI in browser</div>
-                            <div className="mt-1 text-xs text-[#667085] dark:text-[#9aa3af]">
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm font-medium text-[#1f2933] dark:text-[#e6e8ec]">Web UI in browser</div>
+                            <div className="mt-1 truncate text-xs text-[#667085] dark:text-[#9aa3af]">
                               browser · direct iframe · dev server
                             </div>
                           </div>
                           <button
                             disabled={!selectedProject || webPreviewBusy}
-                            onClick={() => void openWebUI()}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void openWebUI();
+                            }}
                             aria-label="Open Web UI in browser"
-                            className="rounded-md bg-sky-500/15 px-3 py-1.5 text-xs font-semibold text-sky-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-sky-200"
+                            className="shrink-0 rounded-md bg-sky-500/15 px-3 py-1.5 text-xs font-semibold text-sky-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-sky-200"
                           >
                             {webPreviewBusy ? "Building..." : "Open"}
                           </button>
@@ -2346,10 +2526,29 @@ export default function RuntimeLabView({
                         // words; full output stays in the runtime console.
                         <div className="mb-2 rounded-md border border-rose-500/30 bg-rose-500/10 p-3">
                           <div className="text-xs font-semibold text-rose-700 dark:text-rose-300">{runtimeCompileCard.title}</div>
+                          {/* Route first, log dump second — the action row
+                              renders ABOVE the error wall, always. */}
+                          {renderFixWithRunnerRow(devLogTail.length ? devLogTail.join("\n") : runtimeCompileCard.detail)}
                           <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-4 text-rose-700/90 dark:text-rose-200/90">{runtimeCompileCard.detail}</pre>
                           <div className="mt-1 text-[10px] text-rose-700/70 dark:text-rose-200/60">
                             The dev server is still running — the preview stays blank until the next successful compile. Full output is in the runtime console.
                           </div>
+                        </div>
+                      ) : null}
+                      {buildProgress ? (
+                        // One lean heartbeat row while the box compiles: thin
+                        // bar + real percent + elapsed + last-output age. No
+                        // spinner walls; verbatim lines stay in the console.
+                        <div className="flex items-center gap-3 rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-[11px] text-[#667085] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#9aa3af]">
+                          <span className="min-w-0 shrink truncate font-medium text-[#344054] dark:text-[#d7dce3]">
+                            {buildProgress.topic}{buildProgress.phase ? ` · ${buildProgress.phase}` : ""}
+                          </span>
+                          <div className="h-1 min-w-[80px] flex-1 overflow-hidden rounded-full bg-[#e4e7ec] dark:bg-[#242b35]">
+                            <div className="h-full rounded-full bg-sky-500 transition-[width] duration-500" style={{ width: `${buildProgress.pct}%` }} />
+                          </div>
+                          <span className="shrink-0 font-semibold tabular-nums text-[#344054] dark:text-[#d7dce3]">{buildProgress.pct}%</span>
+                          <span className="shrink-0 tabular-nums">{formatBuildElapsed(buildNowTick - buildProgress.startedAt)} elapsed</span>
+                          <span className="shrink-0 tabular-nums">last output {Math.max(0, Math.round((buildNowTick - buildProgress.lastOutputAt) / 1000))}s ago</span>
                         </div>
                       ) : null}
                       {!webPreviewUrl ? (
@@ -2514,7 +2713,7 @@ export default function RuntimeLabView({
             <div className="text-xs text-[#667085] dark:text-[#9aa3af]">
               session <span className="font-mono text-[#344054] dark:text-[#d7dce3]">{session.id}</span> · {session.targetLabel} · {session.status}
             </div>
-            <RemoteRuntimeViewer session={session} onSessionChange={setSession} />
+            <RemoteRuntimeViewer session={session} onSessionChange={setSession} onClose={() => setSession(null)} />
           </div>
         ) : null}
       </div>
@@ -2966,13 +3165,41 @@ export default function RuntimeLabView({
               paths, URLs from expo export) scroll INSIDE this box; they
               must never push the pane wider. Ancestors carry min-w-0. */}
           {runtimeConsoleOpen ? (
-            <pre
+            <div
               ref={runtimeConsoleRef}
               onScroll={(event) => setRuntimeConsolePinned(isNearBottom(event.currentTarget))}
-              className="h-52 min-w-0 overflow-y-auto overflow-x-auto whitespace-pre rounded-md border border-[#1f2933] bg-[#0b0d11] p-3 text-[11px] leading-5 text-[#d5dae1]"
+              className="h-52 min-w-0 overflow-y-auto overflow-x-auto rounded-md border border-[#1f2933] bg-[#0b0d11] p-3 font-mono text-[11px] leading-5 text-[#d5dae1]"
             >
-              {log.length ? log.join("\n") : "No runtime operations yet."}
-            </pre>
+              {runtimeConsoleRows.length ? (
+                runtimeConsoleRows.map((row, index) => {
+                  const rowLines = row.text.split("\n");
+                  const rowKey = `${row.stamp}|${rowLines[0]}`;
+                  const expanded = expandedLogRows.has(rowKey);
+                  return (
+                    <div key={`${index}-${rowKey}`} className="whitespace-pre">
+                      <span className="text-[#5d6673]">[{row.stamp}]</span> {rowLines[0]}
+                      {row.count > 1 ? (
+                        <span className="ml-2 rounded bg-[#1f2933] px-1.5 text-[10px] text-[#9aa3af]">×{row.count}</span>
+                      ) : null}
+                      {rowLines.length > 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleLogRow(rowKey)}
+                          className="ml-2 text-[10px] text-sky-400 hover:text-sky-300"
+                        >
+                          {expanded ? "hide" : `${rowLines.length - 1} more lines`}
+                        </button>
+                      ) : null}
+                      {expanded && rowLines.length > 1 ? (
+                        <div className="whitespace-pre pl-6 text-[#9aa3af]">{rowLines.slice(1).join("\n")}</div>
+                      ) : null}
+                    </div>
+                  );
+                })
+              ) : (
+                "No runtime operations yet."
+              )}
+            </div>
           ) : null}
         </div>
         <div className="hidden rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">

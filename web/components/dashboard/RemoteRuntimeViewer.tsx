@@ -42,9 +42,11 @@ type DeviceDims = {
 export default function RemoteRuntimeViewer({
   session,
   onSessionChange,
+  onClose,
 }: {
   session: RemoteRuntimeSession;
   onSessionChange: (session: RemoteRuntimeSession) => void;
+  onClose?: () => void;
 }) {
   // --- transport-agnostic UI state ---------------------------------------
   const [viewerNote, setViewerNote] = useState("Negotiating WebRTC...");
@@ -57,6 +59,8 @@ export default function RemoteRuntimeViewer({
   const [mediaState, setMediaState] = useState("waiting");
   const [iceCandidateCount, setIceCandidateCount] = useState(0);
   const [lastFrameAt, setLastFrameAt] = useState<number | null>(null);
+  // One quiet line naming the HTTP fallback when the WebRTC watchdog fires.
+  const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   // Tracks which transport actually got picked (so the UI can show
   // "RTP H.264" or "JPEG-DC fallback" rather than guess).
   const [transport, setTransport] = useState<string>(session.frameTransport ?? "");
@@ -78,6 +82,17 @@ export default function RemoteRuntimeViewer({
   // can revoke it before swapping in the next frame. Without this
   // we'd leak ~80 KB per frame at 1.4 FPS = a slow but real OOM.
   const jpegUrlRef = useRef<string | null>(null);
+  // Non-scalar session fields + parent callbacks are read through refs so the
+  // lifecycle effect can key on SCALARS only. session.deviceDims is a freshly
+  // parsed object on every /webrtc/offer response — having it in the effect
+  // deps tore down the RTCPeerConnection right after each successful offer
+  // and renegotiated forever ("Connecting" + ICE new/gathering + data closed).
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const onSessionChangeRef = useRef(onSessionChange);
+  onSessionChangeRef.current = onSessionChange;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   const revokeJpeg = useCallback(() => {
     if (jpegUrlRef.current) {
@@ -85,6 +100,27 @@ export default function RemoteRuntimeViewer({
       jpegUrlRef.current = null;
     }
   }, []);
+
+  // ~1 Hz throttle for the frame-age stamp. <video>.ontimeupdate fires ~4 Hz
+  // and the JPEG lanes fire per frame; stamping state on every one re-rendered
+  // the whole panel per frame (part of the visible panel shake).
+  const lastFrameStampRef = useRef(0);
+  const markFrame = useCallback(() => {
+    const now = Date.now();
+    if (now - lastFrameStampRef.current < 1000) return;
+    lastFrameStampRef.current = now;
+    setLastFrameAt(now);
+  }, []);
+
+  const stopSession = useCallback(async () => {
+    try {
+      await agentClient.closeRemoteRuntimeSession(session.id);
+    } catch (err) {
+      // Close the panel regardless — the agent reaps orphaned sessions.
+      setViewerNote(err instanceof Error ? err.message : String(err));
+    }
+    onCloseRef.current?.();
+  }, [session.id]);
 
   // --- pointer drag detection -------------------------------------------
   // Press-and-release at the same spot → tap. Press, drag, release →
@@ -191,45 +227,63 @@ export default function RemoteRuntimeViewer({
   );
 
   // --- core lifecycle ----------------------------------------------------
+  // Keyed on SCALARS only (session.id / transportMode / retryNonce). Object
+  // fields such as session.deviceDims are read through sessionRef — see the
+  // renegotiation-loop note at the ref declarations above.
   useEffect(() => {
     let cancelled = false;
+    // Shared HTTP JPEG pump — the relay-jpeg-poll transport AND the WebRTC
+    // watchdog fallback both consume it. The HTTP frame path is proven (the
+    // lab logs "first frame ok" over HTTP while WebRTC negotiates); it must
+    // not sit unconsumed while the panel says "no media".
+    let pumpActive = false;
+    let watchdogId: number | null = null;
+    let fallbackTransportOverride = false;
+    const sessionId = session.id;
+    const startFramePump = (note: string) => {
+      if (pumpActive) return;
+      pumpActive = true;
+      setViewerNote(note);
+      const pump = async () => {
+        if (cancelled || !pumpActive) return;
+        try {
+          const blob = await agentClient.fetchRemoteRuntimeFrame(sessionId);
+          if (cancelled || !pumpActive) return;
+          revokeJpeg();
+          const url = URL.createObjectURL(blob);
+          jpegUrlRef.current = url;
+          if (imgRef.current) imgRef.current.src = url;
+          setConnected(true);
+          setMediaState("jpeg");
+          markFrame();
+        } catch (err) {
+          if (!cancelled) setViewerNote(err instanceof Error ? err.message : String(err));
+        } finally {
+          if (!cancelled && pumpActive) window.setTimeout(() => void pump(), 900);
+        }
+      };
+      void pump();
+    };
     void (async () => {
       revokeJpeg();
       setConnected(false);
-      setTransport(session.frameTransport ?? "");
+      setTransport(sessionRef.current.frameTransport ?? "");
       setIceState("new");
       setIceGatheringState("new");
       setDataState("closed");
       setMediaState("waiting");
       setIceCandidateCount(0);
+      lastFrameStampRef.current = 0;
       setLastFrameAt(null);
+      setFallbackNote(null);
 
       // Relay-jpeg-poll mode bypasses WebRTC entirely: the viewer
       // GETs a JPEG every ~900 ms. Keeps working as a last resort
       // when ICE can't punch through (corp WiFi blocking UDP, etc.).
       if (session.transportMode === "relay-jpeg-poll") {
-        setViewerNote("Starting relay frame polling...");
         setConnected(true);
-        const pump = async () => {
-          if (cancelled) return;
-          try {
-            const blob = await agentClient.fetchRemoteRuntimeFrame(session.id);
-            if (cancelled) return;
-            revokeJpeg();
-            const url = URL.createObjectURL(blob);
-            jpegUrlRef.current = url;
-            if (imgRef.current) imgRef.current.src = url;
-            setTransport("relay-jpeg-poll-v1");
-            setMediaState("jpeg");
-            setLastFrameAt(Date.now());
-            setViewerNote("Relay frame polling active.");
-          } catch (err) {
-            if (!cancelled) setViewerNote(err instanceof Error ? err.message : String(err));
-          } finally {
-            if (!cancelled) window.setTimeout(pump, 900);
-          }
-        };
-        void pump();
+        setTransport("relay-jpeg-poll-v1");
+        startFramePump("Relay frame polling active.");
         return;
       }
 
@@ -252,6 +306,18 @@ export default function RemoteRuntimeViewer({
       pcRef.current = pc;
       setIceState(pc.iceConnectionState);
       setIceGatheringState(pc.iceGatheringState);
+
+      // Watchdog: if the peer connection has not reached "connected" within
+      // ~8s, fall back to the proven HTTP JPEG frame pump instead of leaving
+      // the panel on "Connecting · no media" forever. Negotiation keeps going
+      // underneath; if it lands, the pump stops and WebRTC takes over.
+      watchdogId = window.setTimeout(() => {
+        if (cancelled || pc.connectionState === "connected") return;
+        fallbackTransportOverride = true;
+        setTransport("relay-jpeg-poll-v1");
+        setFallbackNote("WebRTC has not connected after 8s — showing HTTP frame polling while negotiation continues.");
+        startFramePump("HTTP frame polling active (WebRTC fallback).");
+      }, 8000);
 
       // Ensure the offer has an SCTP m-line. The agent creates the
       // "frames" and "events" channels from its side; without a local
@@ -277,13 +343,13 @@ export default function RemoteRuntimeViewer({
           setMediaState("track");
           videoRef.current.onloadedmetadata = () => {
             setMediaState("metadata");
-            setLastFrameAt(Date.now());
+            markFrame();
           };
           videoRef.current.onplaying = () => {
             setMediaState("playing");
-            setLastFrameAt(Date.now());
+            markFrame();
           };
-          videoRef.current.ontimeupdate = () => setLastFrameAt(Date.now());
+          videoRef.current.ontimeupdate = () => markFrame();
           void videoRef.current.play().catch(() => {
             /* user gesture required — handled by tap on the surface */
             setMediaState("blocked");
@@ -305,6 +371,19 @@ export default function RemoteRuntimeViewer({
         setConnected(state === "connected");
         setViewerNote(`Peer state: ${state}`);
         if (state === "connected") {
+          // WebRTC made it — retire the watchdog fallback if it fired.
+          if (watchdogId !== null) {
+            window.clearTimeout(watchdogId);
+            watchdogId = null;
+          }
+          if (pumpActive) {
+            pumpActive = false;
+            setFallbackNote(null);
+          }
+          if (fallbackTransportOverride) {
+            fallbackTransportOverride = false;
+            setTransport(sessionRef.current.frameTransport ?? "");
+          }
           // Heartbeat — agent uses this to know the viewer is alive
           // for the TeamViewer-style takeover semantics.
           if (heartbeatRef.current === null) {
@@ -345,7 +424,7 @@ export default function RemoteRuntimeViewer({
                 pc.close();
               }
               if (payload?.session) {
-                onSessionChange(payload.session as RemoteRuntimeSession);
+                onSessionChangeRef.current(payload.session as RemoteRuntimeSession);
               }
               if (typeof payload?.error === "string") setViewerNote(payload.error);
             } catch {
@@ -368,7 +447,7 @@ export default function RemoteRuntimeViewer({
             jpegUrlRef.current = url;
             if (imgRef.current) imgRef.current.src = url;
             setMediaState("jpeg");
-            setLastFrameAt(Date.now());
+            markFrame();
           };
         }
       };
@@ -392,12 +471,14 @@ export default function RemoteRuntimeViewer({
       if (candidateCount === 0) {
         setViewerNote("WebRTC offer has no ICE candidates yet; sending anyway, but this usually needs TURN/STUN or a browser network-permission fix.");
       }
-      const result = await agentClient.createRemoteRuntimeWebRTCAnswer(session.id, {
+      const result = await agentClient.createRemoteRuntimeWebRTCAnswer(sessionId, {
         type: local.type,
         sdp: local.sdp,
       });
       if (cancelled) return;
-      onSessionChange(result.session);
+      // Delivered through the ref: the fresh session object (new deviceDims
+      // identity every time) must NOT restart this effect.
+      onSessionChangeRef.current(result.session);
       if (result.transport) setTransport(result.transport);
       if (result.note) setViewerNote(result.note);
       // Pick up the dims that the agent stamped on the session
@@ -417,6 +498,8 @@ export default function RemoteRuntimeViewer({
 
     return () => {
       cancelled = true;
+      pumpActive = false;
+      if (watchdogId !== null) window.clearTimeout(watchdogId);
       if (heartbeatRef.current !== null) {
         window.clearInterval(heartbeatRef.current);
         heartbeatRef.current = null;
@@ -434,7 +517,7 @@ export default function RemoteRuntimeViewer({
       pcRef.current = null;
       eventsRef.current = null;
     };
-  }, [session.id, session.transportMode, session.frameTransport, session.deviceDims, onSessionChange, revokeJpeg, retryNonce, sendEvent]);
+  }, [session.id, session.transportMode, retryNonce, markFrame, revokeJpeg, sendEvent]);
 
   // --- derived state for the UI ------------------------------------------
   const transportLabel = useMemo(() => {
@@ -461,8 +544,14 @@ export default function RemoteRuntimeViewer({
 
   return (
     <div className="space-y-3 rounded-lg border border-surface-800 bg-surface-950/80 p-3 sm:p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0 text-xs text-surface-400">
+      {/* No flex-wrap here on purpose: the variable label truncates on ONE
+          line so the Connected/Retry/Stop cluster never re-wraps (the old
+          wrap was half of the periodic panel shake). */}
+      <div className="flex items-center justify-between gap-3">
+        <div
+          className="min-w-0 flex-1 truncate whitespace-nowrap text-xs text-surface-400"
+          title={`${session.targetLabel} · ${session.deviceId || "attaching"} · ${transportLabel}`}
+        >
           {session.targetLabel} · {session.deviceId || "attaching"} ·{" "}
           {dims ? `${dims.width}×${dims.height}` : "—"} · {transportLabel} · ICE {iceState}/{iceGatheringState}
         </div>
@@ -477,8 +566,19 @@ export default function RemoteRuntimeViewer({
           >
             Retry
           </button>
+          <button
+            onClick={() => void stopSession()}
+            className="px-2 py-1 rounded-md bg-rose-500/15 text-rose-700 dark:text-rose-300 text-xs hover:bg-rose-500/25"
+            title="End this runtime session on the machine and close the panel"
+          >
+            Stop
+          </button>
         </div>
       </div>
+
+      {fallbackNote ? (
+        <div className="text-[11px] text-amber-700 dark:text-amber-300">{fallbackNote}</div>
+      ) : null}
 
       <div className="grid gap-2 text-[11px] sm:grid-cols-4">
         <StatusPill label="Signaling" value={`${iceState}/${iceGatheringState}`} good={iceState === "connected" || iceState === "completed"} />
@@ -618,8 +718,9 @@ export default function RemoteRuntimeViewer({
         )}
       </div>
 
-      <div className="text-xs text-surface-500">
-        {viewerNote} · data {dataState} · media {mediaState} · ICE candidates {iceCandidateCount} · {frameAgeLabel}
+      <div className="text-xs tabular-nums text-surface-500">
+        {viewerNote} · data {dataState} · media {mediaState} · ICE candidates {iceCandidateCount} ·{" "}
+        <span className="inline-block min-w-[9ch]">{frameAgeLabel}</span>
       </div>
     </div>
   );
@@ -629,7 +730,7 @@ function StatusPill({ label, value, good }: { label: string; value: string; good
   return (
     <div className="rounded-md border border-surface-800 bg-surface-900 px-2.5 py-2">
       <div className="font-semibold uppercase tracking-wide text-surface-500">{label}</div>
-      <div className={good ? "truncate text-emerald-700 dark:text-emerald-300" : "truncate text-surface-300"}>{value}</div>
+      <div className={good ? "truncate tabular-nums text-emerald-700 dark:text-emerald-300" : "truncate tabular-nums text-surface-300"}>{value}</div>
     </div>
   );
 }
