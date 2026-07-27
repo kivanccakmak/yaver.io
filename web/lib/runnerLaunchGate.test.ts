@@ -154,6 +154,87 @@ test("not-installed opens with the gap named, and is not called a login problem"
   assert.equal(d.kind === "open-degraded" && d.via, "not-installed");
 });
 
+// ------------------------------------------- the 2026-07-27 revocation
+
+/**
+ * THE ROW THE USER'S OWN BOX ACTUALLY SHIPPED while Claude Code was answering
+ * "Please run /login · API Error: 401 OAuth access token has been revoked."
+ *
+ * Under the old contract this took the zero-check fast path and opened a
+ * terminal onto a dead session. `authVerified` now means "the provider
+ * answered", and `authPresent` carries the old local claim, so this row is
+ * presence-only and must NOT fast-path.
+ */
+const CLAUDE_PRESENT_ONLY: RunnerStatusRow = {
+  runnerId: "claude",
+  status: "ready",
+  ready: true,
+  installed: true,
+  authConfigured: true,
+  authPresent: true,
+  authVerified: false,
+  authSource: "claude.ai · max",
+};
+
+test("presence-only no longer takes the zero-check fast path", () => {
+  const d = decideRunnerLaunchGate({
+    runner: "claude",
+    deviceRunners: [CLAUDE_PRESENT_ONLY],
+    elapsedMs: 0,
+  });
+  assert.notEqual(d.kind, "open");
+  assert.equal(d.kind, "open-degraded");
+  assert.equal(d.kind === "open-degraded" && d.via, "presence-only");
+});
+
+test("presence-only still opens the terminal, with the sign-in affordance beside it", () => {
+  const d = decideRunnerLaunchGate({
+    runner: "claude",
+    deviceRunners: [CLAUDE_PRESENT_ONLY],
+    elapsedMs: 0,
+  });
+  assert.equal(decisionOpensTerminal(d), true, "blocking would wall off users whose credential is fine");
+  assert.equal(d.kind === "open-degraded" && d.signInAffordance, true);
+  assert.match(d.kind === "open-degraded" ? d.banner : "", /claude\.ai · max/);
+});
+
+test("a revoked row routes to sign-in even while it still claims ready", () => {
+  // The agent sets authVerified TRUE on a rejection — it is verified evidence,
+  // of the negative. authConfigured false is the signal that must win, and it
+  // must win regardless of what `ready` says.
+  const revoked: RunnerStatusRow = {
+    runnerId: "claude",
+    status: "ready",
+    ready: true,
+    installed: true,
+    authConfigured: false,
+    authVerified: true,
+    warning: "Claude Code's OAuth access token has been REVOKED by the provider",
+  };
+  const d = decideRunnerLaunchGate({ runner: "claude", deviceRunners: [revoked], elapsedMs: 0 });
+  assert.equal(d.kind, "sign-in");
+  assert.match(d.kind === "sign-in" ? d.reason : "", /REVOKED/);
+});
+
+test("agents older than the split keep their fast path (no regression)", () => {
+  // 1.99.278–1.99.383 send authVerified with the OLD meaning and no
+  // authPresent. Treating that as presence-only would degrade every existing
+  // box for no gain.
+  const d = decideRunnerLaunchGate({
+    runner: "claude",
+    deviceRunners: [CLAUDE_VERIFIED],
+    elapsedMs: 0,
+  });
+  assert.equal(d.kind, "open");
+  assert.equal(d.kind === "open" && d.via, "device-verified");
+});
+
+test("a live probe cannot manufacture 'verified' from presence alone", () => {
+  const out = probeFromStatusRow(CLAUDE_PRESENT_ONLY, "claude");
+  assert.notEqual(out.state, "verified", "the live route asks the same local store — same blind spot");
+  assert.equal(out.state, "error");
+});
+
 // ---------------------------------------------------------------- bounded wait
 
 test("an unresolved check narrates elapsed and remaining, and converges", () => {
@@ -228,6 +309,8 @@ test("EXHAUSTIVE: past the budget, no input combination keeps the user waiting",
     [{ runnerId: "codex", installed: true, authVerified: true, ready: false }],
     [{ runnerId: "codex", installed: true, authVerified: false, authConfigured: true }],
     [{ runnerId: "claude", installed: true, authVerified: true }],
+    [{ runnerId: "codex", installed: true, authConfigured: true, authPresent: true, authVerified: false }],
+    [{ runnerId: "codex", installed: true, authConfigured: false, authVerified: true }],
   ];
   const probes: RunnerLaunchGateInput["probe"][] = [
     null,

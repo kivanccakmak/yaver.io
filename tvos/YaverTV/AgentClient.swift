@@ -495,8 +495,20 @@ actor AgentClient {
         return (try? JSONDecoder().decode([FeedbackReport].self, from: data)) ?? []
     }
 
-    func startRunnerAuth(_ runner: String) async throws -> RunnerAuthStartResult {
-        try await ops("runner_auth", ["op": "browser_start", "runner": runner], as: RunnerAuthStartResult.self)
+    /// `confirm: true` is the user's second, deliberate tap after being told the
+    /// runner already looks signed in — the only path allowed to reap a healthy
+    /// session. Everything else is answered by the agent, not obeyed.
+    func startRunnerAuth(_ runner: String, confirm: Bool = false) async throws -> RunnerAuthStartResult {
+        try await ops(
+            "runner_auth",
+            [
+                "op": "browser_start",
+                "runner": runner,
+                "trigger": confirm ? "confirmed" : "explicit",
+                "confirm": confirm,
+            ],
+            as: RunnerAuthStartResult.self
+        )
     }
 
     func runnerAuthStatus(sessionId: String) async throws -> RunnerAuthStartResult {

@@ -45,6 +45,16 @@ export type CodingRunnerProbe = {
   installed: boolean;
   ready: boolean;
   authConfigured: boolean;
+  /** The runner's own CLI says a credential is here. LOCAL evidence — it
+   *  cannot see a server-side revocation, so it is never proof. */
+  authPresent?: boolean;
+  /** The credential was EXERCISED against the provider and the provider
+   *  answered — a completed turn, a completed OAuth — or explicitly refused it
+   *  (in which case authConfigured is false). Agent 1.99.384+; older agents
+   *  send this field carrying authPresent's weaker meaning. */
+  authVerified?: boolean;
+  /** Epoch ms the provider last spoke. Freshness of the VERDICT. */
+  authVerifiedAt?: number;
   error?: string;
   warning?: string;
 };
@@ -159,6 +169,13 @@ function normalizeRunner(row: any): CodingRunnerProbe | null {
     installed,
     ready: installed && row?.ready === true && authConfigured && !error,
     authConfigured,
+    // Same fail-closed rule as authConfigured: only an explicit true counts.
+    // These two are separate because on 2026-07-27 they were one field, and
+    // it reported a REVOKED Claude token as verified — `claude auth status`
+    // reads the local store, which a revocation never touches.
+    authPresent: row?.authPresent === true,
+    authVerified: row?.authVerified === true,
+    authVerifiedAt: typeof row?.authVerifiedAt === "number" ? row.authVerifiedAt : undefined,
     error,
     warning: typeof row?.warning === "string" ? row.warning : undefined,
   };

@@ -1590,8 +1590,21 @@ export function CodingAgentsSection({ device }: { device: Device }) {
           subtitle = (row?.error || "installed but needs configuration").trim();
           tone = "#f59e0b";
         } else if (authed) {
-          subtitle = `${versionPrefix}✓ signed in`;
-          tone = "#22c55e";
+          // "✓ signed in" is reserved for a credential the PROVIDER answered
+          // for. On 2026-07-27 this box showed a green ✓ for claude while the
+          // very next turn came back "401 OAuth access token has been revoked" —
+          // because the only evidence was a local store, and a local store never
+          // learns about a revocation. Presence-only now says so, quietly,
+          // instead of promising something only an operation can establish.
+          const proven = row?.authVerified === true;
+          const present = row?.authPresent === true;
+          if (!proven && present) {
+            subtitle = `${versionPrefix}signed in (not yet used)`;
+            tone = "#eab308";
+          } else {
+            subtitle = `${versionPrefix}✓ signed in`;
+            tone = "#22c55e";
+          }
         } else {
           subtitle = `${versionPrefix}not signed in`;
           tone = "#f59e0b";

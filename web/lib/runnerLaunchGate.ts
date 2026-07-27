@@ -64,7 +64,16 @@ export interface RunnerStatusRow {
   ready?: boolean;
   installed?: boolean;
   authConfigured?: boolean;
+  /** The runner's own CLI says a credential is here. LOCAL evidence — it
+   *  cannot see a server-side revocation. Agents < 1.99.384 do not send it. */
+  authPresent?: boolean;
+  /** The credential was EXERCISED against the provider and the provider
+   *  answered (or refused). Agents 1.99.278–1.99.383 sent this field carrying
+   *  authPresent's meaning, which is why a row with authVerified and NO
+   *  authPresent is treated as the old, weaker claim. */
   authVerified?: boolean;
+  /** Epoch ms of the last time the provider spoke about this credential. */
+  authVerifiedAt?: number;
   authSource?: string;
   warning?: string;
   error?: string;
@@ -91,8 +100,14 @@ export interface RunnerLaunchGateInput {
 export type RunnerLaunchDecision =
   /** Mount the PTY now. */
   | { kind: "open"; via: "ungated" | "device-verified" | "probe-verified"; detail: string }
-  /** Mount the PTY now, but render `banner` above it — we could not confirm. */
-  | { kind: "open-degraded"; via: "budget-exhausted" | "check-failed" | "not-installed"; banner: string }
+  /** Mount the PTY now, but render `banner` above it — we could not confirm.
+   *  `signInAffordance` means: also show the sign-in button, unpressed. */
+  | {
+      kind: "open-degraded";
+      via: "budget-exhausted" | "check-failed" | "not-installed" | "presence-only";
+      banner: string;
+      signInAffordance?: boolean;
+    }
   /** Route into the runner sign-in flow. PTY stays closed. */
   | { kind: "sign-in"; reason: string }
   /** Still checking — bounded. Callers render elapsed/remaining, never a bare spinner. */
@@ -157,12 +172,38 @@ export function decideRunnerLaunchGate(input: RunnerLaunchGateInput): RunnerLaun
   const label = runnerLabel(runner);
   const row = findRunnerRow(deviceRunners, runner);
 
-  // 1 — FAST PATH. The device row already proves it. This is the case the user
-  // hits every day and it must cost zero network and zero tokens.
+  // 1 — KNOWN BAD FIRST. An explicit negative outranks every positive, always.
   //
-  // `ready === false` vetoes even a verified credential: a runner can hold a
-  // good token and still be unrunnable (codex with the Linux userns sandbox
-  // blocked is the shipped example), and that shows up as ready:false + error.
+  // This used to sit BELOW the fast path, which made correctness depend on a
+  // revoked row also carrying `ready:false` — true today, one refactor away
+  // from not being true. An observed rejection is the strongest evidence the
+  // product has; nothing may be checked before it.
+  if (row && rowSaysSignedOut(row)) {
+    return {
+      kind: "sign-in",
+      reason:
+        String(row.error || row.warning || "").trim() ||
+        `${label} is not signed in on this machine.`,
+    };
+  }
+
+  // 2 — FAST PATH: VERIFIED BY OPERATION. Zero network, zero tokens.
+  //
+  // WHAT CHANGED 2026-07-27 AND WHY. This branch used to fire on
+  // `authVerified === true` when that field meant "a local store says a
+  // credential exists" — which is not proof of anything the terminal is about
+  // to need. The agent answered `authVerified:true authSource:"claude.ai · max"
+  // ready:true` for a token Anthropic had already REVOKED, so this gate opened
+  // a PTY onto a dead session and the user's first keystroke came back
+  // "Please run /login · API Error: 401 OAuth access token has been revoked."
+  //
+  // The agent now splits the two claims. `authPresent` is the old, local claim;
+  // `authVerified` means the provider actually answered. Only the latter buys
+  // the silent fast path.
+  //
+  // `ready === false` still vetoes even a verified credential: a runner can
+  // hold a good token and be unrunnable anyway (codex with the Linux userns
+  // sandbox blocked is the shipped example).
   if (row && row.authVerified === true && row.installed !== false && row.ready !== false) {
     return {
       kind: "open",
@@ -173,14 +214,26 @@ export function decideRunnerLaunchGate(input: RunnerLaunchGateInput): RunnerLaun
     };
   }
 
-  // 2 — Known bad, from the row alone. Route to sign-in immediately; do not
-  // spend seconds rediscovering it.
-  if (row && rowSaysSignedOut(row)) {
+  // 2b — PRESENCE ONLY. A credential is here; nobody has exercised it.
+  //
+  // Neither of the two tempting answers is right. Blocking would put a login
+  // wall in front of the many users whose credential is perfectly fine, and
+  // opening silently is what shipped the incident. So: open the terminal AND
+  // show the sign-in button beside it, unpressed. If the runner is fine the
+  // banner costs a glance; if it is dead the remedy is already on screen when
+  // the 401 arrives, instead of a green chip contradicting the pane.
+  //
+  // Note this branch is unreachable for agents 1.99.278–1.99.383: they send
+  // `authVerified` with the old meaning and no `authPresent`, so they take the
+  // fast path above exactly as they do today. No behaviour change for them.
+  if (row && row.authPresent === true && row.installed !== false && row.ready !== false) {
     return {
-      kind: "sign-in",
-      reason:
-        String(row.error || row.warning || "").trim() ||
-        `${label} is not signed in on this machine.`,
+      kind: "open-degraded",
+      via: "presence-only",
+      signInAffordance: true,
+      banner: row.authSource
+        ? `${label} reports a credential on this machine (${row.authSource}), but nothing has used it yet — the machine cannot tell a live token from a revoked one without trying. Opening the terminal; sign in if ${label} asks.`
+        : `${label} reports a credential on this machine, but nothing has used it yet. Opening the terminal; sign in if ${label} asks.`,
     };
   }
 
@@ -263,9 +316,20 @@ export function probeFromStatusRow(
   if (row.installed === false) {
     return { state: "error", reason: String(row.error || row.warning || `${label} is not installed`) };
   }
-  if (row.authVerified === true && row.ready !== false) return { state: "verified", authSource: row.authSource };
+  // An explicit negative first, for the same reason the gate checks it first.
   if (row.authConfigured === false) {
     return { state: "needs-auth", reason: String(row.error || row.warning || `${label} is not signed in`) };
+  }
+  if (row.authVerified === true && row.ready !== false) return { state: "verified", authSource: row.authSource };
+  // Present-but-unproven from a LIVE probe is not "verified" either — the live
+  // route asks the same local store the heartbeat did, so it inherits the same
+  // blind spot. Report "error" (which fails OPEN with a named banner) rather
+  // than manufacturing a confidence the probe cannot supply.
+  if (row.authPresent === true && row.ready !== false) {
+    return {
+      state: "error",
+      reason: `${label} reports a credential${row.authSource ? ` (${row.authSource})` : ""} that nothing has exercised yet`,
+    };
   }
   if (row.ready === false) {
     return { state: "error", reason: String(row.error || row.warning || `${label} reported not ready`) };

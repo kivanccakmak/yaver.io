@@ -129,7 +129,14 @@ export interface EnvironmentRunnerSummary {
   installed: boolean;
   ready: boolean;
   authConfigured?: boolean;
+  /** The runner's own CLI says a credential is here. LOCAL evidence — it
+   *  cannot see a server-side revocation. Agent 1.99.384+. */
+  authPresent?: boolean;
   authVerified?: boolean;
+  /** Epoch ms of the last time the PROVIDER spoke about this credential —
+   *  a completed turn, a completed OAuth, or a rejection. Freshness of the
+   *  VERDICT, which is not the same as `checkedAt` (freshness of the ROW). */
+  authVerifiedAt?: number;
   authSource?: string;
   warning?: string;
   error?: string;
@@ -911,7 +918,14 @@ export interface RunnerAuthStatusRow {
   installed: boolean;
   ready: boolean;
   authConfigured: boolean;
+  /** The runner's own CLI says a credential is here. LOCAL evidence — it
+   *  cannot see a server-side revocation. Agent 1.99.384+. */
+  authPresent?: boolean;
   authVerified?: boolean;
+  /** Epoch ms of the last time the PROVIDER spoke about this credential —
+   *  a completed turn, a completed OAuth, or a rejection. Freshness of the
+   *  VERDICT, which is not the same as `checkedAt` (freshness of the ROW). */
+  authVerifiedAt?: number;
   authSource?: string;
   warning?: string;
   error?: string;
@@ -2738,10 +2752,44 @@ export class AgentClient {
     };
   }
 
+  /**
+   * Start (or decline to start) a runner sign-in on the agent.
+   *
+   * `trigger` and `confirm` are the caller's honesty declaration, and the agent
+   * enforces them. Starting a sign-in is DESTRUCTIVE — it reaps any live
+   * session for that runner, burns a PKCE flow, and for claude can replace a
+   * working credential. On 2026-07-27 the user was shown sign-in dialogs
+   * repeatedly for runners that were fine.
+   *
+   *   trigger: "auto"      — a machine decided (a gate, a chip, a modal that
+   *                          started a session merely because it opened). The
+   *                          agent will REFUSE on a healthy runner.
+   *   trigger: "explicit"  — the user tapped Sign in. Answered, not obeyed: on
+   *                          a healthy runner the agent returns
+   *                          action:"noop" + reauthable:true.
+   *   confirm: true        — the user was told it already looks signed in and
+   *                          chose to sign in anyway (switching accounts). The
+   *                          only path that may reap.
+   *
+   * `action:"reuse"` returns the session already in flight, so a phone and a
+   * browser asking at the same moment converge on ONE flow.
+   */
   async runnerBrowserAuthStart(
-    params: { runner: "claude" | "codex"; waitSeconds?: number },
+    params: {
+      runner: "claude" | "codex";
+      waitSeconds?: number;
+      trigger?: "auto" | "explicit" | "confirmed";
+      confirm?: boolean;
+    },
     target?: string,
-  ): Promise<{ ok: boolean; session?: RunnerBrowserAuthSession; error?: string }> {
+  ): Promise<{
+    ok: boolean;
+    session?: RunnerBrowserAuthSession;
+    action?: "start" | "reuse" | "noop";
+    reason?: string;
+    reauthable?: boolean;
+    error?: string;
+  }> {
     this.assertConnected();
     const base = target
       ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner-auth/browser/start`
@@ -2749,11 +2797,22 @@ export class AgentClient {
     const res = await fetch(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ runner: params.runner, wait_seconds: params.waitSeconds ?? 5 }),
+      body: JSON.stringify({
+        runner: params.runner,
+        wait_seconds: params.waitSeconds ?? 5,
+        trigger: params.trigger ?? "explicit",
+        confirm: params.confirm ?? false,
+      }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
-    return { ok: true, session: data?.session };
+    return {
+      ok: true,
+      session: data?.session,
+      action: data?.action,
+      reason: data?.reason,
+      reauthable: data?.reauthable,
+    };
   }
 
   async runnerBrowserAuthStatus(

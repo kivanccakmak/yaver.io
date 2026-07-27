@@ -1079,6 +1079,19 @@ export interface RunnerAuthStatusRow {
   installed: boolean;
   ready: boolean;
   authConfigured: boolean;
+  /** The runner's own CLI says a credential is on that machine. LOCAL
+   *  evidence: `claude auth status` / `codex login status` read the local
+   *  store and never ask the provider, so this can be true for a token that
+   *  has already been REVOKED. Never render it as "✓ signed in". */
+  authPresent?: boolean;
+  /** The credential was EXERCISED against the provider and the provider
+   *  answered — a completed turn or a completed OAuth — or explicitly refused
+   *  it (in which case authConfigured is false). This is the only field that
+   *  may be rendered as a confirmed sign-in. Agent 1.99.384+. */
+  authVerified?: boolean;
+  /** Epoch ms the provider last spoke. Freshness of the VERDICT, as opposed
+   *  to freshness of the row. */
+  authVerifiedAt?: number;
   authSource?: string;
   warning?: string;
   error?: string;
@@ -1397,6 +1410,22 @@ interface StreamSlot {
   openedAt: number; // tie-breaker: evict the oldest at equal priority
   released: boolean; // idempotency guard for release/close
   close: () => void; // abort the underlying fetch/XHR
+}
+
+/**
+ * The agent refused to start a sign-in because the runner is already signed in.
+ *
+ * This is not a failure and must never be rendered as one — it is the product
+ * declining to reap a working credential. `reauthable` means the user may
+ * override by confirming (switching accounts is the legitimate case).
+ */
+export class RunnerAlreadySignedInError extends Error {
+  readonly reauthable: boolean;
+  constructor(message: string, reauthable: boolean) {
+    super(message);
+    this.name = "RunnerAlreadySignedInError";
+    this.reauthable = reauthable;
+  }
 }
 
 export class QuicClient {
@@ -4091,20 +4120,44 @@ export class QuicClient {
    * specifically the user must paste the callback code back via
    * submitRunnerBrowserAuthCode().
    */
+  /**
+   * Start — or deliberately NOT start — a runner sign-in on the agent.
+   *
+   * `opts.trigger` is an honesty declaration the agent enforces. Spawning a
+   * sign-in reaps any live session for that runner, burns a PKCE flow, and for
+   * claude can REPLACE a working credential, so an automatic caller (a gate, a
+   * chip, a screen that starts one merely because it mounted) must say "auto"
+   * and be refused on a healthy runner. See DecideRunnerAuthStart.
+   *
+   * Throws `RunnerAlreadySignedInError` when the agent declined — callers must
+   * render that sentence rather than spin, and may retry with `confirm: true`
+   * when the user genuinely wants to switch accounts.
+   */
   async startRunnerBrowserAuth(
     runner: string,
     target?: string,
+    opts?: { trigger?: "auto" | "explicit" | "confirmed"; confirm?: boolean },
   ): Promise<RunnerBrowserAuthSession> {
     this.assertConnected();
     const base = this.peerEndpoint(target, "/runner-auth/browser/start");
     const res = await fetch(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ runner }),
+      body: JSON.stringify({
+        runner,
+        trigger: opts?.confirm ? "confirmed" : (opts?.trigger ?? "explicit"),
+        confirm: opts?.confirm ?? false,
+      }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       throw new Error(data?.error || `startRunnerBrowserAuth ${res.status}`);
+    }
+    if (data?.action === "noop") {
+      throw new RunnerAlreadySignedInError(
+        String(data?.reason || `${runner} is already signed in on that machine.`),
+        data?.reauthable !== false,
+      );
     }
     return unwrapRunnerBrowserAuthEnvelope(data);
   }

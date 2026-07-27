@@ -111,8 +111,14 @@ export interface Device {
     ready?: boolean;
     installed?: boolean;
     authConfigured?: boolean;
+    /** Local evidence only — cannot see a server-side revocation. */
+    authPresent?: boolean;
+    /** The provider actually answered (or refused). */
     authVerified?: boolean;
+    /** Epoch ms the provider last spoke — freshness of the VERDICT. */
+    authVerifiedAt?: number;
     authSource?: string;
+    /** Epoch ms the agent last looked — freshness of the ROW. */
     checkedAt?: number;
     warning?: string;
     error?: string;

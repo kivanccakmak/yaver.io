@@ -19,6 +19,11 @@ struct RuntimeDashboardView: View {
     @State private var gitAuthSession: GitAuthSession?
     @State private var authPollingTask: Task<Void, Never>?
     @State private var authStartingRunner: String?
+    /// Set when the agent refused to start a sign-in because the runner is
+    /// already signed in AND the user may override by confirming (switching
+    /// accounts). Drives the "Sign in anyway" affordance — a refusal with no
+    /// way forward is its own dead end.
+    @State private var authReauthableRunner: String?
     @State private var gitAuthStartingProvider: String?
     @State private var notice: String?
     @State private var refreshTask: Task<Void, Never>?
@@ -152,6 +157,21 @@ struct RuntimeDashboardView: View {
                                 .font(.system(size: 18))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(3)
+                            // The agent refused because the runner is already
+                            // signed in. Offer the ONE case where signing in
+                            // again is genuinely wanted, and make it a second,
+                            // deliberate tap rather than a silent retry.
+                            if let reauthable = authReauthableRunner {
+                                Button {
+                                    Task { await startRunnerAuth(reauthable, confirm: true) }
+                                } label: {
+                                    Label(
+                                        "Sign in to \(runnerLabel(reauthable)) with a different account",
+                                        systemImage: "person.crop.circle.badge.plus"
+                                    )
+                                }
+                                .disabled(authStartingRunner != nil)
+                            }
                             HStack(spacing: 16) {
                                 Button {
                                     Task { await startRunnerAuth("claude") }
@@ -366,7 +386,7 @@ struct RuntimeDashboardView: View {
         return m.contains("invalid token") || m.contains("missing or invalid authorization")
     }
 
-    private func startRunnerAuth(_ runner: String) async {
+    private func startRunnerAuth(_ runner: String, confirm: Bool = false) async {
         guard let client = store.client() else {
             notice = "No runtime machine selected"
             return
@@ -375,9 +395,19 @@ struct RuntimeDashboardView: View {
         authPollingTask?.cancel()
         defer { authStartingRunner = nil }
         do {
-            let result = try await client.startRunnerAuth(runner)
+            let result = try await client.startRunnerAuth(runner, confirm: confirm)
+            // The agent declined on purpose: this runner is already signed in,
+            // and starting a flow would reap a working credential. Say so —
+            // "did not return a session" reads as a bug and invites a retry
+            // that would do the damage the refusal just prevented.
+            if result.action == "noop" {
+                notice = result.reason ?? "\(runnerLabel(runner)) is already signed in on this machine."
+                authReauthableRunner = (result.reauthable ?? true) ? runner : nil
+                return
+            }
+            authReauthableRunner = nil
             guard let session = result.session else {
-                notice = "Runner auth did not return a session"
+                notice = result.reason ?? "Runner auth did not return a session"
                 return
             }
             authSession = session

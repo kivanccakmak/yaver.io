@@ -59,7 +59,9 @@ import { useColors } from "../../src/context/ThemeContext";
 import { quicClient } from "../../src/lib/quic";
 import { YaverGlass } from "../../src/components/YaverGlass";
 
-type SessionStatus = "idle" | "awaiting_url" | "ready_to_sign_in" | "signing_in" | "awaiting_code" | "submitting" | "completed" | "cancelled" | "error";
+type SessionStatus = "idle" | "awaiting_url" | "ready_to_sign_in" | "signing_in" | "awaiting_code" | "submitting" | "completed" | "cancelled" | "error"
+  /** The agent declined to start: this runner already looks signed in. */
+  | "already_signed_in";
 
 interface Snapshot {
   id?: string;
@@ -92,23 +94,61 @@ export default function RunnerAuthBrowserScreen(): React.JSX.Element {
   const [phase, setPhase] = useState<SessionStatus>("idle");
   const [pasted, setPasted] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [declineReason, setDeclineReason] = useState("");
+  const [canReauth, setCanReauth] = useState(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Step 1: kick off the agent-side browser-auth session.
-  const start = useCallback(async () => {
+  // Step 1: ask the agent to start a browser-auth session — and accept being
+  // told no.
+  //
+  // MOUNTING THIS SCREEN USED TO SPAWN `claude auth login` UNCONDITIONALLY.
+  // That is not a harmless "just in case": the agent reaps any live session for
+  // the runner, a PKCE flow is burned, and for claude the working credential
+  // can end up REPLACED. On 2026-07-27 the user was shown sign-in dialogs
+  // repeatedly for runners that were in fact fine — the exact mirror of the
+  // false-green defect fixed in the same change.
+  //
+  // The agent now decides (DecideRunnerAuthStart) and answers with an action:
+  //   start — a session was spawned, proceed as before
+  //   reuse — a session for this runner is ALREADY in flight (the phone and the
+  //           web dashboard both asked); adopt it instead of racing it
+  //   noop  — already signed in. Show WHY, and offer a confirmed re-sign-in
+  //           for the one legitimate case: switching accounts.
+  const start = useCallback(async (confirm = false) => {
     setPhase("awaiting_url");
     setErrorMsg("");
+    setDeclineReason("");
     try {
       const res = await fetch(`${quicClient.baseUrl}/runner-auth/browser/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...quicClient.getAuthHeaders() },
-        body: JSON.stringify({ runner }),
+        body: JSON.stringify({
+          runner,
+          // Opening this screen is a deliberate user action, so "explicit" —
+          // which the agent answers rather than obeys. Only `confirm` reaps.
+          trigger: confirm ? "confirmed" : "explicit",
+          confirm,
+        }),
       });
       if (!res.ok) throw new Error(`start: HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
       const body = await res.json();
+      if (body?.action === "noop") {
+        // Never a spinner. The agent already said the useful sentence.
+        setDeclineReason(String(body?.reason || `${runner} is already signed in on this machine.`));
+        setCanReauth(body?.reauthable !== false);
+        setPhase("already_signed_in");
+        return;
+      }
       const sess: Snapshot = body.session ?? {};
       setSnapshot(sess);
       setSessionId(sess.id ?? "");
+      if (!sess.id) {
+        // An agent that neither started nor explained is a state we must not
+        // render as "waiting" — that is how the original spinner bug happened.
+        setErrorMsg(String(body?.reason || "The machine did not start a sign-in session and did not say why."));
+        setPhase("error");
+        return;
+      }
       if (sess.openUrl) setPhase("ready_to_sign_in");
       else setPhase("awaiting_url"); // openURL may arrive on a subsequent poll
     } catch (err: any) {
@@ -117,8 +157,9 @@ export default function RunnerAuthBrowserScreen(): React.JSX.Element {
     }
   }, [runner]);
 
-  // Auto-start on mount
-  useEffect(() => { void start(); }, [start]);
+  // Auto-start on mount. Safe now: the agent refuses on a healthy runner and
+  // this screen renders that refusal instead of reaping the session.
+  useEffect(() => { void start(false); }, [start]);
 
   // Poll the agent for status until the URL appears or the session
   // completes. Codex completes server-side; Claude requires a paste.
@@ -306,8 +347,28 @@ export default function RunnerAuthBrowserScreen(): React.JSX.Element {
       </YaverGlass>
 
       <View style={{ flex: 1, paddingHorizontal: 16, paddingTop: 16, gap: 14 }}>
+        {/* ALREADY SIGNED IN — the agent declined to reap a healthy session.
+            Never a spinner, never a silent close: say what it found, and offer
+            the one case where signing in again is genuinely wanted. */}
+        {phase === "already_signed_in" ? (
+          <View style={{ gap: 14 }}>
+            <Text style={[styles.help, { color: c.textMuted }]}>{declineReason}</Text>
+            <Pressable onPress={cancel} style={[styles.btnPrimary, { backgroundColor: c.accent }]}>
+              <Ionicons name="checkmark" size={18} color="#fff" />
+              <Text style={[styles.btnText, { color: "#fff" }]}>Done</Text>
+            </Pressable>
+            {canReauth ? (
+              <Pressable onPress={() => void start(true)} hitSlop={8}>
+                <Text style={[styles.linkFallback, { color: c.textMuted }]}>
+                  Sign in with a different account (replaces the current {runnerLabel} login on this machine)
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
+
         {/* Sign-in launcher */}
-        {hasUrl ? (
+        {phase === "already_signed_in" ? null : hasUrl ? (
           <>
             <Pressable
               onPress={openSignIn}
@@ -387,6 +448,7 @@ function iconFor(p: SessionStatus): React.ComponentProps<typeof Ionicons>["name"
     case "completed": return "checkmark-circle";
     case "cancelled": return "close-circle";
     case "error": return "alert-circle";
+    case "already_signed_in": return "shield-checkmark";
     case "submitting":
     case "awaiting_url":
     case "signing_in":
@@ -400,6 +462,7 @@ function tintFor(p: SessionStatus, c: ReturnType<typeof useColors>): string {
     case "completed": return "#10b981";
     case "cancelled": return c.textMuted;
     case "error": return "#ef4444";
+    case "already_signed_in": return "#10b981";
     default: return c.accent;
   }
 }
@@ -415,6 +478,7 @@ function labelFor(p: SessionStatus, runner: string): string {
     case "completed": return `${runner} ready`;
     case "cancelled": return "Cancelled";
     case "error": return "Auth failed";
+    case "already_signed_in": return `${runner} is already signed in`;
   }
 }
 
@@ -432,6 +496,9 @@ function subFor(p: SessionStatus, runner: string): string {
     case "completed": return "Credentials saved on the remote machine.";
     case "cancelled": return "You cancelled before completion.";
     case "error": return "Something went wrong — try again or close.";
+    // The agent supplies the specific sentence (which account, which source),
+    // rendered in the body; this is only the fallback subtitle.
+    case "already_signed_in": return "No sign-in was started — the credential on that machine is in use.";
   }
 }
 

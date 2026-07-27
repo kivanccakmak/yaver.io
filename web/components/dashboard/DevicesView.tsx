@@ -464,6 +464,9 @@ interface RunnerChipState {
   hint?: string;
   authSource?: string;
   authVerified?: boolean;
+  authPresent?: boolean;
+  /** Epoch ms of the last time the PROVIDER spoke about this credential. */
+  authVerifiedAt?: number;
 }
 
 function runnerDisplayName(id: string): string {
@@ -516,12 +519,35 @@ function deriveRunnerChipStates(
     const authSource = typeof raw?.authSource === "string" ? raw.authSource : undefined;
     const rawError = String(raw?.error || raw?.warning || "").trim();
     const authVerified = typeof raw?.authVerified === "boolean" ? raw.authVerified : undefined;
+    const authPresent = typeof raw?.authPresent === "boolean" ? raw.authPresent : undefined;
+    const authVerifiedAt = typeof raw?.authVerifiedAt === "number" ? raw.authVerifiedAt : undefined;
     const needsVerifiedAuth = id === "claude" || id === "codex";
     if (raw?.installed === false) return { id, label, health: "not-installed", hint: "Not installed on this machine" };
+    // An EXPLICIT signed-out beats everything, including a `ready` the agent
+    // computed a moment earlier. On 2026-07-27 the heartbeat's synthetic row
+    // for claude was hard-coded to status:"ready" even when authConfigured was
+    // false, so a revoked runner reached this function already wearing green.
+    if (raw && raw.authConfigured === false) {
+      return {
+        id,
+        label,
+        health: "needs-auth",
+        hint: rawError || "signed out on this machine",
+        authSource,
+        authVerified,
+        authPresent,
+        authVerifiedAt,
+      };
+    }
+    // "Verify needed" means: a credential was found by looking at the disk, and
+    // NOTHING — not the runner's own CLI, not a completed run — has vouched for
+    // it. `authPresent` is the CLI's vouch; agents older than 1.99.384 express
+    // that same claim through `authVerified`, so either satisfies this.
     if (
       needsVerifiedAuth &&
       raw &&
       authVerified !== true &&
+      authPresent !== true &&
       (raw?.authConfigured === true || normalizeRunnerReportedStatus(status) === "ready")
     ) {
       return {
@@ -531,14 +557,16 @@ function deriveRunnerChipStates(
         hint: rawError || "the latest heartbeat did not prove this runner login with the CLI",
         authSource,
         authVerified: false,
+        authPresent,
+        authVerifiedAt,
       };
     }
-    if (raw?.ready === true) return { id, label, health: "ready", hint: authSource || status || "signed in", authSource, authVerified };
+    if (raw?.ready === true) return { id, label, health: "ready", hint: authSource || status || "signed in", authSource, authVerified, authPresent, authVerifiedAt };
     if (raw?.ready === false) {
       if (raw?.authConfigured === false || /auth|login|sign.?in|authenticate/i.test(rawError)) {
-        return { id, label, health: "needs-auth", hint: rawError || "not signed in", authSource, authVerified };
+        return { id, label, health: "needs-auth", hint: rawError || "not signed in", authSource, authVerified, authPresent, authVerifiedAt };
       }
-      if (rawError) return { id, label, health: "down", hint: rawError, authSource, authVerified };
+      if (rawError) return { id, label, health: "down", hint: rawError, authSource, authVerified, authPresent, authVerifiedAt };
     }
     const reported = normalizeRunnerReportedStatus(status);
     switch (reported) {
@@ -546,14 +574,14 @@ function deriveRunnerChipStates(
       case "idle":
       case "ready":
       case "running":
-        return { id, label, health: "ready", hint: status, authSource, authVerified };
+        return { id, label, health: "ready", hint: status, authSource, authVerified, authPresent, authVerifiedAt };
       case "needs-auth":
       case "needs_auth":
-        return { id, label, health: "needs-auth", hint: status, authSource, authVerified };
+        return { id, label, health: "needs-auth", hint: status, authSource, authVerified, authPresent, authVerifiedAt };
       case "down":
-        return { id, label, health: "down", hint: status, authSource, authVerified };
+        return { id, label, health: "down", hint: status, authSource, authVerified, authPresent, authVerifiedAt };
       default:
-        return { id, label, health: "unknown", hint: status, authSource, authVerified };
+        return { id, label, health: "unknown", hint: status, authSource, authVerified, authPresent, authVerifiedAt };
     }
   };
 
@@ -598,7 +626,13 @@ function runnerChipDotClass(health: RunnerHealth): string {
 
 function runnerChipTitle(state: RunnerChipState): string {
   switch (state.health) {
-    case "ready": return `${state.label}: installed and authenticated${state.hint ? ` (${state.hint})` : ""}`;
+    case "ready":
+      if (state.authVerified !== true && state.authPresent === true) {
+        return `${state.label}: a credential is present on this machine${state.hint ? ` (${state.hint})` : ""}, but nothing has exercised it yet — the machine cannot tell a live token from a revoked one without trying.`;
+      }
+      return `${state.label}: installed and authenticated${state.hint ? ` (${state.hint})` : ""}${
+        state.authVerifiedAt ? `, last confirmed ${new Date(state.authVerifiedAt).toLocaleString()}` : ""
+      }`;
     case "needs-auth": return state.authVerified === false
       ? `${state.label}: credentials were found, but the runner has not verified them. Click to refresh remote OAuth.`
       : `${state.label}: installed but not signed in — click "Sign in" on this runner to authorize it with your Claude Max / ChatGPT Plus subscription`;
@@ -610,7 +644,14 @@ function runnerChipTitle(state: RunnerChipState): string {
 
 function runnerChipStatusText(state: RunnerChipState): string {
   switch (state.health) {
-    case "ready": return state.authSource ? `signed in · ${state.authSource}` : "signed in";
+    case "ready":
+      // "signed in" unqualified is reserved for a credential the PROVIDER has
+      // answered for. Presence-only says so, quietly, rather than promising
+      // something only an operation can establish.
+      if (state.authVerified !== true && state.authPresent === true) {
+        return state.authSource ? `signed in (unverified) · ${state.authSource}` : "signed in (unverified)";
+      }
+      return state.authSource ? `signed in · ${state.authSource}` : "signed in";
     case "needs-auth": return state.authVerified === false ? "verify needed" : "sign in needed";
     case "down": return "error";
     case "not-installed": return "not installed";

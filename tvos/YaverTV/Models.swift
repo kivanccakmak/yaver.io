@@ -255,6 +255,21 @@ struct PlatformSurface: Decodable, Identifiable {
 struct RunnerAuthStartResult: Decodable {
     var ok: Bool?
     var session: RunnerAuthSession?
+    /// What the agent DID: "start" (a session was spawned), "reuse" (one was
+    /// already in flight — another surface asked first), or "noop" (declined,
+    /// because the runner is already signed in).
+    ///
+    /// Spawning a sign-in is destructive: the agent reaps any live session for
+    /// that runner, burns a PKCE flow, and for claude can REPLACE a working
+    /// credential. On 2026-07-27 the user was shown sign-in dialogs repeatedly
+    /// for runners that were fine, so the agent now decides and tvOS must
+    /// render the answer rather than treating a no-op as a broken response.
+    var action: String?
+    /// The sentence to show. Always present on "noop"/"reuse".
+    var reason: String?
+    /// True when the user may override by confirming — switching accounts is
+    /// the one legitimate reason to replace a working credential.
+    var reauthable: Bool?
 }
 
 struct RunnerAuthSession: Decodable, Identifiable {
