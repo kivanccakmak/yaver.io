@@ -928,8 +928,19 @@ export default function HotReloadScreen() {
         targetDeviceName: selectedTarget?.name,
         targetDeviceClass: selectedTarget?.deviceClass,
       });
-    } catch {
-      Alert.alert("Failed", `Could not start dev server for ${project.name}`);
+    } catch (e) {
+      // Never swallow the agent's diagnosis — this used to collapse a named
+      // 412 ("Cannot start dev server: bun missing on this machine" +
+      // structured helpHint) into a bare "Could not start dev server",
+      // which is the textbook "the agent told the truth and the client
+      // dropped it" defect (2026-07 failure-recovery audit, D7).
+      const err = e as Error & { kind?: "missing-runtime"; helpHint?: string };
+      const detail = err?.message ? String(err.message).trim() : "";
+      const hint = err?.kind === "missing-runtime" && err.helpHint ? `\n\n${err.helpHint}` : "";
+      Alert.alert(
+        "Could not start the dev server",
+        detail ? `${detail}${hint}` : `Could not start dev server for ${project.name}.`,
+      );
     } finally {
       setStartingProject(null);
     }

@@ -16,6 +16,7 @@ import { router } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { quicClient, RecoveryResult, RelayServer, TunnelServer, type OpenCodeConfigSummary } from "../lib/quic";
 import { connectionManager } from "../lib/connectionManager";
+import { connectGiveUpMessage } from "../lib/platformTransport";
 import { useAuth } from "./AuthContext";
 import { getConvexSiteUrl, getLocalSecret, getUserSettings, saveUserSettings, LOCAL_KEYS, UserSettingsUnavailableError } from "../lib/auth";
 import { appLog } from "../lib/logger";
@@ -2094,10 +2095,15 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           if (activeDevice) connectionManager.disconnect(activeDevice.id);
           setConnectionStatus("disconnected");
           setAgentAuthExpired(false);
+          // connectGiveUpMessage carries the cause the ladder preserved
+          // through every retry (dropping it at surrender was audit gap
+          // T1) and, on RN-web, states that the native lanes are
+          // impossible rather than one-more-retry-away (gap T7 —
+          // explainNoTransport finally has a consumer).
           setLastError(
             quicClient.reconnectStopped
               ? "Reconnection stopped"
-              : `Could not reach device after ${max} attempts`,
+              : connectGiveUpMessage(max, quicClient.lastTransportError),
           );
         } else {
           setConnectionStatus("error");

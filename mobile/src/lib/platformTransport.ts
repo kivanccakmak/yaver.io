@@ -112,5 +112,27 @@ export function explainNoTransport(attempted: TransportKind[]): string | null {
   );
 }
 
+/**
+ * The give-up message for a connect ladder that exhausted its attempts.
+ *
+ * Two audit gaps (2026-07) folded into one seam:
+ *   • T1 — the ladder carefully preserved `lastTransportError` through every
+ *     retry, then dropped it at the moment of surrender: the user read
+ *     "Could not reach device after 5 attempts" with the actual cause
+ *     discarded one line above.
+ *   • T7 — `explainNoTransport` (written after the 2026-07-25 RN-web eternal
+ *     spinner) had zero production consumers. On a platform where the native
+ *     lanes are impossible, the dead end must be STATED, not implied to be
+ *     one more retry away.
+ */
+export function connectGiveUpMessage(attempts: number, lastCause?: string | null): string {
+  let msg = `Could not reach device after ${attempts} attempts`;
+  const cause = (lastCause || "").trim();
+  if (cause) msg += ` — ${cause}`;
+  const impossibility = explainNoTransport(["lan-beacon", "quic-relay", "quic-direct"]);
+  if (impossibility) msg += `. ${impossibility}`;
+  return msg;
+}
+
 /** True when running somewhere with the full native transport set. */
 export const hasNativeTransports = !isWeb;

@@ -11,7 +11,7 @@
  * stays a pure check of the contract: every kind declared, every unsupported
  * kind carrying a reason a user can act on.
  */
-import { TRANSPORT_CAPABILITIES, explainNoTransport, type TransportKind } from "./platformTransport";
+import { TRANSPORT_CAPABILITIES, connectGiveUpMessage, explainNoTransport, type TransportKind } from "./platformTransport";
 
 let passed = 0;
 let failed = 0;
@@ -55,6 +55,18 @@ const KINDS: TransportKind[] = ["lan-beacon", "direct-http", "quic-relay", "quic
   ok(explainNoTransport(["direct-http"]) === null, "no dead-end message while direct HTTP is viable");
   const msg = explainNoTransport(["quic-relay", "quic-direct"]);
   ok(msg === null || msg.length > 20, "a dead end is explained, never left blank");
+}
+
+// ── The give-up message carries the cause the ladder preserved ───────────────
+{
+  const withCause = connectGiveUpMessage(5, "relay: invalid relay password (reason=bad_password)");
+  ok(withCause.includes("after 5 attempts"), "give-up names the attempt count");
+  ok(
+    withCause.includes("reason=bad_password"),
+    "give-up carries the transport cause instead of discarding it at surrender (audit T1)",
+  );
+  const bare = connectGiveUpMessage(5, "   ");
+  ok(bare === "Could not reach device after 5 attempts", "blank cause → clean base message, no dangling dash");
 }
 
 console.log(`\nplatformTransport: ${passed} passed, ${failed} failed`);
