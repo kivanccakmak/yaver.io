@@ -16,17 +16,66 @@ import (
 
 var sudoPromptPattern = regexp.MustCompile(`(?i)(?:\[(?:sudo|SUDO)\]\s*)?password(?:\s+for\s+[^:\r\n]+)?\s*:`)
 
+// terminalLaunchCommand builds the shell line WS /ws/terminal types into a
+// fresh PTY when the caller passed ?launch=<runner>. This is the path the web
+// dashboard's "click Codex on a device card" uses.
+//
+// The yolo flags match applyRunnerYoloDefaults (runner_pty_cmd.go): yolo is the
+// default for a Yaver-launched runner, per the project's runner contract.
+//
+// IS_SANDBOX=1 IS PART OF THE FLAG, NOT A NICETY. Measured on a live root-owned
+// Linux box, 2026-07-27:
+//
+//	# claude --dangerously-skip-permissions -p 'say hi'
+//	--dangerously-skip-permissions cannot be used with root/sudo privileges …
+//	# IS_SANDBOX=1 claude --dangerously-skip-permissions -p 'say hi'
+//	Hi! 👋 How can I help you today?
+//
+// The /ws/runner path has carried this since runnerPTYPaneEnv (runner_pty.go),
+// whose own comment records losing it once already; /ws/terminal never had it.
+// So on any root box — every default Hetzner/VPS install — clicking Claude in
+// the web dashboard opened a terminal that instantly refused, and the refusal
+// blamed the user's privileges rather than our missing env. Same drift, second
+// surface: the fix belongs in both or it is not landed.
 func terminalLaunchCommand(runner string) string {
+	return terminalLaunchCommandFor(runner, os.Geteuid())
+}
+
+// terminalLaunchCommandFor takes euid explicitly so the root behaviour is
+// testable without running the suite as root.
+func terminalLaunchCommandFor(runner string, euid int) string {
+	var session, argv string
 	switch strings.ToLower(strings.TrimSpace(runner)) {
 	case "claude", "claude-code":
-		return `if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s yaver-claude 'claude --dangerously-skip-permissions'; else exec claude --dangerously-skip-permissions; fi`
+		session, argv = "yaver-claude", "claude --dangerously-skip-permissions"
+	case "glm":
+		// Rides the claude binary against z.ai; same root restriction applies.
+		session, argv = "yaver-glm", "claude --dangerously-skip-permissions"
 	case "codex":
-		return `if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s yaver-codex 'codex --dangerously-bypass-approvals-and-sandbox'; else exec codex --dangerously-bypass-approvals-and-sandbox; fi`
+		session, argv = "yaver-codex", "codex --dangerously-bypass-approvals-and-sandbox"
 	case "opencode":
-		return `if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s yaver-opencode 'opencode --auto'; else exec opencode --auto; fi`
+		session, argv = "yaver-opencode", "opencode --auto"
 	default:
 		return ""
 	}
+	argv = runnerYoloEnvPrefix(runner, euid) + argv
+	// argv never contains a single quote, so the tmux quoting below is safe.
+	return "if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s " + session +
+		" '" + argv + "'; else exec " + argv + "; fi"
+}
+
+// runnerYoloEnvPrefix returns the `VAR=value ` assignments a runner's
+// bypass-permissions flag needs to be ACCEPTED on this machine, or "" when the
+// flag works bare. Kept beside the command builder so the two can never drift.
+func runnerYoloEnvPrefix(runner string, euid int) string {
+	if euid != 0 {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(runner)) {
+	case "claude", "claude-code", "glm":
+		return "IS_SANDBOX=1 "
+	}
+	return ""
 }
 
 // handleTerminalWS: WS /ws/terminal — starts or resumes a PTY-backed shell.
