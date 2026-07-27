@@ -128,9 +128,10 @@ async function dispatchColorTask() {
       workDir: PROJECT_DIR,
     }),
   });
-  if (res.status >= 400 || !res.json?.id) throw new Error(`NAMED task dispatch failed (HTTP ${res.status}): ${(res.json?.error || res.text).slice(0, 180)}`);
-  log(`task ${res.json.id} dispatched to ${TASK_RUNNER} on ${RUNNER_DEVICE.slice(0, 8)}`);
-  return res.json.id;
+  const taskId = res.json?.taskId || res.json?.id || res.json?.task?.id;
+  if (res.status >= 400 || !taskId) throw new Error(`NAMED task dispatch failed (HTTP ${res.status}): ${(res.json?.error || res.text).slice(0, 180)}`);
+  log(`task ${taskId} dispatched to ${TASK_RUNNER} on ${RUNNER_DEVICE.slice(0, 8)}`);
+  return taskId;
 }
 
 async function waitTask(taskId) {
@@ -151,11 +152,25 @@ async function restoreRepo() {
   // answer to the cheapest question. Restore on BOTH boxes when split.
   const boxes = [...new Set([RUNNER_DEVICE, RENDER_DEVICE])];
   for (const dev of boxes) {
+    // /exec is ASYNC ({execId}); poll the result — a fire-and-forget restore
+    // that silently failed would leave the repo dirty and poison the next run.
     const res = await call(dev, '/exec', {
       method: 'POST',
-      body: JSON.stringify({ command: `git -C ${PROJECT_DIR} checkout -- . && git -C ${PROJECT_DIR} status --porcelain`, timeoutSec: 60 }),
+      body: JSON.stringify({ command: `git -C ${PROJECT_DIR} checkout -- . && git -C ${PROJECT_DIR} status --porcelain | wc -l`, timeoutSec: 60 }),
     });
-    log(`restore on ${dev.slice(0, 8)}: HTTP ${res.status}`);
+    const execId = res.json?.execId;
+    let verdict = `HTTP ${res.status}`;
+    if (execId) {
+      for (let i = 0; i < 15; i++) {
+        await sleep(2000);
+        const st = (await call(dev, `/exec/${execId}`)).json?.exec || {};
+        if (st.status === 'completed' || st.status === 'failed') {
+          verdict = `exit ${st.exitCode}, dirty-files ${String(st.stdout || '').trim() || '?'}`;
+          break;
+        }
+      }
+    }
+    log(`restore on ${dev.slice(0, 8)}: ${verdict}`);
   }
 }
 
@@ -167,6 +182,10 @@ async function restoreRepo() {
   const previewPath = await bringUpPreview();
   const url = new URL(`${base(RENDER_DEVICE)}${previewPath}`);
   url.searchParams.set('token', TOKEN);
+  // Relay-side auth: __rp authorizes the FIRST browser request; the relay
+  // then mints a scoped webview cookie that carries the page's asset loads
+  // (relay/server.go handleProxy — header → __rp → cookie ladder).
+  url.searchParams.set('__rp', RELAY_PW);
 
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -174,7 +193,7 @@ async function restoreRepo() {
   try {
     await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 120_000 });
     // Give the bundle time to mount real content.
-    await page.waitForFunction(() => (document.getElementById('root')?.children.length || 0) > 0, { timeout: 180_000 });
+    await page.waitForFunction(() => (document.getElementById("root")?.children.length || 0) > 0, null, { timeout: 180_000 });
     await sleep(4000);
     const before = await readBackground(page);
     await page.screenshot({ path: path.join(ARTIFACTS, 'before.png') });
@@ -199,7 +218,7 @@ async function restoreRepo() {
         reloaded = true;
         log('no HMR repaint yet — one explicit reload');
         await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-        await page.waitForFunction(() => (document.getElementById('root')?.children.length || 0) > 0, { timeout: 120_000 }).catch(() => {});
+        await page.waitForFunction(() => (document.getElementById("root")?.children.length || 0) > 0, null, { timeout: 120_000 }).catch(() => {});
       }
       await sleep(3000);
     }
