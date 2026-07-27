@@ -1879,6 +1879,14 @@ func companionSessionAllowed(method, path, scope string) bool {
 			return true
 		case method == http.MethodPost && (path == "/runner/session/turn" || path == "/ops"):
 			return true
+		// The standalone-smartwatch lane (watch_http.go, Wear OS + watchOS):
+		// voice turn in, spoken summary polled out. The agent shipped these
+		// handlers while this scope forbade them — same wall as the TV's
+		// /droid/frame (docs/audits/tv-vibing-scope-wall-deep-analysis-2026-07.md).
+		case method == http.MethodPost && path == "/watch/turn":
+			return true
+		case method == http.MethodGet && path == "/watch/result":
+			return true
 		default:
 			return false
 		}
@@ -1894,12 +1902,47 @@ func companionSessionAllowed(method, path, scope string) bool {
 			return true
 		case method == http.MethodPost && strings.HasPrefix(path, "/remote-runtime/sessions/"):
 			return true
+		// View + preview-lifecycle + install-remedy rows. These are what the
+		// shipped tvOS app calls (tvos/YaverTV/AgentClient.swift) — a companion
+		// scope that forbids its own surface's endpoints renders a healthy
+		// Projects list over previews that 403 forever (seen live 2026-07-27,
+		// docs/audits/tv-vibing-scope-wall-deep-analysis-2026-07.md). Guarded
+		// by companion_scope_parity_test.go, which keys off the Swift source.
+		// Deliberately still closed: /exec, /vault, /settings, /ws/terminal,
+		// task mutation — a stolen TV token can watch previews and start dev
+		// servers, not run commands.
+		case method == http.MethodGet && (path == "/droid/frame" || path == "/capture/frame.jpg" || path == "/dev/events" || path == "/dev/status" || path == "/dev/target"):
+			return true
+		case method == http.MethodGet && (path == "/vibing/preview/status" || path == "/vibing/preview/summaries" || path == "/vibing/preview/clips" || path == "/vibing/preview/events"):
+			return true
+		case method == http.MethodGet && (strings.HasPrefix(path, "/vibing/preview/frames/") || strings.HasPrefix(path, "/vibing/preview/clip/") || strings.HasPrefix(path, "/streams/")):
+			return true
+		case method == http.MethodPost && (path == "/vibing/preview/start" || path == "/vibing/preview/stop" || path == "/vibing/preview/snapshot"):
+			return true
+		case method == http.MethodPost && (path == "/dev/start" || path == "/dev/web-preview/start" || path == "/feedback"):
+			return true
+		case method == http.MethodPost && strings.HasPrefix(path, "/install/"):
+			return true
 		default:
 			return false
 		}
 	default:
 		return true
 	}
+}
+
+// companionScopeDenied writes the 403 for a companion session scope. The body
+// carries a stable code (ReasonAuthSessionScopeDenied) plus the denying scope
+// so clients CLASSIFY instead of regexing the prose — mobile already carries
+// three drifting relay-auth matchers; do not seed a fourth. A scope 403 is
+// never retryable; surfaces route to an agent update instead of a Try again.
+func companionScopeDenied(w http.ResponseWriter, scope string) {
+	jsonReply(w, http.StatusForbidden, map[string]interface{}{
+		"ok":    false,
+		"error": companionScopeDeniedMessage(scope),
+		"code":  ReasonAuthSessionScopeDenied,
+		"scope": normalizeSessionScope(scope),
+	})
 }
 
 func companionScopeDeniedMessage(scope string) string {
@@ -2494,7 +2537,7 @@ func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 			} else {
 				if info.userID == s.ownerUserID {
 					if isCompanionSessionScope(info.sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, info.sessionScope) {
-						jsonError(w, http.StatusForbidden, companionScopeDeniedMessage(info.sessionScope))
+						companionScopeDenied(w, info.sessionScope)
 						return
 					}
 					next(w, r)
@@ -2562,7 +2605,7 @@ func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if isCompanionSessionScope(sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, sessionScope) {
-			jsonError(w, http.StatusForbidden, companionScopeDeniedMessage(sessionScope))
+			companionScopeDenied(w, sessionScope)
 			return
 		}
 		next(w, r)
@@ -2686,7 +2729,7 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 				}
 			}
 			if info.userID == s.ownerUserID && isCompanionSessionScope(info.sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, info.sessionScope) {
-				jsonError(w, http.StatusForbidden, companionScopeDeniedMessage(info.sessionScope))
+				companionScopeDenied(w, info.sessionScope)
 				return
 			}
 			next(w, r)
@@ -2717,7 +2760,7 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 			if isCompanionSessionScope(sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, sessionScope) {
-				jsonError(w, http.StatusForbidden, companionScopeDeniedMessage(sessionScope))
+				companionScopeDenied(w, sessionScope)
 				return
 			}
 			next(w, r)
@@ -2871,7 +2914,7 @@ func (s *HTTPServer) authSDKOrGuest(next http.HandlerFunc) http.HandlerFunc {
 			}
 			if info.userID == s.ownerUserID {
 				if isCompanionSessionScope(info.sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, info.sessionScope) {
-					jsonError(w, http.StatusForbidden, companionScopeDeniedMessage(info.sessionScope))
+					companionScopeDenied(w, info.sessionScope)
 					return
 				}
 				next(w, r)
@@ -2889,7 +2932,7 @@ func (s *HTTPServer) authSDKOrGuest(next http.HandlerFunc) http.HandlerFunc {
 			s.tokenCache.Store(token, &cachedTokenInfo{userID: uid, sessionScope: sessionScope, isSdk: false, storedAt: time.Now()})
 			if uid == s.ownerUserID {
 				if isCompanionSessionScope(sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, sessionScope) {
-					jsonError(w, http.StatusForbidden, companionScopeDeniedMessage(sessionScope))
+					companionScopeDenied(w, sessionScope)
 					return
 				}
 				next(w, r)

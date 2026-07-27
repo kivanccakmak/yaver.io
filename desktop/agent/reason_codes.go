@@ -15,6 +15,15 @@ const (
 	ReasonDeployTestFlightXcodeMissing     = "deploy.testflight.xcode_missing"
 	ReasonDeployPlaystoreAndroidSDKMissing = "deploy.play.android_sdk_missing"
 	ReasonAuthSDKScopeDenied               = "auth.sdk.scope_denied"
+	// ReasonAuthSessionScopeDenied is the wire contract for "this session
+	// token's companion scope (tv/watch/vision/spatial) forbids this
+	// endpoint". Emitted by companionScopeDenied on every scope 403 so
+	// surfaces classify by code, not prose. A scope denial is NOT retryable —
+	// the client-side remedy is updating the agent on the denying box (the
+	// allowlist lives server-side, so skew shows up as this code), never a
+	// Try again loop. Seen live 2026-07-27: the TV rendered "Try again" over
+	// a 403 that could not ever succeed.
+	ReasonAuthSessionScopeDenied = "auth.session.scope_denied"
 	// ReasonCapabilityToolchainMissing is the wire contract for "the
 	// operation needs a tool this machine does not have". Carried by
 	// CapabilityGap.Code on every channel (the /dev/start 412, the
