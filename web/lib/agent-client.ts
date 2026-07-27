@@ -2417,11 +2417,16 @@ export class AgentClient {
    */
   async testRunner(runner: string, opts?: { prompt?: string; model?: string; timeoutMs?: number }): Promise<RunnerTestResult> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/agent/runners/test`, {
-      method: "POST",
-      headers: this.authHeaders,
-      body: JSON.stringify({ runner, prompt: opts?.prompt, model: opts?.model, timeoutMs: opts?.timeoutMs }),
-    });
+    const timeoutMs = Math.max(1_000, Math.min(opts?.timeoutMs || 25_000, 125_000));
+    const res = await this.fetchWithTimeout(
+      `${this.baseUrl}/agent/runners/test`,
+      {
+        method: "POST",
+        headers: this.authHeaders,
+        body: JSON.stringify({ runner, prompt: opts?.prompt, model: opts?.model, timeoutMs }),
+      },
+      timeoutMs + 2_500,
+    );
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error(`testRunner(${runner}) ${res.status}: ${body || res.statusText}`);

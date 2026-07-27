@@ -41,7 +41,8 @@ import type { Device } from "@/lib/use-devices";
 // page.tsx may run one auto-reauth + a second full pass. 90s covers the whole
 // worst case with headroom; past that we stop claiming progress.
 const CONNECT_STALL_MS = 90_000;
-const RUNNER_PREFLIGHT_STALL_MS = 30_000;
+const RUNNER_PREFLIGHT_TIMEOUT_MS = 20_000;
+const RUNNER_PREFLIGHT_STALL_MS = RUNNER_PREFLIGHT_TIMEOUT_MS + 5_000;
 function useAgentConnectionState(): string {
   const [state, setState] = useState<string>(() => agentClient.connectionState);
   useEffect(() => {
@@ -182,7 +183,7 @@ export default function WebShellModal({
     }, RUNNER_PREFLIGHT_STALL_MS);
     (async () => {
       try {
-        const result = await agentClient.testRunner(launch, { timeoutMs: 20_000 });
+        const result = await agentClient.testRunner(launch, { timeoutMs: RUNNER_PREFLIGHT_TIMEOUT_MS });
         if (cancelled) return;
         if (result.ok) {
           setLaunchGate({ key, state: "allowed" });
@@ -228,10 +229,18 @@ export default function WebShellModal({
       failedAt: Date.now(),
     });
   }, [launch, launchGate]);
+  const launchGateElapsedSec = launchGate?.startedAt ? Math.max(0, Math.round((now - launchGate.startedAt) / 1000)) : 0;
+  const launchGateRemainingSec = launchGate?.state === "checking"
+    ? Math.max(0, Math.ceil((RUNNER_PREFLIGHT_STALL_MS - (now - (launchGate.startedAt || now))) / 1000))
+    : 0;
 
   const terminalLaunch = authSensitiveLaunch
     ? launchGate?.state === "allowed" ? launch : undefined
     : launch;
+  const openRunnerPtyAnyway = () => {
+    if (!authSensitiveLaunch || !launch) return;
+    setLaunchGate({ key: `${device.id}:${launch}:manual`, state: "allowed" });
+  };
 
   return (
     <div
@@ -244,30 +253,30 @@ export default function WebShellModal({
           maximized ? "max-w-none rounded-none h-screen sm:rounded-none" : "max-w-5xl rounded-none sm:rounded-xl"
         }`}
       >
-        <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/95 px-4 py-2.5 dark:border-surface-800 dark:bg-surface-900/80">
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 border-b border-slate-200 bg-slate-50/95 px-3 py-2.5 dark:border-surface-800 dark:bg-surface-900/80 sm:px-4">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <span className={`inline-flex h-2 w-2 shrink-0 rounded-full ${state === "ready" ? "bg-emerald-400" : state === "needs-reauth" ? "bg-amber-400" : state === "failed" ? "bg-rose-400" : state === "connecting" ? "bg-cyan-400" : "bg-slate-400 dark:bg-surface-500"}`} />
             <span className="min-w-0 truncate text-[13px] font-semibold text-slate-900 dark:text-surface-100">
               {title} · {device.alias ? `@${device.alias}` : device.name}
             </span>
-            <span className="hidden max-w-[16rem] shrink truncate text-[11px] text-slate-500 dark:text-surface-500 md:inline">
+            <span className="hidden max-w-[12rem] shrink truncate text-[11px] text-slate-500 dark:text-surface-500 2xl:inline">
               {device.host}:{device.port}
             </span>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <span className="hidden max-w-[9rem] truncate rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-slate-500 dark:border-surface-700 dark:bg-surface-950/60 dark:text-surface-400 lg:inline">
-              {state === "needs-reauth" ? "agent auth required" : state === "failed" ? "unreachable" : state === "connecting" ? "connecting…" : "via relay · PTY"}
+          <div className="flex min-w-[5.75rem] shrink-0 items-center justify-end gap-1.5 sm:gap-2">
+            <span className="hidden max-w-[7rem] truncate rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-[0.08em] text-slate-500 dark:border-surface-700 dark:bg-surface-950/60 dark:text-surface-400 xl:inline">
+              {state === "needs-reauth" ? "auth required" : state === "failed" ? "unreachable" : state === "connecting" ? "connecting" : "PTY"}
             </span>
             <button
               onClick={() => setMaximized((m) => !m)}
-              className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-surface-700 dark:bg-surface-950 dark:text-surface-300 dark:hover:border-surface-600 dark:hover:text-surface-100"
+              className="grid h-7 w-7 place-items-center rounded-md border border-slate-200 bg-white text-[11px] text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-surface-700 dark:bg-surface-950 dark:text-surface-300 dark:hover:border-surface-600 dark:hover:text-surface-100"
               title={maximized ? "Restore" : "Maximize"}
             >
               {maximized ? "❐" : "⛶"}
             </button>
             <button
               onClick={onClose}
-              className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-surface-700 dark:bg-surface-950 dark:text-surface-300 dark:hover:border-surface-600 dark:hover:text-surface-100"
+              className="h-7 rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-surface-700 dark:bg-surface-950 dark:text-surface-300 dark:hover:border-surface-600 dark:hover:text-surface-100"
               title="Close (Esc)"
             >
               Close
@@ -283,9 +292,21 @@ export default function WebShellModal({
                 </div>
                 <p className="max-w-md text-[13px] leading-5">
                   {launchGate?.state === "checking"
-                    ? `Checking whether ${title} can run on ${device.alias ? `@${device.alias}` : device.name} before opening the PTY${launchGate.startedAt ? ` · ${Math.max(0, Math.round((now - launchGate.startedAt) / 1000))}s` : ""}.`
+                    ? `Checking whether ${title} can run on ${device.alias ? `@${device.alias}` : device.name} before opening the PTY · ${launchGateElapsedSec}s.`
                     : launchGate?.message || `${title} is not ready on this machine.`}
                 </p>
+                {launchGate?.state === "checking" ? (
+                  <div className="w-full max-w-md rounded-md border border-sky-300 bg-sky-50 p-3 text-left text-[12px] leading-5 text-sky-800 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-100">
+                    <div className="font-semibold">Running live runner probe</div>
+                    <div>
+                      POST <code className="rounded bg-white/70 px-1 py-0.5 font-mono dark:bg-surface-950/70">/agent/runners/test</code>{" "}
+                      with <code className="rounded bg-white/70 px-1 py-0.5 font-mono dark:bg-surface-950/70">{title.toLowerCase()}</code>.
+                    </div>
+                    <div className="mt-1 opacity-80">
+                      This checks a real CLI subprocess, not only the signed-in badge. It will stop in {launchGateRemainingSec}s and then show the fix.
+                    </div>
+                  </div>
+                ) : null}
                 {launchGateDiagnosis ? (
                   <div className="max-w-md rounded-md border border-rose-300 bg-rose-50 p-3 text-left text-[12px] leading-5 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-100">
                     <div className="font-semibold">{launchGateDiagnosis.title}</div>
@@ -294,12 +315,20 @@ export default function WebShellModal({
                   </div>
                 ) : null}
                 {launchGate?.state === "blocked" && authSensitiveLaunch ? (
-                  <button
-                    onClick={() => onRunnerNeedsAuth?.(launch)}
-                    className="rounded-md border border-indigo-300 bg-indigo-50 px-4 py-2 text-[12px] font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-200 dark:hover:bg-indigo-500/15"
-                  >
-                    Sign in to {title}
-                  </button>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      onClick={() => onRunnerNeedsAuth?.(launch)}
+                      className="rounded-md border border-indigo-300 bg-indigo-50 px-4 py-2 text-[12px] font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-200 dark:hover:bg-indigo-500/15"
+                    >
+                      Sign in to {title}
+                    </button>
+                    <button
+                      onClick={openRunnerPtyAnyway}
+                      className="rounded-md border border-slate-300 bg-white px-4 py-2 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-200 dark:hover:bg-surface-800"
+                    >
+                      Open {title} PTY anyway
+                    </button>
+                  </div>
                 ) : null}
               </div>
             ) : (

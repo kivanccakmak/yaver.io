@@ -320,6 +320,53 @@ function normalizeRunnerId(runnerId?: string | null): string {
   return normalized;
 }
 
+const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string; isDefault?: boolean; source?: string }>> = {
+  claude: [
+    { id: "claude-opus-4-1", name: "Claude Opus 4.1", source: "device-inventory" },
+    { id: "claude-sonnet-4", name: "Claude Sonnet 4", isDefault: true, source: "device-inventory" },
+  ],
+  codex: [
+    { id: "gpt-5.4", name: "GPT-5.4", isDefault: true, source: "device-inventory" },
+    { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", source: "device-inventory" },
+    { id: "gpt-5-codex", name: "GPT-5 Codex", source: "device-inventory" },
+    { id: "gpt-5", name: "GPT-5", source: "device-inventory" },
+    { id: "gpt-5-mini", name: "GPT-5 Mini", source: "device-inventory" },
+  ],
+};
+
+function runnerName(id: string): string {
+  if (id === "claude") return "Claude Code";
+  if (id === "codex") return "OpenAI Codex";
+  if (id === "opencode") return "OpenCode";
+  return id || "Runner";
+}
+
+function runnersFromDeviceInventory(device?: Device | null): Runner[] {
+  const rows = device?.runners || [];
+  return rows
+    .map((row): Runner | null => {
+      const id = normalizeRunnerId(row.runnerId);
+      const installed = row.installed ?? true;
+      if (!id || !installed) return null;
+      const ready = row.ready ?? row.authVerified ?? row.authConfigured;
+      return {
+        id,
+        name: runnerName(id),
+        installed,
+        active: false,
+        ready,
+        authConfigured: row.authConfigured,
+        authSource: row.authSource,
+        error: row.error,
+        warning: row.warning,
+        supportsBrowserAuth: id === "claude" || id === "codex",
+        supportsModelSelection: id === "claude" || id === "codex" || id === "opencode",
+        models: FALLBACK_MODELS[id] || [],
+      };
+    })
+    .filter((row): row is Runner => Boolean(row));
+}
+
 function isModelCompatibleWithRunner(modelId: string | null | undefined, runnerId: string | null | undefined): boolean {
   const model = String(modelId || "").trim().toLowerCase();
   const runner = normalizeRunnerId(runnerId);
@@ -585,6 +632,8 @@ export default function RuntimeLabView({
   const autoRenderRef = useRef<string>("");
   const runtimeConsoleRef = useRef<HTMLPreElement | null>(null);
   const taskConsoleRef = useRef<HTMLPreElement | null>(null);
+  const runnerSelectRef = useRef<HTMLSelectElement | null>(null);
+  const modelSelectRef = useRef<HTMLSelectElement | null>(null);
   const mobilePreviewFrameRef = useRef<HTMLIFrameElement | null>(null);
   const [runtimeConsolePinned, setRuntimeConsolePinned] = useState(true);
   const [taskConsolePinned, setTaskConsolePinned] = useState(true);
@@ -715,27 +764,34 @@ export default function RuntimeLabView({
   }, [appendLog, selectedPath]);
 
   const refreshRunners = useCallback(async () => {
+    const deviceFallback = runnersFromDeviceInventory(connectedDevice);
     try {
       const rows = (await agentClient.getRunners()).filter((runner) => {
         if (!runner.installed) return false;
         const id = String(runner.id || "").toLowerCase();
         return !id.includes("aider") && !id.includes("ollama");
       });
-      setRunners(rows);
+      const merged = rows.length ? rows : deviceFallback;
+      setRunners(merged);
       const explicitRunner = connectedDevice?.id ? primaryRunnerByDevice[connectedDevice.id] : "";
       const preferred =
-        rows.find((runner) => runner.id === explicitRunner) ||
-        rows.find((runner) => runner.active) ||
-        rows.find((runner) => runner.isDefault) ||
-        rows.find((runner) => runner.ready) ||
-        rows[0];
-      if (preferred && (!selectedRunner || !rows.some((runner) => runner.id === selectedRunner))) {
+        merged.find((runner) => runner.id === explicitRunner) ||
+        merged.find((runner) => runner.active) ||
+        merged.find((runner) => runner.isDefault) ||
+        merged.find((runner) => runner.ready) ||
+        merged[0];
+      if (preferred && (!selectedRunner || !merged.some((runner) => runner.id === selectedRunner))) {
         setSelectedRunner(preferred.id);
       }
     } catch {
-      setRunners([]);
+      setRunners(deviceFallback);
+      if (deviceFallback.length && (!selectedRunner || !deviceFallback.some((runner) => runner.id === selectedRunner))) {
+        const explicitRunner = connectedDevice?.id ? primaryRunnerByDevice[connectedDevice.id] : "";
+        const preferred = deviceFallback.find((runner) => runner.id === explicitRunner) || deviceFallback.find((runner) => runner.ready) || deviceFallback[0];
+        setSelectedRunner(preferred.id);
+      }
     }
-  }, [connectedDevice?.id, primaryRunnerByDevice, selectedRunner]);
+  }, [connectedDevice, primaryRunnerByDevice, selectedRunner]);
 
   useEffect(() => {
     void refreshRunners();
@@ -865,6 +921,14 @@ export default function RuntimeLabView({
       setRunnerAuthError(err instanceof Error ? err.message : String(err));
     }
   }, [selectedRunnerRow]);
+
+  const openRunnerControls = useCallback((field: "runner" | "model" = "runner") => {
+    setVibingSettingsOpen(true);
+    window.setTimeout(() => {
+      const node = field === "model" ? modelSelectRef.current : runnerSelectRef.current;
+      node?.focus();
+    }, 0);
+  }, []);
 
   const submitRunnerAuthCode = useCallback(async () => {
     const code = runnerAuthCodeInput.trim();
@@ -1867,12 +1931,22 @@ export default function RuntimeLabView({
               </span>
             </div>
             <div className="mt-3 flex min-w-0 flex-wrap gap-1.5 text-[11px] text-[#667085] dark:text-[#9aa3af]">
-              <span className="rounded-full border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 dark:border-[#2a3039] dark:bg-[#101318]">
+              <button
+                type="button"
+                onClick={() => openRunnerControls("runner")}
+                className="rounded-full border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 text-left hover:border-[#98a2b3] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:hover:border-[#475467] dark:hover:text-[#e6e8ec]"
+                title="Change runner"
+              >
                 {selectedRunnerName}
-              </span>
-              <span className="min-w-0 max-w-full truncate rounded-full border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 font-mono dark:border-[#2a3039] dark:bg-[#101318]">
+              </button>
+              <button
+                type="button"
+                onClick={() => openRunnerControls("model")}
+                className="min-w-0 max-w-full truncate rounded-full border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 text-left font-mono hover:border-[#98a2b3] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:hover:border-[#475467] dark:hover:text-[#e6e8ec]"
+                title="Change model"
+              >
                 {effectiveChatModel || "runner default"}
-              </span>
+              </button>
             </div>
             <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
               <button
@@ -2171,6 +2245,7 @@ export default function RuntimeLabView({
               <label className="min-w-0">
                 <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Runner</span>
                 <select
+                  ref={runnerSelectRef}
                   value={selectedRunner}
                   onChange={(event) => setSelectedRunner(event.target.value)}
                   className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
@@ -2187,6 +2262,7 @@ export default function RuntimeLabView({
                 <label className="min-w-0">
                   <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Model</span>
                   <select
+                    ref={modelSelectRef}
                     value={selectedModel}
                     onChange={(event) => setSelectedModel(event.target.value)}
                     className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
@@ -2224,9 +2300,14 @@ export default function RuntimeLabView({
                   {runnerAuthBusy ? "Opening..." : "Remote OAuth"}
                 </button>
               ) : null}
-              <span className="min-w-0 truncate text-[11px] text-[#667085] dark:text-[#9aa3af]">
+              <button
+                type="button"
+                onClick={() => openRunnerControls("runner")}
+                className="min-w-0 truncate rounded-md border border-transparent px-1 py-0.5 text-left text-[11px] text-[#667085] hover:border-[#d7dce3] hover:text-[#1f2933] dark:text-[#9aa3af] dark:hover:border-[#2a3039] dark:hover:text-[#e6e8ec]"
+                title="Change runner/model"
+              >
                 {selectedRunnerRow?.name || selectedRunner || "No runner"} / {safeModelForRunner(selectedRunner, selectedModel, availableModels) || selectedModel || "runner default"}
-              </span>
+              </button>
             </div>
           </div>
           {vibingSettingsOpen || runnerAuthStatus || runnerAuthError ? (

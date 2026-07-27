@@ -245,7 +245,7 @@ func runRunnerProbe(cfg RunnerConfig, runnerID, prompt string, timeout time.Dura
 			args = append(args, "--model", mid)
 		}
 	case "codex":
-		args = []string{"exec", "--skip-git-repo-check"}
+		args = []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"}
 		if mid := strings.TrimSpace(cfg.Model); mid != "" {
 			args = append(args, "--model", mid)
 		}
