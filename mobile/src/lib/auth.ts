@@ -6,6 +6,7 @@ import * as SecureStore from "./secureStoreCompat";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getConvexSiteUrlSync, getWebBaseUrlSync } from "./backendConfig";
 import type { OptionalMoreToolId } from "./moreOptionalTools";
+import type { RuntimeProjectCatalogRow, RuntimeProjectPreference } from "./runtimeProjectSettings";
 
 const TOKEN_KEY = "yaver_auth_token";
 const USER_KEY = "yaver_user";
@@ -691,10 +692,20 @@ export interface UserSettings {
     diagnostics?: string[];
     updatedAt?: number;
   };
+  /** Per-machine default runtime project. Clients write one row at a
+   * time; Convex stores only repo/project identity, never local paths. */
+  defaultRuntimeProjectForDevice?: RuntimeProjectPreference | null;
+  /** Per-machine runtime project catalog seeded by web/mobile runtime
+   * surfaces. Contains repo/project identity only, never local paths. */
+  runtimeProjectCatalogForDevice?: RuntimeProjectCatalogRow | null;
   /** Read-only: full per-device runner map populated by the server on
    * GET /settings. Clients should not write this directly — write via
    * primaryRunnerForDevice instead. */
   primaryRunnerByDevice?: Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }>;
+  /** Read-only default runtime project rows returned by GET /settings. */
+  defaultRuntimeProjectByDevice?: RuntimeProjectPreference[];
+  /** Read-only project catalogs returned by GET /settings. */
+  runtimeProjectCatalogByDevice?: RuntimeProjectCatalogRow[];
   /** Read-only non-secret OpenCode config cache, keyed by device. The live
    *  agent's opencode.json remains source of truth; this lets mobile render
    *  provider/model/mode before the relay refresh returns. API keys are never
@@ -931,11 +942,25 @@ export async function saveUserSettings(token: string, settings: Partial<UserSett
   // the agent vault-backed /voice/config path; never send them to Convex.
   const safeSettings = { ...settings };
   delete safeSettings.speechApiKey;
-  await fetch(`${getConvexSiteUrl()}/settings`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify(safeSettings),
-  }).catch(() => {});
+  let res: Response;
+  try {
+    res = await fetch(`${getConvexSiteUrl()}/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(safeSettings),
+    });
+  } catch (e) {
+    throw new UserSettingsUnavailableError(
+      `settings save failed: ${e instanceof Error ? e.message : String(e)}`,
+      false,
+    );
+  }
+  if (!res.ok) {
+    throw new UserSettingsUnavailableError(
+      `settings save failed: HTTP ${res.status}`,
+      res.status === 401 || res.status === 403,
+    );
+  }
 }
 
 // ── Account linking / unlink / merge ──────────────────────────────────

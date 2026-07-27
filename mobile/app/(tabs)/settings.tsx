@@ -1,7 +1,7 @@
 import Constants from "expo-constants";
 import { Ionicons, FontAwesome } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -43,6 +43,17 @@ import { quicClient, type AgentStatus, type CapabilitySnapshot, type Environment
 import { loadTaskVideoSummaryEnabled, saveTaskVideoSummaryEnabled } from "../../src/lib/taskComposerPrefs";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
 import { OPTIONAL_MORE_TOOLS, normalizeOptionalMoreTools, type OptionalMoreToolId } from "../../src/lib/moreOptionalTools";
+import {
+  resolveRuntimeProjectPreference,
+  runtimeProjectCatalogMap,
+  runtimeProjectDefaultMap,
+  runtimeProjectDisplayName,
+  runtimeProjectMeta,
+  runtimeProjectPreferenceFor,
+  type RuntimeProjectCatalogRow,
+  type RuntimeProjectPreference,
+  type RuntimeProjectSeed,
+} from "../../src/lib/runtimeProjectSettings";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -291,6 +302,11 @@ export default function SettingsScreen() {
   const [showToolchainSync, setShowToolchainSync] = useState(false);
   const [taskVideoSummaryEnabled, setTaskVideoSummaryEnabled] = useState(false);
   const [moreOptionalTools, setMoreOptionalTools] = useState<OptionalMoreToolId[]>([]);
+  const [runtimeProjectCatalogs, setRuntimeProjectCatalogs] = useState<Record<string, RuntimeProjectCatalogRow>>({});
+  const [runtimeProjectDefaults, setRuntimeProjectDefaults] = useState<Record<string, RuntimeProjectPreference>>({});
+  const [runtimeProjectSaving, setRuntimeProjectSaving] = useState<string | null>(null);
+  const [runtimeProjectMessage, setRuntimeProjectMessage] = useState<string | null>(null);
+  const [runtimeProjectExpandedDeviceId, setRuntimeProjectExpandedDeviceId] = useState<string | null>(null);
   const [toolchainSourceId, setToolchainSourceId] = useState<string | null>(null);
   const [toolchainSyncGitCredentials, setToolchainSyncGitCredentials] = useState(true);
   const [toolchainSyncProviderKeys, setToolchainSyncProviderKeys] = useState(true);
@@ -799,6 +815,8 @@ export default function SettingsScreen() {
         setMobileCodingProvider(s.mobileCodingProvider);
       }
       setMoreOptionalTools(normalizeOptionalMoreTools(s.moreOptionalTools));
+      setRuntimeProjectCatalogs(runtimeProjectCatalogMap(s.runtimeProjectCatalogByDevice));
+      setRuntimeProjectDefaults(runtimeProjectDefaultMap(s.defaultRuntimeProjectByDevice));
     }).catch(() => {
       // Settings unreadable (offline / expired session) — leave the form on
       // its current values instead of resetting it to defaults.
@@ -2070,6 +2088,62 @@ export default function SettingsScreen() {
     setTestExecId(null);
   };
 
+  const runtimeProjectDevices = useMemo(
+    () => devices.filter((d) => !d.isGuest),
+    [devices],
+  );
+
+  const saveRuntimeProjectDefaultForDevice = useCallback(async (deviceId: string, project: RuntimeProjectSeed) => {
+    if (!token) {
+      Alert.alert("Sign in required", "Sign in before saving runtime project defaults.");
+      return;
+    }
+    const pref = runtimeProjectPreferenceFor(deviceId, project);
+    setRuntimeProjectSaving(deviceId);
+    setRuntimeProjectMessage(null);
+    try {
+      await saveUserSettings(token, { defaultRuntimeProjectForDevice: pref });
+      setRuntimeProjectDefaults((prev) => ({ ...prev, [deviceId]: pref }));
+      setRuntimeProjectMessage(`Default saved for ${runtimeProjectDisplayName(project)}.`);
+    } catch (e: any) {
+      setRuntimeProjectMessage(e?.message || "Could not save runtime project default.");
+      Alert.alert("Couldn't Save Runtime Default", e?.message || "Yaver couldn't save this default project. Try again.");
+    } finally {
+      setRuntimeProjectSaving(null);
+    }
+  }, [token]);
+
+  const applyRuntimeProjectDefaultToAllMachines = useCallback(async (project: RuntimeProjectSeed) => {
+    if (!token) {
+      Alert.alert("Sign in required", "Sign in before saving runtime project defaults.");
+      return;
+    }
+    setRuntimeProjectSaving("__all__");
+    setRuntimeProjectMessage(null);
+    try {
+      const nextDefaults: Record<string, RuntimeProjectPreference> = {};
+      for (const device of runtimeProjectDevices) {
+        const catalog = runtimeProjectCatalogs[device.id]?.projects || [];
+        const match = resolveRuntimeProjectPreference(catalog, project);
+        if (!match) continue;
+        const pref = runtimeProjectPreferenceFor(device.id, match);
+        await saveUserSettings(token, { defaultRuntimeProjectForDevice: pref });
+        nextDefaults[device.id] = pref;
+      }
+      const count = Object.keys(nextDefaults).length;
+      if (count === 0) {
+        throw new Error("No machine has a matching synced project catalog yet.");
+      }
+      setRuntimeProjectDefaults((prev) => ({ ...prev, ...nextDefaults }));
+      setRuntimeProjectMessage(`Applied to ${count} machine${count === 1 ? "" : "s"} with a matching project.`);
+    } catch (e: any) {
+      setRuntimeProjectMessage(e?.message || "Could not apply runtime default to machines.");
+      Alert.alert("Couldn't Apply Runtime Default", e?.message || "Yaver couldn't save defaults for these machines. Try again.");
+    } finally {
+      setRuntimeProjectSaving(null);
+    }
+  }, [runtimeProjectCatalogs, runtimeProjectDevices, token]);
+
   return (
     <View style={[styles.safeArea, { backgroundColor: c.bg }]}>
       {/* Header */}
@@ -2211,6 +2285,110 @@ export default function SettingsScreen() {
             </View>
           );
         })()}
+
+        {runtimeProjectDevices.length > 0 ? (
+          <View style={styles.section}>
+            <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Runtime project defaults</Text>
+            <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+              <Text style={{ color: c.textMuted, fontSize: 12, lineHeight: 17, marginBottom: 10 }}>
+                Defaults are saved per machine from synced repo/project names only. Local folders never leave the machine.
+              </Text>
+              {runtimeProjectMessage ? (
+                <Text style={{ color: c.accent, fontSize: 12, marginBottom: 10 }}>{runtimeProjectMessage}</Text>
+              ) : null}
+              {runtimeProjectDevices.map((device, index) => {
+                const catalog = runtimeProjectCatalogs[device.id]?.projects || [];
+                const saved = runtimeProjectDefaults[device.id];
+                const savedProject = resolveRuntimeProjectPreference(catalog, saved);
+                const expanded = runtimeProjectExpandedDeviceId === device.id;
+                const currentLabel = savedProject
+                  ? runtimeProjectDisplayName(savedProject)
+                  : saved
+                    ? runtimeProjectDisplayName(saved)
+                    : "No default";
+                return (
+                  <View key={device.id}>
+                    {index > 0 ? <View style={[styles.separator, { backgroundColor: c.borderSubtle }]} /> : null}
+                    <Pressable
+                      style={styles.runtimeMachineRow}
+                      onPress={() => setRuntimeProjectExpandedDeviceId(expanded ? null : device.id)}
+                    >
+                      <View style={{ flex: 1, paddingRight: 10 }}>
+                        <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>{device.name}</Text>
+                        <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2 }}>
+                          {currentLabel}{saved ? ` · ${runtimeProjectMeta(saved) || "synced"}` : ""}
+                        </Text>
+                      </View>
+                      <Text style={[styles.aboutValue, { color: catalog.length ? c.accent : c.textMuted }]}>
+                        {catalog.length ? `${catalog.length} projects ${expanded ? "▴" : "▾"}` : "No catalog"}
+                      </Text>
+                    </Pressable>
+                    {expanded ? (
+                      <View style={styles.runtimeProjectList}>
+                        {catalog.length === 0 ? (
+                          <Text style={{ color: c.textMuted, fontSize: 12, lineHeight: 17 }}>
+                            Open this machine in Runtime once to seed its project names and remotes.
+                          </Text>
+                        ) : (
+                          catalog.map((project, projectIndex) => {
+                            const active = savedProject === project;
+                            const savingThis = runtimeProjectSaving === device.id || runtimeProjectSaving === "__all__";
+                            return (
+                              <View
+                                key={`${runtimeProjectDisplayName(project)}-${project.gitRemote || project.repoName || projectIndex}`}
+                                style={[
+                                  styles.runtimeProjectOption,
+                                  { borderColor: active ? c.accent + "88" : c.borderSubtle, backgroundColor: active ? c.accent + "14" : c.bgInput },
+                                ]}
+                              >
+                                <View style={{ flex: 1, minWidth: 0 }}>
+                                  <Text style={{ color: active ? c.accent : c.textPrimary, fontSize: 13, fontWeight: "700" }}>
+                                    {runtimeProjectDisplayName(project)}
+                                  </Text>
+                                  <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2 }} numberOfLines={2}>
+                                    {runtimeProjectMeta(project) || "repo identity synced"}
+                                  </Text>
+                                </View>
+                                <View style={styles.runtimeProjectActions}>
+                                  <Pressable
+                                    onPress={() => saveRuntimeProjectDefaultForDevice(device.id, project)}
+                                    disabled={savingThis}
+                                    style={({ pressed }) => [
+                                      styles.runtimeProjectButton,
+                                      { backgroundColor: active ? c.accent : c.bgCardElevated, borderColor: active ? c.accent : c.border },
+                                      pressed && { opacity: 0.65 },
+                                      savingThis && { opacity: 0.45 },
+                                    ]}
+                                  >
+                                    <Text style={{ color: active ? "#fff" : c.textSecondary, fontSize: 11, fontWeight: "700" }}>
+                                      {active ? "Default" : "Use"}
+                                    </Text>
+                                  </Pressable>
+                                  <Pressable
+                                    onPress={() => applyRuntimeProjectDefaultToAllMachines(project)}
+                                    disabled={savingThis}
+                                    style={({ pressed }) => [
+                                      styles.runtimeProjectButton,
+                                      { backgroundColor: c.bgCardElevated, borderColor: c.border },
+                                      pressed && { opacity: 0.65 },
+                                      savingThis && { opacity: 0.45 },
+                                    ]}
+                                  >
+                                    <Text style={{ color: c.textSecondary, fontSize: 11, fontWeight: "700" }}>All</Text>
+                                  </Pressable>
+                                </View>
+                              </View>
+                            );
+                          })
+                        )}
+                      </View>
+                    ) : null}
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+        ) : null}
 
         <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: c.textMuted }]}>More menu</Text>
@@ -5800,6 +5978,37 @@ const styles = StyleSheet.create({
   },
   aboutLabel: { fontSize: 15 },
   aboutValue: { fontSize: 15 },
+  runtimeMachineRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 8,
+  },
+  runtimeProjectList: {
+    gap: 8,
+    paddingTop: 4,
+    paddingBottom: 10,
+  },
+  runtimeProjectOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+  },
+  runtimeProjectActions: {
+    flexDirection: "row",
+    gap: 6,
+  },
+  runtimeProjectButton: {
+    minWidth: 44,
+    alignItems: "center",
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+  },
 
   // Links
   linksCard: {
