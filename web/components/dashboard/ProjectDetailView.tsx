@@ -224,17 +224,55 @@ async function probePreviewUrl(url: string): Promise<{ ok: true } | { ok: false;
 // detector output is still information.
 const PLATFORM_CHIP_LABELS: Record<string, string> = {
   mobile: "Mobile",
+  phone: "Mobile",
+  tablet: "Mobile",
+  ios: "Mobile",
+  android: "Mobile",
+  "ios-simulator": "Mobile",
+  "android-emulator": "Mobile",
   web: "Web",
   browser: "Web",
   backend: "Backend",
   watch: "Watch",
+  watchos: "Watch",
+  "watchos-simulator": "Watch",
+  wear: "Watch",
+  wearos: "Watch",
+  "android-wear": "Watch",
   tv: "TV",
+  tvos: "TV",
+  "tvos-simulator": "TV",
+  "android-tv": "TV",
+  appletv: "TV",
   car: "Car",
+  carplay: "Car",
+  "android-auto": "Car",
   vision: "Vision / XR",
+  visionos: "Vision / XR",
+  "visionos-simulator": "Vision / XR",
+  "android-xr": "Vision / XR",
+  xr: "Vision / XR",
+  glass: "Vision / XR",
   desktop: "Desktop",
 };
 
-const PLATFORM_CHIP_NOISE = new Set(["", "none", "unsupported", "unknown", "repo", "monorepo"]);
+// Transports and detector sentinels are not platforms — never chip them.
+const PLATFORM_CHIP_NOISE = new Set([
+  "", "none", "unsupported", "unknown", "repo", "monorepo",
+  "webrtc", "webview", "hermes", "dev-server", "redroid", "simulator", "emulator",
+]);
+
+// The surfaces users vibe on lead; Backend closes the row. Unrecognized
+// detector output still renders (it is information), but after the knowns.
+const PLATFORM_CHIP_ORDER = ["Web", "Mobile", "Watch", "TV", "Car", "Vision / XR", "Desktop", "Backend"];
+
+function sortPlatformChips(chips: Iterable<string>): string[] {
+  const rank = (chip: string) => {
+    const index = PLATFORM_CHIP_ORDER.indexOf(chip);
+    return index === -1 ? PLATFORM_CHIP_ORDER.length : index;
+  };
+  return Array.from(new Set(chips)).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
 
 function platformChips(project: ProjectSummary | null): string[] {
   const chips: string[] = [];
@@ -243,7 +281,27 @@ function platformChips(project: ProjectSummary | null): string[] {
     if (PLATFORM_CHIP_NOISE.has(key)) continue;
     chips.push(PLATFORM_CHIP_LABELS[key] ?? value);
   }
-  return Array.from(new Set(chips));
+  return sortPlatformChips(chips);
+}
+
+// ── Frontend-first app classification ────────────────────────────────────────
+// Yaver's projects flow exists to get a fullstack repo to a FRONTEND you can
+// vibe on. Classify each workspace app by the surface it renders to so the
+// vibe-able apps lead and backend/tooling reads as context, not as an equal
+// choice among fourteen rows.
+function appSurfaceChips(app: WorkspaceAppView): string[] {
+  const fw = String(app.framework || app.stack || "").trim().toLowerCase();
+  const kind = String(app.kind || "").trim().toLowerCase();
+  const out = new Set<string>();
+  if (["nextjs", "next", "next.js", "vite", "react", "remix", "astro", "svelte", "nuxt", "vue"].includes(fw) || kind === "web") out.add("Web");
+  if (["expo", "react-native"].includes(fw)) { out.add("Mobile"); out.add("Web"); }
+  if (fw === "flutter") { out.add("Mobile"); if (kind === "web") out.add("Web"); }
+  if (kind === "hybrid") { out.add("Mobile"); out.add("Web"); }
+  return sortPlatformChips(out);
+}
+
+function isFrontendApp(app: WorkspaceAppView): boolean {
+  return appSurfaceChips(app).length > 0;
 }
 
 function executionModeLabel(mode?: string): string | null {
@@ -362,10 +420,49 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
     ...(project?.services ?? []),
     ...(project?.hosting ?? []),
   ]).filter((v) => !PLATFORM_CHIP_NOISE.has(v.toLowerCase())), [project]);
-  const platformLabels = useMemo(() => platformChips(project), [project]);
+  // Stack detection runs FIRST, from the strongest source available: the
+  // workspace-app rows name real frameworks (nextjs, expo, convex, go…) even
+  // when the project row carries only "monorepo" — which the chip filter
+  // rightly treats as noise. Falling through to "Stack not detected yet"
+  // while the apps list below plainly showed the stack was the bug.
+  const appStackLabels = useMemo(() => unique(
+    (workspaceApps ?? []).flatMap((app) => [app.framework, app.stack]),
+  ).filter((v) => !PLATFORM_CHIP_NOISE.has(v.toLowerCase())), [workspaceApps]);
+  const effectiveStackLabels = stackLabels.length ? stackLabels : appStackLabels;
+  const frontendApps = useMemo(() => (workspaceApps ?? []).filter(isFrontendApp), [workspaceApps]);
+  const backendApps = useMemo(() => (workspaceApps ?? []).filter((app) => !isFrontendApp(app)), [workspaceApps]);
+  const platformLabels = useMemo(() => sortPlatformChips([
+    ...platformChips(project),
+    ...(workspaceApps ?? []).flatMap(appSurfaceChips),
+    ...(backendApps.length > 0 ? ["Backend"] : []),
+  ]), [project, workspaceApps, backendApps]);
+  // null project = still asking the agent; monorepo apps still loading counts
+  // as detecting too. "Not detected" is a verdict — only render it once the
+  // probes have actually come back empty.
+  const detectingStack = !project || (isMonorepoProject(project) && workspaceApps === null);
   const runsAs = executionModeLabel(project?.executionMode);
   const primaryLabel = primaryTargetLabel(project);
   const role = roleInfo(project);
+  const canVibeWeb = supportsWebUI(project) || frontendApps.some((app) => appSurfaceChips(app).includes("Web"));
+  const defaultWebApp = useMemo(() =>
+    frontendApps.find((app) => app.name === "web" && appSurfaceChips(app).includes("Web")) ||
+    frontendApps.find((app) => appSurfaceChips(app).includes("Web")),
+  [frontendApps]);
+
+  // Route THROUGH the vibe page, not around it: picking a browser/frontend
+  // target hands off to /dashboard?tab=vibe with this project preselected and
+  // the web preview auto-started, so the user lands where prompting and the
+  // live preview live together instead of a dead-end iframe on this tab.
+  function goVibe(appName?: string) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", "vibe");
+    url.searchParams.set("project", directory);
+    url.searchParams.set("preview", "web");
+    if (appName) url.searchParams.set("app", appName);
+    else url.searchParams.delete("app");
+    window.history.pushState(null, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -503,15 +600,29 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
           <h2 className="truncate font-mono text-xl font-semibold text-[#1f2933] dark:text-[#e6e8ec]">{project?.name || slug}</h2>
           <div className="truncate font-mono text-xs text-[#667085] dark:text-[#9aa3af]">{directory}</div>
         </div>
+        {canVibeWeb ? (
+          <button
+            onClick={() => goVibe(defaultWebApp?.name)}
+            className="shrink-0 rounded-md bg-[#1f2933] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#344054] dark:bg-[#e6e8ec] dark:text-[#101318] dark:hover:bg-white"
+          >
+            Vibe on this project →
+          </button>
+        ) : null}
       </div>
 
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_340px]">
         <main>
           <ol className="list-none">
             {/* ── Step 1 · Stack — what this project is ──────────────────── */}
-            <WizardStep step={1} title="Stack" hint="what was detected in this repo" state={project ? "done" : "active"}>
+            <WizardStep step={1} title="Stack" hint="what was detected in this repo" state={effectiveStackLabels.length ? "done" : "active"}>
               <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
-                <ChipRow values={stackLabels.length ? stackLabels : ["Stack not detected yet"]} />
+                {effectiveStackLabels.length ? (
+                  <ChipRow values={effectiveStackLabels} />
+                ) : (
+                  <div className="text-xs text-[#98a2b3] dark:text-[#6b7482]">
+                    {detectingStack ? "Detecting stack from the repo…" : "Stack not detected — no framework markers found in this repo."}
+                  </div>
+                )}
                 {platformLabels.length > 0 ? (
                   <>
                     <SectionLabel className="mt-3">Platforms</SectionLabel>
@@ -542,11 +653,10 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
               <div className="space-y-2">
                 <div className="grid gap-2 md:grid-cols-2">
                   <ActionCard
-                    title="Web UI in browser"
-                    meta="browser · direct iframe · dev server"
-                    disabled={!supportsWebUI(project) || busy !== null}
-                    busy={busy === "web"}
-                    onClick={openWebUI}
+                    title="Vibe in browser"
+                    meta="opens the Vibe page · dev server · live preview"
+                    disabled={!canVibeWeb || busy !== null}
+                    onClick={() => goVibe(defaultWebApp?.name)}
                   />
                   <ActionCard
                     title="Load simulator targets"
@@ -556,20 +666,54 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
                     onClick={loadRuntimeTargets}
                   />
                 </div>
+                {canVibeWeb ? (
+                  <button
+                    onClick={() => void openWebUI()}
+                    disabled={busy !== null}
+                    className="text-xs text-[#667085] underline decoration-dotted underline-offset-2 hover:text-[#1f2933] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#9aa3af] dark:hover:text-white"
+                  >
+                    {busy === "web" ? "Starting inline preview…" : "Quick inline preview here instead (skips the Vibe page)"}
+                  </button>
+                ) : null}
                 {workspaceApps && workspaceApps.length > 0 ? (
                   <div className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
-                    <SectionLabel>Monorepo apps</SectionLabel>
-                    <div className="space-y-1">
-                      {workspaceApps.map((app) => (
-                        <div key={app.name} className="flex items-baseline gap-2 text-xs">
-                          <span className="font-mono font-medium text-[#344054] dark:text-[#d7dce3]">{app.name}</span>
-                          <span className="text-[#667085] dark:text-[#9aa3af]">
-                            {[app.framework || app.stack, app.kind].filter(Boolean).join(" · ") || "app"}
-                          </span>
+                    {frontendApps.length > 0 ? (
+                      <>
+                        <SectionLabel>Frontend apps — vibe on these</SectionLabel>
+                        <div className="space-y-1">
+                          {frontendApps.map((app) => (
+                            <div key={app.name} className="flex items-center gap-2 text-xs">
+                              <span className="font-mono font-medium text-[#344054] dark:text-[#d7dce3]">{app.name}</span>
+                              <span className="text-[#667085] dark:text-[#9aa3af]">{app.framework || app.stack || "app"}</span>
+                              <span className="flex gap-1">
+                                {appSurfaceChips(app).map((surface) => (
+                                  <span key={surface} className="rounded border border-[#d7dce3] bg-[#f8fafc] px-1.5 py-0.5 text-[10px] font-medium text-[#475467] dark:border-[#2a3039] dark:bg-[#121720] dark:text-[#c5ccd6]">{surface}</span>
+                                ))}
+                              </span>
+                              <span className="flex-1" />
+                              {appSurfaceChips(app).includes("Web") ? (
+                                <button
+                                  onClick={() => goVibe(app.name)}
+                                  disabled={busy !== null}
+                                  className="rounded-md bg-[#1f2933] px-2.5 py-1 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-35 dark:bg-[#e6e8ec] dark:text-[#101318]"
+                                >
+                                  Vibe
+                                </button>
+                              ) : null}
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                    <div className="mt-2 text-xs text-[#98a2b3] dark:text-[#6b7482]">The browser lane starts the web app; simulator targets pick per app.</div>
+                      </>
+                    ) : null}
+                    {backendApps.length > 0 ? (
+                      <>
+                        <SectionLabel className={frontendApps.length > 0 ? "mt-3" : ""}>Backend &amp; tooling</SectionLabel>
+                        <div className="text-xs text-[#98a2b3] dark:text-[#6b7482]">
+                          {backendApps.map((app) => `${app.name} (${app.framework || app.stack || "app"})`).join(" · ")}
+                        </div>
+                      </>
+                    ) : null}
+                    <div className="mt-2 text-xs text-[#98a2b3] dark:text-[#6b7482]">Vibe opens the app on the Vibe page with the preview attached; simulator targets pick per app.</div>
                   </div>
                 ) : null}
                 {message ? <div className="rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-xs text-[#475467] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#c5ccd6]">{message}</div> : null}
@@ -644,7 +788,7 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
         <aside className="space-y-3">
           <section className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
             <SectionLabel>Environment</SectionLabel>
-            <EnvironmentSwitcher directory={directory} />
+            <EnvironmentSwitcher directory={directory} variant="bare" />
           </section>
         </aside>
       </div>

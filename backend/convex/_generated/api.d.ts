@@ -89,6 +89,7 @@ import type * as pushNotifications from "../pushNotifications.js";
 import type * as relayPool from "../relayPool.js";
 import type * as relaySourceIntents from "../relaySourceIntents.js";
 import type * as runnerUsage from "../runnerUsage.js";
+import type * as runtimeGitRemote from "../runtimeGitRemote.js";
 import type * as runtimeSlices from "../runtimeSlices.js";
 import type * as seed from "../seed.js";
 import type * as serverlessPool from "../serverlessPool.js";
@@ -198,6 +199,7 @@ declare const fullApi: ApiFromModules<{
   relayPool: typeof relayPool;
   relaySourceIntents: typeof relaySourceIntents;
   runnerUsage: typeof runnerUsage;
+  runtimeGitRemote: typeof runtimeGitRemote;
   runtimeSlices: typeof runtimeSlices;
   seed: typeof seed;
   serverlessPool: typeof serverlessPool;
