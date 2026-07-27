@@ -20,7 +20,10 @@ import { providerCatalogDefaults } from "./providerCatalog";
  * - Seed data (runners, models, config): predefined, shared across all instances
  * - User data (users, sessions, devices, metrics): created at runtime, never seeded
  */
-export const all = mutation({
+// internalMutation, NOT mutation: a public mutation is callable by anyone with
+// the deployment URL (committed in this public repo). This seeds/wipes core
+// tables — run it via `npx convex run seed:all`, never over the wire.
+export const all = internalMutation({
   args: {},
   handler: async (ctx) => {
     // ── AI Runners ──
@@ -113,7 +116,11 @@ export const all = mutation({
  *          runnerUsage, dailyTaskCounts, authLogs, developerLogs,
  *          mobileStreamLogs
  */
-export const clearUserData = mutation({
+// internalMutation, NOT mutation: this DELETES every row in users, sessions,
+// devices, and 10+ other tables. A public mutation here = anyone with the
+// public deployment URL ends the deployment in one call. Run only via
+// `npx convex run seed:clearUserData`.
+export const clearUserData = internalMutation({
   args: {},
   handler: async (ctx) => {
     const tablesToClear = [

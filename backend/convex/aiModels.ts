@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 
 export const PREDEFINED_MODELS = [
   // Claude Code (Anthropic SDK). modelIds are the canonical full IDs
@@ -93,7 +93,8 @@ export const list = query({
   },
 });
 
-export const seed = mutation({
+// internalMutation: bootstrap-only bulk upsert+delete; never over the wire.
+export const seed = internalMutation({
   args: {},
   handler: async (ctx) => {
     // Upsert every model in the predefined list.

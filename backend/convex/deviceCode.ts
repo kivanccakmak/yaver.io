@@ -43,10 +43,12 @@ export const createDeviceCode = mutation({
     ownerUserIdHint: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // Clean up expired codes lazily (delete up to 10)
+    // Clean up expired codes lazily (delete up to 10). Uses the by_expiresAt
+    // INDEX, not a .filter() table scan: the old scan made this O(table), so
+    // an attacker flooding live rows turned every insert into a cost bomb.
     const expired = await ctx.db
       .query("deviceCodes")
-      .filter((q) => q.lt(q.field("expiresAt"), Date.now()))
+      .withIndex("by_expiresAt", (q) => q.lt("expiresAt", Date.now()))
       .take(10);
     for (const code of expired) {
       await ctx.db.delete(code._id);

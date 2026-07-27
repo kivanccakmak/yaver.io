@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 
 export const PREDEFINED_RUNNERS = [
   {
@@ -112,7 +112,8 @@ export const list = query({
   },
 });
 
-export const seed = mutation({
+// internalMutation: bootstrap-only bulk upsert+delete; never over the wire.
+export const seed = internalMutation({
   args: {},
   handler: async (ctx) => {
     // One-time migration: drop the legacy "claude" row before upserting
