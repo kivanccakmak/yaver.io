@@ -118,3 +118,32 @@ pid fails silently (`ci_selfhosted_runner.go:984`).
 
 Prove each guard by breaking it (disable → watch the test fail), per the
 snowball rule.
+
+## §4 Production recovery ladder (how a wedged box gets unwedged without a human)
+
+Constraint that orders the ladder: under fork exhaustion, anything that must
+SPAWN is dead. Each layer must function with strictly fewer capabilities.
+
+0. **Prevent** — the §3 leak fixes (spawn constructor, reaps, mutex).
+1. **Foresee** — spawn-capability warden (`exec /usr/bin/true` every 30 s),
+   `canFork`/child/fd counts on the heartbeat; agent sheds optional spawners
+   (screenlog, tmux poll, metrics execs) under pressure and names it.
+2. **Self-heal in place** — `kill()` is a syscall, not a spawn: the live agent
+   SIGKILLs its own leaked children from in-process inventory to free slots,
+   then exits for a clean launchd respawn. Recovers exhaustion WITHOUT reboot,
+   provided the agent process survived (why the relayManager mutex is rank 1).
+3. **Dead-man reboot, fork-free** — resident root sentinel watches the agent
+   beacon and calls the reboot SYSCALL directly on prolonged staleness (a
+   resident process needs no fork even at 100 % table exhaustion). Linux edge:
+   kernel/systemd hardware watchdog petted by the agent. Cloud: provider API
+   reset (hcloud) — already a Yaver lever.
+4. **Remote physical** — macOS has no user hardware watchdog:
+   `systemsetup -setrestartpowerfailure on` + smart plug driven by Yaver's own
+   shelly/tasmota/govee verbs → owner-approved `machine_repair
+   action:"power_cycle"`. ~€15 guarantees no on-site human even when 0–3 fail.
+
+Corollary: render boxes are cattle — clones + toolchains only, safe to
+power-cycle at any moment, by design. Pair with backup `# yaver-managed`
+forced-command watchdog keys provisioned WHILE HEALTHY (the ubuntu→mini auth
+gap found 2026-07-27) so Layer 3's peer path can also restart agents in the
+non-exhaustion wedge cases.
