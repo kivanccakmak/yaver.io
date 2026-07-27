@@ -78,12 +78,13 @@ type BandwidthStats struct {
 }
 
 type DeviceBandwidthSummary struct {
-	DeviceID string `json:"deviceId"`
-	BytesIn  int64  `json:"bytesIn"`
-	BytesOut int64  `json:"bytesOut"`
-	IsPaid   bool   `json:"isPaid"`
-	LimitMB  int    `json:"limitMb"`
-	UsedMB   int    `json:"usedMb"`
+	DeviceID  string `json:"deviceId"`
+	BytesIn   int64  `json:"bytesIn"`
+	BytesOut  int64  `json:"bytesOut"`
+	IsPaid    bool   `json:"isPaid"`
+	Unmetered bool   `json:"unmetered,omitempty"`
+	LimitMB   int    `json:"limitMb"`
+	UsedMB    int    `json:"usedMb"`
 }
 
 // DefaultBandwidthConfig returns sensible defaults.
@@ -228,13 +229,14 @@ func (bm *BandwidthManager) GetStats() BandwidthStats {
 
 	// Top devices by usage
 	type devUsage struct {
-		id     string
-		total  int64
-		isPaid bool
+		id        string
+		total     int64
+		isPaid    bool
+		unmetered bool
 	}
 	var sorted []devUsage
 	for _, dev := range bm.devices {
-		sorted = append(sorted, devUsage{dev.DeviceID, dev.BytesIn + dev.BytesOut, dev.IsPaid})
+		sorted = append(sorted, devUsage{dev.DeviceID, dev.BytesIn + dev.BytesOut, dev.IsPaid, dev.Unmetered})
 	}
 	// Simple sort (top 10)
 	for i := 0; i < len(sorted) && i < 10; i++ {
@@ -257,8 +259,11 @@ func (bm *BandwidthManager) GetStats() BandwidthStats {
 			DeviceID: sorted[i].id,
 			BytesIn:  0, BytesOut: 0, // simplified
 			IsPaid:   sorted[i].isPaid,
-			LimitMB:  limitMB,
-			UsedMB:   int(sorted[i].total / (1024 * 1024)),
+			// "paid" and "no cap at all" are different verdicts; an admin
+			// view that can't tell them apart re-derives today's incident.
+			Unmetered: sorted[i].unmetered,
+			LimitMB:   limitMB,
+			UsedMB:    int(sorted[i].total / (1024 * 1024)),
 		})
 	}
 

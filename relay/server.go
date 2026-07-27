@@ -1231,6 +1231,24 @@ func (s *RelayServer) handleAgentConnection(ctx context.Context, conn quic.Conne
 	s.tunnels[reg.DeviceID] = tunnel
 	s.mu.Unlock()
 
+	// Stamp the device's bandwidth tier NOW, from the registration verdict —
+	// not lazily on the first authenticated proxy request. Registration is the
+	// one moment every lane shares: QUIC bridges (phone native, `yaver code
+	// --attach` CLI-to-CLI), expose subdomains, the SSH bridge and webview
+	// subresources all move bytes for this device without ever carrying a
+	// password themselves, so before this stamp an owner-dev box was unmetered
+	// on the dashboard lane and free-tier on every other one. Same trust
+	// boundary as everything else here: the plan is Convex's cached verdict
+	// about the AUTHENTICATED registrant ("register" action), never a client
+	// claim.
+	if regPaid, regPlan := s.relayAccessEntitlement("register", reg.DeviceID, reg.Password, reg.Token); regPlan != "" || regPaid {
+		ent := deviceEntitlement{Known: true, IsPaid: regPaid, Unmetered: planBandwidthExempt(regPlan)}
+		if regUserID != "" {
+			s.rememberUserEntitlement(regUserID, ent)
+		}
+		s.bandwidth.SetDeviceTier(reg.DeviceID, regPaid, ent.Unmetered)
+	}
+
 	// A registered tunnel is not the same thing as a WORKING one. Watch it.
 	go s.watchTunnelLiveness(tunnel)
 
@@ -1443,6 +1461,17 @@ func (s *RelayServer) handleAgentWebSocket(ws *websocket.Conn) {
 	}
 	s.tunnels[reg.DeviceID] = tunnel
 	s.mu.Unlock()
+
+	// Same registration-time tier stamp as the QUIC path above — the WS
+	// fallback is still a registration, and a box that fell back to
+	// websocket must not silently lose its owner's exemption.
+	if regPaid, regPlan := s.relayAccessEntitlement("register", reg.DeviceID, reg.Password, reg.Token); regPlan != "" || regPaid {
+		ent := deviceEntitlement{Known: true, IsPaid: regPaid, Unmetered: planBandwidthExempt(regPlan)}
+		if regUserID != "" {
+			s.rememberUserEntitlement(regUserID, ent)
+		}
+		s.bandwidth.SetDeviceTier(reg.DeviceID, regPaid, ent.Unmetered)
+	}
 
 	resp := WSTunnelFrame{Type: "registered", OK: true}
 	if err := wst.send(resp); err != nil {
