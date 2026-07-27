@@ -885,10 +885,78 @@ func integrationsHelpText(name string) string {
 	return strings.TrimSpace(fmt.Sprintf("Run `yaver install %s` to install %s.", plan.name, plan.description))
 }
 
+// The step lists of every composite ("meta of metas") recipe, lifted out of
+// their functions so a test can assert that EVERY name resolves — on every
+// GOOS, from any host. The xcodegen/cliclick bug below was darwin-only, which
+// is precisely why nothing on a Linux CI box ever noticed it.
+var (
+	piDevNodePlanNames   = []string{"git", "gh", "uv", "docker", "mobile", "tmux", "ffmpeg", "opencode", "tdd", "backend-dev"}
+	vibePreviewPlanNames = []string{"chromium", "ffmpeg", "maestro", "appium", "android-sdk"}
+	backendDevPlanNames  = []string{"sqlite3", "vercel", "convex", "postgresql-client", "postgresql", "redis-tools", "redis-server", "supabase", "mqtt-broker", "mqtt-clients"}
+	tddPlanNames         = []string{"pre-commit", "pytest", "ruff", "vitest", "eslint", "prettier"}
+)
+
+// remoteRuntimePlanNamesFor is the remote-runtime step list for a given GOOS.
+//
+// Takes goos as an argument rather than reading runtime.GOOS so the darwin
+// branch is testable from a Linux box — the only reason the missing
+// xcodegen/cliclick plans survived is that they are unreachable on the
+// platform CI runs. Returns a fresh slice: appending to a shared package var
+// is how one caller's platform quietly becomes every caller's.
+func remoteRuntimePlanNamesFor(goos string) []string {
+	// Order matters — java first (sdkmanager + gradle dep), then the SDK +
+	// system image (heaviest download), then Flutter (independent of
+	// Android), then the webrtc-stack apt block (smallest, gives quick
+	// feedback that the multi-step plan completed).
+	names := []string{"java", "android-sdk", "flutter", "webrtc-stack"}
+	if goos == "darwin" {
+		// Apple's Xcode-shaped tooling layers on top.
+		names = append(names, "xcodegen", "cliclick")
+	}
+	return names
+}
+
+// resolveCompositePlan is how a MULTI-STEP recipe looks up one of its steps.
+//
+// THE BUG THIS REMOVES (measured 2026-07-27). runRemoteRuntimeInstall appends
+// "xcodegen" and "cliclick" on darwin and resolved every step through
+// metaInstallPlan alone — but neither name has a metaInstallPlan case; they
+// exist only in the `integrations` table. So on macOS `yaver install
+// remote-runtime` / `POST /install/remote-runtime` ALWAYS died with
+// `missing install plan: xcodegen`, and it died at the END: after java,
+// android-sdk and flutter had already downloaded several GB over anything up
+// to an hour. Worse, `yaver install remote-runtime` is the remedy the product
+// itself prints when adb is absent during WebRTC capture
+// (remote_runtime_video_track.go) — a remedy the product refuses, which is
+// the exact 2026-07-26 "yaver lies" defect wearing a bigger price tag.
+//
+// Order is meta-FIRST on purpose: several names (android-sdk, chromium,
+// ffmpeg, tmux, git, gh, uv, docker) exist in BOTH tables with different
+// steps, and the curated meta recipe is what these composites have always
+// run. Falling back to `integrations` is therefore strictly additive — it can
+// only turn a hard failure into a working install, never swap a working plan
+// for a different one.
+// Declared as a func VAR assigned in init(), not as a plain func, to break a
+// package-initialization cycle: the `integrations` table's entries reference
+// the composite runners below, the runners call this resolver, and this
+// resolver reads `integrations` via lookupIntegration. Go follows func→var
+// edges when ordering variable initialisation, and a var with no initialiser
+// expression ends the chain. Behaviour is identical to a plain function.
+var resolveCompositePlan func(name string) (installPlan, bool)
+
+func init() {
+	resolveCompositePlan = func(name string) (installPlan, bool) {
+		if plan, ok := metaInstallPlan(name); ok {
+			return plan, true
+		}
+		return lookupIntegration(name)
+	}
+}
+
 func runPiDevNodeInstall(ctx context.Context, progress func(string)) error {
-	planNames := []string{"git", "gh", "uv", "docker", "mobile", "tmux", "ffmpeg", "opencode", "tdd", "backend-dev"}
+	planNames := piDevNodePlanNames
 	for _, name := range planNames {
-		plan, ok := metaInstallPlan(name)
+		plan, ok := resolveCompositePlan(name)
 		if !ok {
 			return fmt.Errorf("missing install plan: %s", name)
 		}
@@ -919,9 +987,9 @@ func runPiDevNodeInstall(ctx context.Context, progress func(string)) error {
 // fully equipped" step on an existing one. macOS-only sim-ios capture
 // uses xcrun (ships with Xcode); we don't try to install that.
 func runVibePreviewInstall(ctx context.Context, progress func(string)) error {
-	planNames := []string{"chromium", "ffmpeg", "maestro", "appium", "android-sdk"}
+	planNames := vibePreviewPlanNames
 	for _, name := range planNames {
-		plan, ok := metaInstallPlan(name)
+		plan, ok := resolveCompositePlan(name)
 		if !ok {
 			return fmt.Errorf("missing install plan: %s", name)
 		}
@@ -997,17 +1065,11 @@ func runWebRTCInstall(ctx context.Context, progress func(string)) error {
 
 func runRemoteRuntimeInstall(ctx context.Context, progress func(string)) error {
 	// Phase 1 stack: kotlin/flutter via Android emulator + WebRTC capture.
-	// Order matters — java first (sdkmanager + gradle dep), then the
-	// SDK + system image (heaviest download), then Flutter (independent
-	// of Android), then the webrtc-stack apt block (smallest, gives
-	// quick feedback that the multi-step plan completed). On macOS
-	// Apple's Xcode-shaped tooling layers on top.
-	planNames := []string{"java", "android-sdk", "flutter", "webrtc-stack"}
-	if runtime.GOOS == "darwin" {
-		planNames = append(planNames, "xcodegen", "cliclick")
-	}
+	// Step order and the darwin extras live in remoteRuntimePlanNamesFor so
+	// both platforms' lists are assertable from either platform.
+	planNames := remoteRuntimePlanNamesFor(runtime.GOOS)
 	for _, name := range planNames {
-		plan, ok := metaInstallPlan(name)
+		plan, ok := resolveCompositePlan(name)
 		if !ok {
 			return fmt.Errorf("missing install plan: %s", name)
 		}
@@ -1035,9 +1097,9 @@ func runRemoteRuntimeInstall(ctx context.Context, progress func(string)) error {
 }
 
 func runBackendDevInstall(ctx context.Context, progress func(string)) error {
-	planNames := []string{"sqlite3", "vercel", "convex", "postgresql-client", "postgresql", "redis-tools", "redis-server", "supabase", "mqtt-broker", "mqtt-clients"}
+	planNames := backendDevPlanNames
 	for _, name := range planNames {
-		plan, ok := metaInstallPlan(name)
+		plan, ok := resolveCompositePlan(name)
 		if !ok {
 			return fmt.Errorf("missing install plan: %s", name)
 		}
@@ -1062,9 +1124,9 @@ func runBackendDevInstall(ctx context.Context, progress func(string)) error {
 }
 
 func runTDDInstall(ctx context.Context, progress func(string)) error {
-	planNames := []string{"pre-commit", "pytest", "ruff", "vitest", "eslint", "prettier"}
+	planNames := tddPlanNames
 	for _, name := range planNames {
-		plan, ok := metaInstallPlan(name)
+		plan, ok := resolveCompositePlan(name)
 		if !ok {
 			return fmt.Errorf("missing install plan: %s", name)
 		}
