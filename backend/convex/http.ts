@@ -855,6 +855,7 @@ for (const path of [
   "/auth/test/oauth-signin",
   "/auth/device-code/authorize", "/auth/device-code/broker",
   "/auth/device-code/poll", "/auth/device-code/claim", "/auth/device-code/events",
+  "/auth/device-code/pending",
   "/auth/passkey/register/start", "/auth/passkey/register/finish",
   "/auth/passkey/login/start", "/auth/passkey/login/finish",
   "/auth/passkey/signup/start", "/auth/passkey/signup/finish",
@@ -1978,6 +1979,12 @@ http.route({
     if (!result) {
       return errorResponse("Session expired or invalid", 401);
     }
+    // Additive: the caller's own user doc id. TVs/headsets store it as the
+    // owner HINT for their next device-code sign-in, so the owner's phone
+    // can be shown a proactive approve event (see /auth/device-code/pending).
+    // Opaque id, grants nothing by itself; approval always requires the
+    // hinted user's authenticated session.
+    const userDocId = await ctx.runQuery(api.auth.getUserDocId, { tokenHash: newTokenHash && result.rotated ? newTokenHash : tokenHash });
     return jsonResponse({
       ok: true,
       expiresAt: result.expiresAt,
@@ -1986,6 +1993,7 @@ http.route({
       // don't accidentally persist an identical value.
       token: result.rotated ? newToken : undefined,
       rotated: !!result.rotated,
+      userId: userDocId ?? undefined,
     });
   }),
 });
@@ -5484,6 +5492,33 @@ http.route({
       return errorResponse("Not found", 404);
     }
     return jsonResponse(result);
+  }),
+});
+
+/** GET /auth/device-code/pending — pending sign-ins that HINT the caller as
+ *  their owner (a re-authing TV/headset remembering its last user). Drives
+ *  the phone's proactive approve event: the app shows machine + code, the
+ *  user number-matches against the TV screen and taps Approve (the existing
+ *  /authorize route). Bearer-authenticated; the user is derived from the
+ *  session, NEVER from a client arg — a pending userCode is
+ *  approval-capable, so leaking another user's rows would let an attacker
+ *  bind that device to the attacker's account. */
+http.route({
+  path: "/auth/device-code/pending",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const user = await authenticateRequest(ctx, request);
+    if (!user) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const authHeader = request.headers.get("Authorization")!;
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+    const userDoc = await ctx.runQuery(api.auth.getUserDocId, { tokenHash });
+    if (!userDoc) {
+      return errorResponse("User not found", 404);
+    }
+    const pending = await ctx.runQuery(internal.deviceCode.pendingApprovalsForUser, { userId: userDoc });
+    return jsonResponse({ ok: true, pending });
   }),
 });
 

@@ -1270,11 +1270,20 @@ export default defineSchema({
     authorizeAttempts: v.optional(v.number()),
     lastAuthorizeAttemptAt: v.optional(v.number()),
     pendingToken: v.optional(v.string()),
+    // Owner HINT for the proactive phone-approval event ("mobil onay"): a
+    // re-authing TV/headset passes the userId it remembers from its last
+    // session, so that user's signed-in phone can list this pending code
+    // and offer one-tap approve (number-match against the TV screen). A
+    // hint GRANTS NOTHING — authorization still requires the hinted user's
+    // authenticated session; a wrong/forged hint only produces a prompt
+    // the user declines.
+    ownerHintUserId: v.optional(v.id("users")),
     expiresAt: v.number(),
     createdAt: v.number(),
   })
     .index("by_userCode", ["userCode"])
-    .index("by_deviceCode", ["deviceCode"]),
+    .index("by_deviceCode", ["deviceCode"])
+    .index("by_ownerHint", ["ownerHintUserId", "status"]),
 
   // Managed relay subscriptions (LemonSqueezy payments)
   subscriptions: defineTable({

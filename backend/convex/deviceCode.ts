@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation, MutationCtx } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { randomHex, sha256Hex, validateSessionInternal } from "./auth";
 
@@ -37,6 +37,10 @@ export const createDeviceCode = mutation({
     preferredProvider: v.optional(v.string()),
     isWsl: v.optional(v.boolean()),
     deviceId: v.optional(v.string()),
+    /** Owner hint for the proactive phone-approval event. Free-form string
+     *  from the (unauthenticated) device; validated against a real users
+     *  row and silently dropped otherwise. Grants nothing — see schema. */
+    ownerUserIdHint: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Clean up expired codes lazily (delete up to 10)
@@ -64,10 +68,22 @@ export const createDeviceCode = mutation({
     const deviceCode = randomHex(20); // 40-char hex
     const now = Date.now();
 
+    // Validate the owner hint against a real users row; anything else is
+    // silently dropped (an unauthenticated caller must not learn whether an
+    // id exists, and a bogus hint must not create dangling references).
+    let ownerHintUserId: Id<"users"> | undefined;
+    if (args.ownerUserIdHint) {
+      const normalized = ctx.db.normalizeId("users", args.ownerUserIdHint.trim());
+      if (normalized && (await ctx.db.get(normalized))) {
+        ownerHintUserId = normalized;
+      }
+    }
+
     await ctx.db.insert("deviceCodes", {
       userCode,
       deviceCode,
       status: "pending",
+      ownerHintUserId,
       machineName: args.machineName,
       platform: args.platform,
       arch: args.arch,
@@ -86,6 +102,34 @@ export const createDeviceCode = mutation({
       deviceCode,
       expiresAt: now + DEVICE_CODE_TTL_MS,
     };
+  },
+});
+
+/**
+ * Pending codes whose owner HINT names the given user — the feed behind the
+ * proactive phone-approval event. INTERNAL on purpose: the HTTP route derives
+ * `userId` from the caller's bearer session (never a client arg), because a
+ * pending userCode is approval-capable — leaking another user's pending code
+ * would let an attacker approve that device into the ATTACKER's account.
+ */
+export const pendingApprovalsForUser = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const rows = await ctx.db
+      .query("deviceCodes")
+      .withIndex("by_ownerHint", (q) => q.eq("ownerHintUserId", args.userId).eq("status", "pending"))
+      .take(10);
+    return rows
+      .filter((row) => row.expiresAt > now)
+      .map((row) => ({
+        userCode: row.userCode,
+        machineName: row.machineName ?? null,
+        platform: row.platform ?? null,
+        environment: row.environment ?? null,
+        createdAt: row.createdAt,
+        expiresAt: row.expiresAt,
+      }));
   },
 });
 
