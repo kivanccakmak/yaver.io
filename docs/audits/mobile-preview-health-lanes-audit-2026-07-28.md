@@ -195,13 +195,39 @@ node --experimental-strip-types --test \
     browser path. Audit other callers that may call reload from browser/WebView
     context without passing that flag.
 
+## Audit Outcome (2026-07-28, same day)
+
+The 10-item audit ran; verdicts and fixes landed in the same change set:
+
+- Items 1, 3, 4, 5, 6, 9 verified OK (classifier precedence, healthy-startup
+  suppression, agent-signal authority, deterministic-route precedence).
+- Item 7 was a REAL DEFECT: a persisted compile error and stale failure lines
+  outlived a successful recompile, keeping `needs_project_fix` (and the
+  Fix-in-Yaver button) up over a working preview — including right after the
+  Fix-in-Yaver runner itself repaired the project. Fixed with
+  `devBuildRecoveryLine` (clears `SetCompileError`) plus failure→recovery
+  ordering in `previewProjectFailureLines`; guarded by
+  `TestPreviewHealthClearsProjectFixAfterRecoveryLine`.
+- Item 1's residual: `/dev/status` mutated `Error` after health was computed
+  (dead web-sibling probe) — health is recomputed after the mutation.
+- Item 2 was a REAL DEFECT: runtime JS crashes inside the WebView are invisible
+  to the agent, and the authoritative healthy verdict suppressed them. The
+  console channel now escalates on client-only crash shapes
+  (`clientRuntimeLogsNeedProjectFix`).
+- Item 10 found the last Hermes leak: the tasks-tab reload unconditionally did
+  a bundle rebuild; it is now lane-aware, and `hotreload.tsx` no longer lets
+  non-Hermes frameworks fall back into a Hermes reload-app.
+- The duplicated mobile gate was hoisted into `mobile/src/lib/previewHealth.ts`
+  with a parity test (`previewHealth.test.mts`) that fails if either preview
+  implementation regrows a local copy.
+
 ## Known Missing Work
 
-- The new `previewHealth` follow-up is not committed or pushed yet.
 - No full end-to-end mobile device test was run after the follow-up; only
   TypeScript, focused Node tests, and focused Go tests were run.
 - Web dashboard and other non-mobile surfaces have not been migrated to consume
-  `previewHealth`.
+  `previewHealth` (web still runs its own `compileFailure.ts` regex — broader
+  than the agent classifier, drift is live).
 - The health signal currently focuses on dev-server/build health, not on a full
   browser render lifecycle. A WebView can still fail to paint after a healthy
   server; that should be represented as render health separately from project
