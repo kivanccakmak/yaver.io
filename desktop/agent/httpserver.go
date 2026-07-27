@@ -4999,13 +4999,27 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 	fullSnapshot := since <= 0 || since > len(existingOutput)
 	replay := existingOutput
 	if !fullSnapshot {
+		// `since` is a BYTE offset, but every client derives it by counting
+		// JavaScript string length — UTF-16 code units. The two agree only for
+		// ASCII, and a coding runner's transcript is full of box-drawing runes,
+		// "…" and emoji. So the number that arrives here routinely lands INSIDE
+		// a multi-byte rune, and slicing there ships invalid UTF-8 that
+		// json.Marshal turns into U+FFFD — mojibake at the seam, reported by
+		// nothing. Back up to the rune start: replaying a few bytes the client
+		// already has is recoverable, handing it a broken character is not.
+		since = alignToRuneStart(existingOutput, since)
 		replay = existingOutput[since:]
 	}
+
+	// The authoritative cursor. See the `offset` note on the output frames
+	// below: the agent is the only party that can compute this correctly, so it
+	// states it rather than asking the client to derive it.
+	streamOffset := len(existingOutput)
 
 	if resumeRequested {
 		fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
 			"type":   "resume",
-			"offset": len(existingOutput),
+			"offset": streamOffset,
 			"full":   fullSnapshot,
 		}))
 		flusher.Flush()
@@ -5013,8 +5027,9 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 
 	if replay != "" {
 		fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
-			"type": "output",
-			"text": replay,
+			"type":   "output",
+			"text":   replay,
+			"offset": streamOffset,
 		}))
 		flusher.Flush()
 	}
@@ -5086,7 +5101,9 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 			// still preserved in task.Output for the Logs view.
 			const maxStreamChunkBytes = 4096
 			if len(text) > maxStreamChunkBytes {
-				keep := maxStreamChunkBytes
+				// Same rune-cutting bug as the resume slice above: a hard
+				// byte cut lands mid-rune and ships invalid UTF-8.
+				keep := alignToRuneStart(text, maxStreamChunkBytes)
 				text = text[:keep] + "\n…[chunk trimmed: " +
 					fmt.Sprintf("%d", len(text)-keep) +
 					" bytes more in Logs]…\n"

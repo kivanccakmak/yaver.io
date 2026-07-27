@@ -3035,7 +3035,7 @@ export class AgentClient {
    */
   streamTaskOutput(
     taskId: string,
-    onLine: (line: string) => void,
+    onLine: (line: string, offset?: number) => void,
     onEvent?: (event: { type: string; [k: string]: unknown }) => void,
     opts?: {
       /**
@@ -3105,7 +3105,12 @@ export class AgentClient {
             try {
               const event = JSON.parse(dataLines.join("\n"));
               if (event?.type === "output" && event.text) {
-                onLine(String(event.text));
+                // `offset` is the agent's AUTHORITATIVE byte cursor. Pass it
+                // on: the caller's own `String(chunk).length` is UTF-16 code
+                // units, which only equals the byte length for ASCII, and
+                // `?since=` is sliced in bytes. See
+                // desktop/agent/stream_cursor.go.
+                onLine(String(event.text), typeof event.offset === "number" ? event.offset : undefined);
               } else {
                 // Record the terminal frame even when the caller passed no
                 // onEvent — it is what separates "the task finished" from

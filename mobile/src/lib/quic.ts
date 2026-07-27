@@ -2813,7 +2813,7 @@ export class QuicClient {
    */
   streamTaskOutput(
     taskId: string,
-    onData: (text: string) => void,
+    onData: (text: string, offset?: number) => void,
     onDone?: (status: string) => void,
     onEvent?: (event: { type: string; [k: string]: unknown }) => void,
     opts?: {
@@ -2885,7 +2885,11 @@ export class QuicClient {
         try {
           const evt = JSON.parse(line.slice(6));
           if (evt.type === "output" && evt.text) {
-            onData(evt.text);
+            // `offset` is the agent's AUTHORITATIVE byte cursor. Pass it on:
+            // the caller's own `text.length` is UTF-16 code units, which only
+            // equals the byte length for ASCII, and `?since=` is sliced in
+            // bytes. See desktop/agent/stream_cursor.go.
+            onData(evt.text, typeof evt.offset === "number" ? evt.offset : undefined);
           } else if (evt.type === "done") {
             // Record the terminal frame even when the caller passed no
             // onDone — it is what separates "the task finished" from

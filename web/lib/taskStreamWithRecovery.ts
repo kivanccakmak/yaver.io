@@ -80,8 +80,14 @@ export function streamTaskOutputWithRecovery(
     if (disposed) return;
     stop = client.streamTaskOutput(
       taskId,
-      (chunk) => {
-        received += String(chunk || "").length;
+      (chunk, offset) => {
+        // Prefer the agent's authoritative byte cursor. Counting here means
+        // counting UTF-16 code units, and `?since=` is sliced in BYTES — the
+        // two agree only for ASCII, and a runner transcript is full of
+        // box-drawing runes and "…". The local count stays as the fallback for
+        // agents older than the `offset` field.
+        if (typeof offset === "number") received = offset;
+        else received += String(chunk || "").length;
         // A chunk means the stream is alive — clear any banner and reset the
         // ladder so the next outage starts at rung zero.
         attempt = 0;

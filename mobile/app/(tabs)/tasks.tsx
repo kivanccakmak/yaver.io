@@ -2427,8 +2427,14 @@ export default function TasksScreen() {
     if (disposed) return;
     const abort = quicClient.streamTaskOutput(
       selectedTask.id,
-      (text) => {
-        received += text.length;
+      (text, offset) => {
+        // Prefer the agent's authoritative byte cursor. Counting here means
+        // counting UTF-16 code units, and `?since=` is sliced in BYTES — the
+        // two agree only for ASCII, and a runner transcript is full of
+        // box-drawing runes and "…". The local count stays as the fallback for
+        // agents older than the `offset` field.
+        if (typeof offset === "number") received = offset;
+        else received += text.length;
         // Output is flowing again — drop any interruption banner and reset
         // the ladder so the next outage gets a full set of attempts.
         attempt = 0;
