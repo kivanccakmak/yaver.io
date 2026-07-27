@@ -112,6 +112,7 @@ import QAPanel from "@/components/dashboard/QAPanel";
 import WebTestsPanel from "@/components/dashboard/WebTestsPanel";
 import SettingsView from "@/components/dashboard/SettingsView";
 import { PlanUsageCard } from "@/components/dashboard/PlanUsageCard";
+import { MachineRolesCard } from "@/components/dashboard/MachineRolesCard";
 import type { RunnerBrowserAuthSession } from "@/lib/agent-client";
 import webPkg from "../../package.json";
 
@@ -3543,6 +3544,8 @@ export default function DashboardPage() {
             <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full">
               {/* Account plan + relay usage — profile clicks land here. */}
               <PlanUsageCard deviceNames={Object.fromEntries(devices.map((d) => [d.id, d.name]))} />
+              {/* Optional runner/render machine slicing — the favorite config. */}
+              <MachineRolesCard token={token} devices={devices.map((d) => ({ id: d.id, name: d.name, platform: d.platform }))} />
               {/* Mesh lives here now — set-up-once plumbing, not a nav tab. */}
               <button
                 type="button"

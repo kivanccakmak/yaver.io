@@ -1051,6 +1051,23 @@ export default defineSchema({
         }),
       ),
     ),
+    // OPTIONAL machine-role slicing (docs/architecture/RUNNER_RENDER_SPLIT.md):
+    // runner machine (AI tasks / vibing) vs render machine (source, builds,
+    // previews). No row = single-box behavior; runner and render MAY be the
+    // same device. Row without projectName = account-wide favorite. Identity
+    // only — deviceIds + mode flags, never hostnames or paths.
+    machineRolesByProject: v.optional(
+      v.array(
+        v.object({
+          projectName: v.optional(v.string()),
+          runnerDeviceId: v.string(),
+          renderDeviceId: v.optional(v.string()),
+          workspace: v.optional(v.union(v.literal("runner-clone"), v.literal("render-ssh"))),
+          autoPush: v.optional(v.union(v.literal("never"), v.literal("ask"), v.literal("always"))),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
     // Saved render target per (device, project) — with a default project this
     // lets the Vibing tab render without a click. Stable target identity only
     // (targetId like "browser-iframe" / "android-device"), never URLs, ports

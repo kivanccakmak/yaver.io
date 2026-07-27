@@ -141,6 +141,86 @@ function mergeRuntimeTargetPreference(
   return [...filtered, row].slice(-200);
 }
 
+// Machine-role slicing (docs/architecture/RUNNER_RENDER_SPLIT.md): which of
+// the account's machines runs the AI task (runner) and which serves/builds
+// the app (render). OPTIONAL — no row means today's single-box behavior.
+// Row without projectName = the account-wide favorite; per-project rows
+// override. Identity only: deviceIds + mode flags, never hostnames/paths.
+const machineRolesValidator = v.object({
+  projectName: v.optional(v.union(v.string(), v.null())),
+  // null runnerDeviceId clears the row for this project scope.
+  runnerDeviceId: v.union(v.string(), v.null()),
+  renderDeviceId: v.optional(v.union(v.string(), v.null())),
+  workspace: v.optional(v.union(v.literal("runner-clone"), v.literal("render-ssh"), v.null())),
+  autoPush: v.optional(v.union(v.literal("never"), v.literal("ask"), v.literal("always"), v.null())),
+  updatedAt: v.optional(v.number()),
+});
+
+type MachineRolesRow = {
+  projectName?: string;
+  runnerDeviceId: string;
+  renderDeviceId?: string;
+  workspace?: "runner-clone" | "render-ssh";
+  autoPush?: "never" | "ask" | "always";
+  updatedAt: number;
+};
+
+type MachineRolesPatch = {
+  projectName?: string | null;
+  runnerDeviceId: string | null;
+  renderDeviceId?: string | null;
+  workspace?: "runner-clone" | "render-ssh" | null;
+  autoPush?: "never" | "ask" | "always" | null;
+  updatedAt?: number;
+};
+
+// Write-time ownership gate for machine-role rows: every referenced device
+// must belong to the CALLER. Enforcement of what a role can DO stays at each
+// box (bearer + guest scopes, fail-closed), so a forged row grants nothing —
+// this gate exists so the config store can't even hold another tenant's
+// deviceId, same posture as normalizeOwnedDeviceId for primary/secondary.
+async function assertMachineRolesOwned(
+  ctx: any,
+  userId: any,
+  payload: MachineRolesPatch,
+): Promise<void> {
+  for (const [slot, id] of [
+    ["runnerDeviceId", payload.runnerDeviceId],
+    ["renderDeviceId", payload.renderDeviceId],
+  ] as const) {
+    if (!id) continue;
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q: any) => q.eq("deviceId", id))
+      .first();
+    if (!device || String(device.userId) !== String(userId)) {
+      throw new Error(`${slot} must refer to one of the caller's devices`);
+    }
+  }
+}
+
+function mergeMachineRoles(
+  existing: MachineRolesRow[] | undefined,
+  payload: MachineRolesPatch,
+): MachineRolesRow[] | undefined {
+  const projectName = cleanRuntimeText(payload.projectName ?? undefined, 200);
+  const filtered = (existing ?? []).filter(
+    (row) => (row.projectName || "") !== (projectName || ""),
+  );
+  const runnerDeviceId = cleanRuntimeText(payload.runnerDeviceId ?? undefined, 120);
+  if (!runnerDeviceId) return filtered.length > 0 ? filtered : undefined;
+  const renderDeviceId = cleanRuntimeText(payload.renderDeviceId ?? undefined, 120);
+  const row: MachineRolesRow = {
+    ...(projectName ? { projectName } : {}),
+    runnerDeviceId,
+    ...(renderDeviceId ? { renderDeviceId } : {}),
+    ...(payload.workspace ? { workspace: payload.workspace } : {}),
+    ...(payload.autoPush ? { autoPush: payload.autoPush } : {}),
+    updatedAt: payload.updatedAt ?? Date.now(),
+  };
+  return [...filtered, row].slice(-100);
+}
+
 type OpenCodeConfigSnapshotPatch = {
   deviceId: string;
   model?: string | null;
@@ -582,6 +662,7 @@ export const set = internalMutation({
     opencodeConfigForDevice: v.optional(openCodeConfigSnapshotPatchValidator),
     defaultRuntimeProjectForDevice: v.optional(runtimeProjectPreferenceValidator),
     defaultRuntimeTargetForDevice: v.optional(runtimeTargetPreferenceValidator),
+    machineRolesForProject: v.optional(machineRolesValidator),
     runtimeProjectCatalogForDevice: v.optional(runtimeProjectCatalogValidator),
     // Per-subsystem managed: true (Yaver-hosted) | false (user-hosted)
     // | null (unset → use legacy default). Clients send only the
@@ -704,6 +785,13 @@ export const set = internalMutation({
         args.defaultRuntimeTargetForDevice as RuntimeTargetPreferencePatch,
       );
     }
+    if (args.machineRolesForProject !== undefined) {
+      await assertMachineRolesOwned(ctx, args.userId, args.machineRolesForProject as MachineRolesPatch);
+      patch.machineRolesByProject = mergeMachineRoles(
+        existing?.machineRolesByProject as MachineRolesRow[] | undefined,
+        args.machineRolesForProject as MachineRolesPatch,
+      );
+    }
     if (args.runtimeProjectCatalogForDevice !== undefined) {
       patch.runtimeProjectCatalogByDevice = mergeRuntimeProjectCatalog(
         existing?.runtimeProjectCatalogByDevice as RuntimeProjectCatalogRow[] | undefined,
@@ -773,6 +861,7 @@ export const setByToken = mutation({
     opencodeConfigForDevice: v.optional(openCodeConfigSnapshotPatchValidator),
     defaultRuntimeProjectForDevice: v.optional(runtimeProjectPreferenceValidator),
     defaultRuntimeTargetForDevice: v.optional(runtimeTargetPreferenceValidator),
+    machineRolesForProject: v.optional(machineRolesValidator),
     runtimeProjectCatalogForDevice: v.optional(runtimeProjectCatalogValidator),
     managed: v.optional(managedPatchValidator),
     deployPreferences: v.optional(deployPreferencePatchValidator),
@@ -892,6 +981,13 @@ export const setByToken = mutation({
       patch.defaultRuntimeTargetByDevice = mergeRuntimeTargetPreference(
         existing?.defaultRuntimeTargetByDevice as RuntimeTargetPreferenceRow[] | undefined,
         args.defaultRuntimeTargetForDevice as RuntimeTargetPreferencePatch,
+      );
+    }
+    if (args.machineRolesForProject !== undefined) {
+      await assertMachineRolesOwned(ctx, userId, args.machineRolesForProject as MachineRolesPatch);
+      patch.machineRolesByProject = mergeMachineRoles(
+        existing?.machineRolesByProject as MachineRolesRow[] | undefined,
+        args.machineRolesForProject as MachineRolesPatch,
       );
     }
     if (args.runtimeProjectCatalogForDevice !== undefined) {

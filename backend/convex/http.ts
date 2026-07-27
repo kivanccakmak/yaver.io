@@ -4934,6 +4934,9 @@ http.route({
         // Saved render target per (device, project) — pairs with the default
         // project to auto-render the Vibing tab. Identity only, never URLs.
         defaultRuntimeTargetForDevice: body.defaultRuntimeTargetForDevice,
+        // Optional machine-role slicing: runner device vs render device per
+        // project (row without projectName = account favorite).
+        machineRolesForProject: body.machineRolesForProject,
         runtimeProjectCatalogForDevice: body.runtimeProjectCatalogForDevice,
         // Per-subsystem managed toggle. Client sends only the
         // subsystem(s) it's changing; backend merges the patch into
