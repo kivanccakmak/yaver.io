@@ -673,7 +673,15 @@ func runRemoteHeadlessRunnerAuthOverSSH(targetHint, runner string) error {
 	var remoteCmd string
 	switch runner {
 	case "claude":
-		remoteCmd = "claude auth login --console"
+		// --claudeai (Claude Pro/Max subscription OAuth), NEVER --console:
+		// the console flow mints an API-usage-billing token that 401s
+		// against subscription endpoints — the sign-in "succeeds" and every
+		// later task fails, which reads as a broken product. The HTTP
+		// browser-auth path (runner_auth_browser_http.go) was fixed to
+		// --claudeai for exactly this; the SSH fallback must match. Passed
+		// explicitly so a future claude release can't silently switch
+		// defaults.
+		remoteCmd = "claude auth login --claudeai"
 	case "codex":
 		remoteCmd = "codex login --device-auth"
 	default:

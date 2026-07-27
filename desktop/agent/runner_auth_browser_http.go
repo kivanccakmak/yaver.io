@@ -75,9 +75,9 @@ type runnerBrowserAuthSessionState struct {
 	cancel context.CancelFunc
 	// stdin is the spawned CLI's stdin pipe, captured at start time so
 	// the dashboard / mobile / Yaver mobile app can forward a pasted
-	// authentication code (`claude auth login --console` flow shows a
-	// URL, the user signs in on platform.claude.com, gets a long token,
-	// pastes it back). The token is forwarded once and discarded — it
+	// authentication code (the `claude auth login --claudeai` flow shows
+	// a URL, the user signs in on claude.ai, gets a long token, pastes
+	// it back). The token is forwarded once and discarded — it
 	// never lands in Convex, the bus, or any persistent log. Closing
 	// the writer signals EOF so a CLI that wraps a single-shot read
 	// terminates cleanly.
@@ -911,7 +911,7 @@ func (s *HTTPServer) handleRunnerBrowserAuthStatus(w http.ResponseWriter, r *htt
 // running CLI's stdin. Used by the Claude device-auth flow: the user
 // signs in on platform.claude.com, copies the long authentication code,
 // pastes it into the Yaver dashboard / mobile UI, and we feed it through
-// to `claude auth login --console` (which is blocked on its read).
+// to `claude auth login --claudeai` (which is blocked on its read).
 //
 // Privacy contract: the code is forwarded once to the spawned CLI's
 // stdin and immediately discarded. It is NEVER persisted, never logged,
