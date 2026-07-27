@@ -2942,9 +2942,44 @@ export class AgentClient {
     taskId: string,
     onLine: (line: string) => void,
     onEvent?: (event: { type: string; [k: string]: unknown }) => void,
+    opts?: {
+      /**
+       * Byte offset into the task's transcript this caller already holds.
+       * The agent replays only the remainder (`?since=`), so a reattach after
+       * a dropped stream neither duplicates the scrollback nor loses what
+       * arrived while we were away. Omit on a first subscribe.
+       */
+      since?: number;
+      /**
+       * How the stream ENDED. This used to be a bare `catch {}` commented
+       * "Silent best-effort stream; callers usually poll task status too" —
+       * but the poll goes over the SAME dead transport, so a relay bounce
+       * mid-render froze the vibing transcript with nothing to show for it.
+       * Classify with taskStreamRecovery.classifyStreamEnd.
+       */
+      onEnd?: (info: { sawDone: boolean; cancelled: boolean; error?: string }) => void;
+    },
   ): () => void {
     const controller = new AbortController();
-    const url = `${this.baseUrl}/tasks/${taskId}/output`;
+    const since = Number(opts?.since || 0);
+    const url =
+      since > 0
+        ? `${this.baseUrl}/tasks/${taskId}/output?since=${encodeURIComponent(String(Math.floor(since)))}`
+        : `${this.baseUrl}/tasks/${taskId}/output`;
+    let sawDone = false;
+    let cancelled = false;
+    let endReported = false;
+    // Exactly-once terminal report — a caller that reattaches on each call
+    // would otherwise open duplicate streams for one dead connection.
+    const reportStreamEnd = (error?: string) => {
+      if (endReported) return;
+      endReported = true;
+      try {
+        opts?.onEnd?.({ sawDone, cancelled, error });
+      } catch {
+        // a broken listener must not take the transport down
+      }
+    };
     (async () => {
       try {
         const res = await fetch(url, {
@@ -2953,7 +2988,10 @@ export class AgentClient {
           signal: controller.signal,
         });
         const reader = res.body?.getReader();
-        if (!reader) return;
+        if (!reader) {
+          reportStreamEnd(`stream did not open (HTTP ${res.status})`);
+          return;
+        }
         const decoder = new TextDecoder();
         let buf = "";
         while (true) {
@@ -2973,19 +3011,36 @@ export class AgentClient {
               const event = JSON.parse(dataLines.join("\n"));
               if (event?.type === "output" && event.text) {
                 onLine(String(event.text));
-              } else if (onEvent) {
-                onEvent(event);
+              } else {
+                // Record the terminal frame even when the caller passed no
+                // onEvent — it is what separates "the task finished" from
+                // "the stream died", and getting that wrong reattaches forever.
+                if (event?.type === "done") sawDone = true;
+                if (onEvent) onEvent(event);
               }
             } catch {
               // Ignore malformed frames.
             }
           }
         }
-      } catch {
-        // Silent best-effort stream; callers usually poll task status too.
+        // A clean EOF on a stream that should never close is what a severed
+        // relay tunnel looks like. Report it; `sawDone` is the only thing
+        // that makes it benign.
+        reportStreamEnd(sawDone ? undefined : "stream closed before the task finished");
+      } catch (error) {
+        reportStreamEnd(
+          cancelled
+            ? undefined
+            : error instanceof Error
+              ? error.message
+              : "stream connection failed",
+        );
       }
     })();
-    return () => controller.abort();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }
 
   /**

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { capStreamText } from "@/lib/streamBuffer";
+import { classifyStreamEnd, planStreamRecovery } from "@/lib/taskStreamRecovery";
 import { agentClient, isRunnerBrowserAuthTerminal, type AgentGraphRun, type ConnectionState, type GitCommitRow, type GitProviderStatusRow, type GitRemoteRepo, type GitStatusRow, type MachineInfo, type Runner, type Task } from "@/lib/agent-client";
 import { AGENT_AUTH_REMEDY, isAgentAuthErrorMessage } from "@/lib/agentAuthError";
 import { validateOpenCodeModel } from "@/lib/opencodeModel";
@@ -407,6 +408,17 @@ export default function VibeCodingView({
     targetDeviceName?: string;
   } | null>(null);
   const [streamedOutput, setStreamedOutput] = useState("");
+  // The live-output stream's health, rendered ABOVE the transcript. A stream
+  // that drops mid-render used to end in a bare `catch {}` — the transcript
+  // just stopped growing and the user could not tell a finished task from a
+  // severed relay tunnel. Now the drop is named, the reattach is narrated,
+  // and give-up hands over a button. See lib/taskStreamRecovery.ts.
+  const [streamHealth, setStreamHealth] = useState<{
+    kind: "reattaching" | "lost";
+    message: string;
+  } | null>(null);
+  // Bumping this re-runs the stream effect — the "Reattach" route.
+  const [streamReattachNonce, setStreamReattachNonce] = useState(0);
   const [sections, setSections] = useState<Record<SectionKey, SectionState>>(() => loadSectionState());
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [runnerAuthBusy, setRunnerAuthBusy] = useState(false);
@@ -647,10 +659,18 @@ export default function VibeCodingView({
     let cancelled = false;
     const refresh = async () => {
       try {
+        // `listTasks` FAILING and `listTasks` returning nothing are not the
+        // same fact, and conflating them cost the user their session: a single
+        // failed poll during a relay bounce used to resolve to [], which
+        // emptied taskList, nulled activeTask, wiped the live transcript and
+        // tore down the stream — silently, on a 4-second interval, while the
+        // task kept running on the box. `null` here means "we could not ask";
+        // the merge below then KEEPS what we already had (mobile's fetchTasks
+        // has always done this via its `catch {}`).
         const [projectRows, runnerRows, tasks, preview, currentDevStatus, git, commits, gitProviders, machineInventory] = await Promise.all([
           agentClient.listProjects().catch(() => []),
           agentClient.getRunners().catch(() => []),
-          agentClient.listTasks(12).catch(() => []),
+          agentClient.listTasks(12).catch(() => null),
           selectedProjectPath ? agentClient.deployPreview(selectedProjectPath).catch(() => null) : Promise.resolve(null),
           agentClient.getDevServerStatus().catch(() => null),
           selectedProjectPath ? agentClient.gitStatus(selectedProjectPath).catch(() => null) : Promise.resolve(null),
@@ -662,6 +682,9 @@ export default function VibeCodingView({
         setProjects(projectRows);
         setRunners((runnerRows || []).filter((runner) => runner.installed));
         setTaskList((prev) => {
+          // The poll could not reach the box — hold the last known list rather
+          // than rendering "no tasks" for "we don't know". See above.
+          if (tasks === null) return prev;
           const priorById = new Map(prev.map((task) => [task.id, task]));
           const pending = listPendingCloudDispatches().map(pendingCloudTaskPlaceholder);
           const merged = (tasks || []).map((task) => {
@@ -723,7 +746,7 @@ export default function VibeCodingView({
             installed[0];
           if (preferred) setSelectedRunner(preferred.id);
         }
-        if (!activeTaskId && tasks.length > 0) {
+        if (!activeTaskId && tasks && tasks.length > 0) {
           setActiveTaskId(tasks[0].id);
         }
       } catch (error) {
@@ -820,21 +843,84 @@ export default function VibeCodingView({
     };
   }, [runnerAuthSessionId]);
 
+  const activeStreamTaskId = activeTask?.id;
   useEffect(() => {
-    if (!activeTask) {
+    if (!activeStreamTaskId) {
       setStreamedOutput("");
+      setStreamHealth(null);
       return;
     }
-    setStreamedOutput(capStreamText(activeTask.output.join("\n")));
-    const stop = agentClient.streamTaskOutput(activeTask.id, (chunk) => {
-      // Cap HERE, at the write. The useMemo below only bounded the fallback
-      // branch, so while streaming — the one case that matters — the buffer
-      // grew without limit and every chunk re-stripped + re-parsed the whole
-      // transcript.
-      setStreamedOutput((prev) => capStreamText(prev + extractOutputText(chunk)));
-    });
-    return stop;
-  }, [activeTask?.id]);
+    setStreamedOutput(capStreamText((activeTask?.output || []).join("\n")));
+    setStreamHealth(null);
+
+    // Bytes of transcript this view has received from the STREAM (not the
+    // capped display buffer). It is the offset the agent resumes from, so a
+    // reattach replays only what we missed instead of the whole transcript.
+    let received = 0;
+    let attempt = 0;
+    let disposed = false;
+    let stop: (() => void) | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const subscribe = (since: number) => {
+      if (disposed) return;
+      stop = agentClient.streamTaskOutput(
+        activeStreamTaskId,
+        (chunk) => {
+          received += chunk.length;
+          // A successful chunk means the stream is alive again — clear any
+          // "reattaching" banner and reset the ladder for the next outage.
+          attempt = 0;
+          setStreamHealth(null);
+          // Cap HERE, at the write. The useMemo below only bounded the
+          // fallback branch, so while streaming — the one case that matters
+          // — the buffer grew without limit and every chunk re-stripped +
+          // re-parsed the whole transcript.
+          setStreamedOutput((prev) => capStreamText(prev + extractOutputText(chunk)));
+        },
+        (event) => {
+          // `resume.full` means the box's transcript is SHORTER than ours
+          // (task re-created / output reset), so what follows is a snapshot
+          // to REPLACE with, not an increment to append.
+          if (event?.type === "resume" && event.full === true) {
+            received = 0;
+            setStreamedOutput("");
+          }
+        },
+        {
+          since,
+          onEnd: (info) => {
+            if (disposed) return;
+            const plan = planStreamRecovery({
+              end: classifyStreamEnd(info),
+              attempt,
+              cause: info.error,
+            });
+            if (plan.action === "idle") {
+              setStreamHealth(null);
+              return;
+            }
+            if (plan.action === "give-up") {
+              setStreamHealth({ kind: "lost", message: plan.message });
+              return;
+            }
+            setStreamHealth({ kind: "reattaching", message: plan.message });
+            attempt += 1;
+            timer = setTimeout(() => subscribe(received), plan.delayMs);
+          },
+        },
+      );
+    };
+
+    subscribe(0);
+
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      stop?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeStreamTaskId, streamReattachNonce]);
 
   useEffect(() => {
     if (!token || !activeTask?.placementId) return;
@@ -2671,7 +2757,7 @@ export default function VibeCodingView({
             <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
               {activeGraphRunId ? (
                 <DeepAskGraphPanel run={graphRun} liveOutput={graphNodeOutput} />
-              ) : conversationTurns.length > 0 || showLiveOutput ? (
+              ) : conversationTurns.length > 0 || showLiveOutput || streamHealth ? (
                 <div className="space-y-4">
                   {activeFailureDiagnosis ? (
                     <div className="max-w-[92%] rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-rose-100">
@@ -2698,6 +2784,36 @@ export default function VibeCodingView({
                       <div className="text-[13px] leading-6 break-words [&_pre]:whitespace-pre-wrap">
                         <AssistantMarkdown text={liveOutput} />
                       </div>
+                    </div>
+                  ) : null}
+                  {/* A dropped output stream is now NAMED and routed instead of
+                      freezing the transcript on its last frame. `lost` carries
+                      the button; `reattaching` narrates the ladder so the wait
+                      is legible. */}
+                  {streamHealth ? (
+                    <div
+                      className={`max-w-[92%] rounded-2xl border px-4 py-3 text-[13px] leading-5 ${
+                        streamHealth.kind === "lost"
+                          ? "border-rose-500/25 bg-rose-500/10 text-rose-100"
+                          : "border-amber-500/25 bg-amber-500/10 text-amber-100"
+                      }`}
+                    >
+                      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] opacity-80">
+                        {streamHealth.kind === "lost" ? "Live output lost" : "Live output interrupted"}
+                      </div>
+                      <div>{streamHealth.message}</div>
+                      {streamHealth.kind === "lost" ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStreamHealth(null);
+                            setStreamReattachNonce((n) => n + 1);
+                          }}
+                          className="mt-2 rounded-lg border border-rose-400/40 px-3 py-1 text-[12px] font-semibold text-rose-100 hover:bg-rose-500/15"
+                        >
+                          Reattach
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>

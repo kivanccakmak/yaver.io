@@ -2703,6 +2703,24 @@ export class QuicClient {
     onData: (text: string) => void,
     onDone?: (status: string) => void,
     onEvent?: (event: { type: string; [k: string]: unknown }) => void,
+    opts?: {
+      /**
+       * Byte offset into the task's transcript this caller already holds.
+       * The agent replays only the remainder (`?since=`), so a reattach after
+       * a dropped stream neither duplicates the scrollback nor loses what
+       * arrived while we were away. Omit on a first subscribe.
+       */
+      since?: number;
+      /**
+       * How the stream ENDED. Previously this was `xhr.onerror = () => {}`
+       * with the comment "silent (matches the previous behavior)" — so a
+       * relay bounce or box drop mid-render stopped the transcript growing
+       * and NOTHING told the UI. The surface froze on the last frame with a
+       * spinner over a task that was still running. Classify with
+       * taskStreamRecovery.classifyStreamEnd.
+       */
+      onEnd?: (info: { sawDone: boolean; cancelled: boolean; error?: string }) => void;
+    },
   ): () => void {
     // XMLHttpRequest with onprogress instead of fetch().body.getReader()
     // because RN-iOS's fetch streams response bodies live (NSURLSession)
@@ -2712,10 +2730,27 @@ export class QuicClient {
     // claude-code "Hello" tasks on the Samsung tablet today. XHR's
     // onprogress callback fires as data arrives on both platforms.
     // Same workaround that settings.tsx already uses for `yaver logs -f`.
-    const url = `${this.baseUrl}/tasks/${taskId}/output`;
+    const since = Number(opts?.since || 0);
+    const url =
+      since > 0
+        ? `${this.baseUrl}/tasks/${taskId}/output?since=${encodeURIComponent(String(Math.floor(since)))}`
+        : `${this.baseUrl}/tasks/${taskId}/output`;
     const xhr = new XMLHttpRequest();
     let lastIndex = 0;
     let aborted = false;
+    let sawDone = false;
+    let endReported = false;
+    // Exactly-once terminal report. onerror and onloadend can both fire for
+    // one dead stream; a caller that reattaches on each would open two.
+    const reportStreamEnd = (error?: string) => {
+      if (endReported) return;
+      endReported = true;
+      try {
+        opts?.onEnd?.({ sawDone, cancelled: aborted, error });
+      } catch {
+        // a broken listener must not take the transport down
+      }
+    };
 
     // Highest-priority stream: the live output the user is watching. It
     // still counts against the per-host budget (an XHR draws from the same
@@ -2738,8 +2773,12 @@ export class QuicClient {
           const evt = JSON.parse(line.slice(6));
           if (evt.type === "output" && evt.text) {
             onData(evt.text);
-          } else if (evt.type === "done" && onDone) {
-            onDone(evt.status);
+          } else if (evt.type === "done") {
+            // Record the terminal frame even when the caller passed no
+            // onDone — it is what separates "the task finished" from
+            // "the stream died", and getting that wrong reattaches forever.
+            sawDone = true;
+            if (onDone) onDone(evt.status);
           } else if (onEvent) {
             onEvent(evt);
           }
@@ -2765,23 +2804,34 @@ export class QuicClient {
       flushBuffer(ready);
     };
     xhr.onerror = () => {
-      // network error or abort — silent (matches the previous behavior)
+      // NOT silent any more. This handler used to be empty; a relay bounce
+      // or a dropped tunnel therefore ended the user's live output with no
+      // signal to anyone, and the surface froze on the last frame.
       this.releaseStreamSlot(slot);
+      reportStreamEnd("stream connection failed");
     };
     xhr.onloadend = () => {
       // Free the per-host slot whether or not we were aborted — the stream
       // is done either way.
       this.releaseStreamSlot(slot);
-      if (aborted) return;
+      if (aborted) {
+        reportStreamEnd();
+        return;
+      }
       // Drain any trailing buffer that arrived without a terminating \n.
       const tail = (xhr.responseText || "").slice(lastIndex);
       if (tail) flushBuffer(tail);
+      // A clean EOF on a stream that should never close is what a severed
+      // relay tunnel looks like. Report it and let the caller's policy decide
+      // — `sawDone` is the only thing that makes it benign.
+      reportStreamEnd(sawDone ? undefined : "stream closed before the task finished");
     };
     try {
       xhr.send();
     } catch {
       // ignore — onerror will fire if the send itself was rejected
       this.releaseStreamSlot(slot);
+      reportStreamEnd("could not open the output stream");
     }
 
     return () => {

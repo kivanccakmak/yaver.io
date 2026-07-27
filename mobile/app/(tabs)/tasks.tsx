@@ -3,6 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { agentSignalFromTask, agentStateBg, agentStateColor } from "../../src/lib/agentStatus";
 import { clipUrl } from "../../src/lib/vibePreview";
 import { planFollowUp } from "../../src/lib/followUpPlan";
+import { classifyStreamEnd, planStreamRecovery } from "../../src/lib/taskStreamRecovery";
 import { isBundleLoaderAvailable } from "../../src/lib/bundleLoader";
 import { AuthenticatedVideoPlayer } from "../../src/components/AuthenticatedVideoPlayer";
 import {
@@ -2385,6 +2386,16 @@ export default function TasksScreen() {
 
   // SSE stream for the selected running task (full live terminal stream)
   const sseAbortRef = useRef<(() => void) | null>(null);
+  // Health of that stream, rendered above the composer. A stream that drops
+  // mid-render used to end in an EMPTY `xhr.onerror` handler — the transcript
+  // stopped growing and nothing told the user whether the task had finished,
+  // the box had died, or the relay had bounced. See lib/taskStreamRecovery.ts.
+  const [streamHealth, setStreamHealth] = useState<{
+    kind: "reattaching" | "lost";
+    message: string;
+  } | null>(null);
+  // Bumping this re-runs the stream effect — the "Reattach" route.
+  const [streamReattachNonce, setStreamReattachNonce] = useState(0);
   useEffect(() => {
     // Cleanup previous SSE
     if (sseAbortRef.current) {
@@ -2392,11 +2403,33 @@ export default function TasksScreen() {
       sseAbortRef.current = null;
     }
     if (!selectedTask || !taskStatusMeansRunnerIsCoding(selectedTask.status)) return;
-    if (!quicClient.isConnected) return;
+    if (!quicClient.isConnected) {
+      // An unreachable box is a legitimate reason to have no live stream —
+      // but it must not read as "the task went quiet". DeviceContext owns the
+      // reconnect narration; we only make sure we are not ALSO claiming health.
+      setStreamHealth(null);
+      return;
+    }
 
+    // Bytes of transcript received from the STREAM. This is the offset the
+    // agent resumes from (`?since=`), so a reattach after a dropped tunnel
+    // replays only what we missed instead of duplicating the scrollback.
+    let received = 0;
+    let attempt = 0;
+    let disposed = false;
+    let reattachTimer: ReturnType<typeof setTimeout> | undefined;
+    setStreamHealth(null);
+
+    const subscribe = (since: number) => {
+    if (disposed) return;
     const abort = quicClient.streamTaskOutput(
       selectedTask.id,
       (text) => {
+        received += text.length;
+        // Output is flowing again — drop any interruption banner and reset
+        // the ladder so the next outage gets a full set of attempts.
+        attempt = 0;
+        setStreamHealth(null);
         // Push SSE output into the same buffer system
         const lines = text.split("\n").filter(l => l);
         for (const line of lines) {
@@ -2427,6 +2460,19 @@ export default function TasksScreen() {
         // any device on the same account answers, and
         // agent_question_cancelled on timeout / task stop.
         if (!evt || typeof evt.type !== "string") return;
+        // `resume.full` means the box's transcript is SHORTER than ours
+        // (task re-created / output reset), so what follows is a snapshot
+        // to replace with rather than an increment to append.
+        if (evt.type === "resume") {
+          if (evt.full === true) {
+            received = 0;
+            const tid = selectedTask.id;
+            outputBufferRef.current[tid] = [];
+            setTasks((prev) => prev.map((t) => (t.id === tid ? { ...t, output: [] } : t)));
+            setSelectedTask((prev) => (prev?.id === tid ? { ...prev, output: [] } : prev));
+          }
+          return;
+        }
         // Structured shell-command events → fold into per-task card
         // models for the foldable Commands section. P2P only.
         if (isCommandEvent(evt)) {
@@ -2467,8 +2513,36 @@ export default function TasksScreen() {
           setAgentQuestion((cur) => (cur && (!qid || cur.id === qid) ? null : cur));
         }
       },
+      {
+        since,
+        onEnd: (info) => {
+          if (disposed) return;
+          // The transport used to end here in silence (`xhr.onerror` was an
+          // empty handler), so a relay bounce or a dropped tunnel simply
+          // stopped the transcript and the screen sat on its last frame.
+          const plan = planStreamRecovery({
+            end: classifyStreamEnd(info),
+            attempt,
+            cause: info.error,
+          });
+          if (plan.action === "idle") {
+            setStreamHealth(null);
+            return;
+          }
+          if (plan.action === "give-up") {
+            setStreamHealth({ kind: "lost", message: plan.message });
+            return;
+          }
+          setStreamHealth({ kind: "reattaching", message: plan.message });
+          attempt += 1;
+          reattachTimer = setTimeout(() => subscribe(received), plan.delayMs);
+        },
+      },
     );
     sseAbortRef.current = abort;
+    };
+
+    subscribe(0);
 
     // Late-join replay: if the agent already asked while no client
     // was subscribed, the SSE writer will replay on connect. But the
@@ -2495,9 +2569,12 @@ export default function TasksScreen() {
 
     return () => {
       cancelled = true;
-      abort();
+      disposed = true;
+      if (reattachTimer) clearTimeout(reattachTimer);
+      sseAbortRef.current?.();
+      sseAbortRef.current = null;
     };
-  }, [selectedTask?.id, selectedTask?.status]);
+  }, [selectedTask?.id, selectedTask?.status, streamReattachNonce]);
 
   useEffect(() => {
     if (!selectedTask || !taskStatusAllowsRuntimeRender(selectedTask.status)) return;
@@ -5978,6 +6055,55 @@ export default function TasksScreen() {
                     });
                   }}
                 />
+
+                {/* Live-output stream health. Before this, a stream cut
+                    mid-render (relay bounce, box drop, tunnel break) ended in
+                    an EMPTY error handler: the transcript simply stopped and
+                    the user could not tell a finished task from a severed
+                    connection. Now the drop is named, the reattach ladder is
+                    narrated, and give-up carries a Reattach button. The
+                    sentence deliberately states that the TASK is still
+                    running — the thing a frozen transcript makes people
+                    assume is dead. */}
+                {streamHealth ? (
+                  <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+                    <View
+                      style={{
+                        borderWidth: 1,
+                        borderRadius: 12,
+                        paddingHorizontal: 12,
+                        paddingVertical: 10,
+                        borderColor: streamHealth.kind === "lost" ? c.errorBorder : c.warnBorder,
+                        backgroundColor: streamHealth.kind === "lost" ? c.errorBg : c.warnBg,
+                      }}
+                    >
+                      <Text style={{ color: c.textPrimary, fontSize: 13, lineHeight: 18 }}>
+                        {streamHealth.message}
+                      </Text>
+                      {streamHealth.kind === "lost" ? (
+                        <Pressable
+                          onPress={() => {
+                            setStreamHealth(null);
+                            setStreamReattachNonce((n) => n + 1);
+                          }}
+                          style={{
+                            marginTop: 8,
+                            alignSelf: "flex-start",
+                            borderWidth: 1,
+                            borderColor: c.errorBorder,
+                            borderRadius: 8,
+                            paddingHorizontal: 12,
+                            paddingVertical: 6,
+                          }}
+                        >
+                          <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "600" }}>
+                            Reattach
+                          </Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  </View>
+                ) : null}
 
                 {/* Failed-task recovery: a one-tap path to switch the
                     runner/model and re-run. The header's plain "retry"
