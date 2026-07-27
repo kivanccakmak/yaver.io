@@ -341,7 +341,17 @@ func (s *HTTPServer) handleInfraServiceAction(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// handleInfraPower — GET returns the capability report (read-only dry run);
+// POST performs an action.
+//
+// GET is not a convenience: it is how a surface renders a power menu without
+// asking for permission to do anything. Before this, the only way to learn what
+// reboot meant on a box was to try it.
 func (s *HTTPServer) handleInfraPower(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, powerReportPayload())
+		return
+	}
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -354,27 +364,58 @@ func (s *HTTPServer) handleInfraPower(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
+	action := strings.TrimSpace(req.Action)
+	// Asking what is possible never requires confirming anything.
+	if action == "report" {
+		writeJSON(w, http.StatusOK, powerReportPayload())
+		return
+	}
 	if !req.Confirm {
 		jsonError(w, http.StatusBadRequest, "confirm=true required")
 		return
 	}
-	switch strings.TrimSpace(req.Action) {
+	switch action {
 	case "agent_shutdown":
-		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "action": req.Action})
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "action": action})
 		go func() {
 			if s.onShutdown != nil {
 				s.onShutdown()
 			}
 		}()
+	case "agent_restart":
+		facts := powerFactsNow()
+		if a, ok := PowerActionByID(facts, ActionAgentRestart); ok && !a.Available {
+			jsonError(w, http.StatusBadRequest, a.Reason+" "+a.Remedy)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ok": true, "action": action, "scope": string(ScopeAgent), "etaSeconds": 15,
+			"note": "The agent is restarting. The machine stays up; it should answer again within about 15s.",
+		})
+		scheduleAgentRestart()
 	case "host_reboot":
+		facts := powerFactsNow()
+		eta := rebootETALinuxSeconds
+		if a, ok := PowerActionByID(facts, ActionHostReboot); ok {
+			if !a.Available {
+				jsonError(w, http.StatusBadRequest, a.Reason+" "+a.Remedy)
+				return
+			}
+			eta = a.ETASeconds
+		}
 		command, err := infraHostReboot()
 		if err != nil {
 			jsonError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "action": req.Action, "command": command})
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ok": true, "action": action, "scope": string(ScopeMachine),
+			"command": command, "etaSeconds": eta,
+			"note": fmt.Sprintf("Rebooting. The machine will drop off the network and should answer again in about %s.",
+				humanizeRebootSeconds(eta)),
+		})
 	default:
-		jsonError(w, http.StatusBadRequest, "unsupported power action")
+		jsonError(w, http.StatusBadRequest, "unsupported power action — use report, host_reboot, agent_restart or agent_shutdown")
 	}
 }
 
@@ -452,6 +493,22 @@ func newMachineRemoveStreamProgress(s *HTTPServer, streamName string) machineRem
 }
 
 func infraHostReboot() (string, error) {
+	// Ask the capability report FIRST, and refuse if it says we cannot.
+	//
+	// This used to jump straight to the candidate ladder, which meant that
+	// inside a Docker container we would actually RUN `systemctl reboot` and
+	// report whatever it printed. On a container with systemd that can kill the
+	// container; on one without, it returns a confusing "System has not been
+	// booted with systemd" that reads like a broken agent. Neither outcome is a
+	// host reboot, and the user believed they were power-cycling a machine.
+	// The report knows the difference between "no permission" (fixable, and the
+	// remedy says how) and "no such thing from in here" (a container, WSL) —
+	// so let it speak instead of discovering it by executing.
+	facts := powerFactsNow()
+	if action, ok := PowerActionByID(facts, ActionHostReboot); ok && !action.Available {
+		return "", fmt.Errorf("%s %s", action.Reason, action.Remedy)
+	}
+
 	type candidate struct {
 		name string
 		args []string
@@ -475,8 +532,16 @@ func infraHostReboot() (string, error) {
 	}
 	var errs []string
 	for _, cand := range candidates {
-		cmd := exec.Command(cand.name, cand.args...)
+		// Bounded, always. `sudo` can sit waiting on a password prompt forever if
+		// the -n is ever dropped, and a reboot handler that hangs is a machine
+		// the user believes is rebooting while nothing is happening. WaitDelay
+		// matters as much as the context: killing the process does not free us
+		// while a grandchild still holds the output pipe.
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cmd := exec.CommandContext(ctx, cand.name, cand.args...)
+		cmd.WaitDelay = 5 * time.Second
 		out, err := cmd.CombinedOutput()
+		cancel()
 		if err == nil {
 			return strings.TrimSpace(strings.Join(append([]string{cand.name}, cand.args...), " ")), nil
 		}

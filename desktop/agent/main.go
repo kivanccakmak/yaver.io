@@ -825,6 +825,7 @@ Usage:
   yaver ping        Ping a device (direct or via relay)
   yaver stop        Stop the running agent
   yaver restart     Restart the agent
+  yaver reboot      Reboot a machine (--machine=<id>, --check to dry-run, --restart-agent for the safe option)
   yaver code        Terminal-first coding UX (interactive by default, mesh with --mesh)
   yaver claude|codex|opencode [args...] [--machine=<device>]  Run the agent's own TUI, local or remote (exact wrap, tmux-persistent)
   yaver attach      Interactive terminal — see tasks, type prompts (like Claude Code)

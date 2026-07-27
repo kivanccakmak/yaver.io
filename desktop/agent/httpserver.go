@@ -8144,10 +8144,16 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			Confirm bool   `json:"confirm"`
 		}
 		json.Unmarshal(call.Arguments, &args)
+		action := strings.TrimSpace(args.Action)
+		// Read-only dry run needs no confirmation — an AI agent must be able to
+		// ask what a machine can do without agreeing to do it.
+		if action == "report" || action == "" {
+			return mcpToolJSON(powerReportPayload())
+		}
 		if !args.Confirm {
 			return mcpToolError("confirm must be true")
 		}
-		switch strings.TrimSpace(args.Action) {
+		switch action {
 		case "agent_shutdown":
 			log.Printf("[MCP] Infra shutdown requested")
 			go func() {
@@ -8156,15 +8162,36 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 					s.onShutdown()
 				}
 			}()
-			return mcpToolJSON(map[string]interface{}{"ok": true, "action": args.Action})
+			return mcpToolJSON(map[string]interface{}{"ok": true, "action": action})
+		case "agent_restart":
+			facts := powerFactsNow()
+			if a, ok := PowerActionByID(facts, ActionAgentRestart); ok && !a.Available {
+				return mcpToolError(a.Reason + " " + a.Remedy)
+			}
+			log.Printf("[MCP] Infra agent restart requested")
+			scheduleAgentRestart()
+			return mcpToolJSON(map[string]interface{}{
+				"ok": true, "action": action, "scope": string(ScopeAgent), "etaSeconds": 15,
+			})
 		case "host_reboot":
+			facts := powerFactsNow()
+			eta := rebootETALinuxSeconds
+			if a, ok := PowerActionByID(facts, ActionHostReboot); ok {
+				if !a.Available {
+					return mcpToolError(a.Reason + " " + a.Remedy)
+				}
+				eta = a.ETASeconds
+			}
 			command, err := infraHostReboot()
 			if err != nil {
 				return mcpToolError(err.Error())
 			}
-			return mcpToolJSON(map[string]interface{}{"ok": true, "action": args.Action, "command": command})
+			return mcpToolJSON(map[string]interface{}{
+				"ok": true, "action": action, "scope": string(ScopeMachine),
+				"command": command, "etaSeconds": eta,
+			})
 		default:
-			return mcpToolError("unsupported power action")
+			return mcpToolError("unsupported power action — use report, host_reboot, agent_restart or agent_shutdown")
 		}
 
 	case "machine_remove":

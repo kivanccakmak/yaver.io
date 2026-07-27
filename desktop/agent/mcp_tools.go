@@ -1076,14 +1076,22 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			},
 		},
 		{
-			"name":        "infra_power",
-			"description": "Run a managed power action. Supports agent_shutdown and host_reboot. Requires confirm=true.",
+			"name": "infra_power",
+			"description": "Run a managed power action. ALWAYS call action=report first: it is a read-only dry run " +
+				"that says which power actions this machine can actually perform, what each would really do " +
+				"(a container 'reboot' is not a host reboot), the exact command, and the recovery ETA. " +
+				"report needs no confirm; host_reboot, agent_restart and agent_shutdown all require confirm=true.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
-				"required": []string{"action", "confirm"},
+				"required": []string{"action"},
 				"properties": map[string]interface{}{
-					"action":  map[string]interface{}{"type": "string", "description": "agent_shutdown or host_reboot"},
-					"confirm": map[string]interface{}{"type": "boolean", "description": "Must be true to confirm the power action"},
+					"action": map[string]interface{}{
+						"type": "string",
+						"enum": []string{"report", "host_reboot", "agent_restart", "agent_shutdown"},
+						"description": "report = read-only capability dry run. host_reboot = power-cycle the machine. " +
+							"agent_restart = restart just the Yaver agent, machine stays up. agent_shutdown = stop the agent.",
+					},
+					"confirm": map[string]interface{}{"type": "boolean", "description": "Must be true for every action except report"},
 				},
 			},
 		},
