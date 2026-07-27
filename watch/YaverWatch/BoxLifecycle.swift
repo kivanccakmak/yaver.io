@@ -78,7 +78,7 @@ enum WakePhase: String, CaseIterable, Identifiable {
         case .connecting: return "Connecting over the relay…"
         case .online:     return "Network connected — finishing up…"
         case .ready:      return "Ready"
-        case .needsAuth:  return "Sign this box in on your phone to finish"
+        case .needsAuth:  return "Signed out — `yaver auth` on the box, approve on your phone"
         }
     }
 
@@ -228,7 +228,13 @@ final class BoxLifecycle: ObservableObject {
             if probe.authExpired {
                 if Task.isCancelled { return }
                 setPhase(.needsAuth)
-                message = "Your box is awake but signed out. Open Yaver on your phone to sign it in."
+                // Name the ACTUAL action. "Open Yaver on your phone" was a
+                // dead end dressed as a step: the phone cannot sign a box in
+                // by itself — the box has to run `yaver auth`, and the phone's
+                // job is to approve the code it prints. A wrist cannot do
+                // either, and pretending otherwise wastes the one glance the
+                // user gives this screen.
+                message = "Awake but signed out. Run `yaver auth` on the box, then approve it in Yaver on your phone."
                 isWaking = false
                 return
             }
@@ -308,18 +314,30 @@ final class BoxLifecycle: ObservableObject {
                 return HealthProbe(answered: true, authExpired: false)
             }
             let ok = (obj["ok"] as? Bool) ?? true
-            // Either spelling counts: the flat flag, or the lifecycle block the
-            // newer agents publish.
+            // EVERY spelling counts. This list drifted: the watch understood
+            // only `authExpired` and `state == "yaver-auth-expired"`, while
+            // mobile (src/lib/deviceStatus.ts) and Wear OS
+            // (wear/…/BoxLifecycle.kt) also treat `needsAuth` and a
+            // `bootstrap` state/mode as signed out. A box that has never been
+            // paired reports bootstrap, not auth-expired — so on the watch, and
+            // ONLY on the watch, it marched through the ladder to "Ready" and
+            // told the user to speak a command at a box that could not accept
+            // one. That is a false green: the inventory answered, the operation
+            // could not.
             var expired = (obj["authExpired"] as? Bool) ?? false
+            if (obj["needsAuth"] as? Bool) == true { expired = true }
+            if let mode = obj["mode"] as? String, mode == "bootstrap" { expired = true }
             if let lifecycle = obj["lifecycle"] as? [String: Any] {
-                if let state = lifecycle["state"] as? String, state == "yaver-auth-expired" {
+                if let state = lifecycle["state"] as? String,
+                   state == "yaver-auth-expired" || state == "bootstrap" {
                     expired = true
                 }
                 if let usable = lifecycle["usable"] as? Bool, usable == false {
                     expired = true
                 }
             }
-            if let state = obj["lifecycleState"] as? String, state == "yaver-auth-expired" {
+            if let state = obj["lifecycleState"] as? String,
+               state == "yaver-auth-expired" || state == "bootstrap" {
                 expired = true
             }
             return HealthProbe(answered: ok, authExpired: expired)
