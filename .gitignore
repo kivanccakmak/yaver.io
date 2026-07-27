@@ -113,3 +113,9 @@ security/pentest/
 # readme-beautify skill install (npx skills add) — tooling, not product
 .agents/skills/
 skills-lock.json
+
+# session artifacts — never commit
+/pages.pdf
+/webrtc-proof/
+/e2e/.yaver/
+sdk/feedback/swift/.build/
