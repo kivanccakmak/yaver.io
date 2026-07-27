@@ -11,6 +11,7 @@ import { useDevice } from "../../src/context/DeviceContext";
 import { quicClient } from "../../src/lib/quic";
 import { isBundleLoaderAvailable, loadApp } from "../../src/lib/bundleLoader";
 import { openAppBus } from "../../src/lib/openAppBus";
+import { pressureBody, pressureRoute } from "../../src/lib/pressureNotice";
 import { typography } from "../../src/theme/tokens";
 import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
 
@@ -307,20 +308,21 @@ export default function TabLayout() {
       if (command === "storage_pressure") {
         const alerts: string[] = Array.isArray(data.alerts) ? data.alerts : [];
         if (!alerts.length) return;
-        const reclaimable =
-          typeof data.reclaimable === "string" && data.reclaimable !== "0 B"
-            ? `\n\n${data.reclaimable} of build caches can be reclaimed.`
-            : "";
+        // Spend the whole push (pressureNotice.ts). This used to read three of
+        // the agent's five facts: `usedPct`/`freeGb` — the only numbers that
+        // say HOW full — were dropped, and `deepLink` was overridden with a
+        // hardcoded push to the device LIST while the comment above promised
+        // the Storage panel.
         Alert.alert(
           `${data.hostname || "A box"} is running out of space`,
-          `${alerts.join("\n")}${reclaimable}`,
+          pressureBody(data),
           [
             { text: "Later", style: "cancel" },
             {
               text: "Review",
               onPress: () => {
                 try {
-                  router.push("/(tabs)/devices");
+                  router.push(pressureRoute(data.deepLink) as never);
                 } catch {
                   // older expo-router/no-navigator fallback — ignore.
                 }

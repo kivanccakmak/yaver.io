@@ -485,7 +485,10 @@ export function spokenForCarIntent(
     }
     case "storage_scan": {
       const root = (data?.filesystems || [])[0];
-      const freeGb = Number(root?.freeGb ?? root?.freeGB ?? 0);
+      // `freeGb` is the only spelling any producer emits (diskhealth.go:45).
+      // The `freeGB` fallback that used to sit here matched nothing and made
+      // the expression look defensive while covering a case that cannot occur.
+      const freeGb = Number(root?.freeGb ?? 0);
       const reclaimable = formatBytesForSpeech(data?.totalReclaimableBytes);
       const host = data?.hostname ? ` on ${data.hostname}` : "";
       const partial = data?.partial ? " That's a floor — the scan timed out." : "";
