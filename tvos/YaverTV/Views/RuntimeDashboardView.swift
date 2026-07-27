@@ -347,8 +347,13 @@ struct RuntimeDashboardView: View {
     }
 
     private func refresh() async {
-        guard let box = store.selectedBox, let client = store.client() else {
-            notice = "No runtime machine selected"
+        // Runner/render split: runners, runner auth and git auth live on the
+        // RUNNER box. runnerClient() falls back to the selected box when no
+        // split is configured, so single-box behavior is unchanged.
+        guard let box = store.selectedBox, let client = store.runnerClient() else {
+            notice = store.machineSplitActive
+                ? "Your AI machine needs the relay to be reachable from this TV."
+                : "No runtime machine selected"
             return
         }
         // Each verb catches on its own. A single do/catch around five chained
@@ -392,7 +397,7 @@ struct RuntimeDashboardView: View {
     }
 
     private func startRunnerAuth(_ runner: String, confirm: Bool = false) async {
-        guard let client = store.client() else {
+        guard let client = store.runnerClient() else {
             notice = "No runtime machine selected"
             return
         }
@@ -425,7 +430,7 @@ struct RuntimeDashboardView: View {
     }
 
     private func startGitAuth(_ provider: String) async {
-        guard let client = store.client() else {
+        guard let client = store.runnerClient() else {
             notice = "No runtime machine selected"
             return
         }
@@ -453,7 +458,7 @@ struct RuntimeDashboardView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 if Task.isCancelled { return }
-                guard let client = store.client() else { return }
+                guard let client = store.runnerClient() else { return }
                 do {
                     let result = try await client.runnerAuthStatus(sessionId: sessionId)
                     if let session = result.session {
@@ -504,7 +509,7 @@ struct RuntimeDashboardView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 if Task.isCancelled { return }
-                guard let client = store.client() else { return }
+                guard let client = store.runnerClient() else { return }
                 do {
                     let session = try await client.gitAuthStatus(sessionId: sessionId)
                     gitAuthSession = session

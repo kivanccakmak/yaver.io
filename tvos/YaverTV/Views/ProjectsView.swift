@@ -130,7 +130,14 @@ struct ProjectsView: View {
         loading = true
         error = nil
         do {
-            guard let client = store.client() else { throw AgentError(message: "No machine selected") }
+            // Projects come from the RUNNER box — the machine whose repo the
+            // AI edits. In a split, the selected box may be the render-only
+            // machine and its project list is not what a vibe turn will touch.
+            guard let client = store.runnerClient() else {
+                throw AgentError(message: store.machineSplitActive
+                    ? "Your AI machine needs the relay to be reachable from this TV."
+                    : "No machine selected")
+            }
             projects = try await client.listProjects()
         } catch {
             self.error = error.localizedDescription

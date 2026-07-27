@@ -132,7 +132,14 @@ struct ProjectSummary: Decodable, Identifiable {
     enum Kind { case android, web, flutter, unknown }
     var kind: Kind {
         switch (framework ?? "").lowercased() {
-        case "expo", "react-native", "reactnative", "rn": return .android
+        // RN/Expo takes the BROWSER lane, matching the agent's own default
+        // (defaultStreamingSurface: RN → browser): RN-Web in headless Chromium,
+        // sub-second HMR, no emulator — WebPreviewStreamView already boots the
+        // Expo web sibling. Routing RN to redroid meant the preview needed an
+        // Android container that usually wasn't running; redroid stays the
+        // lane for native Android projects.
+        case "expo", "react-native", "reactnative", "rn": return .web
+        case "kotlin", "android": return .android
         case "nextjs", "next", "vite", "react", "web", "remix", "astro", "svelte": return .web
         case "flutter": return .flutter
         default: return .unknown

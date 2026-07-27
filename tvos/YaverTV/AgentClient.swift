@@ -19,6 +19,10 @@ struct AgentError: Error, LocalizedError {
     /// transport, and the TV showed a spinner over a fact the agent had
     /// already stated. Same shape as the 2026-07-26 phone incident.
     var gap: CapabilityGap? = nil
+    /// Stable reason code from the agent's error body (`code` key —
+    /// reason_codes.go vocabulary, e.g. auth.session.scope_denied). Lets views
+    /// classify a refusal without regexing prose. nil on old agents.
+    var code: String? = nil
     var errorDescription: String? { message }
 }
 
@@ -580,7 +584,7 @@ actor AgentClient {
                     let gap = FailureSignals.capabilityGapFromData(data)
                     if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let err = obj["error"] as? String, !err.isEmpty {
-                        throw AgentError(message: err, gap: gap)
+                        throw AgentError(message: err, gap: gap, code: obj["code"] as? String)
                     }
                     if let gap {
                         throw AgentError(message: gap.summary, gap: gap)

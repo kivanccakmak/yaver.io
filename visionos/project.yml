@@ -36,6 +36,11 @@ targets:
       - path: ../tvos/YaverTV/OAuthSignIn.swift
       - path: ../tvos/YaverTV/Models.swift
       - path: ../tvos/YaverTV/AgentClient.swift
+      # Failure classification (capability gaps, scope denials, relay verdicts).
+      # AgentClient references FailureSignals, so leaving this out breaks the
+      # vision build the moment the tvOS client learns a new failure shape —
+      # which is exactly when the headset needs it most.
+      - path: ../tvos/YaverTV/FailureSignals.swift
       # Account machine list + reachable-address resolution. YaverStore's launch
       # auto-connect + connectivity self-heal (re-resolve a stale host) call into
       # MachineRegistry/RegisteredDevice, so the headset needs it too — without it

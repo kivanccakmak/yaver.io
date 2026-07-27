@@ -66,6 +66,73 @@ struct RelayLimitCard: Equatable, Sendable {
 
 enum FailureSignals {
 
+    // ── 0. Session scope denial ───────────────────────────────────────────
+
+    /// Wire code for "this session token's companion scope forbids this
+    /// endpoint" — reason_codes.go ReasonAuthSessionScopeDenied. A scope 403
+    /// is NEVER retryable from the TV: the allowlist lives in the agent, so
+    /// hitting one means the box runs an agent older than this app. The route
+    /// is an agent update, not a Try again.
+    static let sessionScopeDenied = "auth.session.scope_denied"
+
+    /// Code-first, with ONE prose shim for agents that predate the code
+    /// (they emit only "TV-scoped token cannot access this endpoint" —
+    /// httpserver.go companionScopeDeniedMessage). The shim lives here and
+    /// nowhere else; do not copy the string into a view.
+    static func isSessionScopeDenied(_ error: Error) -> Bool {
+        if let agentError = error as? AgentError {
+            if agentError.code == sessionScopeDenied { return true }
+            if agentError.message.contains("scoped token cannot access this endpoint") { return true }
+        }
+        return false
+    }
+
+    /// The sentence + route for a scope denial, in TV words.
+    static func explainSessionScopeDenied() -> String {
+        "The agent on this box is older than this TV app, so it refuses the preview endpoints. Update the agent and this screen will work."
+    }
+
+    // ── 0b. Runner/render target probe failures ───────────────────────────
+
+    /// Mirror of web/lib/runtimeTargetProbeFailure.ts — the SAME policy, keyed
+    /// off the same relay reason codes, so the TV and the dashboard route a
+    /// dead render leg identically. Port the policy, never the regexes-of-the-
+    /// day: if a new relay verdict appears, it gets a code in the agent and a
+    /// row here AND there in one change.
+    enum TargetProbeKind: String, Sendable {
+        case relayPresence = "relay-presence"
+        case relayRoute = "relay-route"
+        case other
+    }
+
+    struct TargetProbePlan: Equatable, Sendable {
+        let kind: TargetProbeKind
+        let retry: Bool
+        let useRunnerFallback: Bool
+        let showFixWithRunner: Bool
+    }
+
+    static let relayDeviceNotConnectedCode = "relay.device_not_connected"
+    static let relayDeviceNotConnectedReason = "connectivity.relay.device_not_connected"
+
+    static func classifyTargetProbeFailure(_ error: String?) -> TargetProbePlan {
+        let lower = (error ?? "").lowercased()
+        if lower.contains(relayDeviceNotConnectedCode)
+            || lower.contains(relayDeviceNotConnectedReason)
+            || lower.contains("device not connected to relay") {
+            return TargetProbePlan(kind: .relayPresence, retry: true, useRunnerFallback: true, showFixWithRunner: false)
+        }
+        if lower.contains("only reachable over a relay") {
+            return TargetProbePlan(kind: .relayRoute, retry: true, useRunnerFallback: true, showFixWithRunner: false)
+        }
+        if lower.contains("render_unreachable")
+            || (lower.contains("render machine") && lower.contains("not reachable"))
+            || (lower.contains("runner/render split") && lower.contains("not reachable")) {
+            return TargetProbePlan(kind: .relayPresence, retry: true, useRunnerFallback: true, showFixWithRunner: false)
+        }
+        return TargetProbePlan(kind: .other, retry: false, useRunnerFallback: false, showFixWithRunner: true)
+    }
+
     // ── 1. Capability gap ─────────────────────────────────────────────────
 
     /// The wire code for a missing toolchain. Mirrors

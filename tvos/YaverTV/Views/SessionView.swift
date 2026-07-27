@@ -364,7 +364,9 @@ struct SessionView: View {
     /// One session → drive it. Several → make the user pick (the agent refuses to
     /// guess, and it is right to). None → say so, with the command that fixes it.
     private func loadSessions() async {
-        guard let box = store.selectedBox, let agent = store.client() else { return }
+        // Runner PTYs live on the RUNNER box — in a split, store.client()
+        // (the selected box) may be the render machine, which has no runners.
+        guard let box = store.selectedBox, let agent = store.runnerClient() else { return }
         loading = true
         defer { loading = false }
         do {

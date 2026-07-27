@@ -29,6 +29,11 @@ struct WebPreviewStreamView: View {
     @State private var fixStartedAt: Date?
     @State private var fixTask: Task<Void, Never>?
     @State private var fixTicker = Date()
+    /// auth.session.scope_denied from the box: not retryable, route to update.
+    @State private var scopeDenied = false
+    /// Set when the render-leg preflight failed and the preview is being
+    /// served by the RUNNER box instead. Start and stop must hit the same box.
+    @State private var fellBackToRunner = false
     // Reattach bookkeeping for the /dev/events log stream.
     @State private var reattachAttempt = 0
     @State private var streamNotice: String?
@@ -49,6 +54,16 @@ struct WebPreviewStreamView: View {
                 // agent that had already said `flutter: executable file not
                 // found in $PATH`.
                 gapPanel(gap)
+            } else if scopeDenied {
+                // Deterministic 403: the box's agent predates the TV scope
+                // rows. Retrying cannot help; updating the agent is the route.
+                VStack(spacing: 16) {
+                    Image(systemName: "arrow.down.circle.dotted").font(.system(size: 56)).foregroundStyle(.orange)
+                    Text("This box needs an agent update").font(.title2)
+                    Text(FailureSignals.explainSessionScopeDenied())
+                        .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 720)
+                    NavigationLink("Update the agent") { UpdateAgentView() }
+                }
             } else if let error {
                 VStack(spacing: 16) {
                     Image(systemName: "globe.badge.chevron.backward").font(.system(size: 56)).foregroundStyle(.secondary)
@@ -96,6 +111,11 @@ struct WebPreviewStreamView: View {
                 }
                 .padding(32)
                 Spacer()
+                // The vibe loop lives ON the preview: prompt → runner turn →
+                // HMR lands in the frame stream that never stopped polling.
+                VibeTurnPanel(projectName: project.name)
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, logLines.isEmpty ? 30 : 8)
                 if !logLines.isEmpty {
                     logPanel
                         .padding(.horizontal, 32)
@@ -109,7 +129,14 @@ struct WebPreviewStreamView: View {
             pollTask?.cancel()
             logTask?.cancel()
             fixTask?.cancel()
-            Task { await store.client()?.stopWebPreview(project: project.name) }
+            // Role parity: stop the preview on the SAME box that served it —
+            // the render box normally, the runner box when the preflight fell
+            // back. Stop-on-a-different-box orphans a dev server.
+            let stopOnRunner = fellBackToRunner
+            Task {
+                let client = stopOnRunner ? store.runnerClient() : store.renderClient()
+                await client?.stopWebPreview(project: project.name)
+            }
         }
     }
 
@@ -181,8 +208,16 @@ struct WebPreviewStreamView: View {
         appendLog("POST \(gap.fix?.path ?? "/install/\(tool)") …")
         fixTask?.cancel()
         fixTask = Task {
-            guard let client = store.client() else {
-                await MainActor.run { fixing = false; error = "No machine selected" }
+            // The gap came from the box that served /dev/start — the install
+            // must land on the SAME box, or the fix "succeeds" somewhere the
+            // preview never runs.
+            guard let client = fellBackToRunner ? store.runnerClient() : store.renderClient() else {
+                await MainActor.run {
+                    fixing = false
+                    error = store.machineSplitActive
+                        ? "Your render machine needs the relay to be reachable from this TV."
+                        : "No machine selected"
+                }
                 return
             }
             let started: AgentClient.InstallStarted
@@ -242,6 +277,8 @@ struct WebPreviewStreamView: View {
     private func restart() {
         error = nil
         gap = nil
+        scopeDenied = false
+        fellBackToRunner = false
         streamNotice = nil
         reattachAttempt = 0
         started = true
@@ -255,11 +292,31 @@ struct WebPreviewStreamView: View {
 
     private func run() async {
         // Runner/render split: previews build + stream from the RENDER box.
-        guard let client = store.renderClient() else {
+        guard var client = store.renderClient() else {
             error = store.machineSplitActive
                 ? "Your render machine needs the relay to be reachable from this TV."
                 : "No machine selected"
             return
+        }
+        // Preflight the render leg BEFORE wiring streams — same policy as the
+        // web Route editor's per-role Test connection. A render box that fell
+        // off the relay must name itself and fall back to the AI machine, not
+        // discover itself as a stuck spinner three requests in.
+        if store.machineSplitActive {
+            do {
+                _ = try await client.info()
+            } catch {
+                let plan = FailureSignals.classifyTargetProbeFailure(error.localizedDescription)
+                if plan.useRunnerFallback, let runner = store.runnerClient() {
+                    fellBackToRunner = true
+                    streamNotice = "Render box isn't reachable right now (\(plan.kind.rawValue)) — previewing on your AI machine instead."
+                    appendLog("render leg probe failed: \(error.localizedDescription)")
+                    client = runner
+                } else {
+                    self.error = "Your render machine didn't answer: \(error.localizedDescription)"
+                    return
+                }
+            }
         }
         startLogStream(client)
         do {
@@ -273,6 +330,10 @@ struct WebPreviewStreamView: View {
                                               width: form.width, height: form.height)
             await poll(client)
         } catch let agentError as AgentError {
+            if FailureSignals.isSessionScopeDenied(agentError) {
+                scopeDenied = true
+                return
+            }
             // The 412 refusal carries the route; keep the sentence too, so a
             // gap-less failure still reads exactly as it always did.
             if let carried = agentError.gap {
@@ -357,10 +418,18 @@ struct WebPreviewStreamView: View {
                     if let img = UIImage(data: data) { frame = img; lastHash = hash; error = nil; misses = 0 }
                 }
             } catch {
+                if FailureSignals.isSessionScopeDenied(error) {
+                    scopeDenied = true
+                    frame = nil
+                    return
+                }
                 misses += 1
                 if misses >= 4 && frame == nil { self.error = error.localizedDescription }
             }
-            try? await Task.sleep(nanoseconds: 700_000_000)
+            // 300 ms: the snapshot answer is a tiny hash-only JSON unless the
+            // frame actually changed, so polling faster costs almost nothing
+            // and roughly halves perceived HMR latency vs the old 700 ms.
+            try? await Task.sleep(nanoseconds: 300_000_000)
         }
     }
 
@@ -409,7 +478,9 @@ struct WebPreviewStreamView: View {
     }
 
     private func rebuild() async {
-        guard let client = store.client() else { return }
+        // Reload the dev server where it runs — the render box, or the runner
+        // box when the preflight fell back there.
+        guard let client = fellBackToRunner ? store.runnerClient() : store.renderClient() else { return }
         rebuilding = true
         defer { rebuilding = false }
         do {

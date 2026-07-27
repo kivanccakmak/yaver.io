@@ -17,6 +17,9 @@ struct DroidStreamView: View {
 
     @State private var frame: UIImage?
     @State private var error: String?
+    /// True when the agent refused with auth.session.scope_denied — a
+    /// deterministic 403 that no retry can clear. Renders the update route.
+    @State private var scopeDenied = false
     @State private var pollTask: Task<Void, Never>?
     @State private var lastFrameAt: Date?
 
@@ -29,6 +32,17 @@ struct DroidStreamView: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .padding(24)
+            } else if scopeDenied {
+                // A scope 403 is deterministic — a Try again would 403 forever
+                // (watched happen live 2026-07-27). Name the cause, offer the
+                // one route that fixes it.
+                VStack(spacing: 16) {
+                    Image(systemName: "arrow.down.circle.dotted").font(.system(size: 56)).foregroundStyle(.orange)
+                    Text("This box needs an agent update").font(.title2)
+                    Text(FailureSignals.explainSessionScopeDenied())
+                        .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 720)
+                    NavigationLink("Update the agent") { UpdateAgentView() }
+                }
             } else if let error {
                 VStack(spacing: 16) {
                     Image(systemName: "iphone.slash").font(.system(size: 56)).foregroundStyle(.secondary)
@@ -54,6 +68,11 @@ struct DroidStreamView: View {
                     }
                     .padding(32)
                     Spacer()
+                    // Same vibe loop as the browser lane: prompt from the
+                    // couch, watch the Android screen pick up the change.
+                    VibeTurnPanel(projectName: "the app on screen")
+                        .padding(.horizontal, 32)
+                        .padding(.bottom, 30)
                 }
             }
         }
@@ -63,6 +82,7 @@ struct DroidStreamView: View {
 
     private func start() {
         error = nil
+        scopeDenied = false
         pollTask?.cancel()
         pollTask = Task { await poll() }
     }
@@ -86,6 +106,14 @@ struct DroidStreamView: View {
                     consecutiveFailures = 0
                 }
             } catch {
+                // Scope denial is deterministic — stop polling on the FIRST
+                // one instead of burning the 3-strike ladder on a verdict that
+                // cannot change.
+                if FailureSignals.isSessionScopeDenied(error) {
+                    scopeDenied = true
+                    frame = nil
+                    return
+                }
                 consecutiveFailures += 1
                 // Only surface the error once we've lost the stream (not on a
                 // single dropped frame) — and only clear the image if there was
