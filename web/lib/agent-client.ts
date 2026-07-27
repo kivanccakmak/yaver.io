@@ -58,6 +58,18 @@ export interface ConversationTurn {
   timestamp: string;
 }
 
+/** Wire shape for POST /screen-context. Mirrors the Go `ScreenContext`
+ *  (desktop/agent/screen_context.go), which re-clamps every field on receipt. */
+export interface ScreenContextReport {
+  workDir: string;
+  route?: string;
+  title?: string;
+  heading?: string;
+  controls?: string[];
+  component?: string;
+  lane?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -1902,6 +1914,46 @@ export class AgentClient {
     }
     this.reconnectAttempt = 0;
     this.attemptConnect().catch(() => {});
+  }
+
+  // ── Screen context ─────────────────────────────────────────────────
+  //
+  // Forwarding half of "the agent knows which screen you're looking at". The
+  // probe the agent injects into the preview posts its observation to this
+  // window (it cannot call the agent itself — the /dev/ preview route is
+  // unauthenticated by design); we relay it over the session's own authed
+  // channel. See web/lib/screenContext.ts and desktop/agent/screen_context.go.
+
+  /** Report the screen currently rendered in the preview for `workDir`. */
+  async reportScreenContext(ctx: ScreenContextReport): Promise<void> {
+    if (!this.isConnected || !ctx.workDir) return;
+    // Deliberately swallow failures. This is advisory context: it must never
+    // sit in the critical path of the prompt the user is trying to send, and a
+    // toast about a failed screen report would be pure noise.
+    try {
+      await fetch(`${this.baseUrl}/screen-context`, {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify(ctx),
+      });
+    } catch {
+      /* advisory only */
+    }
+  }
+
+  /** Drop what we already reported. Called when the user opts out or the
+   *  preview closes, so "off" means the agent is not holding their screen —
+   *  not that it holds it and promises not to look. */
+  async clearScreenContext(workDir: string): Promise<void> {
+    if (!this.isConnected || !workDir) return;
+    try {
+      await fetch(`${this.baseUrl}/screen-context?workDir=${encodeURIComponent(workDir)}`, {
+        method: "DELETE",
+        headers: { ...this.authHeaders },
+      });
+    } catch {
+      /* advisory only */
+    }
   }
 
   // ── Task API ───────────────────────────────────────────────────────

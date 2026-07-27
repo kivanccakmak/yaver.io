@@ -11,6 +11,7 @@ import { validateOpenCodeModel } from "@/lib/opencodeModel";
 import type { Device } from "@/lib/use-devices";
 import { useAuth } from "@/lib/use-auth";
 import { detectAskBreadth, detectAskIntent } from "@/lib/ask-intent";
+import { ScreenContextChip } from "@/components/dashboard/ScreenContextChip";
 import {
   activationBlockReason,
   activateTaskPlacement,
@@ -2825,6 +2826,11 @@ export default function VibeCodingView({
             </div>
 
             <div className="border-t border-surface-800 bg-surface-900/70 p-4">
+              {/* Screen context: names the preview screen that will be attached to
+                  this prompt, and lets the user switch it off. Sits directly above
+                  the composer because a prompt modifier the user cannot see while
+                  typing is a silent mutation. */}
+              <ScreenContextChip agentClient={agentClient} workDir={selectedProjectPath} className="mb-3" />
               <input
                 value={draftTitle}
                 onChange={(event) => setDraftTitle(event.target.value)}
