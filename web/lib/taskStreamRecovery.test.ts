@@ -110,6 +110,20 @@ test("BOTH transports report stream end instead of swallowing it", () => {
   }
 });
 
+test("/dev/events reattaches instead of freezing the log tail", () => {
+  // subscribeDevEvents used to wire only `onClose` and drop `onError` on the
+  // floor, with no reattach at all. A relay bounce or an evicted stream slot
+  // mid-compile then froze the Metro/Flutter tail on its last line — which is
+  // indistinguishable from a compile that simply went quiet.
+  const src = readFileSync(join(repoRoot, "mobile/src/lib/quic.ts"), "utf8");
+  const start = src.indexOf("subscribeDevEvents(");
+  assert.ok(start > 0, "subscribeDevEvents disappeared — update this guard");
+  const body = src.slice(start, start + 4000);
+  assert.match(body, /onError:/, "subscribeDevEvents must observe stream errors");
+  assert.match(body, /onStreamHealth/, "a dropped dev-events stream must be reportable to the UI");
+  assert.match(body, /reattachDelayMs/, "a dropped dev-events stream must reattach on a bounded ladder");
+});
+
 test("the agent's resume contract exists and is documented", () => {
   // Client-side reattach is only lossless because the agent honors ?since=.
   // If that goes away, reattaching starts duplicating transcripts again.

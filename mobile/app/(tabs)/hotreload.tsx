@@ -297,6 +297,10 @@ export default function HotReloadScreen() {
   // so a chatty Metro bundle doesn't blow up state; the card shows
   // the last ~6. Cleared when a new dev server starts.
   const [devLog, setDevLog] = useState<string[]>([]);
+  // Health of the /dev/events stream that FEEDS devLog. A dropped stream and a
+  // silent compile produce the same frozen tail; only this line tells them
+  // apart. Null when the stream is healthy.
+  const [devLogStreamHealth, setDevLogStreamHealth] = useState<string | null>(null);
   const [reloadIncidents, setReloadIncidents] = useState<IncidentEvent[]>([]);
   const [reloadOperations, setReloadOperations] = useState<OperationState[]>([]);
   const [showRemoteBoxPicker, setShowRemoteBoxPicker] = useState(false);
@@ -525,21 +529,29 @@ export default function HotReloadScreen() {
   useEffect(() => {
     if (!isConnected) return;
     setDevLog([]);
-    const unsub = quicClient.subscribeDevEvents((ev) => {
-      if (ev.type === "log" && ev.logLine) {
-        setDevLog((prev) => {
-          const next = [...prev, String(ev.logLine)];
-          return next.length > 40 ? next.slice(next.length - 40) : next;
-        });
-      } else if (ev.type === "ready" || ev.type === "stopped") {
-        setDevLog([]);
-      } else if (ev.type === "error" && ev.message) {
-        setDevLog((prev) => {
-          const next = [...prev, `[error] ${ev.message}`];
-          return next.length > 40 ? next.slice(next.length - 40) : next;
-        });
-      }
-    });
+    const unsub = quicClient.subscribeDevEvents(
+      (ev) => {
+        if (ev.type === "log" && ev.logLine) {
+          setDevLog((prev) => {
+            const next = [...prev, String(ev.logLine)];
+            return next.length > 40 ? next.slice(next.length - 40) : next;
+          });
+        } else if (ev.type === "ready" || ev.type === "stopped") {
+          setDevLog([]);
+        } else if (ev.type === "error" && ev.message) {
+          setDevLog((prev) => {
+            const next = [...prev, `[error] ${ev.message}`];
+            return next.length > 40 ? next.slice(next.length - 40) : next;
+          });
+        }
+      },
+      {
+        // A frozen log tail used to be indistinguishable from a compile that
+        // went quiet. Say which one it is, in the log itself, where the user
+        // is already looking.
+        onStreamHealth: (health) => setDevLogStreamHealth(health?.message ?? null),
+      },
+    );
     return () => unsub();
   }, [isConnected, activeDevice?.id]);
 
@@ -1237,7 +1249,7 @@ export default function HotReloadScreen() {
             {/* Live agent activity: Metro/Expo/Flutter stdout streamed over /dev/events SSE.
                 Shows the last ~6 lines so the user sees progress during "starting…" and
                 the actual log tail on failure. */}
-            {devLog.length > 0 ? (
+            {devLog.length > 0 || devLogStreamHealth ? (
               <View style={[s.insetCard, { backgroundColor: c.bgInput, borderColor: c.borderSubtle }]}>
                 <Text style={[s.insetLabel, { color: c.textSecondary }]}>
                   agent activity
@@ -1251,6 +1263,13 @@ export default function HotReloadScreen() {
                     {line}
                   </Text>
                 ))}
+                {/* Without this, a log tail frozen by a DROPPED STREAM looks
+                    exactly like a compile that stopped producing output. */}
+                {devLogStreamHealth ? (
+                  <Text style={{ color: c.warn, fontSize: 11, marginTop: 6 }}>
+                    {devLogStreamHealth}
+                  </Text>
+                ) : null}
               </View>
             ) : null}
             <View style={[s.cardActions, layout.isTablet ? s.cardActionsTablet : null]}>

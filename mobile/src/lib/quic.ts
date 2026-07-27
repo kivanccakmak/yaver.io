@@ -30,6 +30,14 @@ import { cacheTaskList, cacheTaskOutput, getCachedTaskList, getDeletedTaskIds } 
 // loads AsyncStorage, so importing it here is import-safe.
 import { appLog } from "./logger";
 import { describeDirectProbeFailure, isUnroutableFailure } from "./directProbeFailure";
+import { reattachDelayMs } from "./taskStreamRecovery";
+
+/**
+ * Reattach budget for /dev/events. Same shape as the task-output ladder
+ * (taskStreamRecovery.ts) — a long-lived stream that closes without being
+ * asked has dropped, and must come back on its own or say that it could not.
+ */
+const DEV_EVENTS_MAX_REATTACH = 5;
 import {
   isKnownUnroutable,
   observedTailnetUp,
@@ -2273,23 +2281,85 @@ export class QuicClient {
    * events. The caller is expected to keep only the tail (e.g. last
    * 100 lines) — this helper does no buffering.
    */
-  subscribeDevEvents(onEvent: (ev: { type: string; framework?: string; logLine?: string; message?: string; bundleUrl?: string; deepLink?: string; timestamp?: string }) => void): () => void {
+  subscribeDevEvents(
+    onEvent: (ev: { type: string; framework?: string; logLine?: string; message?: string; bundleUrl?: string; deepLink?: string; timestamp?: string }) => void,
+    opts?: {
+      /**
+       * Health of the stream itself, so a surface can say "the log stopped"
+       * instead of implying the BUILD stopped. `null` means healthy again.
+       *
+       * This stream used to drop `onError` on the floor entirely (only
+       * `onClose` was wired), so a relay bounce or an evicted stream slot
+       * mid-compile silently froze the Metro/Flutter log tail on its last
+       * line — indistinguishable from a compile that simply went quiet.
+       */
+      onStreamHealth?: (health: { kind: "reattaching" | "lost"; message: string } | null) => void;
+    },
+  ): () => void {
     if (!this.isConnected) return () => {};
     let sub: { close(): void } | null = null;
-    // Lowest-priority stream — first to be evicted when the host is busy.
+    let disposed = false;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let lastError: string | undefined;
+    // Lowest-priority stream — first to be evicted when the host is busy,
+    // which is exactly why it needs to come BACK on its own.
     const slot = this.acquireStreamSlot(STREAM_PRIORITY.devEvents, "dev/events", () => sub?.close());
-    // XHR-based SSE (src/lib/sseClient.ts), NOT fetch().body.getReader():
-    // React Native exposes no streaming response body, so `res.body` is undefined
-    // and the old implementation returned immediately without reading a byte.
-    // Same defect fixed in app/(tabs)/apps.tsx and src/components/DevPreview.tsx —
-    // this was the third copy. One implementation now, for all three.
-    sub = subscribeSse({
-      url: `${this.baseUrl}/dev/events`,
-      headers: { ...this.authHeaders },
-      onEvent: (event: any) => onEvent(event),
-      onClose: () => this.releaseStreamSlot(slot),
-    });
+
+    const open = () => {
+      if (disposed) return;
+      lastError = undefined;
+      // XHR-based SSE (src/lib/sseClient.ts), NOT fetch().body.getReader():
+      // React Native exposes no streaming response body, so `res.body` is undefined
+      // and the old implementation returned immediately without reading a byte.
+      // Same defect fixed in app/(tabs)/apps.tsx and src/components/DevPreview.tsx —
+      // this was the third copy. One implementation now, for all three.
+      sub = subscribeSse({
+        url: `${this.baseUrl}/dev/events`,
+        headers: { ...this.authHeaders },
+        onEvent: (event: any) => {
+          // Frames are flowing — the stream is healthy and the ladder resets.
+          attempt = 0;
+          opts?.onStreamHealth?.(null);
+          onEvent(event);
+        },
+        onError: (reason: string) => {
+          lastError = reason;
+        },
+        onClose: () => {
+          if (disposed) return;
+          // The dev-events stream is long-lived by construction: the agent
+          // holds it open for the life of the dev server. Any close we did
+          // not ask for is a drop, whether or not onError also fired.
+          if (attempt >= DEV_EVENTS_MAX_REATTACH) {
+            this.releaseStreamSlot(slot);
+            opts?.onStreamHealth?.({
+              kind: "lost",
+              message:
+                "Dev server log stream stopped and could not be picked back up" +
+                (lastError ? ` (${lastError})` : "") +
+                ". The dev server itself may still be running — reopen this screen to retry.",
+            });
+            return;
+          }
+          const delayMs = reattachDelayMs(attempt);
+          opts?.onStreamHealth?.({
+            kind: "reattaching",
+            message:
+              `Dev server log stream interrupted — reconnecting (${attempt + 1} of ${DEV_EVENTS_MAX_REATTACH})…` +
+              (lastError ? ` (${lastError})` : ""),
+          });
+          attempt += 1;
+          timer = setTimeout(open, delayMs);
+        },
+      });
+    };
+
+    open();
+
     return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
       this.releaseStreamSlot(slot);
       sub?.close();
     };
