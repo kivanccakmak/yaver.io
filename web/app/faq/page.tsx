@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { HIDE_PAID_UI } from "@/lib/launchFlags";
 
 const faqs = [
   {
@@ -38,7 +39,9 @@ const faqs = [
     items: [
       {
         q: "Do I need a relay server?",
-        a: "Only if your phone and dev machine aren't on the same network. On the same WiFi, Yaver finds your machine automatically via LAN broadcast. For remote access, start with Yaver's free shared relay. Relay Pro gives you a private managed relay and higher limits.",
+        a: HIDE_PAID_UI
+          ? "Only if your phone and dev machine aren't on the same network. On the same WiFi, Yaver finds your machine automatically via LAN broadcast. For remote access, use Yaver's free shared relay — or self-host your own relay from the open-source repo."
+          : "Only if your phone and dev machine aren't on the same network. On the same WiFi, Yaver finds your machine automatically via LAN broadcast. For remote access, start with Yaver's free shared relay. Relay Pro gives you a private managed relay and higher limits.",
       },
       {
         q: "Can I use Yaver with a VPN?",
@@ -55,7 +58,9 @@ const faqs = [
     items: [
       {
         q: "Which relay should I use?",
-        a: "Start with Free Relay for light personal use. Upgrade to Relay Pro when Yaver becomes part of daily work and you need private managed capacity with higher limits.",
+        a: HIDE_PAID_UI
+          ? "The free shared relay covers personal use. If you need dedicated capacity, the relay is open source — run your own with `yaver relay serve` on any box you control."
+          : "Start with Free Relay for light personal use. Upgrade to Relay Pro when Yaver becomes part of daily work and you need private managed capacity with higher limits.",
       },
       {
         q: "Can I run everything locally with no cloud?",
