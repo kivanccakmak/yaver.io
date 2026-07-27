@@ -1158,14 +1158,21 @@ func metaInstallPlan(name string) (installPlan, bool) {
 		// runtime — sudo-free, streamed — so the 412's install button has
 		// a real recipe behind it. `bunx` ships with bun.
 		pkg := name
+		var subCommand []string
 		if name == "bunx" {
-			pkg = "bun"
+			// `bunx foo` IS `bun x foo`. Before this, the plan passed
+			// pkg="bun" as the SCRIPT name too, so installing "bunx" wrote
+			// ~/.local/bin/bun and no bunx ever appeared — a green install
+			// followed by the same 412, forever.
+			pkg, subCommand = "bun", []string{"x"}
 		}
 		return installPlan{
 			name:        name,
 			description: pkg + " — package manager/runner this project's manifest asks for",
 			runFunc: func(ctx context.Context, progress func(string)) error {
-				return installNodeBackedCLI(ctx, pkg, pkg, progress)
+				// scriptName is `name`, never `pkg`: the file the user's
+				// PATH must gain is the one the preflight looked for.
+				return installNodeBackedCLIAs(ctx, name, pkg, subCommand, progress)
 			},
 		}, true
 	case "git":
@@ -1636,7 +1643,29 @@ func runSupabaseInstall(ctx context.Context, progress func(string)) error {
 	return installNodeBackedCLI(ctx, "supabase", "supabase", progress)
 }
 
+// nodeBackedCLIScript builds the shim `installNodeBackedCLI` writes.
+//
+// subCommand is the argv the package's own binary needs BEFORE the user's
+// args. It exists for exactly one case, and that case was a shipped bug:
+// `POST /install/bunx` passed pkg="bun" as BOTH the script name and the
+// package, so it wrote ~/.local/bin/**bun** and never a `bunx` at all. The
+// install reported success, commandExists("bunx") stayed false, and the
+// dev-server 412 fired again — a 412 → install → 412 loop with a green
+// install stream on every lap. `bunx foo` is `bun x foo`, so the shim needs
+// the sub-command, not a second package.
+func nodeBackedCLIScript(nodeBinDir, pkgName string, subCommand []string) string {
+	argv := "npx -y " + pkgName
+	for _, a := range subCommand {
+		argv += " " + a
+	}
+	return fmt.Sprintf("#!/usr/bin/env sh\nset -eu\nPATH=\"%s:$PATH\"\nexec %s \"$@\"\n", nodeBinDir, argv)
+}
+
 func installNodeBackedCLI(ctx context.Context, scriptName, pkgName string, progress func(string)) error {
+	return installNodeBackedCLIAs(ctx, scriptName, pkgName, nil, progress)
+}
+
+func installNodeBackedCLIAs(ctx context.Context, scriptName, pkgName string, subCommand []string, progress func(string)) error {
 	nodeBin, err := installNodeRuntime(ctx, progress)
 	if err != nil {
 		return err
@@ -1653,12 +1682,22 @@ func installNodeBackedCLI(ctx context.Context, scriptName, pkgName string, progr
 		return err
 	}
 	targetPath := filepath.Join(targetDir, scriptName)
-	script := fmt.Sprintf("#!/usr/bin/env sh\nset -eu\nPATH=\"%s:$PATH\"\nexec npx -y %s \"$@\"\n", filepath.Dir(nodeBin), pkgName)
-	if err := os.WriteFile(targetPath, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(targetPath, []byte(nodeBackedCLIScript(filepath.Dir(nodeBin), pkgName, subCommand)), 0o755); err != nil {
 		return err
 	}
 	if progress != nil {
 		progress("Installed wrapper: " + targetPath)
+	}
+	// PROBE THE OPERATION, NOT THE INVENTORY. Writing a file is not the same
+	// claim as "the tool now resolves": ~/.local/bin has to be on the same
+	// PATH the spawn will use (lookPathWithRuntimes — the resolution
+	// resolveSpawnPath and commandExists share). Returning nil here without
+	// checking is how an install reports success into a stream the user is
+	// watching while the very next preflight says the tool is still missing.
+	if !commandExists(scriptName) {
+		return fmt.Errorf("wrote %s but %q still does not resolve on this machine — "+
+			"add %s to PATH and retry, or install %s with your system package manager",
+			targetPath, scriptName, targetDir, pkgName)
 	}
 	return nil
 }

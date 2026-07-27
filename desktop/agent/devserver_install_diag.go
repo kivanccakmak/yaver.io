@@ -65,6 +65,21 @@ func (d *installDiag) Tail() string {
 func classifyInstallFailure(tail string) string {
 	t := strings.ToLower(tail)
 	switch {
+	// DISK FULL FIRST, and deliberately so. ENOSPC is the one cause here that
+	// masquerades as every other cause: npm reports a half-written tarball as
+	// EINTEGRITY, a truncated extract as ENOENT, and a failed cache write as
+	// EACCES. Classified below the others, a full disk would be reported as
+	// "re-pack the referenced tarball" or "check that ~/.npm is writable" —
+	// remedies that cannot work and that send the user hunting a lockfile
+	// while the box has nowhere to put a byte. Added 2026-07-27 after the
+	// Tasks/dev-server sweep found no ENOSPC branch anywhere on the install
+	// path (the only disk-full detection in the tree lives in diskhealth.go /
+	// storage_reclaim.go, which nothing on this path calls).
+	case strings.Contains(t, "enospc") || strings.Contains(t, "no space left on device") ||
+		strings.Contains(t, "disk quota exceeded") || strings.Contains(t, "edquot"):
+		return "the disk is full — the install could not write. Free space on this machine " +
+			"(node_modules caches, old builds, `~/.npm/_cacache`) and retry. Nothing in " +
+			"package.json is wrong; npm's other errors above are downstream of the full disk."
 	case strings.Contains(t, "code eintegrity") || strings.Contains(t, "integrity checksum failed"):
 		return "package-lock.json has a stale integrity hash for a file: dependency. " +
 			"Re-pack the referenced tarball OR strip the `integrity` field from that " +
