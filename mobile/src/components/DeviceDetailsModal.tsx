@@ -1704,6 +1704,21 @@ export function CodingAgentsSection({ device }: { device: Device }) {
                   } else {
                     await setPrimaryRunnerForDevice(device.id, id);
                   }
+                  // Parity with web "Save for machine" (2026-07-27): saving
+                  // the preference is the inventory; whether the runner can
+                  // take the next task is the operation. When the box says
+                  // this runner isn't signed in, say so NOW and hand over the
+                  // route — not at task time as a buried failure.
+                  const st = findStatus(id);
+                  if (st && st.installed && (!st.ready || !st.authConfigured)) {
+                    Alert.alert(
+                      "Saved — sign-in needed",
+                      `${label} is now the default for ${device.name || "this machine"}, but it isn't signed in there yet.`,
+                      id === "opencode"
+                        ? [{ text: "Set up", onPress: () => setShowOpenCodeConfig(true) }, { text: "Later", style: "cancel" }]
+                        : [{ text: "Sign in", onPress: () => setAuthModalRunner(id) }, { text: "Later", style: "cancel" }],
+                    );
+                  }
                 } catch (err: any) {
                   Alert.alert("Failed", err?.message || "Could not save default runner");
                 } finally {
