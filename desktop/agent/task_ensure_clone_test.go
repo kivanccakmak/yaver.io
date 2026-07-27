@@ -69,3 +69,14 @@ func TestValidGitRemote(t *testing.T) {
 		}
 	}
 }
+
+// Coalescing: phase changes and 25% buckets pass, per-percent ticks don't.
+func TestGitProgressPhase(t *testing.T) {
+	phase, pct := gitProgressPhase("Counting objects:  43% (39/91)")
+	if phase != "Counting objects" || pct != 43 {
+		t.Fatalf("got %q %d", phase, pct)
+	}
+	if p, _ := gitProgressPhase("Cloning into 'x'..."); p != "" {
+		t.Fatalf("non-progress line classified as progress: %q", p)
+	}
+}

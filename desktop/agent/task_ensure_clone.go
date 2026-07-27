@@ -131,6 +131,29 @@ func (tm *TaskManager) pullBeforeSpawn(task *Task) {
 	}
 }
 
+// gitProgressPhase parses "Counting objects:  43% (39/91)"-style progress
+// lines into (phase, percent). ("", 0) for non-progress lines.
+func gitProgressPhase(line string) (string, int) {
+	i := strings.Index(line, ":")
+	if i <= 0 {
+		return "", 0
+	}
+	rest := line[i+1:]
+	p := strings.Index(rest, "%")
+	if p < 0 {
+		return "", 0
+	}
+	pctStr := strings.TrimSpace(rest[:p])
+	pct := 0
+	for _, ch := range pctStr {
+		if ch < '0' || ch > '9' {
+			return "", 0
+		}
+		pct = pct*10 + int(ch-'0')
+	}
+	return strings.TrimSpace(line[:i]), pct
+}
+
 func taskGitFirstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return s[:i]
@@ -187,13 +210,22 @@ func (tm *TaskManager) runCloneThenStart(task *Task, plan *taskClonePlan) {
 		return
 	}
 
+	// Clone into a temp sibling and RENAME on success. Measured on the real
+	// fleet 2026-07-27 (task 2141464a): the box died mid-clone and left a
+	// partial tree at the destination — which clonePlanForTask would then
+	// treat as "already materialized" and hand to the runner as a poisoned
+	// workDir. The rename makes landing atomic: dest either doesn't exist
+	// or is a complete clone.
+	tmpDest := plan.Dest + ".yaver-clone-tmp"
+	_ = os.RemoveAll(tmpDest) // stale leftover from a previous interrupted run
+
 	ctx, cancel := context.WithTimeout(context.Background(), taskCloneTimeout)
 	defer cancel()
 	args := []string{"clone", "--progress"}
 	if plan.Branch != "" {
 		args = append(args, "--branch", plan.Branch)
 	}
-	args = append(args, "--", plan.Remote, plan.Dest)
+	args = append(args, "--", plan.Remote, tmpDest)
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.WaitDelay = 10 * time.Second // a context kill must not hang on a held pipe
 	stderr, _ := cmd.StderrPipe()
@@ -201,6 +233,23 @@ func (tm *TaskManager) runCloneThenStart(task *Task, plan *taskClonePlan) {
 	if err := cmd.Start(); err != nil {
 		tm.failTaskNamed(task, fmt.Sprintf("Could not start git clone on this machine: %v — is git installed here?", err))
 		return
+	}
+	// Coalesce progress: git rewrites "Counting objects: 43% ..." per tick,
+	// and emitting every tick flooded the transcript with ~one line per
+	// percent (measured on the same task). Emit phase changes and 25%
+	// buckets only; non-progress lines pass through untouched.
+	lastPhase, lastBucket := "", -1
+	emitProgress := func(line string) {
+		phase, pct := gitProgressPhase(line)
+		if phase == "" {
+			tm.emitTaskLine(task, "[clone] "+line)
+			return
+		}
+		bucket := pct / 25
+		if phase != lastPhase || bucket != lastBucket {
+			lastPhase, lastBucket = phase, bucket
+			tm.emitTaskLine(task, "[clone] "+line)
+		}
 	}
 	stream := func(r interface{ Read([]byte) (int, error) }) {
 		if r == nil {
@@ -211,16 +260,22 @@ func (tm *TaskManager) runCloneThenStart(task *Task, plan *taskClonePlan) {
 		for sc.Scan() {
 			line := strings.TrimSpace(sc.Text())
 			if line != "" {
-				tm.emitTaskLine(task, "[clone] "+line)
+				emitProgress(line)
 			}
 		}
 	}
 	go stream(stdout)
 	stream(stderr)
 	if err := cmd.Wait(); err != nil {
+		_ = os.RemoveAll(tmpDest)
 		tm.failTaskNamed(task, fmt.Sprintf(
 			"git clone failed after %s: %v. Check this machine's git access to the remote (SSH key / token), or pick a runner machine that already has the source. Remote: %s",
 			time.Since(started).Round(time.Second), err, sanitizeRemoteForLog(plan.Remote)))
+		return
+	}
+	if err := os.Rename(tmpDest, plan.Dest); err != nil {
+		_ = os.RemoveAll(tmpDest)
+		tm.failTaskNamed(task, fmt.Sprintf("Clone finished but could not land at %s: %v", plan.Dest, err))
 		return
 	}
 	tm.emitTaskLine(task, fmt.Sprintf("[yaver] clone complete in %s — starting %s", time.Since(started).Round(time.Second), task.runner.Name))
