@@ -133,7 +133,14 @@ func (s *runnerBrowserAuthSessionState) snapshot() runnerBrowserAuthSession {
 func refreshRunnerBrowserAuthSnapshot(out *runnerBrowserAuthSession) {
 	// The whole point of this snapshot is to observe a credential that may
 	// have landed a moment ago, so never read it through the status cache.
+	// BOTH caches: codex's login-status cache had no invalidation at all,
+	// so a completed codex OAuth kept reporting authVerified=false from a
+	// mid-sign-in probe for up to ~90s ("verify needed" over a successful
+	// login — the false-amber twin of the false-green rule).
 	invalidateClaudeAuthStatusCache()
+	if out.Runner == "codex" {
+		invalidateCodexLoginStatusCache()
+	}
 	rows, err := collectRunnerAuthStatusRows()
 	if err != nil {
 		return
@@ -344,6 +351,16 @@ func watchRunnerBrowserAuthSilence(sess *runnerBrowserAuthSessionState, runner s
 		state.Status = "failed"
 		if strings.EqualFold(runner, "claude") {
 			state.Error = "Claude Code printed no verification URL in 45s. On a machine with a desktop it opens a browser THERE instead of printing a link, and it has no --device-auth flag, so this remote flow cannot capture one. Use `runner_auth_credentials_import` to copy an existing login from a machine you are signed in on, or run `claude auth login` in a terminal on that machine (a tmux session works)."
+		} else if strings.EqualFold(runner, "codex") {
+			// Codex-specific silence causes, in observed order of likelihood:
+			// device-auth can be DISABLED per-workspace by an admin (the flag
+			// is accepted but the flow just stalls — openai/codex#9253, the
+			// same gating the spawn comment documents), or the CLI is waiting
+			// on an interactive prompt a remote flow cannot answer. The scan
+			// for "Login failed:" lines can never fire here because codex
+			// device-auth is measured SILENT, so this watchdog is the only
+			// place the entitlement possibility can be named for codex.
+			state.Error = "codex printed no verification URL or code in 45s. Either device-auth is disabled for this workspace by its admin (enable it in the workspace settings, or sign in with a personal account), or the CLI is waiting on an interactive prompt a remote flow cannot answer — run `codex login` once in a terminal on that machine, or import credentials from a machine already signed in."
 		} else {
 			state.Error = fmt.Sprintf("%s printed no verification URL or code in 45s. The CLI may be waiting on an interactive prompt that a remote flow cannot answer — run its login once in a terminal on that machine, or import credentials from a machine already signed in.", runner)
 		}

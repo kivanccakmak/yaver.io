@@ -899,6 +899,23 @@ var (
 	codexLoginStatusTTL = 60 * time.Second
 )
 
+// invalidateCodexLoginStatusCache forces the next codexLoginStatusOK to
+// re-run `codex login status` instead of serving a cached verdict.
+//
+// Why it exists (codex-specific gap, 2026-07 audit): during a browser
+// sign-in the status poll keeps probing, so at the moment the OAuth
+// completes the cache almost certainly holds a fresh "not logged in".
+// The completion's heartbeat kick then shipped authVerified=false, and
+// the device card sat on amber "verify needed" for up to ~90s after a
+// SUCCESSFUL login. Claude's equivalent cache is invalidated on every
+// session snapshot (invalidateClaudeAuthStatusCache); codex had no
+// invalidation function at all.
+func invalidateCodexLoginStatusCache() {
+	codexLoginStatusCache.Lock()
+	codexLoginStatusCache.byHome = map[string]codexLoginStatusEntry{}
+	codexLoginStatusCache.Unlock()
+}
+
 func codexCredentialRoot() string {
 	if dir := strings.TrimSpace(os.Getenv("CODEX_HOME")); dir != "" {
 		return dir
