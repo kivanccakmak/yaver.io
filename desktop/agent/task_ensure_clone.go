@@ -97,6 +97,47 @@ func (tm *TaskManager) emitTaskLine(task *Task, line string) {
 	tm.mu.Unlock()
 }
 
+// pullBeforeSpawn fast-forwards an EXISTING runner clone before the runner
+// starts — the other half of the git spine: commits pushed from the render
+// box (or anywhere) must be present before the task begins, exactly as the
+// render box pre-build-pulls the runner's pushes (devserver_pull.go).
+// Bounded, narrated, and non-fatal: a divergence or offline remote emits a
+// NAMED line and the task proceeds on the local tree (the runner CLI can
+// resolve; blocking the task on advisory sync would put sync in the
+// critical path).
+func (tm *TaskManager) pullBeforeSpawn(task *Task) {
+	dir := tm.effectiveTaskWorkDir(task)
+	if strings.TrimSpace(dir) == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	probe := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--is-inside-work-tree")
+	probe.WaitDelay = 5 * time.Second
+	if err := probe.Run(); err != nil {
+		return // not a git tree — nothing to sync
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "pull", "--ff-only")
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.CombinedOutput()
+	summary := strings.TrimSpace(string(out))
+	switch {
+	case err != nil:
+		tm.emitTaskLine(task, fmt.Sprintf("[yaver] pre-task git pull skipped: %v — %s (continuing on the local tree)", err, taskGitFirstLine(summary)))
+	case strings.Contains(summary, "Already up to date"):
+		// Quiet: an up-to-date tree needs no narration.
+	default:
+		tm.emitTaskLine(task, "[yaver] pre-task git pull: "+taskGitFirstLine(summary))
+	}
+}
+
+func taskGitFirstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
 // clonePlanForTask decides whether this task needs a pre-spawn clone.
 // nil = spawn normally (the overwhelmingly common case).
 func (tm *TaskManager) clonePlanForTask(task *Task) *taskClonePlan {

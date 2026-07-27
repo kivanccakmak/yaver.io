@@ -1916,6 +1916,12 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		go tm.runCloneThenStart(task, plan)
 		return task, nil
 	}
+	// Existing clone on a split task: fast-forward it first so commits
+	// pushed from the render box (or anywhere) are present before the
+	// runner reads the tree. Bounded + non-fatal (task_ensure_clone.go).
+	if task.GitRemote != "" && task.GuestUserID == "" {
+		tm.pullBeforeSpawn(task)
+	}
 
 	log.Printf("[task %s] Starting %s process for: %s", id, taskRunner.Name, title)
 	if err := tm.startProcess(task); err != nil {
