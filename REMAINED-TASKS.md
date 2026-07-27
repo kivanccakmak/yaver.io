@@ -332,3 +332,22 @@ cd e2e && AGENT_URL=http://<box-tailscale-ip>:18080 YAVER_AGENT_TOKEN=<box token
   (pattern matches the ssh argv) — use `"expo [s]tart"`.
 - Credentials: env-only, never in files/logs/commits; the app itself redacts
   `token=` in its preview logs — keep it that way.
+
+## Mobile preview feedback occlusion (deferred — needs on-device test) 2026-07-28
+The full-screen WebView preview is `<Modal presentationStyle="fullScreen">`
+(`mobile/app/(tabs)/apps.tsx:3174`). iOS cannot present anything over an
+already-presented full-screen modal, so BOTH of these are occluded:
+- **Shake → feedback**: browser-lane shake injects `yaver-feedback:launch`
+  into the WebView (`apps.tsx:994-1003`) — dead-letters unless the guest embeds
+  yaver-feedback-web — AND `triggerFeedbackLaunch` opens the ROOT
+  `FeedbackOverlay` (`_layout.tsx:168`, an `Animated.View` — not a Modal),
+  which renders BEHIND the preview modal. Result: shake does nothing.
+- **"12 issues" panel** (`apps.tsx:3462`): the log panel + "Fix in Yaver"
+  toggles fine but any overlay it spawns is behind the same modal; and the
+  count is WebView-only (no Hermes-lane feed).
+FIX (test on device, don't ship blind — burns TestFlight slots): render a
+feedback entry/overlay INSIDE the preview Modal's `<View>` so it presents
+over the WebView, rather than relying on the root FeedbackOverlay. Reconcile
+with DevPreview.tsx which lacks the mic + issues FAB entirely (apps.tsx drift).
+The mic fix (1.18.165) already dismisses the modal first — that pattern loses
+the app screenshot for shake, so shake needs the in-modal approach instead.
