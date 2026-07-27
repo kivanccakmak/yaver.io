@@ -36,6 +36,8 @@ import {
 import { openLoginModal } from './LoginModal';
 import { openDevicePickerModal } from './DevicePickerModal';
 import { P2PClient } from './P2PClient';
+import { reloadActions } from './reloadActions';
+import type { DevServerSnapshot, ReloadAction, ReloadWireMode } from './reloadActions';
 
 /** Escape untrusted text before interpolating into innerHTML strings. */
 function escapeHtml(value: string): string {
@@ -499,6 +501,78 @@ export class YaverFeedback {
   static async reloadApp(mode: 'dev' | 'bundle' = 'dev'): Promise<ReloadAck> {
     const client = await YaverFeedback.getClient();
     return client.reloadApp(mode, YaverFeedback.projectIdentity());
+  }
+
+  /**
+   * Fast ("hot") or full reload, explicit — the overlay's Hot Reload / Full
+   * Reload buttons and any host app that wants to wire its own control.
+   */
+  static async reloadWithMode(mode: ReloadWireMode): Promise<ReloadAck> {
+    const client = await YaverFeedback.getClient();
+    if (mode === 'bundle') return client.reloadApp('bundle', YaverFeedback.projectIdentity());
+    const snapshot = await client.getDevServerStatus().catch(() => null);
+    return client.reloadWithMode(mode, snapshot);
+  }
+
+  /**
+   * Best available human name for the selected machine, for use inside
+   * error/disabled copy. Falls back to a phrase that still reads as a
+   * sentence — never an empty string or a raw device id.
+   */
+  static selectedMachineName(): string {
+    const cfg = YaverFeedback.config;
+    const agentUrl = (cfg?.agentUrl || '').trim();
+    if (agentUrl) {
+      try {
+        return new URL(agentUrl).hostname || 'the selected machine';
+      } catch {
+        /* fall through */
+      }
+    }
+    return 'the selected machine';
+  }
+
+  /** Live dev-server snapshot, or null when we cannot reach the machine. */
+  static async devServerSnapshot(): Promise<DevServerSnapshot | null> {
+    try {
+      const client = await YaverFeedback.getClient();
+      return await client.getDevServerStatus();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Is the HOST page a development build?
+   *
+   * Explicit config wins. The fallback is a hostname/port heuristic rather
+   * than a guess dressed up as a fact: a page served from localhost, a
+   * loopback IP, a `.local`/`.test` name, or a non-80/443 port is a dev
+   * server by any reasonable reading. Anything else is treated as production
+   * and gets NO reload UI — the safe direction to be wrong in.
+   *
+   * A host app that ships a dev build on a real domain should set
+   * `devBuild: true` explicitly.
+   */
+  static isDevBuild(): boolean {
+    const configured = YaverFeedback.config?.devBuild;
+    if (typeof configured === 'boolean') return configured;
+    if (typeof window === 'undefined' || !window.location) return false;
+    const host = (window.location.hostname || '').toLowerCase();
+    if (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '::1' ||
+      host === '[::1]' ||
+      host === '0.0.0.0' ||
+      host.endsWith('.local') ||
+      host.endsWith('.localhost') ||
+      host.endsWith('.test')
+    ) {
+      return true;
+    }
+    const port = window.location.port;
+    return !!port && port !== '80' && port !== '443';
   }
 
   static async commitProject(message?: string): Promise<FeedbackProjectActionResult> {
@@ -1683,10 +1757,10 @@ export class YaverFeedback {
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
             <span>Screenshot</span>
           </button>
-          <button id="yaver-fb-reload" class="yvr-fb-tool yvr-fb-tool-reload" type="button" title="Hot reload">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v5h5"/><path d="M20 20v-5h-5"/><path d="M5.5 9A7.5 7.5 0 0 1 19 8.5"/><path d="M18.5 15A7.5 7.5 0 0 1 5 15.5"/></svg>
-            <span>Reload</span>
-          </button>
+          <!-- Reload actions are injected here by refreshReloadTools(), because
+               WHICH ones exist depends on the dev-server state and on whether
+               this is a dev build at all. A production page gets nothing. -->
+          <span id="yaver-fb-reload-tools" class="yvr-fb-reload-tools"></span>
           <button id="yaver-fb-commit" class="yvr-fb-tool yvr-fb-tool-commit" type="button" title="Commit, rebase, and push">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"/><path d="M7 8l5-5 5 5"/><path d="M7 16l5 5 5-5"/></svg>
             <span>Commit</span>
@@ -1734,7 +1808,7 @@ export class YaverFeedback {
       `;
 
       const screenshotBtn = overlay.querySelector<HTMLButtonElement>('#yaver-fb-screenshot')!;
-      const reloadBtn = overlay.querySelector<HTMLButtonElement>('#yaver-fb-reload')!;
+      const reloadTools = overlay.querySelector<HTMLElement>('#yaver-fb-reload-tools')!;
       const commitBtn = overlay.querySelector<HTMLButtonElement>('#yaver-fb-commit')!;
       const deployBtn = overlay.querySelector<HTMLButtonElement>('#yaver-fb-deploy')!;
       const vibeBtn = overlay.querySelector<HTMLButtonElement>('#yaver-fb-vibe')!;
@@ -1953,9 +2027,14 @@ export class YaverFeedback {
 
       const setActionsBusy = (value: boolean) => {
         busy = value;
-        [screenshotBtn, reloadBtn, commitBtn, deployBtn, vibeBtn, vibeRepairBtn, machinePill].forEach(
+        [screenshotBtn, commitBtn, deployBtn, vibeBtn, vibeRepairBtn, machinePill].forEach(
           (el) => ((el as HTMLButtonElement).disabled = value),
         );
+        // Reload buttons are re-rendered per dev-server state, so drive them
+        // by query rather than by a captured reference that goes stale.
+        reloadTools.querySelectorAll<HTMLButtonElement>('button').forEach((el) => {
+          el.disabled = value;
+        });
         runnerActions.querySelectorAll<HTMLButtonElement>('[data-runner], [data-git-action]').forEach((el) => {
           el.disabled = value;
         });
@@ -2044,19 +2123,92 @@ export class YaverFeedback {
         }
       };
 
-      reloadBtn.onclick = async () => {
+      // ── Reload actions ───────────────────────────────────────────────────
+      //
+      // Rendered from the pure `reloadActions()` seam rather than hard-coded,
+      // so the three rules it encodes hold here by construction:
+      //   • a production page renders NO reload UI at all;
+      //   • a blocked action is shown DISABLED with the reason on its tooltip,
+      //     not hidden (hidden teaches the user nothing);
+      //   • Flutter's second action is a Hot RESTART (stdin R), everyone
+      //     else's is a Full Reload.
+      const RELOAD_ICON =
+        '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v5h5"/><path d="M20 20v-5h-5"/><path d="M5.5 9A7.5 7.5 0 0 1 19 8.5"/><path d="M18.5 15A7.5 7.5 0 0 1 5 15.5"/></svg>';
+      const RESTART_ICON =
+        '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v6"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>';
+
+      const runReloadAction = async (action: ReloadAction, snapshot: DevServerSnapshot | null) => {
         setActionsBusy(true);
-        setStatus('Requesting reload…');
+        setStatus(`${action.label}…`);
         try {
-          const ack = await YaverFeedback.reloadApp('dev');
+          const ack =
+            action.mode === 'bundle'
+              ? await YaverFeedback.reloadApp('bundle')
+              : await (await YaverFeedback.getClient()).reloadWithMode(action.mode, snapshot);
           await YaverFeedback.switchToRemoteDevServerIfNeeded();
           setStatus(ack.message);
         } catch (err) {
-          setStatus(err instanceof Error ? err.message : 'Reload failed.');
+          // describeReloadFailure already produced a named cause upstream; if
+          // something else threw we still must not render a bare "failed".
+          setStatus(
+            err instanceof Error && err.message
+              ? err.message
+              : `${action.label} did not start, and the machine gave no reason. Check \`yaver logs\` there.`,
+          );
         } finally {
           setActionsBusy(false);
+          void refreshReloadTools();
         }
       };
+
+      const refreshReloadTools = async () => {
+        const isDev = YaverFeedback.isDevBuild();
+        if (!isDev) {
+          // Production build: no reload affordance, at all.
+          reloadTools.innerHTML = '';
+          return;
+        }
+        const snapshot = await YaverFeedback.devServerSnapshot();
+        const actions = reloadActions(snapshot, {
+          isDevBuild: true,
+          connected: !!snapshot || !!YaverFeedback.config?.agentUrl,
+          machineLabel: YaverFeedback.selectedMachineName(),
+        });
+        if (!actions.length) {
+          reloadTools.innerHTML = '';
+          return;
+        }
+        reloadTools.innerHTML = actions
+          .map(
+            (action, index) => `
+              <button data-reload-index="${index}"
+                      class="yvr-fb-tool yvr-fb-tool-reload"
+                      type="button"
+                      ${action.enabled ? '' : 'disabled'}
+                      title="${escapeHtml(action.enabled ? action.hint : action.disabledReason || action.hint)}">
+                ${action.id === 'full' && action.label === 'Hot Restart' ? RESTART_ICON : RELOAD_ICON}
+                <span>${escapeHtml(action.label)}</span>
+              </button>`,
+          )
+          .join('');
+        reloadTools
+          .querySelectorAll<HTMLButtonElement>('[data-reload-index]')
+          .forEach((btn) => {
+            const action = actions[Number(btn.dataset.reloadIndex)];
+            if (!action) return;
+            btn.onclick = () => {
+              if (!action.enabled) {
+                // A disabled button that also SAYS why when pressed beats a
+                // tooltip the user never hovers on a touch device.
+                setStatus(action.disabledReason || 'Reload is unavailable right now.');
+                return;
+              }
+              void runReloadAction(action, snapshot);
+            };
+          });
+      };
+
+      void refreshReloadTools();
 
       commitBtn.onclick = async () => {
         const message = prompt('Commit message (leave blank for automatic message):') || '';
@@ -3180,6 +3332,7 @@ export class YaverFeedback {
       .yvr-fb-tool > svg { flex-shrink: 0; }
       .yvr-fb-tool-screenshot { color: #60a5fa; }
       .yvr-fb-tool-screenshot:hover:not(:disabled) { color: #93c5fd; border-color: rgba(96,165,250,0.5); }
+      .yvr-fb-reload-tools { display: contents; }
       .yvr-fb-tool-reload { color: #c4b5fd; }
       .yvr-fb-tool-reload:hover:not(:disabled) { color: #ddd6fe; border-color: rgba(196,181,253,0.5); }
       .yvr-fb-tool-commit { color: #34d399; }

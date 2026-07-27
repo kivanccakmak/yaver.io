@@ -13,6 +13,8 @@ import type {
   RunnerAuthStatus,
   RunnerBrowserAuthSession,
 } from './types';
+import { RELOAD_PATH, describeReloadFailure } from './reloadActions';
+import type { DevServerSnapshot, ReloadWireMode } from './reloadActions';
 
 /**
  * P2PClient — lightweight HTTP client for Yaver agent communication.
@@ -297,6 +299,12 @@ export class P2PClient {
 
   async getDevServerStatus(): Promise<{
     running: boolean;
+    /**
+     * True while the dev server is still compiling. Surfaced so the reload
+     * buttons can say "still building" instead of firing a reload into a
+     * half-built tree and reporting a success the user cannot see.
+     */
+    building?: boolean;
     framework?: string;
     port?: number;
     workDir?: string;
@@ -309,6 +317,7 @@ export class P2PClient {
       const data = await resp.json().catch(() => ({} as Record<string, unknown>));
       return {
         running: data.running === true,
+        building: data.building === true,
         framework: typeof data.framework === 'string' ? data.framework : undefined,
         port: typeof data.port === 'number' ? data.port : undefined,
         workDir: typeof data.workDir === 'string' ? data.workDir : undefined,
@@ -467,6 +476,57 @@ export class P2PClient {
   /** Get artifact download URL. */
   getArtifactUrl(buildId: string): string {
     return `${this.baseUrl}/builds/${buildId}/artifact`;
+  }
+
+  /**
+   * Trigger a reload with an explicit fast/full mode.
+   *
+   * This is the direct expression of the agent's `POST /dev/reload
+   * {mode}` contract — no bundle fallback, no mode guessing. The overlay's
+   * Hot Reload / Full Reload buttons call this, because a user who pressed
+   * "Full Reload" must not silently get something else.
+   *
+   * Auth: the SAME bearer this client already sends with the feedback POST.
+   * `/dev/reload` lives behind `authSDKOrGuest`, and the `guest-reload` SDK
+   * scope already lists it — no new secret, no widened gate.
+   *
+   * Throws with a NAMED reason (describeReloadFailure) on any non-2xx, so a
+   * failed reload never renders as a spinner that stops.
+   */
+  async reloadWithMode(
+    mode: ReloadWireMode,
+    snapshot?: DevServerSnapshot | null,
+  ): Promise<ReloadAck> {
+    let resp: Response;
+    try {
+      resp = await fetch(`${this.baseUrl}${RELOAD_PATH}`, {
+        method: 'POST',
+        headers: this.augmentHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ mode }),
+      });
+    } catch (err) {
+      // Status 0 = the request never reached anything. Distinct from a 5xx,
+      // and it needs a different sentence.
+      throw new Error(describeReloadFailure(0, err instanceof Error ? err.message : '', snapshot));
+    }
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(describeReloadFailure(resp.status, text, snapshot));
+    }
+    const payload = await resp.json().catch(() => ({} as Record<string, unknown>));
+    const nativeChangesDetected = payload.nativeChangesDetected === true;
+    return {
+      ok: true,
+      mode: 'dev',
+      acknowledged: true,
+      nativeChangesDetected,
+      changeClass: typeof payload.changeClass === 'string' ? payload.changeClass : undefined,
+      message: nativeChangesDetected
+        ? 'Reload accepted, but native files changed — a rebuild is required.'
+        : mode === 'full'
+          ? 'Full reload requested.'
+          : 'Hot reload requested.',
+    };
   }
 
   async reloadApp(

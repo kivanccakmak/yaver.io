@@ -40,6 +40,16 @@ export interface FeedbackConfig {
   shortcut?: string;
   /** Whether SDK is enabled (default: true in development) */
   enabled?: boolean;
+  /**
+   * Is this page a DEVELOPMENT build?
+   *
+   * Gates the overlay's Hot Reload / Full Reload actions, which must never
+   * appear in a shipped app. When omitted the SDK falls back to a
+   * hostname/port heuristic (see `YaverFeedback.isDevBuild`) that errs
+   * towards "production" — set this explicitly if you serve a dev build
+   * from a real domain.
+   */
+  devBuild?: boolean;
   /** Max screen recording duration in seconds (default: 120) */
   maxRecordingDuration?: number;
   /** Position of floating button */

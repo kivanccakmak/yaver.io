@@ -2,6 +2,21 @@ export { YaverFeedback } from './YaverFeedback';
 export { YaverDiscovery } from './discovery';
 export { FeedbackWidget } from './FeedbackWidget';
 export { P2PClient } from './P2PClient';
+export {
+  reloadActions,
+  reloadRequest,
+  reloadFrameworkFamily,
+  describeReloadFailure,
+  RELOAD_PATH,
+  RELOAD_APP_PATH,
+} from './reloadActions';
+export type {
+  ReloadAction,
+  ReloadActionId,
+  ReloadActionsOptions,
+  ReloadWireMode,
+  DevServerSnapshot,
+} from './reloadActions';
 export { openDevicePickerModal } from './DevicePickerModal';
 export { LoginModal, openLoginModal } from './LoginModal';
 export type { LoginModalOptions } from './LoginModal';
