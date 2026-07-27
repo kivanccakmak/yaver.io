@@ -123,7 +123,7 @@ const RECONNECT_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 export default function GlassTerminalScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { connectionStatus, devices, primaryDeviceId, selectDevice } = useDevice();
+  const { connectionStatus, lastError, devices, primaryDeviceId, selectDevice } = useDevice();
 
   const [mode, setMode] = useState<Mode>("agent");
   const [lines, setLines] = useState<Line[]>([
@@ -807,7 +807,30 @@ export default function GlassTerminalScreen() {
             }}>
               {shellReady ? "● live" : (reconnectTimer.current ? "○ reconnecting" : `○ ${connectionStatus}`)}
             </Text>
-          ) : (
+          ) : null}
+          {/* The named cause, on the surface the user is actually looking at.
+              DeviceContext already turns a relay verdict into a sentence
+              (explainRelayDeny / classifyRelayLimit → lastError), and every RN
+              screen that renders `lastError` inherits it — but this one
+              rendered only the status WORD, so a glass user saw "○ error" over
+              a fully-diagnosed device_mismatch. Shared code is not shared
+              coverage; a seam has to be read to count. */}
+          {mode === "shell" && !shellReady && !reconnectTimer.current && lastError ? (
+            <Text
+              numberOfLines={3}
+              style={{
+                color: PAL.accent,
+                fontFamily: "Menlo",
+                fontSize: 9,
+                marginTop: 2,
+                textAlign: "center",
+                paddingHorizontal: 12,
+              }}
+            >
+              {lastError}
+            </Text>
+          ) : null}
+          {mode === "agent" ? (
             <Text style={{
               color: PAL.muted,
               fontFamily: "Menlo",
@@ -816,7 +839,7 @@ export default function GlassTerminalScreen() {
             }}>
               xr · {yaverNativeSurfaceSummary("xr")}
             </Text>
-          )}
+          ) : null}
         </Pressable>
         <Pressable
           hitSlop={8}
