@@ -486,6 +486,10 @@ function taskOutputSuggestsRender(lines: string[], status: TaskStatus): boolean 
   return /\b(web bundle re-exported|web ui ready|hot reload|fast refresh|reload sent|run-guest|launch-app|yaver_web_preview_start|files? changed|saved|patched|updated)\b/.test(recent);
 }
 
+function taskStatusAllowsRender(status: TaskStatus): boolean {
+  return status === "completed" || status === "review";
+}
+
 function canRunGuestOnRemoteTarget(targetId?: string): boolean {
   return [
     "ios-simulator",
@@ -1466,12 +1470,12 @@ export default function RuntimeLabView({
   useEffect(() => {
     if (!activeTaskStream || !selectedProject) return;
     const structuredRequest = agentRenderRequest?.taskId === activeTaskStream.id ? agentRenderRequest : null;
+    if (!taskStatusAllowsRender(activeTaskStream.status)) return;
     if (!structuredRequest && !taskOutputSuggestsRender(activeTaskStream.lines, activeTaskStream.status)) return;
     const key = [
       activeTaskStream.id,
       activeTaskStream.status,
-      activeTaskStream.lines.length,
-      structuredRequest?.id || "",
+      structuredRequest ? `mcp:${structuredRequest.id}` : "task-finished",
       webPreviewPanelOpen ? "web" : "",
       session?.id || "",
       session?.targetId || "",
@@ -1480,18 +1484,18 @@ export default function RuntimeLabView({
     autoRenderRef.current = key;
 
     if (webPreviewPanelOpen && webPreviewUrl && !webPreviewBusy) {
-      appendLog(structuredRequest ? `auto-render: refreshing Web UI (${structuredRequest.reason})` : "auto-render: refreshing Web UI after coding output");
+      appendLog(structuredRequest ? `task finished: refreshing Web UI (${structuredRequest.reason})` : "task finished: refreshing Web UI");
       void reloadWebPreview("fast");
     }
     if (session?.id && canRunGuestOnRemoteTarget(session.targetId)) {
       appendLog(structuredRequest
-        ? `auto-render: refreshing ${session.targetLabel || session.targetId} stream (${structuredRequest.reason})`
-        : `auto-render: refreshing ${session.targetLabel || session.targetId} stream`);
-      void agentClient.sendRemoteRuntimeCommand(session.id, "run-guest", "web-auto-render", structuredRequest?.workDir || selectedProject.path)
+        ? `task finished: refreshing ${session.targetLabel || session.targetId} stream (${structuredRequest.reason})`
+        : `task finished: refreshing ${session.targetLabel || session.targetId} stream`);
+      void agentClient.sendRemoteRuntimeCommand(session.id, "run-guest", "task-finished-render", structuredRequest?.workDir || selectedProject.path)
         .then((result) => {
           if ((result as any)?.session) setSession((result as any).session as RemoteRuntimeSession);
         })
-        .catch((err) => appendLog(`auto-render remote surface failed: ${err instanceof Error ? err.message : String(err)}`));
+        .catch((err) => appendLog(`task-finished render failed: ${err instanceof Error ? err.message : String(err)}`));
     }
   }, [
     activeTaskStream,
