@@ -17,8 +17,84 @@
 // Pure + dependency-free → unit-tested by the `npx tsx` harness and importable
 // by every surface that has to decide "should I refresh relay creds and retry?"
 
+/** The relay's STABLE machine-readable deny codes (relay/abuse_guard.go).
+ *
+ * Before these existed, the relay's `code` field was http.StatusText — the
+ * literal "Unauthorized" that EVERY 401 carries — so there was no signal to
+ * key off and every surface regexed English. That is the entire reason the
+ * three drifting matchers above existed.
+ *
+ * The prose matching below is NOT dead code and must not be deleted:
+ * public.yaver.io is redeployed by MANUAL scp
+ * (memory/project_public_relay_deploy_drift), self-hosted relays lag
+ * arbitrarily, and this app has to keep working against both. Code first,
+ * prose second. */
+export const RELAY_DENY_CODES = {
+  passwordMissing: "relay_password_missing",
+  passwordInvalid: "relay_password_invalid",
+  passwordRateLimited: "relay_password_rate_limited",
+  authBackendUnavailable: "relay_auth_backend_unavailable",
+  deviceNotConnected: "relay.device_not_connected",
+  deviceOwnerMismatch: "relay.device_owner_mismatch",
+} as const;
+
+/** Codes meaning "the RELAY refused THIS caller's credential" — the class a
+ *  relay-credential refresh repairs. `authBackendUnavailable` is excluded on
+ *  purpose: the credential is fine, the backend is down, and "self-healing" a
+ *  working password on a Convex blip is what turned a hiccup into a fleet-wide
+ *  outage once already. The device codes are excluded because the relay
+ *  authorized us — the tunnel is the problem. */
+const RELAY_CREDENTIAL_DENY_CODES: ReadonlySet<string> = new Set([
+  RELAY_DENY_CODES.passwordMissing,
+  RELAY_DENY_CODES.passwordInvalid,
+  RELAY_DENY_CODES.passwordRateLimited,
+]);
+
+/** True when `code` is one of the relay's stable credential-deny codes.
+ *  Exact-match only — false for "Unauthorized" so an un-upgraded relay falls
+ *  through to the prose path instead of being misclassified. */
+export function isRelayDenyCode(code: string | null | undefined): boolean {
+  if (!code) return false;
+  return RELAY_CREDENTIAL_DENY_CODES.has(code.trim());
+}
+
+/** Extract the relay's stable `code` from a body that may be raw JSON or
+ *  wrapped by the client ("Relay <id> returned HTTP 401: {…}"). The connect
+ *  ladder stringifies bodies into messages, so this is how the code reaches
+ *  isRelayAuthFailure without rewriting every call site. */
+export function relayDenyCodeFromBody(body: string | null | undefined): string | null {
+  if (!body) return null;
+  const start = body.indexOf("{");
+  const end = body.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(body.slice(start, end + 1)) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const code = (parsed as { code?: unknown }).code;
+    return typeof code === "string" && code.trim() ? code.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 export function isRelayAuthFailure(message: string | null | undefined): boolean {
   if (!message) return false;
+
+  // Code first — a stable code is authoritative in BOTH directions, so a
+  // relay.device_not_connected 502 can no longer be swept up by the bare
+  // "relay … 40x" prose leg below and mistaken for a credential problem.
+  const code = relayDenyCodeFromBody(message);
+  if (code) {
+    if (isRelayDenyCode(code)) return true;
+    if (
+      code === RELAY_DENY_CODES.deviceNotConnected ||
+      code === RELAY_DENY_CODES.deviceOwnerMismatch ||
+      code === RELAY_DENY_CODES.authBackendUnavailable
+    ) {
+      return false;
+    }
+  }
+
   const m = message.toLowerCase();
 
   // Worded forms produced by relayStatusHint / the relay / the agent.
