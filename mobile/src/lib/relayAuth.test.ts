@@ -9,7 +9,16 @@
  * never fired. Each block proves the fix AND breaks it (the bare-401 form that
  * the old phrase-only matchers missed).
  */
-import { isRelayAuthFailure } from "./relayAuth";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+  isRelayAuthFailure,
+  isRelayDenyCode,
+  relayDenyCodeFromBody,
+  RELAY_DENY_CODES,
+} from "./relayAuth";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -47,6 +56,41 @@ const oldPhraseOnly = (msg: string) => {
 };
 check("negative control: old matcher MISSED 'returned HTTP 401' (the bug)", oldPhraseOnly("Relay yaver-free returned HTTP 401") === false);
 check("new matcher CATCHES what the old one missed", isRelayAuthFailure("Relay yaver-free returned HTTP 401") === true);
+
+// ── STABLE CODES (landed relay-side 2026-07-28) ─────────────────────────────
+// Before them, `code` was http.StatusText — the literal "Unauthorized" every
+// 401 carries — which is why every surface regexed English in the first place.
+
+// Keyed off the CODE, not the copy: a relay-side rename fails HERE, loudly,
+// instead of silently degrading this app to the prose fallback.
+const relayGuardSrc = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../../../relay/abuse_guard.go"),
+  "utf8",
+);
+for (const code of Object.values(RELAY_DENY_CODES)) {
+  check(`relay/abuse_guard.go still defines ${code}`, relayGuardSrc.includes(`"${code}"`));
+}
+
+// The code decides with NO recognisable prose to fall back on.
+check("code-only: relay_password_missing", isRelayAuthFailure('HTTP 401: {"ok":false,"code":"relay_password_missing","error":"nope"}'));
+check("code-only: relay_password_invalid", isRelayAuthFailure('{"ok":false,"code":"relay_password_invalid","error":"nope"}'));
+check("isRelayDenyCode exact-matches", isRelayDenyCode("relay_password_rate_limited") && !isRelayDenyCode("Unauthorized") && !isRelayDenyCode(null));
+check("relayDenyCodeFromBody extracts from a wrapped body", relayDenyCodeFromBody('Relay x returned HTTP 401: {"code":"relay_password_missing"}') === "relay_password_missing");
+check("relayDenyCodeFromBody on non-JSON is null", relayDenyCodeFromBody("Relay x returned HTTP 401") === null);
+
+// Authoritative in the NEGATIVE direction. These pass today with or without
+// the code layer — no CURRENT prose leg collides with them — so they are a
+// FORWARD guard: the moment someone widens the prose (or the relay reworders a
+// 502/503), the code keeps the verdict correct. The break-proof for the code
+// layer is the `relay_password_invalid` case above, which fails the instant
+// relayDenyCodeFromBody stops being consulted.
+check("code-only: relay.device_not_connected is NOT a credential failure", !isRelayAuthFailure('relay: HTTP 502: {"ok":false,"code":"relay.device_not_connected","error":"device not connected to relay"}'));
+check("code-only: relay.device_owner_mismatch is NOT a credential failure", !isRelayAuthFailure('relay: HTTP 502: {"ok":false,"code":"relay.device_owner_mismatch","error":"device not connected to relay"}'));
+check("code-only: relay_auth_backend_unavailable is NOT a credential failure", !isRelayAuthFailure('relay: HTTP 503: {"ok":false,"code":"relay_auth_backend_unavailable","error":"relay auth backend unavailable — retry"}'));
+
+// PROSE FALLBACK IS LOAD-BEARING. public.yaver.io is redeployed by MANUAL scp,
+// so the live relay still answers code:"Unauthorized" with the old wording.
+check("prose fallback: pre-fix relay body still classifies", isRelayAuthFailure('{"ok":false,"code":"Unauthorized","error":"relay password missing — sign in again to fetch it"}'));
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILED`);
 if (failures > 0) process.exit(1);

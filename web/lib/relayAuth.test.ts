@@ -24,7 +24,10 @@ import { fileURLToPath } from "node:url";
 import {
   isRelayAuthFailure,
   isRelayCredentialDeny,
+  isRelayCredentialDenyCode,
   isRelayCredentialDenyMessage,
+  relayDenyCodeFromBody,
+  RELAY_DENY_CODES,
 } from "./relayAuth";
 import { classifyFetchError, summarizeFailures } from "./connection-error";
 
@@ -111,11 +114,77 @@ test("the dashboard connect-error panel attributes relay credential 401s to the 
   assert.match(page, /Agent responded, but the connection was rejected/);
 });
 
-test("the relay should grow a stable machine code — until then the comment stays", () => {
-  // writeRelayError's `code` field is just http.StatusText ("Unauthorized"),
-  // which every 401 carries. The classifier file must keep the note so the
-  // relay-side fix isn't forgotten.
-  const src = readFileSync(join(root, "lib/relayAuth.ts"), "utf8");
-  assert.match(src, /stable/i);
-  assert.match(src, /relay\/server\.go/);
+// ── Stable machine codes (landed relay-side 2026-07-28) ─────────────────────
+
+test("every stable code this file knows is actually emitted by the relay", () => {
+  // Keyed off the CODE, not the copy: if the relay renames one, this fails
+  // here instead of silently degrading every surface to the prose fallback.
+  const guardSrc = readFileSync(join(root, "../relay/abuse_guard.go"), "utf8");
+  for (const code of Object.values(RELAY_DENY_CODES)) {
+    assert.ok(
+      guardSrc.includes(`"${code}"`),
+      `relay/abuse_guard.go must still define the stable code ${JSON.stringify(code)}`,
+    );
+  }
+});
+
+test("the stable code decides, with no prose to match on", () => {
+  // Deliberately unrecognisable prose — only the code says what happened.
+  assert.equal(
+    isRelayCredentialDenyMessage('HTTP 401: {"ok":false,"code":"relay_password_missing","error":"nope"}'),
+    true,
+  );
+  assert.equal(
+    isRelayCredentialDenyMessage('{"ok":false,"code":"relay_password_invalid","error":"nope"}'),
+    true,
+  );
+  assert.equal(isRelayCredentialDenyCode("relay_password_rate_limited"), true);
+  // The pre-fix relay's code is NOT a credential signal — every 401 carries it.
+  assert.equal(isRelayCredentialDenyCode("Unauthorized"), false);
+  assert.equal(isRelayCredentialDenyCode(undefined), false);
+});
+
+test("a stable code is authoritative in the NEGATIVE direction too", () => {
+  // Both bodies contain the word "relay"; without the code the prose leg could
+  // sweep them up. The relay authorized us fine here — the tunnel is missing.
+  assert.equal(
+    isRelayCredentialDenyMessage('{"ok":false,"code":"relay.device_not_connected","error":"device not connected to relay"}'),
+    false,
+  );
+  assert.equal(
+    isRelayCredentialDenyMessage('{"ok":false,"code":"relay.device_owner_mismatch","error":"device not connected to relay"}'),
+    false,
+  );
+  // A backend blip must never be "self-healed" as a bad credential.
+  assert.equal(
+    isRelayCredentialDenyMessage('{"ok":false,"code":"relay_auth_backend_unavailable","error":"relay auth backend unavailable — retry"}'),
+    false,
+  );
+});
+
+test("PROSE FALLBACK SURVIVES: public.yaver.io is redeployed by hand", () => {
+  // Until the manual scp lands, the LIVE relay still answers code:"Unauthorized"
+  // with the old prose. Deleting the prose path would break every device card
+  // against the deployed relay, so this pins it.
+  assert.equal(
+    isRelayCredentialDenyMessage(
+      '{"ok":false,"code":"Unauthorized","error":"relay password missing — sign in again to fetch it"}',
+    ),
+    true,
+  );
+  assert.equal(isRelayCredentialDenyMessage("invalid relay password"), true);
+  assert.equal(relayDenyCodeFromBody("not json at all"), null);
+  assert.equal(relayDenyCodeFromBody('{"code":"relay_password_missing"}'), "relay_password_missing");
+});
+
+test("the diagnostic gate prefers an explicitly-parsed code over the prose", () => {
+  assert.equal(
+    isRelayCredentialDeny({ path: "relay", status: 401, code: "relay_password_missing", error: "nope" }),
+    true,
+  );
+  // The lane gate still wins — a code alone does not make a non-relay leg one.
+  assert.equal(
+    isRelayCredentialDeny({ path: "tunnel", status: 401, code: "relay_password_missing" }),
+    false,
+  );
 });

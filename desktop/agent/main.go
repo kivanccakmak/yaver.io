@@ -11440,22 +11440,20 @@ var randInt63n = func(n int64) int64 {
 // agent_mesh_remote.go / bus_relay.go; new callers should use
 // classifyRelayAuthFailure to distinguish dead-token from bad-password
 // (audit §3, 2026-07-19).
+//
+// DELEGATES to relay_deny_code.go::isRelayCredentialDenyText — the single
+// classifier. This function used to require "password" AND one of
+// invalid|rejected|denied, which meant it did NOT match the relay's
+// "relay password missing — sign in again to fetch it", and bus_relay.go:64
+// therefore spun forever on that 401 without re-pulling the credential that
+// would have fixed it. Its sibling staleRelayPasswordHTTP already handled the
+// missing case — two predicates for one question, neither a superset of the
+// other. Now there is one, and it reads the relay's stable `code` first.
 func looksLikeStaleRelayPassword(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := strings.ToLower(err.Error())
-	// Preserve the historic behaviour: any of the distinct denials counts as
-	// "worth refetching the password" for the legacy callers, since the old
-	// relay only ever emitted one collapsed string. Callers that need the
-	// finer distinction call classifyRelayAuthFailure directly.
-	if strings.Contains(msg, "reason=dead_token") || strings.Contains(msg, "reason=bad_password") {
-		return true
-	}
-	if !strings.Contains(msg, "password") {
-		return false
-	}
-	return strings.Contains(msg, "invalid") || strings.Contains(msg, "rejected") || strings.Contains(msg, "denied")
+	return isRelayCredentialDenyText(err.Error())
 }
 
 // relayAuthFailureKind names why the relay refused registration. Audit §3.

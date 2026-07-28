@@ -931,6 +931,28 @@ func doRemoteAgentRequest(ctx context.Context, candidates []RemoteAgentCandidate
 			errs = append(errs, fmt.Sprintf("%s: HTTP 404 with non-JSON body (likely not a Yaver agent): %s", candidate.BaseURL, snippet))
 			continue
 		}
+		// A relay-credential refusal means the request NEVER REACHED THE AGENT.
+		// The relay rejected OUR password at its own door and bridged nothing, so
+		// treating it as a reached candidate is the "inventory says yes, operation
+		// says no" defect: `yaver ping` printed a green "reachable · via relay"
+		// for a box the relay had just refused to bridge, and `remote status`
+		// reported "agent rejected our auth token" about an agent that never saw
+		// the request (RCA 2026-07-28, defect D3). Fall through to the next
+		// candidate — a direct/LAN lane may still reach it.
+		//
+		// A genuine AGENT 401/403 is deliberately NOT caught here: that request
+		// DID reach the agent, and the caller must be able to render "the agent
+		// refused your token". The stable relay codes are what tell the two apart
+		// (relay_deny_code.go); prose remains the fallback for relays that have
+		// not been redeployed yet.
+		if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) &&
+			isRelayCredentialDenyText(string(raw)) {
+			recordRemoteAgentFailure(candidate.DeviceID, candidate.BaseURL, time.Now())
+			errs = append(errs, fmt.Sprintf(
+				"%s: relay refused this client's relay password (HTTP %d) — the request never reached the agent; run `yaver auth` here to refresh it",
+				candidate.BaseURL, resp.StatusCode))
+			continue
+		}
 		if strings.TrimSpace(candidate.DeviceID) != "" {
 			remoteAgentLastGood.Store(candidate.DeviceID, candidate.BaseURL)
 		}
@@ -1048,18 +1070,20 @@ func remoteAgentJSONForDevice(ctx context.Context, deviceHint, method, path stri
 	return json.Unmarshal(raw, out)
 }
 
+// staleRelayPasswordHTTP is the status-gated form of the ONE classifier.
+//
+// It used to carry its own prose matcher — a near-copy of
+// looksLikeStaleRelayPassword that differed in exactly one term ("missing"),
+// which is precisely the drift CLAUDE.md warns about. The body test now lives
+// in relay_deny_code.go::isRelayCredentialDenyText, which reads the relay's
+// stable `code` first (relay/abuse_guard.go) and falls back to the historic
+// prose for relays that predate it — public.yaver.io is redeployed by hand, so
+// the fallback is load-bearing, not legacy cruft.
 func staleRelayPasswordHTTP(status int, raw []byte) bool {
 	if status != http.StatusUnauthorized && status != http.StatusForbidden {
 		return false
 	}
-	msg := strings.ToLower(strings.TrimSpace(string(raw)))
-	// "missing" catches the relay's "relay password missing — sign in again to
-	// fetch it" (relay/server.go), the one case that most needs auto-repair: a
-	// fresh/rotated user has no password, so re-pulling creds via repair-relay is
-	// exactly the fix. Without it that case was a dead end on every surface.
-	return strings.Contains(msg, "relay") && strings.Contains(msg, "password") &&
-		(strings.Contains(msg, "invalid") || strings.Contains(msg, "rejected") ||
-			strings.Contains(msg, "denied") || strings.Contains(msg, "missing"))
+	return isRelayCredentialDenyText(strings.TrimSpace(string(raw)))
 }
 
 func repairRelayPasswordForRemoteHTTP(ctx context.Context) bool {

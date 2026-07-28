@@ -436,12 +436,62 @@ func (g *abuseGuard) clearInvalidAuth(remoteAddr string) {
 	g.mu.Unlock()
 }
 
+// Stable machine-readable deny codes for the HTTP paths.
+//
+// Incident (measured live 2026-07-28): `GET /d/<deviceId>/health` with a valid
+// bearer but no X-Relay-Password answered
+//
+//	401 {"code":"Unauthorized","error":"relay password missing — sign in again to fetch it",...}
+//
+// `code` was just http.StatusText(401) — a value EVERY 401 carries — so the web
+// dashboard rendered the literal "Unauthorized" as the DEVICE's verdict
+// ("Alive · can't reach (Unauthorized)") on a box that answers 200 the instant
+// the relay password is attached. With no stable signal, every surface invented
+// its own regex over English prose, and the regexes drifted: mobile carried
+// three different relay-auth matchers, none a superset of the others, and the
+// agent's looksLikeStaleRelayPassword required "invalid|rejected|denied" so it
+// never matched "relay password MISSING" at all.
+//
+// These codes are the structured signal. The human `error`/`message` strings
+// they accompany are DELIBERATELY unchanged: every shipped client still matches
+// on the prose, and the relay is redeployed by hand (see
+// memory/project_public_relay_deploy_drift), so a client talking to an
+// older relay must keep working. Codes are additive, prose is forever.
+//
+// Naming note: the password codes are snake_case and the device/tunnel codes
+// are dotted, matching the pre-existing `relay.device_not_connected` that
+// shipped before this change. Consumers must compare exact strings, never
+// guess a separator.
+const (
+	RelayCodePasswordMissing        = "relay_password_missing"
+	RelayCodePasswordInvalid        = "relay_password_invalid"
+	RelayCodePasswordRateLimited    = "relay_password_rate_limited"
+	RelayCodeAuthBackendUnavailable = "relay_auth_backend_unavailable"
+
+	// RelayCodeDeviceNotConnected is the genuine absence: nobody holds a
+	// tunnel for this deviceId right now.
+	RelayCodeDeviceNotConnected = "relay.device_not_connected"
+	// RelayCodeDeviceOwnerMismatch is the same-owner backstop: a tunnel for
+	// this deviceId EXISTS but belongs to a different account. Before this
+	// code the two were indistinguishable — both 502 "device not connected to
+	// relay" — so a support engineer could not tell "your box is offline"
+	// from "that tunnel is someone else's".
+	RelayCodeDeviceOwnerMismatch = "relay.device_owner_mismatch"
+)
+
 func writeRelayError(w http.ResponseWriter, status int, message string) {
+	writeRelayErrorCode(w, status, http.StatusText(status), message)
+}
+
+// writeRelayErrorCode is writeRelayError with a caller-supplied STABLE code in
+// place of http.StatusText. Body shape is otherwise byte-identical, so a client
+// that only reads `error`/`message` cannot tell the difference.
+func writeRelayErrorCode(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":      false,
-		"code":    http.StatusText(status),
+		"code":    code,
 		"error":   message,
 		"message": message,
 	})
