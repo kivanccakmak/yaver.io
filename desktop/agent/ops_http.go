@@ -82,14 +82,7 @@ func (s *HTTPServer) handleOps(w http.ResponseWriter, r *http.Request) {
 	// Derive caller role from the middleware-set headers. Auth is
 	// already enforced upstream — this is only about telling the
 	// dispatcher whether to honour guest-scoped verbs.
-	caller := "owner"
-	if r.Header.Get("X-Yaver-Support") == "true" {
-		caller = "support"
-	} else if r.Header.Get("X-Yaver-HostShare") == "true" {
-		caller = "host-share"
-	} else if r.Header.Get("X-Yaver-Guest") == "true" {
-		caller = "guest"
-	}
+	caller, callerScope := opsCallerFromRequest(r)
 
 	octx := OpsContext{
 		Ctx:            r.Context(),
@@ -97,7 +90,7 @@ func (s *HTTPServer) handleOps(w http.ResponseWriter, r *http.Request) {
 		RequestHeaders: r.Header.Clone(),
 		ActorUserID:    strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID")),
 		Caller:         caller,
-		Scope:          strings.TrimSpace(r.Header.Get("X-Yaver-GuestScope")),
+		Scope:          callerScope,
 	}
 	out := dispatchOps(octx, req)
 
@@ -119,21 +112,14 @@ func (s *HTTPServer) handleOpsPlan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
 		return
 	}
-	caller := "owner"
-	if r.Header.Get("X-Yaver-Support") == "true" {
-		caller = "support"
-	} else if r.Header.Get("X-Yaver-HostShare") == "true" {
-		caller = "host-share"
-	} else if r.Header.Get("X-Yaver-Guest") == "true" {
-		caller = "guest"
-	}
+	caller, callerScope := opsCallerFromRequest(r)
 	octx := OpsContext{
 		Ctx:            r.Context(),
 		Server:         s,
 		RequestHeaders: r.Header.Clone(),
 		ActorUserID:    strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID")),
 		Caller:         caller,
-		Scope:          strings.TrimSpace(r.Header.Get("X-Yaver-GuestScope")),
+		Scope:          callerScope,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(buildOpsExecutionPlan(octx, req))
@@ -161,4 +147,40 @@ func (s *HTTPServer) handleOpsVerbs(w http.ResponseWriter, r *http.Request) {
 		"count": len(out),
 		"verbs": out,
 	})
+}
+
+// opsCallerFromRequest derives the caller role and scope from the
+// MIDDLEWARE-SET headers. Auth is already enforced upstream; this only tells
+// the dispatcher whether to honour guest-scoped verbs.
+//
+// SECURITY (audit 2026-07-28): this logic existed TWICE, verbatim, in this file
+// — and neither copy knew about companion sessions. A tvOS/watch/vision token
+// reaches /ops legitimately (companionSessionAllowed admits POST /ops for the
+// watch voice lane) but carries none of the guest/support/host-share headers,
+// so both copies fell through to caller="owner". ops.go restricts only
+// caller=="guest", so a stolen TV token reached the `run` verb and executed
+// commands — while httpserver.go promised in a comment that "a stolen TV token
+// can … not run commands".
+//
+// One function now, so the next surface added here cannot inherit only half the
+// rules. Companion sessions are treated as guests carrying the companion scope,
+// reusing the existing tested guestVerbAllowed gate instead of a second
+// parallel one: a companion verb that genuinely needs to work must be marked
+// allowed for that scope explicitly, which is the audit trail we want.
+func opsCallerFromRequest(r *http.Request) (caller string, scope string) {
+	scope = strings.TrimSpace(r.Header.Get("X-Yaver-GuestScope"))
+	switch {
+	case r.Header.Get("X-Yaver-Support") == "true":
+		return "support", scope
+	case r.Header.Get("X-Yaver-HostShare") == "true":
+		return "host-share", scope
+	case r.Header.Get("X-Yaver-Guest") == "true":
+		return "guest", scope
+	}
+	// X-Yaver-SessionScope is stamped by the auth middleware AFTER Convex
+	// validated it, and the inbound copy is stripped, so it cannot be forged.
+	if sess := strings.TrimSpace(r.Header.Get("X-Yaver-SessionScope")); isCompanionSessionScope(sess) {
+		return "guest", sess
+	}
+	return "owner", scope
 }

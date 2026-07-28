@@ -169,3 +169,57 @@ func TestSupportSessionRedeem_RefusedWhileFeatureOff(t *testing.T) {
 			"the kill switch must refuse at the lookup, not only in the handler")
 	}
 }
+
+// COMPANION TOKEN ESCALATION. A tvOS/watch/vision session reaches POST /ops
+// legitimately (companionSessionAllowed admits it for the watch voice lane) but
+// carries none of the guest/support/host-share headers, so ops_http derived
+// caller="owner" — and ops.go restricts only caller=="guest". A stolen TV token
+// therefore reached the `run` verb and executed commands, contradicting the
+// promise in httpserver.go that it could not.
+//
+// To see this fail, delete the X-Yaver-SessionScope branch in
+// opsCallerFromRequest.
+func TestOpsCallerFromRequest_CompanionIsNotOwner(t *testing.T) {
+	for _, scope := range []string{"tv", "watch", "vision", "spatial"} {
+		t.Run(scope, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/ops", nil)
+			r.Header.Set("X-Yaver-SessionScope", scope)
+
+			caller, got := opsCallerFromRequest(r)
+			if caller == "owner" {
+				t.Fatalf("a %q companion session was treated as the OWNER — "+
+					"it reaches the `run` verb and executes commands on the box", scope)
+			}
+			if got != scope {
+				t.Fatalf("companion scope lost: caller=%q scope=%q (want scope %q); "+
+					"without it guestVerbAllowed cannot gate per-surface", caller, got, scope)
+			}
+		})
+	}
+}
+
+// The owner must still be the owner — the fix has to be narrow enough that a
+// normal request is unaffected.
+func TestOpsCallerFromRequest_OwnerUnchanged(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/ops", nil)
+	if caller, _ := opsCallerFromRequest(r); caller != "owner" {
+		t.Fatalf("a plain owner request derived caller=%q, want owner", caller)
+	}
+	// A non-companion session scope (e.g. a full mobile session) is still owner.
+	r2 := httptest.NewRequest(http.MethodPost, "/ops", nil)
+	r2.Header.Set("X-Yaver-SessionScope", "full")
+	if caller, _ := opsCallerFromRequest(r2); caller != "owner" {
+		t.Fatalf("a full-scope session derived caller=%q, want owner", caller)
+	}
+}
+
+// The stamped scope must be unforgeable: an inbound copy is stripped before any
+// handler sees it, so a caller cannot promote or demote themselves.
+func TestStripGuestRequestHeaders_StripsSessionScope(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/ops", nil)
+	r.Header.Set("X-Yaver-SessionScope", "full") // attacker trying to look like the owner
+	stripGuestRequestHeaders(r)
+	if v := r.Header.Get("X-Yaver-SessionScope"); v != "" {
+		t.Fatalf("caller-supplied X-Yaver-SessionScope survived (%q) — forgeable identity", v)
+	}
+}

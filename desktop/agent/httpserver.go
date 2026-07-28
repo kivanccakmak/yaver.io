@@ -1861,6 +1861,25 @@ func spatialSDKRequestAllowed(method, path string) bool {
 	}
 }
 
+// stampSessionScope records the SERVER-VALIDATED session scope on the request so
+// downstream dispatchers (notably /ops) can tell a companion token from the
+// owner. It is set only after the scope came back from Convex, and the inbound
+// copy is stripped in stripGuestRequestHeaders, so a caller cannot forge it.
+//
+// SECURITY (audit 2026-07-28): without this, ops_http.go had no way to see the
+// scope at all — it derived caller purely from the guest/support/host-share
+// headers and so defaulted a tvOS/watch token to caller="owner". Since ops.go
+// only restricts caller=="guest", a stolen TV token reached the `run` verb and
+// executed commands, directly contradicting the comment in this file promising
+// that it could not.
+func stampSessionScope(r *http.Request, scope string) {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return
+	}
+	r.Header.Set("X-Yaver-SessionScope", scope)
+}
+
 func isCompanionSessionScope(scope string) bool {
 	switch normalizeSessionScope(scope) {
 	case "tv", "watch", "vision", "spatial":
@@ -2395,6 +2414,7 @@ func stripGuestRequestHeaders(r *http.Request) {
 		// as the agent user" — starting with ~/.yaver/config.json, which holds
 		// the owner's auth_token. Strip every member; adding a new
 		// X-Yaver-HostShare* header means adding it here too.
+		"X-Yaver-SessionScope",
 		"X-Yaver-HostShare",
 		"X-Yaver-HostShareRoot",
 		"X-Yaver-HostShareUserID",
@@ -2585,7 +2605,7 @@ func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 				s.tokenCache.Delete(token)
 			} else {
 				if info.userID == s.ownerUserID {
-					if isCompanionSessionScope(info.sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, info.sessionScope) {
+					if stampSessionScope(r, info.sessionScope); isCompanionSessionScope(info.sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, info.sessionScope) {
 						companionScopeDenied(w, info.sessionScope)
 						return
 					}
@@ -2653,7 +2673,7 @@ func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 			jsonError(w, http.StatusForbidden, "token belongs to a different user")
 			return
 		}
-		if isCompanionSessionScope(sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, sessionScope) {
+		if stampSessionScope(r, sessionScope); isCompanionSessionScope(sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, sessionScope) {
 			companionScopeDenied(w, sessionScope)
 			return
 		}
@@ -2808,7 +2828,7 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 				jsonError(w, http.StatusForbidden, "token belongs to a different user")
 				return
 			}
-			if isCompanionSessionScope(sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, sessionScope) {
+			if stampSessionScope(r, sessionScope); isCompanionSessionScope(sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, sessionScope) {
 				companionScopeDenied(w, sessionScope)
 				return
 			}
@@ -3000,7 +3020,7 @@ func (s *HTTPServer) authSDKOrGuest(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 			if info.userID == s.ownerUserID {
-				if isCompanionSessionScope(info.sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, info.sessionScope) {
+				if stampSessionScope(r, info.sessionScope); isCompanionSessionScope(info.sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, info.sessionScope) {
 					companionScopeDenied(w, info.sessionScope)
 					return
 				}
@@ -3018,7 +3038,7 @@ func (s *HTTPServer) authSDKOrGuest(next http.HandlerFunc) http.HandlerFunc {
 		if err == nil {
 			s.tokenCache.Store(token, &cachedTokenInfo{userID: uid, sessionScope: sessionScope, isSdk: false, storedAt: time.Now()})
 			if uid == s.ownerUserID {
-				if isCompanionSessionScope(sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, sessionScope) {
+				if stampSessionScope(r, sessionScope); isCompanionSessionScope(sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, sessionScope) {
 					companionScopeDenied(w, sessionScope)
 					return
 				}
