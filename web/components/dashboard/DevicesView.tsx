@@ -15,6 +15,7 @@ import { HIDE_PAID_UI } from "@/lib/launchFlags";
 import { CONVEX_URL } from "@/lib/constants";
 import { agentClient, AgentClient, isRunnerBrowserAuthTerminal, requestAgentUpdateViaConvex, type AgentUpdateStatus, type OpenCodeConfigSummary, type OpenCodeModelSummary, type OpenCodeProviderSummary, type RunnerBrowserAuthSession, type RunnerTestResult } from "@/lib/agent-client";
 import { runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
+import { isUsablePublicEndpoint } from "@/lib/endpoints";
 import { diagnoseRunnerFailure, formatFailureTime } from "@/lib/runnerFailure";
 import {
   lastSeenAgeMs,
@@ -343,26 +344,11 @@ function isVersionOutdated(current: string | undefined | null, latest: string | 
   return l[2] > c[2];
 }
 
-// isUsablePublicEndpoint — gate that filters out endpoints we
-// know will fail before we even try them. Right now this is just
-// the multi-level subdomain pattern <id>.dev.yaver.io: Cloudflare
-// universal SSL only covers *.yaver.io (one level), so the
-// wildcard cert for *.dev.yaver.io is missing. Probing those URLs
-// from the dashboard fails at TLS handshake → "Could not connect
-// to the server" / "access control checks" in console. The seed
-// mutation populated 839 devices with these URLs ahead of cert
-// provisioning; until the cert is actually wired (Cloudflare ACM
-// or upload), keep the dashboard quiet by skipping them.
-function isUsablePublicEndpoint(ep: string): boolean {
-  // The two-label-deep wildcard cert blocker. <id>.dev.yaver.io
-  // is the format the relay auto-mints. Anything not matching
-  // that pattern (custom tunnel, private-network serve URL,
-  // user-configured custom domain) is fine and stays.
-  if (/^https?:\/\/[^/]+\.dev\.yaver\.io(\/|$)/i.test(ep)) {
-    return false;
-  }
-  return true;
-}
+// isUsablePublicEndpoint — the shared known-dead-endpoint gate now lives in
+// lib/endpoints.ts (ONE predicate, many call sites — this file used to carry
+// a private copy that only knew about *.dev.yaver.io and let stale
+// <uuid>.yaver.io rows through to NXDOMAIN console spam). Imported at the top
+// of this file; no local logic remains.
 
 // formatBytes — module-level helper for the AgentUpdateModal
 // progress UI. Distinct from the local helper later in the file

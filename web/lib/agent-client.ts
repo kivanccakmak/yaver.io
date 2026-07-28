@@ -10,6 +10,7 @@ import { getYaverCloudBaseUrl } from "@/lib/yaver-cloud";
 import { CONVEX_URL } from "@/lib/constants";
 import { decodeCloudWorkspaceRequiredError } from "@/lib/cloud-workspace-required";
 import { classifyRelayLimit, explainRelayDeny } from "./relayDeny";
+import { isUsablePublicEndpoint } from "./endpoints";
 import { planReconnect } from "./reconnectLadder";
 import webPkg from "../package.json";
 import type { MachineResourceReport, VibeParticipant, VibeSession } from "./machine-resources";
@@ -1979,7 +1980,10 @@ export class AgentClient {
     this.deviceId = deviceId ?? null;
     this._activeRelayUrl = null;
     this._activeTunnelUrl = null;
-    this.tunnelCandidates = Array.from(new Set((opts?.tunnelUrls || []).map((url) => String(url || "").trim()).filter(Boolean)));
+    // Known-dead endpoint shapes (<uuid>.yaver.io — no DNS; *.dev.yaver.io —
+    // no cert) are dropped by the ONE shared predicate (lib/endpoints.ts)
+    // before attemptConnect() ever dials them.
+    this.tunnelCandidates = Array.from(new Set((opts?.tunnelUrls || []).map((url) => String(url || "").trim()).filter(Boolean))).filter(isUsablePublicEndpoint);
     this.reconnectAttempt = 0;
     this.reconnectRepairAttempted = false;
     this._lastConnectError = null;
@@ -4064,12 +4068,14 @@ export class AgentClient {
       if (!ip) continue;
       push(`http://${ip}:${port}/auth/pair/owner-claim`, `lan ${ip}`);
     }
-    // Tunnel + public endpoints.
-    if (opts.tunnelUrl) {
+    // Tunnel + public endpoints — filtered through the ONE shared known-dead
+    // predicate (lib/endpoints.ts) so owner-claim doesn't dial <uuid>.yaver.io
+    // (no DNS) or *.dev.yaver.io (no cert) endpoints.
+    if (opts.tunnelUrl && isUsablePublicEndpoint(opts.tunnelUrl)) {
       push(`${opts.tunnelUrl.replace(/\/+$/, "")}/auth/pair/owner-claim`, `tunnel ${opts.tunnelUrl}`);
     }
     for (const endpoint of opts.publicEndpoints || []) {
-      if (!endpoint) continue;
+      if (!endpoint || !isUsablePublicEndpoint(endpoint)) continue;
       push(`${endpoint.replace(/\/+$/, "")}/auth/pair/owner-claim`, `public ${endpoint}`);
     }
 
@@ -4260,13 +4266,11 @@ export class AgentClient {
     for (const tunnelUrl of (opts.tunnelUrls || [])
       .map((u) => String(u || "").trim())
       .filter(Boolean)
-      // Skip <id>.dev.yaver.io URLs while the wildcard cert isn't
-      // wired (Cloudflare universal SSL only covers *.yaver.io,
-      // one level deep). Probing them fails at TLS handshake and
-      // floods the console with mixed-content / "access control
-      // checks" errors. See web 1.1.72 + the dev-yaver-io comment
-      // in DevicesView.tsx::isUsablePublicEndpoint.
-      .filter((u) => !/^https?:\/\/[^/]+\.dev\.yaver\.io(\/|$)/i.test(u))) {
+      // ONE shared predicate (lib/endpoints.ts): skips <id>.dev.yaver.io
+      // (wildcard cert not provisioned — TLS handshake failure) AND stale
+      // <uuid>.yaver.io rows (no wildcard *.yaver.io DNS — NXDOMAIN spam).
+      // This used to be a private regex that drifted from DevicesView's copy.
+      .filter(isUsablePublicEndpoint)) {
       const normalized = tunnelUrl.replace(/\/+$/, "");
       const diag = await this.probeHealth(normalized, baseHeaders, 8000, "tunnel");
       diagnostics.push(diag);
