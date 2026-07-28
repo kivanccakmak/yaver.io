@@ -13,7 +13,7 @@ import { ManagedCloudSummary } from "@/components/dashboard/ManagedCloudPanel";
 import WakeProgress, { ParkedSummary } from "@/components/dashboard/WakeProgress";
 import { HIDE_PAID_UI } from "@/lib/launchFlags";
 import { CONVEX_URL } from "@/lib/constants";
-import { agentClient, AgentClient, isRunnerBrowserAuthTerminal, requestAgentUpdateViaConvex, type AgentUpdateStatus, type OpenCodeConfigSummary, type OpenCodeModelSummary, type OpenCodeProviderSummary, type RunnerBrowserAuthSession, type RunnerTestResult } from "@/lib/agent-client";
+import { agentClient, AgentClient, isRunnerBrowserAuthTerminal, requestAgentUpdateViaConvex, type AgentUpdateStatus, type ConnectAttemptDiagnostic, type OpenCodeConfigSummary, type OpenCodeModelSummary, type OpenCodeProviderSummary, type RunnerBrowserAuthSession, type RunnerTestResult } from "@/lib/agent-client";
 import { runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
 import { isUsablePublicEndpoint } from "@/lib/endpoints";
 import { diagnoseRunnerFailure, formatFailureTime } from "@/lib/runnerFailure";
@@ -30,6 +30,14 @@ import {
   type DeviceLifecycleState,
 } from "@/lib/device-lifecycle";
 import { classifyTransport, fetchRelayHealth, type TransportInfo } from "@/lib/transport";
+import {
+  connectedStatusLine,
+  deviceCardSurfaceClasses,
+  isBrowserConnectedToDevice,
+  noteDeviceReachRttMs,
+  readDeviceReachRttMs,
+  useDeviceReachSampleVersion,
+} from "@/lib/connectedDeviceCard";
 import {
   describeMachineState,
   isMachineRunning,
@@ -1283,6 +1291,22 @@ interface DevicesViewProps {
   hiddenCount?: number;
   /** Navigate to the dedicated Yaver Cloud page (slim summary card links here). */
   onNavigateCloud?: () => void;
+  /**
+   * Last connect failure + the per-candidate ladder that produced it.
+   *
+   * `app/dashboard/page.tsx` has been PASSING both of these since they landed,
+   * while this interface never declared them — so `npm run build` fails on
+   * `github/main` today with "Property 'connectError' does not exist on type
+   * DevicesViewProps" (a bare `tsc --noEmit` reports the same, one error, and
+   * nothing else). Declared here so the tree type-checks again.
+   *
+   * NOTE FOR WHOEVER OWNS THE CONNECT-FAILURE PANEL: these are accepted and
+   * not yet rendered. A producer with no consumer is half a change — the card
+   * should name the failed candidate and offer the route to its fix. Land the
+   * consumer against these props rather than re-plumbing new ones.
+   */
+  connectError?: string | null;
+  connectDiagnostics?: ConnectAttemptDiagnostic[];
   /** Shared runner/render role settings hook from dashboard/page.tsx. */
   machineRoles?: ReturnType<typeof useMachineRoles>;
 }
@@ -1368,7 +1392,12 @@ function useDevicePing(device: Device, token: string | null | undefined) {
         ),
       });
       if (probe.ok) {
-        setPingState({ pinging: false, ok: true, rttMs: Date.now() - started });
+        const rttMs = Date.now() - started;
+        // Remember it per-deviceId so the connected card can state its latency
+        // without anyone adding a second probe. This is the round-trip the user
+        // already asked for by tapping Ping — no new I/O, and it expires.
+        noteDeviceReachRttMs(device.id, rttMs);
+        setPingState({ pinging: false, ok: true, rttMs });
       } else {
         setPingState({ pinging: false, ok: false, error: probe.error, authExpired: probe.authExpired });
       }
@@ -1864,6 +1893,23 @@ function useAgentConnectionState(): string {
     return unsubscribe;
   }, []);
   return state;
+}
+
+/**
+ * deviceId the browser's agent client is bound to right now, re-read on every
+ * connectionState transition. This is the ONLY admissible evidence for "the
+ * user is on this card" — `device.workspaceLive` / lifecycle "connected" is a
+ * Convex-derived claim about the agent, not about this browser's session.
+ */
+function useConnectedAgentDeviceId(): string | null {
+  const [id, setId] = useState<string | null>(() => agentClient.connectedDeviceId);
+  useEffect(() => {
+    const sync = () => setId(agentClient.connectedDeviceId);
+    const unsubscribe = agentClient.on("connectionState", sync);
+    sync();
+    return unsubscribe;
+  }, []);
+  return id;
 }
 
 function useDeviceProjects(device: Device, enabled: boolean, token: string | null | undefined) {
@@ -3053,7 +3099,11 @@ export default function DevicesView({
   machineRoles,
 }: DevicesViewProps) {
   const agentConnectionState = useAgentConnectionState();
+  const connectedAgentDeviceId = useConnectedAgentDeviceId();
   const failureRegistryVersion = useFailureRegistryVersion();
+  // Subscribed here (not per-iteration — hooks can't be) so a Ping landing on
+  // any card re-renders the list and the connected card can pick up its RTT.
+  const reachSampleVersion = useDeviceReachSampleVersion();
   const { primaryDeviceId, setPrimaryDevice, secondaryDeviceId, setSecondaryDevice } = usePrimaryDeviceId(token);
   const managedDeviceIds = useManagedDeviceIds(token);
   const { machines: managedMachines, refresh: refreshManagedMachines } =
@@ -3538,8 +3588,39 @@ export default function DevicesView({
             const reach = deriveBrowserReach(device, getLastFailure(device.id));
             const canAct = canBrowserActOnDevice(lifecycle, reach);
             const cta = deviceCtaLabel(lifecycle, reach);
+            // ── "You are on THIS one." ────────────────────────────────────
+            // Keyed on deviceId equality ONLY. Never `device.name` (two agents
+            // on one box register the same name — that is what made the user
+            // open a circuit-sim cell's workspace believing it was the box) and
+            // never the list index (`renderedDevices` re-sorts by role,
+            // lifecycle and managed state on essentially every heartbeat).
+            //
+            // Everything derived from `agentClient` below this line is
+            // SINGLETON state: it describes exactly one device. Rendering any
+            // of it on a card whose id differs is the identity-mixing defect
+            // from the 2026-07-28 device-status incident (a row's own
+            // `needsAuth` printed beside the *connected* agent's version). So
+            // both the transport and the latency are read inside this guard.
+            const isConnectedCard = isBrowserConnectedToDevice(
+              device.id,
+              connectedAgentDeviceId,
+              agentConnectionState,
+            );
+            void reachSampleVersion;
+            const connectedTransport = isConnectedCard ? transportFor(device) : null;
+            const connectedLine = isConnectedCard
+              ? connectedStatusLine({
+                  transportLabel: connectedTransport?.label,
+                  transportPrimary: connectedTransport?.primary,
+                  latencyMs: readDeviceReachRttMs(device.id),
+                })
+              : null;
             return (
-            <div key={device.id} className="card flex items-start gap-4 border border-slate-200 bg-white shadow-sm dark:border-surface-700/80 dark:bg-[rgba(44,46,56,0.82)] dark:shadow-[0_18px_40px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.03)]">
+            <div
+              key={device.id}
+              aria-current={isConnectedCard ? "true" : undefined}
+              className={`card flex items-start gap-4 border shadow-sm dark:shadow-[0_18px_40px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.03)] ${deviceCardSurfaceClasses(isConnectedCard)}`}
+            >
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-500 dark:bg-[rgba(18,19,24,0.92)] dark:text-surface-300">
                 <DeviceIcon
                   platform={device.platform}
@@ -3689,7 +3770,24 @@ export default function DevicesView({
                       <DeviceLifecycleBadge device={device} />
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1">
-                      <TransportBadge device={device} />
+                      {/* The connected card states its LIVE path in prose
+                          ("Connected · Yaver public relay · 604ms") and drops
+                          the transport chip, which would otherwise print the
+                          same words twice a centimetre apart. Every other card
+                          keeps the chip — there the transport is a
+                          classification of the device's metadata, not a claim
+                          about a session this browser holds. */}
+                      {isConnectedCard && connectedLine ? (
+                        <span
+                          className="inline-flex items-center gap-1.5 rounded-full border border-success/40 bg-success-soft px-2 py-0.5 text-[11px] font-semibold text-success-softFg"
+                          title="This is the device your dashboard session is connected to right now. Latency, when shown, is the last Ping measured against this device."
+                        >
+                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success animate-live-pulse" />
+                          {connectedLine}
+                        </span>
+                      ) : (
+                        <TransportBadge device={device} />
+                      )}
                       {/* Only BYO gets its own chip. "yaver-hosted" and
                           "self-hosted" already have a badge above, and
                           rendering both printed SELF-HOSTED twice on the
