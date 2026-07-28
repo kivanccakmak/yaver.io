@@ -1319,6 +1319,11 @@ type TaskInfo struct {
 	InputTokens  int                `json:"inputTokens,omitempty"`
 	OutputTokens int                `json:"outputTokens,omitempty"`
 	Turns        []ConversationTurn `json:"turns,omitempty"`
+	// PendingFollowUps lets chat surfaces render user messages that were
+	// accepted while the runner was still working. The agent already owns the
+	// queue; hiding it made a successful second send look dropped after the
+	// next task-detail refresh.
+	PendingFollowUps []PendingFollowUp `json:"pendingFollowUps,omitempty"`
 	// TurnCount lets a list view show "12 turns" without shipping the
 	// transcript to render a number. The list handler nils Turns and sets this;
 	// the detail endpoint leaves Turns intact and this stays 0.
@@ -4046,7 +4051,7 @@ func (tm *TaskManager) ResumeTaskWithOptions(id, input string, images []ImageAtt
 		// completion blocks). Works for any task source so phones can
 		// text mid-stream the way Codex/Claude Code do.
 		task.PendingFollowUps = append(task.PendingFollowUps, PendingFollowUp{
-			Input:   strings.TrimSpace(input),
+			Input:   input,
 			Images:  append([]ImageAttachment{}, images...),
 			Options: opts,
 		})
@@ -4388,6 +4393,9 @@ func chatTaskResponseContext(mode string) string {
 
 // ListTasks returns info about all tasks.
 func (tm *TaskManager) ListTasks() []TaskInfo {
+	if tm == nil {
+		return nil
+	}
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
 
@@ -4399,18 +4407,20 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			output = output[len(output)-2000:]
 		}
 		result = append(result, TaskInfo{
-			ID:              t.ID,
-			Title:           t.Title,
-			Description:     t.Description,
-			Status:          t.Status,
-			RunnerID:        t.RunnerID,
-			SessionID:       t.SessionID,
-			Output:          output,
-			ResultText:      t.ResultText,
-			CostUSD:         t.CostUSD,
-			InputTokens:     t.InputTokens,
-			OutputTokens:    t.OutputTokens,
-			Turns:           t.Turns,
+			ID:           t.ID,
+			Title:        t.Title,
+			Description:  t.Description,
+			Status:       t.Status,
+			RunnerID:     t.RunnerID,
+			SessionID:    t.SessionID,
+			Output:       output,
+			ResultText:   t.ResultText,
+			CostUSD:      t.CostUSD,
+			InputTokens:  t.InputTokens,
+			OutputTokens: t.OutputTokens,
+			Turns:        t.Turns,
+			PendingFollowUps: append([]PendingFollowUp{},
+				t.PendingFollowUps...),
 			Source:          t.Source,
 			TmuxSession:     t.TmuxSession,
 			TmuxSessionID:   t.TmuxSessionID,

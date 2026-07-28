@@ -1452,7 +1452,10 @@ function formatRelativeTime(ts: number): string {
 function buildChatMessages(task: Task): { role: string; content: string }[] {
   const messages: { role: string; content: string }[] = [];
   const pushMessage = (role: string, content: string) => {
-    const normalizedContent = collapseAdjacentDuplicateLines(String(content || ""));
+    const normalizedContent = role === "user"
+      ? String(content ?? "")
+      : collapseAdjacentDuplicateLines(String(content || ""));
+    if (!normalizedContent.trim()) return;
     const last = messages[messages.length - 1];
     if (
       last &&
@@ -1472,6 +1475,11 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
     pushMessage("user", normalizeTaskTitle(task.title));
     if (task.resultText) {
       pushMessage("assistant", task.resultText);
+    }
+  }
+  if (Array.isArray(task.pendingFollowUps)) {
+    for (const followUp of task.pendingFollowUps) {
+      pushMessage("user", String(followUp?.input ?? ""));
     }
   }
 
@@ -4384,6 +4392,9 @@ export default function TasksScreen() {
       selectedTask?.output[0],
       selectedTask?.output[(selectedTask?.output.length ?? 1) - 1],
       selectedTask?.turns?.length,
+      selectedTask?.pendingFollowUps?.length,
+      selectedTask?.pendingFollowUps?.[0]?.input,
+      selectedTask?.pendingFollowUps?.[(selectedTask?.pendingFollowUps?.length ?? 1) - 1]?.input,
     ],
   );
   // Pre-compute the last-assistant index once per render (not per row) so

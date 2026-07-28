@@ -59,6 +59,12 @@ export interface ConversationTurn {
   timestamp: string;
 }
 
+export interface PendingFollowUp {
+  input: string;
+  images?: unknown[];
+  options?: Record<string, unknown>;
+}
+
 /** Wire shape for POST /screen-context. Mirrors the Go `ScreenContext`
  *  (desktop/agent/screen_context.go), which re-clamps every field on receipt. */
 export interface ScreenContextReport {
@@ -82,6 +88,7 @@ export interface Task {
   resultText?: string;
   costUsd?: number;
   turns?: ConversationTurn[];
+  pendingFollowUps?: PendingFollowUp[];
   createdAt: number;
   updatedAt: number;
   finishedAt?: number;
@@ -2185,6 +2192,7 @@ export class AgentClient {
         resultText: t.resultText || undefined,
         costUsd: t.costUsd || undefined,
         turns: t.turns || undefined,
+        pendingFollowUps: Array.isArray(t.pendingFollowUps) ? t.pendingFollowUps : undefined,
         createdAt: t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
         updatedAt: t.finishedAt
           ? new Date(t.finishedAt).getTime()
@@ -2222,6 +2230,7 @@ export class AgentClient {
       resultText: t.resultText || undefined,
       costUsd: t.costUsd || undefined,
       turns: t.turns || undefined,
+      pendingFollowUps: Array.isArray(t.pendingFollowUps) ? t.pendingFollowUps : undefined,
       createdAt: t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
       updatedAt: t.finishedAt
         ? new Date(t.finishedAt).getTime()

@@ -4514,13 +4514,15 @@ func (s *HTTPServer) taskInfoFromTask(task *Task, r *http.Request) TaskInfo {
 		// Echo the model + deviceName so mobile UIs can render the
 		// task's authoritative target instead of inferring from the
 		// focused-device picker state.
-		Model:           task.Model,
-		DeviceName:      hostname,
-		SessionID:       task.SessionID,
-		Output:          output,
-		ResultText:      task.ResultText,
-		CostUSD:         task.CostUSD,
-		Turns:           task.Turns,
+		Model:      task.Model,
+		DeviceName: hostname,
+		SessionID:  task.SessionID,
+		Output:     output,
+		ResultText: task.ResultText,
+		CostUSD:    task.CostUSD,
+		Turns:      task.Turns,
+		PendingFollowUps: append([]PendingFollowUp{},
+			task.PendingFollowUps...),
 		Source:          task.Source,
 		TmuxSession:     task.TmuxSession,
 		TmuxSessionID:   task.TmuxSessionID,
@@ -5409,7 +5411,7 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if body.Input == "" {
+	if strings.TrimSpace(body.Input) == "" {
 		jsonError(w, http.StatusBadRequest, "input is required")
 		return
 	}

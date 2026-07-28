@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type WheelEvent } from "react";
 import {
   agentClient,
+  type ConversationTurn,
   type RemoteRuntimeCapabilities,
   type RemoteRuntimeSession,
   type RemoteRuntimeTarget,
@@ -28,7 +29,6 @@ import {
   decideComposerKey,
   insertNewline,
   newlineIsNative,
-  normalizeComposerPrompt,
 } from "@/lib/composerKeys";
 import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskStreamWithRecovery";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
@@ -588,14 +588,29 @@ function taskRowsEqual(a: Task[], b: Task[]): boolean {
 }
 
 function taskStreamEqual(
-  a: { id: string; title: string; status: TaskStatus; lines: string[] } | null,
-  b: { id: string; title: string; status: TaskStatus; lines: string[] } | null,
+  a: { id: string; title: string; status: TaskStatus; lines: string[]; turns?: ConversationTurn[]; pendingUserTurns?: ConversationTurn[] } | null,
+  b: { id: string; title: string; status: TaskStatus; lines: string[]; turns?: ConversationTurn[]; pendingUserTurns?: ConversationTurn[] } | null,
 ): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  if (a.id !== b.id || a.title !== b.title || a.status !== b.status || a.lines.length !== b.lines.length) return false;
+  if (
+    a.id !== b.id ||
+    a.title !== b.title ||
+    a.status !== b.status ||
+    a.lines.length !== b.lines.length ||
+    (a.turns?.length || 0) !== (b.turns?.length || 0) ||
+    (a.pendingUserTurns?.length || 0) !== (b.pendingUserTurns?.length || 0)
+  ) {
+    return false;
+  }
   for (let i = 0; i < a.lines.length; i += 1) {
     if (a.lines[i] !== b.lines[i]) return false;
+  }
+  for (let i = 0; i < (a.turns?.length || 0); i += 1) {
+    if (a.turns?.[i]?.role !== b.turns?.[i]?.role || a.turns?.[i]?.content !== b.turns?.[i]?.content) return false;
+  }
+  for (let i = 0; i < (a.pendingUserTurns?.length || 0); i += 1) {
+    if (a.pendingUserTurns?.[i]?.content !== b.pendingUserTurns?.[i]?.content) return false;
   }
   return true;
 }
@@ -649,6 +664,75 @@ function taskOutputLines(task: Pick<Task, "output" | "resultText" | "status" | "
     return [`No runner output was captured for this ${status} task.`];
   }
   return [];
+}
+
+function taskConversationTurns(task: Pick<Task, "title" | "description" | "turns" | "createdAt"> | null | undefined): ConversationTurn[] {
+  const turns = Array.isArray(task?.turns)
+    ? task.turns
+        .filter((turn): turn is ConversationTurn =>
+          (turn?.role === "user" || turn?.role === "assistant") &&
+          typeof turn.content === "string" &&
+          turn.content.trim().length > 0)
+        .slice(-50)
+    : [];
+  if (turns.length) return turns;
+  const description = typeof task?.description === "string" ? task.description : "";
+  const title = typeof task?.title === "string" ? task.title : "";
+  const content = description.trim().length > 0 ? description : title;
+  if (!content.trim()) return [];
+  return [{ role: "user", content, timestamp: new Date(task?.createdAt || Date.now()).toISOString() }];
+}
+
+function taskPendingFollowUpTurns(task: Pick<Task, "pendingFollowUps"> | null | undefined): ConversationTurn[] {
+  if (!Array.isArray(task?.pendingFollowUps)) return [];
+  return task.pendingFollowUps
+    .map((followUp) => String(followUp?.input ?? ""))
+    .filter((input) => input.trim().length > 0)
+    .map((content) => ({ role: "user", content, timestamp: "" }) as ConversationTurn);
+}
+
+function hasConversationTurn(turns: ConversationTurn[] | undefined, role: ConversationTurn["role"], content: string): boolean {
+  const want = String(content ?? "");
+  if (!want.trim()) return false;
+  const normalizedWant = want.trim();
+  return (turns || []).some((turn) => {
+    if (turn.role !== role) return false;
+    const current = String(turn.content ?? "");
+    return current === want || current.trim() === normalizedWant;
+  });
+}
+
+function mergePendingUserTurns(localTurns: ConversationTurn[] | undefined, serverTurns: ConversationTurn[] | undefined, persistedTurns: ConversationTurn[] | undefined): ConversationTurn[] {
+  const merged: ConversationTurn[] = [];
+  const add = (turn: ConversationTurn) => {
+    if (turn.role !== "user") return;
+    const content = String(turn.content ?? "");
+    if (!content.trim()) return;
+    if (hasConversationTurn(persistedTurns, "user", content) || hasConversationTurn(merged, "user", content)) return;
+    merged.push({ ...turn, content });
+  };
+  (localTurns || []).forEach(add);
+  (serverTurns || []).forEach(add);
+  return merged.slice(-10);
+}
+
+function runtimeChatMessages(stream: { title: string; status: TaskStatus; lines: string[]; turns?: ConversationTurn[] }): ConversationTurn[] {
+  const messages = (stream.turns?.length
+    ? stream.turns
+    : [{ role: "user", content: stream.title, timestamp: "" } as ConversationTurn]
+  ).filter((turn) => String(turn.content || "").trim());
+  const liveOutput = stream.lines.join("\n").trim();
+  if (liveOutput && (stream.status === "queued" || stream.status === "running" || !messages.some((turn) => turn.role === "assistant"))) {
+    const last = messages[messages.length - 1];
+    if (last?.role === "assistant") {
+      return [...messages.slice(0, -1), { ...last, content: liveOutput }];
+    }
+    return [...messages, { role: "assistant", content: liveOutput, timestamp: "" }];
+  }
+  if ((stream.status === "queued" || stream.status === "running") && !messages.some((turn) => turn.role === "assistant")) {
+    return [...messages, { role: "assistant", content: "", timestamp: "" }];
+  }
+  return messages;
 }
 
 function taskTimeLabel(task: Pick<Task, "createdAt" | "updatedAt">): string {
@@ -945,6 +1029,7 @@ export default function RuntimeLabView({
   const recognitionRef = useRef<any>(null);
   const autoRenderRef = useRef<string>("");
   const webPreviewReloadInFlightRef = useRef(false);
+  const queuedWebPreviewReloadRef = useRef<"fast" | "full" | null>(null);
   const chatPaneResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const runtimeConsoleRef = useRef<HTMLDivElement | null>(null);
   // Points at the chat pane's ONE scroll container (the pane itself, not the
@@ -966,6 +1051,8 @@ export default function RuntimeLabView({
     title: string;
     status: TaskStatus;
     lines: string[];
+    turns: ConversationTurn[];
+    pendingUserTurns: ConversationTurn[];
   } | null>(null);
   // Live-output stream health. A cut stream used to end in silence, freezing
   // this console on its last line under a "running" badge.
@@ -1096,9 +1183,15 @@ export default function RuntimeLabView({
     if (runtimeConsolePinned) scrollToBottom(runtimeConsoleRef.current);
   }, [log, runtimeConsoleOpen, runtimeConsolePinned, scrollToBottom]);
 
+  const taskLineCount = activeTaskStream?.lines.length || 0;
+  const taskLastLine = taskLineCount ? activeTaskStream?.lines[taskLineCount - 1] || "" : "";
+  const taskTurnCount = activeTaskStream?.turns.length || 0;
+  const pendingTurnCount = activeTaskStream?.pendingUserTurns.length || 0;
+  const pendingLastTurn = pendingTurnCount ? activeTaskStream?.pendingUserTurns[pendingTurnCount - 1]?.content || "" : "";
+
   useEffect(() => {
     if (taskConsolePinned) scrollToBottom(taskConsoleRef.current);
-  }, [activeTaskStream?.lines, taskConsolePinned, scrollToBottom]);
+  }, [pendingLastTurn, pendingTurnCount, scrollToBottom, taskConsolePinned, taskLastLine, taskLineCount, taskTurnCount]);
 
   // New task → back to tail-only view; an expansion is a per-task choice.
   useEffect(() => {
@@ -1859,7 +1952,15 @@ export default function RuntimeLabView({
 
   const attachTaskSession = useCallback((task: Task) => {
     stopActiveTaskStream();
-    const initial = { id: task.id, title: task.title, status: task.status, lines: taskOutputLines(task) };
+    const turns = taskConversationTurns(task);
+    const initial = {
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      lines: taskOutputLines(task),
+      turns,
+      pendingUserTurns: mergePendingUserTurns([], taskPendingFollowUpTurns(task), turns),
+    };
     setActiveTaskStream((prev) => taskStreamEqual(prev, initial) ? prev : initial);
     setRecentTasks((prev) => {
       const next = [task, ...prev.filter((row) => row.id !== task.id)].slice(0, 8);
@@ -1910,7 +2011,15 @@ export default function RuntimeLabView({
         setActiveTaskStream((prev) => {
           if (!prev || prev.id !== task.id) return prev;
           const lines = taskOutputLines(fresh, prev.lines);
-          const next = { ...prev, status: fresh.status, lines };
+          const serverTurns = taskConversationTurns(fresh);
+          const pendingUserTurns = mergePendingUserTurns(prev.pendingUserTurns, taskPendingFollowUpTurns(fresh), serverTurns);
+          const next = {
+            ...prev,
+            status: fresh.status,
+            lines,
+            turns: serverTurns.length ? serverTurns : prev.turns,
+            pendingUserTurns,
+          };
           return taskStreamEqual(prev, next) ? prev : next;
         });
         setRecentTasks((prev) => {
@@ -2047,10 +2156,10 @@ export default function RuntimeLabView({
   }, [machineSplitActive, machineRoles?.autoPush, selectedProject?.gitRemote, selectedProject?.remote, selectedProject?.branch]);
 
   const sendPrompt = useCallback(async () => {
-    // normalizeComposerPrompt trims the EDGES only — interior newlines are the
-    // user's message structure and must reach the runner untouched.
-    const prompt = normalizeComposerPrompt(composer);
-    if (!prompt || sending) return;
+    // Preserve the textarea exactly for the runner payload and the blue user
+    // bubble. Trim only for the blank-message gate.
+    const prompt = composer;
+    if (!prompt.trim() || sending) return;
     // A send is NEVER refused while the runner or a reload is busy: the agent
     // queues mid-run follow-ups (PendingFollowUps) and drains them when the
     // current response finishes, Claude-Desktop style. The old silent
@@ -2058,18 +2167,36 @@ export default function RuntimeLabView({
     // the user never sees — from the chat it read as "secondary prompts don't
     // work at all" (2026-07-27).
     setSending(true);
+    let optimisticTaskId: string | null = null;
+    let optimisticPrompt = "";
     try {
       const existingTaskId = activeTaskStream?.id;
       if (existingTaskId) {
+        const optimisticTurn: ConversationTurn = { role: "user", content: prompt, timestamp: new Date().toISOString() };
+        optimisticTaskId = existingTaskId;
+        optimisticPrompt = prompt;
+        setActiveTaskStream((prev) =>
+          prev && prev.id === existingTaskId
+            ? {
+                ...prev,
+                status: prev.status === "completed" || prev.status === "review" || prev.status === "failed" || prev.status === "stopped" ? "queued" : prev.status,
+                pendingUserTurns: hasConversationTurn(prev.turns, "user", prompt) || hasConversationTurn(prev.pendingUserTurns, "user", prompt)
+                  ? prev.pendingUserTurns
+                  : [...prev.pendingUserTurns, optimisticTurn].slice(-10),
+              }
+            : prev);
+        setTaskConsolePinned(true);
+        window.setTimeout(() => scrollToBottom(taskConsoleRef.current), 0);
         await agentClient.continueTask(existingTaskId, prompt);
         const fresh = await agentClient.getTask(existingTaskId);
         attachTaskSession(fresh);
-        // The agent clears task output for the new turn, so without this the
-        // transcript blanks and the user's own follow-up is invisible (same
-        // family as the mobile silent-fork bug). Echo it locally.
+        // Running-task follow-ups are queued on the agent and do not become
+        // persisted Turns until the current answer drains. Keep the local user
+        // bubble visible across the detail refresh instead of collapsing back
+        // to the previous exchange.
         setActiveTaskStream((prev) =>
-          prev && prev.id === existingTaskId
-            ? { ...prev, lines: [...prev.lines, `» ${prompt}`] }
+          prev && prev.id === existingTaskId && !hasConversationTurn(prev.turns, "user", prompt) && !hasConversationTurn(prev.pendingUserTurns, "user", prompt)
+            ? { ...prev, pendingUserTurns: [...prev.pendingUserTurns, optimisticTurn].slice(-10) }
             : prev);
         appendLog(`continued chat session ${existingTaskId}`);
         setComposer("");
@@ -2102,11 +2229,25 @@ export default function RuntimeLabView({
       appendLog(`task ${task.id} started with ${selectedRunner || "default runner"}${effectiveModel ? ` ${effectiveModel}` : ""}`);
       setComposer("");
     } catch (err) {
+      if (optimisticTaskId && optimisticPrompt) {
+        setActiveTaskStream((prev) => {
+          if (!prev || prev.id !== optimisticTaskId) return prev;
+          let idx = -1;
+          for (let i = prev.pendingUserTurns.length - 1; i >= 0; i -= 1) {
+            if (String(prev.pendingUserTurns[i]?.content ?? "") === optimisticPrompt) {
+              idx = i;
+              break;
+            }
+          }
+          if (idx < 0) return prev;
+          return { ...prev, pendingUserTurns: [...prev.pendingUserTurns.slice(0, idx), ...prev.pendingUserTurns.slice(idx + 1)] };
+        });
+      }
       appendLog(`task failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSending(false);
     }
-  }, [activeTaskStream?.id, appendLog, attachTaskSession, availableModels, composer, opencodeSnapshot, selectedModel, selectedProject, selectedRunner, sending, splitTaskFields]);
+  }, [activeTaskStream?.id, appendLog, attachTaskSession, availableModels, composer, opencodeSnapshot, scrollToBottom, selectedModel, selectedProject, selectedRunner, sending, splitTaskFields]);
 
   // "Fix with <runner>" — the route-to-fix on a failed build/preview. It
   // dispatches a coding task on the SAME box+project through the EXACT path
@@ -2458,10 +2599,17 @@ export default function RuntimeLabView({
    *  the same mode — Flutter maps fast→"r" (hot reload) and full→"R"
    *  (hot restart). Either way the iframe is re-mounted afterwards. */
   const reloadWebPreview = useCallback(async (kind: "fast" | "full") => {
-    if (!selectedProject || webPreviewBusy || webPreviewReloadInFlightRef.current) return;
+    if (!selectedProject || webPreviewReloadInFlightRef.current) return;
     if (taskStatusMeansRunnerIsCoding(activeTaskStream?.status)) {
+      queuedWebPreviewReloadRef.current = kind;
       setWebPreviewNote(`${kind === "fast" ? "Fast reload" : "Full reload"} queued until the current task finishes.`);
       appendLog(`${kind} reload queued until task ${activeTaskStream?.id || "current"} finishes`);
+      return;
+    }
+    if (webPreviewBusy) {
+      queuedWebPreviewReloadRef.current = kind;
+      setWebPreviewNote(`${kind === "fast" ? "Fast reload" : "Full reload"} queued until the current preview operation finishes.`);
+      appendLog(`${kind} reload queued until current preview operation finishes`);
       return;
     }
     webPreviewReloadInFlightRef.current = true;
@@ -2515,6 +2663,14 @@ export default function RuntimeLabView({
     }
     setWebPreviewNonce((n) => n + 1);
   }, [activeTaskStream?.id, activeTaskStream?.status, appendLog, selectedProject, webPreviewBusy]);
+
+  useEffect(() => {
+    const queuedKind = queuedWebPreviewReloadRef.current;
+    if (!queuedKind || !selectedProject || webPreviewBusy || taskStatusMeansRunnerIsCoding(activeTaskStream?.status)) return;
+    queuedWebPreviewReloadRef.current = null;
+    appendLog(`${queuedKind} reload queue draining`);
+    void reloadWebPreview(queuedKind);
+  }, [activeTaskStream?.status, appendLog, reloadWebPreview, selectedProject, webPreviewBusy]);
 
   const closeWebPreview = useCallback(() => {
     setWebPreviewPanelOpen(false);
@@ -3043,10 +3199,10 @@ export default function RuntimeLabView({
                   ) : null}
                   {webPreviewPanelOpen ? (
                     <section className="space-y-2">
-                      <div className="flex items-center justify-between gap-3 rounded-md border border-[#d7dce3] bg-white px-3 py-2 dark:border-[#2a3039] dark:bg-[#161b22]">
-                        <div className="flex min-w-0 flex-wrap items-center gap-2">
-                          <img src="/icon-192.png" alt="Yaver" className="h-6 w-6 rounded-md" />
-                          <div className="min-w-0">
+                      <div className="flex min-h-[62px] items-center justify-between gap-3 rounded-md border border-[#d7dce3] bg-white px-3 py-2.5 dark:border-[#2a3039] dark:bg-[#161b22]">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+                          <img src="/icon-192.png" alt="Yaver" className="h-7 w-7 rounded-md" />
+                          <div className="min-w-0 self-center">
                             <div className="truncate text-sm font-semibold text-[#1f2933] dark:text-[#e6e8ec]">
                               {selectedProject?.name || "Preview"}
                             </div>
@@ -3055,7 +3211,7 @@ export default function RuntimeLabView({
                             </div>
                           </div>
                           {selectedProjectIsMobile ? (
-                            <div className="inline-flex rounded-md border border-[#d7dce3] bg-white p-0.5 dark:border-[#2a3039] dark:bg-[#161b22]">
+                            <div className="inline-flex h-8 items-center rounded-md border border-[#d7dce3] bg-white p-0.5 dark:border-[#2a3039] dark:bg-[#161b22]">
                               {(Object.keys(mobilePreviewDevices) as MobilePreviewMode[]).map((mode) => {
                                 const device = mobilePreviewDevices[mode];
                                 const selected = mobilePreviewMode === mode;
@@ -3064,7 +3220,7 @@ export default function RuntimeLabView({
                                     key={mode}
                                     type="button"
                                     onClick={() => chooseMobilePreviewMode(mode)}
-                                    className={`rounded px-2 py-1 text-[11px] font-medium ${
+                                    className={`h-7 rounded px-2 text-[11px] font-medium ${
                                       selected
                                         ? "bg-[#1f2933] text-white dark:bg-[#e6e8ec] dark:text-[#101318]"
                                         : "text-[#667085] hover:text-[#1f2933] dark:text-[#9aa3af] dark:hover:text-[#e6e8ec]"
@@ -3083,7 +3239,7 @@ export default function RuntimeLabView({
                             onClick={() => setRuntimeControlsOpen((v) => !v)}
                             title="Preview controls"
                             aria-label="Preview controls"
-                            className={`rounded-md border p-1.5 ${
+                            className={`flex h-8 w-8 items-center justify-center rounded-md border ${
                               runtimeControlsOpen
                                 ? "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-200"
                                 : "border-[#d7dce3] bg-white text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
@@ -3104,20 +3260,20 @@ export default function RuntimeLabView({
                           <button
                             type="button"
                             onClick={() => void reloadWebPreview("fast")}
-                            disabled={webPreviewBusy || webPreviewStopping}
+                            disabled={!selectedProject || webPreviewStopping}
                             title="Fast Reload — re-serve the fresh bundle instantly, or hot-reload the dev server"
                             aria-label="Fast Reload"
-                            className="rounded-md bg-[#1f2933] px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-40 dark:bg-[#e6e8ec] dark:text-[#101318]"
+                            className="h-8 rounded-md bg-[#1f2933] px-2.5 text-[11px] font-semibold text-white disabled:opacity-40 dark:bg-[#e6e8ec] dark:text-[#101318]"
                           >
                             Fast Reload
                           </button>
                           <button
                             type="button"
                             onClick={() => void reloadWebPreview("full")}
-                            disabled={webPreviewBusy || webPreviewStopping}
+                            disabled={!selectedProject || webPreviewStopping}
                             title="Full Reload — force a re-export / hot restart (warm cache, never a cold start)"
                             aria-label="Full Reload"
-                            className="rounded-md border border-[#d7dce3] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#475467] hover:text-[#1f2933] disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                            className="h-8 rounded-md border border-[#d7dce3] bg-white px-2.5 text-[11px] font-semibold text-[#475467] hover:text-[#1f2933] disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
                           >
                             Full Reload
                           </button>
@@ -3127,7 +3283,7 @@ export default function RuntimeLabView({
                             disabled={webPreviewStopping}
                             title="Stop the active preview on this machine"
                             aria-label="Stop preview"
-                            className="rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-rose-700 disabled:opacity-40 dark:text-rose-200"
+                            className="h-8 rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 text-[11px] font-semibold text-rose-700 disabled:opacity-40 dark:text-rose-200"
                           >
                             {webPreviewStopping ? "Stopping..." : "Stop"}
                           </button>
@@ -3136,7 +3292,7 @@ export default function RuntimeLabView({
                             onClick={closeWebPreview}
                             title="Close preview"
                             aria-label="Close preview"
-                            className="rounded-md border border-[#d7dce3] bg-white p-1.5 text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                            className="flex h-8 w-8 items-center justify-center rounded-md border border-[#d7dce3] bg-white text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
                           >
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                               <line x1="18" y1="6" x2="6" y2="18" />
@@ -3190,7 +3346,7 @@ export default function RuntimeLabView({
                         // One lean heartbeat row while the box compiles: thin
                         // bar + real percent + elapsed + last-output age. No
                         // spinner walls; verbatim lines stay in the console.
-                        <div className="flex items-center gap-3 rounded-md border border-[#d7dce3] bg-white px-3 py-2 text-[11px] text-[#667085] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#9aa3af]">
+                        <div className="flex min-h-10 items-center gap-3 rounded-md border border-[#d7dce3] bg-white px-3 py-2.5 text-[11px] text-[#667085] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#9aa3af]">
                           <span className="min-w-0 shrink truncate font-medium text-[#344054] dark:text-[#d7dce3]">
                             {buildProgress.topic}{buildProgress.phase ? ` · ${buildProgress.phase}` : ""}
                           </span>
@@ -3725,71 +3881,86 @@ export default function RuntimeLabView({
             >
           {activeTaskStream ? (
                 <div className="flex min-h-full flex-col space-y-3">
-                  <div className="flex justify-end">
-                    <div className="max-w-[88%] rounded-2xl rounded-br-md bg-[#7c5cff] px-3 py-2 text-sm leading-5 text-white shadow-sm">
-                      {activeTaskStream.title}
-                    </div>
-                  </div>
-                  <div className="flex flex-col rounded-2xl rounded-bl-md border border-[#e4e7ec] bg-white shadow-sm dark:border-[#242b35] dark:bg-[#171b23]">
-                    <div className="flex items-center justify-between gap-2 border-b border-[#eef1f5] px-3 py-2 dark:border-[#242b35]">
-                      <div className="min-w-0 truncate text-xs font-semibold text-[#344054] dark:text-[#d7dce3]">
-                        {selectedRunnerName}
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => void copyTaskConsole()}
-                          title="Copy chat output"
-                          aria-label="Copy chat output"
-                          className="rounded-md border border-[#d7dce3] bg-white p-1.5 text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
-                        >
-                          {taskConsoleCopied ? (
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                              <path d="M20 6 9 17l-5-5" />
-                            </svg>
-                          ) : (
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                              <rect x="9" y="9" width="13" height="13" rx="2" />
-                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                            </svg>
-                          )}
-                        </button>
-                        <div className="text-[10px] uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">
-                          {activeTaskStream.status}
-                        </div>
-                      </div>
-                    </div>
-                    {(() => {
-                      // Tail-first stream: the last lines are where the runner
-                      // narrates and answers; earlier raw tool output (grep
-                      // walls, file lists) folds behind a disclosure so it
-                      // never buries the answer.
-                      const TAIL = 30;
-                      const lines = activeTaskStream.lines;
-                      const folded = !taskStreamExpanded && lines.length > TAIL + 10;
-                      const visible = folded ? lines.slice(-TAIL) : lines;
+                  {(() => {
+                    const messages = runtimeChatMessages(activeTaskStream);
+                    const pendingTurns = activeTaskStream.pendingUserTurns || [];
+                    return (
+                      <>
+                  {messages.map((message, index) => {
+                    if (message.role === "user") {
                       return (
-                        <>
-                          {folded || taskStreamExpanded ? (
-                            <button
-                              type="button"
-                              onClick={() => setTaskStreamExpanded((open) => !open)}
-                              className="mx-3 mt-2 self-start rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#9aa3af]"
-                            >
-                              {folded
-                                ? `Show earlier output (${lines.length - TAIL} lines)`
-                                : "Collapse to latest output"}
-                            </button>
-                          ) : null}
-                          {/* No own scrollbar — the bubble grows and the pane
-                              scrolls; two nested scrollers read as two views. */}
-                          <pre className="whitespace-pre-wrap break-words p-3 text-[11px] leading-5 text-[#344054] dark:text-[#d5dae1]">
-                            {visible.length ? visible.join("\n") : "Waiting for runner output..."}
-                          </pre>
-                        </>
+                        <div key={`turn-${index}`} className="flex justify-end" data-testid="runtime-chat-user-bubble">
+                          <div className="max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[#7c5cff] px-3 py-2 text-sm leading-5 text-white shadow-sm">
+                            {message.content}
+                          </div>
+                        </div>
                       );
-                    })()}
-                  </div>
+                    }
+                    const isLatestAssistant = index === messages.length - 1;
+                    const rawLines = String(message.content || "").split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
+                    const TAIL = 30;
+                    const folded = isLatestAssistant && !taskStreamExpanded && rawLines.length > TAIL + 10;
+                    const visible = folded ? rawLines.slice(-TAIL) : rawLines;
+                    return (
+                      <div key={`turn-${index}`} className="flex flex-col rounded-2xl rounded-bl-md border border-[#e4e7ec] bg-white shadow-sm dark:border-[#242b35] dark:bg-[#171b23]">
+                        <div className="flex items-center justify-between gap-2 border-b border-[#eef1f5] px-3 py-2 dark:border-[#242b35]">
+                          <div className="min-w-0 truncate text-xs font-semibold text-[#344054] dark:text-[#d7dce3]">
+                            {selectedRunnerName}
+                          </div>
+                          {isLatestAssistant ? (
+                            <div className="flex shrink-0 items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => void copyTaskConsole()}
+                                title="Copy chat output"
+                                aria-label="Copy chat output"
+                                className="rounded-md border border-[#d7dce3] bg-white p-1.5 text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                              >
+                                {taskConsoleCopied ? (
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <path d="M20 6 9 17l-5-5" />
+                                  </svg>
+                                ) : (
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                  </svg>
+                                )}
+                              </button>
+                              <div className="text-[10px] uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">
+                                {activeTaskStream.status}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                        {folded || (isLatestAssistant && taskStreamExpanded) ? (
+                          <button
+                            type="button"
+                            onClick={() => setTaskStreamExpanded((open) => !open)}
+                            className="mx-3 mt-2 self-start rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#9aa3af]"
+                          >
+                            {folded
+                              ? `Show earlier output (${rawLines.length - TAIL} lines)`
+                              : "Collapse to latest output"}
+                          </button>
+                        ) : null}
+                        <pre className="whitespace-pre-wrap break-words p-3 text-[11px] leading-5 text-[#344054] dark:text-[#d5dae1]">
+                          {visible.length ? visible.join("\n") : "Waiting for runner output..."}
+                        </pre>
+                      </div>
+                    );
+                  })}
+                  {pendingTurns.map((turn, index) => (
+                    <div key={`pending-turn-${index}`} className="flex justify-end" data-testid="runtime-chat-user-bubble">
+                      <div className="max-w-[88%] rounded-2xl rounded-br-md bg-[#7c5cff] px-3 py-2 text-white shadow-sm">
+                        <div className="whitespace-pre-wrap break-words text-sm leading-5">{turn.content}</div>
+                        <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/65">queued</div>
+                      </div>
+                    </div>
+                  ))}
+                      </>
+                    );
+                  })()}
                   <StreamHealthNotice health={taskStreamHealth} />
                 </div>
               ) : (
@@ -3887,7 +4058,7 @@ export default function RuntimeLabView({
                     )}
                   </button>
                   <button
-                    disabled={!composer.trim() || sending || webPreviewBusy}
+                    disabled={!composer.trim() || sending}
                     onClick={() => void sendPrompt()}
                     className="h-9 shrink-0 rounded-md bg-[#7c5cff] px-4 text-xs font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-[#d7dce3] disabled:text-[#98a2b3] dark:disabled:bg-[#242b35]"
                   >

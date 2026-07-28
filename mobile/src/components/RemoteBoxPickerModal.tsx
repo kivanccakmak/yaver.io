@@ -105,6 +105,17 @@ function isYaverAuthWakeBlocker(message?: string | null): boolean {
   );
 }
 
+function switchErrorMessage(targetName: string, error: unknown): string {
+  const raw = error instanceof Error ? error.message : String((error as any)?.message || error || "");
+  if (/maximum call stack size exceeded/i.test(raw)) {
+    return (
+      `Couldn't reach ${targetName}: the app hit a recursive connection call while switching devices. ` +
+      "This is a client-side transport bug, not a runner failure. Go back to the list and try again after the app refreshes; if it repeats, update/reopen Yaver so the fixed transport bundle is loaded."
+    );
+  }
+  return raw || "Failed to switch remote box.";
+}
+
 // A single parked/managed machine rendered inline in the picker list, styled to
 // match the device rows. Its primary action is Wake (a parked box is not a
 // selectable remote box until it's awake); once it wakes it self-registers as a
@@ -699,7 +710,7 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
       // Keep `switching` true (do NOT clear it) so the error view with the
       // failure detail + Try again renders instead of dropping back to the
       // list, which made failures look identical to successes.
-      setSwitchError(err?.message || "Failed to switch remote box.");
+      setSwitchError(switchErrorMessage(target.name, err));
     }
   }, [pickedDevice, selectDevice, activeDevice?.id, lastError, onSelected, onClose, deviceCtx]);
 

@@ -71,6 +71,31 @@ func TestRuntimeTurnCreatesQueuedTaskWhenAskedToRun(t *testing.T) {
 	}
 }
 
+func TestRunningTaskFollowUpIsExposedVerbatimInListTasks(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
+	task := &Task{
+		ID:          "task-follow-up",
+		Title:       "First message",
+		Description: "First message",
+		Status:      TaskStatusRunning,
+		CreatedAt:   time.Now(),
+	}
+	tm.tasks[task.ID] = task
+
+	followUp := "\n  I want you to change background color of yaver mobile app from black to dark gra  \n"
+	if _, err := tm.ResumeTaskWithOptions(task.ID, followUp, nil, TaskResumeOptions{}); err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+
+	tasks := tm.ListTasks()
+	if len(tasks) != 1 {
+		t.Fatalf("task count = %d, want 1", len(tasks))
+	}
+	if got := tasks[0].PendingFollowUps[0].Input; got != followUp {
+		t.Fatalf("pending follow-up was not preserved verbatim:\n got %q\nwant %q", got, followUp)
+	}
+}
+
 func TestRuntimeTurnEnqueuesIdeaAsTaskWhenRequested(t *testing.T) {
 	withIsolatedRuntimeQueue(t)
 	tm := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
