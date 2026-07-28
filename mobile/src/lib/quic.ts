@@ -1680,7 +1680,7 @@ export class QuicClient {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      const res = await fetch(`${this.baseUrl}/health`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/health`, {
         headers: this.authHeaders,
         signal: ctrl.signal,
       });
@@ -2103,7 +2103,7 @@ export class QuicClient {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
       const url = this.peerEndpoint(target, "/runner/opencode/config");
-      const res = await fetch(url, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(url, { headers: this.authHeaders });
       if (!res.ok) return null;
       const data = await res.json();
       return (data?.config || null) as OpenCodeConfigSummary | null;
@@ -2132,7 +2132,7 @@ export class QuicClient {
       // Peer-route to the box being configured — without target this wrote to
       // whichever agent is CONNECTED, not the device the user is viewing (the
       // "set glm-4.7 on magara from my phone and it didn't persist" bug).
-      const res = await fetch(this.peerEndpoint(target, "/runner/opencode/config"), {
+      const res = await this.fetchWithTimeout(this.peerEndpoint(target, "/runner/opencode/config"), {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -2347,7 +2347,7 @@ export class QuicClient {
     compat?: unknown;
   }): Promise<{ taskId: string; title: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/recover`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/recover`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ ...ctx, surface: "mobile" }),
@@ -2538,7 +2538,7 @@ export class QuicClient {
       return getCachedTaskList();
     }
     try {
-      const res = await fetch(`${this.baseUrl}/tasks`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/tasks`, {
         headers: this.authHeaders,
       });
       if (!res.ok) throw new Error(`Failed to list tasks: ${res.status}`);
@@ -2597,7 +2597,7 @@ export class QuicClient {
   /** Get a single task by ID. */
   async getTask(taskId: string): Promise<Task> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks/${taskId}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/tasks/${taskId}`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to get task: ${res.status}`);
@@ -2637,7 +2637,7 @@ export class QuicClient {
   /** Stop a running task (kills the process). */
   async stopTask(taskId: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks/${taskId}/stop`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/tasks/${taskId}/stop`, {
       method: "POST",
       headers: this.authHeaders,
     });
@@ -2647,7 +2647,7 @@ export class QuicClient {
   /** Mark a reviewed task complete. */
   async completeTask(taskId: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks/${taskId}/complete`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/tasks/${taskId}/complete`, {
       method: "POST",
       headers: this.authHeaders,
     });
@@ -2657,7 +2657,7 @@ export class QuicClient {
   /** Gracefully exit a running task by sending the runner's exit command (e.g. /exit for Claude). */
   async exitTask(taskId: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks/${taskId}/exit`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/tasks/${taskId}/exit`, {
       method: "POST",
       headers: this.authHeaders,
     });
@@ -2746,7 +2746,7 @@ export class QuicClient {
   /** Delete a completed or failed task. */
   async deleteTask(taskId: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks/${taskId}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/tasks/${taskId}`, {
       method: "DELETE",
       headers: this.authHeaders,
     });
@@ -2756,7 +2756,7 @@ export class QuicClient {
   /** Stop all running tasks. */
   async stopAllTasks(): Promise<number> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks/stop-all`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/tasks/stop-all`, {
       method: "POST",
       headers: this.authHeaders,
     });
@@ -2770,7 +2770,7 @@ export class QuicClient {
   /** Create a chain of tasks that execute sequentially. */
   async createChain(tasks: { title: string; description?: string }[], options?: { model?: string; runner?: string; autoRetry?: boolean }): Promise<{ chainId: string; tasks: string[]; count: number }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/chain`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/chain`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -2793,7 +2793,7 @@ export class QuicClient {
   /** Get the status of a task chain. */
   async getChainStatus(chainId: string): Promise<{ chainId: string; status: string; tasks: any[] }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/chain/${chainId}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/chain/${chainId}`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to get chain: ${res.status}`);
@@ -2805,7 +2805,7 @@ export class QuicClient {
   /** Get available deploy targets for the current project. */
   async getDeployTargets(): Promise<{ targets: { id: string; name: string; command: string }[]; workDir: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/deploy`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/deploy`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to get deploy targets: ${res.status}`);
@@ -2815,7 +2815,7 @@ export class QuicClient {
   /** Trigger a deploy. Pass target ID or omit for auto-detect. */
   async deploy(target?: string): Promise<{ taskId: string; target: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/deploy`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/deploy`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(target ? { target } : {}),
@@ -2834,7 +2834,7 @@ export class QuicClient {
   async getSummary(hours?: number): Promise<{ summary: any; text: string }> {
     this.assertConnected();
     const q = hours ? `?hours=${hours}` : "";
-    const res = await fetch(`${this.baseUrl}/summary${q}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/summary${q}`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to get summary: ${res.status}`);
@@ -3027,7 +3027,7 @@ export class QuicClient {
     answer: string,
   ): Promise<{ ok: boolean; error?: string }> {
     try {
-      const res = await fetch(`${this.baseUrl}/tasks/${taskId}/answer`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/tasks/${taskId}/answer`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ questionId, answer }),
@@ -3063,7 +3063,7 @@ export class QuicClient {
     timeoutSec: number;
   } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/tasks/${taskId}/question`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/tasks/${taskId}/question`, {
         method: "GET",
         headers: this.authHeaders,
       });
@@ -3154,7 +3154,7 @@ export class QuicClient {
     target?: string,
   ): Promise<{ ok: boolean; session: string; stream: string; warning?: string }> {
     const base = this.peerEndpoint(target, "/netcapture/start");
-    const res = await fetch(base, {
+    const res = await this.fetchWithTimeout(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(opts),
@@ -3164,7 +3164,7 @@ export class QuicClient {
 
   async netcaptureStop(session: string, target?: string): Promise<any> {
     const base = this.peerEndpoint(target, "/netcapture/stop");
-    const res = await fetch(base, {
+    const res = await this.fetchWithTimeout(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ session }),
@@ -3174,7 +3174,7 @@ export class QuicClient {
 
   async netcaptureAnalysisFor(session: string, target?: string): Promise<any> {
     const base = this.peerEndpoint(target, `/netcapture/analysis?session=${encodeURIComponent(session)}`);
-    const res = await fetch(base, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(base, { headers: this.authHeaders });
     return res.json();
   }
 
@@ -3233,7 +3233,7 @@ export class QuicClient {
     has_history_section: boolean;
   }> {
     const url = this.peerEndpoint(target, `/autoinit/status?work_dir=${encodeURIComponent(workDir)}`);
-    const res = await fetch(url, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(url, { headers: this.authHeaders });
     return await res.json();
   }
 
@@ -3247,7 +3247,7 @@ export class QuicClient {
     output?: string;
     force?: boolean;
   }, target?: string): Promise<any> {
-    const res = await fetch(this.peerEndpoint(target, "/autoinit/start"), {
+    const res = await this.fetchWithTimeout(this.peerEndpoint(target, "/autoinit/start"), {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -3263,7 +3263,7 @@ export class QuicClient {
     path: string;
   }> {
     const url = `${this.baseUrl}/autoideas/file?work_dir=${encodeURIComponent(workDir)}&output=${encodeURIComponent(output)}`;
-    const res = await fetch(url, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(url, { headers: this.authHeaders });
     return await res.json();
   }
 
@@ -3280,7 +3280,7 @@ export class QuicClient {
     max_batches?: number;
     tick?: number;
   }): Promise<any> {
-    const res = await fetch(`${this.baseUrl}/autoideas/start`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/autoideas/start`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -3300,7 +3300,7 @@ export class QuicClient {
     auto_branch?: boolean;
     deploy?: string;
   }): Promise<any> {
-    const res = await fetch(`${this.baseUrl}/autoideas/select`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/autoideas/select`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -3377,7 +3377,7 @@ export class QuicClient {
     if (kind) params.set("kind", Array.isArray(kind) ? kind.join(",") : kind);
     if (root) params.set("root", root);
     const query = params.toString() ? `?${params.toString()}` : "";
-    const res = await fetch(`${this.baseUrl}/workspace/apps${query}`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/workspace/apps${query}`, { headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error((data as any)?.error || `Failed to load workspace apps: HTTP ${res.status}`);
     return Array.isArray((data as any)?.apps) ? (data as any).apps : [];
@@ -3405,7 +3405,7 @@ export class QuicClient {
     }[];
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/repos/list`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/repos/list`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to list repos: ${res.status}`);
@@ -3537,7 +3537,7 @@ export class QuicClient {
   /** Trigger a fresh machine-wide repo discovery. */
   async refreshProjects(): Promise<{ ok?: boolean; message?: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/projects/refresh`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/projects/refresh`, {
       method: "POST",
       headers: this.authHeaders,
     });
@@ -3548,7 +3548,7 @@ export class QuicClient {
   /** Trigger a fresh mobile-project scan for the Hot Reload tab. */
   async refreshMobileProjects(): Promise<{ ok?: boolean; message?: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/projects/mobile`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/projects/mobile`, {
       method: "POST",
       headers: this.authHeaders,
     });
@@ -3559,7 +3559,7 @@ export class QuicClient {
   /** Stop a stuck mobile-project scan. The next refresh starts a fresh bounded scan. */
   async stopMobileProjectsScan(): Promise<{ ok?: boolean; message?: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/projects/mobile`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/projects/mobile`, {
       method: "DELETE",
       headers: this.authHeaders,
     });
@@ -3618,14 +3618,14 @@ export class QuicClient {
   async getRemoteRuntimeCapabilities(workDir: string, framework: string): Promise<RemoteRuntimeCapabilities> {
     this.assertConnected();
     const url = `${this.baseUrl}/remote-runtime/capabilities?workDir=${encodeURIComponent(workDir)}&framework=${encodeURIComponent(framework)}`;
-    const res = await fetch(url, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(url, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`Failed to get remote runtime capabilities: ${res.status}`);
     return res.json();
   }
 
   async startRemoteRuntimeSession(workDir: string, framework: string, targetId: string, transportMode?: string): Promise<RemoteRuntimeSession> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/remote-runtime/sessions`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ workDir, framework, targetId, transportMode }),
@@ -3649,7 +3649,7 @@ export class QuicClient {
       if (opts.workDir) body.workDir = opts.workDir;
       if (opts.bundleId) body.bundleId = opts.bundleId;
     }
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/command`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/command`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -3661,7 +3661,7 @@ export class QuicClient {
 
   async getRemoteRuntimeSession(sessionId: string): Promise<RemoteRuntimeSession> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}`, {
       headers: this.authHeaders,
     });
     const data = await res.json().catch(() => ({}));
@@ -3671,7 +3671,7 @@ export class QuicClient {
 
   async closeRemoteRuntimeSession(sessionId: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",
       headers: this.authHeaders,
     });
@@ -3681,7 +3681,7 @@ export class QuicClient {
 
   async createRemoteRuntimeWebRTCAnswer(sessionId: string, offer: { sdp?: string; type?: string }): Promise<{ session: RemoteRuntimeSession; answer: { sdp?: string; type?: string }; transport?: string; note?: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/webrtc/offer`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/webrtc/offer`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ sdp: offer.sdp || "", type: offer.type || "offer" }),
@@ -3693,7 +3693,7 @@ export class QuicClient {
 
   async fetchRemoteRuntimeFrame(sessionId: string): Promise<Blob> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/frame?ts=${Date.now()}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/frame?ts=${Date.now()}`, {
       headers: this.authHeaders,
       cache: "no-store",
     });
@@ -3706,7 +3706,7 @@ export class QuicClient {
 
   async sendRemoteRuntimeControl(sessionId: string, body: { action: "tap" | "swipe" | "text" | "back" | "home" | "key"; x?: number; y?: number; x2?: number; y2?: number; durationMs?: number; text?: string; key?: string }): Promise<RemoteRuntimeSession> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/control`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}/control`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -3728,7 +3728,7 @@ export class QuicClient {
     history: string[];
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/vibing?query=${encodeURIComponent(query)}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/vibing?query=${encodeURIComponent(query)}`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to get vibing state: ${res.status}`);
@@ -3738,7 +3738,7 @@ export class QuicClient {
   /** Execute a vibing suggestion as a task or structured runtime action. */
   async executeVibingSuggestion(prompt: string, projectPath: string): Promise<{ taskId?: string; runtimeDeploy?: any; message?: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/vibing/execute`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/vibing/execute`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt, projectPath }),
@@ -3752,7 +3752,7 @@ export class QuicClient {
   /** Get the count of pending todo items. */
   async todoCount(): Promise<number> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/todolist/count`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/todolist/count`, {
       headers: this.authHeaders,
     });
     if (!res.ok) return 0;
@@ -3763,7 +3763,7 @@ export class QuicClient {
   /** List all todo items. */
   async listTodoItems(): Promise<{ id: string; description: string; status: string; numScreenshots: number; hasAudio: boolean; createdAt: string; taskId?: string }[]> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/todolist`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/todolist`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to list todo items: ${res.status}`);
@@ -3776,7 +3776,7 @@ export class QuicClient {
     this.assertConnected();
     const formData = new FormData();
     formData.append('metadata', JSON.stringify({ description, source }));
-    const res = await fetch(`${this.baseUrl}/todolist`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/todolist`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${this.token}` },
       body: formData,
@@ -3788,7 +3788,7 @@ export class QuicClient {
   /** Remove a todo item. */
   async removeTodoItem(id: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/todolist/${id}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/todolist/${id}`, {
       method: 'DELETE',
       headers: this.authHeaders,
     });
@@ -3798,7 +3798,7 @@ export class QuicClient {
   /** Implement all pending todo items as a batch. */
   async implementAllTodos(): Promise<{ taskId: string; itemCount: number }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/todolist/implement-all`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/todolist/implement-all`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
     });
@@ -3809,7 +3809,7 @@ export class QuicClient {
   /** Implement a single todo item. */
   async implementTodoItem(id: string): Promise<{ taskId: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/todolist/${id}/implement`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/todolist/${id}/implement`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
     });
@@ -3837,7 +3837,7 @@ export class QuicClient {
     // sit in the critical path of the prompt the user is trying to send, and a
     // toast about a failed screen report would be pure noise.
     try {
-      await fetch(`${this.baseUrl}/screen-context`, {
+      await this.fetchWithTimeout(`${this.baseUrl}/screen-context`, {
         method: 'POST',
         headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify(ctx),
@@ -3853,7 +3853,7 @@ export class QuicClient {
   async clearScreenContext(workDir: string): Promise<void> {
     if (!this.isConnected || !workDir) return;
     try {
-      await fetch(`${this.baseUrl}/screen-context?workDir=${encodeURIComponent(workDir)}`, {
+      await this.fetchWithTimeout(`${this.baseUrl}/screen-context?workDir=${encodeURIComponent(workDir)}`, {
         method: 'DELETE',
         headers: this.authHeaders,
       });
@@ -3865,7 +3865,7 @@ export class QuicClient {
   /** Toggle auto-consume mode. */
   async setAutoConsume(enabled: boolean): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/todolist/auto-consume`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/todolist/auto-consume`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
@@ -3877,7 +3877,7 @@ export class QuicClient {
   async getAutopilot(): Promise<boolean> {
     this.assertConnected();
     try {
-      const res = await fetch(`${this.baseUrl}/autopilot`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/autopilot`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return false;
@@ -3891,7 +3891,7 @@ export class QuicClient {
   /** Toggle autopilot (auto-driving) mode. */
   async setAutopilot(enabled: boolean): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/autopilot`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/autopilot`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
@@ -3909,7 +3909,7 @@ export class QuicClient {
     acted: boolean;
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/todolist/classify`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/todolist/classify`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, source, autoAct: true }),
@@ -3933,7 +3933,7 @@ export class QuicClient {
     taskStats: { total: number; done: number; running: number; failed: number };
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/info`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/info`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to get agent info: ${res.status}`);
@@ -3943,7 +3943,7 @@ export class QuicClient {
   /** Clear all todo items. */
   async clearTodoList(): Promise<number> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/todolist`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/todolist`, {
       method: 'DELETE',
       headers: this.authHeaders,
     });
@@ -3961,7 +3961,7 @@ export class QuicClient {
     if (opts?.workDir) body.workDir = opts.workDir;
     if (opts?.timeout) body.timeout = opts.timeout;
     if (opts?.env) body.env = opts.env;
-    const res = await fetch(`${this.baseUrl}/exec`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/exec`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -3975,7 +3975,7 @@ export class QuicClient {
   /** Get exec session details. */
   async getExec(execId: string): Promise<ExecSession> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/exec/${execId}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/exec/${execId}`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to get exec: ${res.status}`);
@@ -3986,7 +3986,7 @@ export class QuicClient {
   /** List all exec sessions. */
   async listExecs(): Promise<ExecSession[]> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/exec`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/exec`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to list execs: ${res.status}`);
@@ -4011,7 +4011,7 @@ export class QuicClient {
   /** Send stdin input to a running exec session. */
   async sendExecInput(execId: string, input: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/exec/${execId}/input`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/exec/${execId}/input`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ input }),
@@ -4022,7 +4022,7 @@ export class QuicClient {
   /** Send a signal to a running exec session. */
   async signalExec(execId: string, signal: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/exec/${execId}/signal`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/exec/${execId}/signal`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ signal }),
@@ -4033,7 +4033,7 @@ export class QuicClient {
   /** Kill and remove an exec session. */
   async killExec(execId: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/exec/${execId}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/exec/${execId}`, {
       method: "DELETE",
       headers: this.authHeaders,
     });
@@ -4044,7 +4044,7 @@ export class QuicClient {
   async getInfo(): Promise<{ hostname: string; version: string; workDir: string } | null> {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
-      const res = await fetch(`${this.baseUrl}/info`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/info`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return null;
@@ -4063,7 +4063,7 @@ export class QuicClient {
   async getNotificationsConfig(): Promise<Record<string, any> | null> {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
-      const res = await fetch(`${this.baseUrl}/notifications/config`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/notifications/config`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return null;
@@ -4075,7 +4075,7 @@ export class QuicClient {
   /** Save notification/integration config to agent. */
   async saveNotificationsConfig(config: Record<string, any>): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/notifications/config`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/notifications/config`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(config),
@@ -4087,7 +4087,7 @@ export class QuicClient {
   /** Test a notification channel. */
   async testNotification(channel: string): Promise<string> {
     try {
-      const res = await fetch(`${this.baseUrl}/notifications/test`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/notifications/test`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ channel }),
@@ -4102,7 +4102,7 @@ export class QuicClient {
   async getAgentStatus(): Promise<AgentStatus | null> {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
-      const res = await fetch(`${this.baseUrl}/agent/status`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/agent/status`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return null;
@@ -4162,7 +4162,7 @@ export class QuicClient {
     if (!this.isConnected && !this.hasConnectionInfo) {
       throw new Error("agent not reachable");
     }
-    const res = await fetch(`${this.baseUrl}/agent/runners/test`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/agent/runners/test`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ runner, prompt: opts?.prompt, model: opts?.model, timeoutMs: opts?.timeoutMs }),
@@ -4206,7 +4206,7 @@ export class QuicClient {
   ): Promise<RunnerBrowserAuthSession> {
     this.assertConnected();
     const base = this.peerEndpoint(target, "/runner-auth/browser/start");
-    const res = await fetch(base, {
+    const res = await this.fetchWithTimeout(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4238,7 +4238,7 @@ export class QuicClient {
     const base = this.peerEndpoint(target, "/runner-auth/browser/status");
     const url = new URL(base);
     url.searchParams.set("id", sessionId);
-    const res = await fetch(url.toString(), { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(url.toString(), { headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       throw new Error(data?.error || `getRunnerBrowserAuthStatus ${res.status}`);
@@ -4251,7 +4251,7 @@ export class QuicClient {
     const base = this.peerEndpoint(target, "/runner-auth/browser/cancel");
     const url = new URL(base);
     url.searchParams.set("id", sessionId);
-    await fetch(url.toString(), { method: "POST", headers: this.authHeaders }).catch(() => {});
+    await this.fetchWithTimeout(url.toString(), { method: "POST", headers: this.authHeaders }).catch(() => {});
   }
 
   async submitRunnerBrowserAuthCode(
@@ -4270,7 +4270,7 @@ export class QuicClient {
     // Claude paste-back attempt.
     const url = new URL(base);
     url.searchParams.set("id", sessionId);
-    const res = await fetch(url.toString(), {
+    const res = await this.fetchWithTimeout(url.toString(), {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ code }),
@@ -4301,7 +4301,7 @@ export class QuicClient {
     const base = this.peerEndpoint(target, "/runner-auth/browser/submit-callback");
     const url = new URL(base);
     url.searchParams.set("id", sessionId);
-    const res = await fetch(url.toString(), {
+    const res = await this.fetchWithTimeout(url.toString(), {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ callbackUrl }),
@@ -4317,7 +4317,7 @@ export class QuicClient {
     if (!this.isConnected && !this.hasConnectionInfo) return [];
     try {
       const base = this.peerEndpoint(target, "/runner-auth/status");
-      const res = await fetch(base, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(base, { headers: this.authHeaders });
       if (!res.ok) return [];
       const data = await res.json().catch(() => ({}));
       return Array.isArray(data?.runners) ? data.runners : [];
@@ -4335,7 +4335,7 @@ export class QuicClient {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
       const base = this.peerEndpoint(target, "/runner-auth/status");
-      const res = await fetch(base, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(base, { headers: this.authHeaders });
       if (!res.ok) return null;
       const data = await res.json().catch(() => null);
       if (!data) return null;
@@ -4351,7 +4351,7 @@ export class QuicClient {
   ): Promise<{ ok: boolean; saved: string[]; runners: RunnerAuthStatusRow[]; error?: string }> {
     this.assertConnected();
     const base = this.peerEndpoint(target, "/runner-auth/set");
-    const res = await fetch(base, {
+    const res = await this.fetchWithTimeout(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4394,7 +4394,7 @@ export class QuicClient {
   }> {
     this.assertConnected();
     const base = this.peerEndpoint(target, "/runner-auth/setup");
-    const res = await fetch(base, {
+    const res = await this.fetchWithTimeout(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4446,7 +4446,7 @@ export class QuicClient {
     if (!this.isConnected && !this.hasConnectionInfo) return [];
     try {
       const base = this.peerEndpoint(target, "/machine/onboarding/status");
-      const res = await fetch(base, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(base, { headers: this.authHeaders });
       if (!res.ok) return [];
       const data = await res.json().catch(() => ({}));
       return Array.isArray(data?.providers) ? data.providers : [];
@@ -4461,7 +4461,7 @@ export class QuicClient {
   ): Promise<{ ok: boolean; applied: string[]; providers: MachineOnboardingProviderStatus[]; error?: string }> {
     this.assertConnected();
     const base = this.peerEndpoint(target, "/machine/onboarding/apply");
-    const res = await fetch(base, {
+    const res = await this.fetchWithTimeout(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4496,7 +4496,7 @@ export class QuicClient {
   ): Promise<{ ok: boolean; removed: string[]; providers: MachineOnboardingProviderStatus[]; error?: string }> {
     this.assertConnected();
     const base = this.peerEndpoint(target, "/machine/onboarding/remove");
-    const res = await fetch(base, {
+    const res = await this.fetchWithTimeout(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4524,7 +4524,7 @@ export class QuicClient {
   ): Promise<GitOAuthSession> {
     this.assertConnected();
     const base = this.peerEndpoint(target, "/git/provider/oauth/start");
-    const res = await fetch(base, {
+    const res = await this.fetchWithTimeout(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ provider, host }),
@@ -4562,7 +4562,7 @@ export class QuicClient {
   ): Promise<GitOAuthStatus> {
     this.assertConnected();
     const base = this.peerEndpoint(target, `/git/provider/oauth/status?session=${encodeURIComponent(sessionId)}`);
-    const res = await fetch(base, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(base, { headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     const state = ["pending", "done", "error", "expired", "unknown"].includes(String(data?.state))
       ? String(data.state) as GitOAuthStatus["state"]
@@ -4586,7 +4586,7 @@ export class QuicClient {
   async getToolchainSyncProfile(): Promise<EnvironmentProfile | null> {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
-      const res = await fetch(`${this.baseUrl}/agent/toolchain-sync/profile`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/agent/toolchain-sync/profile`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return null;
@@ -4609,7 +4609,7 @@ export class QuicClient {
     dryRun?: boolean;
   }): Promise<EnvironmentProfileApplyResult> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/agent/toolchain-sync/apply`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/agent/toolchain-sync/apply`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4656,7 +4656,7 @@ export class QuicClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     try {
-      const res = await fetch(`${this.baseUrl}/health`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/health`, {
         headers: this.authHeaders,
         signal: controller.signal,
       });
@@ -4681,7 +4681,7 @@ export class QuicClient {
   async shutdownAgent(): Promise<boolean> {
     if (!this.isConnected && !this.hasConnectionInfo) return false;
     try {
-      const res = await fetch(`${this.baseUrl}/agent/shutdown`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/agent/shutdown`, {
         method: "POST",
         headers: this.authHeaders,
       });
@@ -4693,7 +4693,7 @@ export class QuicClient {
 
   async infraSummary(): Promise<InfraSummary> {
     if (!this.isConnected && !this.hasConnectionInfo) throw new Error("Not connected");
-    const res = await fetch(`${this.baseUrl}/infra/summary`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/infra/summary`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`Failed to fetch infra summary: ${res.status}`);
     return res.json();
   }
@@ -4702,7 +4702,7 @@ export class QuicClient {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
       const base = this.peerEndpoint(target, "/capabilities/snapshot");
-      const res = await fetch(base, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(base, { headers: this.authHeaders });
       if (!res.ok) return null;
       const data = await res.json();
       return (data?.snapshot as CapabilitySnapshot) ?? null;
@@ -4713,7 +4713,7 @@ export class QuicClient {
 
   async infraServiceAction(scope: "dev" | "system", name: string, action: "start" | "stop" | "restart" | "status"): Promise<any> {
     if (!this.isConnected && !this.hasConnectionInfo) throw new Error("Not connected");
-    const res = await fetch(`${this.baseUrl}/infra/services/action`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/infra/services/action`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ scope, name, action }),
@@ -4726,7 +4726,7 @@ export class QuicClient {
     target?: string,
   ): Promise<any> {
     if (!this.isConnected && !this.hasConnectionInfo) throw new Error("Not connected");
-    const res = await fetch(this.peerEndpoint(target, "/infra/power"), {
+    const res = await this.fetchWithTimeout(this.peerEndpoint(target, "/infra/power"), {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ action, confirm: true }),
@@ -4746,7 +4746,7 @@ export class QuicClient {
    *  takes no confirm. Call it before rendering any power control. */
   async infraPowerReport(target?: string): Promise<PowerReport> {
     if (!this.isConnected && !this.hasConnectionInfo) throw new Error("Not connected");
-    const res = await fetch(this.peerEndpoint(target, "/infra/power"), { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(this.peerEndpoint(target, "/infra/power"), { headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `power report failed: ${res.status}`);
     return data as PowerReport;
@@ -4758,7 +4758,7 @@ export class QuicClient {
    *  so the caller can re-render without waiting for a fresh summary. */
   async infraRebootGrant(password: string, revoke = false): Promise<{ ok: boolean; canReboot: boolean }> {
     if (!this.isConnected && !this.hasConnectionInfo) throw new Error("Not connected");
-    const res = await fetch(`${this.baseUrl}/infra/reboot-grant`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/infra/reboot-grant`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ password, revoke }),
@@ -4770,7 +4770,7 @@ export class QuicClient {
 
   async microserviceWrap(req: MicroserviceWrapRequest, target?: string): Promise<MicroserviceWrapResult> {
     if (!this.isConnected && !this.hasConnectionInfo) throw new Error("Not connected");
-    const res = await fetch(this.peerEndpoint(target, "/microservices/wrap"), {
+    const res = await this.fetchWithTimeout(this.peerEndpoint(target, "/microservices/wrap"), {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(req),
@@ -4782,7 +4782,7 @@ export class QuicClient {
 
   async microserviceStatus(project: string, target?: string): Promise<CompanionStatus> {
     if (!this.isConnected && !this.hasConnectionInfo) throw new Error("Not connected");
-    const res = await fetch(this.peerEndpoint(target, `/microservices/status?project=${encodeURIComponent(project)}`), {
+    const res = await this.fetchWithTimeout(this.peerEndpoint(target, `/microservices/status?project=${encodeURIComponent(project)}`), {
       headers: this.authHeaders,
     });
     const data = await res.json().catch(() => ({}));
@@ -4792,7 +4792,7 @@ export class QuicClient {
 
   async microserviceDown(project: string, target?: string): Promise<void> {
     if (!this.isConnected && !this.hasConnectionInfo) throw new Error("Not connected");
-    const res = await fetch(this.peerEndpoint(target, "/microservices/down"), {
+    const res = await this.fetchWithTimeout(this.peerEndpoint(target, "/microservices/down"), {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ project }),
@@ -4803,7 +4803,7 @@ export class QuicClient {
 
   async machineRemove(phrase: string): Promise<any> {
     if (!this.isConnected && !this.hasConnectionInfo) throw new Error("Not connected");
-    const res = await fetch(`${this.baseUrl}/machine/remove`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/machine/remove`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ confirm: true, phrase }),
@@ -4814,7 +4814,7 @@ export class QuicClient {
   /** Clean up old tasks, images, and logs on the desktop agent. */
   async cleanAgent(days: number = 30): Promise<{ tasksRemoved: number; imagesRemoved: number; bytesFreed: number }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/agent/clean`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/agent/clean`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ days }),
@@ -4828,7 +4828,7 @@ export class QuicClient {
   async restartRunner(): Promise<boolean> {
     if (!this.isConnected && !this.hasConnectionInfo) return false;
     try {
-      const res = await fetch(`${this.baseUrl}/agent/runner/restart`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/agent/runner/restart`, {
         method: "POST",
         headers: this.authHeaders,
       });
@@ -4842,7 +4842,7 @@ export class QuicClient {
   async switchRunner(runnerId: string): Promise<{ ok: boolean; runner?: string; error?: string }> {
     if (!this.isConnected && !this.hasConnectionInfo) return { ok: false, error: "Not connected" };
     try {
-      const res = await fetch(`${this.baseUrl}/agent/runner/switch`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/agent/runner/switch`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ runnerId }),
@@ -4858,7 +4858,7 @@ export class QuicClient {
   /** Delete all finished tasks. */
   async deleteAllTasks(): Promise<number> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tasks`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/tasks`, {
       method: "DELETE",
       headers: this.authHeaders,
     });
@@ -4873,7 +4873,7 @@ export class QuicClient {
   async listTmuxSessions(): Promise<TmuxSession[]> {
     if (!this.isConnected && !this.hasConnectionInfo) return [];
     try {
-      const res = await fetch(`${this.baseUrl}/tmux/sessions`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/tmux/sessions`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return [];
@@ -4894,7 +4894,7 @@ export class QuicClient {
     paneId?: string,
   ): Promise<{ taskId: string; session: string; pane?: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tmux/adopt`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/tmux/adopt`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ session: sessionName, pane: paneId }),
@@ -4909,7 +4909,7 @@ export class QuicClient {
   /** Detach an adopted tmux session (stop monitoring, session keeps running). */
   async detachTmuxSession(taskId: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tmux/detach`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/tmux/detach`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ taskId }),
@@ -4923,7 +4923,7 @@ export class QuicClient {
   /** Stop the adopted runner and close only its tmux pane. */
   async closeTmuxTask(taskId: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tmux/close`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/tmux/close`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ taskId }),
@@ -4942,7 +4942,7 @@ export class QuicClient {
    *  panes by default, and the error explains why. */
   async sendTmuxInput(taskId: string, input: string, allowShell = false): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/tmux/input`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/tmux/input`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ taskId, input, allowShell }),
@@ -5190,7 +5190,7 @@ export class QuicClient {
 
   async vaultList(): Promise<VaultEntrySummary[]> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/vault/list`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/vault/list`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`vault list: HTTP ${res.status}`);
     const data = await res.json();
     return Array.isArray(data) ? data : [];
@@ -5198,7 +5198,7 @@ export class QuicClient {
 
   async vaultGet(name: string): Promise<VaultEntry> {
     this.assertConnected();
-    const res = await fetch(
+    const res = await this.fetchWithTimeout(
       `${this.baseUrl}/vault/get?name=${encodeURIComponent(name)}`,
       { headers: this.authHeaders },
     );
@@ -5208,7 +5208,7 @@ export class QuicClient {
 
   async vaultSet(entry: VaultEntry): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/vault/set`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/vault/set`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(entry),
@@ -5218,7 +5218,7 @@ export class QuicClient {
 
   async vaultDelete(name: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(
+    const res = await this.fetchWithTimeout(
       `${this.baseUrl}/vault/delete?name=${encodeURIComponent(name)}`,
       { method: 'DELETE', headers: this.authHeaders },
     );
@@ -5233,7 +5233,7 @@ export class QuicClient {
     defaults: YaverAgentProviderDefault[];
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/yaver-agent/config`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/yaver-agent/config`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`yaver-agent config get: HTTP ${res.status}`);
     return res.json();
   }
@@ -5244,7 +5244,7 @@ export class QuicClient {
     defaults: YaverAgentProviderDefault[];
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/yaver-agent/config`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/yaver-agent/config`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
@@ -5264,7 +5264,7 @@ export class QuicClient {
   async yaverAgentAudit(opts?: { workDir?: string }): Promise<YaverAgentDeviceAudit> {
     this.assertConnected();
     const qs = opts?.workDir ? `?workDir=${encodeURIComponent(opts.workDir)}` : '';
-    const res = await fetch(`${this.baseUrl}/yaver-agent/audit${qs}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/yaver-agent/audit${qs}`, {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`yaver-agent audit: HTTP ${res.status}`);
@@ -5273,7 +5273,7 @@ export class QuicClient {
 
   async syncList<T = any>(kind: string, since = 0): Promise<{ items: SyncItem<T>[]; latestAt: number }> {
     this.assertConnected();
-    const res = await fetch(
+    const res = await this.fetchWithTimeout(
       `${this.baseUrl}/sync/${encodeURIComponent(kind)}?since=${encodeURIComponent(String(since))}`,
       { headers: this.authHeaders },
     );
@@ -5287,7 +5287,7 @@ export class QuicClient {
 
   async syncMerge<T = any>(kind: string, items: SyncItem<T>[]): Promise<{ applied: number; latestAt: number }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/sync/${encodeURIComponent(kind)}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/sync/${encodeURIComponent(kind)}`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ items }),
@@ -5304,7 +5304,7 @@ export class QuicClient {
 
   async apiKeyList(): Promise<APIKeyRecord[]> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/apikeys`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/apikeys`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`apikey list: HTTP ${res.status}`);
     const data = await res.json();
     return Array.isArray(data?.keys) ? data.keys : [];
@@ -5312,7 +5312,7 @@ export class QuicClient {
 
   async apiKeyCreate(opts: { label: string; scopes?: string[]; expiresInMs?: number; allowedCIDRs?: string[] }): Promise<{ token: string; tokenHash: string; label: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/apikeys`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/apikeys`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(opts),
@@ -5324,7 +5324,7 @@ export class QuicClient {
 
   async apiKeyDisable(idOrLabel: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(
+    const res = await this.fetchWithTimeout(
       `${this.baseUrl}/apikeys?id=${encodeURIComponent(idOrLabel)}`,
       { method: 'DELETE', headers: this.authHeaders },
     );
@@ -5335,7 +5335,7 @@ export class QuicClient {
 
   async listSchedules(): Promise<ScheduledTask[]> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/schedules`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/schedules`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`schedules list: HTTP ${res.status}`);
     const data = await res.json();
     return Array.isArray(data?.schedules) ? data.schedules : [];
@@ -5343,7 +5343,7 @@ export class QuicClient {
 
   async createSchedule(spec: Partial<ScheduledTask> & { title: string }): Promise<ScheduledTask> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/schedules`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/schedules`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(spec),
@@ -5355,7 +5355,7 @@ export class QuicClient {
 
   async deleteSchedule(id: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(
+    const res = await this.fetchWithTimeout(
       `${this.baseUrl}/schedules/${encodeURIComponent(id)}`,
       { method: 'DELETE', headers: this.authHeaders },
     );
@@ -5364,7 +5364,7 @@ export class QuicClient {
 
   async pauseSchedule(id: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(
+    const res = await this.fetchWithTimeout(
       `${this.baseUrl}/schedules/${encodeURIComponent(id)}/pause`,
       { method: 'POST', headers: this.authHeaders },
     );
@@ -5373,7 +5373,7 @@ export class QuicClient {
 
   async resumeSchedule(id: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(
+    const res = await this.fetchWithTimeout(
       `${this.baseUrl}/schedules/${encodeURIComponent(id)}/resume`,
       { method: 'POST', headers: this.authHeaders },
     );
@@ -5382,7 +5382,7 @@ export class QuicClient {
 
   async runScheduleNow(id: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(
+    const res = await this.fetchWithTimeout(
       `${this.baseUrl}/schedules/${encodeURIComponent(id)}/run-now`,
       { method: 'POST', headers: this.authHeaders },
     );
@@ -5393,14 +5393,14 @@ export class QuicClient {
 
   async accountsList(): Promise<{ accounts: any[]; providers: any[] }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/accounts`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/accounts`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`accounts list: HTTP ${res.status}`);
     return res.json();
   }
 
   async accountConnect(provider: string, label: string, fields: Record<string, string>): Promise<any> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/accounts/connect`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/accounts/connect`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider, label, fields }),
@@ -5412,7 +5412,7 @@ export class QuicClient {
 
   async accountDisconnect(provider: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/accounts/disconnect`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/accounts/disconnect`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider }),
@@ -5424,7 +5424,7 @@ export class QuicClient {
   // cloud_list ops verb — read-only, token never leaves the agent).
   async cloudListServers(): Promise<{ servers: any[] }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/ops`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/ops`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ verb: 'cloud_list', machine: 'local', payload: {} }),
@@ -5438,7 +5438,7 @@ export class QuicClient {
   // verb, vault token, confirm required). snapshot defaults off.
   async cloudDestroyServer(serverId: string, opts: { snapshot?: boolean } = {}): Promise<any> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/ops`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/ops`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -5455,7 +5455,7 @@ export class QuicClient {
   // Generic BYO ops dispatch helper (vault token stays on the agent).
   private async byoOps(verb: string, payload: Record<string, unknown>): Promise<any> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/ops`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/ops`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ verb, machine: 'local', payload }),
@@ -5507,7 +5507,7 @@ export class QuicClient {
 
   async filesRoots(): Promise<{ roots: { id: string; name: string; path: string }[] }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/files/roots`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/files/roots`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`files roots: HTTP ${res.status}`);
     return res.json();
   }
@@ -5516,7 +5516,7 @@ export class QuicClient {
     this.assertConnected();
     const p = new URLSearchParams({ root });
     if (path) p.set('path', path);
-    const res = await fetch(`${this.baseUrl}/files/list?${p}`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/files/list?${p}`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`files list: HTTP ${res.status}`);
     return res.json();
   }
@@ -5524,7 +5524,7 @@ export class QuicClient {
   async filesRead(root: string, path: string): Promise<any> {
     this.assertConnected();
     const p = new URLSearchParams({ root, path });
-    const res = await fetch(`${this.baseUrl}/files/read?${p}`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/files/read?${p}`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`files read: HTTP ${res.status}`);
     return res.json();
   }
@@ -5533,7 +5533,7 @@ export class QuicClient {
 
   async sharedStorageProfiles(): Promise<any> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/shared-storage/profiles`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/shared-storage/profiles`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`shared storage profiles: HTTP ${res.status}`);
     return res.json();
   }
@@ -5542,7 +5542,7 @@ export class QuicClient {
     this.assertConnected();
     const p = new URLSearchParams({ id });
     if (path) p.set('path', path);
-    const res = await fetch(`${this.baseUrl}/shared-storage/list?${p}`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/shared-storage/list?${p}`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`shared storage list: HTTP ${res.status}`);
     return res.json();
   }
@@ -5551,7 +5551,7 @@ export class QuicClient {
 
   async blobsListBuckets(): Promise<{ buckets: string[] }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/blobs`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/blobs`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`blobs list: HTTP ${res.status}`);
     return res.json();
   }
@@ -5569,7 +5569,7 @@ export class QuicClient {
     if (opts.limit) q.set('limit', String(opts.limit));
     if (opts.after) q.set('after', opts.after);
     const suffix = q.toString() ? `?${q.toString()}` : '';
-    const res = await fetch(
+    const res = await this.fetchWithTimeout(
       `${this.baseUrl}/blobs/${encodeURIComponent(bucket)}${suffix}`,
       { headers: this.authHeaders },
     );
@@ -5584,7 +5584,7 @@ export class QuicClient {
 
   async blobsDelete(bucket: string, key: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(
+    const res = await this.fetchWithTimeout(
       `${this.baseUrl}/blobs/${encodeURIComponent(bucket)}/${encodeURIComponent(key)}`,
       { method: 'DELETE', headers: this.authHeaders },
     );
@@ -5597,7 +5597,7 @@ export class QuicClient {
   async detectQualityChecks(workDir?: string): Promise<{type: string; available: boolean; command: string; framework: string}[]> {
     this.assertConnected();
     const params = workDir ? `?workDir=${encodeURIComponent(workDir)}` : '';
-    const res = await fetch(`${this.baseUrl}/quality/detect${params}`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/quality/detect${params}`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`Failed to detect quality checks: ${res.status}`);
     return res.json();
   }
@@ -5605,7 +5605,7 @@ export class QuicClient {
   /** Run a single quality check. */
   async runQualityCheck(type: string, workDir?: string): Promise<{id: string; type: string; status: string}> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/quality/run`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/quality/run`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ type, workDir }),
@@ -5617,7 +5617,7 @@ export class QuicClient {
   /** Run all available quality checks. */
   async runAllQualityChecks(workDir?: string): Promise<{id: string; type: string; status: string}[]> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/quality/run-all`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/quality/run-all`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ workDir }),
@@ -5629,7 +5629,7 @@ export class QuicClient {
   /** Get all quality check results. */
   async getQualityResults(): Promise<any[]> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/quality/results`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/quality/results`, { headers: this.authHeaders });
     if (!res.ok) return [];
     return res.json();
   }
@@ -5637,7 +5637,7 @@ export class QuicClient {
   /** Get a single quality check result by ID. */
   async getQualityResult(id: string): Promise<any> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/quality/results/${id}`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/quality/results/${id}`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`Failed to get quality result: ${res.status}`);
     return res.json();
   }
@@ -5647,7 +5647,7 @@ export class QuicClient {
   /** Get all health monitoring targets with current status. */
   async getHealthTargets(): Promise<HealthMonitorTarget[]> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/healthmon`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/healthmon`, { headers: this.authHeaders });
     if (!res.ok) return [];
     const data = await res.json();
     return Array.isArray(data) ? data.map(normalizeHealthTarget) : [];
@@ -5656,7 +5656,7 @@ export class QuicClient {
   /** Add a new health monitoring target. */
   async addHealthTarget(url: string, label?: string, interval?: number): Promise<any> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/healthmon`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/healthmon`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, label, interval: interval || 60 }),
@@ -5668,13 +5668,13 @@ export class QuicClient {
   /** Remove a health monitoring target. */
   async removeHealthTarget(id: string): Promise<void> {
     this.assertConnected();
-    await fetch(`${this.baseUrl}/healthmon/${id}`, { method: 'DELETE', headers: this.authHeaders });
+    await this.fetchWithTimeout(`${this.baseUrl}/healthmon/${id}`, { method: 'DELETE', headers: this.authHeaders });
   }
 
   /** Force an immediate health check on a target. */
   async checkHealthTarget(id: string): Promise<HealthMonitorTarget> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/healthmon/${id}/check`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/healthmon/${id}/check`, {
       method: 'POST',
       headers: this.authHeaders,
     });
@@ -5688,7 +5688,7 @@ export class QuicClient {
   async gitStatus(workDir?: string): Promise<{branch: string; ahead: number; behind: number; clean: boolean; staged: any[]; modified: any[]; untracked: any[]}> {
     this.assertConnected();
     const params = workDir ? `?workDir=${encodeURIComponent(workDir)}` : '';
-    const res = await fetch(`${this.baseUrl}/git/status${params}`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/status${params}`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`Failed to get git status: ${res.status}`);
     return res.json();
   }
@@ -5700,7 +5700,7 @@ export class QuicClient {
     if (workDir) params.set('workDir', workDir);
     if (limit) params.set('limit', String(limit));
     const q = params.toString() ? `?${params}` : '';
-    const res = await fetch(`${this.baseUrl}/git/log${q}`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/log${q}`, { headers: this.authHeaders });
     if (!res.ok) return [];
     return res.json();
   }
@@ -5712,7 +5712,7 @@ export class QuicClient {
     if (workDir) params.set('workDir', workDir);
     if (file) params.set('file', file);
     const q = params.toString() ? `?${params}` : '';
-    const res = await fetch(`${this.baseUrl}/git/diff${q}`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/diff${q}`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`Failed to get git diff: ${res.status}`);
     return res.json();
   }
@@ -5721,7 +5721,7 @@ export class QuicClient {
   async gitBranches(workDir?: string): Promise<{name: string; current: boolean; remote?: string}[]> {
     this.assertConnected();
     const params = workDir ? `?workDir=${encodeURIComponent(workDir)}` : '';
-    const res = await fetch(`${this.baseUrl}/git/branches${params}`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/branches${params}`, { headers: this.authHeaders });
     if (!res.ok) return [];
     return res.json();
   }
@@ -5729,7 +5729,7 @@ export class QuicClient {
   /** Create a git commit. */
   async gitCommit(message: string, files?: string[], workDir?: string): Promise<{hash: string; message: string}> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/git/commit`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/commit`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, files, workDir }),
@@ -5741,7 +5741,7 @@ export class QuicClient {
   /** Push to remote. */
   async gitPush(workDir?: string): Promise<{success: boolean; output: string}> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/git/push`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/push`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ workDir }),
@@ -5753,7 +5753,7 @@ export class QuicClient {
   /** Pull from remote. */
   async gitPull(workDir?: string): Promise<{success: boolean; output: string}> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/git/pull`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/pull`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ workDir }),
@@ -5765,7 +5765,7 @@ export class QuicClient {
   /** Checkout a branch. */
   async gitCheckout(branch: string, workDir?: string): Promise<{success: boolean}> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/git/checkout`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/checkout`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ branch, workDir }),
@@ -5777,7 +5777,7 @@ export class QuicClient {
   /** Stash changes. */
   async gitStash(workDir?: string): Promise<{success: boolean; output: string}> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/git/stash`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/stash`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ workDir }),
@@ -5806,7 +5806,7 @@ export class QuicClient {
     }>;
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/deploy/tokens/catalogue`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/deploy/tokens/catalogue`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`deployTokensCatalogue ${res.status}`);
     const data = await res.json();
     return { targets: Array.isArray(data?.targets) ? data.targets : [] };
@@ -5867,7 +5867,7 @@ export class QuicClient {
     if (args?.target) params.set('target', args.target);
     if (args?.project) params.set('project', args.project);
     const qs = params.toString();
-    const res = await fetch(
+    const res = await this.fetchWithTimeout(
       `${this.baseUrl}/deploy/capabilities${qs ? `?${qs}` : ''}`,
       { headers: this.authHeaders },
     );
@@ -5941,7 +5941,7 @@ export class QuicClient {
     note?: string;
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/vault/peer-sync`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/vault/peer-sync`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ from: args?.from ?? '' }),
@@ -5985,7 +5985,7 @@ export class QuicClient {
     }>;
   }> {
     this.assertConnected();
-    const res = await fetch(
+    const res = await this.fetchWithTimeout(
       `${this.baseUrl}/deploy/tokens/status?project=${encodeURIComponent(project)}`,
       { headers: this.authHeaders },
     );
@@ -6005,7 +6005,7 @@ export class QuicClient {
     results: Record<string, { saved: boolean; reason?: string; verify?: string; verifyDetail?: string; verifyReason?: string }>;
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/deploy/tokens/save`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/deploy/tokens/save`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -6043,7 +6043,7 @@ export class QuicClient {
     sandboxWritten: boolean;
   } | null> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/git/provider/repo/create`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/provider/repo/create`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -6078,7 +6078,7 @@ export class QuicClient {
     const qs = new URLSearchParams();
     if (args.slug) qs.set('slug', args.slug);
     if (args.workDir) qs.set('workDir', args.workDir);
-    const res = await fetch(`${this.baseUrl}/managed-git/status?${qs.toString()}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/managed-git/status?${qs.toString()}`, {
       headers: this.authHeaders,
     });
     if (res.status === 404) return null;
@@ -6096,7 +6096,7 @@ export class QuicClient {
     visibility?: 'private' | 'unlisted' | 'public';
   }): Promise<any> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/managed-git/enable`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/managed-git/enable`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(args),
@@ -6110,7 +6110,7 @@ export class QuicClient {
 
   async managedGitCheckpoint(args: { slug?: string; workDir?: string; message?: string }): Promise<{ ok: boolean; commit: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/managed-git/checkpoint`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/managed-git/checkpoint`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(args),
@@ -6143,7 +6143,7 @@ export class QuicClient {
     reasons?: string[];
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/managed-git/relay-source/plan`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/managed-git/relay-source/plan`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(args),
@@ -6175,7 +6175,7 @@ export class QuicClient {
     apply?: any;
   }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/managed-git/relay-source/work-once`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/managed-git/relay-source/work-once`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(args),
@@ -6189,7 +6189,7 @@ export class QuicClient {
 
   async managedGitBackupRun(args: { slug?: string; workDir?: string }): Promise<{ ok: boolean; backup: any }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/managed-git/backup/run`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/managed-git/backup/run`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(args),
@@ -6209,7 +6209,7 @@ export class QuicClient {
     destPath?: string;
   }): Promise<{ ok: boolean; backup: any }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/managed-git/backup/copy`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/managed-git/backup/copy`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(args),
@@ -6223,7 +6223,7 @@ export class QuicClient {
 
   async managedGitBackupRestore(args: { slug?: string; workDir?: string; bundlePath: string }): Promise<{ ok: boolean; commit: string }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/managed-git/backup/restore`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/managed-git/backup/restore`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(args),
@@ -6237,7 +6237,7 @@ export class QuicClient {
 
   async managedGitDropboxStatus(): Promise<any> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/managed-git/dropbox/status`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/managed-git/dropbox/status`, {
       headers: this.authHeaders,
     });
     if (!res.ok) {
@@ -6249,7 +6249,7 @@ export class QuicClient {
 
   async managedGitDropboxOAuthStart(args: { redirectUri?: string } = {}): Promise<any> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/managed-git/dropbox/oauth/start`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/managed-git/dropbox/oauth/start`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(args),
@@ -6263,7 +6263,7 @@ export class QuicClient {
 
   async managedGitDropboxOAuthSubmit(args: { sessionId: string; code: string }): Promise<any> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/managed-git/dropbox/oauth/submit`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/managed-git/dropbox/oauth/submit`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(args),
@@ -6285,7 +6285,7 @@ export class QuicClient {
     description?: string;
   }): Promise<{ ok: boolean; mirror: any }> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/managed-git/mirrors/connect`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/managed-git/mirrors/connect`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(args),
@@ -6300,7 +6300,7 @@ export class QuicClient {
   /** Pop stashed changes. */
   async gitStashPop(workDir?: string): Promise<{success: boolean; output: string}> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/git/stash-pop`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/stash-pop`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ workDir }),
@@ -6312,7 +6312,7 @@ export class QuicClient {
   /** Revert a commit by hash. */
   async gitRevert(hash: string, workDir?: string): Promise<{success: boolean; output: string}> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/git/revert`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/revert`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ hash, workDir }),
@@ -6332,7 +6332,7 @@ export class QuicClient {
     opts?: { autoInit?: boolean; autoInitRunner?: string },
   ): Promise<{ok: boolean; path: string; output?: string; alreadyExisted?: boolean; metadata?: any; autoinit?: any}> {
     this.assertConnected();
-    const res = await fetch(this.peerEndpoint(target, "/repos/clone"), {
+    const res = await this.fetchWithTimeout(this.peerEndpoint(target, "/repos/clone"), {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -6353,7 +6353,7 @@ export class QuicClient {
   /** Pull latest in a repo directory. */
   async pullRepo(workDir?: string): Promise<{ok: boolean; output: string; branch: string}> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/repos/pull`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/repos/pull`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ workDir }),
@@ -6368,7 +6368,7 @@ export class QuicClient {
   /** Delete a repo directory from the remote machine. This removes source code from that box. */
   async deleteRepo(path: string): Promise<{ok: boolean; path: string}> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/repos/delete`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/repos/delete`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ path }),
@@ -6383,7 +6383,7 @@ export class QuicClient {
   /** List repos on dev machine. */
   async listRepos(target?: string): Promise<{name: string; path: string; branch: string; remote: string; lastCommit: string; dirty: boolean}[]> {
     this.assertConnected();
-    const res = await fetch(this.peerEndpoint(target, "/repos/list"), { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(this.peerEndpoint(target, "/repos/list"), { headers: this.authHeaders });
     if (!res.ok) throw new Error(`Failed to list repos: ${res.status}`);
     return res.json();
   }
@@ -6446,7 +6446,7 @@ export class QuicClient {
   /** Store git credential (PAT) on the dev machine. */
   async setRepoCredential(host: string, token: string, username?: string): Promise<{ok: boolean}> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/repos/credentials`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/repos/credentials`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ host, token, username }),
@@ -6458,7 +6458,7 @@ export class QuicClient {
   /** List configured credential hosts (tokens are never returned). */
   async listRepoCredentials(): Promise<{host: string; username: string; hasToken: boolean}[]> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/repos/credentials`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/repos/credentials`, { headers: this.authHeaders });
     if (!res.ok) throw new Error(`Failed to list credentials: ${res.status}`);
     return res.json();
   }
@@ -6466,7 +6466,7 @@ export class QuicClient {
   /** Remove a credential for a host. */
   async removeRepoCredential(host: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/repos/credentials/${encodeURIComponent(host)}`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/repos/credentials/${encodeURIComponent(host)}`, {
       method: 'DELETE',
       headers: this.authHeaders,
     });
@@ -6476,7 +6476,7 @@ export class QuicClient {
   /** Scaffold a starter monorepo workspace manifest from the current repo. */
   async workspaceScaffold(root?: string): Promise<{ yaml: string; detected: any[]; hint?: string } | null> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/ops`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/ops`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ verb: "workspace", machine: "local", payload: { op: "scaffold", root } }),
@@ -6490,7 +6490,7 @@ export class QuicClient {
   /** Run the workspace init engine against a repo's yaver.workspace.yaml. */
   async workspaceInit(opts: { root?: string; dryRun?: boolean; force?: boolean; onlyApp?: string } = {}): Promise<{ counts?: Record<string, number>; actions?: any[] } | null> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/ops`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/ops`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -6514,7 +6514,7 @@ export class QuicClient {
   /** Read workspace status for a repo with yaver.workspace.yaml. */
   async workspaceStatus(root?: string): Promise<{ name?: string; status?: any[] } | null> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/ops`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/ops`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ verb: "workspace", machine: "local", payload: { op: "status", root } }),
@@ -6858,10 +6858,13 @@ export class QuicClient {
   }
 
   /** Create a fetch with a manual timeout (AbortSignal.timeout may not exist in Hermes). */
-  private fetchWithTimeout(url: string, opts: RequestInit, timeoutMs: number): Promise<Response> {
+  // Default 30s so a call that forgets an explicit bound STILL cannot hang the
+  // UI forever — the "never stuck" floor. Streaming reads pass a long explicit
+  // timeout. opts defaults to {} so `this.fetchWithTimeout(url)` is valid.
+  private fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs = 12000): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+    return this.fetchWithTimeout(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
   }
 
   /** Check if an IP address is direct-routable without the relay:
@@ -7039,7 +7042,7 @@ export class QuicClient {
       controllers[idx] = ctrl;
       const url = `http://${cand.ip}:${cand.port}/health`;
       const timer = setTimeout(() => ctrl.abort(), 2500);
-      return fetch(url, { headers: this.authHeaders, signal: ctrl.signal })
+      return this.fetchWithTimeout(url, { headers: this.authHeaders, signal: ctrl.signal })
         .then(async (res) => {
           clearTimeout(timer);
           if (!res.ok) throw new Error(`status ${res.status}`);
@@ -7722,7 +7725,7 @@ export class QuicClient {
 
     this.pollInterval = setInterval(async () => {
       try {
-        const res = await fetch(`${this.baseUrl}/tasks`, {
+        const res = await this.fetchWithTimeout(`${this.baseUrl}/tasks`, {
           headers: this.authHeaders,
         });
         if (!res.ok) {
@@ -7931,7 +7934,7 @@ export class QuicClient {
   async getDevServerTarget(): Promise<DevTargetPreference | null> {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
-      const res = await fetch(`${this.baseUrl}/dev/target`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/dev/target`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return null;
@@ -7942,7 +7945,7 @@ export class QuicClient {
   async getDevCompatibility(workDir: string, availableModules: string[]): Promise<DevCompatibilityStatus | null> {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
-      const res = await fetch(`${this.baseUrl}/dev/compatibility`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/dev/compatibility`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ workDir, availableModules }),
@@ -7955,7 +7958,7 @@ export class QuicClient {
   /** Persist the dev preview target on the agent. */
   async setDevServerTarget(target: DevTargetPreference): Promise<DevTargetPreference | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/dev/target`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/dev/target`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(target),
@@ -7969,7 +7972,7 @@ export class QuicClient {
   async getMobileWorkerPreviewSession(): Promise<MobileWorkerPreviewSession | null> {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
-      const res = await fetch(`${this.baseUrl}/mobile-workers/preview-session`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/mobile-workers/preview-session`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return null;
@@ -7980,7 +7983,7 @@ export class QuicClient {
   /** Send a targeted command to the selected mobile preview worker. */
   async sendMobileWorkerPreviewCommand(command: string, data?: Record<string, unknown>): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/mobile-workers/preview-session/command`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/mobile-workers/preview-session/command`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ command, data }),
@@ -7993,7 +7996,7 @@ export class QuicClient {
   async pushBlackBoxEvents(deviceId: string, events: Array<Record<string, unknown>>, appName = "Yaver"): Promise<boolean> {
     if (!this.isConnected && !this.hasConnectionInfo) return false;
     try {
-      const res = await fetch(`${this.baseUrl}/blackbox/events`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/blackbox/events`, {
         method: "POST",
         headers: {
           ...this.authHeaders,
@@ -8016,7 +8019,7 @@ export class QuicClient {
   async uploadPhoneFrame(deviceId: string, dataBase64: string, format = "jpg", turnId?: string): Promise<boolean> {
     if (!this.isConnected && !this.hasConnectionInfo) return false;
     try {
-      const res = await fetch(`${this.baseUrl}/blackbox/frame`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/blackbox/frame`, {
         method: "POST",
         headers: {
           ...this.authHeaders,
@@ -8041,7 +8044,7 @@ export class QuicClient {
     const slot = this.acquireStreamSlot(STREAM_PRIORITY.blackboxCommands, "blackbox/commands", () => controller.abort());
     const run = async () => {
       try {
-        const res = await fetch(`${this.baseUrl}/blackbox/command-stream?device=${encodeURIComponent(deviceId)}`, {
+        const res = await this.fetchWithTimeout(`${this.baseUrl}/blackbox/command-stream?device=${encodeURIComponent(deviceId)}`, {
           headers: {
             ...this.authHeaders,
             Accept: "text/event-stream",
@@ -8105,7 +8108,7 @@ export class QuicClient {
     const body = web
       ? { ...rest, platform: "web", caller: "web-ui" }
       : { ...rest, caller: "mobile" };
-    const res = await fetch(`${this.baseUrl}/dev/start`, {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/dev/start`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -8156,7 +8159,7 @@ export class QuicClient {
   ): Promise<{ name: string; installed: boolean; description: string }[]> {
     this.assertConnected();
     const base = this.peerEndpoint(target, "/install/list");
-    const res = await fetch(base, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(base, { headers: this.authHeaders });
     if (!res.ok) return [];
     return res.json();
   }
@@ -8177,7 +8180,7 @@ export class QuicClient {
   ): Promise<{ ok: boolean; tool: string; stream: string; error?: string }> {
     this.assertConnected();
     const base = this.peerEndpoint(target, `/install/${encodeURIComponent(tool)}`);
-    const res = await fetch(base, {
+    const res = await this.fetchWithTimeout(base, {
       method: "POST",
       headers: this.authHeaders,
     });
@@ -8196,7 +8199,7 @@ export class QuicClient {
   }> {
     this.assertConnected();
     const base = this.peerEndpoint(target, "/runner/sessions/close");
-    const res = await fetch(base, {
+    const res = await this.fetchWithTimeout(base, {
       method: "POST",
       headers: this.authHeaders,
     });
@@ -8297,7 +8300,7 @@ export class QuicClient {
   }> {
     this.assertConnected();
     const base = this.peerEndpoint(target, "/agent/update");
-    const res = await fetch(base, {
+    const res = await this.fetchWithTimeout(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: "{}",
@@ -8432,7 +8435,7 @@ export class QuicClient {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
       const base = this.peerEndpoint(target, "/agent/update");
-      const res = await fetch(base, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(base, { headers: this.authHeaders });
       if (!res.ok) return null;
       return await res.json();
     } catch {
@@ -8451,7 +8454,7 @@ export class QuicClient {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
       const base = this.peerEndpoint(target, "/info");
-      const res = await fetch(base, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(base, { headers: this.authHeaders });
       if (!res.ok) return null;
       const data = await res.json();
       return {
@@ -8478,7 +8481,7 @@ export class QuicClient {
   ): Promise<{ ok: boolean; error?: string }> {
     this.assertConnected();
     const base = this.peerEndpoint(target, "/install/sudo");
-    const res = await fetch(base, {
+    const res = await this.fetchWithTimeout(base, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ tool, password, cancel }),
@@ -8557,7 +8560,7 @@ export class QuicClient {
     error?: string;
   } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/dev/stop`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/dev/stop`, {
         method: "POST",
         headers: this.authHeaders,
       });
@@ -8599,7 +8602,7 @@ export class QuicClient {
         // WARM persistent cache — never a cold start). Legacy "dev"
         // maps to fast. Older agents ignore the unknown body field and
         // behave exactly as before — backward compatible.
-        const primary = await fetch(`${this.baseUrl}/dev/reload`, {
+        const primary = await this.fetchWithTimeout(`${this.baseUrl}/dev/reload`, {
           method: "POST",
           headers: { ...this.authHeaders, "Content-Type": "application/json" },
           body: JSON.stringify({ mode: mode === "full" ? "full" : "fast" }),
@@ -8612,7 +8615,7 @@ export class QuicClient {
         }
         // Metro dead — fall through to bundle rebuild below.
       }
-      const res = await fetch(`${this.baseUrl}/dev/reload-app`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/dev/reload-app`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ mode: "bundle" }),
@@ -8657,7 +8660,7 @@ export class QuicClient {
   async getSandboxStatus(): Promise<SandboxStatus | null> {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
-      const res = await fetch(`${this.baseUrl}/sandbox/status`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/sandbox/status`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return null;
@@ -8668,7 +8671,7 @@ export class QuicClient {
   /** One-step containerization setup for shared infra or full host isolation. */
   async sandboxQuickstart(mode: "guests" | "host", buildImage = true): Promise<{ ok: boolean; message?: string; sandbox?: SandboxStatus; error?: string }> {
     try {
-      const res = await fetch(`${this.baseUrl}/sandbox/quickstart`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/sandbox/quickstart`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ mode, buildImage }),
@@ -8684,7 +8687,7 @@ export class QuicClient {
   /** Update container sandbox config on agent. Changes are persisted. */
   async updateSandboxConfig(config: Partial<SandboxConfig>): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/sandbox/config`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/sandbox/config`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(config),
@@ -8696,7 +8699,7 @@ export class QuicClient {
   /** Trigger sandbox Docker image build on agent. Returns immediately; poll status. */
   async buildSandboxImage(): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/sandbox/build`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/sandbox/build`, {
         method: "POST",
         headers: this.authHeaders,
       });
@@ -8715,7 +8718,7 @@ export class QuicClient {
       const url = root
         ? `${this.baseUrl}/testkit/specs?root=${encodeURIComponent(root)}`
         : `${this.baseUrl}/testkit/specs`;
-      const res = await fetch(url, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(url, { headers: this.authHeaders });
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = await res.json();
       return data.specs || [];
@@ -8727,7 +8730,7 @@ export class QuicClient {
   /** Get the current run status (running flag + last suite). */
   async testkitRunStatus(): Promise<TestkitRunStatus | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/testkit/run`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/testkit/run`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return null;
@@ -8740,7 +8743,7 @@ export class QuicClient {
   /** Kick off a new run. Returns false if another run is already in progress. */
   async testkitStartRun(opts: TestkitRunOpts = {}): Promise<{ ok: boolean; reason?: string }> {
     try {
-      const res = await fetch(`${this.baseUrl}/testkit/run`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/testkit/run`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(opts),
@@ -8759,7 +8762,7 @@ export class QuicClient {
       const url = root
         ? `${this.baseUrl}/testkit/history?root=${encodeURIComponent(root)}`
         : `${this.baseUrl}/testkit/history`;
-      const res = await fetch(url, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(url, { headers: this.authHeaders });
       if (!res.ok) return [];
       const data = await res.json();
       return data.entries || [];
@@ -8774,7 +8777,7 @@ export class QuicClient {
       const url = root
         ? `${this.baseUrl}/testkit/flake?root=${encodeURIComponent(root)}`
         : `${this.baseUrl}/testkit/flake`;
-      const res = await fetch(url, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(url, { headers: this.authHeaders });
       if (!res.ok) return [];
       const data = await res.json();
       return data.stats || [];
@@ -8789,7 +8792,7 @@ export class QuicClient {
       const url = root
         ? `${this.baseUrl}/testkit/notifications?root=${encodeURIComponent(root)}`
         : `${this.baseUrl}/testkit/notifications`;
-      const res = await fetch(url, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(url, { headers: this.authHeaders });
       if (!res.ok) return [];
       const data = await res.json();
       return data.notifications || [];
@@ -8804,7 +8807,7 @@ export class QuicClient {
       const url = root
         ? `${this.baseUrl}/testkit/markers?root=${encodeURIComponent(root)}`
         : `${this.baseUrl}/testkit/markers`;
-      const res = await fetch(url, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(url, { headers: this.authHeaders });
       if (!res.ok) return [];
       const data = await res.json();
       return data.markers || [];
@@ -8816,7 +8819,7 @@ export class QuicClient {
   /** Connected USB devices the agent can drive. */
   async testkitDevices(): Promise<TestkitUSBDevice[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/testkit/devices`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/testkit/devices`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return [];
@@ -8830,7 +8833,7 @@ export class QuicClient {
   /** Local CI integration install state (chrome, adb, xcode, etc). */
   async testkitIntegrations(): Promise<TestkitIntegration[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/testkit/integrations`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/testkit/integrations`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return [];
@@ -8847,7 +8850,7 @@ export class QuicClient {
       const url = root
         ? `${this.baseUrl}/testkit/autofix?root=${encodeURIComponent(root)}`
         : `${this.baseUrl}/testkit/autofix`;
-      const res = await fetch(url, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(url, { headers: this.authHeaders });
       if (!res.ok) return [];
       const data = await res.json();
       return data.autofixes || [];
@@ -8859,7 +8862,7 @@ export class QuicClient {
   /** Roll back a previously-applied autofix. */
   async testkitAutoFixUndo(id: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/testkit/autofix/${encodeURIComponent(id)}/undo`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/testkit/autofix/${encodeURIComponent(id)}/undo`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ by: "mobile" }),
@@ -8891,7 +8894,7 @@ export class QuicClient {
     try {
       const params = new URLSearchParams({ dir });
       if (root) params.set("root", root);
-      const res = await fetch(
+      const res = await this.fetchWithTimeout(
         `${this.baseUrl}/testkit/frames?${params.toString()}`,
         { headers: this.authHeaders },
       );
@@ -8914,7 +8917,7 @@ export class QuicClient {
   /** List every release in a channel with rollout percent. */
   async releasesList(channel: string = "production"): Promise<ReleaseManifest | null> {
     try {
-      const res = await fetch(
+      const res = await this.fetchWithTimeout(
         `${this.baseUrl}/releases/list?channel=${encodeURIComponent(channel)}`,
         { headers: this.authHeaders },
       );
@@ -8934,7 +8937,7 @@ export class QuicClient {
     try {
       const params = new URLSearchParams({ channel });
       if (deviceId) params.set("device", deviceId);
-      const res = await fetch(
+      const res = await this.fetchWithTimeout(
         `${this.baseUrl}/releases/latest?${params.toString()}`,
         { headers: this.authHeaders },
       );
@@ -8948,7 +8951,7 @@ export class QuicClient {
   /** Rollback the channel to a previously-published semver. */
   async releasesRollback(channel: string, semver: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/exec`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/exec`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -8964,7 +8967,7 @@ export class QuicClient {
   /** Set the rollout percentage for a channel. */
   async releasesRollout(channel: string, percent: number): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/exec`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/exec`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -8985,7 +8988,7 @@ export class QuicClient {
       const url = includeResolved
         ? `${this.baseUrl}/errors?include_resolved=1`
         : `${this.baseUrl}/errors`;
-      const res = await fetch(url, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(url, { headers: this.authHeaders });
       if (!res.ok) return null;
       return await res.json();
     } catch {
@@ -9012,7 +9015,7 @@ export class QuicClient {
       if (opts.projectPath) p.set("projectPath", opts.projectPath);
       if (opts.includeResolved) p.set("include_resolved", "1");
       if (opts.limit) p.set("limit", String(opts.limit));
-      const res = await fetch(`${this.baseUrl}/incidents?${p.toString()}`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/incidents?${p.toString()}`, { headers: this.authHeaders });
       if (!res.ok) return [];
       const data = await res.json();
       return (data?.incidents as IncidentEvent[]) ?? [];
@@ -9024,7 +9027,7 @@ export class QuicClient {
   async incidentSummary(): Promise<IncidentSummary | null> {
     if (!this.isConnected && !this.hasConnectionInfo) return null;
     try {
-      const res = await fetch(`${this.baseUrl}/incidents/summary`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/incidents/summary`, { headers: this.authHeaders });
       if (!res.ok) return null;
       const data = await res.json();
       return (data?.summary as IncidentSummary) ?? null;
@@ -9048,7 +9051,7 @@ export class QuicClient {
       if (opts.device) p.set("device", opts.device);
       if (opts.projectPath) p.set("projectPath", opts.projectPath);
       if (opts.limit) p.set("limit", String(opts.limit));
-      const res = await fetch(`${this.baseUrl}/operations?${p.toString()}`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/operations?${p.toString()}`, { headers: this.authHeaders });
       if (!res.ok) return [];
       const data = await res.json();
       return (data?.operations as OperationState[]) ?? [];
@@ -9060,7 +9063,7 @@ export class QuicClient {
   /** Mark an error as resolved with an optional one-liner note. */
   async errorResolve(fingerprint: string, note?: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/errors/resolve`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/errors/resolve`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ fingerprint, note }),
@@ -9074,7 +9077,7 @@ export class QuicClient {
   /** Reopen a previously-resolved error. */
   async errorReopen(fingerprint: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/errors/reopen`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/errors/reopen`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ fingerprint }),
@@ -9089,7 +9092,7 @@ export class QuicClient {
 
   async monitorsList(): Promise<YaverMonitor[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/monitors`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/monitors`, { headers: this.authHeaders });
       if (!res.ok) return [];
       const data = await res.json();
       return data.monitors ?? [];
@@ -9105,7 +9108,7 @@ export class QuicClient {
     method?: string;
   }): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/monitors`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/monitors`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(input),
@@ -9118,7 +9121,7 @@ export class QuicClient {
 
   async monitorsRemove(id: string): Promise<boolean> {
     try {
-      const res = await fetch(
+      const res = await this.fetchWithTimeout(
         `${this.baseUrl}/monitors/${encodeURIComponent(id)}`,
         { method: "DELETE", headers: this.authHeaders },
       );
@@ -9131,7 +9134,7 @@ export class QuicClient {
   async monitorsPause(id: string, paused: boolean): Promise<boolean> {
     try {
       const action = paused ? "pause" : "resume";
-      const res = await fetch(
+      const res = await this.fetchWithTimeout(
         `${this.baseUrl}/monitors/${encodeURIComponent(id)}/${action}`,
         { method: "POST", headers: this.authHeaders },
       );
@@ -9143,7 +9146,7 @@ export class QuicClient {
 
   async monitorsCheck(id: string): Promise<MonitorCheck | null> {
     try {
-      const res = await fetch(
+      const res = await this.fetchWithTimeout(
         `${this.baseUrl}/monitors/${encodeURIComponent(id)}/check`,
         { method: "POST", headers: this.authHeaders },
       );
@@ -9161,7 +9164,7 @@ export class QuicClient {
     try {
       const params = new URLSearchParams({ limit: String(limit) });
       if (since) params.set("since", String(since));
-      const res = await fetch(
+      const res = await this.fetchWithTimeout(
         `${this.baseUrl}/analytics/events?${params.toString()}`,
         { headers: this.authHeaders },
       );
@@ -9181,7 +9184,7 @@ export class QuicClient {
 
   async flagsList(): Promise<YaverFlag[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/flags`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/flags`, { headers: this.authHeaders });
       if (!res.ok) return [];
       const data = await res.json();
       return data.flags ?? [];
@@ -9192,7 +9195,7 @@ export class QuicClient {
 
   async flagsSet(flag: YaverFlag): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/flags`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/flags`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(flag),
@@ -9205,7 +9208,7 @@ export class QuicClient {
 
   async flagsDelete(key: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/flags/delete`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/flags/delete`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ key }),
@@ -9218,7 +9221,7 @@ export class QuicClient {
 
   async flagsOverride(key: string, userId: string, value: string, clear: boolean = false): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/flags/override`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/flags/override`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ key, userId, value, clear }),
@@ -9231,7 +9234,7 @@ export class QuicClient {
 
   async flagsEval(userId: string): Promise<Record<string, unknown> | null> {
     try {
-      const res = await fetch(
+      const res = await this.fetchWithTimeout(
         `${this.baseUrl}/flags/eval?userId=${encodeURIComponent(userId)}`,
         { headers: this.authHeaders },
       );
@@ -9247,7 +9250,7 @@ export class QuicClient {
 
   async machineHealth(): Promise<MachineHealth | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/machine/health`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/machine/health`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return null;
@@ -9260,7 +9263,7 @@ export class QuicClient {
 
   async machinePeers(): Promise<PeerState[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/machine/peers`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/machine/peers`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return [];
@@ -9275,7 +9278,7 @@ export class QuicClient {
 
   async clipStart(body: { title?: string; description?: string; targets?: string[] }): Promise<any | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/clips/start`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/clips/start`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -9287,7 +9290,7 @@ export class QuicClient {
 
   async clipStop(): Promise<any | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/clips/stop`, { method: "POST", headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/clips/stop`, { method: "POST", headers: this.authHeaders });
       if (!res.ok) return null;
       return await res.json();
     } catch { return null; }
@@ -9295,7 +9298,7 @@ export class QuicClient {
 
   async clipList(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/clips/list`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/clips/list`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).sessions || [];
     } catch { return []; }
@@ -9303,9 +9306,9 @@ export class QuicClient {
 
   async clipUploadMobileScreen(sessionId: string, fileUri: string): Promise<any | null> {
     try {
-      const fileContent = await fetch(fileUri);
+      const fileContent = await this.fetchWithTimeout(fileUri);
       const blob = await fileContent.blob();
-      const res = await fetch(`${this.baseUrl}/clips/upload/${sessionId}?kind=mobile-screen`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/clips/upload/${sessionId}?kind=mobile-screen`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "video/mp4" },
         body: blob,
@@ -9317,7 +9320,7 @@ export class QuicClient {
 
   async clipMerge(sessionId: string): Promise<any | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/clips/merge/${sessionId}`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/clips/merge/${sessionId}`, {
         method: "POST",
         headers: this.authHeaders,
       });
@@ -9339,7 +9342,7 @@ export class QuicClient {
 
   async chatConversations(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/chat/conversations`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/chat/conversations`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).conversations || [];
     } catch { return []; }
@@ -9347,7 +9350,7 @@ export class QuicClient {
 
   async chatHistory(vid: string): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/chat/messages?vid=${encodeURIComponent(vid)}`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/chat/messages?vid=${encodeURIComponent(vid)}`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).messages || [];
     } catch { return []; }
@@ -9355,7 +9358,7 @@ export class QuicClient {
 
   async chatReply(vid: string, text: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/chat/reply`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/chat/reply`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ vid, text }),
@@ -9368,7 +9371,7 @@ export class QuicClient {
 
   async abExperiments(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/ab/experiments`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/ab/experiments`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).experiments || [];
     } catch { return []; }
@@ -9376,7 +9379,7 @@ export class QuicClient {
 
   async abResults(key: string): Promise<Record<string, any> | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/ab/results?key=${encodeURIComponent(key)}`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/ab/results?key=${encodeURIComponent(key)}`, { headers: this.authHeaders });
       if (!res.ok) return null;
       return (await res.json()).results ?? {};
     } catch { return null; }
@@ -9386,7 +9389,7 @@ export class QuicClient {
 
   async invoicesList(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/invoices`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/invoices`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).invoices || [];
     } catch { return []; }
@@ -9394,7 +9397,7 @@ export class QuicClient {
 
   async customersList(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/customers`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/customers`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).customers || [];
     } catch { return []; }
@@ -9404,7 +9407,7 @@ export class QuicClient {
 
   async affiliatesList(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/affiliates`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/affiliates`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).affiliates || [];
     } catch { return []; }
@@ -9414,7 +9417,7 @@ export class QuicClient {
 
   async asciinemaList(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/asciinema`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/asciinema`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).casts || [];
     } catch { return []; }
@@ -9424,7 +9427,7 @@ export class QuicClient {
 
   async shortList(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/shortener`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/shortener`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).links || [];
     } catch { return []; }
@@ -9432,7 +9435,7 @@ export class QuicClient {
 
   async shortCreate(body: { url: string; code?: string; label?: string }): Promise<any | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/shortener`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/shortener`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -9444,7 +9447,7 @@ export class QuicClient {
 
   async shortDelete(code: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/shortener?code=${encodeURIComponent(code)}`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/shortener?code=${encodeURIComponent(code)}`, {
         method: "DELETE", headers: this.authHeaders,
       });
       return res.ok;
@@ -9455,7 +9458,7 @@ export class QuicClient {
 
   async waitlistList(): Promise<{ entries: any[]; total: number } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/waitlist`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/waitlist`, { headers: this.authHeaders });
       if (!res.ok) return null;
       return await res.json();
     } catch { return null; }
@@ -9463,7 +9466,7 @@ export class QuicClient {
 
   async waitlistLeaderboard(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/waitlist/leaderboard`);
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/waitlist/leaderboard`);
       if (!res.ok) return [];
       return (await res.json()).leaderboard || [];
     } catch { return []; }
@@ -9471,7 +9474,7 @@ export class QuicClient {
 
   async waitlistDelete(email: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/waitlist?email=${encodeURIComponent(email)}`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/waitlist?email=${encodeURIComponent(email)}`, {
         method: "DELETE", headers: this.authHeaders,
       });
       return res.ok;
@@ -9482,7 +9485,7 @@ export class QuicClient {
 
   async docsList(): Promise<{ tree: any[]; config: any } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/docs/_json`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/docs/_json`, { headers: this.authHeaders });
       if (!res.ok) return null;
       return await res.json();
     } catch { return null; }
@@ -9490,7 +9493,7 @@ export class QuicClient {
 
   async docsConfig(body: { path: string; title?: string; theme?: string }): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/docs/config`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/docs/config`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -9503,7 +9506,7 @@ export class QuicClient {
 
   async meetingsList(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/meetings`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/meetings`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).eventTypes || [];
     } catch { return []; }
@@ -9511,7 +9514,7 @@ export class QuicClient {
 
   async meetingsCreate(body: any): Promise<any | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/meetings`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/meetings`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -9523,7 +9526,7 @@ export class QuicClient {
 
   async meetingBookings(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/bookings`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/bookings`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).bookings || [];
     } catch { return []; }
@@ -9533,7 +9536,7 @@ export class QuicClient {
 
   async newsletterCompose(opts: { repo: string; sinceDays?: number; includePrs?: boolean; includeIssues?: boolean; subject?: string; instructions?: string; execute?: boolean; saveDraft?: boolean }): Promise<{ subject: string; draft: string; prompt: string; activity: any; campaignId?: string } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/newsletter/compose`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/newsletter/compose`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(opts),
@@ -9547,7 +9550,7 @@ export class QuicClient {
 
   async pdfRender(body: { html?: string; url?: string; format?: string; landscape?: boolean; printBackground?: boolean }): Promise<string | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/pdf/render`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/pdf/render`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -9581,7 +9584,7 @@ export class QuicClient {
 
   async oauthClients(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/oauth/clients`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/oauth/clients`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).clients || [];
     } catch { return []; }
@@ -9589,7 +9592,7 @@ export class QuicClient {
 
   async oauthClientCreate(body: { name: string; redirectUris: string[]; scopes?: string[] }): Promise<{ client_id: string; client_secret: string } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/oauth/clients`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/oauth/clients`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -9601,7 +9604,7 @@ export class QuicClient {
 
   async oauthUsers(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/oauth/users`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/oauth/users`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).users || [];
     } catch { return []; }
@@ -9609,7 +9612,7 @@ export class QuicClient {
 
   async oauthUserCreate(body: { email: string; password: string; name?: string }): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/oauth/users`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/oauth/users`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -9627,7 +9630,7 @@ export class QuicClient {
       if (opts.folder) p.set("folder", opts.folder);
       if (opts.limit) p.set("limit", String(opts.limit));
       if (opts.onlyPersonal) p.set("onlyPersonal", "true");
-      const res = await fetch(`${this.baseUrl}/mail/inbox?${p.toString()}`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/mail/inbox?${p.toString()}`, { headers: this.authHeaders });
       if (!res.ok) return null;
       return await res.json();
     } catch { return null; }
@@ -9635,7 +9638,7 @@ export class QuicClient {
 
   async mailDraft(id: string, instructions?: string, provider?: string, execute: boolean = true): Promise<{ prompt: string; target: MailMessage; draft?: string } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/mail/draft`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/mail/draft`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ id, instructions, provider, execute }),
@@ -9647,7 +9650,7 @@ export class QuicClient {
 
   async mailSend(body: { to: string[]; subject: string; body?: string; htmlBody?: string }): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/mail/send`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/mail/send`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -9658,7 +9661,7 @@ export class QuicClient {
 
   async mailConnectStart(provider: "gmail" | "o365"): Promise<{ sessionId: string; authUrl: string } | { error: string } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/mail/onboard/start`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/mail/onboard/start`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ provider }),
@@ -9673,7 +9676,7 @@ export class QuicClient {
 
   async mailConnectStatus(sessionId: string): Promise<{ session: any; ready: boolean } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/mail/onboard/status?id=${encodeURIComponent(sessionId)}`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/mail/onboard/status?id=${encodeURIComponent(sessionId)}`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return null;
@@ -9685,7 +9688,7 @@ export class QuicClient {
 
   async formsList(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/forms`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/forms`, { headers: this.authHeaders });
       if (!res.ok) return [];
       const data = await res.json();
       return data.forms || [];
@@ -9694,7 +9697,7 @@ export class QuicClient {
 
   async formCreate(body: { name: string; notifyEmail?: string; honeypotField?: string; rateLimitPerHour?: number }): Promise<any | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/forms`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/forms`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -9706,7 +9709,7 @@ export class QuicClient {
 
   async formSubmissions(id: string): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/forms/${id}/submissions`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/forms/${id}/submissions`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).submissions || [];
     } catch { return []; }
@@ -9716,7 +9719,7 @@ export class QuicClient {
 
   async newsletterSubscribers(): Promise<{ subscribers: any[]; count: any } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/newsletter/subscribers`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/newsletter/subscribers`, { headers: this.authHeaders });
       if (!res.ok) return null;
       return await res.json();
     } catch { return null; }
@@ -9724,7 +9727,7 @@ export class QuicClient {
 
   async newsletterCampaigns(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/newsletter/campaigns`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/newsletter/campaigns`, { headers: this.authHeaders });
       if (!res.ok) return [];
       return (await res.json()).campaigns || [];
     } catch { return []; }
@@ -9732,7 +9735,7 @@ export class QuicClient {
 
   async newsletterCreate(body: { subject: string; body: string; htmlBody?: string }): Promise<any | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/newsletter/campaigns`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/newsletter/campaigns`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -9744,7 +9747,7 @@ export class QuicClient {
 
   async newsletterSend(id: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/newsletter/campaigns/${id}/send`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/newsletter/campaigns/${id}/send`, {
         method: "POST",
         headers: this.authHeaders,
       });
@@ -9756,7 +9759,7 @@ export class QuicClient {
 
   async jobsList(): Promise<{ queue: any[]; dlq: any[] } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/jobs`, { headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/jobs`, { headers: this.authHeaders });
       if (!res.ok) return null;
       return await res.json();
     } catch { return null; }
@@ -9764,14 +9767,14 @@ export class QuicClient {
 
   async jobRetry(id: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/jobs/${id}/retry`, { method: "POST", headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/jobs/${id}/retry`, { method: "POST", headers: this.authHeaders });
       return res.ok;
     } catch { return false; }
   }
 
   async jobCancel(id: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/jobs/${id}/cancel`, { method: "POST", headers: this.authHeaders });
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/jobs/${id}/cancel`, { method: "POST", headers: this.authHeaders });
       return res.ok;
     } catch { return false; }
   }
@@ -9780,7 +9783,7 @@ export class QuicClient {
 
   async wizardStart(): Promise<WizardStartResponse | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/project/wizard/start`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/project/wizard/start`, {
         method: "POST",
         headers: this.authHeaders,
       });
@@ -9797,7 +9800,7 @@ export class QuicClient {
     answer: string,
   ): Promise<WizardStartResponse | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/project/wizard/answer`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/project/wizard/answer`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId, questionId, answer }),
@@ -9814,7 +9817,7 @@ export class QuicClient {
     parentDir?: string,
   ): Promise<WizardGenerateResult | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/project/wizard/generate`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/project/wizard/generate`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId, parentDir }),
@@ -9828,7 +9831,7 @@ export class QuicClient {
 
   async wizardQuestions(): Promise<WizardQuestion[] | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/project/wizard/questions`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/project/wizard/questions`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return null;
@@ -9847,7 +9850,7 @@ export class QuicClient {
     workDir?: string;
   }): Promise<ConversationImportPlan | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/imports/conversation/plan`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/imports/conversation/plan`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -9881,7 +9884,7 @@ export class QuicClient {
       return { ok: false, error: "no active agent connection — open the device first" };
     }
     try {
-      const res = await fetch(`${this.baseUrl}/ops`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/ops`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ verb, payload }),
@@ -10494,7 +10497,7 @@ export class QuicClient {
       if (opts.device) params.set("device", opts.device);
       if (opts.since) params.set("since", String(opts.since));
       params.set("limit", String(opts.limit ?? 200));
-      const res = await fetch(
+      const res = await this.fetchWithTimeout(
         `${this.baseUrl}/logs/search?${params.toString()}`,
         { headers: this.authHeaders },
       );
@@ -10508,7 +10511,7 @@ export class QuicClient {
 
   async agentGraphs(): Promise<AgentGraphRun[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/agent/graphs`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/agent/graphs`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return [];
@@ -10535,7 +10538,7 @@ export class QuicClient {
     hybridDegree?: number;
   }): Promise<{ ok: boolean; run?: AgentGraphRun; error?: string }> {
     try {
-      const res = await fetch(`${this.baseUrl}/agent/graphs`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/agent/graphs`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -10590,7 +10593,7 @@ export class QuicClient {
 
   async stopAgentGraph(id: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/agent/graphs/${encodeURIComponent(id)}/stop`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/agent/graphs/${encodeURIComponent(id)}/stop`, {
         method: "POST",
         headers: this.authHeaders,
       });
@@ -10602,7 +10605,7 @@ export class QuicClient {
 
   async consoleMachines(): Promise<{ machines: MachineInfo[] }> {
     try {
-      const res = await fetch(`${this.baseUrl}/console/machines`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/console/machines`, {
         headers: this.authHeaders,
       });
       if (!res.ok) return { machines: [] };
