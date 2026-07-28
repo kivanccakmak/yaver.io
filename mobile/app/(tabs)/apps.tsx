@@ -38,7 +38,7 @@ import { getAvailableModules, isBundleLoaderAvailable, loadApp } from "../../src
 import { openAppBus } from "../../src/lib/openAppBus";
 import { setActivePreviewLane, subscribeBrowserShake } from "../../src/lib/feedbackTrigger";
 import LaneStartupStatus from "../../src/components/LaneStartupStatus";
-import { PREVIEW_READY_SCRIPT } from "../../src/lib/previewReadyScript";
+import { PREVIEW_READY_SCRIPT, PREVIEW_LANE_SCRIPT } from "../../src/lib/previewReadyScript";
 import { downloadArtifact } from "../../src/lib/builds";
 import { describeConnectionStatus } from "../../src/lib/connection";
 import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../../src/lib/nativeBuild";
@@ -204,6 +204,9 @@ const WEBVIEW_DIAGNOSTICS_SCRIPT = `(function(){
 })(); true;`;
 
 const WEBVIEW_INJECTED_SCRIPT = `${WEBVIEW_DIAGNOSTICS_SCRIPT}\n${PREVIEW_READY_SCRIPT}`;
+// Runs BEFORE the guest's scripts: stamp the lane so a lane-aware
+// yaver-feedback SDK self-hosts its draggable icon (feedback-sdk-lanes audit).
+const WEBVIEW_BEFORE_CONTENT_SCRIPT = `${PREVIEW_LANE_SCRIPT}\n${WEBVIEW_DIAGNOSTICS_SCRIPT}`;
 
 function pathLeaf(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() || path;
@@ -3413,7 +3416,7 @@ export default function AppsScreen() {
               // screen — and latched, so a slow or failed 7 MB bundle stayed
               // blank with no error and no retry. Verified against sfmg and
               // talos/mobile exports: t0 #root=0, old probe said "rendered".
-              injectedJavaScriptBeforeContentLoaded={WEBVIEW_DIAGNOSTICS_SCRIPT}
+              injectedJavaScriptBeforeContentLoaded={WEBVIEW_BEFORE_CONTENT_SCRIPT}
               injectedJavaScript={WEBVIEW_INJECTED_SCRIPT}
               onMessage={(e) => {
                 try {

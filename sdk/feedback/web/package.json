@@ -1,6 +1,6 @@
 {
   "name": "yaver-feedback-web",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Visual feedback SDK for web apps \u2014 screen recording, voice vibe coding (local + Flux STT/TTS), and local-first developer workflows through Yaver",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

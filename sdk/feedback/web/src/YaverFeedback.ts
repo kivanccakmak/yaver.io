@@ -96,9 +96,14 @@ export class YaverFeedback {
 
   /** Initialize the feedback SDK. Call once in your app entry point. */
   static async init(config: FeedbackConfig = {}): Promise<void> {
-    // Default to enabled in development
+    // Running inside a Yaver preview lane is an EXPLICIT opt-in: the user chose
+    // to preview this app in Yaver, so feedback is on regardless of the app's
+    // own dev-env heuristic. Mirrors the RN side's isImplicitOptIn
+    // (feedbackTrigger.ts) — a preview lane is the signal. Otherwise default to
+    // enabled only in development.
+    const laneEarly = YaverFeedback.detectLane();
     if (config.enabled === undefined) {
-      config.enabled = YaverFeedback.detectDevEnvironment();
+      config.enabled = laneEarly !== 'standalone' || YaverFeedback.detectDevEnvironment();
     }
 
     if (!config.enabled) {
@@ -151,8 +156,23 @@ export class YaverFeedback {
         )
       : null;
 
-    // Set up trigger
-    if (config.trigger === 'floating-button') {
+    // Lane-aware trigger. The app runs inside Yaver in one of three lanes and
+    // each owns feedback differently (docs/audits/feedback-sdk-lanes-audit-
+    // 2026-07-28.md): in HERMES the native container owns the shake overlay, so
+    // suppress the in-page one; in BROWSER the container's RN overlay is
+    // occluded behind the fullScreen WebView modal, so the SDK MUST self-host a
+    // DOM floating icon (the only occlusion-proof path); in WEBRTC the viewer
+    // drives feedback over the DataChannel, so no in-page icon.
+    const lane = YaverFeedback.detectLane();
+    YaverFeedback.lane = lane;
+    if (lane === 'hermes') {
+      // Container owns it — no in-page button/shortcut, but still expose the
+      // launch hooks below so a forwarded launch is a no-op rather than a crash.
+    } else if (lane === 'browser') {
+      // Force the draggable DOM icon regardless of the app's configured trigger:
+      // in the browser lane it is the user's ONLY visible affordance.
+      YaverFeedback.createFloatingButton(config.buttonPosition || 'bottom-right');
+    } else if (config.trigger === 'floating-button') {
       YaverFeedback.createFloatingButton(config.buttonPosition || 'bottom-right');
     } else if (config.trigger === 'keyboard') {
       const shortcut = config.shortcut || 'ctrl+shift+f';
@@ -2690,6 +2710,26 @@ export class YaverFeedback {
 
   // --- Private helpers ---
 
+  /** Which Yaver lane this page runs in, once init() has resolved it. */
+  static lane: 'hermes' | 'browser' | 'webrtc' | 'standalone' = 'standalone';
+
+  /**
+   * Detect the runtime lane. Yaver injects `window.__yaverLane` into the
+   * WebView before the app boots (browser lane) or exposes it via the guest
+   * bridge; when absent, the app is running standalone (dev server in a normal
+   * browser tab), which behaves like today. This is the web mirror of the RN
+   * SDK's `NativeModules.YaverInfo` detection — one API, lane-correct at
+   * runtime, so a third-party app calls init() once and gets the right behavior.
+   */
+  static detectLane(): 'hermes' | 'browser' | 'webrtc' | 'standalone' {
+    try {
+      const w = window as unknown as { __yaverLane?: string };
+      const l = String(w.__yaverLane || '').toLowerCase();
+      if (l === 'hermes' || l === 'browser' || l === 'webrtc') return l;
+    } catch { /* noop */ }
+    return 'standalone';
+  }
+
   private static createFloatingButton(position: string): void {
     const btn = document.createElement('div');
     btn.id = 'yaver-feedback-btn';
@@ -2709,10 +2749,51 @@ export class YaverFeedback {
       transition:transform 0.2s;
     `;
     btn.textContent = 'Y';
-    btn.title = 'Yaver Feedback — report a bug';
-    btn.onmouseenter = () => { btn.style.transform = 'scale(1.1)'; };
-    btn.onmouseleave = () => { btn.style.transform = 'scale(1)'; };
-    btn.onclick = () => YaverFeedback.startReport();
+    btn.title = 'Yaver Feedback — drag to move · tap to report';
+    btn.style.touchAction = 'none'; // let us own the pointer gesture (no scroll)
+    btn.onmouseenter = () => { if (!dragState.dragging) btn.style.transform = 'scale(1.1)'; };
+    btn.onmouseleave = () => { if (!dragState.dragging) btn.style.transform = 'scale(1)'; };
+
+    // Draggable — matches the Hermes lane's floating-Y bubble. In the browser
+    // lane the button lives in the WebView DOM (position:fixed), so dragging is
+    // pure pointer math; we switch to explicit left/top on first drag and
+    // persist the last position across reloads. A gesture that moves < 5px is a
+    // TAP (open report); anything more is a DRAG (never opens the report).
+    const dragState = { dragging: false, moved: false, sx: 0, sy: 0, ox: 0, oy: 0 };
+    const applyPos = (x: number, y: number) => {
+      const m = 8, w = btn.offsetWidth || 44, h = btn.offsetHeight || 44;
+      const nx = Math.max(m, Math.min(window.innerWidth - w - m, x));
+      const ny = Math.max(m, Math.min(window.innerHeight - h - m, y));
+      btn.style.left = nx + 'px'; btn.style.top = ny + 'px';
+      btn.style.right = 'auto'; btn.style.bottom = 'auto';
+      try { localStorage.setItem('yaver-feedback-btn-pos', JSON.stringify({ x: nx, y: ny })); } catch { /* noop */ }
+    };
+    try {
+      const saved = localStorage.getItem('yaver-feedback-btn-pos');
+      if (saved) { const p = JSON.parse(saved); if (typeof p?.x === 'number') applyPos(p.x, p.y); }
+    } catch { /* noop */ }
+    btn.addEventListener('pointerdown', (e: PointerEvent) => {
+      dragState.dragging = true; dragState.moved = false;
+      const r = btn.getBoundingClientRect();
+      dragState.sx = e.clientX; dragState.sy = e.clientY; dragState.ox = r.left; dragState.oy = r.top;
+      btn.setPointerCapture(e.pointerId);
+      btn.style.transition = 'none';
+    });
+    btn.addEventListener('pointermove', (e: PointerEvent) => {
+      if (!dragState.dragging) return;
+      const dx = e.clientX - dragState.sx, dy = e.clientY - dragState.sy;
+      if (Math.abs(dx) + Math.abs(dy) > 5) dragState.moved = true;
+      if (dragState.moved) applyPos(dragState.ox + dx, dragState.oy + dy);
+    });
+    const endDrag = (e: PointerEvent) => {
+      if (!dragState.dragging) return;
+      dragState.dragging = false;
+      btn.style.transition = 'transform 0.2s'; btn.style.transform = 'scale(1)';
+      try { btn.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+      if (!dragState.moved) YaverFeedback.startReport(); // a tap, not a drag
+    };
+    btn.addEventListener('pointerup', endDrag);
+    btn.addEventListener('pointercancel', endDrag);
     document.body.appendChild(btn);
     YaverFeedback.widget = btn;
   }

@@ -150,6 +150,20 @@ export const PREVIEW_PROBE_STATE_FUNCTION = `function yaverPreviewProbeState(doc
 }`;
 
 /**
+ * Lane signal, injected via `injectedJavaScriptBeforeContentLoaded` so it is
+ * set BEFORE the guest app's own scripts run. A lane-aware yaver-feedback SDK
+ * reads `window.__yaverLane` in init() and, seeing "browser", self-hosts a
+ * DRAGGABLE DOM floating icon — the only occlusion-proof feedback affordance in
+ * the browser lane (the container's RN overlay is behind the fullScreen WebView
+ * modal on iOS). See docs/audits/feedback-sdk-lanes-audit-2026-07-28.md and
+ * sdk/feedback/web/src/YaverFeedback.ts::detectLane.
+ *
+ * Ends with `true;` — injected scripts must not evaluate to a bridge-interpreted
+ * value. Idempotent: re-injection on reload just re-affirms the same lane.
+ */
+export const PREVIEW_LANE_SCRIPT = `(function(){try{window.__yaverLane='browser';}catch(e){}})(); true;`;
+
+/**
  * How long to keep asking. The old probe gave up after 120 ticks × 500 ms =
  * 60 s and then could never report readiness at all, which for a 7 MB RN web
  * bundle fetched over the relay is well inside the normal range. Raised to

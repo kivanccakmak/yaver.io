@@ -21,7 +21,7 @@ import { isBundleLoaded, loadAppIfChanged, onBundleEvent } from "../lib/bundleLo
 import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../lib/nativeBuild";
 import { isActiveDevServerStatus } from "../lib/devServerState";
 import { mustUseNativePreview as mustUseNativePreviewLane } from "../lib/devLane";
-import { PREVIEW_READY_SCRIPT } from "../lib/previewReadyScript";
+import { PREVIEW_READY_SCRIPT, PREVIEW_LANE_SCRIPT } from "../lib/previewReadyScript";
 import { detectCompileFailure } from "../lib/compileFailure";
 import { previewBundlePath } from "../lib/previewBundlePath";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../lib/previewPhase";
@@ -1063,6 +1063,7 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                 // flutter-view) before we hide the progress overlay — a bare 200
                 // on Flutter's index.html renders black while CanvasKit boots or
                 // if assets 404 through the proxy. Poll for up to 60s.
+                injectedJavaScriptBeforeContentLoaded={PREVIEW_LANE_SCRIPT}
                 injectedJavaScript={PREVIEW_READY_SCRIPT}
                 onMessage={(e) => {
                   try {

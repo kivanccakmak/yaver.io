@@ -86,3 +86,21 @@ const { yaverPreviewProbeState, yaverPreviewReady } = makeFns();
 }
 
 console.log("previewReadyScript contract ok");
+
+// ── Lane inject (feedback-sdk-lanes audit 2026-07-28) ───────────────────────
+// PREVIEW_LANE_SCRIPT must set window.__yaverLane='browser' BEFORE the guest
+// boots, so a lane-aware yaver-feedback SDK self-hosts its draggable icon.
+{
+  const mod = await import("./previewReadyScript");
+  const PREVIEW_LANE_SCRIPT = (mod as any).PREVIEW_LANE_SCRIPT as string;
+  assert.ok(PREVIEW_LANE_SCRIPT, "PREVIEW_LANE_SCRIPT is exported");
+  const fakeWindow: any = {};
+  // Evaluate the injected IIFE against a fake window (matches WebView semantics).
+  new Function("window", PREVIEW_LANE_SCRIPT)(fakeWindow);
+  assert.equal(fakeWindow.__yaverLane, "browser", "lane stamped as browser");
+  // Idempotent + crash-safe: a window that throws on set must not break injection.
+  const hostileWindow: any = new Proxy({}, { set() { throw new Error("readonly"); } });
+  assert.doesNotThrow(() => new Function("window", PREVIEW_LANE_SCRIPT)(hostileWindow),
+    "lane script swallows a hostile window rather than crashing the guest");
+  console.log("✓ PREVIEW_LANE_SCRIPT stamps browser lane, crash-safe");
+}
