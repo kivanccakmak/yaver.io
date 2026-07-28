@@ -67,7 +67,10 @@ import WebviewView from "@/components/dashboard/WebviewView";
 import RuntimeLabView, { type RuntimeLabIntent } from "@/components/dashboard/RuntimeLabView";
 import DevicesView, { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice, RUNNER_WHITELIST_SET, OPENCODE_PROVIDER_CATALOGUE, MODEL_OPTIONS_BY_RUNNER } from "@/components/dashboard/DevicesView";
 import { CapabilityShelf } from "@/components/dashboard/CapabilityShelf";
-import RawFailureBanner from "@/components/dashboard/RawFailureBanner";
+import RawFailureBanner, { announceRawFailure } from "@/components/dashboard/RawFailureBanner";
+import { SessionDeathError } from "@/lib/rawFailure";
+import { isRelayCredentialDeny, RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
+import { usableTunnelUrls } from "@/lib/endpoints";
 import { HIDE_PAID_UI, ENABLE_GUEST_FEATURES } from "@/lib/launchFlags";
 import { parseDashboardChatIntent } from "@/lib/dashboard-chat-intent";
 import { decideComposerKey, insertNewline, newlineIsNative } from "@/lib/composerKeys";
@@ -1201,6 +1204,10 @@ export default function DashboardPage() {
     }
   }, [devices.length, devicesLoading, devicesError, isAuthenticated, isLoading, router, user?.surveyCompleted]);
 
+  // Once per page life: the session-death banner must not re-announce on every
+  // topology-refresh rung of the reconnect ladder.
+  const sessionDeathAnnouncedRef = useRef(false);
+
   useEffect(() => {
     let cancelled = false;
     let resolve: () => void;
@@ -1223,6 +1230,19 @@ export default function DashboardPage() {
             if (!cancelled && opts?.syncPrimary) {
               setPrimaryDeviceId(sd.settings?.primaryDeviceId ?? null);
               setSecondaryDeviceId(sd.settings?.secondaryDeviceId ?? null);
+            }
+          } else if ((sr.status === 401 || sr.status === 403) && !cancelled) {
+            // SESSION DEATH MUST NAME ITSELF (incident 2026-07-28): a token is
+            // present but Convex rejects it, so the relays below get NO
+            // per-user password, every relay probe 401s, and — before this
+            // guard — the UI blamed the AGENT ("connection was rejected")
+            // while a fresh sign-in fixed everything. Announce once through
+            // the existing RawFailureBanner seam (dismissible, single).
+            if (!sessionDeathAnnouncedRef.current) {
+              sessionDeathAnnouncedRef.current = true;
+              announceRawFailure(
+                new SessionDeathError(`GET /settings returned HTTP ${sr.status} with a token present`),
+              );
             }
           }
         } catch {}
@@ -1326,16 +1346,10 @@ export default function DashboardPage() {
               port: device.port,
               token,
               deviceId: device.id,
-              tunnelUrls: Array.from(
-                new Set(
-                  [
-                    ...(Array.isArray(device.publicEndpoints) ? device.publicEndpoints : []),
-                    ...(device.tunnelUrl ? [device.tunnelUrl] : []),
-                  ]
-                    .map((url) => String(url || "").trim())
-                    .filter(Boolean),
-                ),
-              ),
+              // ONE shared predicate (lib/endpoints.ts) filters known-dead
+              // endpoints — <uuid>.yaver.io has no DNS, *.dev.yaver.io has no
+              // cert — before they spam the console with NXDOMAIN/CORS errors.
+              tunnelUrls: usableTunnelUrls(device.publicEndpoints, device.tunnelUrl),
             });
             return [device.id, probe] as const;
           } catch (error: any) {
@@ -1858,16 +1872,10 @@ export default function DashboardPage() {
       await relayReadyPromiseRef.current;
     }
 
-    const tunnelUrls = Array.from(
-      new Set(
-        [
-          ...(Array.isArray(device.publicEndpoints) ? device.publicEndpoints : []),
-          ...(device.tunnelUrl ? [device.tunnelUrl] : []),
-        ]
-          .map((url) => String(url || "").trim())
-          .filter(Boolean),
-      ),
-    );
+    // ONE shared predicate (lib/endpoints.ts): drop endpoints that are dead
+    // before the first packet (<uuid>.yaver.io — no DNS; *.dev.yaver.io — no
+    // cert) instead of probing them into console-error spam.
+    const tunnelUrls = usableTunnelUrls(device.publicEndpoints, device.tunnelUrl);
 
     // Proactive re-auth: if Convex still says the device needs auth,
     // recover the session BEFORE we try to connect. Two important
@@ -3242,6 +3250,14 @@ export default function DashboardPage() {
                   (() => {
                     const authExpired = connectDiagnostics.some((d) => d.authExpired);
                     const anyReached = connectDiagnostics.some((d) => d.status && d.status > 0);
+                    // A relay-lane 401 whose body is the RELAY's own verdict
+                    // ("relay password missing …" / "invalid relay password",
+                    // relay/server.go:1903,1916) is a CREDENTIAL failure on
+                    // OUR side — the agent never saw the request. Blaming the
+                    // agent for it was the 2026-07-28 misattribution incident.
+                    // A genuine agent 401 (body e.g. "invalid token") transits
+                    // a working relay lane and keeps the agent-rejection copy.
+                    const relayCredentialDenied = connectDiagnostics.some((d) => isRelayCredentialDeny(d));
                     const anyRelayProbeTried = connectDiagnostics.some((d) => d.path === "relay");
                     const anyLoadFailed = connectDiagnostics.some((d) => d.path === "direct" && !anyReached);
                     const relayCount = agentClient.configuredRelayServers.length;
@@ -3251,11 +3267,13 @@ export default function DashboardPage() {
                       anyLoadFailed && typeof window !== "undefined" && window.location.protocol === "https:";
                     const headline = authExpired
                       ? "Agent reachable, but its Convex session is expired"
-                      : anyReached
-                        ? "Agent responded, but the connection was rejected"
-                        : relayCount === 0
-                          ? "No relay configured — can't reach this agent from the web"
-                          : "Could not reach agent";
+                      : relayCredentialDenied
+                        ? "Relay refused the request — your account's relay password is missing or stale"
+                        : anyReached
+                          ? "Agent responded, but the connection was rejected"
+                          : relayCount === 0
+                            ? "No relay configured — can't reach this agent from the web"
+                            : "Could not reach agent";
                     const reauthCmd = "yaver auth";
                     return (
                       <div className="mx-auto flex w-full max-w-xl flex-col items-center gap-3">
@@ -3294,6 +3312,11 @@ export default function DashboardPage() {
                                 <span className="ml-2 text-amber-700 dark:text-amber-300">(no relay probe attempted — device has no deviceId?)</span>
                               ) : null}
                             </div>
+                            {relayCredentialDenied ? (
+                              <div className="text-amber-700 dark:text-amber-300">
+                                {RELAY_CREDENTIAL_REMEDY}
+                              </div>
+                            ) : null}
                             {mixedContentLikely ? (
                               <div className="text-amber-700 dark:text-amber-300">
                                 Direct probe returned <code className="rounded bg-surface-900 px-1 font-mono">Load failed</code> because a browser on <code className="rounded bg-surface-900 px-1 font-mono">https://</code> can&apos;t fetch <code className="rounded bg-surface-900 px-1 font-mono">http://</code> LAN IPs (mixed content). The web path has to go through a relay.
