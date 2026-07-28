@@ -71,6 +71,8 @@ import RawFailureBanner, { announceRawFailure } from "@/components/dashboard/Raw
 import { SessionDeathError } from "@/lib/rawFailure";
 import { isRelayCredentialDeny, RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
 import { usableTunnelUrls } from "@/lib/endpoints";
+import { classifyFetchError, summarizeFailures } from "@/lib/connection-error";
+import { clearLastFailure, recordLastFailure } from "@/lib/probe-backoff";
 import { HIDE_PAID_UI, ENABLE_GUEST_FEATURES } from "@/lib/launchFlags";
 import { parseDashboardChatIntent } from "@/lib/dashboard-chat-intent";
 import { decideComposerKey, insertNewline, newlineIsNative } from "@/lib/composerKeys";
@@ -119,8 +121,13 @@ import { PlanUsageCard } from "@/components/dashboard/PlanUsageCard";
 import { MachineRolesCard } from "@/components/dashboard/MachineRolesCard";
 import type { RunnerBrowserAuthSession } from "@/lib/agent-client";
 import webPkg from "../../package.json";
+import { buildLabel } from "@/lib/buildStamp";
 
 const WEB_VERSION = (webPkg as { version?: string }).version ?? "unknown";
+// The semver is hand-maintained and does not move on every deploy, so it cannot
+// answer "is this tab running the build I just shipped?". buildLabel appends the
+// deployed git SHA — see web/lib/buildStamp.ts for the incident.
+const WEB_BUILD_LABEL = buildLabel(WEB_VERSION);
 
 function statusColor(s: string) {
   if (s === "running") return "text-amber-400";
@@ -1923,6 +1930,7 @@ export default function DashboardPage() {
     try {
       await agentClient.connect(device.host, device.port, token, device.id, { tunnelUrls });
       setConnectDiagnostics(agentClient.lastConnectDiagnostics);
+      clearLastFailure(device.id);
       try {
         const info = await agentClient.getInfo();
         setAgentInfo(info);
@@ -1988,7 +1996,14 @@ export default function DashboardPage() {
       }
 
       setConnectError(rawError);
-      setConnectDiagnostics(agentClient.lastConnectDiagnostics);
+      const finalDiagnostics = agentClient.lastConnectDiagnostics;
+      setConnectDiagnostics(finalDiagnostics);
+      const failureSummary = summarizeFailures(finalDiagnostics) || classifyFetchError({ error: rawError });
+      recordLastFailure(device.id, {
+        reason: failureSummary.reason,
+        label: failureSummary.label,
+        detail: failureSummary.detail,
+      });
     }
   };
 
@@ -2748,13 +2763,13 @@ export default function DashboardPage() {
           <a
             href="/"
             className="flex flex-col items-start px-3 py-2 leading-none transition-opacity hover:opacity-80"
-            title={`Yaver.io home — web v${WEB_VERSION}`}
+            title={`Yaver.io home — web ${WEB_BUILD_LABEL}`}
           >
             <span className="text-xl font-bold tracking-tight text-surface-50">
               yaver<span className="font-normal text-surface-500">.io</span>
             </span>
             <span className="mt-0.5 font-mono text-[10px] tracking-wide text-surface-400">
-              v{WEB_VERSION}
+              {WEB_BUILD_LABEL}
             </span>
           </a>
 
@@ -3732,6 +3747,8 @@ export default function DashboardPage() {
                 onOpen={connectToDevice}
                 onCloseWorkspace={disconnect}
                 activeWorkspaceDeviceId={connectedDevice?.id ?? null}
+                connectError={connectError}
+                connectDiagnostics={connectDiagnostics}
                 hiddenCount={hiddenIds.size}
                 onNavigateCloud={() => setActiveTab("settings")}
                 machineRoles={machineRoles}
