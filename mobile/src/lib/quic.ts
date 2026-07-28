@@ -6873,9 +6873,23 @@ export class QuicClient {
   // UI forever — the "never stuck" floor. Streaming reads pass a long explicit
   // timeout. opts defaults to {} so `this.fetchWithTimeout(url)` is valid.
   private fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs = 12000): Promise<Response> {
+    // MUST call the GLOBAL fetch. Calling this.fetchWithTimeout here is infinite
+    // self-recursion → "Maximum call stack size exceeded" on EVERY agent request,
+    // which silently broke all connect/health/relay calls (found via Chromium
+    // 2026-07-28: the bulk `fetch(`→`this.fetchWithTimeout(` sweep rewrote the
+    // call inside this very method). Convex calls were unaffected because they
+    // don't route through here — which is why device lists worked while every
+    // connect failed.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    return this.fetchWithTimeout(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+    // Honor a caller-supplied signal (e.g. the direct-race 2.5s abort) AS WELL
+    // AS the timeout — abort our controller when either fires.
+    const callerSignal = opts.signal;
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort();
+      else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+    return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
   }
 
   /** Check if an IP address is direct-routable without the relay:
