@@ -672,7 +672,7 @@ export default function SettingsScreen() {
     setTestingRelayId(relay.id);
     try {
       const start = Date.now();
-      const res = await fetch(relay.httpUrl + "/health", { method: "GET" });
+      const res = await fetch(relay.httpUrl + "/health", { method: "GET", signal: AbortSignal.timeout(8000) });
       const ms = Date.now() - start;
       if (res.ok) {
         setRelayTestResults((prev) => ({ ...prev, [relay.id]: { ok: true, ms } }));
@@ -745,7 +745,7 @@ export default function SettingsScreen() {
         headers['CF-Access-Client-Id'] = tunnel.cfAccessClientId;
         headers['CF-Access-Client-Secret'] = tunnel.cfAccessClientSecret || '';
       }
-      const res = await fetch(tunnel.url + "/health", { method: "GET", headers });
+      const res = await fetch(tunnel.url + "/health", { method: "GET", headers, signal: AbortSignal.timeout(8000) });
       const ms = Date.now() - start;
       if (res.ok) {
         setTunnelTestResults((prev) => ({ ...prev, [tunnel.id]: { ok: true, ms } }));

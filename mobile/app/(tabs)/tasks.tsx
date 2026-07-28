@@ -5217,7 +5217,12 @@ export default function TasksScreen() {
               )}
 
               <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 18 }}>
-                <Pressable disabled={submittingAgentAnswer} onPress={() => setAgentQuestion(null)} style={{ paddingVertical: 12, paddingHorizontal: 18 }}>
+                {/* Dismiss is NEVER disabled — on iOS this transparent Modal has
+                    no hardware back, so gating Dismiss on submittingAgentAnswer
+                    could trap the user in an undismissable sheet if the answer
+                    POST stalls. Closing also lets the in-flight answer settle in
+                    the background. */}
+                <Pressable onPress={() => setAgentQuestion(null)} style={{ paddingVertical: 12, paddingHorizontal: 18 }}>
                   <Text style={{ color: c.textMuted, fontSize: 15 }}>Dismiss</Text>
                 </Pressable>
                 {(() => {

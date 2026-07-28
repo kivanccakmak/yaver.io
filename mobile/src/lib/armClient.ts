@@ -128,7 +128,7 @@ async function lanAttempt(host: string, port: number, body: string, timeoutMs: n
   }
 }
 
-async function armOps<T = any>(target: ArmTarget | undefined, verb: string, payload: Record<string, unknown>, timeoutMs = 120000): Promise<T> {
+async function armOps<T = any>(target: ArmTarget | undefined, verb: string, payload: Record<string, unknown>, timeoutMs = 20000): Promise<T> {
   if (!target?.id) return { ok: false, error: "pick an arm device first" } as unknown as T;
   const body = JSON.stringify({ verb, payload, machine: "local" });
   const port = target.port || AGENT_PORT;
