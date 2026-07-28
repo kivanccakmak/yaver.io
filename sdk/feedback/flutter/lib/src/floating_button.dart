@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 
 import 'feedback.dart';
+// Selects the web implementation only in a browser build; a no-op stub
+// everywhere else. Lets a Yaver-forwarded shake open the report on
+// flutter-web without dragging dart:html into mobile/desktop builds.
+import 'web_launch_listener_stub.dart'
+    if (dart.library.html) 'web_launch_listener_web.dart';
 
 /// A draggable floating action button that triggers the Yaver feedback flow.
 ///
@@ -51,12 +56,27 @@ class YaverFeedbackButton extends StatefulWidget {
 class _YaverFeedbackButtonState extends State<YaverFeedbackButton> {
   late double _right;
   late double _bottom;
+  void Function()? _disposeWebLaunch;
 
   @override
   void initState() {
     super.initState();
     _right = widget.initialRight;
     _bottom = widget.initialBottom;
+    // Browser-lane shake-forward: Yaver injects `yaver-feedback:launch` into
+    // the WebView when the phone is shaken (the accelerometer is on the phone,
+    // not in the Flutter canvas). Open the same report the button's tap does.
+    _disposeWebLaunch = registerWebLaunchListener(() {
+      if (mounted && YaverFeedback.isEnabled && !YaverFeedback.isRecording) {
+        YaverFeedback.startReport(context);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _disposeWebLaunch?.call();
+    super.dispose();
   }
 
   @override
