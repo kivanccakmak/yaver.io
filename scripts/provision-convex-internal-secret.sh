@@ -92,17 +92,34 @@ command -v curl    >/dev/null || die "curl not found"
 [[ -d "$BACKEND_DIR" ]] || die "no backend/ at $BACKEND_DIR"
 
 # Read the deployment URL from wrangler.toml rather than hardcoding a hostname.
-CONVEX_SITE_URL="$(grep -E '^\s*CONVEX_SITE_URL' "$WEB_DIR/wrangler.toml" \
-  | head -1 | sed -E 's/.*=\s*"([^"]+)".*/\1/')"
-[[ -n "$CONVEX_SITE_URL" ]] || die "could not read CONVEX_SITE_URL from web/wrangler.toml"
+#
+# BUG FIXED 2026-07-28 (hit on the first real run): this used `\s` in `sed -E`.
+# BSD/macOS sed does not support `\s`, so the substitution silently did not
+# match and the WHOLE LINE — `CONVEX_SITE_URL = "https://..."` — became the URL.
+# Every curl then failed, and because the probe appended its own fallback the
+# code read "000000" instead of "000", which slipped past the guard below. The
+# script went on to mutate BOTH sides of production on the strength of a probe
+# that had never reached the network, and then reported "Enforcement did NOT
+# take effect" when in fact it had. Extract with a POSIX class, and validate the
+# result looks like a URL rather than trusting the extraction.
+CONVEX_SITE_URL="$(grep -E '^[[:space:]]*CONVEX_SITE_URL' "$WEB_DIR/wrangler.toml" \
+  | head -1 | sed -E 's/^[^"]*"([^"]+)".*/\1/')"
+case "$CONVEX_SITE_URL" in
+  https://*) : ;;
+  *) die "could not parse CONVEX_SITE_URL from web/wrangler.toml (got: '$CONVEX_SITE_URL')" ;;
+esac
 echo "Convex site: $CONVEX_SITE_URL"
 
 # Probe the gate BEFORE touching anything. A 403 here means it is already
 # enforcing and there is nothing to do (or you want --force to rotate).
+#
+# No `|| echo` fallback: curl already writes 000 on failure, and appending a
+# second value is what produced the unparseable "000000" above. Callers must
+# treat anything that is not three digits as "the probe did not run".
 probe() {
   curl -s -o /dev/null -w '%{http_code}' -m 20 \
     -X POST "$CONVEX_SITE_URL/auth/create-session" \
-    -H 'Content-Type: application/json' -d '{}' || echo "000"
+    -H 'Content-Type: application/json' -d '{}' 2>/dev/null
 }
 
 if [[ $ROLLBACK -eq 1 ]]; then
@@ -124,6 +141,13 @@ fi
 
 BEFORE="$(probe)"
 echo "Gate probe before: HTTP $BEFORE"
+# Refuse to touch production on a probe that did not actually reach the network.
+# A malformed code here is not "the gate is open" — it is "we learned nothing",
+# and the two must never be conflated (that is what shipped the bug above).
+case "$BEFORE" in
+  [0-9][0-9][0-9]) : ;;
+  *) die "probe returned '$BEFORE', not an HTTP code — refusing to change prod on an unverified probe" ;;
+esac
 if [[ "$BEFORE" == "403" ]]; then
   grn "Already enforcing — /auth/create-session rejects unsigned callers."
   [[ $FORCE -eq 1 ]] || { echo "Nothing to do. Pass --force to rotate."; exit 0; }
