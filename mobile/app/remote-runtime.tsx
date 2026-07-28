@@ -257,7 +257,7 @@ export default function RemoteRuntimeScreen() {
               <View key={target.id} style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
                 <Text style={[styles.section, { color: c.textPrimary }]}>{target.label}</Text>
                 <Text style={[styles.meta, { color: c.textMuted }]}>
-                  {target.requiredCli || "runtime tools"} · host {target.hostOs || "unknown"} · runtime class {target.runtimeHostClass || "generic"}
+                  {target.displaySurface || target.surface || target.requiredCli || "runtime tools"}{target.viewport ? ` · ${target.viewport.width}x${target.viewport.height}` : ""} · host {target.hostOs || "unknown"} · runtime class {target.runtimeHostClass || "generic"}
                 </Text>
                 {target.reason ? <Text style={[styles.reason, { color: "#fca5a5" }]}>{target.reason}</Text> : null}
                 <Pressable

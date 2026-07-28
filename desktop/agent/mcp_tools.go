@@ -3474,12 +3474,12 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	runtimeRuntimeTools := []map[string]interface{}{
 		{
 			"name":        "runtime_targets",
-			"description": "List remote-runtime targets for a project (iOS/iPadOS/watchOS/tvOS/visionOS sims, Android emu/device, browser-window). Returns each target's id, surface badge, and enabled/disabled state.",
+			"description": "List remote-runtime targets for a project (iOS/iPadOS/watchOS/tvOS/visionOS sims, Android emu/device, browser-window). Returns each target's id, surface badge, enabled/disabled state, and presentation hints such as displaySurface + viewport; agents must use those hints when browser-window is rendering a mobile web build.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"framework", "workDir"},
 				"properties": map[string]interface{}{
-					"framework": map[string]interface{}{"type": "string", "description": "swift, kotlin, flutter, browser"},
+					"framework": map[string]interface{}{"type": "string", "description": "expo, react-native, swift, kotlin, flutter, browser"},
 					"workDir":   map[string]interface{}{"type": "string", "description": "Project root the target list is computed for."},
 				},
 			},

@@ -38,7 +38,15 @@ type RemoteRuntimeTarget struct {
 	// Surface is the n2n picker badge — phone|tablet|watch|tv|vision|browser.
 	// Additive: JSON clients ignore unknown fields. Populated for every
 	// Apple-runtime target (P0 fan-out). Older Android targets omit it.
-	Surface string `json:"surface,omitempty"`
+	Surface        string                 `json:"surface,omitempty"`
+	DisplaySurface string                 `json:"displaySurface,omitempty"`
+	Viewport       *RemoteRuntimeViewport `json:"viewport,omitempty"`
+}
+
+type RemoteRuntimeViewport struct {
+	Label  string `json:"label,omitempty"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
 }
 
 type RemoteRuntimeCapabilities struct {
@@ -88,22 +96,24 @@ type RemoteBuilderSummary struct {
 }
 
 type RemoteRuntimeSession struct {
-	ID               string               `json:"id"`
-	WorkDir          string               `json:"workDir"`
-	Framework        string               `json:"framework"`
-	ExecutionMode    ProjectExecutionMode `json:"executionMode"`
-	TargetID         string               `json:"targetId"`
-	TargetLabel      string               `json:"targetLabel"`
-	Platform         string               `json:"platform,omitempty"`
-	DeviceID         string               `json:"deviceId,omitempty"`
-	RuntimeHostClass string               `json:"runtimeHostClass,omitempty"`
-	TransportMode    string               `json:"transportMode,omitempty"`
-	FrameTransport   string               `json:"frameTransport,omitempty"`
-	Status           string               `json:"status"`
-	LastCommand      string               `json:"lastCommand,omitempty"`
-	CreatedAt        string               `json:"createdAt"`
-	UpdatedAt        string               `json:"updatedAt"`
-	Note             string               `json:"note,omitempty"`
+	ID               string                 `json:"id"`
+	WorkDir          string                 `json:"workDir"`
+	Framework        string                 `json:"framework"`
+	ExecutionMode    ProjectExecutionMode   `json:"executionMode"`
+	TargetID         string                 `json:"targetId"`
+	TargetLabel      string                 `json:"targetLabel"`
+	Platform         string                 `json:"platform,omitempty"`
+	DeviceID         string                 `json:"deviceId,omitempty"`
+	RuntimeHostClass string                 `json:"runtimeHostClass,omitempty"`
+	DisplaySurface   string                 `json:"displaySurface,omitempty"`
+	Viewport         *RemoteRuntimeViewport `json:"viewport,omitempty"`
+	TransportMode    string                 `json:"transportMode,omitempty"`
+	FrameTransport   string                 `json:"frameTransport,omitempty"`
+	Status           string                 `json:"status"`
+	LastCommand      string                 `json:"lastCommand,omitempty"`
+	CreatedAt        string                 `json:"createdAt"`
+	UpdatedAt        string                 `json:"updatedAt"`
+	Note             string                 `json:"note,omitempty"`
 	// RemoteBuilderId is the alias (NOT the URL or token) of the
 	// builder this session is dispatched to. Set when a Linux dev
 	// box forwards a Swift session to a paired Mac via the Phase-5
@@ -172,6 +182,10 @@ type devServerInfo interface {
 type browserWindowNavigator interface {
 	Attach(ctx context.Context) (deviceID string, err error)
 	Navigate(ctx context.Context, deviceID, url string) error
+}
+
+type browserWindowViewportNavigator interface {
+	AttachViewport(ctx context.Context, width, height int) (deviceID string, err error)
 }
 
 func NewRemoteRuntimeManager() *RemoteRuntimeManager {
@@ -521,7 +535,7 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 			// video of one, so feedback carries real state instead of a
 			// viewer-triggered control message.
 			//
-			probeBrowserWindowTarget(),
+			browserWindowTargetForFramework(framework),
 		}
 		if runtimeProjectHasMobileAppleSurface(framework, projectSurfaces) {
 			caps.Targets = appendAppleMobileRuntimeTargets(caps.Targets, rnAppleFams, rnAppleFamsKnown)
@@ -583,7 +597,7 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 				// no emulator boot, no Redroid, and the in-app yaver_feedback
 				// SDK (pub.dev) works because the app is real rather than a
 				// video of one.
-				probeBrowserWindowTarget(),
+				browserWindowTargetForFramework(framework),
 			}
 			if runtimeProjectHasMobileAndroidSurface(framework, projectSurfaces) {
 				caps.Targets = appendAndroidMobileRuntimeTargets(caps.Targets, true)
@@ -618,6 +632,16 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 	// mac-rack-1" instead of the generic disabled-target message.
 	caps.RemoteBuilders = collectIOSBuilderSummaries()
 	return caps
+}
+
+func browserWindowTargetForFramework(framework string) RemoteRuntimeTarget {
+	target := probeBrowserWindowTarget()
+	switch strings.ToLower(strings.TrimSpace(framework)) {
+	case "expo", "react-native", "flutter":
+		target.DisplaySurface = "mobile-web"
+		target.Viewport = &RemoteRuntimeViewport{Label: "Mobile", Width: 393, Height: 852}
+	}
+	return target
 }
 
 func remoteRuntimeCapabilitiesForProjectCached(workDir, framework string, refresh bool) RemoteRuntimeCapabilities {
@@ -662,8 +686,19 @@ func cloneRemoteRuntimeCapabilities(in RemoteRuntimeCapabilities) RemoteRuntimeC
 	out := in
 	out.SupportedTransports = append([]string(nil), in.SupportedTransports...)
 	out.Targets = append([]RemoteRuntimeTarget(nil), in.Targets...)
+	for i := range out.Targets {
+		out.Targets[i].Viewport = cloneRemoteRuntimeViewport(in.Targets[i].Viewport)
+	}
 	out.RemoteBuilders = append([]RemoteBuilderSummary(nil), in.RemoteBuilders...)
 	return out
+}
+
+func cloneRemoteRuntimeViewport(in *RemoteRuntimeViewport) *RemoteRuntimeViewport {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }
 
 func resetRemoteRuntimeCapabilitiesCacheForTest() {
@@ -994,6 +1029,8 @@ func (m *RemoteRuntimeManager) Create(workDir, framework, targetID, transportMod
 		TargetLabel:      selected.Label,
 		Platform:         selected.Platform,
 		RuntimeHostClass: selected.RuntimeHostClass,
+		DisplaySurface:   selected.DisplaySurface,
+		Viewport:         cloneRemoteRuntimeViewport(selected.Viewport),
 		TransportMode:    transportMode,
 		FrameTransport:   frameTransport,
 		Status:           "control-ready",
@@ -1105,7 +1142,17 @@ func (m *RemoteRuntimeManager) attachAndNavigateBrowserWindow(session RemoteRunt
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	deviceID, err := nav.Attach(ctx)
+	var deviceID string
+	var err error
+	if selectedViewport := session.Viewport; selectedViewport != nil {
+		if viewportNav, ok := nav.(browserWindowViewportNavigator); ok {
+			deviceID, err = viewportNav.AttachViewport(ctx, selectedViewport.Width, selectedViewport.Height)
+		} else {
+			deviceID, err = nav.Attach(ctx)
+		}
+	} else {
+		deviceID, err = nav.Attach(ctx)
+	}
 	if err != nil {
 		updated, _ := m.Update(session.ID, func(s *RemoteRuntimeSession) {
 			s.Status = "attach-failed"

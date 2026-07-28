@@ -529,6 +529,11 @@ export default function RemoteRuntimeViewer({
   }, [transport]);
 
   const isRTP = transport.startsWith("webrtc-rtp-h264");
+  const isMobileWebBrowser = session.displaySurface === "mobile-web" ||
+    (session.targetId === "browser-window" && ["expo", "react-native", "flutter"].includes(String(session.framework || "").toLowerCase()));
+  const viewportWidth = session.viewport?.width || (isMobileWebBrowser ? 393 : dims?.width || 1280);
+  const viewportHeight = session.viewport?.height || (isMobileWebBrowser ? 852 : dims?.height || 800);
+  const viewportLabel = session.viewport?.label || (isMobileWebBrowser ? "Mobile" : "Browser");
   const frameAgeLabel = useMemo(() => {
     if (!lastFrameAt) return "no media";
     const ageMs = Date.now() - lastFrameAt;
@@ -536,7 +541,9 @@ export default function RemoteRuntimeViewer({
     return `media ${Math.round(ageMs / 1000)}s ago`;
   }, [lastFrameAt]);
 
-  const aspectRatio = dims
+  const aspectRatio = isMobileWebBrowser
+    ? `${viewportWidth} / ${viewportHeight}`
+    : dims
     ? `${dims.width} / ${dims.height}`
     : session.platform === "android"
     ? "9 / 19.5"
@@ -553,7 +560,7 @@ export default function RemoteRuntimeViewer({
           title={`${session.targetLabel} · ${session.deviceId || "attaching"} · ${transportLabel}`}
         >
           {session.targetLabel} · {session.deviceId || "attaching"} ·{" "}
-          {dims ? `${dims.width}×${dims.height}` : "—"} · {transportLabel} · ICE {iceState}/{iceGatheringState}
+          {isMobileWebBrowser ? `${viewportLabel} ${viewportWidth}×${viewportHeight}` : dims ? `${dims.width}×${dims.height}` : "—"} · {transportLabel} · ICE {iceState}/{iceGatheringState}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <div className={`text-xs ${connected ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}`}>
@@ -591,42 +598,52 @@ export default function RemoteRuntimeViewer({
           handlers work the same regardless of which transport
           painted the picture. We use display:contents-equivalent
           stacking so only one is visible at a time. */}
-      <div
-        className="relative mx-auto w-full select-none overflow-hidden rounded-lg border border-surface-800 bg-black touch-none"
-        style={{ aspectRatio, maxHeight: "min(72vh, 760px)", maxWidth: "min(100%, 980px)" }}
-        onPointerDown={onPointerDown}
-        onPointerUp={onPointerUp}
-        onPointerCancel={() => {
-          dragStartRef.current = null;
-        }}
-      >
-        {/* RTP path: <video srcObject> filled by ontrack. Hidden
-            (display:none) when JPEG-DC is the active transport so the
-            stale srcObject doesn't bleed through. */}
-        <video
-          ref={videoRef}
-          className={`absolute inset-0 w-full h-full object-contain ${
-            isRTP ? "block" : "hidden"
+      <div className={isMobileWebBrowser ? "flex w-full justify-center overflow-hidden rounded-md border border-surface-800 bg-[#0b0d11] p-3" : ""}>
+        <div
+          className={`relative mx-auto w-full select-none overflow-hidden border bg-black touch-none ${
+            isMobileWebBrowser ? "rounded-[24px] border-[#243142] p-[10px] shadow-2xl" : "rounded-lg border-surface-800"
           }`}
-          autoPlay
-          playsInline
-          muted
-        />
-        {/* JPEG path: <img> filled by frames DataChannel or relay
-            poll. Hidden when RTP wins. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          ref={imgRef}
-          alt=""
-          className={`absolute inset-0 w-full h-full object-contain ${
-            isRTP ? "hidden" : "block"
-          }`}
-        />
-        {(!connected || !lastFrameAt) && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-surface-500" role="status" aria-live="polite">
-            {viewerNote}
+          style={{
+            aspectRatio,
+            maxHeight: isMobileWebBrowser ? "min(72vh, 760px)" : "min(72vh, 760px)",
+            maxWidth: isMobileWebBrowser ? `min(100%, ${viewportWidth + 20}px)` : "min(100%, 980px)",
+          }}
+          onPointerDown={onPointerDown}
+          onPointerUp={onPointerUp}
+          onPointerCancel={() => {
+            dragStartRef.current = null;
+          }}
+        >
+          <div className={isMobileWebBrowser ? "relative h-full w-full overflow-hidden rounded-[18px] bg-black" : "contents"}>
+            {/* RTP path: <video srcObject> filled by ontrack. Hidden
+                (display:none) when JPEG-DC is the active transport so the
+                stale srcObject doesn't bleed through. */}
+            <video
+              ref={videoRef}
+              className={`absolute inset-0 h-full w-full object-contain ${
+                isRTP ? "block" : "hidden"
+              }`}
+              autoPlay
+              playsInline
+              muted
+            />
+            {/* JPEG path: <img> filled by frames DataChannel or relay
+                poll. Hidden when RTP wins. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              ref={imgRef}
+              alt=""
+              className={`absolute inset-0 h-full w-full object-contain ${
+                isRTP ? "hidden" : "block"
+              }`}
+            />
+            {(!connected || !lastFrameAt) && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-surface-500" role="status" aria-live="polite">
+                {viewerNote}
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">

@@ -60,11 +60,26 @@ func TestRemoteRuntimeCapabilitiesForRNIsWebRTCEligibleButHermesPrimary(t *testi
 		}
 		// Must offer at least an iOS sim + Android emulator target.
 		ids := map[string]bool{}
+		var browser *RemoteRuntimeTarget
 		for _, tg := range caps.Targets {
 			ids[tg.ID] = true
+			if tg.ID == "browser-window" {
+				copy := tg
+				browser = &copy
+			}
 		}
 		if !ids["ios-simulator"] || !ids["android-emulator"] {
 			t.Errorf("%s should offer ios-simulator + android-emulator targets, got %v", fw, ids)
+		}
+		if browser == nil {
+			t.Errorf("%s should offer browser-window for the RN-web mobile lane, got %v", fw, ids)
+		} else {
+			if browser.DisplaySurface != "mobile-web" {
+				t.Errorf("%s browser-window displaySurface = %q, want mobile-web", fw, browser.DisplaySurface)
+			}
+			if browser.Viewport == nil || browser.Viewport.Width != 393 || browser.Viewport.Height != 852 {
+				t.Errorf("%s browser-window viewport = %+v, want 393x852", fw, browser.Viewport)
+			}
 		}
 	}
 }

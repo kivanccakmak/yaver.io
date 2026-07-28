@@ -156,6 +156,12 @@ func TestFlutterIsOfferedTheBrowserTargetFirst(t *testing.T) {
 		}
 		t.Errorf("browser-window must lead for flutter; got %v", ids)
 	}
+	if caps.Targets[0].DisplaySurface != "mobile-web" {
+		t.Errorf("flutter browser-window displaySurface = %q, want mobile-web", caps.Targets[0].DisplaySurface)
+	}
+	if caps.Targets[0].Viewport == nil || caps.Targets[0].Viewport.Width != 393 || caps.Targets[0].Viewport.Height != 852 {
+		t.Errorf("flutter browser-window viewport = %+v, want 393x852", caps.Targets[0].Viewport)
+	}
 }
 
 // Closed loop for the browser lane, against REAL project directories.
@@ -364,11 +370,23 @@ type recordingBrowserNav struct {
 	attachDeviceID string
 	navigatedURL   string
 	attachCalls    int
+	viewportCalls  int
+	viewportWidth  int
+	viewportHeight int
 	navigateCalls  int
 }
 
 func (r *recordingBrowserNav) Attach(_ context.Context) (string, error) {
 	r.attachCalls++
+	if r.attachDeviceID == "" {
+		r.attachDeviceID = "fake-browser-window"
+	}
+	return r.attachDeviceID, nil
+}
+func (r *recordingBrowserNav) AttachViewport(_ context.Context, width, height int) (string, error) {
+	r.viewportCalls++
+	r.viewportWidth = width
+	r.viewportHeight = height
 	if r.attachDeviceID == "" {
 		r.attachDeviceID = "fake-browser-window"
 	}
@@ -406,6 +424,35 @@ func TestCreateBrowserWindowNavigatesToResolvedURL(t *testing.T) {
 	}
 	if session.DeviceID != rec.attachDeviceID {
 		t.Errorf("session.DeviceID must carry the attached browser id (so the HTTP handler's later Attach short-circuits); got %q, want %q", session.DeviceID, rec.attachDeviceID)
+	}
+}
+
+func TestCreateMobileBrowserWindowUsesMobileViewport(t *testing.T) {
+	if !browserBinaryAvailable() {
+		t.Skip("browser-window target requires a Chrome binary on this host to be offered by Create")
+	}
+	mgr := NewRemoteRuntimeManager()
+	mgr.SetDevServerManager(&fakeDevServer{
+		running: true, workDir: "/tmp/rn", devPort: 8081, webPreview: 8085,
+	})
+	rec := &recordingBrowserNav{}
+	mgr.SetBrowserNavigator(rec)
+
+	session, err := mgr.Create("/tmp/rn", "expo", "browser-window", "direct-webrtc")
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if rec.attachCalls != 0 {
+		t.Fatalf("mobile browser-window must not open the default desktop viewport first; attachCalls=%d", rec.attachCalls)
+	}
+	if rec.viewportCalls != 1 || rec.viewportWidth != 393 || rec.viewportHeight != 852 {
+		t.Fatalf("AttachViewport = %d @ %dx%d, want 1 @ 393x852", rec.viewportCalls, rec.viewportWidth, rec.viewportHeight)
+	}
+	if session.DisplaySurface != "mobile-web" {
+		t.Fatalf("session displaySurface = %q, want mobile-web", session.DisplaySurface)
+	}
+	if session.Viewport == nil || session.Viewport.Width != 393 || session.Viewport.Height != 852 {
+		t.Fatalf("session viewport = %+v, want 393x852", session.Viewport)
 	}
 }
 

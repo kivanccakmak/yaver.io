@@ -44,7 +44,6 @@ import (
 
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/input"
-	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/google/uuid"
 )
@@ -252,6 +251,14 @@ func (browserWindowTarget) Attach(ctx context.Context) (string, error) {
 	return entry.id, nil
 }
 
+func (browserWindowTarget) AttachViewport(ctx context.Context, width, height int) (string, error) {
+	entry, err := browserPool.open(ctx, width, height)
+	if err != nil {
+		return "", err
+	}
+	return entry.id, nil
+}
+
 func (browserWindowTarget) Tap(ctx context.Context, deviceID string, x, y int) error {
 	e, ok := browserPool.get(deviceID)
 	if !ok {
@@ -315,31 +322,20 @@ func (browserWindowTarget) Screenshot(ctx context.Context, deviceID, pngPath str
 	return nil
 }
 
-func (browserWindowTarget) Dims(ctx context.Context, deviceID string) DeviceDims {
+func (browserWindowTarget) Dims(_ context.Context, deviceID string) DeviceDims {
 	e, ok := browserPool.get(deviceID)
 	if !ok {
 		return DeviceDims{Width: 1280, Height: 800, Scale: 1.0, Rotation: "portrait"}
 	}
-	var width, height int64
-	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	_ = chromedp.Run(probeCtx, chromedp.ActionFunc(func(c context.Context) error {
-		_, _, _, _, _, contentSize, err := page.GetLayoutMetrics().Do(c)
-		if err == nil && contentSize != nil {
-			width = int64(contentSize.Width)
-			height = int64(contentSize.Height)
-		}
-		return nil
-	}))
-	if width == 0 || height == 0 {
-		width = int64(e.width)
-		height = int64(e.height)
+	rot := "portrait"
+	if e.width > e.height {
+		rot = "landscape"
 	}
 	return DeviceDims{
-		Width:    int(width),
-		Height:   int(height),
+		Width:    e.width,
+		Height:   e.height,
 		Scale:    1.0,
-		Rotation: "landscape",
+		Rotation: rot,
 	}
 }
 

@@ -49,6 +49,9 @@ func TestBrowserFrameworkCapabilities(t *testing.T) {
 	if len(caps.Targets) == 0 || caps.Targets[0].ID != "browser-window" {
 		t.Fatalf("expected single browser-window target, got %+v", caps.Targets)
 	}
+	if caps.Targets[0].DisplaySurface != "" || caps.Targets[0].Viewport != nil {
+		t.Fatalf("generic browser target should not carry mobile presentation, got displaySurface=%q viewport=%+v", caps.Targets[0].DisplaySurface, caps.Targets[0].Viewport)
+	}
 }
 
 func TestProbeBrowserWindowTargetShape(t *testing.T) {

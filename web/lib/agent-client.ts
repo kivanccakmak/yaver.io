@@ -651,6 +651,14 @@ export interface RemoteRuntimeTarget {
   hostOs?: string;
   requiredCli?: string;
   surface?: string;
+  displaySurface?: string;
+  viewport?: RemoteRuntimeViewport;
+}
+
+export interface RemoteRuntimeViewport {
+  label?: string;
+  width: number;
+  height: number;
 }
 
 export interface RemoteRuntimeCapabilities {
@@ -683,6 +691,8 @@ export interface RemoteRuntimeSession {
   platform?: string;
   deviceId?: string;
   runtimeHostClass?: string;
+  displaySurface?: string;
+  viewport?: RemoteRuntimeViewport;
   transportMode?: string;
   frameTransport?: string;
   status: string;

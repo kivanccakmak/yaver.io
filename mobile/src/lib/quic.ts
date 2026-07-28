@@ -368,6 +368,12 @@ export interface ConversationTurn {
   timestamp: string;
 }
 
+export interface PendingFollowUp {
+  input: string;
+  images?: ImageAttachment[];
+  options?: Record<string, unknown>;
+}
+
 export interface HealthMonitorPing {
   status: string;
   responseMs: number;
@@ -495,6 +501,7 @@ export interface Task {
   model?: string;
   source?: string;        // Task origin: "mobile", "mcp", "cli", "vibing", "vibing-cache", "todolist"
   turns?: ConversationTurn[];  // Full conversation history (detail only)
+  pendingFollowUps?: PendingFollowUp[];
   /** How many turns the server holds, even when `turns` is omitted. The list
    *  endpoint strips `turns` to bound its payload but keeps this count, so the
    *  UI can tell "opened-from-list, needs hydration" (turnCount>0, turns empty)
@@ -950,6 +957,14 @@ export interface RemoteRuntimeTarget {
   hostOs?: string;
   requiredCli?: string;
   surface?: string;
+  displaySurface?: string;
+  viewport?: RemoteRuntimeViewport;
+}
+
+export interface RemoteRuntimeViewport {
+  label?: string;
+  width: number;
+  height: number;
 }
 
 export interface RemoteRuntimeCapabilities {
@@ -976,6 +991,8 @@ export interface RemoteRuntimeSession {
   platform?: string;
   deviceId?: string;
   runtimeHostClass?: string;
+  displaySurface?: string;
+  viewport?: RemoteRuntimeViewport;
   transportMode?: string;
   frameTransport?: string;
   status: string;
@@ -2579,6 +2596,7 @@ export class QuicClient {
         inputTokens: typeof t.inputTokens === "number" ? t.inputTokens : undefined,
         outputTokens: typeof t.outputTokens === "number" ? t.outputTokens : undefined,
         turns: t.turns || undefined,
+        pendingFollowUps: Array.isArray(t.pendingFollowUps) ? t.pendingFollowUps : undefined,
         turnCount: typeof t.turnCount === "number" ? t.turnCount : (Array.isArray(t.turns) ? t.turns.length : undefined),
         tmuxSession: t.tmuxSession || undefined,
         tmuxSessionId: t.tmuxSessionId || undefined,
@@ -2634,6 +2652,7 @@ export class QuicClient {
       inputTokens: typeof t.inputTokens === "number" ? t.inputTokens : undefined,
       outputTokens: typeof t.outputTokens === "number" ? t.outputTokens : undefined,
       turns: t.turns || undefined,
+      pendingFollowUps: Array.isArray(t.pendingFollowUps) ? t.pendingFollowUps : undefined,
       turnCount: typeof t.turnCount === "number" ? t.turnCount : (Array.isArray(t.turns) ? t.turns.length : undefined),
       tmuxSession: t.tmuxSession || undefined,
       tmuxSessionId: t.tmuxSessionId || undefined,

@@ -2945,7 +2945,7 @@ export default function RuntimeLabView({
                     <div className="min-w-0 flex-1">
                       <div className={`truncate text-sm font-medium ${target.enabled ? "text-[#1f2933] dark:text-[#e6e8ec]" : "text-[#667085] dark:text-[#8b949e]"}`}>{target.label}</div>
                       <div className="mt-1 truncate text-xs text-[#667085] dark:text-[#9aa3af]">
-                        {target.surface || "runtime"} · {target.id} · {target.requiredCli || "tools"}
+                        {target.displaySurface || target.surface || "runtime"} · {target.id} · {target.viewport ? `${target.viewport.width}x${target.viewport.height}` : target.requiredCli || "tools"}
                       </div>
                     </div>
                     {target.enabled ? (
