@@ -15,6 +15,7 @@
  */
 
 import type { ConnectAttemptDiagnostic } from "@/lib/agent-client";
+import { isRelayCredentialDenyMessage, RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
 
 export type ConnectionFailureReason =
   | "mixed-content"
@@ -23,6 +24,7 @@ export type ConnectionFailureReason =
   | "tunnel-stale"
   | "subdomain-unrouted"
   | "auth-expired"
+  | "relay-credential"
   | "unauthorized"
   | "forbidden"
   | "not-found"
@@ -114,6 +116,22 @@ export function classifyFetchError(input: ClassifyFetchErrorInput): ClassifiedFa
   }
 
   if (status === 401) {
+    // The RELAY's own credential verdict is not an agent rejection: the
+    // request never reached the agent (incident 2026-07-28 — a stale web
+    // session left the relays without the per-user password and the UI
+    // blamed the agent). Distinguish by BODY, not by lane: an agent 401
+    // ("invalid token") transits a perfectly working relay lane and must
+    // keep the agent copy.
+    if (path === "relay" && isRelayCredentialDenyMessage(raw)) {
+      return {
+        reason: "relay-credential",
+        label: "Relay refused: account relay password missing or stale",
+        detail: RELAY_CREDENTIAL_REMEDY,
+        suggestedAction: "Sign in again to refresh the relay password.",
+        status,
+        raw,
+      };
+    }
     return {
       reason: "unauthorized",
       label: "Unauthorized",
@@ -252,6 +270,7 @@ export function summarizeFailures(diags: ConnectAttemptDiagnostic[]): Classified
   const classified = failed.map(classifyDiagnostic);
   const priority: ConnectionFailureReason[] = [
     "auth-expired",
+    "relay-credential",
     "unauthorized",
     "forbidden",
     "relay-stale",

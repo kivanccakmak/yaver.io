@@ -18,6 +18,7 @@ import {
   isDeliberateAbort,
   isRawNetworkFailure,
   rawFailureMessage,
+  SessionDeathError,
 } from "./rawFailure";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -139,4 +140,31 @@ test("POST /settings answers auth failures with a CORS-carrying 401", () => {
   assert.match(arm, /unauthorized/i, "the catch arm must recognise an auth failure");
   assert.match(arm, /errorResponse\([^)]*401\)/, "the catch arm must answer 401");
   assert.match(arm, /errorResponse\([^)]*500\)/, "other throws must still answer WITH CORS headers");
+});
+
+// ── Session-death names itself (incident 2026-07-28) ────────────────────────
+//
+// GET /settings 401'd for a stale token, refreshRelayTopology swallowed it,
+// relays got no per-user password, every relay probe 401'd, and the UI blamed
+// the agent. The session's death must surface as its own named banner.
+
+test("SessionDeathError maps to the dedicated sign-in-expired banner", () => {
+  const named = describeRawFailure(new SessionDeathError("GET /settings returned HTTP 401 with a token present"));
+  assert.ok(named, "a session death must never be silent");
+  assert.equal(named.kind, "auth");
+  assert.equal(named.title, "Your sign-in has expired");
+  assert.match(named.detail, /sign in again to reconnect to your machines/i);
+  assert.match(named.detail, /relay password/i, "the detail must explain the cascade it prevents");
+  assert.equal(named.needsSignIn, true);
+  assert.equal(named.retryable, false);
+});
+
+test("refreshRelayTopology announces the session death instead of swallowing the 401", () => {
+  const page = readFileSync(join(root, "app/dashboard/page.tsx"), "utf8");
+  const start = page.indexOf("const refreshRelayTopology");
+  assert.ok(start > 0, "refreshRelayTopology must exist");
+  const fn = page.slice(start, start + 3000);
+  assert.match(fn, /sr\.status === 401/, "the /settings 401 must be checked, not swallowed");
+  assert.match(fn, /SessionDeathError/, "the 401 must be announced as a SessionDeathError");
+  assert.match(page, /sessionDeathAnnouncedRef/, "the banner must announce once, not per reconnect rung");
 });

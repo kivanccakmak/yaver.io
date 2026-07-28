@@ -41,6 +41,25 @@ const AUTH_SHAPED_RE =
 
 export type RawFailureKind = "offline" | "auth" | "unreachable";
 
+/**
+ * SessionDeathError — thrown/announced by a call site that CAUGHT a 401 from
+ * a Convex route while a token was present (the session is dead, not absent).
+ *
+ * Incident (2026-07-28): `GET /settings` returned 401 for a stale token,
+ * refreshRelayTopology swallowed it, the relays got no per-user password, and
+ * every relay probe 401'd — devices looked broken while a fresh sign-in fixed
+ * everything. The session's death must NAME ITSELF instead of cascading into
+ * misattributed connectivity errors. Announce via
+ * `announceRawFailure(new SessionDeathError(...))` — describeRawFailure maps
+ * it to the dedicated banner below.
+ */
+export class SessionDeathError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = "SessionDeathError";
+  }
+}
+
 export interface NamedFailure {
   kind: RawFailureKind;
   /** Short headline for the banner. Never a status code, never a TypeError. */
@@ -107,6 +126,26 @@ export function describeRawFailure(
 ): NamedFailure | null {
   if (isDeliberateAbort(reason)) return null;
   const raw = rawFailureMessage(reason);
+
+  // A call site explicitly reported that the signed-in session is dead. This
+  // outranks the generic auth shape: the copy must say what BREAKS (machines
+  // unreachable — without a session there is no relay password) and what fixes
+  // it (sign in again), not "nothing was saved".
+  if (reason instanceof SessionDeathError) {
+    return {
+      kind: "auth",
+      title: "Your sign-in has expired",
+      detail:
+        "Sign in again to reconnect to your machines. Without a valid session the " +
+        "dashboard cannot fetch your account's relay password, so every relay " +
+        "connection is rejected and devices look unreachable when they are fine.",
+      action: "Sign in again — a fresh session refreshes the relay password and reconnects.",
+      retryable: false,
+      needsSignIn: true,
+      raw,
+    };
+  }
+
   const network = isRawNetworkFailure(reason);
   const auth = isAuthShapedFailure(reason);
   if (!network && !auth) return null;
