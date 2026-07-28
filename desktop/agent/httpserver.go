@@ -2822,12 +2822,31 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // isLocalLoopbackRequest reports whether r came from a process on THIS host
-// that reached the agent directly — no relay/cloudflared hop. Both tunnels
-// terminate on loopback but always add X-Forwarded-For, so requiring its
-// absence keeps tunneled (remote) traffic on the authenticated path while a
-// genuinely-local `yaver build` CLI process (which connects straight to
-// 127.0.0.1 with no proxy header) is recognized as local.
+// that reached the agent directly — no relay/cloudflared hop. cloudflared adds
+// X-Forwarded-For, so requiring its absence keeps that traffic on the
+// authenticated path while a genuinely-local `yaver build` CLI process (which
+// connects straight to 127.0.0.1 with no proxy header) is recognized as local.
+//
+// SECURITY (audit 2026-07-28): the X-Forwarded-For test alone was a false
+// green. The comment above used to claim "both tunnels always add
+// X-Forwarded-For" — the relay bridge does not. It re-issues the request
+// against 127.0.0.1 and stamps only X-Yaver-Via-Relay (main.go:11828, :11935),
+// so every relay-delivered request read as local here and sailed through
+// authBuildLocal with NO authentication. Chained with the relay's expose lane
+// (which auto-publishes <deviceId>.<EXPOSE_DOMAIN> for every registered device
+// and authenticates nobody), that made POST /builds — attacker-chosen workDir
+// and args, run via `sh -c` — reachable by an unauthenticated caller on the
+// internet.
+//
+// dev_bundle_sig.go::isLoopbackRequest got this right in the 2026-07-13 audit.
+// This is a SECOND, independent implementation of the same predicate that never
+// received the fix — the derive was duplicated, so hardening one did nothing
+// for the other. Both must reject relay-bridged traffic; if you add a third,
+// call isRelayBridged from it too.
 func isLocalLoopbackRequest(r *http.Request) bool {
+	if isRelayBridged(r) {
+		return false
+	}
 	if r.Header.Get("X-Forwarded-For") != "" {
 		return false
 	}
