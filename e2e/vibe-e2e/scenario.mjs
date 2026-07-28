@@ -52,27 +52,28 @@ export async function runScenario(adapter, opts = {}) {
     const baseColor = classifyColor(base);
     record("BASELINE background read", baseColor !== "unknown", `${base} → ${baseColor}`);
 
-    // 5–7. VIBE → green, wait, assert.
-    await adapter.sendChat("Change the login page background color from black to green. Only the login screen background.");
-    record("CHAT → 'background to green' sent", true);
-    const t1 = await adapter.waitForTurnComplete(opts.turnTimeoutMs ?? 8 * 60_000);
-    if (!t1.ok) return named(`runner turn did not complete (green): ${t1.reason}`);
-    record("RUNNER turn completed (green)", true, t1.detail);
-    await adapter.waitForRender();
-    const afterGreen = await adapter.waitForBackground("green", opts.renderTimeoutMs ?? 3 * 60_000);
-    record("ASSERT background == green", afterGreen.ok, `${afterGreen.color}`);
-    if (!afterGreen.ok) return named(`preview did not turn green (got ${afterGreen.color}) — runner ran but render/edit did not land`);
+    // The TERMINAL signal is the pixels, not a chat-status string (the "Ready
+    // for …" placeholder always contains "ready"). After sending, poll the
+    // preview background until it reaches the target — that single signal proves
+    // the runner ran AND the edit rendered. Generous window: a Codex turn +
+    // render can take several minutes.
+    const budget = opts.turnAndRenderMs ?? 12 * 60_000;
 
-    // 8–10. VIBE ← black, wait, assert revert.
-    await adapter.sendChat("Revert the login page background color back to black.");
+    // 5–7. VIBE → green.
+    const sentGreen = await adapter.sendChat("Change the login page background color from black to green. Only the login screen background.");
+    if (!sentGreen) return named("could not SEND the 'green' message (composer never cleared — Send did not dispatch)");
+    record("CHAT → 'background to green' sent", true);
+    const afterGreen = await adapter.waitForBackground("green", budget);
+    record("ASSERT background == green", afterGreen.ok, `${afterGreen.color}`);
+    if (!afterGreen.ok) return named(`preview did not turn green in ${Math.round(budget / 60000)}min (got ${afterGreen.color}) — runner/render/edit`);
+
+    // 8–10. VIBE ← black (revert).
+    const sentBlack = await adapter.sendChat("Revert the login page background color back to black.");
+    if (!sentBlack) return named("could not SEND the 'revert' message (composer never cleared)");
     record("CHAT ← 'revert to black' sent", true);
-    const t2 = await adapter.waitForTurnComplete(opts.turnTimeoutMs ?? 8 * 60_000);
-    if (!t2.ok) return named(`runner turn did not complete (revert): ${t2.reason}`);
-    record("RUNNER turn completed (revert)", true, t2.detail);
-    await adapter.waitForRender();
-    const afterBlack = await adapter.waitForBackground("black", opts.renderTimeoutMs ?? 3 * 60_000);
+    const afterBlack = await adapter.waitForBackground("black", budget);
     record("ASSERT background == black (reverted)", afterBlack.ok, `${afterBlack.color}`);
-    if (!afterBlack.ok) return named(`preview did not revert to black (got ${afterBlack.color})`);
+    if (!afterBlack.ok) return named(`preview did not revert to black in ${Math.round(budget / 60000)}min (got ${afterBlack.color})`);
 
     return { verdict: VERDICT.PIXELS, reason: "black → green → black observed end to end", steps };
   } catch (e) {

@@ -56,13 +56,27 @@ export function makeWebAdapter(driver, framesDir) {
       if (cfg.cached_relay_password) H["X-Relay-Password"] = cfg.cached_relay_password;
       const health = await fetch(`${RELAY}/d/${TARGET_ID}/health`, { headers: H }).catch(() => ({ status: 0 }));
       if (health.status !== 200) return { ok: false, reason: `relay /health ${health.status} — box not reachable` };
-      // Give the dashboard a moment to auto-connect to the primary.
-      await driver.sleep(6000);
+      // POLL (up to 90s) for the dashboard to auto-connect to the primary; if it
+      // hasn't after a warm-up, actively click the box's connect CTA.
+      const deadline = Date.now() + 90_000;
+      let triggered = false;
+      while (Date.now() < deadline) {
+        const txt = (await bodyText()).toLowerCase();
+        const connected = /connected|relay ·|tunnel ·|direct ·/.test(txt) && txt.includes("ubuntu-4gb");
+        if (connected) { await snap("connect"); return { ok: true, detail: `codex=${txt.includes("codex")}` }; }
+        if (!triggered && Date.now() - (deadline - 90_000) > 12_000) {
+          // Nudge: open/connect the primary box explicitly.
+          for (const rx of ["Open Workspace", "Try Connect", "Connect"]) {
+            try {
+              const el = await driver.findElement(By.xpath(`//button[contains(normalize-space(.),${xpathLit(rx)})]`));
+              await driver.executeScript("arguments[0].click()", el); triggered = true; log(`  ·· nudged connect via '${rx}'`); break;
+            } catch {}
+          }
+        }
+        await driver.sleep(5000);
+      }
       await snap("connect");
-      const txt = (await bodyText()).toLowerCase();
-      const connected = /connected|relay ·|tunnel ·|direct ·/.test(txt) && txt.includes("ubuntu-4gb");
-      const codex = txt.includes("codex");
-      return { ok: connected, detail: `codex=${codex}`, reason: connected ? "" : "dashboard did not show ubuntu-4gb Connected" };
+      return { ok: false, reason: "dashboard did not show ubuntu-4gb Connected within 90s" };
     },
 
     async openVibing() {
@@ -90,21 +104,37 @@ export function makeWebAdapter(driver, framesDir) {
     },
 
     async renderPreview() {
-      // Boot the render surfaces on the primary box.
-      try { await clickText("Load Targets", 12000); } catch (e) { log(`  ·· Load Targets not clicked: ${e?.message || e}`); }
-      await driver.sleep(4000);
-      await snap("targets_loading");
-      // Open the browser / web preview target once it appears (the yaver/mobile
-      // web-UI path). Try the most specific labels first.
-      for (const rx of ["Open in Yaver", "Browser", "Web UI", "Mobile Web UI", "Open"]) {
-        try { await clickText(rx, 6000); await driver.sleep(1500); break; } catch {}
-      }
-      // Wait for the preview iframe/bundle to deliver.
+      // Boot the render surfaces on the primary box. "Load Targets" kicks a web
+      // bundle build on the render machine (slow), then shows target cards.
+      try {
+        const btn = await driver.wait(until.elementLocated(By.xpath("//button[contains(normalize-space(.),'Load Targets')]")), 15000);
+        await driver.executeScript("arguments[0].click()", btn);
+        log("  ·· clicked Load Targets");
+      } catch (e) { log(`  ·· Load Targets not clicked: ${e?.message || e}`); }
+      // Wait (up to 3min) for targets/preview to appear: an iframe, or a
+      // browser/phone target, or the web-bundle transport starting.
       await driver.wait(async () => {
+        if ((await driver.findElements(By.css("iframe"))).length > 0) return true;
         const t = await bodyText();
-        return /Web UI bundle|bundle rebuilt|delivered|streaming/i.test(t) || (await driver.findElements(By.css("iframe"))).length > 0;
-      }, 90000).catch(() => {});
-      await driver.sleep(4000);
+        return /Web UI bundle|bundle rebuilt|Mobile Web UI|Fast Reload|Open in Yaver|webview\/transport|streaming/i.test(t);
+      }, 180000).catch(() => {});
+      await snap("targets_loading");
+      // Open the "Web UI in browser" target — the DIRECT IFRAME lane (not
+      // "WebRTC over browser", which is a video stream we can't DOM-read). Click
+      // the Open button INSIDE that specific card.
+      let opened = false;
+      for (const card of ["Web UI in browser", "Web UI", "direct iframe"]) {
+        try {
+          const btn = await driver.findElement(By.xpath(`//*[contains(normalize-space(.),${xpathLit(card)})]//button[contains(normalize-space(.),'Open')]`));
+          await driver.executeScript("arguments[0].scrollIntoView({block:'center'});arguments[0].click()", btn);
+          log(`  ·· opened preview target via card: ${card}`);
+          opened = true; break;
+        } catch {}
+      }
+      if (!opened) { try { const b = await driver.findElement(By.xpath("//button[normalize-space(.)='Open']")); await driver.executeScript("arguments[0].click()", b); log("  ·· opened first Open button"); } catch {} }
+      // Wait for an iframe (the actual rendered app) to mount.
+      await driver.wait(async () => (await driver.findElements(By.css("iframe"))).length > 0, 120000).catch(() => {});
+      await driver.sleep(6000);
       await snap("preview_open");
     },
 
@@ -140,16 +170,28 @@ export function makeWebAdapter(driver, framesDir) {
 
     async sendChat(text) {
       const box = await driver.wait(until.elementLocated(By.css('textarea, input[placeholder*="Ask" i]')), 20000);
-      await box.click(); await box.clear().catch(() => {});
+      await box.click();
+      await box.sendKeys(Key.chord(Key.META, "a"), Key.DELETE);
       await box.sendKeys(text);
       await snap("chat_typed");
-      // Send — click the Send button (or Enter).
-      try { await clickText("Send", 4000); } catch { await box.sendKeys(Key.chord(Key.META, Key.RETURN)); }
-      await driver.sleep(1500);
+      // Click the ENABLED Send button with a REAL Selenium click (executeScript
+      // click doesn't always fire React's onClick). Verify by the composer
+      // CLEARING — that is the true "sent" signal (text-in-body is not: the
+      // textarea IS in the body).
+      let sent = false;
+      for (let attempt = 0; attempt < 3 && !sent; attempt++) {
+        try {
+          const sendBtn = await driver.findElement(By.xpath("//button[normalize-space(.)='Send' and not(@disabled)]"));
+          await driver.executeScript("arguments[0].scrollIntoView({block:'center'})", sendBtn);
+          await sendBtn.click();
+        } catch { try { await box.sendKeys(Key.RETURN); } catch {} }
+        await driver.sleep(2500);
+        const remaining = (await box.getAttribute("value").catch(() => "")) || "";
+        sent = !remaining.includes(text.slice(0, 20));
+        if (!sent) { await box.click(); await box.sendKeys(Key.chord(Key.META, "a")); await box.sendKeys(text.slice(0, 0)); }
+      }
       await snap("chat_sent");
-      // Assert the message is in the transcript.
-      const t = await bodyText();
-      return t.includes(text.slice(0, 24));
+      return sent;
     },
 
     async waitForTurnComplete(timeoutMs) {
