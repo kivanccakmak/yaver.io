@@ -398,6 +398,20 @@ export const accept = mutation({
     if (membership.status === "active") {
       return { ok: true, alreadyMember: true, slug: share.slug, repoUrl: share.repoUrl, role: membership.role, branch: membership.branch };
     }
+    // SECURITY (audit 2026-07-28): only an "invited" membership may be
+    // accepted. The by_share_user lookup above matches on userId with NO status
+    // filter, and revokeMember leaves userId in place while setting
+    // status:"revoked" — so without this line a REVOKED member who re-entered
+    // the share code fell straight through to materializeProjectGrant below and
+    // patched themselves back to status:"active". Removal was undoable by the
+    // removed party. Note the email-fallback branch a few lines up already
+    // filters on status === "invited"; the guard was intended and was simply
+    // missing from the primary path. Revoking does not rotate shareCode, so the
+    // code the member already knows stays valid for everyone else — which is
+    // exactly why this check has to live here.
+    if (membership.status !== "invited") {
+      throw new Error("Your access to this project was revoked. Ask the owner for a new invitation.");
+    }
 
     const now = Date.now();
     const role = membership.role as Role;

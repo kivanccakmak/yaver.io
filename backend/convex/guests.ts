@@ -367,7 +367,24 @@ async function materializeInvitationAccept(
     ? new Set(proposed.filter((id: string) => ownedIds.has(id)))
     : ownedIds;
   const finalIds = chosen.filter((id) => allowedSet.has(id));
-  if (finalIds.length === 0) return; // nothing to grant
+
+  // SECURITY (audit 2026-07-28): this used to `return` when finalIds was empty,
+  // which FAILED OPEN. Reaching here means scoping WAS requested — the host
+  // pre-scoped, or the guest chose devices — and the intersection with the
+  // host's owned devices came out empty (e.g. the guest accepted with device
+  // ids the host does not own). Returning early left a guestAccess row with no
+  // infraAccessGrant, and access.ts:129 reads "guestAccess but no grant" as the
+  // LEGACY unscoped case and returns true for every host device. So asking for
+  // a narrow scope that resolved to nothing granted strictly MORE access than
+  // asking for a wide one — and the trigger is guest-controlled.
+  //
+  // Falling through creates the grant with shareAllDevices:false and zero
+  // device links, which access.ts:126 evaluates to false for every device.
+  // Deny-all is the honest reading of "you were scoped to nothing".
+  //
+  // Note the earlier `chosen.length === 0` return above is a DIFFERENT case and
+  // is intentional: nobody scoped anything, so legacy full access is what the
+  // host asked for.
 
   // Create an explicit infraAccessGrant + links so the access-check path
   // in access.ts recognizes the narrow scope.
