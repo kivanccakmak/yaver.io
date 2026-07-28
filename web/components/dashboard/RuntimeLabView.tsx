@@ -1654,7 +1654,16 @@ export default function RuntimeLabView({
       try {
         const ev = JSON.parse(msg.data);
         if (ev.type === "log" && typeof ev.message === "string") { appendLog(`dev: ${ev.message}`); pushTail(ev.message); touchBuildOutput(); }
-        else if (ev.type === "phase" && ev.topic && ev.phase) { appendLog(`${ev.topic}: ${ev.phase}`); touchBuildOutput(); }
+        else if (ev.type === "phase" && ev.topic && ev.phase) {
+          appendLog(`${ev.topic}: ${ev.phase}`);
+          touchBuildOutput();
+          // The transport tracker's TERMINAL phase is `delivered` (or `error`)
+          // — a distinct SSE `type:"phase"`, NOT a `type:"ready"` event. Without
+          // clearing here, the "webview/transport · streaming NN%" bar for the
+          // static web-bundle lane never settles and sticks (e.g. at 16% — the
+          // byte share the iframe fetches before the rest go unrequested).
+          if (ev.phase === "delivered" || ev.phase === "error") setBuildProgress(null);
+        }
         // Agent pct is already 0..100 (devserver.go Pct) — multiplying by
         // 100 here printed "1575% streaming". formatDevProgressLine clamps.
         else if (ev.type === "progress" && ev.topic) {
@@ -1697,7 +1706,19 @@ export default function RuntimeLabView({
   useEffect(() => {
     if (!buildProgressActive) return;
     setBuildNowTick(Date.now());
-    const id = window.setInterval(() => setBuildNowTick(Date.now()), 1000);
+    const id = window.setInterval(() => {
+      setBuildNowTick(Date.now());
+      // Stall watchdog. The transport can stop emitting mid-stream — the iframe
+      // stops requesting files, or the `delivered` ack never arrives — leaving
+      // the bar frozen. A progress bar that cannot advance must not imply
+      // "still building" forever, so settle it after a quiet window. The build
+      // itself already resolved over HTTP; this only clears stale UI.
+      setBuildProgress((prev) => {
+        if (!prev) return prev;
+        const last = prev.lastOutputAt ?? prev.startedAt ?? Date.now();
+        return Date.now() - last > 12000 ? null : prev;
+      });
+    }, 1000);
     return () => window.clearInterval(id);
   }, [buildProgressActive]);
 
@@ -2537,17 +2558,27 @@ export default function RuntimeLabView({
     const key = [
       activeTaskStream.id,
       activeTaskStream.status,
+      // Per-TURN discriminator. A follow-up runs on the SAME task and ends at
+      // "completed" again, so WITHOUT this the second turn's key equals the
+      // first turn's key → the render is deduped away and the preview never
+      // updates past the first vibe message ("only first message works",
+      // 2026-07-28). Output lines accumulate per turn; the count plus the tail
+      // of the final line make each completed turn a distinct key even if the
+      // line buffer is capped (identical count, different content).
+      String(activeTaskStream.lines?.length ?? 0),
+      (activeTaskStream.lines?.[activeTaskStream.lines.length - 1] ?? "").slice(-80),
       structuredRequest ? `mcp:${structuredRequest.id}` : "task-finished",
       webPreviewPanelOpen ? "web" : "",
       session?.id || "",
       session?.targetId || "",
     ].join(":");
     if (autoRenderRef.current === key) return;
-    autoRenderRef.current = key;
 
+    let dispatched = false;
     if (webPreviewPanelOpen && webPreviewUrl && !webPreviewBusy) {
       appendLog(structuredRequest ? `task finished: refreshing Web UI (${structuredRequest.reason})` : "task finished: refreshing Web UI");
       void reloadWebPreview("fast");
+      dispatched = true;
     }
     if (session?.id && canRunGuestOnRemoteTarget(session.targetId)) {
       appendLog(structuredRequest
@@ -2558,7 +2589,13 @@ export default function RuntimeLabView({
           if ((result as any)?.session) setSession((result as any).session as RemoteRuntimeSession);
         })
         .catch((err) => appendLog(`task-finished render failed: ${err instanceof Error ? err.message : String(err)}`));
+      dispatched = true;
     }
+    // Only burn the dedupe key once a render actually went out. If the iframe
+    // lane was skipped because a prior reload was still busy (and there is no
+    // session lane), leave the key unset so the effect retries when
+    // webPreviewBusy clears — otherwise this turn's render is lost for good.
+    if (dispatched) autoRenderRef.current = key;
   }, [
     activeTaskStream,
     agentRenderRequest,
