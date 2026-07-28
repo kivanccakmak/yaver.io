@@ -1511,6 +1511,8 @@ export class QuicClient {
   private _connectionPath: ConnectionPath = null;
   private _networkType: string | null = null; // "wifi" | "cellular" | etc.
   private _connectingInProgress = false; // guard against concurrent attemptConnect calls
+  private _attemptStartedAt = 0; // wall-clock when the current attempt took the guard
+  private _connectAttemptId = 0; // monotonic id; only the latest attempt may clear the guard
   private _lastTransportError: string | null = null;
   // Wall-clock millis of the last /health 200 through the current baseUrl.
   // See lastHealthOkAt / verifyStillConnected. 0 means "never".
@@ -7169,17 +7171,68 @@ export class QuicClient {
     return null;
   }
 
-  private async attemptConnect(): Promise<void> {
-    // Prevent concurrent connection attempts (poll failure + NetInfo can race)
-    if (this._connectingInProgress) {
-      console.log("[QUIC] attemptConnect already in progress, skipping");
-      return;
+  // Longer than the sum of every BOUNDED leg (NetInfo ≤3s + direct phase +
+  // 8s/tunnel + 8s/relay). If an attempt outlives this it is hung on an
+  // UNBOUNDED await — the exact wedge that pinned the pill at "Connecting" for
+  // 30+ minutes in the iOS simulator when NetInfo.fetch() never resolved. Past
+  // this deadline a fresh attempt abandons the wedged one rather than
+  // short-circuiting forever, so "Connecting" can never be a permanent state.
+  private static readonly ATTEMPT_WEDGE_MS = 40000;
+
+  // NetInfo.fetch() has NO timeout of its own and hangs indefinitely in the
+  // iOS simulator (and occasionally on device after a network-change storm).
+  // It sits at the very top of _doAttemptConnect, BEFORE the bounded transport
+  // ladder, so a hang there wedges the whole attempt and pins the pill at
+  // "Connecting". Bound it, and on timeout assume a direct-capable network so
+  // EVERY leg (direct + tunnel + relay) is still attempted — the ladder itself
+  // decides what actually works. Relay is tried regardless of this value.
+  private async fetchNetStateBounded(timeoutMs = 3000): Promise<NetInfoState> {
+    const fallback = {
+      type: "wifi",
+      isConnected: true,
+      isInternetReachable: true,
+      details: null,
+    } as unknown as NetInfoState;
+    try {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<NetInfoState>((resolve) => {
+        timer = setTimeout(() => {
+          appLog("warn", "[connect] NetInfo.fetch() timed out — assuming direct-capable network, trying all legs");
+          resolve(fallback);
+        }, timeoutMs);
+      });
+      const state = await Promise.race([NetInfo.fetch(), timeout]);
+      if (timer) clearTimeout(timer);
+      return state ?? fallback;
+    } catch {
+      return fallback;
     }
+  }
+
+  private async attemptConnect(): Promise<void> {
+    // Prevent concurrent connection attempts (poll failure + NetInfo can race).
+    // But a guard that can only be released by the SAME attempt is a deadlock
+    // if that attempt hangs — so a stale guard (older than every bounded leg's
+    // budget) is treated as wedged and abandoned, never honored forever.
+    if (this._connectingInProgress) {
+      const age = Date.now() - this._attemptStartedAt;
+      if (age < QuicClient.ATTEMPT_WEDGE_MS) {
+        console.log("[QUIC] attemptConnect already in progress, skipping");
+        return;
+      }
+      appLog("warn", `[connect] previous attempt wedged for ${Math.round(age / 1000)}s — abandoning it and retrying`);
+      // fall through: take the guard with a NEW id so the wedged attempt's
+      // finally becomes a no-op and can't clobber this fresh attempt.
+    }
+    const myId = ++this._connectAttemptId;
     this._connectingInProgress = true;
+    this._attemptStartedAt = Date.now();
     try {
       await this._doAttemptConnect();
     } finally {
-      this._connectingInProgress = false;
+      // Only the latest attempt may release the guard. A stale/wedged attempt
+      // that finally resolves must not clear a guard a newer attempt now holds.
+      if (this._connectAttemptId === myId) this._connectingInProgress = false;
     }
   }
 
@@ -7196,7 +7249,7 @@ export class QuicClient {
       let connected = false;
 
       // Check if we're on WiFi (direct connection possible) or cellular (relay only)
-      const netState = await NetInfo.fetch();
+      const netState = await this.fetchNetStateBounded();
       // A BROWSER is always direct-capable, whatever NetInfo says.
       //
       // In a browser navigator.connection exposes no `type` at all — only
