@@ -931,6 +931,28 @@ func doRemoteAgentRequest(ctx context.Context, candidates []RemoteAgentCandidate
 			errs = append(errs, fmt.Sprintf("%s: HTTP 404 with non-JSON body (likely not a Yaver agent): %s", candidate.BaseURL, snippet))
 			continue
 		}
+		// A relay-credential refusal means the request NEVER REACHED THE AGENT.
+		// The relay rejected OUR password at its own door and bridged nothing, so
+		// treating it as a reached candidate is the "inventory says yes, operation
+		// says no" defect: `yaver ping` printed a green "reachable · via relay"
+		// for a box the relay had just refused to bridge, and `remote status`
+		// reported "agent rejected our auth token" about an agent that never saw
+		// the request (RCA 2026-07-28, defect D3). Fall through to the next
+		// candidate — a direct/LAN lane may still reach it.
+		//
+		// A genuine AGENT 401/403 is deliberately NOT caught here: that request
+		// DID reach the agent, and the caller must be able to render "the agent
+		// refused your token". The stable relay codes are what tell the two apart
+		// (relay_deny_code.go); prose remains the fallback for relays that have
+		// not been redeployed yet.
+		if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) &&
+			isRelayCredentialDenyText(string(raw)) {
+			recordRemoteAgentFailure(candidate.DeviceID, candidate.BaseURL, time.Now())
+			errs = append(errs, fmt.Sprintf(
+				"%s: relay refused this client's relay password (HTTP %d) — the request never reached the agent; run `yaver auth` here to refresh it",
+				candidate.BaseURL, resp.StatusCode))
+			continue
+		}
 		if strings.TrimSpace(candidate.DeviceID) != "" {
 			remoteAgentLastGood.Store(candidate.DeviceID, candidate.BaseURL)
 		}
