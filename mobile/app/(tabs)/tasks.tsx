@@ -3815,6 +3815,10 @@ export default function TasksScreen() {
     // The optimistic turn is carried across the fork so the conversation reads
     // continuously, the way a chat app is expected to behave.
     const optimisticText = followUpText.trim();
+    // Capture the payload NOW, before we clear the composer — the send calls
+    // below must use these consts, never the live followUpText/followUpImages
+    // state (which we're about to empty).
+    const optimisticImages = followUpImages;
     const optimisticTurn = {
       role: "user" as const,
       content: optimisticText,
@@ -3830,12 +3834,26 @@ export default function TasksScreen() {
       setTasks((prev) => prev.map((t) => (t.id === optimisticParentId ? withTurn(t) : t)));
       setSelectedTask((prev) => (prev && prev.id === optimisticParentId ? withTurn(prev) : prev));
     }
+    // WhatsApp/Claude-Code-style: the message is on screen, so clear the input
+    // and RE-ENABLE the composer immediately — do NOT hold it disabled for the
+    // network round-trip. On a slow relay path (measured 2932ms in the iOS
+    // simulator) the old flow froze "Sending…" until the POST settled, which
+    // read as a stuck UI. The send now runs in the background; a failure rolls
+    // the turn back and alerts, and the typed text is restored so the user can
+    // retry. The fork-confirm path re-checks the input from these consts.
+    setFollowUpText("");
+    setFollowUpImages([]);
+    setIsSendingFollowUp(false);
 
     // Undo the optimistic turn when the send does not happen. Leaving it would
     // show the user a message that was never sent — the same "UI states
     // something it does not know" failure this screen has been bitten by
     // before, just inverted.
     const rollbackOptimisticTurn = () => {
+      // Restore the input we cleared optimistically so the user can retry —
+      // only if they haven't already started typing the next message.
+      setFollowUpText((cur) => (cur.trim() ? cur : optimisticText));
+      setFollowUpImages((cur) => (cur.length ? cur : optimisticImages));
       if (!optimisticText) return;
       const dropTurn = (t: Task): Task => {
         const turns = t.turns ?? [];
@@ -3852,7 +3870,7 @@ export default function TasksScreen() {
     try {
       if (selectedTask.isAdopted) {
         // For adopted tmux sessions, send input directly via tmux send-keys
-        await quicClient.sendTmuxInput(selectedTask.id, followUpText.trim());
+        await quicClient.sendTmuxInput(selectedTask.id, optimisticText);
       } else {
         // Decide between continue (resume in place) vs. fork (spawn a
         // child task). We fork when:
@@ -3930,7 +3948,7 @@ export default function TasksScreen() {
           const forkRunner = plan.forkRunner;
           const result = await connectionManager.runnerClient().forkTask(selectedTask.id, {
             runner: forkRunner,
-            input: followUpText.trim(),
+            input: optimisticText,
           });
           // Switch the chat to the new child so subsequent follow-ups
           // continue against the forked task.
@@ -3962,11 +3980,10 @@ export default function TasksScreen() {
           // Same runner: regular continue. The agent now accepts
           // follow-ups while a task is still streaming and queues them
           // onto the same session instead of requiring a stop first.
-          await connectionManager.runnerClient().continueTask(selectedTask.id, followUpText.trim(), followUpImages.length > 0 ? followUpImages : undefined);
+          await connectionManager.runnerClient().continueTask(selectedTask.id, optimisticText, optimisticImages.length > 0 ? optimisticImages : undefined);
         }
       }
-      setFollowUpText("");
-      setFollowUpImages([]);
+      // Input already cleared optimistically above — just refresh.
       await fetchTasks();
     } catch (err) {
       // The send failed, so the message never reached the runner. Take the
@@ -4538,7 +4555,14 @@ export default function TasksScreen() {
                       color={connMode === "direct" ? c.success : c.info}
                     />
                     <Text style={[s.bannerStatusCopy, { color: c.textSecondary }]}>
-                      {connMode === "direct" ? "Direct" : connMode === "relay" ? "Relay" : "Transport pending"}
+                      {/* This row only renders when isEffectivelyConnected, so
+                          the box IS reachable. connMode can still be null when
+                          native QUIC hasn't handshaked (e.g. the iOS simulator,
+                          where UDP/QUIC is unreliable) while requests actually
+                          flow over the HTTP relay proxy. That is a RELAY path,
+                          not "pending" — showing "Transport pending" on a
+                          working connection is the desync that read as stuck. */}
+                      {connMode === "direct" ? "Direct" : connMode === "tunnel" ? "Tunnel" : "Relay"}
                     </Text>
                     {runnerBannerState ? (
                       <Text style={[s.bannerStatusCopy, { color: c.textSecondary, flexShrink: 1 }]} numberOfLines={1}>
