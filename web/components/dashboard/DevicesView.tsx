@@ -1599,7 +1599,16 @@ function useDeviceRuntimeInfo(device: Device, enabled: boolean, token: string | 
             signal: AbortSignal.timeout(2_000),
           });
           if (!res.ok) {
-            lastErr = `HTTP ${res.status}`;
+            // Capture the body. The relay proxies the agent's 401 with a
+            // relay-credential message ("relay password missing/invalid") that
+            // is SELF-HEALABLE and OUR fault. Recording a bare "HTTP 401" drops
+            // that evidence, so classifyFetchError falls through to the
+            // agent-blaming "Unauthorized" — a false positive on a box that
+            // answers /health 200 the whole time. Keep status AND body so the
+            // classifier can tell relay-credential from a genuine agent 401.
+            let body = "";
+            try { body = (await res.text()).slice(0, 300); } catch {}
+            lastErr = body ? `HTTP ${res.status}: ${body}` : `HTTP ${res.status}`;
             lastDetails = { status: res.status, path: cand.path, url: cand.url, message: lastErr };
             continue;
           }
@@ -1969,7 +1978,16 @@ function useDeviceProjects(device: Device, enabled: boolean, token: string | nul
             signal: AbortSignal.timeout(3_000),
           });
           if (!res.ok) {
-            lastErr = `HTTP ${res.status}`;
+            // Capture the body. The relay proxies the agent's 401 with a
+            // relay-credential message ("relay password missing/invalid") that
+            // is SELF-HEALABLE and OUR fault. Recording a bare "HTTP 401" drops
+            // that evidence, so classifyFetchError falls through to the
+            // agent-blaming "Unauthorized" — a false positive on a box that
+            // answers /health 200 the whole time. Keep status AND body so the
+            // classifier can tell relay-credential from a genuine agent 401.
+            let body = "";
+            try { body = (await res.text()).slice(0, 300); } catch {}
+            lastErr = body ? `HTTP ${res.status}: ${body}` : `HTTP ${res.status}`;
             lastDetails = { status: res.status, path: cand.path, url: cand.url, message: lastErr };
             continue;
           }
