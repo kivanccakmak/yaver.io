@@ -62,6 +62,26 @@ test("an unreachable runner never routes to Fix-with-runner or render-on-runner"
   }
 });
 
+test("unknown_verb from an older agent is version skew, never an LLM fix", () => {
+  for (const cause of [
+    'Renderer recovery failed: unknown verb "machine_repair"; call ops_verbs to list available verbs',
+    "Machine repair is not supported by the connected agent [unknown_verb] — it predates the repair verb (needs agent 1.99.388+).",
+  ]) {
+    const plan = classifyRuntimeTargetProbeFailure(cause);
+    assert.equal(plan.kind, "agent-verb-skew");
+    assert.equal(plan.retry, true);
+    assert.equal(plan.useRunnerFallback, false);
+    assert.equal(plan.showFixWithRunner, false, "an LLM cannot add a verb to a released binary — update the agent instead");
+  }
+});
+
+test("the probe-failure card must render the render-box connection check", () => {
+  const src = readFileSync(join(webRoot, "components/dashboard/RuntimeLabView.tsx"), "utf8");
+  assert.match(src, /probeRenderConnectivity/, "RuntimeLabView must probe render-box connectivity for the failure card");
+  assert.match(src, /No connection to \{effectiveRenderBoxName\}/, "the failure card must state when no connection to the render box exists");
+  assert.match(src, /Connection to \{effectiveRenderBoxName\}: OK/, "the failure card must state when the render box IS reachable");
+});
+
 test("ordinary target probe failures still route to the coding runner", () => {
   const plan = classifyRuntimeTargetProbeFailure("xcrun simctl failed");
   assert.equal(plan.kind, "other");

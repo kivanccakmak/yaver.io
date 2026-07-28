@@ -5,6 +5,7 @@
 export type RuntimeTargetProbeFailureKind =
   | "relay-presence"
   | "relay-route"
+  | "agent-verb-skew"
   | "other";
 
 export type RuntimeTargetProbeFailurePlan = {
@@ -20,6 +21,20 @@ export const RELAY_DEVICE_NOT_CONNECTED_REASON = "connectivity.relay.device_not_
 export function classifyRuntimeTargetProbeFailure(error: string | null | undefined): RuntimeTargetProbeFailurePlan {
   const raw = String(error || "");
   const lower = raw.toLowerCase();
+
+  // An /ops verb the agent has never heard of is VERSION SKEW — the web
+  // shipped a call the installed agent predates. Deterministic fix (update
+  // the agent), so never route it to a coding runner: an LLM cannot add a
+  // verb to a released binary, and one such escalation already burned 121k
+  // tokens grepping for the verb name in the wrong repo (2026-07-28).
+  if (lower.includes("unknown_verb") || lower.includes("unknown verb")) {
+    return {
+      kind: "agent-verb-skew",
+      retry: true,
+      useRunnerFallback: false,
+      showFixWithRunner: false,
+    };
+  }
   const relayPresence =
     lower.includes(RELAY_DEVICE_NOT_CONNECTED_CODE) ||
     lower.includes(RELAY_DEVICE_NOT_CONNECTED_REASON) ||

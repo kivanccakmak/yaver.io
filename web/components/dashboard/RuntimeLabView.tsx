@@ -912,6 +912,19 @@ export default function RuntimeLabView({
   // aside's machinesNote is off-screen from that row, and a save that fails
   // silently is an unfalsifiable state.
   const [renderPickNote, setRenderPickNote] = useState<string | null>(null);
+  // Connection truth for the render box, probed from this browser over
+  // relay/tunnel. The probe-failure card renders it so "recovery failed"
+  // never appears without answering the user's first question: is there a
+  // connection to that machine at all?
+  const [renderConnCheck, setRenderConnCheck] = useState<{
+    deviceId: string;
+    pinging?: boolean;
+    ok?: boolean;
+    path?: string;
+    rttMs?: number;
+    error?: string;
+    at: number;
+  } | null>(null);
   const [chatPaneWidth, setChatPaneWidth] = useState(() => {
     if (typeof window === "undefined") return defaultRuntimeChatWidth("phone");
     const parsed = Number(window.localStorage.getItem(RUNTIME_CHAT_WIDTH_KEY));
@@ -1400,6 +1413,41 @@ export default function RuntimeLabView({
       }));
     }
   }, [devices, machinesDraftRender, machinesDraftRunner, token]);
+
+  // Silent (no console log) — callers decide what to narrate. Probes the same
+  // relay/tunnel/direct ladder as the Route editor's Test connection.
+  const probeRenderConnectivity = useCallback(async (deviceId: string) => {
+    const device = (devices || []).find((d) => d.id === deviceId);
+    if (!deviceId || !device || !token) return null;
+    setRenderConnCheck({ deviceId, pinging: true, at: Date.now() });
+    const started = Date.now();
+    let check: { deviceId: string; ok: boolean; path?: string; rttMs?: number; error?: string; at: number };
+    try {
+      const probe = await agentClient.probeDeviceStatus({
+        host: device.host,
+        port: device.port,
+        token,
+        deviceId: device.id,
+        tunnelUrls: Array.from(
+          new Set(
+            [
+              ...(Array.isArray(device.publicEndpoints) ? device.publicEndpoints : []),
+              ...(device.tunnelUrl ? [device.tunnelUrl] : []),
+            ]
+              .map((u) => String(u || "").trim())
+              .filter(Boolean),
+          ),
+        ),
+      });
+      check = probe.ok
+        ? { deviceId, ok: true, path: probe.path, rttMs: Date.now() - started, at: Date.now() }
+        : { deviceId, ok: false, error: probe.error || "no relay, tunnel, or direct path answered", at: Date.now() };
+    } catch (err) {
+      check = { deviceId, ok: false, error: err instanceof Error ? err.message : String(err), at: Date.now() };
+    }
+    setRenderConnCheck(check);
+    return check;
+  }, [devices, token]);
 
   const clearMachineRoles = useCallback(async () => {
     if (!onClearMachineRoles) return;
@@ -2162,7 +2210,22 @@ export default function RuntimeLabView({
     setMachineRecoverBusy(true);
     setError(null);
     setWebPreviewNote(null);
-    appendLog(`recover renderer ${deviceNameById.get(deviceId) || deviceId.slice(0, 8)}`);
+    const boxName = deviceNameById.get(deviceId) || deviceId.slice(0, 8);
+    appendLog(`recover renderer ${boxName}`);
+    // Connectivity first: "the box is dark" and "the box answered but repair
+    // failed" are different failures with different next steps, and the
+    // outcome line must say which one happened.
+    const conn = await probeRenderConnectivity(deviceId);
+    if (conn) {
+      appendLog(conn.ok
+        ? `render box connection: reachable via ${conn.path || "relay"} (${conn.rttMs}ms)`
+        : `render box connection: NONE — ${conn.error}`);
+    }
+    const connLine = conn
+      ? conn.ok
+        ? ` Connection to ${boxName}: OK via ${conn.path || "relay"} (${conn.rttMs}ms).`
+        : ` Connection to ${boxName}: NONE (${conn.error}) — the agent on it is not answering on any path, so no remote repair can reach it.`
+      : "";
     try {
       const result = await agentClient.callOps("machine_repair", {
         action: "restart_agent",
@@ -2171,18 +2234,24 @@ export default function RuntimeLabView({
       const outcome = result.initial?.outcome || result.error || "repair attempted";
       appendLog(`machine repair: ${result.code || (result.ok ? "ok" : "failed")} - ${outcome}`);
       if (!result.ok) {
-        setError(`Renderer recovery failed: ${outcome}`);
+        if (String(result.code || "") === "unknown_verb" || /unknown verb/i.test(String(outcome))) {
+          setError(
+            `Machine repair is not supported by the connected agent [unknown_verb] — it predates the repair verb (needs agent 1.99.388+). Update the agent, then retry.${connLine}`,
+          );
+        } else {
+          setError(`Renderer recovery failed: ${outcome}.${connLine}`);
+        }
         return;
       }
       await loadCapabilities();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       appendLog(`machine repair failed: ${message}`);
-      setError(`Renderer recovery failed: ${message}`);
+      setError(`Renderer recovery failed: ${message}.${connLine}`);
     } finally {
       setMachineRecoverBusy(false);
     }
-  }, [appendLog, deviceNameById, loadCapabilities, machineRoles?.renderDeviceId, machineRoles?.runnerDeviceId]);
+  }, [appendLog, deviceNameById, loadCapabilities, machineRoles?.renderDeviceId, machineRoles?.runnerDeviceId, probeRenderConnectivity]);
 
   // Render-machine picker on the Load Targets row: save the chosen box as the
   // account favorite, re-point agentClient in the same breath, then re-probe.
@@ -2577,6 +2646,22 @@ export default function RuntimeLabView({
 
   const targetProbeFailurePlan = error ? classifyRuntimeTargetProbeFailure(error) : null;
 
+  // Whenever the probe-failure card is visible, answer the user's first
+  // question unprompted: does a connection to the render box exist at all?
+  // Freshness guard (15s) terminates the setState → re-run cycle and keeps
+  // the periodic devices refresh from turning this into a probe storm.
+  useEffect(() => {
+    if (!error || !effectiveRenderDeviceId || isAgentAuthErrorMessage(error)) return;
+    if (
+      renderConnCheck &&
+      renderConnCheck.deviceId === effectiveRenderDeviceId &&
+      (renderConnCheck.pinging || Date.now() - renderConnCheck.at < 15_000)
+    ) {
+      return;
+    }
+    void probeRenderConnectivity(effectiveRenderDeviceId);
+  }, [error, effectiveRenderDeviceId, probeRenderConnectivity, renderConnCheck]);
+
   return (
     <div
       className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-3 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] sm:p-4 xl:[grid-template-columns:minmax(0,1fr)_10px_var(--runtime-chat-width)]"
@@ -2657,6 +2742,24 @@ export default function RuntimeLabView({
               {isAgentAuthErrorMessage(error) ? "Agent auth needs refresh" : "Runtime target probe failed"}
             </div>
             <div className="mt-1">{error}</div>
+            {!isAgentAuthErrorMessage(error) && effectiveRenderDeviceId &&
+              renderConnCheck && renderConnCheck.deviceId === effectiveRenderDeviceId ? (
+              <div className="mt-2 text-xs">
+                {renderConnCheck.pinging ? (
+                  <span className="text-[#667085] dark:text-[#9aa3af]">
+                    Checking connection to {effectiveRenderBoxName}…
+                  </span>
+                ) : renderConnCheck.ok ? (
+                  <span className="font-medium text-emerald-700 dark:text-emerald-300">
+                    ✓ Connection to {effectiveRenderBoxName}: OK via {renderConnCheck.path || "relay"} ({renderConnCheck.rttMs}ms) — the box is up; the failure is in the operation, not the connection.
+                  </span>
+                ) : (
+                  <span className="font-medium">
+                    ✗ No connection to {effectiveRenderBoxName} — {renderConnCheck.error || "no relay, tunnel, or direct path answered"}. The agent on that box is not answering on any path, so nothing remote can repair it. Power it on (or power-cycle it), or pick another render machine.
+                  </span>
+                )}
+              </div>
+            ) : null}
             {isAgentAuthErrorMessage(error) ? (
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
@@ -2695,6 +2798,17 @@ export default function RuntimeLabView({
                     The render machine <span className="font-semibold">{effectiveRenderBoxName || "(unknown)"}</span> has
                     no live relay connection, so the target probe never reached it. Bring that box online, or pick a
                     different render machine above.
+                  </div>
+                ) : null}
+                {targetProbeFailurePlan.kind === "agent-verb-skew" ? (
+                  // Version skew is deterministic: the installed agent predates
+                  // a verb this dashboard calls. Never offer "Fix with runner"
+                  // here — an LLM cannot add a verb to a released binary.
+                  <div className="text-xs">
+                    The agent answering this call is older than the dashboard expects (machine repair needs agent{" "}
+                    <span className="font-semibold">1.99.388+</span>). Update it on{" "}
+                    <span className="font-semibold">{runnerBoxName || "the runner box"}</span> with{" "}
+                    <code className="rounded bg-black/10 px-1 dark:bg-white/10">npm install -g yaver-cli@latest</code>, then retry.
                   </div>
                 ) : null}
                 <div className="flex flex-wrap items-center gap-2">
