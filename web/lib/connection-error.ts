@@ -15,7 +15,11 @@
  */
 
 import type { ConnectAttemptDiagnostic } from "@/lib/agent-client";
-import { isRelayCredentialDenyMessage, RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
+// Relative, not "@/lib/…": this is a VALUE import, so it is resolved at
+// runtime, and the `@/` alias is a Next/tsconfig path that `npx tsx` does not
+// resolve. Aliasing it makes relayAuth.test.ts unrunnable — a guard nobody can
+// execute is a guess. (The type-only import above is erased, so it is exempt.)
+import { isRelayCredentialDenyMessage, RELAY_CREDENTIAL_REMEDY } from "./relayAuth";
 
 export type ConnectionFailureReason =
   | "mixed-content"
