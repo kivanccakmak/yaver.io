@@ -2799,15 +2799,61 @@ export default function AppsScreen() {
             <Text style={[s.actionSheetSubtitle, { color: c.textMuted }]}>
               What do you want to do?
             </Text>
+            <ScrollView style={s.actionSheetScroll}>
+              {/* THE ROUTE RENDERS FIRST — advisory never buries it. Measured
+                  2026-07-28 (build-482 regression, live on the real app as
+                  RN-web): with the advisory block ABOVE this scroll region in
+                  a maxHeight:70% sheet, an 8,212-char guidance wall pushed
+                  "WebRTC Reload"/"Browser Reload" 280–340px below a fold the
+                  user could not scroll past (body.scrollHeight === viewport).
+                  Chosen shape: the lanes are the FIRST children of the scroll
+                  region and the whole advisory block lives BELOW them — so
+                  "lanes below the fold with no scroll" is structurally
+                  impossible: the sheet opens showing lanes, and advisory
+                  length only adds scrollable content underneath. Every
+                  advisory <Text> also carries numberOfLines, belt-and-braces
+                  with the producer-side cap (devserver_http.go
+                  compatGuidanceMaxChars). Guard:
+                  mobile/src/lib/appsAdvisoryLayout.test.ts */}
+              {/* Tapping a project is only about rendering it — the reload lanes.
+                  Tests (and build/deploy) are driven by vibing text to the agent. */}
+              {actionSheet?.actions.map((action, i) => {
+                const disabled = action.supported === false;
+                return (
+                  <Pressable
+                    key={`${action.label}-${i}`}
+                    style={[s.actionSheetItem, { borderColor: c.border }, disabled && { opacity: 0.4 }]}
+                    onPress={() => handleExecuteAction(action)}
+                  >
+                    <Text style={s.actionSheetIcon}>{action.icon || "▶"}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[s.actionSheetLabel, { color: disabled ? c.textMuted : c.textPrimary }]}>
+                        {action.label}{disabled ? " (coming soon)" : ""}
+                      </Text>
+                      <Text style={[s.actionSheetMeta, { color: c.textMuted }]}>
+                        {disabled && action.reason ? action.reason : `${action.target}${action.framework ? ` · ${action.framework}` : ""}${action.platform ? ` → ${action.platform}` : ""}`}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+              {/* Advisory / diagnostics — below the route, scrollable, every
+                  line capped. Detail beyond the caps belongs on a dedicated
+                  diagnostics surface, not in front of the lanes. */}
             {actionSheet?.compatibility?.guidance ? (
-              <Text style={[s.actionSheetSubtitle, { color: actionSheet.compatibility.compatible ? "#cbd5e1" : "#fbbf24", marginTop: -8 }]}>
+              /* numberOfLines: guidance is producer-capped (280 chars) since
+                 2026-07-28, but this surface must not trust that alone — the
+                 identical content once flowed here unbounded as an 8KB wall
+                 while the errors[0] Text below was already capped. Same
+                 channel, same cap. */
+              <Text numberOfLines={4} style={[s.actionSheetSubtitle, { color: actionSheet.compatibility.compatible ? "#cbd5e1" : "#fbbf24", marginTop: 8 }]}>
                 {actionSheet.compatibility.guidance}
               </Text>
             ) : secondClassGuidance(
               actionSheet?.actions.find((a) => isSecondClassMobileFramework(a.framework))?.framework,
               isDirectConnection,
             ) ? (
-              <Text style={[s.actionSheetSubtitle, { color: "#cbd5e1", marginTop: -8 }]}>
+              <Text numberOfLines={4} style={[s.actionSheetSubtitle, { color: "#cbd5e1", marginTop: 8 }]}>
                 {secondClassGuidance(
                   actionSheet?.actions.find((a) => isSecondClassMobileFramework(a.framework))?.framework,
                   isDirectConnection,
@@ -2816,7 +2862,7 @@ export default function AppsScreen() {
             ) : agentFlowGuidance(
               actionSheet?.actions.find((a) => a.framework === "expo" || a.framework === "react-native")?.framework
             ) ? (
-              <Text style={[s.actionSheetSubtitle, { color: "#cbd5e1", marginTop: -8 }]}>
+              <Text numberOfLines={4} style={[s.actionSheetSubtitle, { color: "#cbd5e1", marginTop: 8 }]}>
                 {agentFlowGuidance(
                   actionSheet?.actions.find((a) => a.framework === "expo" || a.framework === "react-native")?.framework
                 )}
@@ -2876,38 +2922,15 @@ export default function AppsScreen() {
               </Text>
             ) : null}
             {!!actionSheet?.compatibility?.missingLocalTools?.length && (
-              <Text style={[s.actionSheetSubtitle, { color: "#fca5a5", marginTop: -8 }]}>
+              <Text numberOfLines={4} style={[s.actionSheetSubtitle, { color: "#fca5a5", marginTop: -8 }]}>
                 Missing on machine: {actionSheet.compatibility.missingLocalTools.join(", ")}
               </Text>
             )}
             {actionSheet?.compatibility?.hermesCompilerError ? (
-              <Text style={[s.actionSheetSubtitle, { color: "#fca5a5", marginTop: -8 }]}>
+              <Text numberOfLines={4} style={[s.actionSheetSubtitle, { color: "#fca5a5", marginTop: -8 }]}>
                 {actionSheet.compatibility.hermesCompilerError}
               </Text>
             ) : null}
-            <ScrollView style={s.actionSheetScroll}>
-              {/* Tapping a project is only about rendering it — the reload lanes.
-                  Tests (and build/deploy) are driven by vibing text to the agent. */}
-              {actionSheet?.actions.map((action, i) => {
-                const disabled = action.supported === false;
-                return (
-                  <Pressable
-                    key={`${action.label}-${i}`}
-                    style={[s.actionSheetItem, { borderColor: c.border }, disabled && { opacity: 0.4 }]}
-                    onPress={() => handleExecuteAction(action)}
-                  >
-                    <Text style={s.actionSheetIcon}>{action.icon || "\u25B6"}</Text>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[s.actionSheetLabel, { color: disabled ? c.textMuted : c.textPrimary }]}>
-                        {action.label}{disabled ? " (coming soon)" : ""}
-                      </Text>
-                      <Text style={[s.actionSheetMeta, { color: c.textMuted }]}>
-                        {disabled && action.reason ? action.reason : `${action.target}${action.framework ? ` · ${action.framework}` : ""}${action.platform ? ` → ${action.platform}` : ""}`}
-                      </Text>
-                    </View>
-                  </Pressable>
-                );
-              })}
             </ScrollView>
           </Pressable>
         </Pressable>
