@@ -4151,17 +4151,24 @@ export default function DevicesView({
                             </span>
                           ) : null}
                         </div>
-                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                          {states.map((state) => (
-                            <RunnerStatusChip
-                              key={`${device.id}:runner-status:${state.id}`}
-                              state={state}
-                              token={token ?? null}
-                              onSignIn={(runnerId) => setAuthModal({ device, runner: runnerId })}
-                              primary={state.id === primaryId}
-                            />
-                          ))}
-                        </div>
+                        {/* Less is more: when the PREFERRED runner is healthy,
+                            the single Preferred chip above already says it all —
+                            don't repeat every other runner's status. Surface the
+                            full list only when the preferred one needs attention,
+                            so the alternatives are there exactly when they help. */}
+                        {primaryState?.health !== "ready" ? (
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            {states.map((state) => (
+                              <RunnerStatusChip
+                                key={`${device.id}:runner-status:${state.id}`}
+                                state={state}
+                                token={token ?? null}
+                                onSignIn={(runnerId) => setAuthModal({ device, runner: runnerId })}
+                                primary={state.id === primaryId}
+                              />
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                       {codingAgentModalDeviceId === device.id ? (
                         <CodingAgentModal

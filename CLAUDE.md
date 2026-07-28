@@ -86,6 +86,34 @@ changing those.
   preference: web, mobile, tablet, tvOS, watchOS, Wear OS, car, AR/VR, and CLI
   companion surfaces must all follow the same queue → quiet status → one final
   render pattern.
+- **LESS IS MORE — every UI/UX surface earns its pixels or it's cut.** Yaver
+  shows a lot: devices, runners, transports, previews, statuses, incidents. The
+  default failure mode of a control surface is *accretion* — one more chip, one
+  more status line, one more banner — until the thing the user actually came for
+  is buried in metadata. Fight it on every surface (mobile, web, tvOS, watch,
+  car, glass, CLI). The rule of thumb:
+  1. **Show the answer, not the inventory.** When the primary/preferred choice
+     is healthy, don't also render every alternative's status — the one good
+     line says it all. Surface the alternatives exactly when they help: when the
+     primary needs attention. (Worked example 2026-07-28: the device card
+     repeated all three coding-agents' statuses under the "Preferred" chip; now
+     the status row appears only when the preferred runner isn't ready —
+     `DevicesView.tsx`.)
+  2. **One primary action per view.** Diagnostics (ping/ssh/copy) belong behind
+     a "⋯", not competing with the thing you came to do — the same reasoning as
+     the single-CTA device card.
+  3. **Progressive disclosure over walls of state.** Detail lives one tap deeper
+     (a modal, an expand), never crowding the summary. A dense diagnostics wall
+     that squeezes the action lane to zero height is a *worse* bug than missing
+     information (build 482, `40eec39ef`).
+  4. **Advisory never outranks the route** — not in pixels, not in vertical
+     space, not in reading order. This is the same law as "advisory work must
+     never sit in the critical path": here it's the *visual* critical path.
+  5. **A quiet, honest status beats a loud, busy one.** One line that says the
+     real state ("Relay · 301ms", "Preferred: Codex ✓") is worth more than a
+     grid of chips. Removing a widget that only restated something already shown
+     is a feature. When unsure whether an element earns its place, cut it and
+     see if anyone misses it.
 - **Every incident must leave the product harder than it found it.** When you
   debug a real failure — yours, a user's, or a past session's — fixing the
   immediate symptom is only half the job. Before you call it done, ask: *"what
