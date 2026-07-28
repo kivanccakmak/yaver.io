@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { v } from "convex/values";
 import { httpAction, internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import { ENABLE_TEAM_FEATURES } from "./launchFlags";
 import { clientIpFromRequest } from "./rateLimiter";
 import type { SessionScope } from "./auth";
 import { sha256Hex, randomHex } from "./auth";
@@ -7314,6 +7315,12 @@ http.route({
   path: "/teams",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
+    // LAUNCH KILL SWITCH (launchFlags.ts). Teams ship off at stage one. Gating
+    // the ROUTE is not enough on its own — the Convex functions are a second
+    // front door — but it closes the surface the clients actually use, and it
+    // closes the two audited defects here: this family returned every member's
+    // email with no membership check, and let any member mint an admin.
+    if (!ENABLE_TEAM_FEATURES) return errorResponse("Teams are disabled at launch", 403);
     const authHeader = request.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
     const tokenHash = await sha256Hex(authHeader.slice(7));
@@ -7334,6 +7341,12 @@ http.route({
   path: "/teams",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
+    // LAUNCH KILL SWITCH (launchFlags.ts). Teams ship off at stage one. Gating
+    // the ROUTE is not enough on its own — the Convex functions are a second
+    // front door — but it closes the surface the clients actually use, and it
+    // closes the two audited defects here: this family returned every member's
+    // email with no membership check, and let any member mint an admin.
+    if (!ENABLE_TEAM_FEATURES) return errorResponse("Teams are disabled at launch", 403);
     const authHeader = request.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
     const tokenHash = await sha256Hex(authHeader.slice(7));
@@ -7361,6 +7374,12 @@ http.route({
   path: "/teams/members",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
+    // LAUNCH KILL SWITCH (launchFlags.ts). Teams ship off at stage one. Gating
+    // the ROUTE is not enough on its own — the Convex functions are a second
+    // front door — but it closes the surface the clients actually use, and it
+    // closes the two audited defects here: this family returned every member's
+    // email with no membership check, and let any member mint an admin.
+    if (!ENABLE_TEAM_FEATURES) return errorResponse("Teams are disabled at launch", 403);
     const authHeader = request.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
     const tokenHash = await sha256Hex(authHeader.slice(7));
@@ -7401,6 +7420,12 @@ http.route({
   path: "/teams/members",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
+    // LAUNCH KILL SWITCH (launchFlags.ts). Teams ship off at stage one. Gating
+    // the ROUTE is not enough on its own — the Convex functions are a second
+    // front door — but it closes the surface the clients actually use, and it
+    // closes the two audited defects here: this family returned every member's
+    // email with no membership check, and let any member mint an admin.
+    if (!ENABLE_TEAM_FEATURES) return errorResponse("Teams are disabled at launch", 403);
     const authHeader = request.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
     const tokenHash = await sha256Hex(authHeader.slice(7));
@@ -7423,6 +7448,12 @@ http.route({
   path: "/teams/validate",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
+    // LAUNCH KILL SWITCH (launchFlags.ts). Teams ship off at stage one. Gating
+    // the ROUTE is not enough on its own — the Convex functions are a second
+    // front door — but it closes the surface the clients actually use, and it
+    // closes the two audited defects here: this family returned every member's
+    // email with no membership check, and let any member mint an admin.
+    if (!ENABLE_TEAM_FEATURES) return errorResponse("Teams are disabled at launch", 403);
     const authHeader = request.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
     const tokenHash = await sha256Hex(authHeader.slice(7));

@@ -1,5 +1,6 @@
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
+import { guestGrantsAreLive } from "./launchFlags";
 
 type AccessCtx = QueryCtx | MutationCtx;
 
@@ -16,6 +17,14 @@ export async function getActiveInfraGrant(
   hostUserId: Id<"users">,
   guestUserId: Id<"users">,
 ): Promise<ActiveInfraGrant | null> {
+  // LAUNCH KILL SWITCH (launchFlags.ts). Rows already in the database do not
+  // disappear when a flag flips, and a disabled feature whose old rows still
+  // authorize is not disabled. Cancelling here — at the primitive every guest
+  // read path is built on — means an invitation accepted last week stops
+  // granting access immediately, and starts working again unchanged when the
+  // flag comes back on. Cancel, never delete: turning a feature off must not
+  // destroy the user's data.
+  if (!guestGrantsAreLive()) return null;
   const g = await ctx.db
     .query("infraAccessGrants")
     .withIndex("by_host_guest", (q) =>
@@ -31,6 +40,12 @@ export async function getLegacyGuestAccess(
   hostUserId: Id<"users">,
   guestUserId: Id<"users">,
 ) {
+  // LAUNCH KILL SWITCH — same reasoning as getActiveInfraGrant above. This is
+  // the LEGACY path, and it is the more dangerous of the two to leave live:
+  // guestCanReachSpecificHostDevice treats "a guestAccess row with no grant" as
+  // unscoped access to EVERY host device, so an un-cancelled legacy row is the
+  // widest possible grant rather than the narrowest.
+  if (!guestGrantsAreLive()) return null;
   return await ctx.db
     .query("guestAccess")
     .withIndex("by_host_guest", (q) =>

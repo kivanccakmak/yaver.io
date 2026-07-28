@@ -1,4 +1,5 @@
 import { mutation, query } from "./_generated/server";
+import { requireGuestFeatures } from "./launchFlags";
 import { v } from "convex/values";
 import { validateSessionInternal } from "./auth";
 import { Id } from "./_generated/dataModel";
@@ -261,6 +262,10 @@ export const create = mutation({
     payer: v.optional(v.union(v.literal("owner"), v.literal("invitee"))),
   },
   handler: async (ctx, args) => {
+    // LAUNCH KILL SWITCH (launchFlags.ts). Grant-CREATING paths only.
+    // revoke/leave/delete stay open on purpose: turning a feature off must
+    // never trap a user with access they cannot rescind.
+    requireGuestFeatures();
     const session = await validateSessionInternal(ctx, args.tokenHash);
     if (!session) throw new Error("Unauthorized");
     const owner = session.user._id;
@@ -322,6 +327,10 @@ export const invite = mutation({
     role: v.optional(v.union(v.literal("dev"), v.literal("normie"), v.literal("viewer"))),
   },
   handler: async (ctx, args) => {
+    // LAUNCH KILL SWITCH (launchFlags.ts). Grant-CREATING paths only.
+    // revoke/leave/delete stay open on purpose: turning a feature off must
+    // never trap a user with access they cannot rescind.
+    requireGuestFeatures();
     const session = await validateSessionInternal(ctx, args.tokenHash);
     if (!session) throw new Error("Unauthorized");
     const owner = session.user._id;
@@ -369,6 +378,10 @@ export const invite = mutation({
 export const accept = mutation({
   args: { tokenHash: v.string(), shareCode: v.string() },
   handler: async (ctx, args) => {
+    // LAUNCH KILL SWITCH (launchFlags.ts). Grant-CREATING paths only.
+    // revoke/leave/delete stay open on purpose: turning a feature off must
+    // never trap a user with access they cannot rescind.
+    requireGuestFeatures();
     const session = await validateSessionInternal(ctx, args.tokenHash);
     if (!session) throw new Error("Unauthorized");
     const me = session.user._id;
@@ -448,6 +461,10 @@ export const setRole = mutation({
     role: v.union(v.literal("dev"), v.literal("normie"), v.literal("viewer")),
   },
   handler: async (ctx, args) => {
+    // LAUNCH KILL SWITCH (launchFlags.ts). Grant-CREATING paths only.
+    // revoke/leave/delete stay open on purpose: turning a feature off must
+    // never trap a user with access they cannot rescind.
+    requireGuestFeatures();
     const session = await validateSessionInternal(ctx, args.tokenHash);
     if (!session) throw new Error("Unauthorized");
     const share = await ctx.db.get(args.shareId);

@@ -611,9 +611,26 @@ func startBootstrapBeacon(ctx context.Context, httpPort int, hostname, passkey s
 	// Bootstrap device IDs are ephemeral random 8-char tags so
 	// multiple unpaired boxes on the same LAN don't collide.
 	shortID := fmt.Sprintf("boot%04x", os.Getpid()&0xFFFF)
-	broadcastPasskey := passkey
-	if os.Getenv("YAVER_BOOTSTRAP_NO_BEACON_PK") == "1" {
-		broadcastPasskey = ""
+	// SECURITY (audit 2026-07-28): the passkey is NOT broadcast by default.
+	//
+	// This used to be opt-OUT (YAVER_BOOTSTRAP_NO_BEACON_PK=1), which meant the
+	// one secret that authorizes /auth/pair/submit — an endpoint that is
+	// unauthenticated by design, because "the pairing code IS the secret" — was
+	// published to 255.255.255.255 every few seconds during setup. Any machine
+	// on the LAN (a cafe, a coworking space, a hotel, a compromised IoT device)
+	// could read it and claim the box before its owner did.
+	//
+	// Discovery still works: the beacon continues to advertise the unclaimed box
+	// so the phone can offer it. Only the SECRET is withheld, so pairing now
+	// requires the passkey the operator can see printed on the box's own
+	// console — the same model as pairing an Apple TV. That is the difference
+	// between "convenient" and "anyone nearby owns your machine".
+	broadcastPasskey := ""
+	if envTruthy(os.Getenv("YAVER_BOOTSTRAP_BEACON_PASSKEY")) {
+		broadcastPasskey = passkey
+		log.Printf("[bootstrap-beacon] WARNING: broadcasting the pairing passkey on the LAN " +
+			"(YAVER_BOOTSTRAP_BEACON_PASSKEY=1). Anyone on this network can claim this box. " +
+			"Use only on a network you control.")
 	}
 	// Include the device's current public key so the phone can
 	// verify it against Convex before encrypting. Safe to broadcast

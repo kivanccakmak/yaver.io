@@ -1,4 +1,5 @@
 import { mutation, query } from "./_generated/server";
+import { requireGuestFeatures } from "./launchFlags";
 import { v } from "convex/values";
 import { validateSessionInternal } from "./auth";
 import { Id } from "./_generated/dataModel";
@@ -172,6 +173,10 @@ export const createInvite = mutation({
     allowedProjects: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
+    // LAUNCH KILL SWITCH (launchFlags.ts). Grant-CREATING paths only.
+    // revoke/leave/delete stay open on purpose: turning a feature off must
+    // never trap a user with access they cannot rescind.
+    requireGuestFeatures();
     const session = await validateSessionInternal(ctx, args.tokenHash);
     if (!session) throw new Error("Unauthorized");
 
@@ -320,6 +325,10 @@ export const joinByCode = mutation({
     guestDeviceId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // LAUNCH KILL SWITCH (launchFlags.ts). Grant-CREATING paths only.
+    // revoke/leave/delete stay open on purpose: turning a feature off must
+    // never trap a user with access they cannot rescind.
+    requireGuestFeatures();
     const session = await validateSessionInternal(ctx, args.tokenHash);
     if (!session) throw new Error("Unauthorized");
 
@@ -618,6 +627,10 @@ export const touchSessionActivity = mutation({
     sessionId: v.id("hostShareSessions"),
   },
   handler: async (ctx, args) => {
+    // LAUNCH KILL SWITCH (launchFlags.ts). Grant-CREATING paths only.
+    // revoke/leave/delete stay open on purpose: turning a feature off must
+    // never trap a user with access they cannot rescind.
+    requireGuestFeatures();
     const session = await validateSessionInternal(ctx, args.tokenHash);
     if (!session) throw new Error("Unauthorized");
     const row = await ctx.db.get(args.sessionId);

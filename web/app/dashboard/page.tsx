@@ -68,7 +68,7 @@ import RuntimeLabView, { type RuntimeLabIntent } from "@/components/dashboard/Ru
 import DevicesView, { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice, RUNNER_WHITELIST_SET, OPENCODE_PROVIDER_CATALOGUE, MODEL_OPTIONS_BY_RUNNER } from "@/components/dashboard/DevicesView";
 import { CapabilityShelf } from "@/components/dashboard/CapabilityShelf";
 import RawFailureBanner from "@/components/dashboard/RawFailureBanner";
-import { HIDE_PAID_UI } from "@/lib/launchFlags";
+import { HIDE_PAID_UI, ENABLE_GUEST_FEATURES } from "@/lib/launchFlags";
 import { parseDashboardChatIntent } from "@/lib/dashboard-chat-intent";
 import { decideComposerKey, insertNewline, newlineIsNative } from "@/lib/composerKeys";
 import {
@@ -375,6 +375,24 @@ function runnerChipsForDevice(device: Pick<Device, "sharedRunners" | "runners">)
     if (label) chips.add(label);
   }
   return [...chips];
+}
+
+// FeatureOffNotice — what a user sees where a launch-gated feature used to be.
+// A blank panel reads as breakage; this says the feature is off by policy, not
+// broken, and that nothing is required of them. Same principle as the agent's
+// featureDisabledMessage: a refusal the user cannot act on is a silent wall.
+function FeatureOffNotice({ name }: { name: string }) {
+  return (
+    <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full">
+      <div className="rounded-lg border border-surface-800/60 bg-surface-900/40 p-6">
+        <h2 className="text-sm font-medium text-surface-100">{name} is not available yet</h2>
+        <p className="mt-2 text-xs text-surface-400">
+          {name} is turned off for this release and will arrive in a later one.
+          Nothing is wrong with your account and there is nothing to configure.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 function sharedGuestLabels(device: Pick<Device, "sharedGuests">): string[] {
@@ -3087,13 +3105,13 @@ export default function DashboardPage() {
           <div className="min-h-6 flex-1" />
 
           <div className="shrink-0 space-y-3 border-t border-surface-800/60 pt-4">
-            <button
+            {ENABLE_GUEST_FEATURES && <button
               onClick={() => setActiveTab("guests")}
               className="w-full rounded-md border border-brand/30 bg-brand-soft/60 px-3 py-1.5 text-xs font-medium text-brand-softFg hover:bg-brand-soft hover:border-brand/50 transition-colors"
               title="Invite someone to share this machine"
             >
               Invite a guest
-            </button>
+            </button>}
 
             <div>
               <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-surface-500">Join as a guest</p>
@@ -3597,7 +3615,12 @@ export default function DashboardPage() {
               </div>
             </div>
           ) : activeTab === "guests" ? (
-            <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full"><GuestsStatusView /></div>
+            // LAUNCH KILL SWITCH (@/lib/launchFlags). Guest sharing ships off at
+            // stage one; Convex refuses the mutations and the agent refuses the
+            // token, so offering the UI would only produce a dead end.
+            ENABLE_GUEST_FEATURES
+              ? <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full"><GuestsStatusView /></div>
+              : <FeatureOffNotice name="Guest sharing" />
           ) : activeTab === "collab" ? (
             <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full space-y-6">
               {/* Live co-vibe roster first: who is here NOW, and who may type.
