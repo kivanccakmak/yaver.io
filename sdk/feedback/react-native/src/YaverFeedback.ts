@@ -1,4 +1,4 @@
-import { NativeModules } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 import { FeedbackConfig, CapturedError } from './types';
 import { YaverDiscovery } from './Discovery';
 import { BlackBox } from './BlackBox';
@@ -286,6 +286,79 @@ export class YaverFeedback {
    * If no `agentUrl` is provided, the SDK will attempt auto-discovery
    * via `YaverDiscovery` on the first `startReport()` call.
    */
+  /** The runtime lane, when running on web inside a Yaver preview WebView. */
+  static detectWebLane(): 'browser' | 'webrtc' | null {
+    try {
+      if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
+      const l = String((window as unknown as { __yaverLane?: string }).__yaverLane || '').toLowerCase();
+      if (l === 'browser' || l === 'webrtc') return l;
+    } catch { /* noop */ }
+    return null;
+  }
+
+  /**
+   * Mount a draggable DOM floating "Y" icon for the BROWSER lane (RN-web). It
+   * lives in the WebView's document.body (position:fixed, max z-index), so it
+   * renders ON TOP of the page inside the WebView and is never occluded by the
+   * fullScreen preview modal — the one occlusion-proof affordance on iOS.
+   * Tap opens the SDK's existing report flow (the RN FeedbackModal renders in
+   * the same WebView DOM, also un-occluded). No-op off-web or off-lane, and
+   * idempotent (a re-init reuses the existing node).
+   */
+  static mountBrowserLaneIcon(): void {
+    if (YaverFeedback.detectWebLane() !== 'browser') return;
+    try {
+      const doc = (globalThis as unknown as { document?: Document }).document;
+      if (!doc || !doc.body) return;
+      if (doc.getElementById('yaver-feedback-btn')) return; // idempotent
+      const btn = doc.createElement('div');
+      btn.id = 'yaver-feedback-btn';
+      btn.textContent = 'Y';
+      btn.title = 'Yaver Feedback — drag to move · tap to report';
+      btn.style.cssText =
+        'position:fixed;bottom:20px;right:20px;width:44px;height:44px;border-radius:50%;' +
+        'background:#6366f1;color:#fff;display:flex;align-items:center;justify-content:center;' +
+        'cursor:pointer;z-index:99999;font-size:18px;font-weight:bold;touch-action:none;' +
+        'box-shadow:0 4px 12px rgba(99,102,241,0.4);transition:transform 0.2s;';
+      const drag = { on: false, moved: false, sx: 0, sy: 0, ox: 0, oy: 0 };
+      const w = window as unknown as { innerWidth: number; innerHeight: number };
+      const applyPos = (x: number, y: number) => {
+        const m = 8;
+        const nx = Math.max(m, Math.min(w.innerWidth - 44 - m, x));
+        const ny = Math.max(m, Math.min(w.innerHeight - 44 - m, y));
+        btn.style.left = nx + 'px'; btn.style.top = ny + 'px';
+        btn.style.right = 'auto'; btn.style.bottom = 'auto';
+        try { localStorage.setItem('yaver-feedback-btn-pos', JSON.stringify({ x: nx, y: ny })); } catch { /* noop */ }
+      };
+      try { const s = localStorage.getItem('yaver-feedback-btn-pos'); if (s) { const p = JSON.parse(s); if (typeof p?.x === 'number') applyPos(p.x, p.y); } } catch { /* noop */ }
+      btn.addEventListener('pointerdown', (e: PointerEvent) => {
+        drag.on = true; drag.moved = false;
+        const r = btn.getBoundingClientRect();
+        drag.sx = e.clientX; drag.sy = e.clientY; drag.ox = r.left; drag.oy = r.top;
+        btn.setPointerCapture(e.pointerId); btn.style.transition = 'none';
+      });
+      btn.addEventListener('pointermove', (e: PointerEvent) => {
+        if (!drag.on) return;
+        const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+        if (Math.abs(dx) + Math.abs(dy) > 5) drag.moved = true;
+        if (drag.moved) applyPos(drag.ox + dx, drag.oy + dy);
+      });
+      const end = (e: PointerEvent) => {
+        if (!drag.on) return;
+        drag.on = false; btn.style.transition = 'transform 0.2s';
+        try { btn.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+        if (!drag.moved) { try { void YaverFeedback.startReport(); } catch { /* noop */ } }
+      };
+      btn.addEventListener('pointerup', end);
+      btn.addEventListener('pointercancel', end);
+      // Also answer the host's forwarded shake (Yaver injects yaver-feedback:launch).
+      const launch = () => { try { void YaverFeedback.startReport(); } catch { /* noop */ } };
+      window.addEventListener('yaver-feedback:launch', launch as EventListener);
+      (window as unknown as { __yaverFeedbackLaunch?: () => void }).__yaverFeedbackLaunch = launch;
+      doc.body.appendChild(btn);
+    } catch { /* noop — never break the guest app over a feedback affordance */ }
+  }
+
   static init(cfg: FeedbackConfig): void {
     config = {
       trigger: 'shake',
@@ -391,6 +464,15 @@ export class YaverFeedback {
     // settings.
     YaverFeedback.stopShakeDetector();
     YaverFeedback.syncShakeDetector();
+
+    // Browser lane (RN-web inside Yaver's fullScreen WebView preview): the
+    // native shake module doesn't exist on web, and Yaver's own container
+    // overlay is OCCLUDED behind the WebView modal on iOS. So mount an
+    // occlusion-proof DRAGGABLE DOM icon INSIDE the WebView — same pattern as
+    // yaver-feedback-web. Lane is stamped by Yaver via
+    // window.__yaverLane='browser' (mobile PREVIEW_LANE_SCRIPT). See
+    // docs/audits/feedback-sdk-lanes-audit-2026-07-28.md.
+    if (enabled) YaverFeedback.mountBrowserLaneIcon();
 
     // Wire up BlackBox command handlers for reload + status signals from
     // the agent. Opens an SSE channel the agent uses to:
