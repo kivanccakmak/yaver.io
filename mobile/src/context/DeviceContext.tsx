@@ -3111,22 +3111,40 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
               continue;
             }
           }
-          // Fallback: legacy passkey flow (requires passkey in beacon)
-          if (!dev.bootstrapPasskey) continue;
-          const info = await fetchPairInfo(targetUrl);
-          if (!info.ok) continue;
-          const res = await submitPair({
-            code: dev.bootstrapPasskey,
-            targetUrl,
-            token,
-            userId: user.id,
-          });
-          if (res.ok) {
-            appLog("info", `Passkey auto-pair: ${dev.name || dev.deviceId} at ${dev.ip}`);
-            paired = true;
-            recordAutoPairSuccess(dev.deviceId);
-            setTimeout(() => refreshDevices(), 3000);
+          // SECURITY (audit 2026-07-28): the legacy plaintext-passkey fallback
+          // is GONE from the automatic path.
+          //
+          // It POSTed this phone's 1-year bearer token, in cleartext, to
+          // `http://<ip>:<port>` taken straight from a beacon — and a bootstrap
+          // beacon (`na:true`) bypasses BOTH the fingerprint check and the
+          // known-device check by design (see beacon.ts), because an unclaimed
+          // box has no identity yet. So anyone on the LAN could broadcast a
+          // forged `na:true` beacon carrying any passkey and receive the user's
+          // token, unprompted, within 3 seconds. No interaction, no prompt.
+          //
+          // It is now strictly an attacker vector: agents no longer put the
+          // passkey in the beacon at all (auth_bootstrap.go, same audit), so a
+          // beacon that still carries one is either a stale build or a forgery,
+          // and neither is a reason to hand over a credential automatically.
+          //
+          // The encrypted path above remains and is sufficient: it encrypts to
+          // the public key CONVEX holds for that device, so a spoofed host
+          // receives ciphertext it cannot read. Cryptographic proof of identity
+          // is the bar for doing this without asking the user.
+          //
+          // Pairing a genuinely new box still works — the owner reads the
+          // passkey printed on that box's console and enters it, which is a
+          // deliberate human act against a machine they can see, not an
+          // automatic reaction to a UDP packet from a stranger.
+          if (dev.bootstrapPasskey) {
+            appLog(
+              "warn",
+              `Ignoring beacon passkey from ${dev.name || dev.deviceId} at ${dev.ip}: ` +
+                `auto-pair requires a Convex-verified device key. Enter the passkey shown ` +
+                `on that machine to pair it manually.`
+            );
           }
+          continue;
         } catch {
           autoPairedRef.current.delete(dev.deviceId);
         } finally {
