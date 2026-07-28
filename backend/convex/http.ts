@@ -1354,7 +1354,7 @@ http.route({
       .join("");
     const tokenHash = await sha256Hex(rawToken);
 
-    const result = await ctx.runMutation(api.auth.createPasswordReset, {
+    const result = await ctx.runMutation(internal.auth.createPasswordReset, {
       email: email.toLowerCase().trim(),
       tokenHash,
     });
@@ -1401,7 +1401,7 @@ http.route({
     const newPasswordHash = await hashPassword(password);
 
     try {
-      await ctx.runMutation(api.auth.resetPassword, {
+      await ctx.runMutation(internal.auth.resetPassword, {
         tokenHash,
         newPasswordHash,
       });

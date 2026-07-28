@@ -2160,7 +2160,22 @@ const RESET_COOLDOWN_MS = 60 * 1000;               // 1 min between requests
  *  - Max 5 requests per email per 24h
  *  - 60s cooldown between consecutive requests
  */
-export const createPasswordReset = mutation({
+// SECURITY (audit 2026-07-28): internalMutation, NOT mutation. This takes the
+// reset `tokenHash` as a CALLER ARGUMENT and binds it to the victim's userId
+// with no proof of mailbox control, and resetPassword below then overwrites the
+// password and deletes every session that user has. As a public mutation both
+// were callable directly against the deployment URL — an anonymous, repeatable,
+// permanent account lockout for any email-provider account, and a takeover the
+// moment YAVER_EMAIL_PASSWORD_AUTH_ENABLED is turned on (the KDF is in this
+// public repo, so a valid newPasswordHash is computed offline).
+//
+// The three guards in http.ts (requireEmailPasswordAuthEnabled,
+// lookupPasswordResetTarget, requireEmailPasswordEmailAllowed) did NOT protect
+// this: a direct Convex call never passes through http.ts. That is the general
+// lesson — http.ts is one of TWO front doors, and a guard that lives only in a
+// route handler is bypassable by function name. Keep the guards there, but the
+// function itself must not be reachable from outside.
+export const createPasswordReset = internalMutation({
   args: {
     email: v.string(),
     tokenHash: v.string(),
@@ -2239,7 +2254,9 @@ export const lookupPasswordResetTarget = internalQuery({
  * Validate a password reset token and apply the new password.
  * The token can only be used once.
  */
-export const resetPassword = mutation({
+// SECURITY (audit 2026-07-28): internalMutation — see createPasswordReset above.
+// Reachable publicly, this pair was an anonymous account-destruction primitive.
+export const resetPassword = internalMutation({
   args: {
     tokenHash: v.string(),
     newPasswordHash: v.string(),
