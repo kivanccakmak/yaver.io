@@ -10,6 +10,7 @@ import React, {
 import { Alert, AppState, AppStateStatus, Linking, Platform } from "react-native";
 import Constants from "expo-constants";
 import { setKnownDevicePublicKeys } from "../lib/identityProof";
+import { isRelayAuthFailure } from "../lib/relayAuth";
 import { appTag } from "../lib/appVersion";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -685,14 +686,12 @@ function looksLikeManualRelayOverride(
   return platformServers.length === 0;
 }
 
+// Unified relay-auth classifier (src/lib/relayAuth.ts) — the single source that
+// also catches the bare "returned HTTP 401" form the old phrase-only matcher
+// missed, which is what left the sim stuck (the refresh-retry below never fired
+// on a stale relay password). See relayAuth.ts.
 function isRelayAuthError(message: string): boolean {
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("invalid relay password") ||
-    lower.includes("relay password mismatch") ||
-    lower.includes("too many invalid relay password attempts") ||
-    lower.includes("relay authentication failed")
-  );
+  return isRelayAuthFailure(message);
 }
 
 function deviceEndpointKey(device: Pick<Device, "host" | "port" | "isGuest">): string | null {

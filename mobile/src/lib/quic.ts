@@ -51,6 +51,7 @@ import {
 import { beaconListener } from "./beacon";
 import NetInfo, { type NetInfoState } from "@react-native-community/netinfo";
 import { withDeadline, ConnectAttemptGuard } from "./connectGuard";
+import { isRelayAuthFailure } from "./relayAuth";
 
 // Longer than the sum of every BOUNDED connect leg (NetInfo ≤3s + direct phase
 // + 8s/tunnel + 8s/relay). A held guard older than this is hung on an UNBOUNDED
@@ -7500,7 +7501,16 @@ export class QuicClient {
       void this.persistConnectionSnapshot();
       // Best-effort vault sync on connect
       this.syncVault();
-    } catch {
+    } catch (e) {
+      // Carry the DETAILED per-leg reason out to the caller. Previously this
+      // `catch {}` swallowed the `Could not reach agent — <legs>` message the
+      // ladder built, so connect() fell back to the generic
+      // "(direct, tunnel, or via relay)" — hiding WHICH leg failed and why
+      // (e.g. "relay: HTTP 401" vs "relay disabled in preferences"). A failure
+      // the user can't read is unfalsifiable. Store it so connect() surfaces it
+      // and the Connection Logs name the real cause.
+      const detail = e instanceof Error ? e.message : String(e);
+      if (detail && detail !== "undefined") this._lastTransportError = detail;
       this.setConnectionState("error");
       this.scheduleReconnect();
     }
@@ -7708,12 +7718,11 @@ export class QuicClient {
     // Fire the repair once per failure streak. Idempotent + per-user, so
     // safe on the shared relay. No-op when the transport error is not
     // relay-auth-shaped.
-    const cause = (this._lastTransportError || "").toLowerCase();
-    const isRelayAuthShaped =
-      cause.includes("reason=bad_password") ||
-      cause.includes("reason=dead_token") ||
-      cause.includes("invalid relay") ||
-      cause.includes("relay password");
+    // Unified relay-auth classifier (relayAuth.ts) — the same one DeviceContext
+    // uses, and it also catches the bare "returned HTTP 401" form. Previously
+    // this local matcher and DeviceContext's diverged, so a relay 401 fired the
+    // repair on one path and not the other.
+    const isRelayAuthShaped = isRelayAuthFailure(this._lastTransportError);
     if (isRelayAuthShaped && !this._reconnectRepairAttempted) {
       this._reconnectRepairAttempted = true;
       this._relayRepairHook?.().catch(() => {});
