@@ -102,5 +102,23 @@ if [ -e "$SHADOW_AASA" ]; then
 fi
 
 # 2. Build and deploy
+#
+# Stamp the build with the git SHA being deployed. Without this the dashboard
+# can only show web/package.json's hand-maintained semver, which does NOT move
+# on every deploy — so "the fix was never shipped" and "the fix shipped and your
+# tab is cached" render identically and neither the user nor an agent can tell
+# them apart. That cost a real debugging round on 2026-07-28. See
+# web/lib/buildStamp.ts.
+NEXT_PUBLIC_BUILD_ID="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if ! git -C "$REPO_ROOT" diff --quiet HEAD -- "$DEPLOY_DIR" 2>/dev/null; then
+  # Say so rather than stamping a SHA that does not describe these bytes.
+  NEXT_PUBLIC_BUILD_ID="${NEXT_PUBLIC_BUILD_ID}-dirty"
+fi
+export NEXT_PUBLIC_BUILD_ID
+echo "→ build stamp: $NEXT_PUBLIC_BUILD_ID (shown in the dashboard sidebar)"
+
 cd "$DEPLOY_DIR"
 npm run deploy
+
+echo "✓ deployed build $NEXT_PUBLIC_BUILD_ID — the sidebar must show this SHA;"
+echo "  if it shows an older one, that tab is serving a cached bundle (hard-reload)."
