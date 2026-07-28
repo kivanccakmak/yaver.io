@@ -3,6 +3,12 @@
 import { useEffect, useState, useCallback } from "react";
 import { CONVEX_URL } from "@/lib/constants";
 import type { RuntimeProjectSeed } from "@/lib/runtimeProjectSettings";
+import {
+  resolveIdentityMerge,
+  type IdentityCandidate,
+  type SecondaryAgentRef,
+} from "@/lib/deviceIdentityMerge";
+import { aliasCollisionOutcome, agentInstanceRelation } from "@/lib/aliasShadowing";
 
 /** DeviceStorage is the live disk gauge the agent sends on every heartbeat. */
 export interface DeviceStorage {
@@ -137,6 +143,15 @@ export interface Device {
   }>;
   installedRunnerIds?: string[];
   sessionBinding?: "dedicated" | "legacy-shared";
+  /**
+   * Other `yaver serve` instances running on the SAME physical box that were
+   * collapsed into this row (same hardwareId, own deviceId/port/version). Set
+   * by the identity merge — see lib/deviceIdentityMerge.ts. Empty/undefined is
+   * the normal case; a non-empty list is what lets a surface say "this machine
+   * also runs a second agent on :18090 with no relay tunnel" instead of
+   * handing the user a button that can only 502.
+   */
+  secondaryAgents?: SecondaryAgentRef[];
   lastTunnelEvent?: {
     online: boolean;
     at: number;
@@ -351,15 +366,36 @@ function mergeIpLists(a?: string[], b?: string[]): string[] | undefined {
   return merged.size > 0 ? [...merged] : undefined;
 }
 
+function deviceIdentityCandidate(d: Device): IdentityCandidate {
+  return {
+    deviceId: d.id,
+    needsAuth: !!d.needsAuth,
+    isOnline: !!d.online || d.peerState === "online",
+    lastHeartbeat: Date.parse(d.lastSeen || "") || 0,
+    port: d.port,
+    agentVersion: d.agentVersion,
+    alias: d.alias,
+    publicKey: d.publicKey,
+    hardwareId: d.hardwareId,
+    lastTunnelEvent: d.lastTunnelEvent,
+  };
+}
+
 function mergeDeviceEntries(existing: Device, incoming: Device): Device {
-  const incomingWins =
-    (!existing.online && incoming.online) ||
-    (Date.parse(incoming.lastSeen || "") || 0) > (Date.parse(existing.lastSeen || "") || 0);
-  const base = incomingWins ? incoming : existing;
-  const other = incomingWins ? existing : incoming;
+  // HEALTH FIRST — identical rule to backend/convex/devices.ts, from the same
+  // shared module. The old rule here was even weaker than the server's: it had
+  // no needsAuth clause at all, so a needs-auth loopback agent that heartbeated
+  // one second later took over the row's deviceId, needsAuth and port, and
+  // every action (RECLAIM, connect, recycle, power) routed to an id the relay
+  // has no tunnel for. See lib/deviceIdentityMerge.ts for the incident.
+  const { base, other, secondaryAgents } = resolveIdentityMerge(existing, incoming, deviceIdentityCandidate, {
+    relate: agentInstanceRelation,
+    readSecondaries: (row) => row.secondaryAgents,
+  });
   return {
     ...other,
     ...base,
+    secondaryAgents,
     host: base.host || other.host,
     port: base.port || other.port,
     online: base.online || other.online,
@@ -407,16 +443,6 @@ function mergeDeviceEntries(existing: Device, incoming: Device): Device {
   };
 }
 
-function pickActiveOverStale(existing: Device, incoming: Device): Device | null {
-  const existingDead = !existing.online;
-  const incomingDead = !incoming.online;
-  const existingLive = existing.online;
-  const incomingLive = incoming.online;
-  if (existingDead && incomingLive) return incoming;
-  if (incomingDead && existingLive) return existing;
-  return null;
-}
-
 function collapseDevices(devices: Device[]): Device[] {
   const byIdentity = new Map<string, Device>();
   for (const device of devices) {
@@ -437,16 +463,31 @@ function collapseDevices(devices: Device[]): Device[] {
       byAlias.set(key, device);
       continue;
     }
-    const strongConflict =
-      (!!prev.hardwareId && !!device.hardwareId && prev.hardwareId !== device.hardwareId) ||
-      (!!prev.publicKey && !!device.publicKey && prev.publicKey !== device.publicKey);
-    if (strongConflict) {
-      const winner = pickActiveOverStale(prev, device);
-      if (winner) {
-        byAlias.set(key, winner);
-        continue;
-      }
+    // Was an inline `strongConflict` boolean — the third hand-copy of a rule
+    // that already had one home. Web was also the only surface missing
+    // `keep-both`, so two DIFFERENT machines behind one hostname were merged
+    // into one flip-flopping row here even after the server stopped doing it.
+    const outcome = aliasCollisionOutcome(
+      { hardwareId: prev.hardwareId, publicKey: prev.publicKey, online: prev.online, needsAuth: !!prev.needsAuth, port: prev.port, deviceId: prev.id, lastHeartbeat: Date.parse(prev.lastSeen || "") || 0 },
+      { hardwareId: device.hardwareId, publicKey: device.publicKey, online: device.online, needsAuth: !!device.needsAuth, port: device.port, deviceId: device.id, lastHeartbeat: Date.parse(device.lastSeen || "") || 0 },
+    );
+    if (outcome === "keep-a") {
+      byAlias.set(key, prev);
+      continue;
     }
+    if (outcome === "keep-b") {
+      byAlias.set(key, device);
+      continue;
+    }
+    if (outcome === "keep-both") {
+      byAlias.delete(key);
+      byAlias.set(`${key}#${prev.hardwareId || prev.publicKey || prev.id}`, prev);
+      byAlias.set(`${key}#${device.hardwareId || device.publicKey || device.id}`, device);
+      continue;
+    }
+    // "merge" and "merge-secondary" are both ONE machine — merge health-first.
+    // mergeDeviceEntries records the collapsed-away instance under
+    // `secondaryAgents` when (and only when) it is a second RUNNING agent.
     byAlias.set(key, mergeDeviceEntries(prev, device));
   }
 
@@ -649,6 +690,10 @@ export function useDevices(token: string | null): DevicesState & { hiddenIds: Se
         sharedRunners: Array.isArray(d.sharedRunners) ? d.sharedRunners : undefined,
         runners: Array.isArray(d.runners) ? d.runners : undefined,
         installedRunnerIds: Array.isArray(d.installedRunnerIds) ? d.installedRunnerIds : undefined,
+        // Server-side collapse already found these (backend/convex/devices.ts).
+        // Carry them through so the client merge below adds to the list rather
+        // than starting a second, disagreeing one.
+        secondaryAgents: Array.isArray(d.secondaryAgents) ? d.secondaryAgents : undefined,
         sessionBinding: d.sessionBinding,
         lastTunnelEvent:
           d.lastTunnelEvent && typeof d.lastTunnelEvent === "object"

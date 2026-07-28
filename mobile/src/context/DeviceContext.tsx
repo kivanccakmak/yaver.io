@@ -32,7 +32,8 @@ import { submitEncryptedPair } from "../lib/encryptedPair";
 import { probeMobileDeviceStatus, type MobileDeviceStatusProbe } from "../lib/deviceStatus";
 import { probeDeviceWithRepair } from "../lib/probeWithRepair";
 import { resolveSweepOutcome } from "../lib/autoConnectStatus";
-import { aliasCollisionOutcome } from "../lib/aliasShadowing";
+import { aliasCollisionOutcome, agentInstanceRelation } from "../lib/aliasShadowing";
+import { resolveIdentityMerge, type IdentityCandidate } from "../lib/deviceIdentityMerge";
 
 // Auto-connect probe budget. Matches the manual switch modal (4000ms) — the
 // automatic path used to run at 3000ms, so the path the user lands on by
@@ -724,38 +725,44 @@ export function isGhostDevice(device: Pick<Device, "hwid" | "publicKey" | "isGue
   return !device.hwid && !device.publicKey && !device.isGuest;
 }
 
-function mergeDeviceEntries(existing: Device, incoming: Device): Device {
-  const incomingWins =
-    (!!existing.needsAuth && !incoming.needsAuth) ||
-    incoming.lastSeen > existing.lastSeen ||
-    (!!incoming.online && !existing.online) ||
-    (!!incoming.local && !existing.local);
-
-  if (incomingWins) {
-    return {
-      ...existing,
-      ...incoming,
-      runners: incoming.runners?.length ? incoming.runners : existing.runners,
-      installedRunnerIds: incoming.installedRunnerIds?.length ? incoming.installedRunnerIds : existing.installedRunnerIds,
-      publicKey: incoming.publicKey || existing.publicKey,
-      hwid: incoming.hwid || existing.hwid,
-      host: incoming.host || existing.host,
-      port: incoming.port || existing.port,
-      lastSeen: Math.max(existing.lastSeen || 0, incoming.lastSeen || 0),
-    };
-  }
-
+function deviceIdentityCandidate(d: Device): IdentityCandidate {
   return {
-    ...incoming,
-    ...existing,
-    host: existing.host || incoming.host,
-    port: existing.port || incoming.port,
-    online: existing.online || incoming.online,
-    local: existing.local || incoming.local,
-    runners: existing.runners?.length ? existing.runners : incoming.runners,
-    installedRunnerIds: existing.installedRunnerIds?.length ? existing.installedRunnerIds : incoming.installedRunnerIds,
-    publicKey: existing.publicKey || incoming.publicKey,
-    hwid: existing.hwid || incoming.hwid,
+    deviceId: d.id,
+    needsAuth: !!d.needsAuth,
+    isOnline: !!d.online,
+    lastHeartbeat: d.lastSeen || 0,
+    port: d.port,
+    agentVersion: d.agentVersion,
+    alias: d.alias,
+    publicKey: d.publicKey,
+    hardwareId: d.hwid,
+    // A LAN-beacon sighting is the phone's own proof it can reach this exact
+    // instance — the strongest transport evidence a phone has, so it ranks with
+    // a live relay tunnel rather than with a bare `online` claim.
+    relayConnected: !!d.local,
+  };
+}
+
+function mergeDeviceEntries(existing: Device, incoming: Device): Device {
+  // HEALTH FIRST — same shared rule as backend/convex/devices.ts and
+  // web/lib/use-devices.ts. The phone's old chain had `incoming.lastSeen >
+  // existing.lastSeen` as its SECOND clause, so on a box running two agents the
+  // needs-auth one took the row whenever it heartbeated last, and the picker
+  // flipped identities under the user's thumb. See lib/deviceIdentityMerge.ts.
+  const { base, other } = resolveIdentityMerge(existing, incoming, deviceIdentityCandidate, {
+    relate: agentInstanceRelation,
+  });
+  return {
+    ...other,
+    ...base,
+    host: base.host || other.host,
+    port: base.port || other.port,
+    online: base.online || other.online,
+    local: base.local || other.local,
+    runners: base.runners?.length ? base.runners : other.runners,
+    installedRunnerIds: base.installedRunnerIds?.length ? base.installedRunnerIds : other.installedRunnerIds,
+    publicKey: base.publicKey || other.publicKey,
+    hwid: base.hwid || other.hwid,
     lastSeen: Math.max(existing.lastSeen || 0, incoming.lastSeen || 0),
   };
 }
@@ -786,9 +793,12 @@ function collapseAliasDevices(devices: Device[]): Device[] {
     // viable → KEEP BOTH. Merging two real machines made deviceId/name
     // flip every heartbeat — the 2026-07-26 picker flip-flop (real agent +
     // circuit-sim cell sharing one hostname).
+    // Pass port/deviceId/lastHeartbeat too: without them the rule cannot tell
+    // "two agents running on one box" from "two machines", and it was the
+    // former all along on the box this whole incident came from.
     const outcome = aliasCollisionOutcome(
-      { hardwareId: existing.hwid, publicKey: existing.publicKey, online: !!existing.online, needsAuth: !!existing.needsAuth },
-      { hardwareId: device.hwid, publicKey: device.publicKey, online: !!device.online, needsAuth: !!device.needsAuth },
+      { hardwareId: existing.hwid, publicKey: existing.publicKey, online: !!existing.online, needsAuth: !!existing.needsAuth, port: existing.port, deviceId: existing.id, lastHeartbeat: existing.lastSeen },
+      { hardwareId: device.hwid, publicKey: device.publicKey, online: !!device.online, needsAuth: !!device.needsAuth, port: device.port, deviceId: device.id, lastHeartbeat: device.lastSeen },
     );
     if (outcome === "keep-a") {
       byAlias.set(alias, existing);

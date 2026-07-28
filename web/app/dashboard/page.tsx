@@ -7,8 +7,11 @@ import {
   formatAgeShort,
   hasRecentLiveSignal,
   deriveDeviceLifecycleState,
+  deriveBrowserReach,
   type DeviceLifecycleState,
 } from "@/lib/device-lifecycle";
+import { getLastFailure } from "@/lib/probe-backoff";
+import { reauthFailureLine } from "@/lib/reauthFailure";
 import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskStreamWithRecovery";
 import { StreamHealthNotice } from "@/components/dashboard/StreamHealthNotice";
 import WebShellModal from "@/components/dashboard/WebShellModal";
@@ -1724,13 +1727,13 @@ export default function DashboardPage() {
         }
         setTimeout(() => setReauthMsg((m) => (m?.deviceId === d.id ? null : m)), 6000);
       } else {
-        const diagSummary = r.diagnostics
-          .map((dx) => `${dx.path}/${dx.step}: ${dx.ok ? "ok" : dx.error || "fail"}`)
-          .join(" · ");
+        // ONE formatter, shared with DevicesView. The old text pasted lane
+        // labels ("relay · public-free/direct: device not connected to relay")
+        // that name nothing the user can do. See lib/reauthFailure.ts.
         setReauthMsg({
           deviceId: d.id,
           ok: false,
-          text: `Re-auth failed${r.error ? `: ${r.error}` : ""}. ${diagSummary}`,
+          text: reauthFailureLine(r, { name: d.name, alias: d.alias, secondaryAgents: d.secondaryAgents }),
         });
       }
     } catch (e: any) {
@@ -3039,7 +3042,18 @@ export default function DashboardPage() {
                   const hasError = isSelected && connState === "error";
                   const isReauthing = reauthBusy === d.id;
                   const lifecycle = deriveDeviceLifecycleState(d);
-                  const needsRecovery = lifecycle === "bootstrap" || lifecycle === "yaver-auth-expired";
+                  // A button that cannot dial is worse than no button: RECLAIM
+                  // used to render on lifecycle ALONE, so a row whose identity
+                  // had been taken over by a tunnel-less second agent offered a
+                  // reclaim that could only 502. Require reachability evidence
+                  // (the same gate DevicesView already uses) and otherwise say
+                  // WHY, in place, instead of promising an action.
+                  const reach = deriveBrowserReach(d, getLastFailure(d.id));
+                  const secondAgents = d.secondaryAgents || [];
+                  const noViableTransport = reach.unreachable || (secondAgents.length > 0 && reach.state === "offline");
+                  const recoveryWanted = lifecycle === "bootstrap" || lifecycle === "yaver-auth-expired";
+                  const needsRecovery = recoveryWanted && !noViableTransport;
+                  const blockedRecovery = recoveryWanted && noViableTransport;
                   const readyToConnect = lifecycle === "ready-to-connect" || lifecycle === "connected";
                   const dotClass = hasError
                     ? "bg-red-400"
@@ -3056,7 +3070,7 @@ export default function DashboardPage() {
                     ? "border border-red-500/30 bg-red-500/5"
                     : isConnecting
                       ? "border border-amber-500/30 bg-amber-500/5"
-                      : needsRecovery
+                      : recoveryWanted
                         ? "border border-amber-500/30 bg-amber-500/5"
                         : "border border-transparent hover:bg-surface-800/80";
                   const showReauthMsg = reauthMsg && reauthMsg.deviceId === d.id;
@@ -3066,10 +3080,28 @@ export default function DashboardPage() {
                         <button
                           onClick={() => connectToDevice(d)}
                           className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-xs"
-                          title={`${d.host}:${d.port}`}
+                          title={
+                            secondAgents.length > 0
+                              ? `${d.host}:${d.port} — this box also runs ${secondAgents.length} other Yaver agent${secondAgents.length > 1 ? "s" : ""} (${secondAgents.map((s) => (s.port ? `port ${s.port}` : s.deviceId.slice(0, 8))).join(", ")})`
+                              : `${d.host}:${d.port}`
+                          }
                         >
                           <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
                           <span className="min-w-0 flex-1 truncate text-surface-200">{d.name}</span>
+                          {/* Two agents on one box used to be invisible HERE — where
+                              the action button lives — while DevicesView showed the
+                              alias chip. Show the disambiguator next to the button. */}
+                          {d.alias ? (
+                            <span className="shrink-0 font-mono text-[9px] text-emerald-500/90" title={`Alias: yaver ssh @${d.alias}`}>@{d.alias}</span>
+                          ) : null}
+                          {secondAgents.length > 0 ? (
+                            <span
+                              className="shrink-0 rounded bg-amber-500/15 px-1 font-mono text-[9px] text-amber-700 dark:text-amber-300"
+                              title={`One machine, ${secondAgents.length + 1} agents. This row points at port ${d.port}.`}
+                            >
+                              :{d.port}
+                            </span>
+                          ) : null}
                           {primaryDeviceId === d.id ? (
                             <span className="shrink-0 text-[9px] text-indigo-400" title="Primary">&#9733;</span>
                           ) : null}
@@ -3092,6 +3124,13 @@ export default function DashboardPage() {
                           </button>
                         ) : null}
                       </div>
+                      {blockedRecovery ? (
+                        <div className="px-2 pb-1 text-[10px] leading-tight text-amber-700 dark:text-amber-300">
+                          {secondAgents.length > 0
+                            ? `Can't re-auth from here — this row points at an agent on port ${d.port} with no relay tunnel (this box runs ${secondAgents.length + 1} agents). Run \`yaver auth\` on the machine.`
+                            : `Can't re-auth from here — ${reach.label || "no working transport"}. Run \`yaver auth\` on the machine.`}
+                        </div>
+                      ) : null}
                       {showReauthMsg ? (
                         <div
                           className={`px-2 pb-1 text-[10px] leading-tight ${

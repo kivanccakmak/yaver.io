@@ -9,7 +9,12 @@ import {
   listVisibleInfraGrantsForGuest,
 } from "./access";
 import { resolveSigReach } from "./accessSigPolicy";
-import { aliasCollisionOutcome } from "./aliasShadowing";
+import { aliasCollisionOutcome, agentInstanceRelation } from "./aliasShadowing";
+import {
+  resolveIdentityMerge,
+  type IdentityCandidate,
+  type SecondaryAgentRef,
+} from "./deviceIdentityMerge";
 import { relayEntitlementForUser } from "./userSettings";
 import { recommendPlacement } from "./edgePlacement";
 import { isMachineWakeable } from "./cloudMachines";
@@ -276,6 +281,14 @@ type ListedDevice = {
    * snapshot cannot come back at any price.
    */
   machineWakeable?: boolean;
+  /**
+   * Agent instances that were collapsed AWAY into this row — same box, own
+   * deviceId/port/version. Present only when two agents were heartbeating
+   * concurrently (see deviceIdentityMerge.ts). Surfaces read it to explain why
+   * an action aimed at this machine can behave oddly, and to say WHICH other
+   * agent exists instead of silently pretending there is one row.
+   */
+  secondaryAgents?: SecondaryAgentRef[];
 };
 
 function mergeHardwareProfile(
@@ -385,17 +398,43 @@ function selectLocalIps(a: ListedDevice, b: ListedDevice, now: number): string[]
   return [...new Set(parts.filter(Boolean))].slice(0, MAX_LOCAL_IPS_PER_DEVICE);
 }
 
+function identityCandidate(d: ListedDevice): IdentityCandidate {
+  return {
+    deviceId: d.deviceId,
+    needsAuth: !!d.needsAuth,
+    isOnline: !!d.isOnline,
+    lastHeartbeat: d.lastHeartbeat || 0,
+    port: d.quicPort,
+    agentVersion: d.agentVersion,
+    alias: d.alias,
+    publicKey: d.publicKey,
+    hardwareId: d.hardwareId,
+    relayConnected: d.relayConnected,
+    lastTunnelEvent: d.lastTunnelEvent,
+  };
+}
+
 function mergeListedDevices(a: ListedDevice, b: ListedDevice): ListedDevice {
-  const incomingWins =
-    (!!a.needsAuth && !b.needsAuth) ||
-    (b.lastHeartbeat || 0) > (a.lastHeartbeat || 0) ||
-    (!!b.isOnline && !a.isOnline);
-  const base = incomingWins ? b : a;
-  const other = incomingWins ? a : b;
   const now = Date.now();
+  // HEALTH FIRST, then transport, then recency, then deviceId. The old rule was
+  // an `||` chain where a one-second-newer heartbeat outranked "this row can
+  // actually be authenticated" — see deviceIdentityMerge.ts for the incident
+  // that produced. `isOnline`/`lastHeartbeat` may still be OR'd/max'd below
+  // (the BOX is alive either way); IDENTITY may not.
+  // Two agents on one box (distinct instance, both heartbeating) is a fact the
+  // merge must not destroy: resolveIdentityMerge keeps the loser's
+  // deviceId/port/version under `secondaryAgents` so a surface can NAME it. A
+  // stale duplicate row of ONE agent is not a secondary agent and is not
+  // reported as one.
+  const { base, other, secondaryAgents } = resolveIdentityMerge(a, b, identityCandidate, {
+    relate: agentInstanceRelation,
+    readSecondaries: (row) => row.secondaryAgents,
+    now,
+  });
   return {
     ...other,
     ...base,
+    secondaryAgents,
     quicHost: base.quicHost || other.quicHost,
     quicPort: base.quicPort || other.quicPort,
     isOnline: base.isOnline || other.isOnline,
@@ -457,9 +496,17 @@ function collapseListedDevices(devices: ListedDevice[]): ListedDevice[] {
       continue;
     }
     const outcome = aliasCollisionOutcome(
-      { hardwareId: existing.hardwareId, publicKey: existing.publicKey, online: existing.isOnline, needsAuth: existing.needsAuth },
-      { hardwareId: device.hardwareId, publicKey: device.publicKey, online: device.isOnline, needsAuth: device.needsAuth },
+      { hardwareId: existing.hardwareId, publicKey: existing.publicKey, online: existing.isOnline, needsAuth: existing.needsAuth, port: existing.quicPort, deviceId: existing.deviceId, lastHeartbeat: existing.lastHeartbeat },
+      { hardwareId: device.hardwareId, publicKey: device.publicKey, online: device.isOnline, needsAuth: device.needsAuth, port: device.quicPort, deviceId: device.deviceId, lastHeartbeat: device.lastHeartbeat },
     );
+    if (outcome === "merge-secondary") {
+      // TWO AGENTS ON ONE BOX. Not two machines — `keep-both` here would put
+      // the same physical machine on screen twice. Merge health-first;
+      // mergeListedDevices records the loser under `secondaryAgents` so the
+      // second instance is named rather than erased.
+      byAlias.set(key, mergeListedDevices(existing, device));
+      continue;
+    }
     if (outcome === "keep-a") {
       byAlias.set(key, existing);
       continue;

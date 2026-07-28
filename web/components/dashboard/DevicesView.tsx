@@ -50,6 +50,7 @@ import {
   getLastFailure,
   subscribeLastFailure,
 } from "@/lib/probe-backoff";
+import { reauthFailureLine } from "@/lib/reauthFailure";
 import type { useMachineRoles, MachineRolesRow } from "@/lib/useMachineRoles";
 
 function transportToneClasses(tone: TransportInfo["tone"]): string {
@@ -4040,13 +4041,17 @@ export default function DevicesView({
                           }));
                           setTimeout(() => onRefresh().catch(() => {}), 1200);
                         } else {
-                          const summary = r.diagnostics
-                            .map((d) => `${d.path}/${d.step}: ${d.ok ? "ok" : d.error || "fail"}`)
-                            .join(" · ");
+                          // Same formatter as the sidebar in app/dashboard/page.tsx.
+                          // This file used to carry its own copy — the repo's
+                          // defining bug is the duplicated derive.
                           setRescueStatus((prev) => ({
                             ...prev,
                             [device.id]: {
-                              msg: `Re-auth failed${r.error ? `: ${r.error}` : ""}. ${summary}`,
+                              msg: reauthFailureLine(r, {
+                                name: device.name,
+                                alias: device.alias,
+                                secondaryAgents: device.secondaryAgents,
+                              }),
                               tone: "err",
                             },
                           }));

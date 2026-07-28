@@ -17,7 +17,7 @@
 // two machines or for one machine seen twice.
 //
 // The rule, in one testable place (mirrored bit-for-bit in
-// backend/convex/aliasShadowing.ts and web/lib/aliasShadowing.ts — every surface
+// backend/convex/aliasShadowing.ts and mobile/src/lib/aliasShadowing.ts — every surface
 // runs the same collapse over its own snapshot; a fix in one is not a fix):
 //   • no strong identity conflict → same physical machine seen twice
 //     (re-pair, LAN + VPN registration, stale row after a wipe) → MERGE.
