@@ -57,13 +57,19 @@ if ! xcodebuild -showsdks | grep -q "appletvos"; then
   exit 1
 fi
 
-if [ ! -d "$TVOS_DIR/YaverTV.xcodeproj" ]; then
-  if ! command -v xcodegen >/dev/null 2>&1; then
-    echo "ERROR: tvos/YaverTV.xcodeproj is missing and xcodegen is not installed." >&2
-    exit 1
-  fi
-  (cd "$TVOS_DIR" && xcodegen generate)
+# ALWAYS regenerate the project from project.yml, never reuse the on-disk
+# .xcodeproj. It is gitignored and drifts from the source tree: a new
+# Views/*.swift added since the last generate is silently NOT compiled, which
+# surfaced as `cannot find 'VibeTurnPanel' in scope` (2026-07-28) — the file
+# existed on disk but wasn't in the stale project's compile sources. A
+# conditional "only if missing" regenerate is the exact inventory-vs-operation
+# trap: the project's presence is not proof it matches the sources.
+if ! command -v xcodegen >/dev/null 2>&1; then
+  echo "ERROR: xcodegen is required to generate tvos/YaverTV.xcodeproj from project.yml." >&2
+  echo "Install: brew install xcodegen" >&2
+  exit 1
 fi
+(cd "$TVOS_DIR" && xcodegen generate)
 
 EXTRA_SETTINGS=()
 if [ -n "$MARKETING_VERSION" ]; then
