@@ -1895,26 +1895,31 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 			// password is invalid when the auth backend is merely down sends it
 			// hunting a credential bug that does not exist (and, in the mobile
 			// client, into a retry loop that trips the limiter below).
+			// Every refusal below carries a STABLE `code` (abuse_guard.go) so a
+			// client can tell "the RELAY refused MY credential" from "the AGENT
+			// refused your token" without regexing English. The prose is
+			// unchanged on purpose — shipped clients still match it, and this
+			// relay is redeployed by hand.
 			if authErr != nil {
-				writeRelayError(w, http.StatusServiceUnavailable, "relay auth backend unavailable — retry")
+				writeRelayErrorCode(w, http.StatusServiceUnavailable, RelayCodeAuthBackendUnavailable, "relay auth backend unavailable — retry")
 				return
 			}
 			if strings.TrimSpace(relayPw) == "" {
-				writeRelayError(w, http.StatusUnauthorized, "relay password missing — sign in again to fetch it")
+				writeRelayErrorCode(w, http.StatusUnauthorized, RelayCodePasswordMissing, "relay password missing — sign in again to fetch it")
 				return
 			}
 			// Throttle invalid-auth attempts so the account-wide relay password
 			// isn't brute-forcible over HTTP (relay security audit, finding #4).
 			// Keyed on the real client IP (trusted-proxy-aware clientIP).
 			if !s.abuseGuard.allowInvalidAuth(s.abuseGuard.clientIP(r)) {
-				writeRelayError(w, http.StatusTooManyRequests, "too many invalid relay password attempts")
+				writeRelayErrorCode(w, http.StatusTooManyRequests, RelayCodePasswordRateLimited, "too many invalid relay password attempts")
 				return
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"error": "invalid relay password",
-			})
+			// Was a hand-rolled `{"error": ...}` with no ok/code/message at all,
+			// so the ONE deny a credential refresh actually repairs arrived on
+			// the wire less structured than every other refusal. Same prose,
+			// now the standard envelope.
+			writeRelayErrorCode(w, http.StatusUnauthorized, RelayCodePasswordInvalid, "invalid relay password")
 			return
 		}
 		userID = uid
@@ -2024,7 +2029,12 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// (self-hosted shared-password relay with no Convex) skips the check —
 	// there is no access graph to scope to in that deployment.
 	if ok && userID != "" && tunnel.userID != "" && tunnel.userID != userID {
-		writeRelayError(w, http.StatusBadGateway, "device not connected to relay")
+		// Deliberately the SAME prose as the genuine-absence 502 below — a
+		// caller must not be able to probe whether a deviceId belongs to
+		// someone else. The `code` differs so OUR OWN operators (logs, support,
+		// `yaver doctor`) can tell the two apart; the body a stranger sees is
+		// otherwise identical.
+		writeRelayErrorCode(w, http.StatusBadGateway, RelayCodeDeviceOwnerMismatch, "device not connected to relay")
 		return
 	}
 
@@ -2033,7 +2043,7 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"ok":         false,
-			"code":       "relay.device_not_connected",
+			"code":       RelayCodeDeviceNotConnected,
 			"reasonCode": "connectivity.relay.device_not_connected",
 			"error":      "device not connected to relay",
 		})
@@ -2732,22 +2742,25 @@ func (s *RelayServer) logTunnels(ctx context.Context) {
 // their real usage numbers — "no limit" and "how much am I moving" are both
 // things the owner asked to see (2026-07-27).
 func (s *RelayServer) handleMyBandwidth(w http.ResponseWriter, r *http.Request) {
+	// Same stable codes as the /d/ proxy ladder: a credential refusal is a
+	// credential refusal whichever relay endpoint produced it, so one client
+	// classifier covers both. Prose unchanged.
 	pw := strings.TrimSpace(r.Header.Get("X-Relay-Password"))
 	if pw == "" {
-		writeRelayError(w, http.StatusUnauthorized, "relay password required")
+		writeRelayErrorCode(w, http.StatusUnauthorized, RelayCodePasswordMissing, "relay password required")
 		return
 	}
 	userID, ok, err := s.validateRelayAccessE(pw, "", "", "")
 	if err != nil {
-		writeRelayError(w, http.StatusServiceUnavailable, "auth backend unavailable — retry")
+		writeRelayErrorCode(w, http.StatusServiceUnavailable, RelayCodeAuthBackendUnavailable, "auth backend unavailable — retry")
 		return
 	}
 	if !ok || userID == "" {
 		if !s.abuseGuard.allowInvalidAuth(s.abuseGuard.clientIP(r)) {
-			writeRelayError(w, http.StatusTooManyRequests, "too many invalid auth attempts")
+			writeRelayErrorCode(w, http.StatusTooManyRequests, RelayCodePasswordRateLimited, "too many invalid auth attempts")
 			return
 		}
-		writeRelayError(w, http.StatusUnauthorized, "invalid relay password")
+		writeRelayErrorCode(w, http.StatusUnauthorized, RelayCodePasswordInvalid, "invalid relay password")
 		return
 	}
 	isPaid, plan := s.relayAccessEntitlement("", "", pw, "")
