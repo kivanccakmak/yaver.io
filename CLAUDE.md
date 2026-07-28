@@ -306,6 +306,38 @@ changing those.
      real app against a real box → PIXELS / NAMED / **SILENT**, where SILENT is
      the only failing verdict. A change that cannot be observed end-to-end from
      the app the user actually holds is not finished.
+- **CONNECTIVITY ROBUSTNESS — no unbounded await, no un-releasable guard, ever.**
+  A connection path is a ladder of network calls behind a concurrency guard, and
+  it must be *impossible* to wedge. Two invariants, both non-negotiable, on every
+  surface and every transport (direct/LAN, Tailscale/tailnet, Cloudflare tunnel,
+  the free relay, mesh):
+  1. **Every await in a connect/poll/health path is wall-clock bounded.** The
+     trap is RN-specific and lethal: **`fetch` AND `NetInfo.fetch()` have NO
+     default timeout** — they hang forever. On 2026-07-28 `NetInfo.fetch()` at
+     the top of the mobile ladder hung in the iOS simulator and pinned the pill
+     at "Connecting" for 30+ minutes while the relay was up and Retry no-op'd.
+     Native surfaces are immune *by construction* (URLSession
+     `timeoutIntervalForRequest`, OkHttp `connect/readTimeout`) — but the
+     invariant is universal. Route every network/native call through
+     `withDeadline` / `fetchWithTimeout` (`mobile/src/lib/connectGuard.ts`,
+     `quic.ts`). The ONE sanctioned exception is a genuine long-lived stream
+     (`text/event-stream` SSE) torn down by an `AbortController` — never a
+     request/response call.
+  2. **A concurrency guard is releasable by a NEWER attempt, never only by the
+     attempt that took it.** An attempt-owned boolean (`_connectingInProgress`)
+     turns one hung await into a *permanent* stuck state: every retry and the
+     Retry button short-circuit at "already in progress." Use
+     `ConnectAttemptGuard` — a monotonic attempt id (only the latest clears the
+     guard) plus a wedge deadline that lets a fresh attempt ABANDON a holder hung
+     past the sum of all bounded legs. "Connecting" can then never be permanent.
+  Both live as pure, dependency-free primitives in `connectGuard.ts` so the
+  logic that SHIPS is the logic that's TESTED (`connectGuard.test.ts`, run by
+  `npx tsx`) — with negative-control cases that reproduce the old wedge (a bare
+  await never completes; a never-wedging guard stays stuck forever). Prove any
+  guard by breaking it. When you add a transport leg or a new connect entry
+  point, it inherits both invariants or it is a connectivity bug even if it
+  "works" on your fast network. Incident + rationale:
+  `memory/project_netinfo_wedges_connect_guard`.
 - **NEVER `scp` a locally-built agent binary onto a macOS box.** macOS kills an
   unsigned binary under launchd with `last exit reason = OS_REASON_CODESIGNING`,
   and because launchd keeps "state = spawn scheduled" the box looks like it is

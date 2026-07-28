@@ -50,6 +50,12 @@ import {
 } from "./unroutableCache";
 import { beaconListener } from "./beacon";
 import NetInfo, { type NetInfoState } from "@react-native-community/netinfo";
+import { withDeadline, ConnectAttemptGuard } from "./connectGuard";
+
+// Longer than the sum of every BOUNDED connect leg (NetInfo ≤3s + direct phase
+// + 8s/tunnel + 8s/relay). A held guard older than this is hung on an UNBOUNDED
+// await and is abandoned by a fresh attempt — see connectGuard.ts.
+const CONNECT_ATTEMPT_WEDGE_MS = 40000;
 
 // deriveNetworkIdentity returns a stable string that identifies the phone's
 // current L3 network for the purposes of the direct-probe negative cache.
@@ -1510,9 +1516,10 @@ export class QuicClient {
   private _connectionMode: ConnectionMode = null;
   private _connectionPath: ConnectionPath = null;
   private _networkType: string | null = null; // "wifi" | "cellular" | etc.
-  private _connectingInProgress = false; // guard against concurrent attemptConnect calls
-  private _attemptStartedAt = 0; // wall-clock when the current attempt took the guard
-  private _connectAttemptId = 0; // monotonic id; only the latest attempt may clear the guard
+  // Connectivity-robustness guard (connectGuard.ts): cannot wedge. Releasable
+  // only by the latest attempt, and auto-abandons a holder hung past
+  // ATTEMPT_WEDGE_MS so a single unbounded await can never pin "Connecting".
+  private readonly _connectGuard = new ConnectAttemptGuard(CONNECT_ATTEMPT_WEDGE_MS);
   private _lastTransportError: string | null = null;
   // Wall-clock millis of the last /health 200 through the current baseUrl.
   // See lastHealthOkAt / verifyStillConnected. 0 means "never".
@@ -2015,7 +2022,7 @@ export class QuicClient {
    */
   async connect(host: string, port: number, token: string, deviceId: string, lanIps?: string[], sessionTunnels?: TunnelServer[], connectionPreferences?: ConnectionPreference[]): Promise<void> {
     void this.hydrateTtsTaskMode(); // apply the persisted "TTS mode" flag to tasks created this session
-    if (this._connectingInProgress && this.deviceId === deviceId) {
+    if (this._connectGuard.busy && this.deviceId === deviceId) {
       // Join the in-flight same-device attempt. Do not call primeTarget()
       // here: it rewrites host/port before attemptConnect() notices another
       // race is already running. That exact ordering let an auto-connect
@@ -2052,7 +2059,7 @@ export class QuicClient {
 
   private async waitForConnectingAttempt(timeoutMs: number): Promise<void> {
     const started = Date.now();
-    while (this._connectingInProgress && Date.now() - started < timeoutMs) {
+    while (this._connectGuard.busy && Date.now() - started < timeoutMs) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
@@ -6711,7 +6718,7 @@ export class QuicClient {
     if (!this.host || !this.port || !this.token) return;
     if (this._reconnectStopped) return;
     if (this._connectionState === "connected") return;
-    if (this._connectingInProgress) return;
+    if (this._connectGuard.busy) return;
     this.setReconnectAttempt(1);
     this.attemptConnect().catch(() => {});
   }
@@ -7177,8 +7184,6 @@ export class QuicClient {
   // 30+ minutes in the iOS simulator when NetInfo.fetch() never resolved. Past
   // this deadline a fresh attempt abandons the wedged one rather than
   // short-circuiting forever, so "Connecting" can never be a permanent state.
-  private static readonly ATTEMPT_WEDGE_MS = 40000;
-
   // NetInfo.fetch() has NO timeout of its own and hangs indefinitely in the
   // iOS simulator (and occasionally on device after a network-change storm).
   // It sits at the very top of _doAttemptConnect, BEFORE the bounded transport
@@ -7194,45 +7199,34 @@ export class QuicClient {
       details: null,
     } as unknown as NetInfoState;
     try {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeout = new Promise<NetInfoState>((resolve) => {
-        timer = setTimeout(() => {
-          appLog("warn", "[connect] NetInfo.fetch() timed out — assuming direct-capable network, trying all legs");
-          resolve(fallback);
-        }, timeoutMs);
+      return await withDeadline(NetInfo.fetch(), timeoutMs, fallback, () => {
+        appLog("warn", "[connect] NetInfo.fetch() timed out — assuming direct-capable network, trying all legs");
       });
-      const state = await Promise.race([NetInfo.fetch(), timeout]);
-      if (timer) clearTimeout(timer);
-      return state ?? fallback;
     } catch {
       return fallback;
     }
   }
 
   private async attemptConnect(): Promise<void> {
-    // Prevent concurrent connection attempts (poll failure + NetInfo can race).
-    // But a guard that can only be released by the SAME attempt is a deadlock
-    // if that attempt hangs — so a stale guard (older than every bounded leg's
-    // budget) is treated as wedged and abandoned, never honored forever.
-    if (this._connectingInProgress) {
-      const age = Date.now() - this._attemptStartedAt;
-      if (age < QuicClient.ATTEMPT_WEDGE_MS) {
-        console.log("[QUIC] attemptConnect already in progress, skipping");
-        return;
-      }
-      appLog("warn", `[connect] previous attempt wedged for ${Math.round(age / 1000)}s — abandoning it and retrying`);
-      // fall through: take the guard with a NEW id so the wedged attempt's
-      // finally becomes a no-op and can't clobber this fresh attempt.
+    // Concurrency guard that CANNOT wedge (connectGuard.ts). acquire() denies a
+    // fresh in-flight attempt (the real "already in progress" path) but ABANDONS
+    // a holder hung past ATTEMPT_WEDGE_MS, so a single unbounded await upstream
+    // of the bounded ladder can never pin "Connecting" forever.
+    const slot = this._connectGuard.acquire();
+    if (!slot) {
+      console.log("[QUIC] attemptConnect already in progress, skipping");
+      return;
     }
-    const myId = ++this._connectAttemptId;
-    this._connectingInProgress = true;
-    this._attemptStartedAt = Date.now();
+    if (slot.abandonedWedged) {
+      appLog(
+        "warn",
+        `[connect] previous attempt wedged >${Math.round(CONNECT_ATTEMPT_WEDGE_MS / 1000)}s — abandoning it and retrying`,
+      );
+    }
     try {
       await this._doAttemptConnect();
     } finally {
-      // Only the latest attempt may release the guard. A stale/wedged attempt
-      // that finally resolves must not clear a guard a newer attempt now holds.
-      if (this._connectAttemptId === myId) this._connectingInProgress = false;
+      this._connectGuard.release(slot.id);
     }
   }
 
