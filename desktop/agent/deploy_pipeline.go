@@ -260,7 +260,7 @@ func RollbackToDeploy(dir, deployID string) (*DeployRecord, error) {
 		return nil, fmt.Errorf("deploy %s not found or missing commit sha", deployID)
 	}
 	rec := &DeployRecord{
-		ID: fmt.Sprintf("rb_%s", time.Now().Format("20060102_150405")),
+		ID:         fmt.Sprintf("rb_%s", time.Now().Format("20060102_150405")),
 		ProjectDir: dir, StartedAt: time.Now(), Status: "running", Trigger: "rollback",
 		PrevCommit: target.Commit, Message: "Rollback to " + target.Commit[:8],
 	}
@@ -313,8 +313,8 @@ func runIn(dir, bin string, args ...string) (string, error) {
 // handleDeployWebhook: GitHub-compatible push webhook. Validates HMAC using
 // the project's webhookSecret, then fires a deploy if autoDeploy is enabled.
 //
-//   POST /deploy/webhook?project=/abs/path
-//   Headers: X-Hub-Signature-256: sha256=<hex>
+//	POST /deploy/webhook?project=/abs/path
+//	Headers: X-Hub-Signature-256: sha256=<hex>
 //
 // The endpoint is intentionally unauthenticated (no Authorization header)
 // because GitHub/CI systems can't carry a Yaver bearer. The webhookSecret
@@ -325,6 +325,18 @@ func runIn(dir, bin string, args ...string) (string, error) {
 // you genuinely want push-to-deploy, set deploy.webhookSecret in the
 // project config and configure GitHub with the same value.
 func (s *HTTPServer) handleDeployWebhook(w http.ResponseWriter, r *http.Request) {
+	// KILL SWITCH (see feature_flags.go). This route is unauthenticated by
+	// design — GitHub calls it — and its only credential is the HMAC secret in
+	// `<project>/.yaver/deploy.yaml`. But `project` is caller-supplied below, so
+	// the caller chooses WHICH config is loaded, which means it supplies both
+	// the secret it will be checked against AND `buildCommand`, which RunDeploy
+	// hands to `sh -c`. A signature check you can bring your own key to is not a
+	// signature check. Off until `project` is constrained to a registered root.
+	if !DeployWebhookEnabled() {
+		jsonError(w, http.StatusForbidden,
+			featureDisabledMessage("Deploy webhook", envEnableDeployWebhook))
+		return
+	}
 	dir := r.URL.Query().Get("project")
 	if dir == "" {
 		jsonError(w, http.StatusBadRequest, "project required")
@@ -392,7 +404,9 @@ func (s *HTTPServer) handleDeployRollback(w http.ResponseWriter, r *http.Request
 		jsonError(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	var b struct{ ID string `json:"id"` }
+	var b struct {
+		ID string `json:"id"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	rec, err := RollbackToDeploy(s.dirParam(r), b.ID)
 	if err != nil {

@@ -27,12 +27,12 @@ import (
 // supportSession is the active, in-memory grant. A host has at most
 // one at a time; calling start again replaces the previous one.
 type supportSession struct {
-	Code            string    // human-typeable 6-char invite code
-	Token           string    // long random bearer token (clients use this)
-	Label           string    // optional tag e.g. "cousin"
-	Hostname        string    // host machine name, copied at create time
-	AllowedPrefixes []string  // URL prefixes this session may access
-	Shell           bool      // host opted into RCE-class endpoints (/exec, /ws/terminal, /browser/*)
+	Code            string   // human-typeable 6-char invite code
+	Token           string   // long random bearer token (clients use this)
+	Label           string   // optional tag e.g. "cousin"
+	Hostname        string   // host machine name, copied at create time
+	AllowedPrefixes []string // URL prefixes this session may access
+	Shell           bool     // host opted into RCE-class endpoints (/exec, /ws/terminal, /browser/*)
 	CreatedAt       time.Time
 	ExpiresAt       time.Time
 }
@@ -218,6 +218,15 @@ func pathMatchesSupportAllowlist(path string, allowed []string) bool {
 // Case-insensitive to survive mobile autocapitalization, then compared
 // in constant time to neutralize the timing-oracle brute-force surface.
 func supportSessionRedeem(code string) *supportSession {
+	// KILL SWITCH (see feature_flags.go). Off at launch. Redeeming yields a
+	// NON-OWNER credential with file read (and shell when the owner opted in),
+	// reached over an unauthenticated endpoint whose 6-char code has no attempt
+	// cap — the rate limiter buckets on the caller-supplied Authorization
+	// header, so rotating a dummy bearer resets it. Refuse at the lookup so
+	// every caller of this function is covered, not just the HTTP handler.
+	if !SupportSessionsEnabled() {
+		return nil
+	}
 	sess := activeSupportSnapshot()
 	if sess == nil {
 		return nil

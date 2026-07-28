@@ -1971,6 +1971,17 @@ func (s *HTTPServer) applyDelegatedGuestSDKHeaders(w http.ResponseWriter, r *htt
 	// SDK token would reach /ops AS THE OWNER and bypass the circuit allowlist.
 	// Stamp the guest identity straight from the capability scope, before the
 	// owner fall-through below.
+	// KILL SWITCH (see feature_flags.go). A delegated-guest SDK token is a guest
+	// credential wearing an SDK jacket, so it must die with the guest feature.
+	// Refusing here rather than letting it fall through matters: the
+	// fall-through at the bottom of this function returns true, which means
+	// "proceed AS THE OWNER" — exactly the escalation the capability-scope
+	// branch below was written to prevent.
+	if !GuestAccessEnabled() && strings.TrimSpace(info.delegatedGuestUserID) != "" {
+		jsonError(w, http.StatusForbidden,
+			featureDisabledMessage("Guest access", envEnableGuestAccess))
+		return false
+	}
 	if capScope := firstCapabilityScope(info.scopes); capScope != "" && strings.TrimSpace(info.delegatedGuestUserID) == "" {
 		if info.targetDeviceID != "" && strings.TrimSpace(info.targetDeviceID) != strings.TrimSpace(s.deviceID) {
 			jsonError(w, http.StatusForbidden, "SDK token is not valid for this device")
@@ -2038,8 +2049,13 @@ func hostShareAllowedProjectsFromHeader(r *http.Request) []string {
 
 func hostShareCanAccessProject(r *http.Request, projectPath string) bool {
 	allowed := hostShareAllowedProjectsFromHeader(r)
+	// SECURITY (audit 2026-07-28): FAIL CLOSED. This returned true on an empty
+	// allowlist, and empty is the DEFAULT (`--projects` is optional), so the
+	// common case granted every project rather than none. "No projects were
+	// granted to you" must mean no access, never all access — the same
+	// fail-open shape as the guest empty-scope grant fixed in Convex today.
 	if len(allowed) == 0 {
-		return true
+		return false
 	}
 	base := strings.TrimSpace(filepath.Base(projectPath))
 	for _, p := range allowed {
@@ -2307,6 +2323,16 @@ func (s *HTTPServer) refreshGuestList(ctx context.Context) {
 // task-spawn path) can apply the extra redaction + force-containerize rules
 // without a second manager lookup.
 func (s *HTTPServer) allowGuest(w http.ResponseWriter, r *http.Request, uid string, next http.HandlerFunc) bool {
+	// KILL SWITCH (see feature_flags.go). Refuse before any scope lookup,
+	// header stamping or path matching — several 2026-07-28 audit findings were
+	// bugs INSIDE that logic, so the switch must short-circuit ahead of it
+	// rather than depend on it being correct. Returning true means "handled":
+	// the caller must not fall through to another authorization path.
+	if !GuestAccessEnabled() {
+		jsonError(w, http.StatusForbidden,
+			featureDisabledMessage("Guest access", envEnableGuestAccess))
+		return true
+	}
 	if !s.isApprovedGuest(uid) {
 		return false
 	}
@@ -2360,6 +2386,20 @@ func stripGuestRequestHeaders(r *http.Request) {
 		"X-Yaver-GuestAllowedProjects",
 		"X-Yaver-GuestAllowedRunners",
 		"X-Yaver-SdkAllowedRunners",
+		// SECURITY (audit 2026-07-28): the HostShare FAMILY, not just the
+		// runners header. Only X-Yaver-HostShareAllowedRunners was stripped, so
+		// a caller could attach X-Yaver-HostShare themselves. Combined with
+		// resolveHostShareRoot honouring a caller-supplied ABSOLUTE rootPath and
+		// hostShareCanAccessProject failing open on an empty allowlist, one
+		// extra header on a support token turned /files/read into "read any file
+		// as the agent user" — starting with ~/.yaver/config.json, which holds
+		// the owner's auth_token. Strip every member; adding a new
+		// X-Yaver-HostShare* header means adding it here too.
+		"X-Yaver-HostShare",
+		"X-Yaver-HostShareRoot",
+		"X-Yaver-HostShareUserID",
+		"X-Yaver-HostShareProject",
+		"X-Yaver-HostShareAllowedProjects",
 		"X-Yaver-HostShareAllowedRunners",
 		"X-Yaver-AllowedTools",
 		"X-Yaver-Connector",
@@ -2408,6 +2448,15 @@ func (s *HTTPServer) currentAuthToken() string {
 }
 
 func (s *HTTPServer) allowHostShare(w http.ResponseWriter, r *http.Request, uid string, access *HostShareAccessInfo, next http.HandlerFunc) bool {
+	// KILL SWITCH (see feature_flags.go). Off at launch. This path is also the
+	// one whose trust headers were not stripped from caller input and whose
+	// project allowlist failed open when empty, so it stays shut until both are
+	// fixed AND proven by a test that fails without the fix.
+	if !HostShareEnabled() {
+		jsonError(w, http.StatusForbidden,
+			featureDisabledMessage("Host share", envEnableHostShare))
+		return true
+	}
 	if access == nil {
 		return false
 	}
@@ -2913,6 +2962,25 @@ func (s *HTTPServer) authSDKOrGuest(next http.HandlerFunc) http.HandlerFunc {
 		if cached, ok := s.tokenCache.Load(token); ok {
 			info := cached.(*cachedTokenInfo)
 			if info.isSdk {
+				// SECURITY (audit 2026-07-28): CROSS-TENANT BYPASS. This branch
+				// validated scopes and CIDR but never checked WHOSE token it is,
+				// while authSDK (:2706) rejects a foreign userID outright. The
+				// miss path below made it trivially reachable: it Stored the
+				// cache entry BEFORE the owner check, so request 1 populated the
+				// cache and 403'd, and request 2 hit this branch and was
+				// authorized AS THE OWNER. Any Yaver account could mint an SDK
+				// token, send it twice to a stranger's agent, and reach /ops,
+				// /agent/runner/switch and /dev/reload as that stranger.
+				//
+				// Owner-equality is the correct test, not an approximation: a
+				// legitimately delegated guest SDK token carries the HOST's id
+				// (backend/convex/guests.ts:588 mints with userId: hostUserId)
+				// and is demoted to a scoped guest by
+				// applyDelegatedGuestSDKHeaders below — so guests still work.
+				if info.userID != s.ownerUserID {
+					jsonError(w, http.StatusForbidden, "token belongs to a different user")
+					return
+				}
 				if !requestAllowedByScopes(r.Method, r.URL.Path, info.scopes) {
 					jsonError(w, http.StatusForbidden, "SDK token scope does not allow this endpoint")
 					return
@@ -2982,12 +3050,15 @@ func (s *HTTPServer) authSDKOrGuest(next http.HandlerFunc) http.HandlerFunc {
 			targetDeviceID:       sdkInfo.TargetDeviceID,
 			allowedProjects:      sdkInfo.AllowedProjects,
 		}
-		s.tokenCache.Store(token, info)
-
+		// SECURITY (audit 2026-07-28): the owner check MUST run before the cache
+		// write. Storing first meant a rejected foreign token still populated
+		// the cache, and the cached branch above then authorized it on the very
+		// next request. Never cache a credential you are about to refuse.
 		if info.userID != s.ownerUserID {
 			jsonError(w, http.StatusForbidden, "token belongs to a different user")
 			return
 		}
+		s.tokenCache.Store(token, info)
 		if !requestAllowedByScopes(r.Method, r.URL.Path, info.scopes) {
 			jsonError(w, http.StatusForbidden, "SDK token scope does not allow this endpoint")
 			return
