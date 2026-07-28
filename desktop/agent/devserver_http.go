@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/mod/semver"
 )
@@ -655,6 +656,90 @@ func buildStateGuidance(state nativeBuildStatus) string {
 	default:
 		return "This project is still source-only on this machine. Compile Hermes once, then Open in Yaver on the phone."
 	}
+}
+
+// ── Compatibility guidance bounds ────────────────────────────────────────────
+//
+// Incident 2026-07-28 (the build-482 regression, re-measured live on the real
+// mobile app driven as RN-web): opening yaver/mobile — an Expo app with ~90
+// native deps missing from the Yaver container — produced a `guidance` string
+// of 8,212 characters: "<dep> requires native code but is not present in the
+// Yaver app." × ~90, strings.Join'd into one sentence. The mobile action sheet
+// rendered that wall at full height (viewport 757px, wall container 757px);
+// the action lanes ("WebRTC Reload" at y=1036, "Browser Reload" at y=1097) sat
+// 280–340px below the fold, and body.scrollHeight === 757 meant the user could
+// not scroll to them. The ONE route the product offered was unreachable — the
+// exact defect CLAUDE.md records from build 482 (40eec39ef): advisory content
+// never wins over the route, not in pixels and not in time.
+//
+// The fix is by construction, not by consumer discipline:
+//   - `guidance` is a bounded SUMMARY — count + first few module names — never
+//     a join of N per-module sentences. Full detail stays in the structured
+//     `errors` / `missingModules` arrays, which every surface caps per line.
+//   - capCompatGuidance is a hard backstop applied to EVERY producer path
+//     right before the reply, so no future assignment (buildStateGuidance
+//     embedding a bundler stack trace, a new error class, …) can regenerate
+//     the wall.
+//
+// Guard: devserver_http_guidance_bounds_test.go — proven by breaking (restore
+// the strings.Join form and the test fails naming the byte count).
+
+// compatGuidanceMaxChars is the hard cap on the advisory `guidance` string.
+// One short paragraph; anything longer belongs in the structured arrays.
+const compatGuidanceMaxChars = 280
+
+// capCompatGuidance truncates guidance at compatGuidanceMaxChars on a word
+// boundary (never mid-rune) with a trailing ellipsis. Short strings pass
+// through untouched.
+func capCompatGuidance(s string) string {
+	if len(s) <= compatGuidanceMaxChars {
+		return s
+	}
+	const ellipsis = "…"
+	cut := compatGuidanceMaxChars - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	trimmed := s[:cut]
+	if i := strings.LastIndexByte(trimmed, ' '); i > 0 {
+		trimmed = trimmed[:i]
+	}
+	return strings.TrimRight(trimmed, " .,;:") + ellipsis
+}
+
+// compatIncompatibleGuidance renders the error channel as a bounded summary:
+// the missing-native-module class collapses to one sentence naming the count
+// and the first few packages, and only a couple of the remaining (individually
+// short) tooling/dependency errors ride along verbatim. Surfaces that want the
+// full detail read `errors` / `missingModules` — those stay complete.
+func compatIncompatibleGuidance(errs []string, missingModules []string) string {
+	var parts []string
+	if n := len(missingModules); n > 0 {
+		shown := missingModules
+		if len(shown) > 3 {
+			shown = shown[:3]
+		}
+		list := strings.Join(shown, ", ")
+		if extra := n - len(shown); extra > 0 {
+			list += fmt.Sprintf(", +%d more", extra)
+		}
+		noun := "package needs"
+		if n != 1 {
+			noun = "packages need"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s native code that isn't in the Yaver app (%s). Use WebRTC or Browser preview, or install a dev build.", n, noun, list))
+	}
+	added := 0
+	for _, e := range errs {
+		if strings.Contains(e, "requires native code but is not present in the Yaver app") {
+			continue // summarized above — never re-join the per-module wall
+		}
+		parts = append(parts, e)
+		if added++; added >= 2 {
+			break
+		}
+	}
+	return capCompatGuidance(strings.Join(parts, " "))
 }
 
 func detectProjectPackageManager(workDir string, manifest *projectPackageManifest) string {
@@ -4722,7 +4807,11 @@ func (s *HTTPServer) handleDevServerCompatibility(w http.ResponseWriter, r *http
 	}
 	if len(errors) > 0 {
 		needsYaverCLI = true
-		guidance = strings.Join(errors, " ") + " yaver-cli is not required for the agent flow, but its compatibility check/watch workflow may help. The Feedback SDK is still optional."
+		// Bounded summary, NEVER strings.Join(errors, " ") — that join produced
+		// the 8,212-char advisory wall that buried the action lanes (see the
+		// Compatibility guidance bounds block above). Detail lives in the
+		// structured errors/missingModules arrays below, untouched.
+		guidance = compatIncompatibleGuidance(errors, missing)
 	} else if len(warnings) > 0 {
 		guidance = warnings[0] + " Open in Yaver should still be the default path. yaver-cli remains optional."
 	} else {
@@ -4731,6 +4820,10 @@ func (s *HTTPServer) handleDevServerCompatibility(w http.ResponseWriter, r *http
 	if len(errors) == 0 && buildState.State == "build_failed" && buildState.LastError != "" && !strings.Contains(guidance, buildState.LastError) {
 		guidance = buildStateGuidance(buildState)
 	}
+	// Backstop: guidance is advisory prose and must never be able to bury the
+	// action lanes again. Every producer path above (including build errors,
+	// which can embed a bundler stack trace) goes through the hard cap.
+	guidance = capCompatGuidance(guidance)
 
 	jsonReply(w, http.StatusOK, map[string]interface{}{
 		"compatible":                 len(errors) == 0,
