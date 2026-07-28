@@ -354,6 +354,11 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	SetDevBundleServerRef(s)
 
 	// Public
+	// Unauthenticated BY DESIGN and safe to be: it proves this machine holds the
+	// device private key Convex records, and reveals nothing else. It exists so a
+	// client never has to attach a credential to an unverified host discovered
+	// over an unsigned LAN beacon. See identity_proof.go.
+	mux.HandleFunc("/identity/prove", s.handleIdentityProve)
 	mux.HandleFunc("/health", s.handleHealth)
 	// P8: /health/deep — actionable per-subsystem health with
 	// graduated recovery hints. Auth-wrapped so it can't be scraped

@@ -13,6 +13,7 @@
  */
 
 import { Platform } from "react-native";
+import { verifyHostIdentity, getKnownDevicePublicKey } from "./identityProof";
 import { hasNativeTransports } from "./platformTransport";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
@@ -7776,7 +7777,40 @@ export class QuicClient {
         if (lanInfo) {
           try {
             const directUrl = `http://${lanInfo.ip}:${lanInfo.port}`;
-            console.log("[QUIC] Beacon found device on LAN — trying upgrade to direct:", directUrl);
+            console.log("[QUIC] Beacon found device on LAN — verifying identity before upgrade:", directUrl);
+
+            // SECURITY (audit 2026-07-28): PROVE THE HOST BEFORE TRUSTING IT.
+            //
+            // This used to probe /health WITH this.authHeaders and switch the
+            // whole session on a 200 — i.e. it handed the bearer token to an
+            // address named by an UNSIGNED UDP packet. The beacon's `th` tag is
+            // a short unsalted hash any listener can replay, so anyone on the
+            // LAN could advertise a device id, receive the user's token, and
+            // become the machine.
+            //
+            // A beacon tells you an ADDRESS; it never tells you WHO is there.
+            // So the host now proves possession of the device private key that
+            // Convex records — a standard challenge-response, carrying NO
+            // credential — and only a host that passes is given one.
+            const expectedKey = this.deviceId ? getKnownDevicePublicKey(this.deviceId) : null;
+            if (!expectedKey) {
+              // No recorded key ⇒ nothing to verify against ⇒ no upgrade. Staying
+              // on the current (working) path is the safe failure: this is an
+              // optimisation, and an unverifiable optimisation is not worth a
+              // session.
+              console.log("[QUIC] No Convex-recorded key for this device — skipping LAN upgrade");
+              return;
+            }
+            const proven = await verifyHostIdentity(directUrl, expectedKey, 2000);
+            if (!proven) {
+              console.warn(
+                "[QUIC] LAN host failed the identity challenge — NOT upgrading. " +
+                  "Either a stale beacon or someone impersonating this device:",
+                directUrl
+              );
+              return;
+            }
+
             const probeRes = await this.fetchWithTimeout(`${directUrl}/health`, {
               headers: this.authHeaders,
             }, 2000);

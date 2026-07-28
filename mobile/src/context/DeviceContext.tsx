@@ -9,6 +9,7 @@ import React, {
 } from "react";
 import { Alert, AppState, AppStateStatus, Linking, Platform } from "react-native";
 import Constants from "expo-constants";
+import { setKnownDevicePublicKeys } from "../lib/identityProof";
 import { appTag } from "../lib/appVersion";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -1471,6 +1472,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         // Fixed at the source rather than by re-keying one effect: any effect
         // depending on `devices` gets the same protection, including ones added
         // later that would otherwise reintroduce this quietly.
+        // Feed the identity-proof registry from the CONVEX list, never from the
+        // beacon: the LAN handshake compares an advertised host against a key
+        // the attacker cannot control. See lib/identityProof.ts.
+        setKnownDevicePublicKeys(withLocalBox as Array<{ id?: string; publicKey?: string }>);
         setDevices((prev) => (sameDeviceList(prev, withLocalBox) ? prev : withLocalBox));
         if (withLocalBox.length > 0) {
           setEverHadDevices((prev) => {
