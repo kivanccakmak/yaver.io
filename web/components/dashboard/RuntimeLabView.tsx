@@ -114,6 +114,15 @@ function clampRuntimeChatWidth(width: number) {
   return Math.min(max, Math.max(RUNTIME_CHAT_WIDTH_MIN, Math.round(width)));
 }
 
+function formatPressureAge(atMs: number): string {
+  const min = Math.max(0, Math.round((Date.now() - atMs) / 60000));
+  if (min < 1) return "moments ago";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 48) return `${hr}h ago`;
+  return `${Math.round(hr / 24)}d ago`;
+}
+
 function RuntimePreviewLoadingScreen({
   note,
   projectName,
@@ -1325,6 +1334,15 @@ export default function RuntimeLabView({
   const effectiveRenderBoxName = effectiveRenderDeviceId
     ? deviceNameById.get(effectiveRenderDeviceId) || effectiveRenderDeviceId.slice(0, 8)
     : null;
+  // The warden's last heartbeat word about the render box. Once the box is
+  // dark this is the only evidence of WHY — it upgrades "no connection" to
+  // "it reported fork exhaustion; power-cycle it" (mac mini, 2026-07-27).
+  const renderBoxPressure = useMemo(() => {
+    if (!effectiveRenderDeviceId) return null;
+    const rp = (devices || []).find((d) => d.id === effectiveRenderDeviceId)?.resourcePressure;
+    if (!rp || (rp.level !== "critical" && rp.canFork !== false)) return null;
+    return rp;
+  }, [devices, effectiveRenderDeviceId]);
 
   useEffect(() => {
     void refreshRunners();
@@ -2756,6 +2774,14 @@ export default function RuntimeLabView({
                 ) : (
                   <span className="font-medium">
                     ✗ No connection to {effectiveRenderBoxName} — {renderConnCheck.error || "no relay, tunnel, or direct path answered"}. The agent on that box is not answering on any path, so nothing remote can repair it. Power it on (or power-cycle it), or pick another render machine.
+                    {renderBoxPressure ? (
+                      <span className="mt-1 block">
+                        Its last heartbeat reported {renderBoxPressure.canFork === false
+                          ? "process-table exhaustion — the box cannot start any new process, so the agent cannot restart itself and SSH cannot execute commands"
+                          : `critical resource pressure${renderBoxPressure.reasons?.length ? ` (${renderBoxPressure.reasons[0]})` : ""}`}
+                        {renderBoxPressure.at ? `, ${formatPressureAge(renderBoxPressure.at)}` : ""}. A physical power-cycle is the expected recovery.
+                      </span>
+                    ) : null}
                   </span>
                 )}
               </div>

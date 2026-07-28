@@ -3772,6 +3772,30 @@ export default function DevicesView({
                           </>
                         ) : null}
                       </span>
+                      {device.resourcePressure && device.resourcePressure.level !== "ok" ? (
+                        // The warden's last word survives the box going dark —
+                        // for a wedged host this chip is the forensic that turns
+                        // "offline" into "power-cycle it" (mac mini, 2026-07-27).
+                        <span
+                          title={[
+                            ...(device.resourcePressure.reasons || []),
+                            device.resourcePressure.at
+                              ? `reported ${formatLastSeen(new Date(device.resourcePressure.at).toISOString())}`
+                              : "",
+                          ].filter(Boolean).join(" · ")}
+                          className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${
+                            device.resourcePressure.level === "critical"
+                              ? "bg-rose-500/15 text-rose-700 dark:text-rose-300"
+                              : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                          }`}
+                        >
+                          {device.resourcePressure.canFork === false
+                            ? "⚠ can't spawn processes — power-cycle"
+                            : device.resourcePressure.level === "critical"
+                              ? "⚠ resources: critical"
+                              : "⚠ resources: degraded"}
+                        </span>
+                      ) : null}
                       {device.agentVersion && latestAgentVersion && compareSemver(String(device.agentVersion).replace(/^v/i, ""), latestAgentVersion) < 0 ? (() => {
                             const lc = lifecycle;
                             // Gate on browser reachability too, not just on the

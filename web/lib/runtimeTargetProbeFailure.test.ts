@@ -82,6 +82,18 @@ test("the probe-failure card must render the render-box connection check", () =>
   assert.match(src, /Connection to \{effectiveRenderBoxName\}: OK/, "the failure card must state when the render box IS reachable");
 });
 
+test("the warden's resourcePressure signal has web consumers (signal-with-no-consumer guard)", () => {
+  // Heartbeat → Convex → /devices/list already carry resourcePressure; these
+  // surfaces are the consumers that make the signal exist for a user. A dark
+  // box's last pressure report is the difference between "offline" and
+  // "power-cycle it" (mac mini fork exhaustion, 2026-07-27/28).
+  const runtimeSrc = readFileSync(join(webRoot, "components/dashboard/RuntimeLabView.tsx"), "utf8");
+  assert.match(runtimeSrc, /resourcePressure/, "RuntimeLabView must read the render box's resourcePressure");
+  assert.match(runtimeSrc, /process-table exhaustion/, "the failure card must name fork exhaustion when the box reported canFork=false");
+  const devicesSrc = readFileSync(join(webRoot, "components/dashboard/DevicesView.tsx"), "utf8");
+  assert.match(devicesSrc, /resourcePressure/, "DevicesView must render a pressure chip from resourcePressure");
+});
+
 test("ordinary target probe failures still route to the coding runner", () => {
   const plan = classifyRuntimeTargetProbeFailure("xcrun simctl failed");
   assert.equal(plan.kind, "other");
