@@ -67,7 +67,11 @@ export async function runScenario(adapter, opts = {}) {
     record("ASSERT background == green", afterGreen.ok, `${afterGreen.color}`);
     if (!afterGreen.ok) return named(`preview did not turn green in ${Math.round(budget / 60000)}min (got ${afterGreen.color}) — runner/render/edit`);
 
-    // 8–10. VIBE ← black (revert).
+    // Two TASKS, not one follow-up: start a fresh session so the revert is its
+    // own task (exercises the new-task render path, not just a follow-up).
+    if (adapter.newTask) { await adapter.newTask(); record("NEW TASK (fresh session for the revert)", true); }
+
+    // 8–10. VIBE ← black (revert) — as a second, separate task.
     const sentBlack = await adapter.sendChat("Revert the login page background color back to black.");
     if (!sentBlack) return named("could not SEND the 'revert' message (composer never cleared)");
     record("CHAT ← 'revert to black' sent", true);

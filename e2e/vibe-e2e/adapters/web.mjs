@@ -32,21 +32,31 @@ export function makeWebAdapter(driver, framesDir) {
     log, snap,
 
     async login() {
-      // Seed the session token from ~/.yaver/config.json (the same linked
-      // account/access-graph that owns ubuntu-4gb, with a FRESH relay password —
-      // proven to auto-connect to the primary). This is the reliable auth for
-      // the vibe loop. NOTE: driving the /auth email/password form as the icloud
-      // account instead reproduced a REAL bug — that web session's stale relay
-      // password does not self-heal, so it shows "Unauthorized" and auto-connect
-      // skips the primary. That is tracked separately; the loop needs a
-      // connected box, so we seed the working session here.
+      // FRESH email/password login with the user's own account (env-only, never
+      // logged). A fresh sign-in mints a new session + pulls a fresh relay
+      // password — the difference from a STALE cached session that showed the
+      // false "Unauthorized" and skipped the primary.
+      const email = process.env.YAVER_TEST_EMAIL;
+      const password = process.env.YAVER_TEST_PASSWORD;
+      await driver.get(APP + "/auth");
+      await driver.sleep(2500); await snap("auth");
+      // Reveal the email form if it's behind a "Continue with Email" toggle.
+      const findEmail = async () => (await driver.findElements(By.css('input[type="email"], input[placeholder="Email address"]')))[0];
+      if (!(await findEmail())) { try { await clickText("Continue with Email", 6000); await driver.sleep(1500); } catch {} }
+      const emailIn = await driver.wait(async () => (await findEmail()) || null, 20000);
+      await emailIn.clear(); await emailIn.sendKeys(email);
+      const pwIn = await driver.findElement(By.css('input[type="password"]'));
+      await pwIn.clear(); await pwIn.sendKeys(password);
+      await snap("auth_filled");
+      // Submit the login form.
+      try {
+        const submit = await driver.findElement(By.xpath("//button[@type='submit' or normalize-space(.)='Sign in' or normalize-space(.)='Log in' or normalize-space(.)='Continue']"));
+        await driver.executeScript("arguments[0].click()", submit);
+      } catch { await pwIn.sendKeys(Key.RETURN); }
+      // Land on the dashboard.
+      await driver.wait(until.elementLocated(By.xpath("//*[contains(text(),'Devices') or contains(text(),'Vibing')]")), 45000);
       await driver.get(APP + "/dashboard");
-      await driver.executeScript(
-        "try{localStorage.setItem('yaver_auth_token', arguments[0]);document.cookie='yaver_auth_token='+arguments[0]+'; path=/; samesite=lax';}catch(e){}",
-        cfg.auth_token,
-      );
-      await driver.get(APP + "/dashboard");
-      await driver.wait(until.elementLocated(By.xpath("//*[contains(text(),'Devices') or contains(text(),'Vibing')]")), 40000);
+      await driver.wait(until.elementLocated(By.xpath("//*[contains(text(),'Devices') or contains(text(),'Vibing')]")), 30000);
       await snap("dashboard");
     },
 
@@ -192,6 +202,16 @@ export function makeWebAdapter(driver, framesDir) {
       }
       await snap("chat_sent");
       return sent;
+    },
+
+    async newTask() {
+      // Start a fresh vibing session so the next message is its OWN task.
+      try {
+        const btn = await driver.findElement(By.xpath("//button[normalize-space(.)='New session' and not(@disabled)]"));
+        await driver.executeScript("arguments[0].scrollIntoView({block:'center'});arguments[0].click()", btn);
+        await driver.sleep(2500);
+        await snap("new_task");
+      } catch (e) { log(`  ·· New session not clicked: ${e?.message || e}`); }
     },
 
     async waitForTurnComplete(timeoutMs) {
