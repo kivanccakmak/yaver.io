@@ -45,6 +45,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SURFACE = process.argv[2] || "both";
 const SOURCE = process.env.YAVER_WEBRTC_SOURCE || "yavertest";
 const OUT = process.env.YAVER_OUT_DIR || "/tmp/yaver-webrtc";
+const PLAYWRIGHT_VIDEO = process.env.YAVER_WEBRTC_NATIVE_VIDEO === "1";
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 
@@ -304,7 +305,7 @@ async function main() {
     });
     const context = await browser.newContext({
       viewport: { width: w, height: h },
-      recordVideo: { dir: join(OUT, "videos"), size: { width: w, height: h } },
+      ...(PLAYWRIGHT_VIDEO ? { recordVideo: { dir: join(OUT, "videos"), size: { width: w, height: h } } } : {}),
     });
     const driver = await context.newPage();
     const stopFrameRecorder = startFrameRecorder(driver, s);
@@ -320,7 +321,7 @@ async function main() {
       console.log(`  [${s}] SILENT · crash: ${e?.message || e}`);
       await driver.waitForTimeout(Number(process.env.YAVER_WEBRTC_RECORD_DWELL_MS || 3000)).catch(() => {});
     } finally {
-      const video = driver.video();
+      const video = PLAYWRIGHT_VIDEO ? driver.video() : null;
       if (video) {
         try { videoPath = await video.path(); } catch {}
       }

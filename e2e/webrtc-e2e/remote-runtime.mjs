@@ -27,6 +27,7 @@ const OUT = process.env.YAVER_OUT_DIR || `/tmp/yaver-rr-webrtc-${TARGET}`;
 const DWELL_MS = Number(process.env.YAVER_WEBRTC_RECORD_DWELL_MS || 3500);
 const NO_VIDEO = process.env.YAVER_RUNTIME_NO_VIDEO === "1";
 const PIXEL_TIMEOUT_MS = Number(process.env.YAVER_WEBRTC_PIXEL_TIMEOUT_MS || defaultPixelTimeout(TARGET));
+const PLAYWRIGHT_VIDEO = process.env.YAVER_WEBRTC_NATIVE_VIDEO === "1";
 const CONTROL_NAVIGATE_URL = (process.env.YAVER_RUNTIME_CONTROL_NAVIGATE_URL || "").trim();
 const EXPECT_BROWSER_LOGS = (process.env.YAVER_RUNTIME_EXPECT_BROWSER_LOGS || "")
   .split(",")
@@ -227,7 +228,10 @@ const browser = await chromium.launch({
   executablePath: process.env.YAVER_CHROMIUM_PATH || undefined,
   args: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"],
 });
-const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, recordVideo: { dir: join(OUT, "videos"), size: { width: 1280, height: 800 } } });
+const page = await browser.newPage({
+  viewport: { width: 1280, height: 800 },
+  ...(PLAYWRIGHT_VIDEO ? { recordVideo: { dir: join(OUT, "videos"), size: { width: 1280, height: 800 } } } : {}),
+});
 const stopRecording = startRecorder(page, TARGET);
 
 try {

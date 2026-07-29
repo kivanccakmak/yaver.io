@@ -96,11 +96,38 @@ node e2e/webrtc-e2e/remote-runtime.mjs ios-simulator
 
 This harness runs from Ubuntu Chromium against this Mac as the remote runtime host. It accepts either RTP H.264 pixels or JPEG-DC pixels, records MP4 from screenshots, and always deletes the remote-runtime session in `finally`.
 
+### Full Autorun Matrix
+
+```sh
+YAVER_WEBRTC_BASE=http://<mac-tailscale-ip>:19080 \
+YAVER_WEBRTC_TOKEN="$MAC_AGENT_TOKEN" \
+YAVER_WEBRTC_CLIENT_SSH=root@<ubuntu-tailscale-ip> \
+YAVER_WEBRTC_CLIENT_WORKDIR=/root/Workspace/sfmg \
+YAVER_CHROMIUM_PATH=/snap/bin/chromium \
+YAVER_RUNTIME_WORKDIR=/tmp/yaver-webrtc-push/mobile \
+YAVER_RUNTIME_FRAMEWORK=react-native \
+YAVER_WEBRTC_PIXEL_TIMEOUT_MS=70000 \
+node e2e/webrtc-e2e/autorun.mjs
+```
+
+For RTP browser viewport lanes only:
+
+```sh
+YAVER_WEBRTC_AUTORUN_TARGETS=none \
+YAVER_WEBRTC_AUTORUN_RTP_BASE=http://<mac-tailscale-ip>:19080 \
+node e2e/webrtc-e2e/autorun.mjs
+```
+
+The autorun copies the harness to the Ubuntu client, probes Mac capabilities, runs every enabled runtime target, records MP4 from screenshots, copies recordings back to the Mac, deletes sessions after each target, and fails only on `SILENT`. Missing hardware/tooling is `NAMED`.
+
 ## Autowork Product Requirements
 
 - Add `YAVER_WEBRTC_TOKEN` support to `e2e/webrtc-e2e/run.mjs` so cross-box tests do not depend on the client machine's local auth cache. Status: implemented in this audit.
 - Add `e2e/webrtc-e2e/remote-runtime.mjs` so simulator/browser-window WebRTC can be driven from Ubuntu Chromium against this Mac, including MP4 proof and cleanup. Status: implemented in this audit.
 - Add opt-in browser console assertions to the remote-runtime harness: wait for the WebRTC `events` DataChannel, navigate the remote browser through `/control`, then assert `browser-log` events for log/error/exception payloads. Status: implemented in this audit.
+- Add `e2e/webrtc-e2e/autorun.mjs` so WebRTC checks run as a capability-aware matrix instead of a hand-run sequence. Status: implemented after the manual all-surface pass exposed harness-only hangs.
+- Disable Playwright's native WebM recording by default in the WebRTC harnesses and keep the screenshot-to-MP4 recorder as the proof artifact. Status: implemented after Ubuntu 4GB kept an ffmpeg WebM process alive and slowed the client.
+- Add per-target process timeouts, post-target session cleanup, and remote-artifact collection to autorun. Status: implemented after a failed browser-window navigation and an attach-failed Android session left live sessions behind.
 - Chunk JPEG-DC frames and teach web/mobile/harness consumers to reassemble them. Status: implemented in this audit after iOS simulator opened `frames` but delivered no JPEG message.
 - Start the JPEG-DC pump as soon as that transport is negotiated, and bound each capture so a stuck screenshot becomes `frame-error` instead of a silent pump hang. Status: implemented in this audit.
 - Add a browser-window e2e that creates an already-attached `about:blank` session and proves `Attach` navigates before WebRTC offer handling.
@@ -130,3 +157,20 @@ Results below must be filled from command output and sampled pixels only.
 | W9 | `PIXELS` | Ubuntu Chromium against Mac watchOS simulator: `VERDICT=PIXELS · watchos-simulator:jpeg-dc:webrtc-datachannel-jpeg-v1`; frame-meta `bytes=12833 chunked=true width=416 height=496`. Recording: `/tmp/yaver-webrtc-artifacts/remote-runtime/yaver-rr-webrtc-watchos-simulator-final/watchos-simulator.mp4` (`h264`, 1280x800, 30 frames, 7.5s). | Center pixel was black because the captured watch screen was dark; proof is a real decoded JPEG frame with watch dimensions and metadata. |
 | W10 | `PIXELS` | Ubuntu Chromium against Mac Apple Vision Pro simulator: first run with the default 25s pixel window was `SILENT`; rerun with target-aware 60s budget passed: `VERDICT=PIXELS · visionos-simulator:jpeg-dc:webrtc-datachannel-jpeg-v1`; frame-meta `bytes=19895 chunked=true width=720 height=405`. Recording: `/tmp/yaver-webrtc-artifacts/remote-runtime/visionos-macremote/visionos-simulator.mp4` (`h264`, 1280x800, 34 frames, 8.5s). | Keep 60s default first-pixel budget for visionOS in the harness; still add an agent-side first-frame progress event later. |
 | W11 | `PIXELS` | Ubuntu temp agent lifecycle smoke: create browser-window session, fetch JPEG frame, `DELETE /remote-runtime/sessions/<id>`, then `GET /remote-runtime/sessions` returned no sessions. | Extend cleanup guard to assert browser child processes are gone, not just session map empty. |
+
+## Autorun Results
+
+Latest autorun from Ubuntu Chromium against this Mac:
+
+- Remote-runtime matrix: `SUMMARY pixels=7 named=7 silent=0`.
+- RTP browser viewport matrix: `SUMMARY pixels=2 named=0 silent=0`.
+- Session cleanup in both runs: `0 live sessions after run`.
+- Local copied artifacts: `/tmp/yaver-webrtc-artifacts/autorun/mac-remote-ubuntu-client` and `/tmp/yaver-webrtc-artifacts/autorun/mac-rtp-ubuntu-client`.
+- Remote-runtime recordings copied back: browser-window, iOS, iPadOS, watchOS, tvOS, visionOS, and Android-emulator named-failure recording.
+- RTP recordings copied back: desktop Web UI and mobile iframe viewport.
+
+Named Android results are expected for this Mac/Ubuntu pass unless Android AVD profiles or a physical Android device are provisioned:
+
+- `android-emulator`: `no AVDs configured — run avdmanager create avd ...`
+- `android-device`: no physical Android device attached.
+- `android-wear`, `android-tv`, `android-xr`, `android-auto`, `android-redroid`: target not advertised by this project/host capability probe.
