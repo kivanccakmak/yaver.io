@@ -29,7 +29,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -108,11 +110,17 @@ func BuildSurfacesDoctorReport(ctx context.Context) SurfacesDoctorReport {
 	// ── Android ─────────────────────────────────────────────────────────
 	adb := DiscoverBinary("adb") != ""
 	emu := SurfaceCheck{Surface: "android-emulator", Transport: "webrtc-video"}
-	if adb {
-		emu.Available = true
-		emu.Detail = "adb present; the emulator binary is probed at session start"
-	} else {
+	switch {
+	case !adb:
 		emu.Detail = "adb not found — run `yaver install remote-runtime`"
+	case DiscoverBinary("emulator") == "":
+		emu.Detail = "Android emulator binary not found — run `yaver install remote-runtime`"
+	default:
+		avdOK, avdDetail := androidAVDInventory(ctx)
+		emu.Detail = avdDetail
+		if avdOK {
+			emu.Available = true
+		}
 	}
 	rep.Checks = append(rep.Checks, emu)
 
@@ -155,6 +163,77 @@ func BuildSurfacesDoctorReport(ctx context.Context) SurfacesDoctorReport {
 	return rep
 }
 
+// androidAVDInventory probes the Android emulator operation, not just adb.
+// `adb` on PATH with no loadable AVD is the Android equivalent of a simulator
+// runtime with no device: every preview request will fail after the picker says
+// yes. Keep the probe cheap by listing AVD names and checking each config's
+// system image path rather than booting a VM.
+func androidAVDInventory(ctx context.Context) (bool, string) {
+	bin := DiscoverBinary("emulator")
+	if bin == "" {
+		return false, "Android emulator binary not found — run `yaver install remote-runtime`"
+	}
+	c, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(c, bin, "-list-avds").CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return false, "Android emulator could not list AVDs: " + msg
+	}
+	var missing []string
+	for _, line := range strings.Split(string(out), "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			continue
+		}
+		if ok, pkg := androidAVDSystemImagePresent(name); ok {
+			return true, "loadable AVD present: " + name
+		} else if pkg != "" {
+			missing = append(missing, name+" needs `sdkmanager \""+pkg+"\"`")
+		} else {
+			missing = append(missing, name+" has no readable AVD config")
+		}
+	}
+	if len(missing) > 0 {
+		return false, "AVDs exist but none has an installed system image: " + strings.Join(missing, "; ")
+	}
+	return false, "no AVDs configured — run `avdmanager create avd ...` or `yaver install remote-runtime`"
+}
+
+func androidAVDSystemImagePresent(avd string) (bool, string) {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(avd) == "" {
+		return false, ""
+	}
+	cfg := filepath.Join(home, ".android", "avd", avd+".avd", "config.ini")
+	data, err := os.ReadFile(cfg)
+	if err != nil {
+		return false, ""
+	}
+	sysdir := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok && strings.TrimSpace(k) == "image.sysdir.1" {
+			sysdir = strings.TrimSpace(v)
+			break
+		}
+	}
+	if sysdir == "" {
+		return false, ""
+	}
+	for _, root := range androidSDKCandidateRoots() {
+		if root == "" {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(root, sysdir)); err == nil && info.IsDir() {
+			return true, ""
+		}
+	}
+	return false, strings.ReplaceAll(strings.Trim(sysdir, "/"), "/", ";")
+}
+
 // appleSimInventory returns which simulator RUNTIMES and which device FAMILIES
 // exist. Both matter: a runtime with no device of that family cannot boot, and
 // a device whose runtime was removed is listed but unavailable.
@@ -185,10 +264,27 @@ func appleSimInventory(ctx context.Context) (runtimes, devices map[string]bool) 
 	}
 
 	if out, err := exec.CommandContext(c, "xcrun", "simctl", "list", "devices", "available").Output(); err == nil {
-		s := string(out)
-		for _, k := range []string{"iPhone", "iPad", "Apple Watch", "Apple TV", "Vision"} {
-			if strings.Contains(s, k) {
-				devices[k] = true
+		currentRuntime := ""
+		for _, line := range strings.Split(string(out), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "-- ") && strings.HasSuffix(trimmed, " --") {
+				currentRuntime = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "-- "), " --"))
+				continue
+			}
+			if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+				continue
+			}
+			switch {
+			case strings.HasPrefix(currentRuntime, "iOS") && strings.Contains(trimmed, "iPhone"):
+				devices["iPhone"] = true
+			case strings.HasPrefix(currentRuntime, "iOS") && strings.Contains(trimmed, "iPad"):
+				devices["iPad"] = true
+			case strings.HasPrefix(currentRuntime, "watchOS"):
+				devices["Apple Watch"] = true
+			case strings.HasPrefix(currentRuntime, "tvOS"):
+				devices["Apple TV"] = true
+			case strings.HasPrefix(currentRuntime, "visionOS") || strings.HasPrefix(currentRuntime, "xrOS"):
+				devices["Vision"] = true
 			}
 		}
 	}
