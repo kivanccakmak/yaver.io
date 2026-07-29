@@ -30,8 +30,9 @@ test.describe("landing page", () => {
     await expect(page).toHaveTitle(/Yaver/i);
     const hero = page.getByRole("heading", { level: 1 });
     await expect(hero).toBeVisible();
-    await expect(hero).toContainText(/AI writes code in seconds/i);
-    await expect(hero).toContainText(/The loop around it still takes hours/i);
+    await expect(hero).toContainText(/Vibe it, see it/i);
+    await expect(hero).toContainText(/Instantly on your real phone/i);
+    await expect(page.getByText(/Open-source MCP for real-device app loops/i)).toBeVisible();
 
     expect(errors, `console errors on /: ${errors.join(" | ")}`).toEqual([]);
   });
