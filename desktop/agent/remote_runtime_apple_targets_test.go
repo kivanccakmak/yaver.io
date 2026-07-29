@@ -40,6 +40,27 @@ func appleSpecialSurfaceProject(t *testing.T) string {
 	return dir
 }
 
+func appleSiblingSurfaceProject(t *testing.T) (root, mobile string) {
+	t.Helper()
+	root = t.TempDir()
+	mobile = filepath.Join(root, "mobile")
+	for _, dir := range []string{mobile, filepath.Join(root, "tvos"), filepath.Join(root, "visionos")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(mobile, "package.json"), []byte(`{"scripts":{"ios":"expo run:ios"}}`), 0o600); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tvos", "project.yml"), []byte("targets:\n  YaverTV:\n    platform: tvOS\n"), 0o600); err != nil {
+		t.Fatalf("write tvos project.yml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "visionos", "project.yml"), []byte("targets:\n  YaverVision:\n    platform: visionOS\n"), 0o600); err != nil {
+		t.Fatalf("write visionos project.yml: %v", err)
+	}
+	return root, mobile
+}
+
 func TestParseInstalledRuntimeFamilies_SimctlFixture(t *testing.T) {
 	// Captured from `xcrun simctl list runtimes` on a mac that has iOS 26.4
 	// + visionOS 2.1 installed but no watchOS/tvOS runtimes. The visionOS
@@ -156,6 +177,47 @@ func TestCapabilitiesEnumeratesAllAppleSurfacesAndBadgesSurface(t *testing.T) {
 		}
 		if !strings.Contains(seen["tvos-simulator"].Reason, "tvOS runtime not installed") {
 			t.Fatalf("tvos-simulator reason should point at the missing runtime, got %q", seen["tvos-simulator"].Reason)
+		}
+	}
+}
+
+func TestCapabilitiesFromMobileDirIncludeSiblingAppleSurfaceProjects(t *testing.T) {
+	// Yaver's dogfood app is scoped to mobile/, while the TV and Vision app
+	// packages live beside it as tvos/ and visionos/. A capability probe from
+	// mobile/ must not silently omit those streamable simulator lanes.
+	cleanup := setAppleRuntimeFamiliesForTest(map[string]bool{
+		"iOS": true, "tvOS": true, "visionOS": true,
+	})
+	defer cleanup()
+	cleanupDevices := setAppleSimulatorDevicesForTest(map[string]bool{
+		"iPhone": true, "iPad": true, "Apple TV": true, "Apple Vision": true,
+	})
+	defer cleanupDevices()
+	_, mobile := appleSiblingSurfaceProject(t)
+
+	surfaces := runtimeProjectSurfaces(mobile, "react-native")
+	if !surfaces[SurfaceTVOS] {
+		t.Fatalf("mobile-scoped surface detection missed sibling tvos/project.yml: %v", surfaces)
+	}
+	if !surfaces[SurfaceVisionOS] {
+		t.Fatalf("mobile-scoped surface detection missed sibling visionos/project.yml: %v", surfaces)
+	}
+
+	caps := remoteRuntimeCapabilitiesForProject(mobile, "react-native")
+	got := map[string]RemoteRuntimeTarget{}
+	for _, tg := range caps.Targets {
+		got[tg.ID] = tg
+	}
+	for id, wantSurface := range map[string]string{
+		"tvos-simulator":     "tv",
+		"visionos-simulator": "vision",
+	} {
+		tg, ok := got[id]
+		if !ok {
+			t.Fatalf("capabilities missing %s from mobile-scoped sibling project layout; got %+v", id, caps.Targets)
+		}
+		if tg.Surface != wantSurface {
+			t.Fatalf("%s Surface=%q, want %q", id, tg.Surface, wantSurface)
 		}
 	}
 }

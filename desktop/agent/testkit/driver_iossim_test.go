@@ -77,3 +77,43 @@ func TestRankSimulatorsFromJSONMatchesTypeNotJustName(t *testing.T) {
 		t.Fatalf("garbage input should yield nil, got %v", got)
 	}
 }
+
+func TestSimulatorCreateSpecFromJSONPicksMatchingRuntimeFamily(t *testing.T) {
+	deviceTypes := `{"devicetypes":[
+		{"name":"iPad Pro 13-inch (M5) (16GB)","identifier":"com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-16GB"},
+		{"name":"iPad Pro 13-inch (M5)","identifier":"com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB"},
+		{"name":"Apple TV 4K","identifier":"com.apple.CoreSimulator.SimDeviceType.Apple-TV-4K-1080p"},
+		{"name":"Apple Vision Pro","identifier":"com.apple.CoreSimulator.SimDeviceType.Apple-Vision-Pro"}
+	]}`
+	runtimes := `{"runtimes":[
+		{"name":"iOS 18.6","identifier":"com.apple.CoreSimulator.SimRuntime.iOS-18-6","isAvailable":true},
+		{"name":"iOS 26.2","identifier":"com.apple.CoreSimulator.SimRuntime.iOS-26-2","isAvailable":true},
+		{"name":"tvOS 26.2","identifier":"com.apple.CoreSimulator.SimRuntime.tvOS-26-2","isAvailable":true},
+		{"name":"visionOS 26.2","identifier":"com.apple.CoreSimulator.SimRuntime.xrOS-26-2","isAvailable":true}
+	]}`
+
+	ipad, ok := simulatorCreateSpecFromJSON(deviceTypes, runtimes, "iPad")
+	if !ok {
+		t.Fatal("iPad create spec was not found")
+	}
+	if ipad.DeviceTypeID != "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB" ||
+		ipad.RuntimeID != "com.apple.CoreSimulator.SimRuntime.iOS-26-2" {
+		t.Fatalf("bad iPad create spec: %+v", ipad)
+	}
+
+	tv, ok := simulatorCreateSpecFromJSON(deviceTypes, runtimes, "Apple TV")
+	if !ok {
+		t.Fatal("Apple TV create spec was not found")
+	}
+	if tv.RuntimeID != "com.apple.CoreSimulator.SimRuntime.tvOS-26-2" {
+		t.Fatalf("Apple TV picked wrong runtime: %+v", tv)
+	}
+
+	vision, ok := simulatorCreateSpecFromJSON(deviceTypes, runtimes, "Apple Vision")
+	if !ok {
+		t.Fatal("Apple Vision create spec was not found")
+	}
+	if vision.RuntimeID != "com.apple.CoreSimulator.SimRuntime.xrOS-26-2" {
+		t.Fatalf("Apple Vision picked wrong runtime: %+v", vision)
+	}
+}

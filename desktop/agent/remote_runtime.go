@@ -787,6 +787,11 @@ var appleSimulatorDeviceAvailableForCaps = func(deviceType string) (bool, string
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if _, err := testkit.RankSimulators(ctx, deviceType); err != nil {
+		if ok, createReason := testkit.SimulatorTypeCreatable(ctx, deviceType); ok {
+			return true, ""
+		} else if strings.TrimSpace(createReason) != "" {
+			return false, err.Error() + "; auto-create unavailable: " + createReason
+		}
 		return false, err.Error()
 	}
 	return true, ""

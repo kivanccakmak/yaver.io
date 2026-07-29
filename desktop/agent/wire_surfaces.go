@@ -528,6 +528,23 @@ func DetectProjectSurfaces(root, stack string) []WireSurface {
 			add(SurfaceVisionOS)
 		}
 	}
+	for _, spec := range findXcodeGenProjectFiles(root) {
+		data, err := readWireJSONBounded(spec, 1<<20)
+		if err != nil {
+			continue
+		}
+		s := strings.ToLower(string(data))
+		if strings.Contains(s, "platform: watchos") || strings.Contains(s, "platform: watchkit") {
+			add(SurfaceWatchOS)
+			add(SurfaceIOS)
+		}
+		if strings.Contains(s, "platform: tvos") {
+			add(SurfaceTVOS)
+		}
+		if strings.Contains(s, "platform: visionos") || strings.Contains(s, "platform: xros") {
+			add(SurfaceVisionOS)
+		}
+	}
 
 	if androidDeclaresWatch(root) {
 		add(SurfaceWearOS)
@@ -555,6 +572,36 @@ func findPbxprojFiles(root string) []string {
 					out = append(out, p)
 				}
 			}
+		}
+	}
+	return out
+}
+
+// findXcodeGenProjectFiles finds XcodeGen specs in bounded, conventional app
+// surface locations. This catches repos like Yaver where mobile/ is one app
+// package and tvos/visionos are sibling native app packages; probing mobile/
+// alone must still tell the user "TV exists" instead of silently omitting it.
+func findXcodeGenProjectFiles(root string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		p = filepath.Clean(p)
+		if seen[p] || !wireFileExists(p) {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	add(filepath.Join(root, "project.yml"))
+	for _, sub := range []string{"tvos", "tv", "appletv", "apple-tv", "visionos", "vision", "xros", "watchos", "watch"} {
+		add(filepath.Join(root, sub, "project.yml"))
+	}
+	if parent := filepath.Dir(filepath.Clean(root)); parent != "." && parent != root {
+		for _, sub := range []string{"tvos", "tv", "appletv", "apple-tv", "visionos", "vision", "xros", "watchos", "watch"} {
+			add(filepath.Join(parent, sub, "project.yml"))
 		}
 	}
 	return out

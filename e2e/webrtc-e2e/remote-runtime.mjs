@@ -26,6 +26,7 @@ const FRAMEWORK = process.env.YAVER_RUNTIME_FRAMEWORK || "react-native";
 const OUT = process.env.YAVER_OUT_DIR || `/tmp/yaver-rr-webrtc-${TARGET}`;
 const DWELL_MS = Number(process.env.YAVER_WEBRTC_RECORD_DWELL_MS || 3500);
 const NO_VIDEO = process.env.YAVER_RUNTIME_NO_VIDEO === "1";
+const PIXEL_TIMEOUT_MS = Number(process.env.YAVER_WEBRTC_PIXEL_TIMEOUT_MS || defaultPixelTimeout(TARGET));
 
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
@@ -38,6 +39,18 @@ function token() {
 }
 const TOKEN = token();
 if (!TOKEN) throw new Error("missing token; set YAVER_WEBRTC_TOKEN");
+
+function defaultPixelTimeout(target) {
+  switch (target) {
+    case "visionos-simulator":
+      return 60_000;
+    case "tvos-simulator":
+    case "watchos-simulator":
+      return 45_000;
+    default:
+      return 25_000;
+  }
+}
 
 async function agent(path, opts = {}) {
   const res = await fetch(BASE + path, {
@@ -218,7 +231,7 @@ try {
         sdp: answer.body.answer.sdp,
         transport: answer.body.transport,
       });
-      const px = await waitPixel(page, Number(process.env.YAVER_WEBRTC_PIXEL_TIMEOUT_MS || 25000));
+      const px = await waitPixel(page, PIXEL_TIMEOUT_MS);
       await new Promise((r) => setTimeout(r, DWELL_MS));
       if (px) {
         console.log(`PIXELS ${JSON.stringify(px)}`);

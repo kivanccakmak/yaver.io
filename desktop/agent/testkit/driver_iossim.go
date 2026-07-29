@@ -70,7 +70,14 @@ func (d *IOSSimDriver) Boot(ctx context.Context) (string, error) {
 	if udid == "" {
 		candidates, err := RankSimulators(ctx, d.DeviceType)
 		if err != nil {
-			return "", err
+			if strings.TrimSpace(d.DeviceType) == "" {
+				return "", err
+			}
+			created, createErr := CreateSimulatorForType(ctx, d.DeviceType)
+			if createErr != nil {
+				return "", fmt.Errorf("%w; could not auto-create simulator: %v", err, createErr)
+			}
+			candidates = []string{created}
 		}
 		if d.Chooser != nil {
 			chosen, ok := d.Chooser(candidates)
@@ -223,6 +230,153 @@ func pickSimulator(ctx context.Context, deviceType string) (string, error) {
 		return "", err
 	}
 	return ranked[0], nil
+}
+
+// CreateSimulatorForType creates a simulator instance for an installed Apple
+// runtime when the device type exists but no device instance has been created
+// yet. This is the iPad dogfood failure mode: Xcode had many iPad device TYPES
+// installed, but `simctl list devices` had zero iPad DEVICES, so the product
+// reported "tablet unavailable" even though the operation had a deterministic,
+// local fix.
+func CreateSimulatorForType(ctx context.Context, deviceType string) (string, error) {
+	if strings.TrimSpace(deviceType) == "" {
+		return "", fmt.Errorf("device type is empty")
+	}
+	spec, err := simulatorCreatableSpec(ctx, deviceType)
+	if err != nil {
+		return "", err
+	}
+	name := "Yaver " + strings.TrimSpace(deviceType)
+	out, err := runCtx(ctx, "xcrun", "simctl", "create", name, spec.DeviceTypeID, spec.RuntimeID)
+	if err != nil {
+		return "", fmt.Errorf("simctl create %s: %w%s", name, err, commandOutputSuffix(out))
+	}
+	udid := strings.TrimSpace(out)
+	if udid == "" {
+		return "", fmt.Errorf("simctl create returned an empty UDID")
+	}
+	return udid, nil
+}
+
+func SimulatorTypeCreatable(ctx context.Context, deviceType string) (bool, string) {
+	if _, err := simulatorCreatableSpec(ctx, deviceType); err != nil {
+		return false, err.Error()
+	}
+	return true, ""
+}
+
+type simulatorCreateSpec struct {
+	DeviceTypeID string
+	RuntimeID    string
+}
+
+func simulatorCreatableSpec(ctx context.Context, deviceType string) (simulatorCreateSpec, error) {
+	if strings.TrimSpace(deviceType) == "" {
+		return simulatorCreateSpec{}, fmt.Errorf("device type is empty")
+	}
+	typeOut, err := runCtx(ctx, "xcrun", "simctl", "list", "devicetypes", "--json")
+	if err != nil {
+		return simulatorCreateSpec{}, fmt.Errorf("simctl list devicetypes: %w", err)
+	}
+	runtimeOut, err := runCtx(ctx, "xcrun", "simctl", "list", "runtimes", "--json")
+	if err != nil {
+		return simulatorCreateSpec{}, fmt.Errorf("simctl list runtimes: %w", err)
+	}
+	spec, ok := simulatorCreateSpecFromJSON(typeOut, runtimeOut, deviceType)
+	if !ok {
+		return simulatorCreateSpec{}, fmt.Errorf("no installed runtime/device type can create %q", deviceType)
+	}
+	return spec, nil
+}
+
+func simulatorCreateSpecFromJSON(deviceTypesJSON, runtimesJSON, deviceType string) (simulatorCreateSpec, bool) {
+	want := strings.ToLower(strings.TrimSpace(deviceType))
+	if want == "" {
+		return simulatorCreateSpec{}, false
+	}
+	var types struct {
+		DeviceTypes []struct {
+			Name       string `json:"name"`
+			Identifier string `json:"identifier"`
+		} `json:"devicetypes"`
+	}
+	if err := json.Unmarshal([]byte(deviceTypesJSON), &types); err != nil {
+		return simulatorCreateSpec{}, false
+	}
+	var runtimes struct {
+		Runtimes []struct {
+			Name        string `json:"name"`
+			Identifier  string `json:"identifier"`
+			IsAvailable bool   `json:"isAvailable"`
+		} `json:"runtimes"`
+	}
+	if err := json.Unmarshal([]byte(runtimesJSON), &runtimes); err != nil {
+		return simulatorCreateSpec{}, false
+	}
+	typeID := ""
+	typeFamily := ""
+	for _, dt := range types.DeviceTypes {
+		name := strings.ToLower(dt.Name)
+		id := strings.ToLower(dt.Identifier)
+		if !appleSimulatorTypeMatches(name, id, want) {
+			continue
+		}
+		if typeID != "" && strings.Contains(name+" "+id, "16gb") {
+			continue
+		}
+		typeID = dt.Identifier
+		typeFamily = appleRuntimeFamilyForDeviceType(name + " " + id)
+		if !strings.Contains(name+" "+id, "16gb") {
+			break
+		}
+	}
+	if typeID == "" || typeFamily == "" {
+		return simulatorCreateSpec{}, false
+	}
+	runtimeID := ""
+	for _, rt := range runtimes.Runtimes {
+		if !rt.IsAvailable || rt.Identifier == "" {
+			continue
+		}
+		if appleRuntimeFamilyForDeviceType(strings.ToLower(rt.Name)+" "+strings.ToLower(rt.Identifier)) == typeFamily {
+			runtimeID = rt.Identifier
+		}
+	}
+	if runtimeID == "" {
+		return simulatorCreateSpec{}, false
+	}
+	return simulatorCreateSpec{DeviceTypeID: typeID, RuntimeID: runtimeID}, true
+}
+
+func commandOutputSuffix(out string) string {
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return ""
+	}
+	if len(out) > 500 {
+		out = out[len(out)-500:]
+	}
+	return ": " + out
+}
+
+func appleSimulatorTypeMatches(name, id, want string) bool {
+	wantDashed := strings.ReplaceAll(want, " ", "-")
+	return strings.Contains(id, wantDashed) || strings.Contains(id, want) || strings.Contains(name, want)
+}
+
+func appleRuntimeFamilyForDeviceType(s string) string {
+	switch {
+	case strings.Contains(s, "iphone"), strings.Contains(s, "ipad"), strings.Contains(s, "ios"):
+		return "ios"
+	case strings.Contains(s, "apple-tv"), strings.Contains(s, "appletv"), strings.Contains(s, "tvos"):
+		return "tvos"
+	case strings.Contains(s, "apple-watch"), strings.Contains(s, "watchos"):
+		return "watchos"
+	case strings.Contains(s, "apple-vision"), strings.Contains(s, "visionos"), strings.Contains(s, "xros"):
+		return "visionos"
+	default:
+		return ""
+	}
 }
 
 // pickSimulatorFromList returns the single best candidate (compatibility
