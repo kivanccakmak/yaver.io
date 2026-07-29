@@ -27,6 +27,11 @@ const OUT = process.env.YAVER_OUT_DIR || `/tmp/yaver-rr-webrtc-${TARGET}`;
 const DWELL_MS = Number(process.env.YAVER_WEBRTC_RECORD_DWELL_MS || 3500);
 const NO_VIDEO = process.env.YAVER_RUNTIME_NO_VIDEO === "1";
 const PIXEL_TIMEOUT_MS = Number(process.env.YAVER_WEBRTC_PIXEL_TIMEOUT_MS || defaultPixelTimeout(TARGET));
+const CONTROL_NAVIGATE_URL = (process.env.YAVER_RUNTIME_CONTROL_NAVIGATE_URL || "").trim();
+const EXPECT_BROWSER_LOGS = (process.env.YAVER_RUNTIME_EXPECT_BROWSER_LOGS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
@@ -193,6 +198,28 @@ async function waitPixel(page, ms) {
   return last;
 }
 
+async function waitEventsOpen(page, ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const open = await page.evaluate(() => window.__yv.channels.includes("events:open"));
+    if (open) return true;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
+}
+
+async function waitBrowserLogs(page, needles, ms) {
+  const deadline = Date.now() + ms;
+  let events = [];
+  while (Date.now() < deadline) {
+    events = await page.evaluate(() => window.__yv.events.filter((e) => e && e.type === "browser-log"));
+    const joined = events.map((e) => String(e.message || "")).join("\n");
+    if (needles.every((needle) => joined.includes(needle))) return events;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return events;
+}
+
 let sessionID = "";
 const server = await serveReceiver();
 const browser = await chromium.launch({
@@ -231,11 +258,37 @@ try {
         sdp: answer.body.answer.sdp,
         transport: answer.body.transport,
       });
+      if (CONTROL_NAVIGATE_URL) {
+        const eventsOpen = await waitEventsOpen(page, 10_000);
+        console.log(`events-channel ${eventsOpen ? "open" : "not-open"}`);
+        const nav = await agent(`/remote-runtime/sessions/${sessionID}/control`, {
+          method: "POST",
+          body: JSON.stringify({ action: "navigate", url: CONTROL_NAVIGATE_URL }),
+        });
+        console.log(`navigate HTTP ${nav.res.status} ${JSON.stringify(nav.body || nav.text).slice(0, 320)}`);
+        if (!nav.res.ok) {
+          console.log(`VERDICT=NAMED · navigate failed for ${TARGET}`);
+          process.exitCode = 5;
+        }
+      }
       const px = await waitPixel(page, PIXEL_TIMEOUT_MS);
+      if (EXPECT_BROWSER_LOGS.length > 0 && process.exitCode === undefined) {
+        const logs = await waitBrowserLogs(page, EXPECT_BROWSER_LOGS, 15_000);
+        const compact = logs.map((e) => `${e.level || ""}:${e.source || ""}:${String(e.message || "").slice(0, 160)}`);
+        console.log(`browser-logs ${JSON.stringify(compact)}`);
+        const joined = logs.map((e) => String(e.message || "")).join("\n");
+        const missing = EXPECT_BROWSER_LOGS.filter((needle) => !joined.includes(needle));
+        if (missing.length > 0) {
+          console.log(`VERDICT=SILENT · ${TARGET}:missing-browser-log:${missing.join("|")}`);
+          process.exitCode = 6;
+        }
+      }
       await new Promise((r) => setTimeout(r, DWELL_MS));
       if (px) {
         console.log(`PIXELS ${JSON.stringify(px)}`);
-        console.log(`VERDICT=PIXELS · ${TARGET}:${px.mode || "unknown"}:${px.transport || "unknown"}`);
+        if (process.exitCode === undefined) {
+          console.log(`VERDICT=PIXELS · ${TARGET}:${px.mode || "unknown"}:${px.transport || "unknown"}`);
+        }
       } else {
         const state = await page.evaluate(() => window.__yv);
         console.log(`SILENT ${JSON.stringify(state).slice(0, 500)}`);
