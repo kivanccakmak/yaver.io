@@ -1,0 +1,117 @@
+<!doctype html>
+<!--
+  receiver.html — the browser-lane WebRTC RECEIVER used by run.mjs.
+
+  This is the pixel-truth end of the WebRTC closed loop. It stands in for BOTH
+  user-facing receivers, which are the same browser RTCPeerConnection under the
+  hood:
+    • webui   → web/components/dashboard/RemoteRuntimeViewer.tsx
+                (new RTCPeerConnection; addTransceiver("video",{recvonly});
+                 ontrack → video.srcObject)
+    • mobile  → mobile/app/remote-runtime.tsx buildRemoteRuntimeViewerHtml()
+                (same RTCPeerConnection, injected inside a WebView/iframe; on the
+                 RN-web build the WebView degrades to an <iframe srcdoc> so the
+                 identical browser WebRTC runs)
+
+  Signaling is RELAYED THROUGH THE NODE HARNESS (run.mjs), not fetched from here:
+  the browser makes the offer, the harness POSTs it to the box's
+  POST /stream/webrtc/offer over Tailscale (no browser CORS dependency), then
+  hands the answer back. Media (RTP H.264) then flows browser↔box over ICE.
+
+  The functions below are the ONLY contract with run.mjs. Keep them stable.
+-->
+<meta charset="utf-8" />
+<title>Yaver WebRTC receiver</title>
+<style>
+  html,body{margin:0;background:#000;height:100%}
+  video{width:320px;height:240px;object-fit:fill;background:#000}
+</style>
+<video id="v" autoplay playsinline muted></video>
+<script>
+  // State the harness polls.
+  window.__yv = { offer: null, transport: null, track: false, err: null, ice: null };
+  let pc = null;
+
+  // 1) Create a recvonly peer, generate the offer, and (non-trickle) wait for
+  //    full ICE gathering so all candidates are embedded — mirrors what the box
+  //    does on its side (GatheringCompletePromise). Returns the offer SDP.
+  window.makeOffer = function () {
+    return new Promise(function (resolve, reject) {
+      try {
+        pc = new RTCPeerConnection({
+          iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        });
+        pc.addTransceiver("video", { direction: "recvonly" });
+        pc.ontrack = function (e) {
+          window.__yv.track = true;
+          document.getElementById("v").srcObject = e.streams[0];
+        };
+        pc.oniceconnectionstatechange = function () {
+          window.__yv.ice = pc.iceConnectionState;
+        };
+        pc.createOffer()
+          .then(function (offer) { return pc.setLocalDescription(offer); })
+          .then(function () {
+            if (pc.iceGatheringState === "complete") return finish();
+            pc.onicegatheringstatechange = function () {
+              if (pc.iceGatheringState === "complete") finish();
+            };
+            setTimeout(finish, 3500); // safety: don't hang if a candidate stalls
+          })
+          .catch(reject);
+        var done = false;
+        function finish() {
+          if (done) return;
+          done = true;
+          window.__yv.offer = pc.localDescription.sdp;
+          resolve(pc.localDescription.sdp);
+        }
+      } catch (e) {
+        window.__yv.err = String(e);
+        reject(e);
+      }
+    });
+  };
+
+  // 2) Apply the box's answer. Media starts flowing after this.
+  window.applyAnswer = function (sdp, transport) {
+    window.__yv.transport = transport || null;
+    return pc.setRemoteDescription({ type: "answer", sdp: sdp });
+  };
+
+  // 3) Sample the CENTER pixel of the live <video> frame. Returns null until a
+  //    real frame has painted (videoWidth becomes non-zero only once decoded
+  //    H.264 arrives — the JPEG-DataChannel fallback never fills a <video>).
+  window.readPixel = function () {
+    var v = document.getElementById("v");
+    if (!v.videoWidth || !v.videoHeight) return null;
+    var c = document.createElement("canvas");
+    c.width = v.videoWidth;
+    c.height = v.videoHeight;
+    var ctx = c.getContext("2d");
+    ctx.drawImage(v, 0, 0);
+    var d = ctx.getImageData(v.videoWidth >> 1, v.videoHeight >> 1, 1, 1).data;
+    return { r: d[0], g: d[1], b: d[2], w: v.videoWidth, h: v.videoHeight };
+  };
+
+  // Inbound video RTP stats — the decode-vs-receive bisect. framesDecoded==0
+  // with packetsReceived>0 means "arrived but never decoded" (keyframe/corrupt);
+  // framesDecoded>0 with a flat green pixel means "decoded to zero content".
+  window.getStats = async function () {
+    if (!pc) return null;
+    var s = await pc.getStats();
+    var o = null;
+    s.forEach(function (r) {
+      if (r.type === "inbound-rtp" && r.kind === "video") {
+        o = {
+          packetsReceived: r.packetsReceived, packetsLost: r.packetsLost,
+          bytesReceived: r.bytesReceived, framesReceived: r.framesReceived,
+          framesDecoded: r.framesDecoded, framesDropped: r.framesDropped,
+          keyFramesDecoded: r.keyFramesDecoded, pliCount: r.pliCount,
+          nackCount: r.nackCount, frameWidth: r.frameWidth,
+        };
+      }
+    });
+    return o;
+  };
+</script>
