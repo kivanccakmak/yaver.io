@@ -271,6 +271,16 @@ export function canBrowserActOnDevice(lifecycle: DeviceLifecycleState, reach: Br
   return lifecycle === "connected" || lifecycle === "ready-to-connect";
 }
 
+export type WorkspaceConnectionState = "disconnected" | "connecting" | "connected" | "error" | string;
+
+export function canShowCloseWorkspace(args: {
+  activeWorkspaceDeviceId: string | null | undefined;
+  deviceId: string;
+  connectionState: WorkspaceConnectionState;
+}): boolean {
+  return args.activeWorkspaceDeviceId === args.deviceId && args.connectionState === "connected";
+}
+
 export interface DeviceCta {
   label: string;
   /** Render the confident/primary style only when we have proof. */

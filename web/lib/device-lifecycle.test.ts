@@ -19,6 +19,7 @@ import {
   deviceStatusLabel,
   deviceCtaLabel,
   canBrowserActOnDevice,
+  canShowCloseWorkspace,
 } from "./device-lifecycle";
 import { MAX_DELAY_MS } from "./probe-backoff";
 
@@ -171,4 +172,23 @@ test("no surface offers a confident CTA without proof", () => {
       assert.equal(reach.verified, true, `confident CTA without proof for ${JSON.stringify(d)}`);
     }
   }
+});
+
+test("selected device only shows Close Workspace for a live agent connection", () => {
+  const deviceId = "mac-mini";
+  assert.equal(
+    canShowCloseWorkspace({ activeWorkspaceDeviceId: deviceId, deviceId, connectionState: "connected" }),
+    true,
+  );
+  for (const connectionState of ["connecting", "error", "disconnected"]) {
+    assert.equal(
+      canShowCloseWorkspace({ activeWorkspaceDeviceId: deviceId, deviceId, connectionState }),
+      false,
+      `stale selected device must not render Close Workspace while ${connectionState}`,
+    );
+  }
+  assert.equal(
+    canShowCloseWorkspace({ activeWorkspaceDeviceId: "other", deviceId, connectionState: "connected" }),
+    false,
+  );
 });

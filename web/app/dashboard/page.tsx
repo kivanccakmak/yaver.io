@@ -154,6 +154,11 @@ function isDashboardTab(value: string | null): value is DashboardTab {
   return DASHBOARD_TABS.includes(value as DashboardTab);
 }
 
+function isLaunchEnabledDashboardTab(value: DashboardTab): boolean {
+  if (value === "guests") return ENABLE_GUEST_FEATURES;
+  return true;
+}
+
 function runnerModelOptions(runner?: Runner | null, runnerId?: string) {
   const live = Array.isArray(runner?.models) ? runner.models : [];
   if (live.length > 0) return live;
@@ -312,6 +317,14 @@ function isDormantUnreachableDevice(
   if (Boolean(device.tunnelUrl) || Boolean(device.publicEndpoints?.length)) return false;
   const age = lastSeenAgeMs(device.lastSeen);
   return age !== null && age >= DORMANT_DEVICE_HIDE_MS;
+}
+
+function duplicateHostKey(device: Pick<Device, "isGuest" | "platform" | "name">): string | null {
+  if (device.isGuest) return null;
+  const platform = String(device.platform || "").trim().toLowerCase();
+  const name = String(device.name || "").trim().toLowerCase().replace(/\.local$/, "");
+  if (!platform || !name) return null;
+  return `${platform}:${name}`;
 }
 
 function formatRunnerChipLabel(runner: string): string {
@@ -1004,7 +1017,7 @@ export default function DashboardPage() {
     const applyUrlTab = () => {
       const params = new URLSearchParams(window.location.search);
       const tab = params.get("tab");
-      if (isDashboardTab(tab)) setActiveTab(tab);
+      if (isDashboardTab(tab) && isLaunchEnabledDashboardTab(tab)) setActiveTab(tab);
     };
     applyUrlTab();
     window.addEventListener("popstate", applyUrlTab);
@@ -1168,7 +1181,7 @@ export default function DashboardPage() {
     autoLandedRef.current = true;
     if (typeof window !== "undefined") {
       const urlTab = new URLSearchParams(window.location.search).get("tab");
-      if (isDashboardTab(urlTab)) return; // deep link wins
+      if (isDashboardTab(urlTab) && isLaunchEnabledDashboardTab(urlTab)) return; // deep link wins
     }
     if (activeTabRef.current === "devices") setActiveTab("runtime");
   }, [isConnected]);
@@ -1378,7 +1391,11 @@ export default function DashboardPage() {
     };
   }, [activeTab, token, devices, relayReady]);
 
-  useEffect(() => { const u = agentClient.on("connectionState", setConnState); return u; }, []);
+  useEffect(() => {
+    const u = agentClient.on("connectionState", setConnState);
+    setConnState(agentClient.connectionState);
+    return u;
+  }, []);
 
   // Tracks which task is currently being live-streamed via SSE.
   // While SSE owns the wheel, the 3-second polling loop in agent-
@@ -1644,7 +1661,7 @@ export default function DashboardPage() {
   }, [connectedDevice, primaryModelByDevice, runners, selectedRunner, selectedModel, user?.email]);
 
   useEffect(() => {
-    if (!token) { setPendingInvites([]); return; }
+    if (!ENABLE_GUEST_FEATURES || !token) { setPendingInvites([]); return; }
     let cancelled = false;
     const load = async () => {
       try {
@@ -1960,6 +1977,12 @@ export default function DashboardPage() {
       const authOwnedByAnotherUser = isDifferentUserAuthError(rawError, firstDiagnostics);
 
       if (authOwnedByAnotherUser) {
+        const failureSummary = summarizeFailures(firstDiagnostics) || classifyFetchError({ error: rawError });
+        recordLastFailure(device.id, {
+          reason: failureSummary.reason,
+          label: failureSummary.label,
+          detail: failureSummary.detail,
+        });
         setConnectError(
           "This device is still paired to a different Yaver user. Open Rescue and run the auth reset, then reconnect once the box comes back."
         );
@@ -1988,6 +2011,7 @@ export default function DashboardPage() {
             await agentClient.connect(device.host, device.port, token, device.id, { tunnelUrls });
             setConnectError(null);
             setConnectDiagnostics(agentClient.lastConnectDiagnostics);
+            clearLastFailure(device.id);
             try { setAgentInfo(await agentClient.getInfo()); } catch {}
             try { setRunners(await agentClient.getRunners()); } catch {}
             return;
@@ -2696,8 +2720,39 @@ export default function DashboardPage() {
   const activeRunnerAuthIssue = runnerAuthIssue(activeRunnerRow);
   const canStartBrowserRunnerAuth = Boolean(activeRunnerRow && (activeRunnerRow.id === "claude" || activeRunnerRow.id === "codex"));
   const mobileWorkers = displayDevices.filter((d) => d.deviceClass === "edge-mobile");
-  const dormantDevices = displayDevices.filter((d) => isDormantUnreachableDevice(d));
-  const visibleDevices = displayDevices.filter((d) => !isDormantUnreachableDevice(d));
+  const sidebarRoleRank = (id: string): number => {
+    const fav = machineRoles.favorite;
+    if (id === primaryDeviceId) return 0;
+    if (id === fav?.runnerDeviceId) return 1;
+    if (id === fav?.renderDeviceId) return 2;
+    if (id === secondaryDeviceId) return 3;
+    if (id === fav?.secondaryRunnerDeviceId || id === fav?.secondaryRenderDeviceId) return 4;
+    return 5;
+  };
+  const duplicateAuthSidebarIds = (() => {
+    const byHost = new Map<string, Device[]>();
+    for (const device of displayDevices) {
+      const key = duplicateHostKey(device);
+      if (!key) continue;
+      const list = byHost.get(key) || [];
+      list.push(device);
+      byHost.set(key, list);
+    }
+    const hidden = new Set<string>();
+    for (const group of byHost.values()) {
+      if (group.length < 2) continue;
+      const hasRoleBearingSibling = group.some((device) => !device.needsAuth && sidebarRoleRank(device.id) < 5);
+      if (!hasRoleBearingSibling) continue;
+      for (const device of group) {
+        if (device.needsAuth && sidebarRoleRank(device.id) >= 5) hidden.add(device.id);
+      }
+    }
+    return hidden;
+  })();
+  const isHiddenSidebarDevice = (device: Device): boolean =>
+    isDormantUnreachableDevice(device) || duplicateAuthSidebarIds.has(device.id);
+  const dormantDevices = displayDevices.filter((d) => isHiddenSidebarDevice(d));
+  const visibleDevices = displayDevices.filter((d) => !isHiddenSidebarDevice(d));
   const selectedPreviewTarget = mobileWorkers.find((d) => d.id === previewTargetId) || null;
   // Owner-only experimental hardware cells. Hidden from non-owners so the
   // default dashboard stays the AI coding/preview/deploy product. Owner status
@@ -3136,23 +3191,25 @@ export default function DashboardPage() {
               Invite a guest
             </button>}
 
-            <div>
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-surface-500">Join as a guest</p>
-              <div className="flex gap-1.5">
-                <input value={guestCode} onChange={e => setGuestCode(e.target.value.toUpperCase())} maxLength={6}
-                  placeholder="CODE" className="min-w-0 flex-[1_1_0%] rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-center font-mono tracking-widest text-slate-700 placeholder-slate-400 outline-none focus:border-indigo-500 dark:border-surface-800 dark:bg-surface-900 dark:text-surface-200 dark:placeholder-surface-600" />
-                <button onClick={async () => {
-                  if (guestCode.trim().length < 4) return;
-                  try {
-                    const res = await fetch(`${CONVEX_URL}/guests/accept-code`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ code: guestCode.trim() }) });
-                    const data = await res.json();
-                    if (data.ok || data.hostName) { alert(`Joined ${data.hostName || "host"}'s machine!`); setGuestCode(""); refreshDevices(); }
-                    else alert(data.error || "Invalid code");
-                  } catch (e: any) { alert(e.message); }
-                }} disabled={guestCode.trim().length < 4}
-                  className="shrink-0 rounded-md bg-indigo-600 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-30 dark:bg-indigo-500 dark:hover:bg-indigo-400">Join</button>
+            {ENABLE_GUEST_FEATURES ? (
+              <div>
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-surface-500">Join as a guest</p>
+                <div className="flex gap-1.5">
+                  <input value={guestCode} onChange={e => setGuestCode(e.target.value.toUpperCase())} maxLength={6}
+                    placeholder="CODE" className="min-w-0 flex-[1_1_0%] rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-center font-mono tracking-widest text-slate-700 placeholder-slate-400 outline-none focus:border-indigo-500 dark:border-surface-800 dark:bg-surface-900 dark:text-surface-200 dark:placeholder-surface-600" />
+                  <button onClick={async () => {
+                    if (guestCode.trim().length < 4) return;
+                    try {
+                      const res = await fetch(`${CONVEX_URL}/guests/accept-code`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ code: guestCode.trim() }) });
+                      const data = await res.json();
+                      if (data.ok || data.hostName) { alert(`Joined ${data.hostName || "host"}'s machine!`); setGuestCode(""); refreshDevices(); }
+                      else alert(data.error || "Invalid code");
+                    } catch (e: any) { alert(e.message); }
+                  }} disabled={guestCode.trim().length < 4}
+                    className="shrink-0 rounded-md bg-indigo-600 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-30 dark:bg-indigo-500 dark:hover:bg-indigo-400">Join</button>
+                </div>
               </div>
-            </div>
+            ) : null}
           </div>
         </div>
         </div>
@@ -3265,6 +3322,9 @@ export default function DashboardPage() {
                   (() => {
                     const authExpired = connectDiagnostics.some((d) => d.authExpired);
                     const anyReached = connectDiagnostics.some((d) => d.status && d.status > 0);
+                    const relayTunnelDown = connectDiagnostics.some(
+                      (d) => d.path === "relay" && (d.status === 502 || d.status === 503 || d.status === 504),
+                    );
                     // A relay-lane 401 whose body is the RELAY's own verdict
                     // ("relay password missing …" / "invalid relay password",
                     // relay/server.go:1903,1916) is a CREDENTIAL failure on
@@ -3284,6 +3344,8 @@ export default function DashboardPage() {
                       ? "Agent reachable, but its Convex session is expired"
                       : relayCredentialDenied
                         ? "Relay refused the request — your account's relay password is missing or stale"
+                        : relayTunnelDown
+                          ? "Relay tunnel down — web cannot reach this machine"
                         : anyReached
                           ? "Agent responded, but the connection was rejected"
                           : relayCount === 0
@@ -3332,6 +3394,11 @@ export default function DashboardPage() {
                                 {RELAY_CREDENTIAL_REMEDY}
                               </div>
                             ) : null}
+                            {relayTunnelDown ? (
+                              <div className="text-amber-700 dark:text-amber-300">
+                                The relay answered, but it has no live tunnel to this agent. From yaver.io, direct LAN HTTP is blocked by the browser, so the relay must be healthy before web connect can work.
+                              </div>
+                            ) : null}
                             {mixedContentLikely ? (
                               <div className="text-amber-700 dark:text-amber-300">
                                 Direct probe returned <code className="rounded bg-surface-900 px-1 font-mono">Load failed</code> because a browser on <code className="rounded bg-surface-900 px-1 font-mono">https://</code> can&apos;t fetch <code className="rounded bg-surface-900 px-1 font-mono">http://</code> LAN IPs (mixed content). The web path has to go through a relay.
@@ -3342,13 +3409,44 @@ export default function DashboardPage() {
                           {/* Re-auth — always offered on connection error. */}
                           <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/5 p-2 text-left">
                             <p className="text-[11px] text-amber-700 dark:text-amber-300">
-                              {authExpired
+                              {relayTunnelDown
+                                ? "This cannot repair a dead tunnel by itself. First refresh the relay password, then retry; if the tunnel is still down, run `yaver auth` or restart Yaver on the box."
+                                : authExpired
                                 ? "Agent accepted the probe but its Convex session is stale. Hand your current session down to the box:"
                                 : "Try handing your current session down to the box — works even if the agent's own token is dead, as long as one relay can reach it:"}
                             </p>
                             <div className="mt-2 flex items-center gap-2">
+                              {relayTunnelDown ? (
+                                <button
+                                  disabled={reauthing || !token}
+                                  onClick={async () => {
+                                    if (!token) return;
+                                    setReauthing(true);
+                                    setReauthMessage(null);
+                                    try {
+                                      const repaired = await repairRelay();
+                                      setReauthMessage({
+                                        kind: repaired.repaired ? "ok" : "err",
+                                        text: repaired.repaired
+                                          ? "Relay credentials refreshed — retrying connect..."
+                                          : `Relay repair did not change anything${repaired.reason ? `: ${repaired.reason}` : ""}`,
+                                      });
+                                      if (repaired.repaired && connectedDevice) {
+                                        setTimeout(() => connectToDevice(connectedDevice), 400);
+                                      }
+                                    } catch (e: any) {
+                                      setReauthMessage({ kind: "err", text: e?.message || "Relay repair failed" });
+                                    } finally {
+                                      setReauthing(false);
+                                    }
+                                  }}
+                                  className="flex-1 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-200 hover:bg-amber-500/20 disabled:opacity-40"
+                                >
+                                  {reauthing ? "Repairing relay..." : "Repair relay & retry"}
+                                </button>
+                              ) : null}
                               <button
-                                disabled={reauthing || !connectedDevice || !token || relayCount === 0}
+                                disabled={reauthing || relayTunnelDown || !connectedDevice || !token || relayCount === 0}
                                 onClick={async () => {
                                   if (!connectedDevice || !token) return;
                                   setReauthing(true);
@@ -3383,7 +3481,7 @@ export default function DashboardPage() {
                                 }}
                                 className="flex-1 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-200 hover:bg-amber-500/20 disabled:opacity-40"
                               >
-                                {reauthing ? "Re-authing…" : relayCount === 0 ? "Re-auth (needs a relay)" : "Re-auth this device from web"}
+                                {reauthing && !relayTunnelDown ? "Re-authing…" : relayCount === 0 ? "Re-auth (needs a relay)" : "Re-auth this device from web"}
                               </button>
                             </div>
                             {reauthMessage ? (
@@ -3747,6 +3845,7 @@ export default function DashboardPage() {
                 onOpen={connectToDevice}
                 onCloseWorkspace={disconnect}
                 activeWorkspaceDeviceId={connectedDevice?.id ?? null}
+                workspaceConnectionState={connState}
                 connectError={connectError}
                 connectDiagnostics={connectDiagnostics}
                 hiddenCount={hiddenIds.size}
