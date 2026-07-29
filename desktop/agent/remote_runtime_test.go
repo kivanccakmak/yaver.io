@@ -252,6 +252,67 @@ func TestRemoteRuntimeCapabilitiesOnlyOffersDeclaredSpecialClientSurfaces(t *tes
 	}
 }
 
+func TestRemoteRuntimeAllSurfacesOverrideExposesAndroidSpecialTargets(t *testing.T) {
+	t.Setenv("YAVER_REMOTE_RUNTIME_ALL_SURFACES", "1")
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "android", "app", "src", "main"), 0o755); err != nil {
+		t.Fatalf("mkdir android app: %v", err)
+	}
+
+	caps := remoteRuntimeCapabilitiesForProject(dir, "react-native")
+	want := map[string]bool{
+		"android-wear":    true,
+		"android-tv":      true,
+		"android-xr":      true,
+		"android-auto":    true,
+		"android-redroid": true,
+	}
+	for _, target := range caps.Targets {
+		delete(want, target.ID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("all-surfaces override did not expose Android special targets: %v", want)
+	}
+}
+
+func TestAndroidSpecialSurfaceCapabilityNamesMissingAVD(t *testing.T) {
+	t.Setenv("YAVER_REMOTE_RUNTIME_ALL_SURFACES", "1")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	bin := filepath.Join(home, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	for _, name := range []string{"adb", "emulator"} {
+		path := filepath.Join(bin, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", bin)
+
+	caps := remoteRuntimeCapabilitiesForProject(t.TempDir(), "react-native")
+	target, ok := targetByIDForTest(caps, "android-wear")
+	if !ok {
+		t.Fatal("android-wear target missing")
+	}
+	if target.Enabled {
+		t.Fatalf("android-wear was enabled without a wear AVD: %+v", target)
+	}
+	if !strings.Contains(target.Reason, "AVD \"wear\" is not configured") {
+		t.Fatalf("missing AVD reason was not named:\n%s", target.Reason)
+	}
+}
+
+func targetByIDForTest(caps RemoteRuntimeCapabilities, id string) (RemoteRuntimeTarget, bool) {
+	for _, target := range caps.Targets {
+		if target.ID == id {
+			return target, true
+		}
+	}
+	return RemoteRuntimeTarget{}, false
+}
+
 func TestRemoteRuntimeSessionCarriesDeviceDims(t *testing.T) {
 	// The DeviceDims field should round-trip through JSON unscathed
 	// so the web viewer can pick it up directly from the session

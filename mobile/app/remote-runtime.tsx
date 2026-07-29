@@ -780,7 +780,8 @@ function buildRemoteRuntimeViewerHtml(baseUrl: string, headers: Record<string, s
                   post({ type: "feedback-launch-request", source: payload.source || "remote-runtime" });
                   setStatus("Feedback overlay requested.");
                 }
-                if (payload.error) setStatus(payload.error);
+                if (payload.type === "frame-error" && payload.error) setStatus("Frame capture failed: " + String(payload.error));
+                else if (payload.error) setStatus(payload.error);
               } catch {}
             };
           }

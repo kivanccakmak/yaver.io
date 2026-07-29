@@ -450,6 +450,9 @@ export default function RemoteRuntimeViewer({
               if (payload?.type === "browser-log") {
                 onRuntimeEventRef.current?.(payload as Record<string, unknown>);
               }
+              if (payload?.type === "frame-error" && payload.error) {
+                setViewerNote(`Frame capture failed: ${String(payload.error)}`);
+              }
               if (payload?.type === "taken-over") {
                 setViewerNote("Session taken over by another viewer.");
                 pc.close();

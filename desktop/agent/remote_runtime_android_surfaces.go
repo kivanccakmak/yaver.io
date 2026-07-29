@@ -41,7 +41,7 @@ func (t androidSurfaceTarget) Attach(ctx context.Context) (string, error) {
 // probeAndroidSurfaceTarget mirrors probeAndroidEmulatorTarget but
 // stamps a Surface badge + friendly label for the specific surface.
 // Enablement is identical (adb + emulator on PATH).
-func probeAndroidSurfaceTarget(id, surface, label string) RemoteRuntimeTarget {
+func probeAndroidSurfaceTarget(id, surface, label, avdName string) RemoteRuntimeTarget {
 	target := RemoteRuntimeTarget{
 		ID:               id,
 		Label:            label,
@@ -67,19 +67,24 @@ func probeAndroidSurfaceTarget(id, surface, label string) RemoteRuntimeTarget {
 		}
 		return target
 	}
+	if ok, reason := testkit.AndroidAVDUsable(avdName); !ok {
+		target.Enabled = false
+		target.Reason = reason
+		return target
+	}
 	target.Enabled = true
 	return target
 }
 
 func probeAndroidWearTarget() RemoteRuntimeTarget {
-	return probeAndroidSurfaceTarget("android-wear", "watch", "Wear OS Emulator over WebRTC")
+	return probeAndroidSurfaceTarget("android-wear", "watch", "Wear OS Emulator over WebRTC", "wear")
 }
 func probeAndroidTVTarget() RemoteRuntimeTarget {
-	return probeAndroidSurfaceTarget("android-tv", "tv", "Android TV Emulator over WebRTC")
+	return probeAndroidSurfaceTarget("android-tv", "tv", "Android TV Emulator over WebRTC", "tv")
 }
 func probeAndroidXRTarget() RemoteRuntimeTarget {
-	return probeAndroidSurfaceTarget("android-xr", "vision", "Android XR Emulator over WebRTC")
+	return probeAndroidSurfaceTarget("android-xr", "vision", "Android XR Emulator over WebRTC", "xr")
 }
 func probeAndroidAutoTarget() RemoteRuntimeTarget {
-	return probeAndroidSurfaceTarget("android-auto", "car", "Android Auto Emulator over WebRTC")
+	return probeAndroidSurfaceTarget("android-auto", "car", "Android Auto Emulator over WebRTC", "auto")
 }

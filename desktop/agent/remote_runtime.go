@@ -454,26 +454,31 @@ func appendDeclaredSpecialRuntimeTargets(
 	families map[string]bool,
 	familiesKnown bool,
 ) []RemoteRuntimeTarget {
+	allSurfaces := strings.EqualFold(strings.TrimSpace(os.Getenv("YAVER_REMOTE_RUNTIME_ALL_SURFACES")), "1") ||
+		strings.EqualFold(strings.TrimSpace(os.Getenv("YAVER_REMOTE_RUNTIME_ALL_SURFACES")), "true")
 	if surfaces[SurfaceWatchOS] {
 		targets = append(targets, probeWatchOSSimulatorTarget(families, familiesKnown))
 	}
-	if surfaces[SurfaceWearOS] {
+	if surfaces[SurfaceWearOS] || allSurfaces {
 		targets = append(targets, probeAndroidWearTarget())
 	}
 	if surfaces[SurfaceTVOS] {
 		targets = append(targets, probeTVOSSimulatorTarget(families, familiesKnown))
 	}
-	if projectHasAnyPathMarker(workDir, "android-tv", "androidtv", "tv/android", "tv/android-tv") {
+	if allSurfaces || projectHasAnyPathMarker(workDir, "android-tv", "androidtv", "tv/android", "tv/android-tv") {
 		targets = append(targets, probeAndroidTVTarget())
 	}
 	if surfaces[SurfaceVisionOS] {
 		targets = append(targets, probeVisionOSSimulatorTarget(families, familiesKnown))
 	}
-	if projectHasAnyPathMarker(workDir, "android-xr", "xr/android", "vision/android") {
+	if allSurfaces || projectHasAnyPathMarker(workDir, "android-xr", "xr/android", "vision/android") {
 		targets = append(targets, probeAndroidXRTarget())
 	}
-	if projectHasAnyPathMarker(workDir, "android-auto", "automotive", "car/android", "car/android-auto") {
+	if allSurfaces || projectHasAnyPathMarker(workDir, "android-auto", "automotive", "car/android", "car/android-auto") {
 		targets = append(targets, probeAndroidAutoTarget())
+	}
+	if allSurfaces {
+		targets = append(targets, probeRedroidTarget())
 	}
 	return targets
 }

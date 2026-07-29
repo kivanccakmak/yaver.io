@@ -167,6 +167,26 @@ func (m *RemoteRuntimeManager) Attach(sessionID string) (RemoteRuntimeSession, e
 	live.releaseDevice = releaseDevice
 	live.mu.Unlock()
 
+	if remoteRuntimeNeedsAttachFrameProbe(session.TargetID) {
+		probeCtx, probeCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		_, _, _, probeErr := live.captureJPEGFrame(probeCtx)
+		probeCancel()
+		if probeErr != nil {
+			live.mu.Lock()
+			live.deviceID = ""
+			live.releaseDevice = nil
+			live.mu.Unlock()
+			if releaseDevice != nil {
+				releaseDevice()
+			}
+			updated, _ := m.Update(sessionID, func(current *RemoteRuntimeSession) {
+				current.Status = "attach-failed"
+				current.Note = fmt.Sprintf("Could not capture an initial frame from %s (%s): %v", current.TargetLabel, deviceID, probeErr)
+			})
+			return updated, fmt.Errorf("initial frame probe failed for %s (%s): %w", session.TargetID, deviceID, probeErr)
+		}
+	}
+
 	// Probe the booted device's screen dims now (before signaling
 	// starts) so the session payload carries them, and the events
 	// channel can emit the same numbers on first connect. Fallback
@@ -187,6 +207,10 @@ func (m *RemoteRuntimeManager) Attach(sessionID string) (RemoteRuntimeSession, e
 		updated = m.ensureBrowserWindowNavigated(updated, live)
 	}
 	return updated, nil
+}
+
+func remoteRuntimeNeedsAttachFrameProbe(targetID string) bool {
+	return strings.HasPrefix(targetID, "android-") && preferredCaptureMethod(targetID) == CaptureJPEGScreenshot
 }
 
 // exclusiveAttacher is implemented by targets backed by a device that only ONE

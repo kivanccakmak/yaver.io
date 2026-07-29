@@ -1,6 +1,7 @@
 package testkit
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -49,11 +50,14 @@ func (d *AndroidEmuDriver) Boot(ctx context.Context) (string, error) {
 	if d.AVD == "" {
 		// Auto-pick the first AVD if the user didn't name one.
 		out, _ := runCtx(ctx, "emulator", "-list-avds")
-		first := strings.SplitN(strings.TrimSpace(out), "\n", 2)
-		if first[0] == "" {
+		avdName, skipped, err := chooseBootableAVD(out)
+		if err != nil {
 			return "", fmt.Errorf("no AVDs configured — run `avdmanager create avd ...`")
 		}
-		d.AVD = first[0]
+		if len(skipped) > 0 {
+			fmt.Fprintf(os.Stderr, "[android-emulator] skipped unusable AVDs: %s\n", strings.Join(skipped, ", "))
+		}
+		d.AVD = avdName
 	}
 
 	// PROBE THE AVD BEFORE SPAWNING.
@@ -67,6 +71,9 @@ func (d *AndroidEmuDriver) Boot(ctx context.Context) (string, error) {
 	// system-images/android-32/google_apis_playstore/arm64-v8a with the
 	// system-images directory completely empty.
 	if missing, remedy := avdSystemImageMissing(d.AVD); missing {
+		return "", fmt.Errorf("%s", remedy)
+	}
+	if malformed, remedy := avdConfigMalformed(d.AVD); malformed {
 		return "", fmt.Errorf("%s", remedy)
 	}
 
@@ -84,21 +91,165 @@ func (d *AndroidEmuDriver) Boot(ctx context.Context) (string, error) {
 	if runtime.GOOS == "linux" && !kvmAvailable() {
 		args = append(args, "-accel", "tcg", "-cores", "2")
 	}
-	cmd := exec.CommandContext(ctx, resolveTestkitCommandPath("emulator"), args...)
+	cmd := exec.Command(resolveTestkitCommandPath("emulator"), args...)
+	logFile, logPath, logErr := emulatorBootLog()
+	if logErr == nil {
+		defer logFile.Close()
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+	}
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("emulator start: %w", err)
 	}
-	// Don't reap — we want the emulator to outlive this Boot() call.
-	go func() { _ = cmd.Wait() }()
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
 
 	deviceID, err := waitForAdbDevice(ctx, 120*time.Second)
 	if err != nil {
+		if logFile != nil {
+			_ = logFile.Sync()
+		}
+		select {
+		case waitErr := <-waitCh:
+			tail := emulatorLogTail(logPath)
+			if tail != "" {
+				return "", fmt.Errorf("AVD %q started but exited before adb came online: %v\nemulator log tail:\n%s", d.AVD, waitErr, tail)
+			}
+			return "", fmt.Errorf("AVD %q started but exited before adb came online: %v", d.AVD, waitErr)
+		default:
+		}
+		if logPath != "" {
+			terminateStartedEmulator(cmd, waitCh)
+			return "", fmt.Errorf("AVD %q did not expose an adb device after 120s; emulator was stopped, log: %s", d.AVD, logPath)
+		}
+		terminateStartedEmulator(cmd, waitCh)
 		return "", err
 	}
 	if err := waitForBootComplete(ctx, deviceID, 120*time.Second); err != nil {
+		if logFile != nil {
+			_ = logFile.Sync()
+		}
+		select {
+		case waitErr := <-waitCh:
+			tail := emulatorLogTail(logPath)
+			if tail != "" {
+				return deviceID, fmt.Errorf("AVD %q adb device %s appeared but emulator exited before boot completed: %v\nemulator log tail:\n%s", d.AVD, deviceID, waitErr, tail)
+			}
+			return deviceID, fmt.Errorf("AVD %q adb device %s appeared but emulator exited before boot completed: %v", d.AVD, deviceID, waitErr)
+		default:
+		}
+		terminateStartedEmulator(cmd, waitCh)
 		return deviceID, err
 	}
 	return deviceID, nil
+}
+
+func terminateStartedEmulator(cmd *exec.Cmd, waitCh <-chan error) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Kill()
+	select {
+	case <-waitCh:
+	case <-time.After(5 * time.Second):
+	}
+}
+
+func emulatorBootLog() (*os.File, string, error) {
+	f, err := os.CreateTemp("", "yaver-android-emulator-*.log")
+	if err != nil {
+		return nil, "", err
+	}
+	return f, f.Name(), nil
+}
+
+func emulatorLogTail(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || len(b) == 0 {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) > 40 {
+		lines = lines[len(lines)-40:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func avdConfigPath(home, avd string) string {
+	if strings.TrimSpace(avd) == "" {
+		return ""
+	}
+	avdHome := strings.TrimSpace(os.Getenv("ANDROID_AVD_HOME"))
+	if avdHome == "" {
+		avdHome = filepath.Join(home, ".android", "avd")
+	}
+	if iniPath := filepath.Join(avdHome, avd+".ini"); iniPath != "" {
+		if data, err := os.ReadFile(iniPath); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				k, v, ok := strings.Cut(line, "=")
+				if ok && strings.TrimSpace(k) == "path" {
+					p := strings.TrimSpace(v)
+					if p != "" {
+						return filepath.Join(p, "config.ini")
+					}
+				}
+			}
+		}
+	}
+	if avdHome := strings.TrimSpace(os.Getenv("ANDROID_AVD_HOME")); avdHome != "" {
+		return filepath.Join(avdHome, avd+".avd", "config.ini")
+	}
+	return filepath.Join(avdHome, avd+".avd", "config.ini")
+}
+
+func chooseBootableAVD(list string) (string, []string, error) {
+	var skipped []string
+	for _, line := range strings.Split(list, "\n") {
+		avd := strings.TrimSpace(line)
+		if avd == "" {
+			continue
+		}
+		if missing, _ := avdSystemImageMissing(avd); missing {
+			skipped = append(skipped, avd)
+			continue
+		}
+		if malformed, _ := avdConfigMalformed(avd); malformed {
+			skipped = append(skipped, avd)
+			continue
+		}
+		return avd, skipped, nil
+	}
+	return "", skipped, fmt.Errorf("no usable AVDs")
+}
+
+// AndroidAVDUsable reports whether a named AVD can be offered as a picker
+// target before the user starts a session. Special surfaces (Wear/TV/XR/Auto)
+// do not auto-pick; advertising them from adb/emulator alone says "yes" while
+// Attach later says "no AVD/image/config", which is the silent-spinner class of
+// bug in capability form.
+func AndroidAVDUsable(avd string) (bool, string) {
+	name := strings.TrimSpace(avd)
+	if name == "" {
+		return false, "AVD name is empty"
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, fmt.Sprintf("cannot resolve HOME to find AVD %q: %v", name, err)
+	}
+	cfg := avdConfigPath(home, name)
+	if info, err := os.Stat(cfg); err != nil || info.IsDir() {
+		return false, fmt.Sprintf("AVD %q is not configured. Create it with `avdmanager create avd -n %s ...` after installing the matching Android system image.", name, name)
+	}
+	if missing, remedy := avdSystemImageMissing(name); missing {
+		return false, remedy
+	}
+	if malformed, remedy := avdConfigMalformed(name); malformed {
+		return false, remedy
+	}
+	return true, ""
 }
 
 // kvmAvailable reports whether /dev/kvm is exposed to this process.
@@ -176,9 +327,18 @@ func (d *AndroidEmuDriver) Launch(ctx context.Context, deviceID string) error {
 // Screenshot captures a PNG to outPath via `adb exec-out screencap`.
 func (d *AndroidEmuDriver) Screenshot(ctx context.Context, deviceID, outPath string) error {
 	cmd := exec.CommandContext(ctx, resolveTestkitCommandPath("adb"), "-s", deviceID, "exec-out", "screencap", "-p")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return fmt.Errorf("adb screencap: %w: %s", err, msg)
+		}
 		return fmt.Errorf("adb screencap: %w", err)
+	}
+	if len(out) == 0 {
+		return fmt.Errorf("adb screencap produced 0 bytes for %s — device is online but not capturable", deviceID)
 	}
 	return writeFile(outPath, out)
 }
@@ -200,19 +360,31 @@ func waitForAdbDevice(ctx context.Context, timeout time.Duration) (string, error
 		default:
 		}
 		out, _ := runCtx(ctx, "adb", "devices")
-		for _, line := range strings.Split(out, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "List of devices") {
-				continue
-			}
-			fields := strings.Fields(line)
-			if len(fields) >= 2 && fields[1] == "device" {
-				return fields[0], nil
-			}
+		if serial, err := adbOnlineDeviceFromList(out); err != nil {
+			return "", err
+		} else if serial != "" {
+			return serial, nil
 		}
 		time.Sleep(1 * time.Second)
 	}
 	return "", fmt.Errorf("no adb device online after %s", timeout)
+}
+
+func adbOnlineDeviceFromList(out string) (string, error) {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "List of devices") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == "device" {
+			return fields[0], nil
+		}
+		if len(fields) >= 2 && fields[1] == "unauthorized" {
+			return "", fmt.Errorf("adb device %s is unauthorized — accept the Android debugging prompt, or restart adb with ADB_VENDOR_KEYS pointing at the user's ~/.android adb key before booting the emulator", fields[0])
+		}
+	}
+	return "", nil
 }
 
 // waitForBootComplete polls the device until `getprop sys.boot_completed`
@@ -298,7 +470,7 @@ func avdSystemImageMissing(avd string) (bool, string) {
 	if err != nil {
 		return false, ""
 	}
-	cfg := filepath.Join(home, ".android", "avd", avd+".avd", "config.ini")
+	cfg := avdConfigPath(home, avd)
 	data, err := os.ReadFile(cfg)
 	if err != nil {
 		return false, "" // no config to read — let the emulator speak for itself
@@ -335,4 +507,41 @@ func avdSystemImageMissing(avd string) (bool, string) {
 			"Install it with: sdkmanager %q   (then the Android lane works without any further setup). "+
 			"Nothing is wrong with adb or the emulator binary.",
 		avd, sysdir, pkg)
+}
+
+func avdConfigMalformed(avd string) (bool, string) {
+	if strings.TrimSpace(avd) == "" {
+		return false, ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, ""
+	}
+	cfg := avdConfigPath(home, avd)
+	data, err := os.ReadFile(cfg)
+	if err != nil {
+		return false, ""
+	}
+	var bad []string
+	for _, line := range strings.Split(string(data), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key := strings.TrimSpace(k)
+		value := strings.TrimSpace(v)
+		switch key {
+		case "avd.id", "avd.name", "disk.dataPartition.path":
+			if strings.Contains(value, "<") || strings.Contains(value, ">") {
+				bad = append(bad, key+"="+value)
+			}
+		}
+	}
+	if len(bad) == 0 {
+		return false, ""
+	}
+	return true, fmt.Sprintf(
+		"AVD %q has malformed config fields (%s). Recreate it with avdmanager after reinstalling its system image; "+
+			"the emulator may start but never expose adb, so WebRTC cannot capture frames from it.",
+		avd, strings.Join(bad, ", "))
 }

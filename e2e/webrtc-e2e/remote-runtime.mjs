@@ -295,9 +295,16 @@ try {
         }
       } else {
         const state = await page.evaluate(() => window.__yv);
-        console.log(`SILENT ${JSON.stringify(state).slice(0, 500)}`);
-        console.log(`VERDICT=SILENT · ${TARGET}`);
-        process.exitCode = 4;
+        const frameError = (state.events || []).find((e) => e && e.type === "frame-error" && e.error);
+        if (frameError) {
+          console.log(`NAMED ${JSON.stringify(state).slice(0, 500)}`);
+          console.log(`VERDICT=NAMED · ${TARGET}:frame-error:${String(frameError.error).slice(0, 240)}`);
+          process.exitCode = 7;
+        } else {
+          console.log(`SILENT ${JSON.stringify(state).slice(0, 500)}`);
+          console.log(`VERDICT=SILENT · ${TARGET}`);
+          process.exitCode = 4;
+        }
       }
     }
   }

@@ -67,6 +67,61 @@ func TestMissingSystemImageIsNamedNotTimedOut(t *testing.T) {
 	}
 }
 
+func TestSystemImageProbeUsesAndroidAVDHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	avdHome := filepath.Join(home, "custom-avds")
+	t.Setenv("ANDROID_AVD_HOME", avdHome)
+	sdk := filepath.Join(home, "sdk")
+	t.Setenv("ANDROID_SDK_ROOT", sdk)
+	t.Setenv("ANDROID_HOME", sdk)
+
+	const sysdir = "system-images/android-34/android-wear/arm64-v8a/"
+	dir := filepath.Join(avdHome, "wear.avd")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir avd: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.ini"), []byte("image.sysdir.1 = "+sysdir+"\n"), 0o644); err != nil {
+		t.Fatalf("write config.ini: %v", err)
+	}
+
+	missing, remedy := avdSystemImageMissing("wear")
+	if !missing {
+		t.Fatal("ANDROID_AVD_HOME was ignored; the real AVD registry was not preflighted")
+	}
+	if !strings.Contains(remedy, "system-images;android-34;android-wear;arm64-v8a") {
+		t.Fatalf("remedy did not name the exact package: %s", remedy)
+	}
+}
+
+func TestMalformedAVDConfigIsNamedBeforeBoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".android", "avd", "wear.avd")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir avd: %v", err)
+	}
+	body := strings.Join([]string{
+		"image.sysdir.1 = system-images/android-34/android-wear/arm64-v8a/",
+		"avd.id=<build>",
+		"avd.name=<build>",
+		"disk.dataPartition.path=<temp>",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(dir, "config.ini"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write config.ini: %v", err)
+	}
+
+	malformed, remedy := avdConfigMalformed("wear")
+	if !malformed {
+		t.Fatal("malformed AVD placeholders were not named before boot")
+	}
+	for _, want := range []string{"avd.id=<build>", "disk.dataPartition.path=<temp>", "never expose adb"} {
+		if !strings.Contains(remedy, want) {
+			t.Fatalf("remedy missing %q:\n%s", want, remedy)
+		}
+	}
+}
+
 func TestSystemImageProbeStaysQuietWhenItCannotKnow(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -87,6 +142,111 @@ func TestSystemImageProbeStaysQuietWhenItCannotKnow(t *testing.T) {
 	}
 }
 
+func TestChooseBootableAVDSkipsBrokenFirstCandidate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sdk := filepath.Join(home, "sdk")
+	t.Setenv("ANDROID_SDK_ROOT", sdk)
+	t.Setenv("ANDROID_HOME", sdk)
+
+	writeAVD(t, home, "missing_image", "system-images/android-32/google_apis/arm64-v8a/")
+	badDir := filepath.Join(home, ".android", "avd", "malformed.avd")
+	if err := os.MkdirAll(badDir, 0o755); err != nil {
+		t.Fatalf("mkdir malformed avd: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(badDir, "config.ini"), []byte("image.sysdir.1 = system-images/android-33/android-tv/arm64-v8a/\navd.id=<build>\n"), 0o644); err != nil {
+		t.Fatalf("write malformed avd: %v", err)
+	}
+	const goodSysdir = "system-images/android-35/google_atd/arm64-v8a/"
+	writeAVD(t, home, "good", goodSysdir)
+	if err := os.MkdirAll(filepath.Join(sdk, goodSysdir), 0o755); err != nil {
+		t.Fatalf("mkdir good sysimage: %v", err)
+	}
+
+	got, skipped, err := chooseBootableAVD("missing_image\nmalformed\ngood\n")
+	if err != nil {
+		t.Fatalf("chooseBootableAVD: %v", err)
+	}
+	if got != "good" {
+		t.Fatalf("picked %q, want good", got)
+	}
+	if strings.Join(skipped, ",") != "missing_image,malformed" {
+		t.Fatalf("skipped = %v", skipped)
+	}
+}
+
+func TestChooseBootableAVDResolvesDisplayNameIniPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sdk := filepath.Join(home, "sdk")
+	t.Setenv("ANDROID_SDK_ROOT", sdk)
+	t.Setenv("ANDROID_HOME", sdk)
+	avdHome := filepath.Join(home, ".android", "avd")
+	realDir := filepath.Join(avdHome, "Medium_Phone.avd")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("mkdir avd: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(avdHome, "Medium_Phone_API_36.0.ini"), []byte("path="+realDir+"\n"), 0o644); err != nil {
+		t.Fatalf("write avd ini: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "config.ini"), []byte("image.sysdir.1=system-images/android-36/google_apis_playstore/arm64-v8a/\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, skipped, err := chooseBootableAVD("Medium_Phone_API_36.0\n")
+	if err == nil {
+		t.Fatal("display-name AVD with missing image was treated as bootable because its .ini path was ignored")
+	}
+	if strings.Join(skipped, ",") != "Medium_Phone_API_36.0" {
+		t.Fatalf("skipped = %v", skipped)
+	}
+}
+
+func TestAndroidAVDUsableNamesMissingExactAVD(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	ok, reason := AndroidAVDUsable("wear")
+	if ok {
+		t.Fatal("missing exact Wear AVD was reported usable")
+	}
+	for _, want := range []string{"AVD \"wear\" is not configured", "avdmanager create avd", "wear"} {
+		if !strings.Contains(reason, want) {
+			t.Fatalf("reason missing %q:\n%s", want, reason)
+		}
+	}
+}
+
+func TestAndroidAVDUsableAcceptsInstalledImage(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sdk := filepath.Join(home, "sdk")
+	t.Setenv("ANDROID_SDK_ROOT", sdk)
+	t.Setenv("ANDROID_HOME", sdk)
+
+	const sysdir = "system-images/android-34/android-wear/arm64-v8a/"
+	writeAVD(t, home, "wear", sysdir)
+	if err := os.MkdirAll(filepath.Join(sdk, sysdir), 0o755); err != nil {
+		t.Fatalf("mkdir sysimage: %v", err)
+	}
+
+	if ok, reason := AndroidAVDUsable("wear"); !ok {
+		t.Fatalf("installed Wear AVD was disabled: %s", reason)
+	}
+}
+
+func TestWaitForAdbDeviceNamesUnauthorized(t *testing.T) {
+	_, err := adbOnlineDeviceFromList("List of devices attached\nemulator-5554\tunauthorized\n")
+	if err == nil {
+		t.Fatal("unauthorized adb device waited for timeout instead of naming the auth problem")
+	}
+	for _, want := range []string{"unauthorized", "ADB_VENDOR_KEYS", "emulator-5554"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%s", want, err)
+		}
+	}
+}
+
 // Boot must actually CALL the probe. The helper being correct is worthless if the
 // boot path skips it — that is precisely the two-minute-timeout behaviour we
 // removed, and it would come back invisibly.
@@ -100,13 +260,21 @@ func TestBootPreflightsTheSystemImage(t *testing.T) {
 	if bootAt < 0 {
 		t.Fatal("Boot not found — was it renamed?")
 	}
-	spawnAt := strings.Index(src[bootAt:], "exec.CommandContext")
+	spawnAt := strings.Index(src[bootAt:], "exec.Command(")
 	if spawnAt < 0 {
 		t.Fatal("Boot no longer spawns the emulator — was it rewritten?")
+	}
+	if strings.Contains(src[bootAt:], "exec.CommandContext(ctx, resolveTestkitCommandPath(\"emulator\")") {
+		t.Fatal("Boot ties the emulator process lifetime to the attach/wait context — a successful attach can " +
+			"cancel that context and kill the emulator before WebRTC captures its first frame")
 	}
 	if !strings.Contains(src[bootAt:bootAt+spawnAt], "avdSystemImageMissing(") {
 		t.Fatal("Boot spawns the emulator WITHOUT pre-flighting the system image — a missing image " +
 			"then panics on the emulator's own stderr and the caller waits two minutes to report " +
 			"\"no adb device online\", blaming adb for an absent download")
+	}
+	if !strings.Contains(src[bootAt:bootAt+spawnAt], "avdConfigMalformed(") {
+		t.Fatal("Boot spawns the emulator WITHOUT pre-flighting malformed AVD config — a Wear/TV/Auto image " +
+			"with placeholder fields can then hang until adb timeout or produce a silent WebRTC stream")
 	}
 }

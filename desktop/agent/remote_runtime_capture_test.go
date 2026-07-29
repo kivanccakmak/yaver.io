@@ -31,3 +31,15 @@ func TestPreferredCaptureMethod(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteRuntimeNeedsAttachFrameProbe(t *testing.T) {
+	if !remoteRuntimeNeedsAttachFrameProbe("android-wear") {
+		t.Fatal("android-wear must prove JPEG capture before reporting WebRTC ready")
+	}
+	if !remoteRuntimeNeedsAttachFrameProbe("android-emulator") {
+		t.Fatal("android-emulator must prove JPEG capture before reporting WebRTC ready")
+	}
+	if remoteRuntimeNeedsAttachFrameProbe("ios-simulator") {
+		t.Fatal("iOS RTP targets should not run JPEG attach frame probes")
+	}
+}
