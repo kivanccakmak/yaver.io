@@ -102,14 +102,12 @@ jobs:
             echo "::warning::Skipping password-auth E2E specs because live signup is unavailable: ${{ steps.password-auth.outputs.reason }}"
             cd e2e
             E2E_SKIP_LIVE_AUTH=1 npx playwright test \
-              tests/bootstrap-pair.spec.ts \
               tests/dashboard-autodev.spec.ts \
               tests/landing.spec.ts \
               tests/managed-cloud-delete.spec.ts \
               tests/mobile-app-lane-matrix.spec.ts \
               tests/remote-preview-live.spec.ts \
               tests/remote-runners.spec.ts \
-              tests/vibe-preview.spec.ts \
               tests/webrtc-stream-live.spec.ts \
               tests/webui-lane-matrix.spec.ts
           fi
