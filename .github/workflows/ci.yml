@@ -127,6 +127,40 @@ jobs:
       - name: Build CLI
         run: cd desktop/agent && go build -o yaver .
 
+  # Deterministic client-side unit tests: connectivity-robustness guards and the
+  # false-positive-label classifiers. Pure TS primitives (no react-native, no
+  # 16G node_modules) — run straight through `tsx`. The vibe/false-positive/webrtc
+  # CLOSED-LOOP e2e (e2e/vibe-e2e, e2e/webrtc-e2e, e2e/false-positive-*.mjs) are
+  # NOT here: they need the caller's real account creds + a live box, so they run
+  # manually.
+  client-unit-tests:
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true' || needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install tsx
+        run: npm i -g tsx
+      # Un-wedgeable connect guard (deadline + monotonic attempt-id) w/ negative controls.
+      - name: connectGuard (wedge + attempt-id)
+        if: needs.changes.outputs.mobile == 'true'
+        run: tsx mobile/src/lib/connectGuard.test.ts
+      # Relay refusal classifier — stable code first, prose fallback.
+      - name: relayAuth classifier
+        if: needs.changes.outputs.mobile == 'true'
+        run: tsx mobile/src/lib/relayAuth.test.ts
+      # Native vs .web.ts beacon parity (drift is invisible to tsc, crashes at runtime).
+      - name: beacon native/web parity
+        if: needs.changes.outputs.mobile == 'true'
+        run: tsx mobile/src/lib/beaconParity.test.ts
+      # Web device-card "Unauthorized" false-positive classifier.
+      - name: web connection-error classifier
+        if: needs.changes.outputs.web == 'true'
+        run: tsx web/lib/connection-error.test.ts
+
   web-build:
     needs: changes
     if: needs.changes.outputs.web == 'true'
