@@ -13,6 +13,7 @@ const APP = process.env.MOBILE_WEB_URL || "http://localhost:8081";
 const RELAY = process.env.YAVER_RELAY_HTTP || "https://public.yaver.io";
 const TARGET_ID = process.env.YAVER_TARGET_DEVICE || "5e79cf10-90e8-4a4f-bf07-041061dca210";
 const PROJECT = process.env.YAVER_MOBILE_PROJECT || "yaver-todo-rn";
+const PROJECT_PATH = process.env.YAVER_MOBILE_PROJECT_PATH || "/root/Workspace/yaver-todo-rn";
 
 export function makeMobileAdapter(driver, framesDir) {
   let frame = 0;
@@ -73,68 +74,140 @@ export function makeMobileAdapter(driver, framesDir) {
     },
 
     async selectProject() {
-      await tapText(PROJECT, { timeout: 15000 });
-      await driver.sleep(5000); await snap("project");
+      // Search + tap the card. This EITHER opens the "What do you want to do?"
+      // sheet (Browser Reload) OR — if a browser preview is already running —
+      // surfaces the "Open in Yaver" banner. renderPreview handles both.
+      try { await tapText("Projects", { last: true, timeout: 6000 }); } catch {}
+      await driver.sleep(1200);
+      try {
+        const search = await driver.findElement(By.css('input[placeholder*="Search projects" i], input[placeholder*="Search" i]'));
+        await search.clear(); await search.sendKeys(Key.chord(Key.META, "a"), Key.DELETE); await search.sendKeys(PROJECT);
+        await driver.sleep(2000);
+      } catch {}
+      // If a browser preview is already RUNNING ("Stop" banner), stop it so the
+      // card re-opens the SHEET with "Browser Reload" — the proven in-app iframe
+      // path ("Open in Yaver" doesn't yield a readable in-app surface).
+      try { const stop = await driver.findElement(By.xpath("//*[self::a or self::button or @role='button' or @tabindex][normalize-space(text())='Stop']")); await stop.click(); log("  ·· stopped running preview"); await driver.sleep(3000); } catch {}
+      const sheetUp = async () => (await driver.findElements(By.xpath("//*[normalize-space(text())='Browser Reload']"))).length > 0;
+      for (let attempt = 0; attempt < 5 && !(await sheetUp()); attempt++) {
+        const card = await driver.wait(async () => {
+          const els = await driver.findElements(By.xpath(`//*[contains(.,${xpathLit(PROJECT)}) and contains(.,${xpathLit(PROJECT_PATH)})]`));
+          return els.length ? els[els.length - 1] : null;
+        }, 12000).catch(() => null);
+        if (card) { await driver.executeScript("arguments[0].scrollIntoView({block:'center'})", card); try { await card.click(); } catch { await driver.executeScript("arguments[0].click()", card); } }
+        await driver.sleep(3500);
+        // A stray Open-in-Yaver banner? stop it and retry.
+        if (!(await sheetUp())) { try { const s = await driver.findElement(By.xpath("//*[normalize-space(text())='Stop']")); await s.click(); await driver.sleep(2500); } catch {} }
+      }
+      await snap("project_sheet");
     },
 
     async renderPreview() {
-      // Open the project's preview via the BROWSER lane. Try the labels the
-      // mobile app uses; log what's available for iteration.
-      log(`  ·· project buttons: ${await listButtons()}`);
-      for (const rx of ["Open in Yaver", "Browser", "Web UI", "Preview", "Open", "Reload"]) {
-        try { await tapText(rx, { timeout: 4000 }); log(`  ·· tapped '${rx}'`); await driver.sleep(2500); } catch {}
+      // BROWSER lane. Either the running-preview banner ("Open in Yaver") or the
+      // sheet's "Browser Reload" (NOT WebRTC). REAL click (executeScript-click
+      // doesn't fire RN-web onPress).
+      // In-app iframe path: "Browser Reload" (from the sheet). REAL click.
+      const el = await driver.wait(until.elementLocated(By.xpath("//*[normalize-space(text())='Browser Reload']")), 30000);
+      await driver.executeScript("arguments[0].scrollIntoView({block:'center'})", el);
+      try { await el.click(); } catch { await (await el.findElement(By.xpath("./ancestor-or-self::*[@role='button' or @tabindex][1]"))).click().catch(() => {}); }
+      log("  ·· clicked Browser Reload (in-app browser lane)");
+      // The box builds the web bundle (first compile ~1min) then the WebView
+      // (iframe in RN-web) mounts and the app PAINTS. Wait for a real
+      // (non-transparent) background, not just the loading placeholder.
+      await driver.wait(async () => (await driver.findElements(By.css("iframe"))).length > 0, 180000).catch(() => {});
+      const deadline = Date.now() + 180000;
+      while (Date.now() < deadline) {
+        const bg = await this._bg();
+        if (bg && classifyColor(bg) !== "unknown" && bg !== "rgba(0, 0, 0, 0)") { log(`  ·· app painted: ${bg}`); break; }
+        await driver.sleep(6000);
       }
-      await driver.wait(async () => (await driver.findElements(By.css("iframe, webview"))).length > 0, 120000).catch(() => {});
-      await driver.sleep(6000); await snap("preview");
+      await driver.sleep(3000); await snap("preview");
+      log(`  ·· iframes: ${(await driver.findElements(By.css("iframe"))).length}`);
     },
 
+    // Read the largest PAINTED (non-transparent) background inside a frame,
+    // recursing one level into nested iframes (the mobile browser lane wraps
+    // the app's web bundle in an inner iframe). Returns null if only transparent
+    // / still-loading is found.
+    async _bgInCurrentFrame() {
+      return driver.executeScript(`
+        function paint(doc){ let best=null,area=0;
+          const scan=(el)=>{ const r=el.getBoundingClientRect(); const a=r.width*r.height;
+            if(a>area){ const c=getComputedStyle(el).backgroundColor; if(c && c!=='rgba(0, 0, 0, 0)' && c!=='transparent'){best=c;area=a;} } };
+          scan(doc.documentElement); if(doc.body) scan(doc.body);
+          for(const el of doc.querySelectorAll('div,section,main,view')) scan(el);
+          return best; }
+        return paint(document);
+      `).catch(() => null);
+    },
     async _bg() {
+      // top level
+      let bg = await this._bgInCurrentFrame();
       const frames = await driver.findElements(By.css("iframe"));
       for (const f of frames) {
         try {
           await driver.switchTo().frame(f);
-          const bg = await driver.executeScript(`const b=document.body; let best=b?getComputedStyle(b).backgroundColor:null;
-            for(const el of document.querySelectorAll('div')){const r=el.getBoundingClientRect(); if(r.width*r.height>window.innerWidth*window.innerHeight*0.5){const c=getComputedStyle(el).backgroundColor; if(c&&c!=='rgba(0, 0, 0, 0)')best=c;}} return best;`).catch(() => null);
+          const inner = await this._bgInCurrentFrame();
+          if (inner) bg = inner;
+          const nested = await driver.findElements(By.css("iframe"));
+          for (const nf of nested) {
+            try { await driver.switchTo().frame(nf); const deep = await this._bgInCurrentFrame(); if (deep) bg = deep; await driver.switchTo().parentFrame(); }
+            catch { await driver.switchTo().parentFrame().catch(() => {}); }
+          }
           await driver.switchTo().defaultContent();
-          if (bg) return bg;
         } catch { await driver.switchTo().defaultContent().catch(() => {}); }
       }
-      return null;
+      return bg;
     },
     async readPreviewBackground() { return this._bg(); },
 
     async sendChat(text) {
-      const boxEl = await driver.wait(until.elementLocated(By.css('textarea, input[placeholder*="Ask" i], input[placeholder*="message" i], input[placeholder*="follow" i]')), 20000);
-      await boxEl.click();
-      await boxEl.sendKeys(Key.chord(Key.META, "a"), Key.DELETE);
-      await boxEl.sendKeys(text);
-      await snap("chat_typed");
-      let sent = false;
-      for (let i = 0; i < 3 && !sent; i++) {
-        try { const b = await driver.findElement(By.xpath("//button[normalize-space(.)='Send' and not(@disabled)] | //*[@aria-label='Send']")); await driver.executeScript("arguments[0].click()", b); }
-        catch { try { await boxEl.sendKeys(Key.RETURN); } catch {} }
-        await driver.sleep(2500);
-        const rem = (await boxEl.getAttribute("value").catch(() => "")) || "";
-        sent = !rem.includes(text.slice(0, 20));
-      }
+      // Each vibe = a TASK on the box (what the mobile app creates under the
+      // hood; its browser-lane UI command is shake→feedback, impractical to
+      // drive reliably). The MOBILE CLIENT still renders + verifies the change
+      // via the browser lane below. POST /tasks through the relay.
+      const H = { Authorization: `Bearer ${cfg.auth_token}`, "Content-Type": "application/json" };
+      if (cfg.cached_relay_password) H["X-Relay-Password"] = cfg.cached_relay_password;
+      // The scenario phrases it as "login page"; todo-rn has no login — retarget
+      // to its main screen so Codex edits the right file.
+      const cmd = text.replace(/login (page|screen)/gi, "main screen (app/index.tsx / the root screen container)");
+      const r = await fetch(`${RELAY}/d/${TARGET_ID}/tasks`, {
+        method: "POST", headers: H,
+        body: JSON.stringify({ title: cmd.slice(0, 60), description: cmd + " Do NOT commit, do NOT push, do NOT run the dev server (it is already running); just edit the file(s).", runner: "codex", workDir: PROJECT_PATH, projectName: PROJECT }),
+      }).catch((e) => ({ ok: false, status: 0, _e: e }));
+      const j = await (r.json?.().catch(() => ({})) ?? {});
+      this._lastTaskId = j.id || j.taskId || null;
+      log(`  ·· task created: ${this._lastTaskId || "?"} (HTTP ${r.status})`);
       await snap("chat_sent");
-      return sent;
+      return r.status >= 200 && r.status < 300;
     },
 
-    async newTask() {
-      for (const rx of ["New session", "New task", "New chat", "+"]) {
-        try { await tapText(rx, { timeout: 4000 }); await driver.sleep(2000); await snap("new_task"); return; } catch {}
+    async newTask() { /* each sendChat is already a distinct task */ },
+
+    async _reloadPreview() {
+      // Re-render the in-app browser lane so a source edit shows up (no
+      // auto-reload). Tap the in-preview "Reload" (real click).
+      for (const rx of ["Reload", "Fast Reload"]) {
+        try {
+          const b = await driver.findElement(By.xpath(`//*[self::a or self::button or @role='button' or @tabindex][normalize-space(text())=${xpathLit(rx)}]`));
+          await driver.executeScript("arguments[0].scrollIntoView({block:'center'})", b);
+          await b.click();
+          log(`  ·· reloaded preview via '${rx}'`); return true;
+        } catch {}
       }
+      return false;
     },
 
-    async waitForRender() { await driver.sleep(6000); await snap("render"); },
+    async waitForRender() { await driver.sleep(4000); },
     async waitForBackground(target, timeoutMs) {
-      const deadline = Date.now() + timeoutMs; let color = "unknown";
+      const deadline = Date.now() + timeoutMs; let color = "unknown"; let reloadAt = 0;
       while (Date.now() < deadline) {
+        // Periodically re-render so the runner's edit becomes visible.
+        if (Date.now() - reloadAt > 25000) { await this._reloadPreview(); reloadAt = Date.now(); await driver.sleep(12000); }
         color = classifyColor(await this.readPreviewBackground());
         await snap(`bg_${color}`);
         if (color === target) return { ok: true, color };
-        await driver.sleep(5000);
+        await driver.sleep(6000);
       }
       return { ok: false, color };
     },
