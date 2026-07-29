@@ -114,6 +114,7 @@ export default function Header() {
               <Link href="/download" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
                 Download
               </Link>
+              {/*
               <Link href="/integrations" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
                 Integrations
               </Link>
@@ -123,6 +124,7 @@ export default function Header() {
               <Link href="/games" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
                 Games
               </Link>
+              */}
               <Link href="/blog" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
                 Blog
               </Link>
@@ -192,9 +194,11 @@ export default function Header() {
             <Link href="/docs" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Docs</Link>
             <Link href="/docs/developers" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Developers</Link>
             <Link href="/download" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Download</Link>
+            {/*
             <Link href="/integrations" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Integrations</Link>
             <Link href="/apps" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Apps</Link>
             <Link href="/games" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Games</Link>
+            */}
             <Link href="/blog" className="text-sm text-surface-400 hover:text-surface-50" onClick={() => setMobileOpen(false)}>Blog</Link>
             <Link href="/auth" className="btn-primary text-center text-sm" onClick={() => setMobileOpen(false)}>Log in</Link>
           </div>
