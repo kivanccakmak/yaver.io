@@ -11,6 +11,7 @@ import { Builder } from "selenium-webdriver";
 import chrome from "selenium-webdriver/chrome.js";
 import { runScenario, classifyColor } from "./scenario.mjs";
 import { makeWebAdapter } from "./adapters/web.mjs";
+import { makeMobileAdapter } from "./adapters/mobile.mjs";
 
 const SURFACE = process.argv[2] || "web";
 const PHASE = process.env.VIBE_PHASE || "full";
@@ -27,9 +28,11 @@ async function main() {
   if (process.env.HEADED !== "1") opts.addArguments("--headless=new");
   const driver = await new Builder().forBrowser("chrome").setChromeOptions(opts).build();
 
-  const adapter = SURFACE === "web" || SURFACE === "mobile"
-    ? makeWebAdapter(driver, FRAMES)
-    : (() => { throw new Error(`no adapter for ${SURFACE}`); })();
+  const adapter = SURFACE === "mobile"
+    ? makeMobileAdapter(driver, FRAMES)
+    : SURFACE === "web"
+      ? makeWebAdapter(driver, FRAMES)
+      : (() => { throw new Error(`no adapter for ${SURFACE}`); })();
 
   let result;
   try {
