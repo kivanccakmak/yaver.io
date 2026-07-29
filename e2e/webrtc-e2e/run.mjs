@@ -13,12 +13,12 @@
 // CanEncodeRTPH264 = ffmpegPath() != ""). We drive it with a CONTROLLED test
 // pattern so the loop is deterministic and pixel-truthful:
 //
-//   push a solid-GREEN JPEG   →  POST /stream/push?name=<src>
+//   push a solid-MAGENTA JPEG →  POST /stream/push?name=<src>
 //   browser offers recvonly   →  makeOffer() (full ICE gather, non-trickle)
 //   harness relays signaling   →  POST /stream/webrtc/offer {source, sdp}   (no browser CORS)
 //   media flows over ICE       →  ontrack → <video> paints
-//   read the CENTER pixel      →  assert GREEN
-//   push RED, assert RED        →  the transport carried a real, changing frame
+//   read the CENTER pixel      →  assert MAGENTA
+//   push BLUE, assert BLUE      →  the transport carried a real, changing frame
 //
 // A real RTP track is the ONLY way <video>.videoWidth becomes non-zero; the JPEG
 // fallback fills an <img>, never a <video> — so readPixel()!=null is itself proof
@@ -38,8 +38,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, execSync } from "node:child_process";
 import http from "node:http";
-import { Builder, By } from "selenium-webdriver";
-import chrome from "selenium-webdriver/chrome.js";
+import { chromium } from "playwright";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SURFACE = process.argv[2] || "both";
@@ -54,7 +53,18 @@ const TOKEN = cfg.auth_token;
 // Resolve the box HTTP base at RUNTIME (never hardcode infra IPs in a public repo).
 function resolveBase() {
   if (process.env.YAVER_WEBRTC_BASE) return process.env.YAVER_WEBRTC_BASE.replace(/\/$/, "");
-  const out = execSync("yaver devices 2>/dev/null", { encoding: "utf8" });
+  let out;
+  try {
+    out = execSync("yaver devices 2>/dev/null", {
+      encoding: "utf8",
+      timeout: Number(process.env.YAVER_WEBRTC_DEVICES_TIMEOUT_MS || 10_000),
+    });
+  } catch (e) {
+    const why = e?.signal === "SIGTERM" || e?.code === "ETIMEDOUT"
+      ? "timed out waiting for `yaver devices`"
+      : `failed to run \`yaver devices\`: ${e?.message || e}`;
+    throw new Error(`${why}; set YAVER_WEBRTC_BASE=http://<box>:18080 for a bounded live run`);
+  }
   // The primary row carries the reachable host:port in its last column.
   const line = out.split("\n").find((l) => /\bprimary\b/.test(l)) || "";
   const m = line.match(/(\d{1,3}(?:\.\d{1,3}){3}:\d+)/);
@@ -78,20 +88,26 @@ const MAGENTA = makeFrame("0xE032B0", "a.jpg");
 const BLUE = makeFrame("0x2E52E4", "b.jpg");
 
 async function pushFrame(b64) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), Number(process.env.YAVER_WEBRTC_PUSH_TIMEOUT_MS || 8_000));
   const res = await fetch(`${BASE}/stream/push?name=${encodeURIComponent(SOURCE)}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify({ jpegB64: b64, mime: "image/jpeg" }),
-  });
+    signal: ac.signal,
+  }).finally(() => clearTimeout(timer));
   if (!res.ok) throw new Error(`push failed HTTP ${res.status}`);
 }
 
 async function offerToBox(sdp) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), Number(process.env.YAVER_WEBRTC_OFFER_TIMEOUT_MS || 20_000));
   const res = await fetch(`${BASE}/stream/webrtc/offer`, {
     method: "POST",
     headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify({ source: SOURCE, sdp }),
-  });
+    signal: ac.signal,
+  }).finally(() => clearTimeout(timer));
   const data = await res.json();
   // The decoupled ffmpeg stream lane answers {ok,type:"answer",sdp} directly
   // (it ALWAYS produces an RTP H.264 track — no JPEG fallback on this route).
@@ -134,12 +150,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function runSurface(driver, surface, server) {
   const port = server.address().port;
   const url = surface === "mobile" ? `http://127.0.0.1:${port}/mobile` : `http://127.0.0.1:${port}/`;
-  await driver.get(url);
+  console.log(`  [${surface}] opening receiver ${url}`);
+  await driver.goto(url, { waitUntil: "domcontentloaded", timeout: Number(process.env.YAVER_WEBRTC_PAGELOAD_TIMEOUT_MS || 15_000) });
   await sleep(500);
 
   // In the mobile framing the receiver lives inside the <iframe> — drive that
   // window's globals so the SAME contract (makeOffer/applyAnswer/readPixel) works.
-  const ctx = surface === "mobile" ? "document.getElementById('f').contentWindow" : "window";
+  const targetWindow = surface === "mobile"
+    ? "() => document.getElementById('f').contentWindow"
+    : "() => window";
 
   // A pushed stream source is only "live" while frames keep arriving
   // (pushedFreshWindow = 12s, desktop/agent/stream_push.go) and the encoder
@@ -150,13 +169,24 @@ async function runSurface(driver, surface, server) {
   (async () => { while (pushing) { try { await pushFrame(cur); } catch {} await sleep(600); } })();
   await sleep(400); // let the first frame land before the encoder starts
 
-  const offer = await driver.executeAsyncScript(
-    `const cb=arguments[arguments.length-1];(${ctx}).makeOffer().then(cb).catch(e=>cb('ERR:'+e));`);
+  console.log(`  [${surface}] creating WebRTC offer`);
+  const offer = await driver.evaluate(async (targetWindowSource) => {
+    const win = eval(targetWindowSource)();
+    try {
+      return await win.makeOffer();
+    } catch (e) {
+      return `ERR:${e?.message || e}`;
+    }
+  }, targetWindow);
   if (typeof offer === "string" && offer.startsWith("ERR:")) { pushing = false; throw new Error(`makeOffer ${offer}`); }
 
+  console.log(`  [${surface}] sending offer to ${BASE}`);
   const ans = await offerToBox(offer);
-  await driver.executeScript(
-    `(${ctx}).applyAnswer(arguments[0], arguments[1]);`, ans.answerSdp, ans.transport || "");
+  console.log(`  [${surface}] applying answer (${ans.transport})`);
+  await driver.evaluate(({ targetWindowSource, sdp, transport }) => {
+    const win = eval(targetWindowSource)();
+    return win.applyAnswer(sdp, transport || "");
+  }, { targetWindowSource: targetWindow, sdp: ans.answerSdp, transport: ans.transport || "" });
 
   // Poll for a painted frame of the wanted color (real H.264 decode → non-zero
   // videoWidth; the all-zero-YUV "no-signal" frame reads rgb(0,135,0) = neither).
@@ -164,7 +194,10 @@ async function runSurface(driver, surface, server) {
     const end = Date.now() + ms;
     let last = "none";
     while (Date.now() < end) {
-      const px = await driver.executeScript(`return (${ctx}).readPixel();`);
+      const px = await driver.evaluate((targetWindowSource) => {
+        const win = eval(targetWindowSource)();
+        return win.readPixel();
+      }, targetWindow);
       last = classify(px);
       if (last === want) return { ok: true, px };
       await sleep(700);
@@ -179,12 +212,18 @@ async function runSurface(driver, surface, server) {
   // a bare "no pixels" — it says WHY (decoded to green? never decoded?).
   let stats = null;
   if (!g.ok || !rres.ok) {
-    stats = await driver.executeAsyncScript(`const cb=arguments[arguments.length-1];(${ctx}).getStats().then(cb).catch(()=>cb(null));`).catch(() => null);
+    stats = await driver.evaluate(async (targetWindowSource) => {
+      const win = eval(targetWindowSource)();
+      return await win.getStats().catch(() => null);
+    }, targetWindow).catch(() => null);
   }
   pushing = false;
 
   const transport = ans.transport || "(none)";
-  const iceState = await driver.executeScript(`return (${ctx}).__yv && (${ctx}).__yv.ice;`).catch(() => null);
+  const iceState = await driver.evaluate((targetWindowSource) => {
+    const win = eval(targetWindowSource)();
+    return win.__yv && win.__yv.ice;
+  }, targetWindow).catch(() => null);
   const pass = g.ok && rres.ok && transport.includes("rtp-h264");
   // "no-signal" = frames decode but only to the all-zero-YUV green — the content
   // bug (encode delivered empty frames), distinct from "never decoded" (transport).
@@ -197,7 +236,7 @@ async function runSurface(driver, surface, server) {
   else if (!transport.includes("rtp-h264")) { verdict = "NAMED"; reason = `no RTP track — transport=${transport} (ffmpeg/source?)`; }
   else { verdict = "SILENT"; reason = `green=${g.ok} red=${rres.ok} last=${rres.last} (ice=${iceState})${st}`; }
 
-  try { writeFileSync(join(OUT, `${surface}.png`), Buffer.from(await driver.takeScreenshot(), "base64")); } catch {}
+  try { await driver.screenshot({ path: join(OUT, `${surface}.png`) }); } catch {}
   return { surface, verdict, reason, transport };
 }
 
@@ -209,11 +248,13 @@ async function main() {
   for (const s of surfaces) {
     const w = s === "mobile" ? 420 : 1280;
     const h = s === "mobile" ? 860 : 800;
-    const opts = new chrome.Options().addArguments(
-      `--window-size=${w},${h}`, "--no-sandbox", "--disable-gpu",
-      "--autoplay-policy=no-user-gesture-required");
-    if (process.env.HEADED !== "1") opts.addArguments("--headless=new");
-    const driver = await new Builder().forBrowser("chrome").setChromeOptions(opts).build();
+    const browser = await chromium.launch({
+      headless: process.env.HEADED !== "1",
+      timeout: Number(process.env.YAVER_WEBRTC_BROWSER_TIMEOUT_MS || 20_000),
+      args: ["--no-sandbox", "--disable-gpu", "--autoplay-policy=no-user-gesture-required"],
+    });
+    const context = await browser.newContext({ viewport: { width: w, height: h } });
+    const driver = await context.newPage();
     try {
       const r = await runSurface(driver, s, server);
       results.push(r);
@@ -222,7 +263,7 @@ async function main() {
       results.push({ surface: s, verdict: "SILENT", reason: `crash: ${e?.message || e}` });
       console.log(`  [${s}] SILENT · crash: ${e?.message || e}`);
     } finally {
-      await driver.quit().catch(() => {});
+      await browser.close().catch(() => {});
     }
   }
   server.close();

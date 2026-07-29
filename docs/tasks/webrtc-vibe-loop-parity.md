@@ -376,3 +376,49 @@ that falls out of their feature for free.
 ## Findings
 (Append verified findings here as you go. State what you PROVED and how,
 and what you could not verify. Do not write "should work".)
+
+- 2026-07-29: Re-verified the browser-window mobile viewport guard locally:
+  `cd desktop/agent && go test -count=1 -timeout 90s -run 'TestRemoteRuntimeCapabilitiesForRNIsWebRTCEligibleButHermesPrimary|TestCreateMobileBrowserWindowUsesMobileViewport|TestCreateBrowserWindowForRNUsesWebPreviewPort|TestRemoteRuntimeCapabilitiesOnlyOffersDeclaredSpecialClientSurfaces|TestRemoteRuntimeCapabilitiesForFlutterExposesBothTargets' .`
+  passed. This proves `browser-window` sessions for RN/Expo/Flutter carry
+  `displaySurface=mobile-web`, `viewport=393x852`, and attach through
+  `AttachViewport` instead of first opening a desktop viewport.
+- 2026-07-29: Re-verified the scoped WebRTC transport guards locally:
+  `cd desktop/agent && go test -count=1 -timeout 90s -run 'TestApplyWebRTCOffer_VideoTransceiverPicksRTPH264Path|TestSelectRemoteRuntimeStreamerFallsBackWhenRTPUnavailable|TestApplyWebRTCOffer_VideoTransceiverFallsBackWhenAgentCannotEncode|TestBuildWebRTCDoctorReport|TestStreamingReadyGatesOnCriticals' .`
+  passed. This proves offer `m=video` still selects RTP H.264 when the target
+  can encode, and falls back to JPEG-DC only when the host cannot encode.
+- 2026-07-29: The requested live `ubuntu-4gb` browser-lane run could not start
+  from this Mac because the documented host aliases (`ubuntu-4gb-hel1-1`,
+  `ubuntu-4gb`, `linux-2`, `magara`, `linux`) did not resolve, and
+  `yaver devices` did not return a primary address promptly. Fixed the RTP
+  harness so missing `YAVER_WEBRTC_BASE` is a bounded NAMED failure:
+  `YAVER_WEBRTC_DEVICES_TIMEOUT_MS=1500 node e2e/webrtc-e2e/run.mjs webui`
+  now exits with "timed out waiting for `yaver devices`; set
+  YAVER_WEBRTC_BASE=http://<box>:18080" instead of hanging.
+- 2026-07-29: `cd e2e && E2E_SKIP_LIVE_AUTH=1 npx playwright test
+  tests/remote-runtime-browser-jpeg.spec.ts --project=chromium` exits cleanly
+  with one skipped test when no live base is configured. Without
+  `E2E_SKIP_LIVE_AUTH=1`, the global setup is blocked by live auth policy
+  (`/auth/signup` 403 for the dummy `@yaver.test` account), which is unrelated
+  to WebRTC.
+- 2026-07-29: Used this Mac as the fallback live box after ubuntu host aliases
+  failed. The local agent answered on `127.0.0.1:18080` with auth; unauthenticated
+  `/info` correctly returned 401. Replaced the RTP harness receiver automation
+  with Playwright because Selenium/ChromeDriver session creation wedged before
+  the first phase log on this overloaded Mac. `node --check
+  e2e/webrtc-e2e/run.mjs` passed after the change.
+- 2026-07-29: Local RTP browser-lane run:
+  `YAVER_WEBRTC_BASE=http://127.0.0.1:18080 node e2e/webrtc-e2e/run.mjs both`
+  negotiated `webrtc-rtp-h264-v1` on both `webui` and `mobile`, ICE connected,
+  and packets/frames decoded (`webui rx=1945 dec=12 kf=13 lost=0`,
+  `mobile rx=1932 dec=12 kf=12 lost=0`). Verdict remained **SILENT** for both
+  because the decoded center pixel was the all-zero-YUV no-signal green frame,
+  not the pushed magenta/blue content. This reproduces the §4.2 content bug on
+  this Mac too; the failing layer is encode/content, not signaling, ICE, RTP, or
+  the browser receivers.
+- 2026-07-29: Cleaned local machine pressure from this task: terminated two
+  orphaned headless WebDriver Chrome roots (`PPID=1`, temp
+  `org.chromium.Chromium.scoped_dir.*`) that had been running for hours and one
+  helper was consuming roughly 90% CPU; removed the listed stale
+  `/tmp/YaverBuild` tree (5.8 GiB, no active `xcodebuild`) and this task's tiny
+  `/tmp/yaver-webrtc` temp before rerunning. Free space improved from 28 GiB to
+  33 GiB.

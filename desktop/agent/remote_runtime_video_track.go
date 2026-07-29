@@ -34,6 +34,75 @@ type nalSource interface {
 	Next(ctx context.Context) (NALUnit, error)
 }
 
+type accessUnitReader struct {
+	src     nalSource
+	pending *NALUnit
+}
+
+func newAccessUnitReader(src nalSource) *accessUnitReader {
+	return &accessUnitReader{src: src}
+}
+
+func isVCLNAL(t uint8) bool {
+	return t >= 1 && t <= 5
+}
+
+func startsNextAccessUnit(t uint8, haveVCL bool) bool {
+	if !haveVCL {
+		return false
+	}
+	switch t {
+	case 1, 2, 3, 4, 5, 7, 8, 9:
+		return true
+	default:
+		return false
+	}
+}
+
+func appendAnnexBNAL(dst []byte, nal NALUnit) []byte {
+	if len(nal.Data) == 0 {
+		return dst
+	}
+	dst = append(dst, 0x00, 0x00, 0x01)
+	return append(dst, nal.Data...)
+}
+
+func (r *accessUnitReader) Next(ctx context.Context) ([]byte, error) {
+	var au []byte
+	haveVCL := false
+	for {
+		var nal NALUnit
+		if r.pending != nil {
+			nal = *r.pending
+			r.pending = nil
+		} else {
+			next, err := r.src.Next(ctx)
+			if errors.Is(err, io.EOF) {
+				if len(au) > 0 {
+					return au, nil
+				}
+				return nil, io.EOF
+			}
+			if err != nil {
+				return nil, err
+			}
+			nal = next
+		}
+		if len(nal.Data) == 0 {
+			continue
+		}
+		if startsNextAccessUnit(nal.Type, haveVCL) {
+			copyNAL := nal
+			r.pending = &copyNAL
+			return au, nil
+		}
+		au = appendAnnexBNAL(au, nal)
+		if isVCLNAL(nal.Type) {
+			haveVCL = true
+		}
+	}
+}
+
 const (
 	// 4 Mbps is the comfortable default for 1080p screenrecord —
 	// well under the relay's per-response cap and high enough that
@@ -178,26 +247,28 @@ func (p *videoTrackPump) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	accessUnits := newAccessUnitReader(reader)
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		nal, err := reader.Next(ctx)
+		au, err := accessUnits.Next(ctx)
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		// Pion's H.264 packetizer wants Annex-B input — it scans for
-		// start codes to find NAL boundaries before fragmenting into
-		// RTP STAP-A / FU-A as size dictates. We feed one NAL per
-		// Sample with a 3-byte start code restored.
-		buf := make([]byte, 0, 3+len(nal.Data))
-		buf = append(buf, 0x00, 0x00, 0x01)
-		buf = append(buf, nal.Data...)
+		if len(au) == 0 {
+			continue
+		}
+		// Pion's H.264 packetizer wants one access unit per media
+		// sample, with Annex-B start codes between NALs. Feeding one
+		// NAL per sample lets browsers count decoded frames while
+		// painting no-signal green, because SPS/PPS/slices arrive as
+		// separate timestamped frames.
 		if err := p.track.WriteSample(media.Sample{
-			Data:     buf,
+			Data:     au,
 			Duration: rtpFrameDuration,
 		}); err != nil {
 			return fmt.Errorf("write sample: %w", err)
