@@ -12,9 +12,10 @@ import { HIDE_PAID_UI } from "@/lib/launchFlags";
 // third-party dev-portal gate) rather than specific competitor names,
 // per LEGAL_SAFETY.md §2 (trademark) and §3 (comparative claims).
 const LANDING_TAGLINE =
-  "Vibe it, see it. Instantly on your real phone. AI writes code in seconds; the loop around it still takes hours. Yaver closes it: every prompt you send becomes the real app in your hand. Claude Code, Codex, or OpenCode builds on your own machine, and the result is live on your iPhone and Android seconds later. Shake, say what's wrong, and the fix lands while the app is still open. It runs on the AI subscription you already pay for, and your code never leaves your machine. Open source, self-hostable, and the same live loop reaches watch, TV, car, and AR/VR.";
+  "Vibe it, see it. Instantly on your real phone. AI writes code in seconds; the loop around it still takes hours. Yaver closes it: every prompt you send becomes the real React Native app in your hand. Claude Code, Codex, or OpenCode builds on your own machine, and the result is live on your iPhone and Android seconds later. Shake, say what's wrong, and the fix lands while the app is still open. It runs on the AI subscription you already pay for, and your code never leaves your machine.";
 
-const SUPPORTED_SURFACES = ["iOS", "Android", "Watch", "TV", "Car", "AR/VR"];
+const SUPPORTED_SURFACES = ["iOS", "Android"];
+const SHOW_HN_FULL_PLATFORM_SECTIONS = false;
 
 // HN-LAUNCH-HIDE-PAID: paid/managed-cloud/pricing surfaces are hidden via the
 // shared HIDE_PAID_UI flag (imported from @/lib/launchFlags).
@@ -30,7 +31,7 @@ const LANDING_FAQ: ReadonlyArray<{ q: string; a: string }> = [
   // ── What is it ──────────────────────────────────────────────────────
   {
     q: "What is Yaver?",
-    a: "An open-source, multi-surface developer toolkit centered on your own workstation. Drive your coding agent, trigger reloads across iOS, Android, watch, TV, car, and AR/VR surfaces, capture feedback from your dev build, and keep everything running on your own machine — no hosted middleman. Works with any terminal agent: Claude Code, Codex, Aider, Goose, OpenCode, or a local model runner of your choice.",
+    a: "An open-source React Native development loop centered on your own workstation and your own phone. Claude Code, Codex, or OpenCode edits on your machine; Yaver compiles and reloads the real app on iPhone or Android; feedback from the app flows back to the agent.",
   },
   {
     q: "Who is Yaver for?",
@@ -48,7 +49,7 @@ const LANDING_FAQ: ReadonlyArray<{ q: string; a: string }> = [
   // ── Push to Device (Section 6) ──────────────────────────────────────
   {
     q: "Can I preview my React Native app on my own phone during development?",
-    a: "Yes, that is the intended developer-tool workflow. The Yaver mobile app is a developer preview container — when you run yaver-cli on your own machine, it compiles YOUR project's JavaScript to Hermes bytecode and previews it on your paired phone. The pairing is bound to your authenticated developer account; the preview path is for the developer's own apps (the same apps they will eventually submit to TestFlight / App Store). This is a development-time iteration tool, not a distribution channel — apps your users install still come from the App Store, exactly as Apple requires.",
+    a: "Yes, that is the intended developer-tool workflow. The Yaver mobile app is a developer preview container — when you run yaver-cli on your own machine, it compiles YOUR project's JavaScript to Hermes bytecode and previews it on your paired phone. The pairing is bound to your authenticated developer account; the preview path is for the developer's own apps. This is a development-time iteration tool, not a distribution channel.",
   },
   {
     q: "Does the developer preview support the React Native New Architecture (TurboModules, Fabric)?",
@@ -56,13 +57,13 @@ const LANDING_FAQ: ReadonlyArray<{ q: string; a: string }> = [
   },
   {
     q: "Can I hot-reload my app on a real phone while editing on my laptop?",
-    a: "Yes. yaver dev start runs Metro on your machine and the paired developer-preview container reloads on save — same loop as Expo Go, expo-dev-client, and the React Native Debug build, just with the build happening on your own machine. Native code changes flow through TestFlight / Play Store internal track when you are ready to ship. The Feedback SDK adds an opt-in feedback/debug button inside your own app for capturing repro context during development and beta testing.",
+    a: "Yes. yaver dev start runs Metro on your machine and the paired developer-preview container reloads on save — same loop as Expo Go, expo-dev-client, and the React Native Debug build, just with the build happening on your own machine. The Feedback SDK adds an opt-in feedback/debug button inside your own app for capturing repro context during development and beta testing.",
   },
 
   // ── App Store / Play Store compliance ───────────────────────────────
   {
     q: "Is the Yaver mobile preview container compliant with App Store policies?",
-    a: "Yaver is positioned and built as a developer tool — analogous to Expo Go, expo-dev-client, and the React Native Debug build — for previewing the developer's own React Native projects on real devices during development. The mobile preview container only loads bundles for the authenticated developer's own paired devices; it is not a marketplace, not a distribution channel, and provides no way to discover or run other developers' apps. End-user apps continue to ship through the App Store and Google Play in the normal way; the preview path is purely a development-time iteration shortcut. App Store Review Guideline 2.5.2 carves out an explicit exception for educational and developer-tool apps that download code, which is the category Yaver fits.",
+    a: "Yaver is positioned and built as a developer tool — analogous to Expo Go, expo-dev-client, and the React Native Debug build — for previewing the developer's own React Native projects on real devices during development. The mobile preview container only loads bundles for the authenticated developer's own paired devices; it is not a marketplace, not a distribution channel, and provides no way to discover or run other developers' apps. End-user apps still ship through the normal store process; the preview path is purely a development-time iteration shortcut.",
   },
   {
     q: "Does loading code into the mobile preview container violate Apple's no-remote-code rule?",
@@ -148,6 +149,19 @@ const LANDING_FAQ: ReadonlyArray<{ q: string; a: string }> = [
   },
 ];
 
+const SHOW_HN_FAQ_QUESTIONS = new Set([
+  "What is Yaver?",
+  "Can I preview my React Native app on my own phone during development?",
+  "Does the developer preview support the React Native New Architecture (TurboModules, Fabric)?",
+  "Can I hot-reload my app on a real phone while editing on my laptop?",
+  "Is the Yaver mobile preview container compliant with App Store policies?",
+  "Does loading code into the mobile preview container violate Apple's no-remote-code rule?",
+  "Is my code safe?",
+  "What license is Yaver under?",
+]);
+
+const VISIBLE_LANDING_FAQ = LANDING_FAQ.filter(({ q }) => SHOW_HN_FAQ_QUESTIONS.has(q));
+
 const LANDING_HOWTO_STEPS: ReadonlyArray<{ name: string; text: string; url?: string }> = [
   {
     name: "Install the Yaver CLI",
@@ -156,7 +170,7 @@ const LANDING_HOWTO_STEPS: ReadonlyArray<{ name: string; text: string; url?: str
   },
   {
     name: "Install a Yaver surface app",
-    text: "Download Yaver for iOS or Android first, then add watch, TV, car, or AR/VR surfaces when that is where you want to preview or control the workflow.",
+    text: "Download Yaver for iOS or Android and sign in with the same account.",
     url: "https://yaver.io/download",
   },
   {
@@ -259,8 +273,8 @@ function DebugConsolePreview() {
             <div className="flex items-start gap-3">
               <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-[#60a5fa]/10 text-sm text-[#60a5fa]">{"\u2692"}</div>
               <div>
-                <p className="text-sm font-medium text-surface-200">Build + Deploy</p>
-                <p className="text-xs text-surface-500">One button builds iOS + Android, uploads to TestFlight &amp; Play Store. Configurable: one platform, both, or build-only without deploy.</p>
+                <p className="text-sm font-medium text-surface-200">Build bundle</p>
+                <p className="text-xs text-surface-500">Compile Hermes and send it to your phone.</p>
               </div>
             </div>
             <div className="flex items-start gap-3">
@@ -1187,7 +1201,7 @@ export default function HomePage() {
   const faqLd = {
     "@context": "https://schema.org",
     "@type": "FAQPage",
-    mainEntity: LANDING_FAQ.map(({ q, a }) => ({
+    mainEntity: VISIBLE_LANDING_FAQ.map(({ q, a }) => ({
       "@type": "Question",
       name: q,
       acceptedAnswer: { "@type": "Answer", text: a },
@@ -1199,7 +1213,7 @@ export default function HomePage() {
     "@type": "HowTo",
     name: "Install and pair Yaver from a client surface",
     description:
-      "Run AI coding agents on your own machine and control them from phone, web, watch, TV, car, or AR/VR surfaces.",
+      "Run AI coding agents on your own machine and preview React Native changes on your own phone.",
     totalTime: "PT5M",
     supply: [{ "@type": "HowToSupply", name: "A Mac, Linux, or Windows machine" }],
     tool: [
@@ -1253,7 +1267,7 @@ export default function HomePage() {
           </p>
           <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-            Open source · Self-hostable · Multi-surface
+            Open source · Self-hostable · Real-device loop
           </div>
 
           <h1 className="mb-5 text-4xl font-bold leading-[1.02] tracking-tight text-surface-50 sm:text-5xl md:text-6xl">
@@ -1274,12 +1288,10 @@ export default function HomePage() {
 
           <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-surface-300 sm:text-base md:text-[17px]">
             Claude Code, Codex, or OpenCode builds on your own machine, and
-            the result is live on your iPhone and Android seconds later. Spot
+            the result is live on your iPhone or Android seconds later. Spot
             something off? Shake, say it, and watch the fix land while the
             app is still open. It runs on the AI subscription you already pay
-            for, and your code never leaves your machine. Open source,
-            self-hostable, and the same live loop reaches watch, TV, car, and
-            AR/VR.
+            for, and your code never leaves your machine.
           </p>
 
           <div className="mx-auto mt-6 flex max-w-2xl flex-wrap items-center justify-center gap-2">
@@ -1299,7 +1311,7 @@ export default function HomePage() {
                 yaver_lazy_setup to sign in and pair the phone in-chat. */}
             <div className="w-full max-w-xl text-left">
               <p className="mb-2 text-center text-[11px] text-surface-500">
-                Start with the CLI directly, or register Yaver as an MCP server in Claude Code, Codex, or opencode:
+                Five-minute path:
               </p>
               <div className="space-y-1.5 rounded-lg border border-surface-800 bg-surface-950 px-4 py-3 font-mono text-[12px] leading-relaxed">
                 <div className="text-surface-500"># direct CLI:</div>
@@ -1309,34 +1321,10 @@ export default function HomePage() {
                 <div className="text-surface-600">
                   $ <span className="select-all break-all text-surface-200">yaver auth</span>
                 </div>
-                <div className="my-1.5 h-px bg-surface-800/60" />
-                <div className="text-surface-500"># or as MCP:</div>
-                <div className="text-surface-600">
-                  $ <span className="select-all break-all text-surface-200">claude mcp add --scope user yaver -- npx -y yaver-cli yaver-mcp</span>
-                </div>
-                <div className="text-surface-600">
-                  $ <span className="select-all break-all text-surface-200">codex mcp add yaver -- npx -y yaver-cli yaver-mcp</span>
-                </div>
-                <div className="text-surface-600">
-                  $ <span className="select-all break-all text-surface-200">npx -y -p yaver-cli yaver mcp setup opencode</span>
-                </div>
-                <div className="my-1.5 h-px bg-surface-800/60" />
-                <div className="text-surface-500"># then, in the agent chat:</div>
-                <div className="select-all break-all text-emerald-300">call yaver_lazy_setup</div>
               </div>
               <p className="mt-2 text-center text-[11px] text-surface-600">
-                <code className="rounded bg-surface-900 px-1.5 py-0.5 text-surface-400">
-                  yaver_lazy_setup
-                </code>{" "}
-                surfaces the sign-in link and pairs your phone in-chat.{" "}
                 <Link href="/docs/mcp" className="underline hover:text-surface-300">
-                  full MCP guide &rarr;
-                </Link>
-              </p>
-              <p className="mt-1 text-center text-[11px] text-surface-700">
-                Prefer the global CLI?{" "}
-                <Link href="/download" className="underline hover:text-surface-400">
-                  Install via npm &rarr;
+                  Prefer MCP setup? Open the guide &rarr;
                 </Link>
               </p>
             </div>
@@ -1378,7 +1366,10 @@ export default function HomePage() {
           the hero video above is the single viral artifact; a second
           video area below it competed for attention. */}
 
-      {!HIDE_PAID_UI && <CloudInfraSection />}
+      {/* Show HN launch trim: keep the first-read page on the phone feedback loop.
+          Flip SHOW_HN_FULL_PLATFORM_SECTIONS after launch to restore cloud,
+          backend/database, deploy, agent-catalog, MCP, and remote-box sections. */}
+      {SHOW_HN_FULL_PLATFORM_SECTIONS && !HIDE_PAID_UI && <CloudInfraSection />}
 
       {/* ── Section 3: Get Started ── */}
       <section id="get-started" className="border-t border-surface-800/60 px-6 py-16">
@@ -1423,21 +1414,8 @@ export default function HomePage() {
                 <p className="mt-1 text-[11px] leading-relaxed text-surface-400">
                   Register Yaver as an MCP server — no global install needed, <code>npx</code> pulls it on first run. Then ask the agent to call <code>yaver_lazy_setup</code>; it surfaces the sign-in link for you to tap and pairs your phone from inside the chat.
                 </p>
-                <div className="mt-2 space-y-1.5 rounded bg-surface-900 p-2">
-                  <div className="text-[10px] text-surface-500"># direct CLI</div>
-                  <code className="block text-[11px] text-surface-200 select-all">npm install -g yaver-cli</code>
-                  <code className="block text-[11px] text-surface-200 select-all">yaver auth</code>
-                  <div className="pt-1 text-[10px] text-surface-500"># or as MCP</div>
-                  <div className="text-[10px] text-surface-500"># Claude Code</div>
-                  <code className="block text-[11px] text-surface-200 select-all">claude mcp add --scope user yaver -- npx -y yaver-cli yaver-mcp</code>
-                  <div className="text-[10px] text-surface-500"># Codex</div>
-                  <code className="block text-[11px] text-surface-200 select-all">codex mcp add yaver -- npx -y yaver-cli yaver-mcp</code>
-                  <div className="text-[10px] text-surface-500"># opencode</div>
-                  <code className="block text-[11px] text-surface-200 select-all">npx -y -p yaver-cli yaver mcp setup opencode</code>
-                </div>
                 <p className="mt-2 text-[11px] leading-relaxed text-surface-500">
-                  Full tool list and remote/HTTP setup: <Link href="/docs/mcp" className="underline hover:text-surface-300">MCP guide</Link>. Other agents (Cursor, Aider, …) can paste{" "}
-                  <code className="select-all">Install yaver using https://yaver.io/llms.txt — surface the sign-in URL to me when ready.</code>
+                  Full tool list and setup commands live in the <Link href="/docs/mcp" className="underline hover:text-surface-300">MCP guide</Link>.
                 </p>
               </div>
             </div>
@@ -1465,7 +1443,7 @@ export default function HomePage() {
                 Sign in with the same OAuth account you used for <code>yaver auth</code>. The app auto-pairs with your dev machine over LAN, or via relay on cellular &mdash; no QR code, no IP to type.
               </p>
               <p className="mt-2 text-[11px] text-surface-500">
-                iOS and Android are the first install surfaces. Watch, TV, car, and AR/VR builds extend the same operator model for glanceable approvals, room-scale dashboards, in-car voice summaries, and spatial previews. For React Native, the normal flow is Hermes bundle reload into Yaver on the phone, not a native Xcode install.
+                For React Native, the launch flow is Hermes bundle reload into Yaver on the phone, not a native Xcode install.
               </p>
             </div>
 
@@ -1496,6 +1474,7 @@ export default function HomePage() {
             </div>
           </div>
 
+          {SHOW_HN_FULL_PLATFORM_SECTIONS && (
           <div className="mt-6 rounded-xl border border-surface-800 bg-surface-900/30 p-5">
             <p className="mb-2 text-sm font-medium text-surface-200">
               Today&apos;s wedge is narrower than the whole repo
@@ -1505,9 +1484,12 @@ export default function HomePage() {
               feedback from the app, triage from the nearest surface, fix on your machine.
             </p>
           </div>
+          )}
         </div>
       </section>
 
+      {SHOW_HN_FULL_PLATFORM_SECTIONS && (
+        <>
       {/* ── Section 4: Create a Project ── */}
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-5xl">
@@ -1593,6 +1575,8 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+        </>
+      )}
 
       {/* ── Section 6: Test on Real Devices ── */}
       <section className="border-t border-surface-800/60 px-6 py-24">
@@ -1636,8 +1620,8 @@ export default function HomePage() {
             {[
               { icon: "\uD83D\uDC1B", color: "text-[#f87171] bg-[#f87171]/10", t: "Feedback SDK", d: "Drop <FloatingButton /> in your app. Users or internal testers report issues with screenshots, logs, and context attached." },
               { icon: "\u25B6", color: "text-[#a78bfa] bg-[#a78bfa]/10", t: "Autonomous Testing", d: "Agent navigates every screen, catches crashes, fixes them, hot reloads, repeats. Fix report shows all changes." },
-              { icon: "\u2692", color: "text-[#60a5fa] bg-[#60a5fa]/10", t: "Build + Deploy", d: "One button: iOS + Android \u2192 TestFlight + Play Store. Both platforms or one." },
-              { icon: "\u21BB", color: "text-[#fbbf24] bg-[#fbbf24]/10", t: "Watch Mode", d: "--watch re-pushes on every save. Edit \u2192 save \u2192 see on device in ~1s." },
+              { icon: "\u2692", color: "text-[#60a5fa] bg-[#60a5fa]/10", t: "Native bridge", d: "Runs through the Yaver app's native React Native bridge, not a WebView." },
+              { icon: "\u21BB", color: "text-[#fbbf24] bg-[#fbbf24]/10", t: "Auto reload", d: "--watch re-pushes on every save. Edit \u2192 save \u2192 see on device in ~1s." },
               { icon: "\u25CF", color: "text-[#22c55e] bg-[#22c55e]/10", t: "BlackBox", d: "Streams logs, navigation events, crashes, and runtime breadcrumbs into the incident like a flight recorder." },
               { icon: "\uD83D\uDD12", color: "text-[#818cf8] bg-[#818cf8]/10", t: "Security", d: "Scoped tokens, IP binding, HTTPS on LAN, key rotation. Auto-disabled in production." },
             ].map((f) => (
@@ -1677,8 +1661,6 @@ return (
             <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
               <span className="text-surface-500">Available for:</span>
               <span className="rounded bg-surface-800 px-2 py-1 text-surface-300">React Native</span>
-              <span className="rounded bg-surface-800 px-2 py-1 text-surface-300">Flutter</span>
-              <span className="rounded bg-surface-800 px-2 py-1 text-surface-300">Web</span>
             </div>
           </div>
 
@@ -1693,6 +1675,8 @@ return (
         </div>
       </section>
 
+      {SHOW_HN_FULL_PLATFORM_SECTIONS && (
+        <>
       {/* ── Section 7: Deploy ── */}
       <section className="border-t border-surface-800/60 px-6 py-24">
         <div className="mx-auto max-w-5xl">
@@ -1882,6 +1866,8 @@ return (
 
       {/* ── Section 11: Remote box guides ── */}
       <ResourceCardsSection />
+        </>
+      )}
 
       {/* ── Section 12: FAQ ── */}
       <section id="faq" className="border-t border-surface-800/60 px-6 py-24">
@@ -1890,7 +1876,7 @@ return (
             FAQ
           </h2>
           <div>
-            {LANDING_FAQ.map(({ q, a }) => (
+            {VISIBLE_LANDING_FAQ.map(({ q, a }) => (
               <FAQItem key={q} question={q} answer={a} />
             ))}
           </div>

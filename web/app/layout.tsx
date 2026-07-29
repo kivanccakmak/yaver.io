@@ -13,23 +13,18 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Yaver \u2014 Your Machine Is Your Cloud",
+  title: "Yaver \u2014 Vibe it, see it on your real phone",
   description:
-    "Create full-stack projects, run local backends, test on iOS, Android, watch, TV, car, and AR/VR surfaces, and deploy from your own machine. Free, open source, P2P encrypted.",
+    "Open-source React Native dev loop: your AI coding agent runs on your own machine, and the app reloads on your iPhone or Android seconds later.",
   keywords: [
-    "developer control plane",
-    "local development platform",
-    "Convex local dashboard",
-    "Supabase local",
-    "deploy from phone",
-    "AR VR developer tools",
-    "watch app developer tools",
-    "TV app developer tools",
-    "car app developer tools",
+    "React Native dev loop",
+    "React Native real device testing",
+    "Hermes bytecode",
+    "mobile AI coding",
     "vibe coding",
-    "your machine is your cloud",
     "Claude Code",
-    "Ollama",
+    "OpenAI Codex",
+    "OpenCode",
     "MCP server",
   ],
   icons: {
@@ -41,9 +36,9 @@ export const metadata: Metadata = {
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
   },
   openGraph: {
-    title: "Yaver \u2014 Your Machine Is Your Cloud",
+    title: "Yaver \u2014 Vibe it, see it on your real phone",
     description:
-      "Control your dev machines from phone, web, watch, TV, car, and AR/VR surfaces. Create projects, run local backends, test on real devices, deploy. Free forever.",
+      "Run Claude Code, Codex, or OpenCode on your own machine and see React Native changes on your iPhone or Android seconds later.",
     url: "https://yaver.io",
     siteName: "Yaver",
     type: "website",
@@ -51,9 +46,9 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Yaver \u2014 Your Machine Is Your Cloud",
+    title: "Yaver \u2014 Vibe it, see it on your real phone",
     description:
-      "Control your dev machines from phone, web, watch, TV, car, and AR/VR surfaces. Create projects, run local backends, test on real devices, deploy. Free forever.",
+      "Run Claude Code, Codex, or OpenCode on your own machine and see React Native changes on your iPhone or Android seconds later.",
     images: ["/og-image.png"],
   },
   metadataBase: new URL("https://yaver.io"),
@@ -138,7 +133,7 @@ export default function RootLayout({
               applicationCategory: "DeveloperApplication",
               operatingSystem: "macOS, Windows, Linux, iOS, Android",
               description:
-                "Open-source P2P tool that lets developers use any AI coding agent from their mobile device, connecting directly to development machines.",
+                "Open-source React Native dev loop that runs AI coding agents on your own machine and previews changes on your own phone.",
               url: "https://yaver.io",
               downloadUrl: "https://yaver.io/download",
               installUrl: "https://yaver.io/llms.txt",
