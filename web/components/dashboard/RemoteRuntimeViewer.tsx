@@ -43,10 +43,12 @@ export default function RemoteRuntimeViewer({
   session,
   onSessionChange,
   onClose,
+  onRuntimeEvent,
 }: {
   session: RemoteRuntimeSession;
   onSessionChange: (session: RemoteRuntimeSession) => void;
   onClose?: () => void;
+  onRuntimeEvent?: (event: Record<string, unknown>) => void;
 }) {
   // --- transport-agnostic UI state ---------------------------------------
   const [viewerNote, setViewerNote] = useState("Negotiating WebRTC...");
@@ -93,6 +95,8 @@ export default function RemoteRuntimeViewer({
   onSessionChangeRef.current = onSessionChange;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const onRuntimeEventRef = useRef(onRuntimeEvent);
+  onRuntimeEventRef.current = onRuntimeEvent;
 
   const revokeJpeg = useCallback(() => {
     if (jpegUrlRef.current) {
@@ -418,6 +422,9 @@ export default function RemoteRuntimeViewer({
               }
               if (payload?.type === "throttle") {
                 setViewerNote(`throttled · ${payload.reason ?? "rtp"}`);
+              }
+              if (payload?.type === "browser-log") {
+                onRuntimeEventRef.current?.(payload as Record<string, unknown>);
               }
               if (payload?.type === "taken-over") {
                 setViewerNote("Session taken over by another viewer.");

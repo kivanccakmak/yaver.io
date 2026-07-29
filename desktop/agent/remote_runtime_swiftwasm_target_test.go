@@ -480,6 +480,56 @@ func TestCreateBrowserWindowExplainsWhenNoDevServer(t *testing.T) {
 	}
 }
 
+func TestAttachBrowserWindowNavigatesAlreadyAttachedBlankSession(t *testing.T) {
+	mgr := NewRemoteRuntimeManager()
+	mgr.SetDevServerManager(&fakeDevServer{
+		running: true, workDir: "/tmp/rn", devPort: 8081, webPreview: 8085,
+	})
+	rec := &recordingBrowserNav{attachDeviceID: "fake-browser-window"}
+	mgr.SetBrowserNavigator(rec)
+
+	sessionID := "rr_attached_blank_browser"
+	now := "2026-07-29T14:00:00Z"
+	mgr.mu.Lock()
+	mgr.sessions[sessionID] = RemoteRuntimeSession{
+		ID:             sessionID,
+		WorkDir:        "/tmp/rn",
+		Framework:      "expo",
+		ExecutionMode:  ExecutionModeRNHermes,
+		TargetID:       "browser-window",
+		TargetLabel:    "WebRTC over browser",
+		Platform:       "browser",
+		DeviceID:       rec.attachDeviceID,
+		TransportMode:  "direct-webrtc",
+		FrameTransport: "webrtc-datachannel-jpeg-v1",
+		Status:         "control-ready",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		Note:           "attached but not navigated",
+	}
+	mgr.live[sessionID] = &remoteRuntimeLiveState{
+		sessionID: sessionID,
+		targetID:  "browser-window",
+		platform:  "browser",
+		deviceID:  rec.attachDeviceID,
+	}
+	mgr.mu.Unlock()
+
+	session, err := mgr.Attach(sessionID)
+	if err != nil {
+		t.Fatalf("Attach failed: %v", err)
+	}
+	if rec.navigateCalls != 1 {
+		t.Fatalf("Attach must navigate an already-attached browser-window before streaming; got %d navigate calls", rec.navigateCalls)
+	}
+	if !strings.Contains(rec.navigatedURL, ":8085") {
+		t.Fatalf("Attach navigated to %q, want Expo web preview port :8085", rec.navigatedURL)
+	}
+	if session.Status != "control-ready" || !strings.Contains(session.Note, "8085") {
+		t.Fatalf("session did not record navigated state: status=%q note=%q", session.Status, session.Note)
+	}
+}
+
 // The RN companion of the flutter test above — verifies the WebPreviewPort
 // picking is honoured through the full Create seam, not just at the resolver.
 // This is the assertion that would have caught the whole class of bug: a green

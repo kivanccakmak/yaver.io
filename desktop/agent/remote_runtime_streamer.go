@@ -13,6 +13,14 @@ const (
 	remoteRuntimeTransportJPEGDC  = "webrtc-datachannel-jpeg-v1"
 )
 
+func h264RTPCodecCapability() webrtc.RTPCodecCapability {
+	return webrtc.RTPCodecCapability{
+		MimeType:    webrtc.MimeTypeH264,
+		ClockRate:   90000,
+		SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+	}
+}
+
 // remoteRuntimeStreamer is the facade between WebRTC signaling and the
 // platform-specific capture implementations. Viewers always negotiate
 // through the same HTTP/WebRTC surface; this interface decides whether
@@ -45,7 +53,7 @@ func (rtpH264Streamer) ConfigurePeer(pc *webrtc.PeerConnection, live *remoteRunt
 	videoTrack := existingTrack
 	if videoTrack == nil {
 		track, err := webrtc.NewTrackLocalStaticSample(
-			webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
+			h264RTPCodecCapability(),
 			"yaver-runtime", "yaver-stream",
 		)
 		if err != nil {

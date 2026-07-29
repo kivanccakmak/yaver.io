@@ -44,6 +44,8 @@ import (
 
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/input"
+	cdplog "github.com/chromedp/cdproto/log"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/google/uuid"
 )
@@ -59,6 +61,7 @@ type browserWindowEntry struct {
 	createdAt     time.Time
 	lastUsedAt    time.Time
 	url           string
+	eventSink     func(map[string]any)
 }
 
 type browserWindowPool struct {
@@ -151,6 +154,8 @@ func (p *browserWindowPool) open(ctx context.Context, width, height int) (*brows
 	// mobile:true is what enables viewport pinch-zoom semantics; touch points
 	// must be >0 for the page to report touch support at all.
 	if err := chromedp.Run(browserCtx,
+		runtime.Enable(),
+		cdplog.Enable(),
 		emulation.SetTouchEmulationEnabled(true).WithMaxTouchPoints(5),
 		emulation.SetDeviceMetricsOverride(int64(width), int64(height), 1, true),
 	); err != nil {
@@ -176,6 +181,13 @@ func (p *browserWindowPool) open(ctx context.Context, width, height int) (*brows
 	p.mu.Lock()
 	p.entries[entry.id] = entry
 	p.mu.Unlock()
+	chromedp.ListenTarget(browserCtx, func(ev any) {
+		event := browserWindowEventFromCDP(ev)
+		if event == nil {
+			return
+		}
+		p.emitEvent(entry.id, event)
+	})
 	return entry, nil
 }
 
@@ -202,6 +214,107 @@ func (p *browserWindowPool) close(deviceID string) bool {
 	e.browserCancel()
 	e.allocCancel()
 	return true
+}
+
+func (p *browserWindowPool) setEventSink(deviceID string, sink func(map[string]any)) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[deviceID]
+	if !ok {
+		return false
+	}
+	e.eventSink = sink
+	e.lastUsedAt = time.Now()
+	return true
+}
+
+func (p *browserWindowPool) currentURL(deviceID string) (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[deviceID]
+	if !ok {
+		return "", false
+	}
+	e.lastUsedAt = time.Now()
+	return e.url, true
+}
+
+func (p *browserWindowPool) emitEvent(deviceID string, event map[string]any) {
+	p.mu.Lock()
+	e, ok := p.entries[deviceID]
+	var sink func(map[string]any)
+	if ok {
+		e.lastUsedAt = time.Now()
+		sink = e.eventSink
+	}
+	p.mu.Unlock()
+	if sink != nil {
+		sink(event)
+	}
+}
+
+func browserWindowEventFromCDP(ev any) map[string]any {
+	switch e := ev.(type) {
+	case *runtime.EventConsoleAPICalled:
+		parts := make([]string, 0, len(e.Args))
+		for _, arg := range e.Args {
+			if arg == nil {
+				continue
+			}
+			if arg.Value != nil {
+				parts = append(parts, strings.TrimSpace(string(arg.Value)))
+				continue
+			}
+			if arg.Description != "" {
+				parts = append(parts, arg.Description)
+				continue
+			}
+			if arg.Type != "" {
+				parts = append(parts, string(arg.Type))
+			}
+		}
+		text := strings.TrimSpace(strings.Join(parts, " "))
+		if text == "" {
+			text = string(e.Type)
+		}
+		return map[string]any{
+			"type":    "browser-log",
+			"level":   string(e.Type),
+			"message": text,
+			"source":  "console",
+		}
+	case *runtime.EventExceptionThrown:
+		msg := e.ExceptionDetails.Text
+		if e.ExceptionDetails.Exception != nil {
+			if e.ExceptionDetails.Exception.Description != "" {
+				msg = e.ExceptionDetails.Exception.Description
+			} else if e.ExceptionDetails.Exception.Value != nil {
+				msg = strings.TrimSpace(string(e.ExceptionDetails.Exception.Value))
+			}
+		}
+		if msg == "" {
+			msg = "uncaught browser exception"
+		}
+		return map[string]any{
+			"type":    "browser-log",
+			"level":   "error",
+			"message": msg,
+			"source":  "exception",
+		}
+	case *cdplog.EventEntryAdded:
+		if e.Entry == nil || strings.TrimSpace(e.Entry.Text) == "" {
+			return nil
+		}
+		return map[string]any{
+			"type":    "browser-log",
+			"level":   string(e.Entry.Level),
+			"message": e.Entry.Text,
+			"source":  string(e.Entry.Source),
+			"url":     e.Entry.URL,
+		}
+	default:
+		return nil
+	}
 }
 
 func (p *browserWindowPool) list() []map[string]any {

@@ -124,6 +124,9 @@ func (m *RemoteRuntimeManager) Attach(sessionID string) (RemoteRuntimeSession, e
 		return RemoteRuntimeSession{}, fmt.Errorf("remote runtime state missing")
 	}
 	if strings.TrimSpace(session.DeviceID) != "" {
+		if session.TargetID == "browser-window" {
+			return m.ensureBrowserWindowNavigated(session, live), nil
+		}
 		return session, nil
 	}
 
@@ -177,6 +180,9 @@ func (m *RemoteRuntimeManager) Attach(sessionID string) (RemoteRuntimeSession, e
 		current.Note = fmt.Sprintf("Attached to %s (%s). Screen %dx%d %s. WebRTC streaming ready for signaling.",
 			current.TargetLabel, deviceID, dims.Width, dims.Height, dims.Rotation)
 	})
+	if updated.TargetID == "browser-window" {
+		updated = m.ensureBrowserWindowNavigated(updated, live)
+	}
 	return updated, nil
 }
 

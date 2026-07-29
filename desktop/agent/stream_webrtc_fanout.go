@@ -41,7 +41,7 @@ func getOrCreateEncode(source string, prof StreamProfile) (*sharedEncode, error)
 		return se, nil
 	}
 	track, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "video", "yaver-"+key)
+		h264RTPCodecCapability(), "video", "yaver-"+key)
 	if err != nil {
 		return nil, err
 	}

@@ -3520,7 +3520,17 @@ export default function RuntimeLabView({
             <div className="text-xs text-[#667085] dark:text-[#9aa3af]">
               session <span className="font-mono text-[#344054] dark:text-[#d7dce3]">{session.id}</span> · {session.targetLabel} · {session.status}
             </div>
-            <RemoteRuntimeViewer session={session} onSessionChange={setSession} onClose={() => setSession(null)} />
+            <RemoteRuntimeViewer
+              session={session}
+              onSessionChange={setSession}
+              onClose={() => setSession(null)}
+              onRuntimeEvent={(event) => {
+                if (event.type !== "browser-log") return;
+                const level = typeof event.level === "string" && event.level ? event.level : "log";
+                const message = typeof event.message === "string" ? event.message : JSON.stringify(event);
+                appendLog(`browser ${level}: ${message}`);
+              }}
+            />
           </div>
         ) : null}
       </div>

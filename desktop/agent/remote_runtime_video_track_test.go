@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
+
+	"github.com/pion/webrtc/v4"
 )
 
 type sliceNALSource struct {
@@ -71,5 +74,21 @@ func TestAccessUnitReaderGroupsParameterSetsWithFrame(t *testing.T) {
 	}
 	if string(third) != string(wantThird) {
 		t.Fatalf("third AU bytes = %v, want %v", third, wantThird)
+	}
+}
+
+func TestH264RTPCodecCapabilityAdvertisesPacketizationMode(t *testing.T) {
+	cap := h264RTPCodecCapability()
+	if cap.MimeType != webrtc.MimeTypeH264 {
+		t.Fatalf("MimeType = %q, want %q", cap.MimeType, webrtc.MimeTypeH264)
+	}
+	if cap.ClockRate != 90000 {
+		t.Fatalf("ClockRate = %d, want 90000", cap.ClockRate)
+	}
+	if !strings.Contains(cap.SDPFmtpLine, "packetization-mode=1") {
+		t.Fatalf("SDPFmtpLine = %q, want packetization-mode=1", cap.SDPFmtpLine)
+	}
+	if !strings.Contains(cap.SDPFmtpLine, "profile-level-id=42e01f") {
+		t.Fatalf("SDPFmtpLine = %q, want constrained baseline profile", cap.SDPFmtpLine)
 	}
 }

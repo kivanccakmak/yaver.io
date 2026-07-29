@@ -266,6 +266,7 @@ func streamSnapshotHandler(c OpsContext, payload json.RawMessage) OpsResult {
 			return OpsResult{OK: true, Initial: map[string]interface{}{
 				"source": p.Source,
 				"image":  "data:" + f.mime + ";base64," + f.b64,
+				"pushed": true,
 			}}
 		}
 		return OpsResult{OK: false, Code: "bad_payload", Error: fmt.Sprintf("unknown source %q", p.Source)}

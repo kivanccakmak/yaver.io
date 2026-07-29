@@ -1167,6 +1167,9 @@ func (m *RemoteRuntimeManager) attachAndNavigateBrowserWindow(session RemoteRunt
 		live.mu.Lock()
 		live.deviceID = deviceID
 		live.mu.Unlock()
+		browserPool.setEventSink(deviceID, func(ev map[string]any) {
+			live.sendEventJSON(ev)
+		})
 	}
 	if err := nav.Navigate(ctx, deviceID, url); err != nil {
 		updated, _ := m.Update(session.ID, func(s *RemoteRuntimeSession) {
@@ -1178,6 +1181,47 @@ func (m *RemoteRuntimeManager) attachAndNavigateBrowserWindow(session RemoteRunt
 	}
 	updated, _ := m.Update(session.ID, func(s *RemoteRuntimeSession) {
 		s.DeviceID = deviceID
+		s.Status = "control-ready"
+		s.Note = fmt.Sprintf("Browser opened. Navigated to %s.", url)
+	})
+	return updated
+}
+
+func (m *RemoteRuntimeManager) ensureBrowserWindowNavigated(session RemoteRuntimeSession, live *remoteRuntimeLiveState) RemoteRuntimeSession {
+	deviceID := strings.TrimSpace(session.DeviceID)
+	if session.TargetID != "browser-window" || deviceID == "" {
+		return session
+	}
+	browserPool.setEventSink(deviceID, func(ev map[string]any) {
+		live.sendEventJSON(ev)
+	})
+	if current, ok := browserPool.currentURL(deviceID); ok && strings.TrimSpace(current) != "" && current != "about:blank" {
+		return session
+	}
+	url, reason := m.resolveDevServerURL(session.WorkDir, session.Framework)
+	if url == "" {
+		updated, _ := m.Update(session.ID, func(s *RemoteRuntimeSession) {
+			s.Status = "waiting-for-dev-server"
+			s.Note = "Browser window is open but blank: " + reason
+		})
+		return updated
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	m.mu.RLock()
+	nav := m.browserNav
+	m.mu.RUnlock()
+	if nav == nil {
+		nav = browserWindowTarget{}
+	}
+	if err := nav.Navigate(ctx, deviceID, url); err != nil {
+		updated, _ := m.Update(session.ID, func(s *RemoteRuntimeSession) {
+			s.Status = "navigate-failed"
+			s.Note = fmt.Sprintf("Browser opened but navigate to %s failed: %v", url, err)
+		})
+		return updated
+	}
+	updated, _ := m.Update(session.ID, func(s *RemoteRuntimeSession) {
 		s.Status = "control-ready"
 		s.Note = fmt.Sprintf("Browser opened. Navigated to %s.", url)
 	})
