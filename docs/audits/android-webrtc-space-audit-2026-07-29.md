@@ -77,6 +77,17 @@ Android tools observed:
    needs an XR/Quest-capable target, and Redroid needs a Linux host/container
    path rather than this macOS host.
 
+8. Warm Android phone WebRTC against the `fgs` AVD attached and negotiated ICE,
+   but returned `SILENT`: the viewer had a video element and
+   `webrtc-rtp-h264-v1` ready event, with no pixels. Direct operation probe
+   found the cause: `adb exec-out screenrecord --output-format=h264 ... -`
+   exited `0` and wrote `0` bytes on this Android ATD image. The product must
+   not select RTP H.264 from adb inventory alone.
+9. After forcing Android emulator/device targets through JPEG-DC, the same
+   Mac-remote / Ubuntu-browser closed loop passed:
+   `SUMMARY pixels=2 named=0 silent=0`, with
+   `android-emulator:jpeg-dc:webrtc-datachannel-jpeg-v1`.
+
 ## Space Plan
 
 Recommended local plan:
@@ -101,6 +112,10 @@ Changed:
   `image.sysdir.1` against discovered Android SDK roots.
 - `desktop/agent/doctor_surfaces.go` now detects Apple simulator devices from
   `simctl` runtime sections, not only from default device names.
+- `desktop/agent/remote_runtime_capture.go` now keeps Android emulator/device
+  targets on the JPEG-DC WebRTC path by default. H.264 can return later only
+  after the agent probes real screenrecord bytes and falls back when the byte
+  stream is empty.
 
 Expected behavior after this change:
 

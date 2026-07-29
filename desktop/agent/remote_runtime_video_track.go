@@ -440,6 +440,9 @@ func spawnAdbScreenrecord(ctx context.Context, deviceID string) (*exec.Cmd, io.R
 // override it deterministically without faking adb on PATH. Production
 // keeps the real probe.
 var agentCanEncodeRTPH264 = func(targetID string) bool {
+	if !captureIsRealtime(preferredCaptureMethod(targetID)) {
+		return false
+	}
 	tgt, err := runtimeTargetFor(targetID)
 	if err != nil {
 		return false

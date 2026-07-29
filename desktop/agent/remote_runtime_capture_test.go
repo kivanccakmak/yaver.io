@@ -2,16 +2,18 @@ package main
 
 import "testing"
 
-// Speed-first: iOS sims MUST use H.264 recordVideo, never screenshot (18s/frame
-// on the mini). Android uses scrcpy H.264; only genuine no-encoder targets fall
-// back to JPEG screenshots.
+// Speed-first where the encoder is proven: iOS sims MUST use H.264 recordVideo,
+// never screenshot (18s/frame on the mini). Android stays on JPEG-DC until the
+// product probes screenrecord bytes, because ATD can exit 0 with an empty H.264
+// stream and leave the viewer connected to black video.
 func TestPreferredCaptureMethod(t *testing.T) {
 	cases := map[string]CaptureMethod{
 		"ios-simulator":      CaptureH264RecordVideo,
 		"tvos-simulator":     CaptureH264RecordVideo,
 		"visionos-simulator": CaptureH264RecordVideo,
-		"android-emulator":   CaptureH264Scrcpy,
-		"android-redroid":    CaptureH264Scrcpy,
+		"android-emulator":   CaptureJPEGScreenshot,
+		"android-device":     CaptureJPEGScreenshot,
+		"android-redroid":    CaptureJPEGScreenshot,
 		"browser-window":     CaptureJPEGScreenshot,
 	}
 	for target, want := range cases {

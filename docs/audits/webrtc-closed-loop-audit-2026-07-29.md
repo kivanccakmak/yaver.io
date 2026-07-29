@@ -128,6 +128,7 @@ The autorun copies the harness to the Ubuntu client, probes Mac capabilities, ru
 - Add `e2e/webrtc-e2e/autorun.mjs` so WebRTC checks run as a capability-aware matrix instead of a hand-run sequence. Status: implemented after the manual all-surface pass exposed harness-only hangs.
 - Disable Playwright's native WebM recording by default in the WebRTC harnesses and keep the screenshot-to-MP4 recorder as the proof artifact. Status: implemented after Ubuntu 4GB kept an ffmpeg WebM process alive and slowed the client.
 - Add per-target process timeouts, post-target session cleanup, and remote-artifact collection to autorun. Status: implemented after a failed browser-window navigation and an attach-failed Android session left live sessions behind.
+- Keep `YAVER_WEBRTC_TOKEN` out of remote SSH command arguments. Status: implemented after an interrupted Android run showed the token in the local `ssh` argv while the remote client was still running; remote env is now sent over stdin to `ssh sh -s`.
 - Chunk JPEG-DC frames and teach web/mobile/harness consumers to reassemble them. Status: implemented in this audit after iOS simulator opened `frames` but delivered no JPEG message.
 - Start the JPEG-DC pump as soon as that transport is negotiated, and bound each capture so a stuck screenshot becomes `frame-error` instead of a silent pump hang. Status: implemented in this audit.
 - Add a browser-window e2e that creates an already-attached `about:blank` session and proves `Attach` navigates before WebRTC offer handling.

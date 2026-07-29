@@ -97,6 +97,22 @@ function run(cmd, args, opts = {}) {
   return res;
 }
 
+function runWithInput(cmd, args, input, opts = {}) {
+  const printable = [cmd, ...args.map((a) => a.includes(TOKEN) ? "<token>" : a)].join(" ");
+  console.log(`$ ${printable} <stdin>`);
+  const res = spawnSync(cmd, args, {
+    input,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: opts.timeout || TARGET_TIMEOUT_MS,
+    ...opts,
+    env: { ...process.env, ...(opts.env || {}) },
+  });
+  if (res.stdout) process.stdout.write(res.stdout);
+  if (res.stderr) process.stderr.write(res.stderr);
+  return res;
+}
+
 function shellQuote(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
@@ -141,7 +157,7 @@ function runClientNode(script, args, env, label) {
     .map(([k, v]) => `${k}=${shellQuote(v)}`)
     .join(" ");
   const command = `cd ${shellQuote(CLIENT_WORKDIR)} && ${assignments} node ./${script} ${args.map(shellQuote).join(" ")}`;
-  return run("ssh", [CLIENT_SSH, command], { env: { YAVER_WEBRTC_TOKEN: "" }, label });
+  return runWithInput("ssh", [CLIENT_SSH, "sh", "-s"], command, { env: { YAVER_WEBRTC_TOKEN: "" }, label });
 }
 
 async function startBrowserLogServer() {
