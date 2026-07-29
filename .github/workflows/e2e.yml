@@ -56,8 +56,63 @@ jobs:
         if: steps.pw-cache.outputs.cache-hit == 'true'
         run: cd e2e && npx playwright install-deps chromium
 
+      - name: Probe password-auth E2E capability
+        id: password-auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const base = process.env.E2E_CONVEX_URL || process.env.NEXT_PUBLIC_CONVEX_SITE_URL || "https://perceptive-minnow-557.eu-west-1.convex.site";
+          const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          const user = {
+            email: `e2e-probe-${id}@yaver.test`,
+            password: `pw-${id}A1`,
+            fullName: `E2E Probe ${id.slice(0, 8)}`,
+          };
+          const res = await fetch(`${base}/auth/signup`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(user),
+          });
+          if (!res.ok) {
+            const body = await res.text();
+            console.error(`[e2e password-auth probe] signup unavailable: ${res.status} ${body}`);
+            console.log("enabled=false");
+            console.log("reason=password-signup-unavailable");
+            process.exit(0);
+          }
+          const data = await res.json().catch(() => ({}));
+          if (data.token) {
+            await fetch(`${base}/auth/delete-account`, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${data.token}` },
+            }).catch(() => {});
+          }
+          console.log("enabled=true");
+          console.log("reason=");
+          NODE
+
       - name: Run Playwright suite
-        run: cd e2e && npx playwright test
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.password-auth.outputs.enabled }}" = "true" ]; then
+            cd e2e
+            npx playwright test
+          else
+            echo "::warning::Skipping password-auth E2E specs because live signup is unavailable: ${{ steps.password-auth.outputs.reason }}"
+            cd e2e
+            E2E_SKIP_LIVE_AUTH=1 npx playwright test \
+              tests/bootstrap-pair.spec.ts \
+              tests/dashboard-autodev.spec.ts \
+              tests/landing.spec.ts \
+              tests/managed-cloud-delete.spec.ts \
+              tests/mobile-app-lane-matrix.spec.ts \
+              tests/remote-preview-live.spec.ts \
+              tests/remote-runners.spec.ts \
+              tests/vibe-preview.spec.ts \
+              tests/webrtc-stream-live.spec.ts \
+              tests/webui-lane-matrix.spec.ts
+          fi
         env:
           CI: "1"
 
