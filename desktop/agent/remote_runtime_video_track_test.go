@@ -77,6 +77,43 @@ func TestAccessUnitReaderGroupsParameterSetsWithFrame(t *testing.T) {
 	}
 }
 
+func TestAccessUnitReaderKeepsMultiSliceFrameTogether(t *testing.T) {
+	src := &sliceNALSource{nals: []NALUnit{
+		{Data: []byte{0x67, 0x01}, Type: 7},       // SPS
+		{Data: []byte{0x68, 0x02}, Type: 8},       // PPS
+		{Data: []byte{0x65, 0x80, 0xaa}, Type: 5}, // IDR slice, first_mb_in_slice=0
+		{Data: []byte{0x65, 0x40, 0xbb}, Type: 5}, // same picture, first_mb_in_slice=1
+		{Data: []byte{0x65, 0x80, 0xcc}, Type: 5}, // next picture, first_mb_in_slice=0
+	}}
+	reader := newAccessUnitReader(src)
+	first, err := reader.Next(context.Background())
+	if err != nil {
+		t.Fatalf("first AU: %v", err)
+	}
+	if strings.Count(string(first), string([]byte{0, 0, 1})) != 4 {
+		t.Fatalf("first AU should contain SPS, PPS, and both slices of one picture; bytes=%v", first)
+	}
+	if !strings.Contains(string(first), string([]byte{0x65, 0x40, 0xbb})) {
+		t.Fatalf("first AU dropped the second slice of the picture: %v", first)
+	}
+	second, err := reader.Next(context.Background())
+	if err != nil {
+		t.Fatalf("second AU: %v", err)
+	}
+	if !strings.Contains(string(second), string([]byte{0x65, 0x80, 0xcc})) {
+		t.Fatalf("second AU did not begin with the next first slice: %v", second)
+	}
+}
+
+func TestH264FirstMBInSlice(t *testing.T) {
+	if got := h264FirstMBInSlice([]byte{0x65, 0x80}); got != 0 {
+		t.Fatalf("first_mb_in_slice = %d, want 0", got)
+	}
+	if got := h264FirstMBInSlice([]byte{0x65, 0x40}); got != 1 {
+		t.Fatalf("first_mb_in_slice = %d, want 1", got)
+	}
+}
+
 func TestH264RTPCodecCapabilityAdvertisesPacketizationMode(t *testing.T) {
 	cap := h264RTPCodecCapability()
 	if cap.MimeType != webrtc.MimeTypeH264 {

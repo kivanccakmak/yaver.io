@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/webrtc/v4"
@@ -113,6 +114,8 @@ type remoteRuntimeControlRequest struct {
 }
 
 const remoteRuntimeMaxJPEGDataChannelBytes = 60 * 1024
+const remoteRuntimeJPEGDataChannelChunkBytes = 12 * 1024
+const remoteRuntimeFrameCaptureBudget = 20 * time.Second
 
 func (m *RemoteRuntimeManager) Attach(sessionID string) (RemoteRuntimeSession, error) {
 	session, ok := m.Get(sessionID)
@@ -342,6 +345,12 @@ func (m *RemoteRuntimeManager) ApplyWebRTCOffer(sessionID string, offer webrtc.S
 		_ = pc.Close()
 		return session, webrtc.SessionDescription{}, err
 	}
+	if framesDC != nil {
+		framesDC.OnOpen(func() {
+			streamer.Start(context.Background(), live, m)
+		})
+		streamer.Start(context.Background(), live, m)
+	}
 
 	peer := &remoteRuntimePeer{pc: pc, framesDC: framesDC, eventsDC: eventsDC}
 	live.mu.Lock()
@@ -482,37 +491,104 @@ func (live *remoteRuntimeLiveState) startFramePump(mgr *RemoteRuntimeManager) {
 	go func() {
 		ticker := time.NewTicker(700 * time.Millisecond)
 		defer ticker.Stop()
+		type captureResult struct {
+			payload       []byte
+			width, height int
+			err           error
+		}
+		var captureInFlight atomic.Bool
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				payload, width, height, err := live.captureJPEGFrame(ctx)
-				if err != nil {
-					live.sendEventJSON(map[string]any{
-						"type":  "frame-error",
-						"error": err.Error(),
-					})
+				if !captureInFlight.CompareAndSwap(false, true) {
 					continue
 				}
-				live.mu.Lock()
-				dc := live.framesDC
-				live.mu.Unlock()
-				if dc == nil || dc.ReadyState() != webrtc.DataChannelStateOpen {
-					continue
-				}
-				if err := dc.Send(payload); err != nil {
-					continue
-				}
-				live.sendEventJSON(map[string]any{
-					"type":   "frame-meta",
-					"width":  width,
-					"height": height,
-					"ts":     time.Now().UTC().Format(time.RFC3339Nano),
-				})
+				frameCtx, frameCancel := context.WithTimeout(ctx, remoteRuntimeFrameCaptureBudget)
+				resultCh := make(chan captureResult, 1)
+				go func() {
+					payload, width, height, err := live.captureJPEGFrame(frameCtx)
+					resultCh <- captureResult{payload: payload, width: width, height: height, err: err}
+				}()
+				go func() {
+					defer frameCancel()
+					select {
+					case <-ctx.Done():
+						captureInFlight.Store(false)
+						return
+					case result := <-resultCh:
+						captureInFlight.Store(false)
+						if result.err != nil {
+							live.sendEventJSON(map[string]any{
+								"type":  "frame-error",
+								"error": result.err.Error(),
+							})
+							return
+						}
+						live.mu.Lock()
+						dc := live.framesDC
+						live.mu.Unlock()
+						if dc == nil || dc.ReadyState() != webrtc.DataChannelStateOpen {
+							return
+						}
+						chunked, err := sendJPEGDataChannelFrame(dc, result.payload)
+						if err != nil {
+							live.sendEventJSON(map[string]any{
+								"type":  "frame-error",
+								"error": fmt.Sprintf("send frame over WebRTC data channel: %v", err),
+							})
+							return
+						}
+						live.sendEventJSON(map[string]any{
+							"type":    "frame-meta",
+							"width":   result.width,
+							"height":  result.height,
+							"bytes":   len(result.payload),
+							"chunked": chunked,
+							"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+						})
+					case <-time.After(remoteRuntimeFrameCaptureBudget + time.Second):
+						live.sendEventJSON(map[string]any{
+							"type":  "frame-error",
+							"error": fmt.Sprintf("frame capture exceeded %.0fs in WebRTC JPEG data-channel pump", remoteRuntimeFrameCaptureBudget.Seconds()),
+						})
+						return
+					}
+				}()
 			}
 		}
 	}()
+}
+
+func sendJPEGDataChannelFrame(dc *webrtc.DataChannel, payload []byte) (bool, error) {
+	if len(payload) <= remoteRuntimeJPEGDataChannelChunkBytes {
+		return false, dc.Send(payload)
+	}
+	frameID := time.Now().UTC().Format("20060102T150405.000000000")
+	total := (len(payload) + remoteRuntimeJPEGDataChannelChunkBytes - 1) / remoteRuntimeJPEGDataChannelChunkBytes
+	for i := 0; i < total; i++ {
+		start := i * remoteRuntimeJPEGDataChannelChunkBytes
+		end := start + remoteRuntimeJPEGDataChannelChunkBytes
+		if end > len(payload) {
+			end = len(payload)
+		}
+		msg := map[string]any{
+			"type":  "jpeg-chunk",
+			"id":    frameID,
+			"index": i,
+			"total": total,
+			"data":  base64.StdEncoding.EncodeToString(payload[start:end]),
+		}
+		buf, err := json.Marshal(msg)
+		if err != nil {
+			return true, err
+		}
+		if err := dc.SendText(string(buf)); err != nil {
+			return true, err
+		}
+	}
+	return true, nil
 }
 
 // sendEventJSON broadcasts payload to every attached viewer's
@@ -651,9 +727,8 @@ func (m *RemoteRuntimeManager) CaptureFrame(sessionID string) (RemoteRuntimeSess
 	// deadline, the elapsed time, and where to look. `signal: killed` tells the
 	// user nothing they can act on; "we gave up after 20s while the box was busy"
 	// points at load, and at the doctor probe that measures it.
-	const frameCaptureBudget = 20 * time.Second
 	captureStart := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), frameCaptureBudget)
+	ctx, cancel := context.WithTimeout(context.Background(), remoteRuntimeFrameCaptureBudget)
 	defer cancel()
 	payload, _, _, err := live.captureJPEGFrame(ctx)
 	if err != nil {
@@ -663,7 +738,7 @@ func (m *RemoteRuntimeManager) CaptureFrame(sessionID string) (RemoteRuntimeSess
 				"screen capture gave up after %.0fs (budget %.0fs) — the box is too busy to screenshot, not broken. "+
 					"A healthy simctl screenshot is <1s; run the webrtc doctor to measure CoreSimulator health, "+
 					"or wait for the current build to finish: %w",
-				elapsed.Seconds(), frameCaptureBudget.Seconds(), err)
+				elapsed.Seconds(), remoteRuntimeFrameCaptureBudget.Seconds(), err)
 		}
 		return session, nil, err
 	}

@@ -705,6 +705,25 @@ function buildRemoteRuntimeViewerHtml(baseUrl: string, headers: Record<string, s
           if (iceRes.ok && iceData.iceServers && iceData.iceServers.length > 0) iceServers = iceData.iceServers;
         } catch {}
         const pc = new RTCPeerConnection({ iceServers });
+        const jpegChunks = new Map();
+        function jpegBlobFromMessage(data) {
+          if (typeof data !== "string") return new Blob([data], { type: "image/jpeg" });
+          let payload = null;
+          try { payload = JSON.parse(data); } catch { return null; }
+          if (!payload || payload.type !== "jpeg-chunk" || !payload.id ||
+              typeof payload.index !== "number" || typeof payload.total !== "number" ||
+              typeof payload.data !== "string") return null;
+          const entry = jpegChunks.get(payload.id) || { total: payload.total, parts: [] };
+          entry.total = payload.total;
+          entry.parts[payload.index] = payload.data;
+          jpegChunks.set(payload.id, entry);
+          if (entry.parts.filter(Boolean).length < entry.total) return null;
+          jpegChunks.delete(payload.id);
+          const raw = atob(entry.parts.join(""));
+          const bytes = new Uint8Array(raw.length);
+          for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+          return new Blob([bytes], { type: "image/jpeg" });
+        }
         // SCTP m-line: the agent creates the "frames"/"events" channels from
         // its side, so a video-only offer would leave them un-negotiable.
         pc.createDataChannel("primer");
@@ -742,8 +761,10 @@ function buildRemoteRuntimeViewerHtml(baseUrl: string, headers: Record<string, s
           if (event.channel.label === "frames") {
             event.channel.binaryType = "arraybuffer";
             event.channel.onmessage = (msg) => {
+              const blob = jpegBlobFromMessage(msg.data);
+              if (!blob) return;
               if (objectUrl) URL.revokeObjectURL(objectUrl);
-              objectUrl = URL.createObjectURL(new Blob([msg.data], { type: "image/jpeg" }));
+              objectUrl = URL.createObjectURL(blob);
               frameEl.src = objectUrl;
             };
           }

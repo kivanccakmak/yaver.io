@@ -310,6 +310,30 @@ export default function RemoteRuntimeViewer({
       pcRef.current = pc;
       setIceState(pc.iceConnectionState);
       setIceGatheringState(pc.iceGatheringState);
+      const jpegChunks = new Map<string, { total: number; parts: string[] }>();
+      const jpegBlobFromMessage = (data: MessageEvent["data"]): Blob | null => {
+        if (typeof data !== "string") return new Blob([data as ArrayBuffer], { type: "image/jpeg" });
+        let payload: { type?: string; id?: string; index?: number; total?: number; data?: string };
+        try {
+          payload = JSON.parse(data);
+        } catch {
+          return null;
+        }
+        if (payload.type !== "jpeg-chunk" || !payload.id || typeof payload.index !== "number" ||
+          typeof payload.total !== "number" || typeof payload.data !== "string") {
+          return null;
+        }
+        const entry = jpegChunks.get(payload.id) ?? { total: payload.total, parts: [] };
+        entry.total = payload.total;
+        entry.parts[payload.index] = payload.data;
+        jpegChunks.set(payload.id, entry);
+        if (entry.parts.filter(Boolean).length < entry.total) return null;
+        jpegChunks.delete(payload.id);
+        const raw = atob(entry.parts.join(""));
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        return new Blob([bytes], { type: "image/jpeg" });
+      };
 
       // Watchdog: if the peer connection has not reached "connected" within
       // ~8s, fall back to the proven HTTP JPEG frame pump instead of leaving
@@ -448,8 +472,9 @@ export default function RemoteRuntimeViewer({
           ch.onerror = () => setDataState(ch.readyState);
           ch.onmessage = (msg) => {
             if (cancelled) return;
+            const blob = jpegBlobFromMessage(msg.data);
+            if (!blob) return;
             revokeJpeg();
-            const blob = new Blob([msg.data as ArrayBuffer], { type: "image/jpeg" });
             const url = URL.createObjectURL(blob);
             jpegUrlRef.current = url;
             if (imgRef.current) imgRef.current.src = url;

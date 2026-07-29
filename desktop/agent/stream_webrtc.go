@@ -110,7 +110,9 @@ func (t streamSourceTarget) SpawnCapture(ctx context.Context, deviceID string) (
 	args := []string{
 		"-f", "mjpeg", "-framerate", fmt.Sprintf("%d", fps), "-i", "pipe:0",
 		"-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-		"-pix_fmt", "yuv420p", "-g", fmt.Sprintf("%d", fps*2), "-bf", "0",
+		"-profile:v", "baseline", "-pix_fmt", "yuv420p",
+		"-threads", "1", "-x264-params", "sliced-threads=0:slices=1",
+		"-g", fmt.Sprintf("%d", fps*2), "-bf", "0",
 	}
 	// Downscale to the profile cap (keep aspect, even dims). 0 = source.
 	if prof.MaxWidth > 0 {

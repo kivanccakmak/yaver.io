@@ -30,7 +30,8 @@
 //            remote-runtime.tsx's WebView→srcdoc on the RN-web build)
 //
 // Env: YAVER_WEBRTC_BASE (http://host:port of the box) overrides auto-resolve.
-//      YAVER_WEBRTC_SOURCE (default "yavertest"). Token from ~/.yaver/config.json.
+//      YAVER_WEBRTC_SOURCE (default "yavertest").
+//      YAVER_WEBRTC_TOKEN overrides ~/.yaver/config.json for cross-box dogfood.
 
 import { readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
@@ -47,8 +48,14 @@ const OUT = process.env.YAVER_OUT_DIR || "/tmp/yaver-webrtc";
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 
-const cfg = JSON.parse(readFileSync(join(homedir(), ".yaver", "config.json"), "utf8"));
-const TOKEN = cfg.auth_token;
+function resolveToken() {
+  const fromEnv = (process.env.YAVER_WEBRTC_TOKEN || "").trim();
+  if (fromEnv) return fromEnv;
+  const cfg = JSON.parse(readFileSync(join(homedir(), ".yaver", "config.json"), "utf8"));
+  return cfg.auth_token || cfg.token || "";
+}
+const TOKEN = resolveToken();
+if (!TOKEN) throw new Error("missing Yaver auth token; set YAVER_WEBRTC_TOKEN or sign in with `yaver auth`");
 
 // Resolve the box HTTP base at RUNTIME (never hardcode infra IPs in a public repo).
 function resolveBase() {
@@ -86,6 +93,47 @@ function makeFrame(hex, name) {
 // decoded content — the no-signal frame matches neither.
 const MAGENTA = makeFrame("0xE032B0", "a.jpg");
 const BLUE = makeFrame("0x2E52E4", "b.jpg");
+
+function startFrameRecorder(page, surface) {
+  const dir = join(OUT, "frame-recordings", surface);
+  mkdirSync(dir, { recursive: true });
+  let stopped = false;
+  let busy = false;
+  let n = 0;
+  const tick = async () => {
+    if (stopped || busy) return;
+    busy = true;
+    try {
+      n += 1;
+      await page.screenshot({ path: join(dir, `frame_${String(n).padStart(4, "0")}.png`) });
+    } catch {
+      n -= 1;
+    } finally {
+      busy = false;
+    }
+  };
+  const timer = setInterval(() => { void tick(); }, Number(process.env.YAVER_WEBRTC_RECORD_FRAME_MS || 250));
+  void tick();
+  return async () => {
+    stopped = true;
+    clearInterval(timer);
+    while (busy) await sleep(20);
+    if (n <= 0) return "";
+    const outDir = join(OUT, "recordings");
+    mkdirSync(outDir, { recursive: true });
+    const out = join(outDir, `${surface}.mp4`);
+    try {
+      execFileSync("ffmpeg", [
+        "-y", "-v", "error", "-framerate", "4",
+        "-i", join(dir, "frame_%04d.png"),
+        "-vf", "format=yuv420p", "-movflags", "+faststart", out,
+      ]);
+      return out;
+    } catch {
+      return "";
+    }
+  };
+}
 
 async function pushFrame(b64) {
   const ac = new AbortController();
@@ -251,19 +299,35 @@ async function main() {
     const browser = await chromium.launch({
       headless: process.env.HEADED !== "1",
       timeout: Number(process.env.YAVER_WEBRTC_BROWSER_TIMEOUT_MS || 20_000),
+      executablePath: process.env.YAVER_CHROMIUM_PATH || undefined,
       args: ["--no-sandbox", "--disable-gpu", "--autoplay-policy=no-user-gesture-required"],
     });
-    const context = await browser.newContext({ viewport: { width: w, height: h } });
+    const context = await browser.newContext({
+      viewport: { width: w, height: h },
+      recordVideo: { dir: join(OUT, "videos"), size: { width: w, height: h } },
+    });
     const driver = await context.newPage();
+    const stopFrameRecorder = startFrameRecorder(driver, s);
+    let videoPath = "";
+    let frameRecordingPath = "";
     try {
       const r = await runSurface(driver, s, server);
       results.push(r);
       console.log(`  [${r.surface}] ${r.verdict} · ${r.reason}`);
+      await driver.waitForTimeout(Number(process.env.YAVER_WEBRTC_RECORD_DWELL_MS || 3000)).catch(() => {});
     } catch (e) {
       results.push({ surface: s, verdict: "SILENT", reason: `crash: ${e?.message || e}` });
       console.log(`  [${s}] SILENT · crash: ${e?.message || e}`);
+      await driver.waitForTimeout(Number(process.env.YAVER_WEBRTC_RECORD_DWELL_MS || 3000)).catch(() => {});
     } finally {
+      const video = driver.video();
+      if (video) {
+        try { videoPath = await video.path(); } catch {}
+      }
+      frameRecordingPath = await stopFrameRecorder();
       await browser.close().catch(() => {});
+      if (videoPath) console.log(`  [${s}] recording ${videoPath}`);
+      if (frameRecordingPath) console.log(`  [${s}] frame-recording ${frameRecordingPath}`);
     }
   }
   server.close();

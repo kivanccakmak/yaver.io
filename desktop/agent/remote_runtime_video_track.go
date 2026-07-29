@@ -47,16 +47,89 @@ func isVCLNAL(t uint8) bool {
 	return t >= 1 && t <= 5
 }
 
-func startsNextAccessUnit(t uint8, haveVCL bool) bool {
+func startsNextAccessUnit(nal NALUnit, haveVCL bool) bool {
 	if !haveVCL {
 		return false
 	}
-	switch t {
-	case 1, 2, 3, 4, 5, 7, 8, 9:
+	switch nal.Type {
+	case 1, 2, 3, 4, 5:
+		// A picture may be split across multiple VCL slice NALs. Only a
+		// slice whose first_mb_in_slice is 0 begins the next picture; treating
+		// every VCL as a new sample decodes just the top slice and paints the
+		// rest as all-zero-YUV green.
+		return h264FirstMBInSlice(nal.Data) == 0
+	case 7, 8, 9:
 		return true
 	default:
 		return false
 	}
+}
+
+func h264FirstMBInSlice(nal []byte) int {
+	if len(nal) < 2 {
+		return 0
+	}
+	rbsp := make([]byte, 0, len(nal)-1)
+	zeros := 0
+	for _, b := range nal[1:] {
+		if zeros >= 2 && b == 0x03 {
+			zeros = 0
+			continue
+		}
+		rbsp = append(rbsp, b)
+		if b == 0 {
+			zeros++
+		} else {
+			zeros = 0
+		}
+	}
+	br := h264BitReader{data: rbsp}
+	v, ok := br.readUE()
+	if !ok {
+		return 0
+	}
+	return v
+}
+
+type h264BitReader struct {
+	data []byte
+	bit  int
+}
+
+func (r *h264BitReader) readBit() (int, bool) {
+	if r.bit >= len(r.data)*8 {
+		return 0, false
+	}
+	b := r.data[r.bit/8]
+	shift := 7 - (r.bit % 8)
+	r.bit++
+	return int((b >> shift) & 1), true
+}
+
+func (r *h264BitReader) readUE() (int, bool) {
+	zeros := 0
+	for {
+		b, ok := r.readBit()
+		if !ok {
+			return 0, false
+		}
+		if b == 1 {
+			break
+		}
+		zeros++
+		if zeros > 30 {
+			return 0, false
+		}
+	}
+	value := 1<<zeros - 1
+	for i := 0; i < zeros; i++ {
+		b, ok := r.readBit()
+		if !ok {
+			return 0, false
+		}
+		value += b << (zeros - 1 - i)
+	}
+	return value, true
 }
 
 func appendAnnexBNAL(dst []byte, nal NALUnit) []byte {
@@ -91,7 +164,7 @@ func (r *accessUnitReader) Next(ctx context.Context) ([]byte, error) {
 		if len(nal.Data) == 0 {
 			continue
 		}
-		if startsNextAccessUnit(nal.Type, haveVCL) {
+		if startsNextAccessUnit(nal, haveVCL) {
 			copyNAL := nal
 			r.pending = &copyNAL
 			return au, nil
