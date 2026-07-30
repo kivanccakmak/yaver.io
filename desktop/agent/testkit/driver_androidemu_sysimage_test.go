@@ -12,6 +12,7 @@ package testkit
 // completely empty.
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,6 +120,50 @@ func TestMalformedAVDConfigIsNamedBeforeBoot(t *testing.T) {
 		if !strings.Contains(remedy, want) {
 			t.Fatalf("remedy missing %q:\n%s", want, remedy)
 		}
+	}
+}
+
+func TestGeneratedAVDConfigRepairClearsPlaceholders(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".android", "avd", "wear.avd")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir avd: %v", err)
+	}
+	body := strings.Join([]string{
+		"image.sysdir.1 = system-images/android-34/android-wear/arm64-v8a/",
+		"avd.id=<build>",
+		"avd.name=<build>",
+		"disk.dataPartition.path=<temp>",
+	}, "\n")
+	cfg := filepath.Join(dir, "config.ini")
+	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
+		t.Fatalf("write config.ini: %v", err)
+	}
+
+	repaired, err := repairGeneratedAVDConfig("wear")
+	if err != nil {
+		t.Fatalf("repairGeneratedAVDConfig: %v", err)
+	}
+	if !repaired {
+		t.Fatal("malformed generated config was not repaired")
+	}
+	data, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatalf("read config.ini: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		"avd.id=wear",
+		"avd.name=wear",
+		"disk.dataPartition.path=" + filepath.Join(dir, "userdata-qemu.img"),
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("repaired config missing %q:\n%s", want, got)
+		}
+	}
+	if malformed, remedy := avdConfigMalformed("wear"); malformed {
+		t.Fatalf("repaired config is still malformed:\n%s", remedy)
 	}
 }
 
@@ -235,6 +280,18 @@ func TestAndroidAVDUsableAcceptsInstalledImage(t *testing.T) {
 	}
 }
 
+func TestScreencapStripsWarningBeforePNG(t *testing.T) {
+	raw := append([]byte("[Warning] Multiple displays were found\n"), []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 1, 2, 3}...)
+	got := stripToPNGSignature(raw)
+	if !bytes.Equal(got, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 1, 2, 3}) {
+		t.Fatalf("did not strip warning prefix: % x", got)
+	}
+	plain := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
+	if got := stripToPNGSignature(plain); !bytes.Equal(got, plain) {
+		t.Fatalf("plain PNG changed: % x", got)
+	}
+}
+
 func TestWaitForAdbDeviceNamesUnauthorized(t *testing.T) {
 	_, err := adbOnlineDeviceFromList("List of devices attached\nemulator-5554\tunauthorized\n")
 	if err == nil {
@@ -267,6 +324,13 @@ func TestBootPreflightsTheSystemImage(t *testing.T) {
 	if strings.Contains(src[bootAt:], "exec.CommandContext(ctx, resolveTestkitCommandPath(\"emulator\")") {
 		t.Fatal("Boot ties the emulator process lifetime to the attach/wait context — a successful attach can " +
 			"cancel that context and kill the emulator before WebRTC captures its first frame")
+	}
+	if !strings.Contains(src[bootAt:bootAt+spawnAt], "onlineEmulatorForAVD(ctx, d.AVD)") {
+		t.Fatal("Boot with an exact AVD can reuse the first unrelated online emulator — android-tv could attach " +
+			"to a running Wear device and report a false pass")
+	}
+	if !strings.Contains(src[bootAt:], "waitForAdbDeviceForAVD(ctx, 120*time.Second, d.AVD)") {
+		t.Fatal("Boot does not wait for the requested AVD after spawning — adb can return an older emulator first")
 	}
 	if !strings.Contains(src[bootAt:bootAt+spawnAt], "avdSystemImageMissing(") {
 		t.Fatal("Boot spawns the emulator WITHOUT pre-flighting the system image — a missing image " +

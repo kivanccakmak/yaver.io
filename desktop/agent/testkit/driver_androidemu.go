@@ -41,7 +41,14 @@ func (d *AndroidEmuDriver) Boot(ctx context.Context) (string, error) {
 	if err := d.Available(); err != nil {
 		return "", err
 	}
-	if deviceID := firstOnlineEmulator(ctx); deviceID != "" {
+	if d.AVD == "" {
+		if deviceID := firstOnlineEmulator(ctx); deviceID != "" {
+			if err := waitForBootComplete(ctx, deviceID, 30*time.Second); err != nil {
+				return deviceID, err
+			}
+			return deviceID, nil
+		}
+	} else if deviceID := onlineEmulatorForAVD(ctx, d.AVD); deviceID != "" {
 		if err := waitForBootComplete(ctx, deviceID, 30*time.Second); err != nil {
 			return deviceID, err
 		}
@@ -72,6 +79,11 @@ func (d *AndroidEmuDriver) Boot(ctx context.Context) (string, error) {
 	// system-images directory completely empty.
 	if missing, remedy := avdSystemImageMissing(d.AVD); missing {
 		return "", fmt.Errorf("%s", remedy)
+	}
+	if repaired, err := repairGeneratedAVDConfig(d.AVD); err != nil {
+		return "", err
+	} else if repaired {
+		fmt.Fprintf(os.Stderr, "[android-emulator] repaired generated AVD config for %s\n", d.AVD)
 	}
 	if malformed, remedy := avdConfigMalformed(d.AVD); malformed {
 		return "", fmt.Errorf("%s", remedy)
@@ -104,7 +116,7 @@ func (d *AndroidEmuDriver) Boot(ctx context.Context) (string, error) {
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- cmd.Wait() }()
 
-	deviceID, err := waitForAdbDevice(ctx, 120*time.Second)
+	deviceID, err := waitForAdbDeviceForAVD(ctx, 120*time.Second, d.AVD)
 	if err != nil {
 		if logFile != nil {
 			_ = logFile.Sync()
@@ -246,10 +258,66 @@ func AndroidAVDUsable(avd string) (bool, string) {
 	if missing, remedy := avdSystemImageMissing(name); missing {
 		return false, remedy
 	}
+	if _, err := repairGeneratedAVDConfig(name); err != nil {
+		return false, err.Error()
+	}
 	if malformed, remedy := avdConfigMalformed(name); malformed {
 		return false, remedy
 	}
 	return true, ""
+}
+
+func repairGeneratedAVDConfig(avd string) (bool, error) {
+	name := strings.TrimSpace(avd)
+	if name == "" {
+		return false, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, nil
+	}
+	cfg := avdConfigPath(home, name)
+	data, err := os.ReadFile(cfg)
+	if err != nil {
+		return false, nil
+	}
+	avdDir := filepath.Dir(cfg)
+	changed := false
+	var lines []string
+	for _, line := range strings.Split(string(data), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			lines = append(lines, line)
+			continue
+		}
+		key := strings.TrimSpace(k)
+		value := strings.TrimSpace(v)
+		switch key {
+		case "avd.id":
+			if strings.Contains(value, "<") || strings.Contains(value, ">") {
+				line = "avd.id=" + name
+				changed = true
+			}
+		case "avd.name":
+			if strings.Contains(value, "<") || strings.Contains(value, ">") {
+				line = "avd.name=" + name
+				changed = true
+			}
+		case "disk.dataPartition.path":
+			if strings.Contains(value, "<") || strings.Contains(value, ">") {
+				line = "disk.dataPartition.path=" + filepath.Join(avdDir, "userdata-qemu.img")
+				changed = true
+			}
+		}
+		lines = append(lines, line)
+	}
+	if !changed {
+		return false, nil
+	}
+	if err := os.WriteFile(cfg, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		return false, fmt.Errorf("repair AVD %q generated config: %w", name, err)
+	}
+	return true, nil
 }
 
 // kvmAvailable reports whether /dev/kvm is exposed to this process.
@@ -270,6 +338,27 @@ func firstOnlineEmulator(ctx context.Context) string {
 		return online[0]
 	}
 	return ""
+}
+
+func onlineEmulatorForAVD(ctx context.Context, avd string) string {
+	want := strings.TrimSpace(avd)
+	if want == "" {
+		return firstOnlineEmulator(ctx)
+	}
+	for _, serial := range OnlineEmulators(ctx) {
+		if emulatorAVDName(ctx, serial) == want {
+			return serial
+		}
+	}
+	return ""
+}
+
+func emulatorAVDName(ctx context.Context, serial string) string {
+	out, err := runCtx(ctx, "adb", "-s", serial, "shell", "getprop", "ro.boot.qemu.avd_name")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
 }
 
 // OnlineEmulators returns every booted emulator serial, in adb order.
@@ -340,7 +429,16 @@ func (d *AndroidEmuDriver) Screenshot(ctx context.Context, deviceID, outPath str
 	if len(out) == 0 {
 		return fmt.Errorf("adb screencap produced 0 bytes for %s — device is online but not capturable", deviceID)
 	}
+	out = stripToPNGSignature(out)
 	return writeFile(outPath, out)
+}
+
+func stripToPNGSignature(out []byte) []byte {
+	pngSig := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
+	if i := bytes.Index(out, pngSig); i > 0 {
+		return out[i:]
+	}
+	return out
 }
 
 // Shutdown stops the emulator. Best-effort.
@@ -352,6 +450,10 @@ func (d *AndroidEmuDriver) Shutdown(ctx context.Context, deviceID string) error 
 // waitForAdbDevice polls `adb devices` until at least one online
 // device shows up or timeout. Returns the first online device id.
 func waitForAdbDevice(ctx context.Context, timeout time.Duration) (string, error) {
+	return waitForAdbDeviceForAVD(ctx, timeout, "")
+}
+
+func waitForAdbDeviceForAVD(ctx context.Context, timeout time.Duration, avd string) (string, error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		select {
@@ -363,9 +465,17 @@ func waitForAdbDevice(ctx context.Context, timeout time.Duration) (string, error
 		if serial, err := adbOnlineDeviceFromList(out); err != nil {
 			return "", err
 		} else if serial != "" {
+			if strings.TrimSpace(avd) == "" || emulatorAVDName(ctx, serial) == strings.TrimSpace(avd) {
+				return serial, nil
+			}
+		}
+		if serial := onlineEmulatorForAVD(ctx, avd); serial != "" {
 			return serial, nil
 		}
 		time.Sleep(1 * time.Second)
+	}
+	if strings.TrimSpace(avd) != "" {
+		return "", fmt.Errorf("no adb device for AVD %q online after %s", avd, timeout)
 	}
 	return "", fmt.Errorf("no adb device online after %s", timeout)
 }

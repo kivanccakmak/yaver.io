@@ -86,7 +86,11 @@ const jpegChunks=new Map();
 function jpegBlobFromMessage(data){
   if(typeof data!=="string") return new Blob([data],{type:"image/jpeg"});
   let payload=null;
-  try{ payload=JSON.parse(data); }catch{ return null; }
+  try{ payload=JSON.parse(data); }catch{
+    const bytes=new Uint8Array(data.length);
+    for(let i=0;i<data.length;i++) bytes[i]=data.charCodeAt(i)&255;
+    return new Blob([bytes],{type:"image/jpeg"});
+  }
   if(!payload||payload.type!=="jpeg-chunk"||!payload.id||typeof payload.index!=="number"||typeof payload.total!=="number"||typeof payload.data!=="string") return null;
   const entry=jpegChunks.get(payload.id)||{total:payload.total,parts:[]};
   entry.total=payload.total; entry.parts[payload.index]=payload.data; jpegChunks.set(payload.id,entry);

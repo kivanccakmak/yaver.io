@@ -317,7 +317,9 @@ export default function RemoteRuntimeViewer({
         try {
           payload = JSON.parse(data);
         } catch {
-          return null;
+          const bytes = new Uint8Array(data.length);
+          for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i) & 255;
+          return new Blob([bytes], { type: "image/jpeg" });
         }
         if (payload.type !== "jpeg-chunk" || !payload.id || typeof payload.index !== "number" ||
           typeof payload.total !== "number" || typeof payload.data !== "string") {
