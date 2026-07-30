@@ -213,12 +213,18 @@ func (iosSimulatorTarget) Key(ctx context.Context, _ string, key string) error {
 	return nil
 }
 func (iosSimulatorTarget) Screenshot(ctx context.Context, deviceID, pngPath string) error {
+	if err := (&testkit.IOSSimDriver{}).Screenshot(ctx, deviceID, pngPath); err == nil {
+		return nil
+	}
 	if png, err := wdaClientFor(wdaBaseURL()).Screenshot(ctx); err == nil {
 		return os.WriteFile(pngPath, png, 0o644)
 	}
-	return (&testkit.IOSSimDriver{}).Screenshot(ctx, deviceID, pngPath)
+	return fmt.Errorf("simctl screenshot and WebDriverAgent screenshot both failed for simulator %s", deviceID)
 }
 func (iosSimulatorTarget) Dims(ctx context.Context, deviceID string) DeviceDims {
+	if dims := probeIOSDims(ctx, deviceID); dims.Width > 0 && dims.Height > 0 {
+		return dims
+	}
 	if w, h, err := wdaClientFor(wdaBaseURL()).WindowSize(ctx); err == nil && w > 0 && h > 0 {
 		rot := "portrait"
 		if w > h {
@@ -226,7 +232,7 @@ func (iosSimulatorTarget) Dims(ctx context.Context, deviceID string) DeviceDims 
 		}
 		return DeviceDims{Width: w, Height: h, Scale: 3, Rotation: rot}
 	}
-	return probeIOSDims(ctx, deviceID)
+	return fallbackDims
 }
 func (iosSimulatorTarget) SpawnCapture(ctx context.Context, deviceID string) (*exec.Cmd, io.ReadCloser, error) {
 	return spawnXcrunRecordVideo(ctx, deviceID)
