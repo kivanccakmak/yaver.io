@@ -40,6 +40,39 @@ if [ -f "$HOME/.androidplay/yaver.env" ]; then
   set -a; source "$HOME/.androidplay/yaver.env"; set +a
 fi
 
+REPO_ROOT="$(cd ../.. && pwd)"
+if [ ! -f "keystore.properties" ] || [ ! -f "$REPO_ROOT/keys/yaver-upload.keystore" ]; then
+  echo "Android release signing material missing; running scripts/bootstrap-android-signing.sh..."
+  if ! (cd "$REPO_ROOT" && ./scripts/bootstrap-android-signing.sh); then
+    echo "ERROR: Android release signing material is missing and bootstrap failed." >&2
+    echo "Expected $REPO_ROOT/keys/yaver-upload.keystore and mobile/android/keystore.properties before building." >&2
+    exit 1
+  fi
+fi
+
+STORE_FILE=$(awk -F= '/^storeFile=/ {print substr($0, index($0, "=") + 1)}' keystore.properties | tail -1)
+STORE_PASSWORD=$(awk -F= '/^storePassword=/ {print substr($0, index($0, "=") + 1)}' keystore.properties | tail -1)
+if [ -z "$STORE_FILE" ] || [ -z "$STORE_PASSWORD" ]; then
+  echo "ERROR: mobile/android/keystore.properties is missing storeFile or storePassword." >&2
+  exit 1
+fi
+case "$STORE_FILE" in
+  /*) KEYSTORE_FILE="$STORE_FILE" ;;
+  *) KEYSTORE_FILE="$(cd app && pwd)/$STORE_FILE" ;;
+esac
+if [ ! -f "$KEYSTORE_FILE" ]; then
+  echo "ERROR: Android release keystore file not found at $KEYSTORE_FILE." >&2
+  echo "Run ./scripts/bootstrap-android-signing.sh or restore the local gitignored keys/yaver-upload.keystore file." >&2
+  exit 1
+fi
+if command -v keytool >/dev/null 2>&1; then
+  if ! keytool -list -keystore "$KEYSTORE_FILE" -storepass "$STORE_PASSWORD" >/dev/null 2>&1; then
+    echo "ERROR: Android release keystore exists but keytool cannot open it with keystore.properties." >&2
+    echo "Re-run ./scripts/bootstrap-android-signing.sh so the keystore and passwords come from the same vault snapshot." >&2
+    exit 1
+  fi
+fi
+
 if [ -x "./gradlew" ]; then
   GRADLE="./gradlew"
 elif command -v gradle >/dev/null 2>&1; then
@@ -47,6 +80,16 @@ elif command -v gradle >/dev/null 2>&1; then
 else
   echo "ERROR: No Gradle runner found."
   echo "Expected ./mobile/android/gradlew or a global 'gradle' binary."
+  exit 1
+fi
+
+MIN_FREE_GB="${YAVER_PLAYSTORE_MIN_FREE_GB:-16}"
+AVAILABLE_KB=$(df -Pk . | awk 'NR==2 {print $4}')
+MIN_FREE_KB=$((MIN_FREE_GB * 1024 * 1024))
+if [ -n "$AVAILABLE_KB" ] && [ "$AVAILABLE_KB" -lt "$MIN_FREE_KB" ]; then
+  AVAILABLE_GB=$((AVAILABLE_KB / 1024 / 1024))
+  echo "ERROR: Play deploy needs at least ${MIN_FREE_GB} GiB free on the Android build volume; only ${AVAILABLE_GB} GiB is available." >&2
+  echo "Clean generated artifacts (mobile/android/app/build, mobile/android/.gradle, node_modules native .cxx/build outputs, or Gradle caches) or run the Play deploy on CI." >&2
   exit 1
 fi
 
@@ -128,6 +171,26 @@ fi
 # Build worklets prefab first — reanimated CMake configure depends on it.
 echo "Building release AAB..."
 "$GRADLE" :react-native-worklets:prefabReleasePackage
+
+# Reanimated 4.x imports libworklets.so from the legacy AGP
+# intermediates/cmake/release path, while the current worklets/AGP build emits
+# it under intermediates/cxx/RelWithDebInfo/<hash>/obj. Bridge the exact ABI
+# files after building worklets so bundleRelease cannot fail later with
+# "libworklets.so missing and no known rule to make it".
+WORKLETS_ANDROID="../../mobile/node_modules/react-native-worklets/android"
+WORKLETS_EXPECTED="$WORKLETS_ANDROID/build/intermediates/cmake/release/obj"
+for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+  src=$(find "$WORKLETS_ANDROID/build/intermediates/cxx/RelWithDebInfo" -path "*/obj/$abi/libworklets.so" -print -quit 2>/dev/null || true)
+  if [ -n "$src" ]; then
+    mkdir -p "$WORKLETS_EXPECTED/$abi"
+    cp "$src" "$WORKLETS_EXPECTED/$abi/libworklets.so"
+  fi
+done
+if [ ! -f "$WORKLETS_EXPECTED/arm64-v8a/libworklets.so" ]; then
+  echo "ERROR: react-native-worklets built no arm64 libworklets.so; cannot build Reanimated release." >&2
+  exit 1
+fi
+
 "$GRADLE" bundleRelease
 
 AAB_PATH="app/build/outputs/bundle/release/app-release.aab"
