@@ -15,6 +15,46 @@ node "$ROOT/scripts/add-liveactivity-ios-target.js"
 
 cd "$ROOT/mobile/ios"
 
+hydrate_native_dependency_artifacts() {
+  local sqlite_dir="$ROOT/mobile/node_modules/expo-sqlite"
+  if [ -d "$sqlite_dir/ios" ]; then
+    for file in sqlite3.c sqlite3.h; do
+      if [ ! -f "$sqlite_dir/ios/$file" ] && [ -f "$sqlite_dir/vendor/sqlite3/$file" ]; then
+        echo "Hydrating ExpoSQLite iOS artifact: $file"
+        cp "$sqlite_dir/vendor/sqlite3/$file" "$sqlite_dir/ios/$file"
+      fi
+    done
+  fi
+
+  local audio_dir="$ROOT/mobile/node_modules/react-native-audio-api"
+  local audio_external="$audio_dir/common/cpp/audioapi/external"
+  if [ -d "$audio_dir" ] && [ ! -d "$audio_external/ffmpeg_ios" ]; then
+    if [ -x "$audio_dir/scripts/download-prebuilt-binaries.sh" ]; then
+      echo "Hydrating RNAudioAPI prebuilt binaries"
+      (cd "$audio_dir" && ./scripts/download-prebuilt-binaries.sh)
+    else
+      echo "ERROR: RNAudioAPI prebuilt binaries are missing and download-prebuilt-binaries.sh is unavailable." >&2
+      exit 1
+    fi
+  fi
+
+  local missing=0
+  for path in \
+    "$sqlite_dir/ios/sqlite3.c" \
+    "$sqlite_dir/ios/sqlite3.h" \
+    "$audio_external/ffmpeg_ios" \
+    "$audio_external/iphoneos" \
+    "$audio_external/iphonesimulator"; do
+    if [ ! -e "$path" ]; then
+      echo "ERROR: required native deploy artifact missing: $path" >&2
+      missing=1
+    fi
+  done
+  [ "$missing" = 0 ] || exit 1
+}
+
+hydrate_native_dependency_artifacts
+
 # Load secrets from the Yaver vault (project="mobile" + globals). Vault
 # values win when present; values not in the vault fall through from the
 # parent env. Locally: `yaver vault add APP_STORE_KEY_PATH --project mobile`.

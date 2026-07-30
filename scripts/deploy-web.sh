@@ -87,6 +87,11 @@ fi
 
 echo "Size OK. Building and deploying to Cloudflare..."
 
+if [ ! -f "$DEPLOY_DIR/node_modules/next/package.json" ]; then
+  echo "web dependencies missing — running npm ci before Cloudflare deploy."
+  (cd "$DEPLOY_DIR" && npm ci)
+fi
+
 # 1b. AASA shadow guard (incident 2026-07-23).
 # A physical file at public/.well-known/apple-app-site-association is served by
 # Cloudflare's static-assets binding BEFORE the Next rewrite reaches the route
