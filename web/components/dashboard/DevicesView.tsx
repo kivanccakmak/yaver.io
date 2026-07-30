@@ -11,7 +11,7 @@ import { RecycleBoxDialog } from "@/components/dashboard/RecycleBoxDialog";
 import { DevicePowerModal } from "@/components/dashboard/DevicePowerModal";
 import { ManagedCloudSummary } from "@/components/dashboard/ManagedCloudPanel";
 import WakeProgress, { ParkedSummary } from "@/components/dashboard/WakeProgress";
-import { HIDE_PAID_UI } from "@/lib/launchFlags";
+import { ENABLE_GUEST_FEATURES, HIDE_PAID_UI } from "@/lib/launchFlags";
 import { CONVEX_URL } from "@/lib/constants";
 import { agentClient, AgentClient, isRunnerBrowserAuthTerminal, requestAgentUpdateViaConvex, type AgentUpdateStatus, type ConnectAttemptDiagnostic, type OpenCodeConfigSummary, type OpenCodeModelSummary, type OpenCodeProviderSummary, type RunnerBrowserAuthSession, type RunnerTestResult } from "@/lib/agent-client";
 import { runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
@@ -4211,7 +4211,7 @@ export default function DevicesView({
                     ))}
                   </div>
                 ) : null}
-                {shareSummary && shareSummary.guestChips.length > 0 ? (
+                {ENABLE_GUEST_FEATURES && shareSummary && shareSummary.guestChips.length > 0 ? (
                   <div className="mt-3">
                     <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-surface-400">
                       Shared with
@@ -5799,7 +5799,7 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
           </div>
         </div>
       ) : null}
-      {allGuests.length ? (
+      {ENABLE_GUEST_FEATURES && allGuests.length ? (
         <div className="mt-3">
           <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-500">
             Shared with

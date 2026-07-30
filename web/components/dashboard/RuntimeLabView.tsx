@@ -38,7 +38,7 @@ import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow
 import { CONVEX_URL } from "@/lib/constants";
 import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
-import { machineRolesSplitActive, type MachineRolesRow } from "@/lib/useMachineRoles";
+import { machineRolesSaveErrorMessage, machineRolesSplitActive, type MachineRolesRow } from "@/lib/useMachineRoles";
 import { classifyRuntimeTargetProbeFailure } from "@/lib/runtimeTargetProbeFailure";
 import { RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
@@ -1178,6 +1178,10 @@ export default function RuntimeLabView({
     return connectedDevice;
   }, [connectedDevice, devices, machineRoles?.runnerDeviceId]);
   const deviceRunnerFallback = useMemo(() => runnersFromDeviceInventory(runnerFallbackDevice), [runnerFallbackDevice?.id, runnerFallbackDevice?.runners]);
+  const ownedDeviceIds = useMemo(
+    () => new Set((devices || []).filter((d) => !d.isGuest).map((d) => d.id)),
+    [devices],
+  );
 
   const appendLog = useCallback((line: string) => {
     const stamp = new Date().toLocaleTimeString();
@@ -2465,7 +2469,14 @@ export default function RuntimeLabView({
   // and hit the old box.
   const setRenderDeviceAndReprobe = useCallback(async (renderId: string) => {
     if (!onSaveMachineRoles || !renderId) return;
-    const runnerId = machineRoles?.runnerDeviceId || connectedDevice?.id || renderId;
+    const currentRunner = machineRoles?.runnerDeviceId || "";
+    const runnerId = currentRunner && ownedDeviceIds.has(currentRunner)
+      ? currentRunner
+      : connectedDevice?.id && ownedDeviceIds.has(connectedDevice.id)
+        ? connectedDevice.id
+        : ownedDeviceIds.has(renderId)
+          ? renderId
+          : currentRunner || renderId;
     setMachinesBusy(true);
     setRenderPickNote(null);
     try {
@@ -2479,13 +2490,16 @@ export default function RuntimeLabView({
       });
       agentClient.setMachineRoleRoutes({ runnerDeviceId: runnerId, renderDeviceId: renderId });
       appendLog(`render machine → ${deviceNameById.get(renderId) || renderId.slice(0, 8)}`);
+      if (currentRunner && currentRunner !== runnerId) {
+        appendLog(`machine roles: replaced stale runner ${currentRunner.slice(0, 8)} with ${deviceNameById.get(runnerId) || runnerId.slice(0, 8)}`);
+      }
       void loadCapabilities();
     } catch (err) {
-      setRenderPickNote(`Could not set render machine: ${err instanceof Error ? err.message : String(err)}`);
+      setRenderPickNote(`Could not set render machine: ${machineRolesSaveErrorMessage(err instanceof Error ? err.message : String(err))}`);
     } finally {
       setMachinesBusy(false);
     }
-  }, [appendLog, connectedDevice?.id, deviceNameById, loadCapabilities, machineRoles?.autoPush, machineRoles?.runnerDeviceId, machineRoles?.secondaryRenderDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.workspace, onSaveMachineRoles]);
+  }, [appendLog, connectedDevice?.id, deviceNameById, loadCapabilities, machineRoles?.autoPush, machineRoles?.runnerDeviceId, machineRoles?.secondaryRenderDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.workspace, onSaveMachineRoles, ownedDeviceIds]);
 
   const recoverAgentAuthAndReloadTargets = useCallback(async () => {
     if (!selectedProject || recoveringAgentAuth) return;
@@ -2521,7 +2535,7 @@ export default function RuntimeLabView({
       if (!result.ok) {
         throw new Error(result.error || "relay credential refresh failed");
       }
-      appendLog("relay credentials refreshed; retrying target probe");
+      appendLog(`${result.repaired ? "relay credentials refreshed" : `relay credentials unchanged${result.reason ? ` (${result.reason})` : ""}`}; retrying target probe`);
       await loadCapabilities(selectedProject);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

@@ -3175,23 +3175,25 @@ export default function DashboardPage() {
               Invite a guest
             </button>}
 
-            <div>
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-surface-500">Join as a guest</p>
-              <div className="flex gap-1.5">
-                <input value={guestCode} onChange={e => setGuestCode(e.target.value.toUpperCase())} maxLength={6}
-                  placeholder="CODE" className="min-w-0 flex-[1_1_0%] rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-center font-mono tracking-widest text-slate-700 placeholder-slate-400 outline-none focus:border-indigo-500 dark:border-surface-800 dark:bg-surface-900 dark:text-surface-200 dark:placeholder-surface-600" />
-                <button onClick={async () => {
-                  if (guestCode.trim().length < 4) return;
-                  try {
-                    const res = await fetch(`${CONVEX_URL}/guests/accept-code`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ code: guestCode.trim() }) });
-                    const data = await res.json();
-                    if (data.ok || data.hostName) { alert(`Joined ${data.hostName || "host"}'s machine!`); setGuestCode(""); refreshDevices(); }
-                    else alert(data.error || "Invalid code");
-                  } catch (e: any) { alert(e.message); }
-                }} disabled={guestCode.trim().length < 4}
-                  className="shrink-0 rounded-md bg-indigo-600 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-30 dark:bg-indigo-500 dark:hover:bg-indigo-400">Join</button>
+            {ENABLE_GUEST_FEATURES ? (
+              <div>
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-surface-500">Join as a guest</p>
+                <div className="flex gap-1.5">
+                  <input value={guestCode} onChange={e => setGuestCode(e.target.value.toUpperCase())} maxLength={6}
+                    placeholder="CODE" className="min-w-0 flex-[1_1_0%] rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-center font-mono tracking-widest text-slate-700 placeholder-slate-400 outline-none focus:border-indigo-500 dark:border-surface-800 dark:bg-surface-900 dark:text-surface-200 dark:placeholder-surface-600" />
+                  <button onClick={async () => {
+                    if (guestCode.trim().length < 4) return;
+                    try {
+                      const res = await fetch(`${CONVEX_URL}/guests/accept-code`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ code: guestCode.trim() }) });
+                      const data = await res.json();
+                      if (data.ok || data.hostName) { alert(`Joined ${data.hostName || "host"}'s machine!`); setGuestCode(""); refreshDevices(); }
+                      else alert(data.error || "Invalid code");
+                    } catch (e: any) { alert(e.message); }
+                  }} disabled={guestCode.trim().length < 4}
+                    className="shrink-0 rounded-md bg-indigo-600 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-30 dark:bg-indigo-500 dark:hover:bg-indigo-400">Join</button>
+                </div>
               </div>
-            </div>
+            ) : null}
           </div>
         </div>
         </div>

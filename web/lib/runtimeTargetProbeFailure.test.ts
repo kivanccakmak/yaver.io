@@ -128,6 +128,30 @@ test("RuntimeLabView consumes the shared classifier instead of private relay reg
   );
 });
 
+test("RuntimeLab relay repair reports unchanged credentials honestly", () => {
+  const src = readFileSync(join(webRoot, "components/dashboard/RuntimeLabView.tsx"), "utf8");
+  const clientSrc = readFileSync(join(webRoot, "lib/agent-client.ts"), "utf8");
+  assert.match(src, /result\.repaired \? "relay credentials refreshed" : `relay credentials unchanged/, "repair UI must not call unchanged credentials refreshed");
+  assert.match(clientSrc, /repaired\?: boolean; reason\?: string/, "agent client must expose repair verdict fields from Convex");
+});
+
+test("RuntimeLab render-machine picker does not preserve stale unowned runner ids", () => {
+  const src = readFileSync(join(webRoot, "components/dashboard/RuntimeLabView.tsx"), "utf8");
+  assert.match(src, /const ownedDeviceIds = useMemo/, "RuntimeLabView must derive owned device ids before saving split roles");
+  assert.match(src, /ownedDeviceIds\.has\(currentRunner\)/, "existing runner id must be reused only when it is still owned");
+  assert.match(src, /replaced stale runner/, "the runtime console must name stale-runner replacement");
+});
+
+test("v1 guest UI stays behind the shared launch flag", () => {
+  const flags = readFileSync(join(webRoot, "lib/launchFlags.ts"), "utf8");
+  const dashboard = readFileSync(join(webRoot, "app/dashboard/page.tsx"), "utf8");
+  const devices = readFileSync(join(webRoot, "components/dashboard/DevicesView.tsx"), "utf8");
+  assert.match(flags, /export const ENABLE_GUEST_FEATURES = false/, "v1 guest features must default off");
+  assert.match(dashboard, /ENABLE_GUEST_FEATURES \? \([\s\S]*<p[^>]*>Join as a guest/, "join-as-guest sidebar must be gated");
+  assert.match(devices, /ENABLE_GUEST_FEATURES && shareSummary && shareSummary\.guestChips\.length > 0/, "device shared-with chips must be gated");
+  assert.match(devices, /ENABLE_GUEST_FEATURES && allGuests\.length/, "device details shared-with section must be gated");
+});
+
 test("RuntimeLab relay repair failure preserves the original relay-auth classification", () => {
   const src = readFileSync(join(webRoot, "components/dashboard/RuntimeLabView.tsx"), "utf8");
   assert.match(
@@ -137,7 +161,7 @@ test("RuntimeLab relay repair failure preserves the original relay-auth classifi
   );
   assert.match(
     src,
-    /setRelayRepairFailure\(\{ probeError, repairError: message, at: Date\.now\(\) \}\);\s*setError\(probeError\);/s,
+    /setRelayRepairFailure\(\{ probeError, repairError: message, at: Date\.now\(\) \}\);[\s\S]*setError\(probeError\);/,
     "a failed repair must restore the original relay-auth error so the card remains on the deterministic relay-auth branch",
   );
   assert.match(

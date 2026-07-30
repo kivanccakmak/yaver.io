@@ -5791,7 +5791,7 @@ export class AgentClient {
    * relayServers cache. After this returns, this.activeRelayPassword
    * is fresh and EventSource / fetch can be retried.
    */
-  async repairRelayPassword(): Promise<{ ok: boolean; error?: string }> {
+  async repairRelayPassword(): Promise<{ ok: boolean; repaired?: boolean; reason?: string; error?: string }> {
     if (!this.token) return { ok: false, error: "not signed in" };
     try {
       const repairRes = await fetch(`${CONVEX_URL}/settings/repair-relay`, {
@@ -5803,8 +5803,10 @@ export class AgentClient {
         body: "{}",
       });
       if (!repairRes.ok) {
-        return { ok: false, error: `repair-relay ${repairRes.status}` };
+        const data = await repairRes.json().catch(() => ({}));
+        return { ok: false, error: data?.error || data?.reason || `repair-relay ${repairRes.status}` };
       }
+      const repairData = await repairRes.json().catch(() => ({}));
       // Pull the freshly-rotated password back from /config so
       // activeRelayPassword reflects it on the next stream attempt.
       const cfgRes = await fetch(`${CONVEX_URL}/config`, {
@@ -5832,7 +5834,7 @@ export class AgentClient {
           if (fresh?.password) cached.password = fresh.password;
         }
       }
-      return { ok: true };
+      return { ok: true, repaired: !!repairData?.repaired, reason: repairData?.reason };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }

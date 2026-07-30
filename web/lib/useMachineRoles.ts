@@ -24,6 +24,21 @@ export type MachineRolesRow = {
   autoPush?: "never" | "ask" | "always";
 };
 
+export function machineRolesSaveErrorMessage(message: string): string {
+  const raw = String(message || "").trim();
+  const slot = raw.match(/\b(runnerDeviceId|renderDeviceId|secondaryRunnerDeviceId|secondaryRenderDeviceId)\b/)?.[1];
+  if (slot && /must refer to one of the caller's devices/i.test(raw)) {
+    const label: Record<string, string> = {
+      runnerDeviceId: "runner machine",
+      renderDeviceId: "render machine",
+      secondaryRunnerDeviceId: "secondary runner",
+      secondaryRenderDeviceId: "secondary renderer",
+    };
+    return `${label[slot] || slot} is not one of this account's owned devices. Pick an owned machine or reconnect that machine from this account.`;
+  }
+  return raw || "settings save failed";
+}
+
 /** True when the row actually splits work across two machines. */
 export function machineRolesSplitActive(row: MachineRolesRow | null | undefined): boolean {
   if (!row?.runnerDeviceId) return false;
@@ -66,7 +81,7 @@ export function useMachineRoles(token: string | null) {
         body: JSON.stringify({ machineRolesForProject: { ...row, updatedAt: Date.now() } }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `settings: HTTP ${res.status}`);
+      if (!res.ok) throw new Error(machineRolesSaveErrorMessage(data?.error || `settings: HTTP ${res.status}`));
       setFavorite(row);
     },
     [token],
@@ -80,7 +95,7 @@ export function useMachineRoles(token: string | null) {
       body: JSON.stringify({ machineRolesForProject: { runnerDeviceId: null } }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error || `settings: HTTP ${res.status}`);
+    if (!res.ok) throw new Error(machineRolesSaveErrorMessage(data?.error || `settings: HTTP ${res.status}`));
     setFavorite(null);
   }, [token]);
 
