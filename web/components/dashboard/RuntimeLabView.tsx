@@ -81,6 +81,7 @@ type MachineRolesDoctorInitial = {
 };
 
 type MobilePreviewMode = "phone" | "tablet";
+type RuntimeSurfaceMode = "single-device" | "physical-device";
 
 type RuntimeProjectPreference = {
   deviceId: string;
@@ -927,6 +928,11 @@ function runtimeTargetGroup(target: RemoteRuntimeTarget): "browser" | "simulator
   return "advanced";
 }
 
+function isPhysicalDeviceTarget(target: RemoteRuntimeTarget): boolean {
+  const id = String(target.id || "").toLowerCase();
+  return id === "android-device" || id === "ios-device" || id.endsWith("-device");
+}
+
 // isAgentAuthErrorMessage was file-local here until 2026-07 (audit §6 item 4);
 // it now lives in @/lib/agentAuthError so every dashboard view shares it.
 
@@ -1073,6 +1079,7 @@ export default function RuntimeLabView({
   const [showAdvancedTargets, setShowAdvancedTargets] = useState(false);
   const [webPreviewUrl, setWebPreviewUrl] = useState<string | null>(null);
   const [webPreviewPanelOpen, setWebPreviewPanelOpen] = useState(false);
+  const [runtimeSurfaceMode, setRuntimeSurfaceMode] = useState<RuntimeSurfaceMode>("single-device");
   const [runtimeControlsOpen, setRuntimeControlsOpen] = useState(false);
   const [vibingSettingsOpen, setVibingSettingsOpen] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -3082,6 +3089,9 @@ export default function RuntimeLabView({
                 return acc;
               }, {});
               const unavailableTargets = caps.targets.filter((target) => !target.enabled);
+              const physicalTargets = caps.targets.filter(isPhysicalDeviceTarget);
+              const physicalUnavailableTargets = physicalTargets.filter((target) => !target.enabled);
+              const nonPhysicalUnavailableTargets = unavailableTargets.filter((target) => !isPhysicalDeviceTarget(target));
               const primaryTargets = caps.targets.filter(isPrimaryRuntimeTarget);
               const groupOrder: ReturnType<typeof runtimeTargetGroup>[] = ["browser", "simulator", "container", "device", "advanced"];
               // Whole card is clickable (same handler as Open); the visible
@@ -3159,6 +3169,34 @@ export default function RuntimeLabView({
               return (
                 <>
                   {!webPreviewPanelOpen ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#d7dce3] bg-white p-1.5 dark:border-[#2a3039] dark:bg-[#161b22]">
+                      <div className="inline-flex rounded-md bg-[#f2f4f7] p-0.5 dark:bg-[#101318]">
+                        {([
+                          ["single-device", "Single device"],
+                          ["physical-device", "Physical device"],
+                        ] as const).map(([mode, label]) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => setRuntimeSurfaceMode(mode)}
+                            className={`h-8 rounded px-3 text-xs font-semibold ${
+                              runtimeSurfaceMode === mode
+                                ? "bg-[#1f2933] text-white dark:bg-[#e6e8ec] dark:text-[#101318]"
+                                : "text-[#667085] hover:text-[#1f2933] dark:text-[#9aa3af] dark:hover:text-[#e6e8ec]"
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="min-w-0 truncate px-2 text-xs text-[#667085] dark:text-[#9aa3af]">
+                        {runtimeSurfaceMode === "single-device"
+                          ? `${effectiveRenderBoxName || "This box"} runs runner, dev server, browser/stream publisher`
+                          : `${effectiveRenderBoxName || "This box"} builds and publishes; the phone/tablet runs the app`}
+                      </div>
+                    </div>
+                  ) : null}
+                  {!webPreviewPanelOpen && runtimeSurfaceMode === "single-device" ? (
                   <section className="space-y-2">
                     <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">
                       Browser
@@ -3477,12 +3515,42 @@ export default function RuntimeLabView({
                     <div className="grid gap-2 md:grid-cols-2">
                       {enabledTargets.map((target) => renderTarget(target))}
                     </div>
+                  ) : runtimeSurfaceMode === "physical-device" ? (
+                    <div className="space-y-3">
+                      <section className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                        {[
+                          ["AI runner", runnerBoxName || effectiveRenderBoxName || "Selected box"],
+                          ["Build/dev server", effectiveRenderBoxName || "Selected box"],
+                          ["Stream publisher", effectiveRenderBoxName || "Selected box"],
+                          ["Runtime device", physicalTargets.length ? "Attached phone/tablet" : "Waiting for device"],
+                        ].map(([label, value]) => (
+                          <div key={label} className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">{label}</div>
+                            <div className="mt-1 truncate text-sm font-medium text-[#1f2933] dark:text-[#e6e8ec]">{value}</div>
+                          </div>
+                        ))}
+                      </section>
+                      {physicalTargets.some((target) => target.enabled) ? (
+                        <section className="space-y-2">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">
+                            Physical devices
+                          </div>
+                          <div className="grid gap-2 md:grid-cols-2">
+                            {physicalTargets.filter((target) => target.enabled).map((target) => renderTarget(target))}
+                          </div>
+                        </section>
+                      ) : (
+                        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-100">
+                          No attached physical runtime is ready on {effectiveRenderBoxName || "this box"}. Android needs adb authorization; iOS needs a Mac with WDA/device signing.
+                        </div>
+                      )}
+                    </div>
                   ) : (
                     <div className="space-y-4">
-                      {groupOrder.filter((group) => group !== "browser").map((group) => renderGroup(group, groupedTargets[group] ?? []))}
+                      {groupOrder.filter((group) => group !== "browser" && group !== "device").map((group) => renderGroup(group, groupedTargets[group] ?? []))}
                     </div>
                   )}
-                  {unavailableTargets.length ? (
+                  {(runtimeSurfaceMode === "physical-device" ? physicalUnavailableTargets : nonPhysicalUnavailableTargets).length ? (
                     <div className="rounded-md border border-[#d7dce3] bg-[#f8fafc] dark:border-[#2a3039] dark:bg-[#121720]">
                       <button
                         type="button"
@@ -3493,12 +3561,12 @@ export default function RuntimeLabView({
                           Unavailable targets
                         </span>
                         <span className="text-xs text-[#667085] dark:text-[#9aa3af]">
-                          {unavailableTargets.length} {showAdvancedTargets ? "hide" : "show"}
+                          {(runtimeSurfaceMode === "physical-device" ? physicalUnavailableTargets : nonPhysicalUnavailableTargets).length} {showAdvancedTargets ? "hide" : "show"}
                         </span>
                       </button>
                       {showAdvancedTargets ? (
                         <div className="grid gap-2 border-t border-[#d7dce3] p-3 dark:border-[#2a3039] md:grid-cols-2">
-                          {unavailableTargets.map((target) => renderTarget(target, true))}
+                          {(runtimeSurfaceMode === "physical-device" ? physicalUnavailableTargets : nonPhysicalUnavailableTargets).map((target) => renderTarget(target, true))}
                         </div>
                       ) : null}
                     </div>

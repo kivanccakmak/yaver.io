@@ -50,9 +50,50 @@ func TestBuildRedroidResourceStatusImageMissing(t *testing.T) {
 		Arch:            "arm64",
 		DockerPresent:   true,
 		DockerReachable: true,
+		BinderDevices:   true,
+		FreeBytes:       minRedroidFreeBytes,
 	})
 	if st.State != "image_missing" {
 		t.Fatalf("state = %q, want image_missing", st.State)
+	}
+}
+
+func TestBuildRedroidResourceStatusBinderMissing(t *testing.T) {
+	st := buildRedroidResourceStatus(redroidResourceProbe{
+		OS:                  "linux",
+		Arch:                "arm64",
+		DockerPresent:       true,
+		DockerReachable:     true,
+		RedroidImagePresent: true,
+		BinderDetail:        "binder_linux module not found",
+		FreeBytes:           minRedroidFreeBytes,
+	})
+	if st.State != "binder_missing" {
+		t.Fatalf("state = %q, want binder_missing", st.State)
+	}
+	if st.Ready || st.CanHostHere {
+		t.Fatalf("binder-missing host must not be ready: %+v", st)
+	}
+	if st.Summary == "" || len(st.NextActions) == 0 {
+		t.Fatalf("binder failure must carry a route: %+v", st)
+	}
+}
+
+func TestBuildRedroidResourceStatusDiskTooLow(t *testing.T) {
+	st := buildRedroidResourceStatus(redroidResourceProbe{
+		OS:                  "linux",
+		Arch:                "arm64",
+		DockerPresent:       true,
+		DockerReachable:     true,
+		RedroidImagePresent: true,
+		BinderDevices:       true,
+		FreeBytes:           minRedroidFreeBytes - 1,
+	})
+	if st.State != "disk_too_low" {
+		t.Fatalf("state = %q, want disk_too_low", st.State)
+	}
+	if st.Ready || st.CanHostHere {
+		t.Fatalf("disk-low host must not be ready: %+v", st)
 	}
 }
 
@@ -63,6 +104,8 @@ func TestBuildRedroidResourceStatusReady(t *testing.T) {
 		DockerPresent:       true,
 		DockerReachable:     true,
 		RedroidImagePresent: true,
+		BinderDevices:       true,
+		FreeBytes:           minRedroidFreeBytes,
 	})
 	if !st.Ready || !st.CanHostHere {
 		t.Fatalf("ready host not marked ready: %+v", st)

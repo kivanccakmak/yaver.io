@@ -3,11 +3,16 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
+
+const minRedroidFreeBytes = 3 * 1024 * 1024 * 1024
 
 type redroidResourceProbe struct {
 	OS                  string
@@ -17,6 +22,11 @@ type redroidResourceProbe struct {
 	DockerDetail        string
 	RedroidImagePresent bool
 	DefaultWorkDir      string
+	BinderDevices       bool
+	BinderModule        bool
+	BinderDetail        string
+	FreeBytes           uint64
+	DiskDetail          string
 }
 
 type redroidResourceStatus struct {
@@ -32,6 +42,11 @@ type redroidResourceStatus struct {
 	RedroidImage        string   `json:"redroidImage"`
 	RedroidImagePresent bool     `json:"redroidImagePresent"`
 	DefaultWorkDir      string   `json:"defaultWorkDir"`
+	BinderDevices       bool     `json:"binderDevices"`
+	BinderModule        bool     `json:"binderModule"`
+	BinderDetail        string   `json:"binderDetail,omitempty"`
+	FreeBytes           uint64   `json:"freeBytes,omitempty"`
+	DiskDetail          string   `json:"diskDetail,omitempty"`
 	State               string   `json:"state"`
 	Summary             string   `json:"summary"`
 	NextActions         []string `json:"nextActions"`
@@ -66,6 +81,26 @@ func probeRedroidResource(ctx context.Context) redroidResourceProbe {
 		Arch:           runtime.GOARCH,
 		DefaultWorkDir: defaultRedroidWorkDir(),
 	}
+	if runtime.GOOS == "linux" {
+		p.BinderDevices = redroidBinderDevicesPresent()
+		p.BinderModule = redroidBinderModulePresent(ctx)
+		if p.BinderDevices {
+			p.BinderDetail = "/dev/binder, /dev/hwbinder, and /dev/vndbinder exist"
+		} else if p.BinderModule {
+			p.BinderDetail = "binder_linux module exists but binder devices are not loaded yet"
+		} else {
+			p.BinderDetail = "binder_linux module not found for this running kernel"
+		}
+		if free, err := redroidFreeBytes(defaultRedroidWorkDir()); err == nil {
+			p.FreeBytes = free
+			p.DiskDetail = fmt.Sprintf("%.1f GiB free near %s", float64(free)/(1024*1024*1024), defaultRedroidWorkDir())
+		} else if free, err := redroidFreeBytes("/"); err == nil {
+			p.FreeBytes = free
+			p.DiskDetail = fmt.Sprintf("%.1f GiB free on /", float64(free)/(1024*1024*1024))
+		} else {
+			p.DiskDetail = err.Error()
+		}
+	}
 	if _, err := exec.LookPath("docker"); err == nil {
 		p.DockerPresent = true
 	} else {
@@ -92,6 +127,38 @@ func probeRedroidResource(ctx context.Context) redroidResourceProbe {
 	return p
 }
 
+func redroidBinderDevicesPresent() bool {
+	for _, p := range []string{"/dev/binder", "/dev/hwbinder", "/dev/vndbinder"} {
+		if _, err := os.Stat(p); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func redroidBinderModulePresent(ctx context.Context) bool {
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(cctx, "modinfo", "binder_linux").Run(); err == nil {
+		return true
+	}
+	return false
+}
+
+func redroidFreeBytes(path string) (uint64, error) {
+	if strings.TrimSpace(path) == "" {
+		path = "/"
+	}
+	if _, err := os.Stat(path); err != nil {
+		path = "/"
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(path, &st); err != nil {
+		return 0, err
+	}
+	return st.Bavail * uint64(st.Bsize), nil
+}
+
 func buildRedroidResourceStatus(p redroidResourceProbe) redroidResourceStatus {
 	st := redroidResourceStatus{
 		Kind:                "android-redroid",
@@ -104,6 +171,11 @@ func buildRedroidResourceStatus(p redroidResourceProbe) redroidResourceStatus {
 		RedroidImage:        defaultRedroidImage,
 		RedroidImagePresent: p.RedroidImagePresent,
 		DefaultWorkDir:      p.DefaultWorkDir,
+		BinderDevices:       p.BinderDevices,
+		BinderModule:        p.BinderModule,
+		BinderDetail:        p.BinderDetail,
+		FreeBytes:           p.FreeBytes,
+		DiskDetail:          p.DiskDetail,
 		Notes: []string{
 			"One redroid resource is treated as one user's private Android clone; it is not a shared multi-tenant phone.",
 			"Redroid is for automation and app QA. Real-phone home-hosting still needs physical-device proof.",
@@ -131,6 +203,20 @@ func buildRedroidResourceStatus(p redroidResourceProbe) redroidResourceStatus {
 		st.NextActions = []string{
 			"Start Docker and make sure this user can reach the Docker daemon.",
 			"Run docker info, then redroid_resource_status again.",
+		}
+	case !p.BinderDevices && !p.BinderModule:
+		st.State = "binder_missing"
+		st.Summary = "This Linux kernel cannot host Redroid yet: binder_linux is not available for the running kernel."
+		st.NextActions = []string{
+			"Install kernel modules for the exact running kernel, usually linux-modules-extra-$(uname -r), then reboot if the package changes the kernel.",
+			"Run `modprobe binder_linux devices=binder,hwbinder,vndbinder`, then redroid_resource_status again.",
+		}
+	case p.FreeBytes > 0 && p.FreeBytes < minRedroidFreeBytes:
+		st.State = "disk_too_low"
+		st.Summary = "This host does not have enough free disk to boot a Redroid runtime safely."
+		st.NextActions = []string{
+			"Free at least 3 GiB on the Redroid host workdir or root filesystem.",
+			"Run redroid_resource_status again before starting the runtime.",
 		}
 	case !p.RedroidImagePresent:
 		st.State = "image_missing"

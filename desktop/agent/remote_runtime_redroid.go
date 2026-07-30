@@ -124,9 +124,13 @@ func probeRedroidTarget() RemoteRuntimeTarget {
 		target.Reason = "Requires a Linux host with Docker and Android binder support."
 		return target
 	}
-	if _, err := exec.LookPath("docker"); err != nil {
+	st := buildRedroidResourceStatus(probeRedroidResource(context.Background()))
+	if !st.Ready {
 		target.Enabled = false
-		target.Reason = "docker not found. Install Docker on the redroid host."
+		target.Reason = st.Summary
+		if len(st.NextActions) > 0 {
+			target.Reason += " " + st.NextActions[0]
+		}
 		return target
 	}
 	target.Enabled = true
