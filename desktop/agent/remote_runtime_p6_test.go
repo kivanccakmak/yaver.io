@@ -4,6 +4,8 @@ package main
 // target tests. Pure — no shell-outs, no live simulators.
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -68,6 +70,48 @@ func TestProbeAndroidSurfaceTargets_HaveExpectedSurfaceBadge(t *testing.T) {
 		if tg.Surface == "" {
 			t.Errorf("%s missing Surface badge", tg.ID)
 		}
+		if tg.DisplaySurface == "" {
+			t.Errorf("%s missing DisplaySurface", tg.ID)
+		}
+		if tg.Viewport == nil || tg.Viewport.Width <= 0 || tg.Viewport.Height <= 0 {
+			t.Errorf("%s missing usable viewport: %+v", tg.ID, tg.Viewport)
+		}
+		if len(tg.Checks) == 0 {
+			t.Errorf("%s missing probe checks", tg.ID)
+		}
+	}
+}
+
+func TestProbeAndroidEmulatorTargetRequiresBootableAVD(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	bin := filepath.Join(home, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	for _, name := range []string{"adb", "emulator"} {
+		body := "#!/bin/sh\nexit 0\n"
+		if name == "emulator" {
+			body = "#!/bin/sh\nif [ \"$1\" = \"-list-avds\" ]; then exit 0; fi\nexit 0\n"
+		}
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", bin)
+
+	tg := probeAndroidEmulatorTarget()
+	if tg.Enabled {
+		t.Fatalf("android-emulator enabled without any bootable AVD: %+v", tg)
+	}
+	if tg.Surface != "phone" || tg.DisplaySurface == "" || tg.Viewport == nil {
+		t.Fatalf("android-emulator missing phone presentation metadata: %+v", tg)
+	}
+	if !strings.Contains(tg.Reason, "No Android AVDs configured") {
+		t.Fatalf("android-emulator reason = %q, want missing AVD guidance", tg.Reason)
+	}
+	if len(tg.Checks) != 3 || tg.Checks[2].OK {
+		t.Fatalf("android-emulator checks should name the failed AVD probe: %+v", tg.Checks)
 	}
 }
 

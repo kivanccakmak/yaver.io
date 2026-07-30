@@ -116,8 +116,10 @@ func (d *AndroidEmuDriver) Boot(ctx context.Context) (string, error) {
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- cmd.Wait() }()
 
+	adbWaitStarted := time.Now()
 	deviceID, err := waitForAdbDeviceForAVD(ctx, 120*time.Second, d.AVD)
 	if err != nil {
+		adbWaitElapsed := time.Since(adbWaitStarted).Round(time.Second)
 		if logFile != nil {
 			_ = logFile.Sync()
 		}
@@ -132,7 +134,12 @@ func (d *AndroidEmuDriver) Boot(ctx context.Context) (string, error) {
 		}
 		if logPath != "" {
 			terminateStartedEmulator(cmd, waitCh)
-			return "", fmt.Errorf("AVD %q did not expose an adb device after 120s; emulator was stopped, log: %s", d.AVD, logPath)
+			tail := emulatorLogTail(logPath)
+			adbState := adbDevicesSnapshot(context.Background())
+			if tail != "" || adbState != "" {
+				return "", fmt.Errorf("AVD %q did not expose an adb device after %s; emulator was stopped, log: %s\nadb devices:\n%s\nemulator log tail:\n%s", d.AVD, adbWaitElapsed, logPath, adbState, tail)
+			}
+			return "", fmt.Errorf("AVD %q did not expose an adb device after %s; emulator was stopped, log: %s", d.AVD, adbWaitElapsed, logPath)
 		}
 		terminateStartedEmulator(cmd, waitCh)
 		return "", err
@@ -188,6 +195,14 @@ func emulatorLogTail(path string) string {
 		lines = lines[len(lines)-40:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+func adbDevicesSnapshot(ctx context.Context) string {
+	out, err := runCtx(ctx, "adb", "devices", "-l")
+	if err != nil && strings.TrimSpace(out) == "" {
+		return err.Error()
+	}
+	return strings.TrimSpace(out)
 }
 
 func avdConfigPath(home, avd string) string {
@@ -263,6 +278,31 @@ func AndroidAVDUsable(avd string) (bool, string) {
 	}
 	if malformed, remedy := avdConfigMalformed(name); malformed {
 		return false, remedy
+	}
+	return true, ""
+}
+
+// AndroidAnyAVDUsable reports whether the default Android emulator target can
+// honestly be offered. It mirrors Boot's auto-pick path instead of treating
+// `adb + emulator` as enough: an installed emulator binary with zero bootable
+// AVDs still cannot create a WebRTC session.
+func AndroidAnyAVDUsable(ctx context.Context) (bool, string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	out, err := runCtx(ctx, "emulator", "-list-avds")
+	if err != nil {
+		return false, fmt.Sprintf("Android emulator AVD probe failed: %v", err)
+	}
+	avdName, skipped, err := chooseBootableAVD(out)
+	if err != nil {
+		if len(skipped) > 0 {
+			return false, fmt.Sprintf("No bootable Android AVDs configured. Skipped unusable AVDs: %s.", strings.Join(skipped, ", "))
+		}
+		return false, "No Android AVDs configured. Create one with Android Studio Device Manager or `avdmanager create avd ...`."
+	}
+	if strings.TrimSpace(avdName) == "" {
+		return false, "No Android AVDs configured. Create one with Android Studio Device Manager or `avdmanager create avd ...`."
 	}
 	return true, ""
 }

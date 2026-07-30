@@ -36,8 +36,8 @@ type RemoteRuntimeTarget struct {
 	HostOS           string `json:"hostOs,omitempty"`
 	RequiredCLI      string `json:"requiredCli,omitempty"`
 	// Surface is the n2n picker badge — phone|tablet|watch|tv|vision|browser.
-	// Additive: JSON clients ignore unknown fields. Populated for every
-	// Apple-runtime target (P0 fan-out). Older Android targets omit it.
+	// Additive: JSON clients ignore unknown fields. Populated for simulator,
+	// emulator, physical-device, browser, and desktop runtime targets.
 	Surface        string                 `json:"surface,omitempty"`
 	DisplaySurface string                 `json:"displaySurface,omitempty"`
 	Viewport       *RemoteRuntimeViewport `json:"viewport,omitempty"`
@@ -898,17 +898,22 @@ func probeVisionOSSimulatorTarget(families map[string]bool, familiesKnown bool) 
 }
 
 func probeAndroidEmulatorTarget() RemoteRuntimeTarget {
+	display, viewport := androidTargetDisplay("phone")
 	target := RemoteRuntimeTarget{
 		ID:               "android-emulator",
 		Label:            "Android Emulator over WebRTC",
+		Surface:          "phone",
 		Platform:         "android",
 		RuntimeHostClass: runtimeHostClassForAndroid(),
 		HostOS:           runtime.GOOS,
 		RequiredCLI:      "adb + emulator",
+		DisplaySurface:   display,
+		Viewport:         viewport,
 	}
 	if findAndroidToolPath("adb") == "" {
 		target.Enabled = false
 		target.Reason = "adb not found. Install Android platform-tools."
+		target.Checks = androidRuntimeChecks(false, false, "", false, "Not probed because adb is missing.")
 		return target
 	}
 	if findAndroidToolPath("emulator") == "" {
@@ -920,9 +925,19 @@ func probeAndroidEmulatorTarget() RemoteRuntimeTarget {
 		} else {
 			target.Reason = "Android emulator binary not found. Run `yaver install remote-runtime`."
 		}
+		target.Checks = androidRuntimeChecks(true, false, "", false, "Not probed because the emulator binary is missing.")
+		return target
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if ok, reason := testkit.AndroidAnyAVDUsable(ctx); !ok {
+		target.Enabled = false
+		target.Reason = reason
+		target.Checks = androidRuntimeChecks(true, true, "", false, reason)
 		return target
 	}
 	target.Enabled = true
+	target.Checks = androidRuntimeChecks(true, true, "", true, "")
 	return target
 }
 

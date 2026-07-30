@@ -12,14 +12,23 @@ import (
 var (
 	_ runtimeTarget = iosSimulatorTarget{}
 	_ runtimeTarget = androidEmulatorTarget{}
+	_ runtimeTarget = androidSurfaceTarget{}
 	_ runtimeTarget = androidDeviceTarget{}
 )
 
 func TestRuntimeTargetFor_KnownAndUnknown(t *testing.T) {
 	cases := map[string]string{
-		"ios-simulator":    "iosSimulatorTarget",
-		"android-emulator": "androidEmulatorTarget",
-		"android-device":   "androidDeviceTarget",
+		"ios-simulator":      "iosSimulatorTarget",
+		"ipados-simulator":   "iosSimulatorTarget",
+		"watchos-simulator":  "iosSimulatorTarget",
+		"tvos-simulator":     "iosSimulatorTarget",
+		"visionos-simulator": "iosSimulatorTarget",
+		"android-emulator":   "androidEmulatorTarget",
+		"android-wear":       "androidSurfaceTarget",
+		"android-tv":         "androidSurfaceTarget",
+		"android-xr":         "androidSurfaceTarget",
+		"android-auto":       "androidSurfaceTarget",
+		"android-device":     "androidDeviceTarget",
 	}
 	for id, want := range cases {
 		tgt, err := runtimeTargetFor(id)

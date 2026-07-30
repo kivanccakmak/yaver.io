@@ -38,10 +38,50 @@ func (t androidSurfaceTarget) Attach(ctx context.Context) (string, error) {
 	return (&testkit.AndroidEmuDriver{AVD: t.avdHint}).Boot(ctx)
 }
 
+func androidTargetDisplay(surface string) (string, *RemoteRuntimeViewport) {
+	switch surface {
+	case "phone":
+		return "Android phone emulator", &RemoteRuntimeViewport{Label: "Android Phone", Width: 393, Height: 852}
+	case "watch":
+		return "Wear OS emulator", &RemoteRuntimeViewport{Label: "Wear OS", Width: 390, Height: 390}
+	case "tv":
+		return "Android TV emulator", &RemoteRuntimeViewport{Label: "TV", Width: 1920, Height: 1080}
+	case "vision":
+		return "Android XR emulator", &RemoteRuntimeViewport{Label: "XR", Width: 1440, Height: 1440}
+	case "car":
+		return "Android Auto emulator", &RemoteRuntimeViewport{Label: "Car", Width: 1280, Height: 720}
+	default:
+		return "", nil
+	}
+}
+
+func androidRuntimeChecks(adbOK, emulatorOK bool, avdName string, avdOK bool, avdReason string) []RemoteRuntimeCheck {
+	avdLabel := "Bootable Android AVD"
+	if name := strings.TrimSpace(avdName); name != "" {
+		avdLabel = fmt.Sprintf("AVD %s", name)
+	}
+	return []RemoteRuntimeCheck{
+		{ID: "android-adb", Label: "adb", OK: adbOK, Reason: func() string {
+			if adbOK {
+				return ""
+			}
+			return "adb not found. Install Android platform-tools."
+		}()},
+		{ID: "android-emulator", Label: "Android emulator", OK: emulatorOK, Reason: func() string {
+			if emulatorOK {
+				return ""
+			}
+			return "Android emulator binary not found."
+		}()},
+		{ID: "android-avd", Label: avdLabel, OK: avdOK, Reason: avdReason},
+	}
+}
+
 // probeAndroidSurfaceTarget mirrors probeAndroidEmulatorTarget but
 // stamps a Surface badge + friendly label for the specific surface.
 // Enablement is identical (adb + emulator on PATH).
 func probeAndroidSurfaceTarget(id, surface, label, avdName string) RemoteRuntimeTarget {
+	display, viewport := androidTargetDisplay(surface)
 	target := RemoteRuntimeTarget{
 		ID:               id,
 		Label:            label,
@@ -50,10 +90,13 @@ func probeAndroidSurfaceTarget(id, surface, label, avdName string) RemoteRuntime
 		RuntimeHostClass: runtimeHostClassForAndroid(),
 		HostOS:           runtime.GOOS,
 		RequiredCLI:      "adb + emulator",
+		DisplaySurface:   display,
+		Viewport:         viewport,
 	}
 	if findAndroidToolPath("adb") == "" {
 		target.Enabled = false
 		target.Reason = "adb not found. Install Android platform-tools."
+		target.Checks = androidRuntimeChecks(false, false, avdName, false, "Not probed because adb is missing.")
 		return target
 	}
 	if findAndroidToolPath("emulator") == "" {
@@ -65,14 +108,17 @@ func probeAndroidSurfaceTarget(id, surface, label, avdName string) RemoteRuntime
 		} else {
 			target.Reason = "Android emulator binary not found. Run `yaver install remote-runtime`."
 		}
+		target.Checks = androidRuntimeChecks(true, false, avdName, false, "Not probed because the emulator binary is missing.")
 		return target
 	}
 	if ok, reason := testkit.AndroidAVDUsable(avdName); !ok {
 		target.Enabled = false
 		target.Reason = reason
+		target.Checks = androidRuntimeChecks(true, true, avdName, false, reason)
 		return target
 	}
 	target.Enabled = true
+	target.Checks = androidRuntimeChecks(true, true, avdName, true, "")
 	return target
 }
 
