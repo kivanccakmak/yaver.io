@@ -566,13 +566,32 @@ changing those.
   toolchain that isn't on macOS, a runner that needs a secret you don't
   have on this machine, etc.) — and when you do, say so explicitly.
 
+  **One deploy path:** from this repo, humans, agents, and MCP should start with
+  `./deploy/deploy.sh <target> [options]`. That is the canonical front door.
+  It delegates to the maintained vault-aware scripts and `yaver deploy`
+  internals, but centralizes target names, owner/permission checks, and dry-run
+  discovery so future sessions do not choose a different path.
+
+  Do not call `scripts/deploy-web.sh`, `scripts/deploy-testflight.sh`,
+  `scripts/deploy-playstore.sh`, `scripts/deploy-convex.sh`, or `npm publish`
+  directly unless you are editing/testing those scripts. Use:
+  `./deploy/deploy.sh all`, `backend`, `cloudflare`, `ios`, `android`, `npm`,
+  or `mcp`.
+
+  Deploy is owner-only. MCP deploy tools are hidden and denied for non-owner
+  accounts, and `deploy/deploy.sh` refuses group/other-writable repo or script
+  paths before touching deploy credentials. Never weaken that gate to make a
+  test pass.
+
   | Target | Local command (preferred) | CI fallback |
   |---|---|---|
-  | npm (`yaver-cli`) | `cd cli && npm publish` | `release-cli.yml` |
-  | TestFlight (iOS) | `./scripts/deploy-testflight.sh` | local-only by design |
-  | Google Play internal | `JAVA_HOME=$(/usr/libexec/java_home -v 17) ./scripts/deploy-playstore.sh && PLAY_STORE_KEY_FILE=keys/google-play-service-account.json python3 scripts/upload-playstore.py` | `release-mobile.yml` (android job) |
-  | Convex backend | `cd backend && npx convex deploy --yes` | not wired to CI |
-  | Cloudflare web | `./scripts/deploy-web.sh` | `release-web.yml` |
+  | Full Yaver stack | `./deploy/deploy.sh all` | none; run locally unless explicitly told otherwise |
+  | npm (`yaver-cli`) | `./deploy/deploy.sh npm` | `release-cli.yml` after the local command tags/pushes |
+  | TestFlight (iOS) | `./deploy/deploy.sh ios` | local-only by design |
+  | Google Play internal | `./deploy/deploy.sh android` | `release-mobile.yml` (android job) |
+  | Convex backend | `./deploy/deploy.sh backend` | not wired to CI |
+  | Cloudflare web | `./deploy/deploy.sh cloudflare` | `release-web.yml` |
+  | MCP registry metadata | `./deploy/deploy.sh mcp` | release CLI workflow when publishing npm |
 
   When the user asks to ship, run the local command — don't push a tag and
   let CI do it unless the user explicitly says "use CI". If a local deploy
@@ -622,10 +641,11 @@ yaver auth --headless
   release-mobile.yml, `web/v*` → release-web.yml. Tag protection is a repo
   ruleset (`release tag protection`); it survived the org transfer, as did all
   61 Actions secrets — verified by diffing before/after.
-- **Cloudflare web deploy**: `./scripts/deploy-web.sh` (size-guarded at 15 MB,
-  uses `@opennextjs/cloudflare` + `wrangler deploy`).
-- **Convex backend deploy**: `cd backend && npx convex deploy --yes`. Not
-  triggered by CI — deploy explicitly when schema or HTTP routes change.
+- **Cloudflare web deploy**: `./deploy/deploy.sh cloudflare` (delegates to the
+  size-guarded Cloudflare script using `@opennextjs/cloudflare` + `wrangler
+  deploy`).
+- **Convex backend deploy**: `./deploy/deploy.sh backend`. Not triggered by CI
+  — deploy explicitly when schema or HTTP routes change.
 
 ## Secrets
 
@@ -836,10 +856,10 @@ source ~/.appstoreconnect/yaver.env
 ./scripts/deploy-testflight.sh
 
 # explicit env path (no vault, no env file — type the values yourself)
-export APP_STORE_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_77Z6B543D5.p8"
-export APP_STORE_KEY_ID="77Z6B543D5"
+export APP_STORE_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_<key-id>.p8"
+export APP_STORE_KEY_ID="<key-id>"
 export APP_STORE_KEY_ISSUER="<uuid>"
-export APPLE_TEAM_ID="5SJZ4KA39A"
+export APPLE_TEAM_ID="<team-id>"
 ./scripts/deploy-testflight.sh
 ```
 

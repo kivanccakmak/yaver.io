@@ -27,6 +27,16 @@ After reading the docs, **grep the code for the symbols the docs name** before r
 
 ## Local Deploy Memory
 
+- **One deploy path:** use `./deploy/deploy.sh <target>` from the repo root.
+  Do not call `scripts/deploy-web.sh`, `scripts/deploy-testflight.sh`,
+  `scripts/deploy-playstore.sh`, `scripts/deploy-convex.sh`, or npm publish
+  directly unless you are editing/testing those scripts. Targets:
+  `all`, `backend`, `cloudflare`, `ios`, `android`, `npm`, `mcp`. This wrapper
+  is the canonical human/agent/MCP entrypoint and performs owner/permission
+  checks before delegating to the maintained deploy scripts.
+- **Deploy is owner-only:** MCP deploy tools are hidden/denied for non-owner
+  accounts, and `deploy/deploy.sh` refuses group/other-writable repo or script
+  paths before using deploy credentials. Never weaken this to make a test pass.
 - On this Mac, local TestFlight deploys can work even when `yaver vault env --project mobile` is unauthenticated, because the deploy guide in [`CLAUDE.md`](CLAUDE.md) already documents the fallback `APP_STORE_KEY_*` / `APPLE_TEAM_ID` exports used by the working local path.
 - If `scripts/deploy-testflight.sh` appears stuck with almost no output, check for another active `xcodebuild archive` from another local mobile project or an earlier Yaver run before assuming credentials are broken.
 - If you must clean local archive artifacts, inspect the exact path first (`ls -la /tmp/YaverBuild /tmp/Yaver.xcarchive /tmp/YaverExport`) and only then remove those specific directories.

@@ -139,6 +139,23 @@ products and machine-sharing surfaces are not part of the launch surface.
 | `demo-videos/` | Source notes for the landing/demo clips |
 | `docs/` | Architecture notes, setup guides, audits, handoffs, and planning material |
 
+## Deploying Yaver
+
+Use exactly one local entrypoint:
+
+```bash
+./deploy/deploy.sh <target> [options]
+```
+
+Targets are `all`, `backend`, `cloudflare`, `ios`, `android`, `npm`, and `mcp`
+with aliases listed by `./deploy/deploy.sh --help`. The entrypoint delegates to
+the maintained vault-aware scripts and `yaver deploy` commands, but gives
+humans, agents, and MCP one path so deploys do not drift.
+
+Deploys are owner-only. The script refuses group/other-writable repo or script
+paths before touching Convex, Cloudflare, App Store Connect, Play Console, npm,
+or MCP registry credentials.
+
 ## This repo is the monorepo
 
 **Yaver is one monorepo — this one.** Agent, CLI, mobile, watch, TV, car,
