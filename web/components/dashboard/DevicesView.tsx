@@ -2296,7 +2296,8 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
           for (const row of rows) {
             if (!row?.deviceId || !row?.runnerId) continue;
             runners[row.deviceId] = row.runnerId;
-            if (row.model) models[row.deviceId] = row.model;
+            const model = usableSavedModelForRunner(row.runnerId, row.model);
+            if (model) models[row.deviceId] = model;
             if (row.mode) modes[row.deviceId] = row.mode;
             if (row.provider) providers[row.deviceId] = row.provider;
           }
@@ -2491,6 +2492,15 @@ export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
   codex: "gpt-5.4",
   opencode: "zai-coding-plan/glm-4.7",
 };
+
+const OBSOLETE_MODEL_IDS = new Set(["o3-mini", "gpt-5-codex", "gpt-5.3-codex"]);
+
+function usableSavedModelForRunner(runnerId: string | null | undefined, model: string | null | undefined): string {
+  const value = String(model || "").trim();
+  if (!value) return "";
+  if (String(runnerId || "").trim().toLowerCase() === "codex" && OBSOLETE_MODEL_IDS.has(value)) return "";
+  return value;
+}
 
 export function isKivancAccount(email: string | null | undefined): boolean {
   const normalized = String(email || "").trim().toLowerCase();

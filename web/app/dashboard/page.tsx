@@ -2162,31 +2162,66 @@ export default function DashboardPage() {
   const autoConnectTriedRef = useRef(false);
   useEffect(() => {
     if (autoConnectTriedRef.current) return;
-    if (!token || devices.length === 0) return;
+    if (!token || devices.length === 0 || !relayReady) return;
     if (connectedDevice || connState === "connecting" || connState === "connected") return;
-    const isOnline = (d: Device) => {
-      const probe = probeStates[d.id];
-      const peer = peerStates[d.id];
-      return probe?.ok === true || peer?.state === "online" || d.online === true;
+    let cancelled = false;
+    const browserReachable = async (d: Device) => {
+      const cached = probeStates[d.id];
+      if (cached?.ok === true) return true;
+      try {
+        const probe = await agentClient.probeDeviceStatus({
+          host: d.host,
+          port: d.port,
+          token,
+          deviceId: d.id,
+          tunnelUrls: usableTunnelUrls(d.publicEndpoints, d.tunnelUrl),
+        });
+        if (!cancelled) setProbeStates((prev) => ({ ...prev, [d.id]: probe }));
+        return probe.ok === true;
+      } catch (error: any) {
+        if (!cancelled) {
+          setProbeStates((prev) => ({
+            ...prev,
+            [d.id]: {
+              ok: false,
+              checkedAt: new Date().toISOString(),
+              error: error?.message || "Probe failed",
+              diagnostics: [],
+            },
+          }));
+        }
+        return false;
+      }
     };
-    const pick = (id: string | null) => {
+    const pick = async (id: string | null) => {
       if (!id) return undefined;
       const d = devices.find((x) => x.id === id && !x.isGuest);
-      return d && isOnline(d) ? d : undefined;
+      return d && (await browserReachable(d)) ? d : undefined;
     };
-    const hasPref = Boolean(primaryDeviceId || secondaryDeviceId);
-    const target: Device | undefined = hasPref
-      ? pick(primaryDeviceId) ?? pick(secondaryDeviceId)
-      : devices
-          .filter((d) => !d.isGuest && isOnline(d))
-          .sort((a, b) => (a.name || "").localeCompare(b.name || ""))[0];
-    if (!target) return; // nothing reachable yet → list / empty-state handles it
-    autoConnectTriedRef.current = true;
-    void connectToDevice(target);
+    void (async () => {
+      const hasPref = Boolean(primaryDeviceId || secondaryDeviceId);
+      const candidates = hasPref
+        ? ([primaryDeviceId, secondaryDeviceId]
+            .map((id) => (id ? devices.find((d) => d.id === id && !d.isGuest) : undefined))
+            .filter(Boolean) as Device[])
+        : devices
+            .filter((d) => !d.isGuest)
+            .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+      for (const candidate of candidates) {
+        if (cancelled || autoConnectTriedRef.current) return;
+        const target = await pick(candidate.id);
+        if (!target) continue;
+        if (cancelled || autoConnectTriedRef.current) return;
+        autoConnectTriedRef.current = true;
+        void connectToDevice(target);
+        return;
+      }
+    })();
     // connectToDevice intentionally omitted from deps — the ref guarantees a
     // single attempt, and we want the latest closure when it fires.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, devices, probeStates, peerStates, primaryDeviceId, secondaryDeviceId, connState, connectedDevice]);
+    return () => { cancelled = true; };
+  }, [token, devices, probeStates, primaryDeviceId, secondaryDeviceId, connState, connectedDevice, relayReady]);
 
   const refreshConnectedRunners = async () => {
     if (!isConnected) return;

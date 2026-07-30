@@ -868,9 +868,11 @@ export default function VibeCodingView({
         const installed = (runnerRows || []).filter((runner) => runner.installed);
         const ready = installed.filter((runner) => runner.ready);
         const explicitRunner = connectedDevice ? primaryRunnerByDevice[connectedDevice.id] : "";
-        if (explicitRunner && installed.some((runner) => runner.id === explicitRunner) && selectedRunner !== explicitRunner) {
-          setSelectedRunner(explicitRunner);
-        } else if (!selectedRunner) {
+        const explicitReady = explicitRunner ? ready.find((runner) => runner.id === explicitRunner) : undefined;
+        const selectedStillReady = selectedRunner ? ready.some((runner) => runner.id === selectedRunner) : false;
+        if (explicitReady && selectedRunner !== explicitReady.id) {
+          setSelectedRunner(explicitReady.id);
+        } else if (!selectedRunner || !selectedStillReady) {
           const seededRunner = connectedDevice
             ? preferredDefaultRunnerForDevice(
                 connectedDevice,
@@ -914,7 +916,8 @@ export default function VibeCodingView({
       return;
     }
     const explicitModel = connectedDevice ? primaryModelByDevice[connectedDevice.id] : "";
-    if (explicitModel && availableModels.some((model) => model.id === explicitModel) && selectedModel !== explicitModel) {
+    const explicitModelAvailable = explicitModel && availableModels.some((model) => model.id === explicitModel);
+    if (explicitModelAvailable && selectedModel !== explicitModel) {
       setSelectedModel(explicitModel);
       return;
     }
@@ -925,7 +928,7 @@ export default function VibeCodingView({
       ? preferredDefaultModelForRunner(selectedRunnerRow.id, connectedDevice, user?.email)
       : null;
     const preferred =
-      (explicitModel && availableModels.find((model) => model.id === explicitModel)) ||
+      (explicitModelAvailable && availableModels.find((model) => model.id === explicitModel)) ||
       (seededModel && availableModels.find((model) => model.id === seededModel)) ||
       availableModels.find((model) => model.isDefault) ||
       availableModels[0];
