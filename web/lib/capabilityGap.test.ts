@@ -61,7 +61,18 @@ test("no route ⇒ no button, ever", () => {
 test("agent-client forwards the typed gap instead of flattening it", () => {
   const src = readFileSync(join(webRoot, "lib/agent-client.ts"), "utf8");
   assert.match(src, /err\.capabilityGap = data\?\.capabilityGap/, "the 412 gap is dropped again — web loses its Install button");
+  assert.match(src, /capabilityGap: data\.capabilityGap/, "POST /tasks 201-failed capabilityGap must stay on the returned Task");
+  assert.match(src, /capabilityGap: t\.capabilityGap \|\| undefined/, "GET/list task mappers must preserve stored capabilityGap");
   assert.match(src, /capabilityGap\?: unknown/, "getDevServerStatus must pass the polled gap through");
+});
+
+test("vibing task failures render and run deterministic capability-gap fixes", () => {
+  const src = readFileSync(join(webRoot, "components/dashboard/VibeCodingView.tsx"), "utf8");
+  assert.match(src, /capabilityGapFromError\(/, "task create failures must parse the typed gap instead of only showing prose");
+  assert.match(src, /parseCapabilityGap\(activeTask\?\.capabilityGap\)/, "failed task bubbles must read the routed gap");
+  assert.match(src, /TaskCapabilityGapCard/, "Vibing needs a visible failure card beside the transcript");
+  assert.match(src, /agentClient\.installTool\(tool\)/, "the card must POST the deterministic install route");
+  assert.match(src, /agentClient\.streamLog\(streamName/, "the card must stream the fix output");
 });
 
 test("both web preview surfaces render the route", () => {

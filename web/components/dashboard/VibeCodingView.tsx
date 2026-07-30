@@ -10,6 +10,19 @@ import { sliceAfterFrameBoundary } from "@/lib/promptFraming";
 import { groomRunnerTranscript } from "@/lib/runnerTranscript";
 import { classifyStreamEnd, planStreamRecovery } from "@/lib/taskStreamRecovery";
 import { agentClient, isRunnerBrowserAuthTerminal, type AgentGraphRun, type ConnectionState, type GitCommitRow, type GitProviderStatusRow, type GitRemoteRepo, type GitStatusRow, type MachineInfo, type Runner, type Task } from "@/lib/agent-client";
+import {
+  capabilityGapFromError,
+  gapBody,
+  gapConstraint,
+  gapFixLabel,
+  gapHeadroomLine,
+  gapInstallTool,
+  gapRetriesAfterFix,
+  gapTitle,
+  gapWarning,
+  parseCapabilityGap,
+  type CapabilityGap,
+} from "@/lib/capabilityGap";
 import { AGENT_AUTH_REMEDY, isAgentAuthErrorMessage } from "@/lib/agentAuthError";
 import { validateOpenCodeModel } from "@/lib/opencodeModel";
 import type { Device } from "@/lib/use-devices";
@@ -228,6 +241,58 @@ const ChatBubble = memo(function ChatBubble({ turn }: { turn: ChatTurn }) {
   prev.turn.role === next.turn.role &&
   prev.turn.content === next.turn.content,
 );
+
+function TaskCapabilityGapCard({
+  gap,
+  running,
+  startedAt,
+  now,
+  onRun,
+}: {
+  gap: CapabilityGap;
+  running: boolean;
+  startedAt: number | null;
+  now: number;
+  onRun: (gap: CapabilityGap) => void;
+}) {
+  const label = gapFixLabel(gap);
+  const elapsed = startedAt ? Math.max(0, Math.floor((now - startedAt) / 1000)) : 0;
+  const elapsedText = elapsed >= 60 ? `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}` : `${elapsed}s`;
+  return (
+    <div className="max-w-[92%] rounded-2xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-amber-100">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300">
+        Failed · setup required
+      </div>
+      <div className="text-sm font-semibold">{gapTitle(gap)}</div>
+      {gapBody(gap) ? <div className="mt-1 text-[13px] leading-5 text-amber-100/85">{gapBody(gap)}</div> : null}
+      {gapHeadroomLine(gap) ? (
+        <div className="mt-2 font-mono text-[11px] text-amber-100/70">{gapHeadroomLine(gap)}</div>
+      ) : null}
+      {gapWarning(gap) ? (
+        <div className="mt-2 rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-[12px] leading-5 text-amber-50">
+          {gapWarning(gap)}
+        </div>
+      ) : null}
+      {label ? (
+        <button
+          type="button"
+          onClick={() => onRun(gap)}
+          disabled={running}
+          className="mt-3 rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
+        >
+          {running ? `Installing... ${elapsedText} elapsed` : label}
+        </button>
+      ) : (
+        <div className="mt-2 text-[12px] leading-5 text-amber-100/75">
+          {gapConstraint(gap) || "Yaver has no deterministic fixer for this failure yet."}
+        </div>
+      )}
+      {running ? (
+        <div className="mt-2 text-[11px] text-amber-100/60">Install output is streaming in the agent output below.</div>
+      ) : null}
+    </div>
+  );
+}
 
 type SectionKey = "projects" | "runner" | "actions" | "repo" | "secrets" | "providers" | "sessions";
 
@@ -456,6 +521,9 @@ export default function VibeCodingView({
     targetDeviceName?: string;
   } | null>(null);
   const [streamedOutput, setStreamedOutput] = useState("");
+  const [taskGapFixRunning, setTaskGapFixRunning] = useState(false);
+  const [taskGapFixStartedAt, setTaskGapFixStartedAt] = useState<number | null>(null);
+  const [taskGapFixNow, setTaskGapFixNow] = useState(Date.now());
   // The live-output stream's health, rendered ABOVE the transcript. A stream
   // that drops mid-render used to end in a bare `catch {}` — the transcript
   // just stopped growing and the user could not tell a finished task from a
@@ -494,6 +562,12 @@ export default function VibeCodingView({
   // runner already looks signed in. An answer, not an error; `reauthable`
   // offers the confirmed restart (switch account), the only path that reaps.
   const [runnerAuthDeclined, setRunnerAuthDeclined] = useState<{ reason: string; reauthable: boolean } | null>(null);
+
+  useEffect(() => {
+    if (!taskGapFixRunning) return;
+    const id = window.setInterval(() => setTaskGapFixNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [taskGapFixRunning]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1148,6 +1222,8 @@ export default function VibeCodingView({
   // console only. Name it, and name the auth remedy when it's auth-shaped
   // (audit §6 item 4).
   function sendFailureLabel(err: unknown): string {
+    const gap = capabilityGapFromError(err);
+    if (gap) return `Send failed: ${gapTitle(gap)}`;
     const m = err instanceof Error ? err.message : String(err);
     return isAgentAuthErrorMessage(m) ? `${AGENT_AUTH_REMEDY} (${m})` : `Send failed: ${m}`;
   }
@@ -1348,6 +1424,28 @@ export default function VibeCodingView({
     try {
       task = await agentClient.createTask(taskParams);
     } catch (err) {
+      const gap = capabilityGapFromError(err);
+      if (gap) {
+        const failedTask: Task = {
+          id: `local-gap-${Date.now()}`,
+          title,
+          description: taskParams.description,
+          status: "failed",
+          runnerId: selectedRunner || undefined,
+          model: selectedModel || undefined,
+          output: [gapBody(gap) || gapTitle(gap)],
+          resultText: gapBody(gap) || gapTitle(gap),
+          capabilityGap: gap,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        setComposer("");
+        setDraftTitle("");
+        setTaskList((prev) => [failedTask, ...prev.filter((row) => row.id !== failedTask.id)]);
+        setActiveTaskId(failedTask.id);
+        setBusy(`Send failed: ${gapTitle(gap)}`);
+        return;
+      }
       if (!(err instanceof CloudWorkspaceRequiredError)) throw err;
       const pending = saveCloudWorkspaceRequiredDispatch({
         err,
@@ -1825,6 +1923,71 @@ export default function VibeCodingView({
       failedAt: activeTask.finishedAt || activeTask.updatedAt || activeTask.createdAt,
 	    });
 	  }, [activeTask, liveOutput, selectedModel, selectedRunner]);
+
+  const activeTaskGap = useMemo(
+    () => parseCapabilityGap(activeTask?.capabilityGap),
+    [activeTask?.capabilityGap],
+  );
+
+  async function runTaskGapFix(gap: CapabilityGap) {
+    const tool = gapInstallTool(gap);
+    if (!tool || taskGapFixRunning) return;
+    setTaskGapFixRunning(true);
+    setTaskGapFixStartedAt(Date.now());
+    setTaskGapFixNow(Date.now());
+    setStreamHealth(null);
+    setStreamedOutput((prev) => capStreamText([prev, `[fix] POST ${gap.fix!.path} …`].filter(Boolean).join("\n")));
+    let started: { ok: boolean; stream: string; error?: string };
+    try {
+      started = await agentClient.installTool(tool);
+    } catch (err) {
+      setTaskGapFixRunning(false);
+      setBusy(`${gap.fix!.path} failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    if (!started.ok) {
+      setTaskGapFixRunning(false);
+      setBusy(`${gap.fix!.path} refused: ${started.error || "unknown error"}`);
+      return;
+    }
+    const streamName = started.stream || gap.fix!.stream;
+    setStreamedOutput((prev) => capStreamText([prev, `[fix] streaming /streams/${streamName}`].filter(Boolean).join("\n")));
+    const stop = agentClient.streamLog(streamName, (ev: any) => {
+      if (ev?.type === "line" && typeof ev.text === "string") {
+        setStreamedOutput((prev) => capStreamText([prev, ev.text].filter(Boolean).join("\n")));
+        return;
+      }
+      if (ev?.type !== "result") return;
+      stop();
+      setTaskGapFixRunning(false);
+      if (ev.status === "ok") {
+        setBusy("Installed. Retry the task when ready.");
+        setStreamedOutput((prev) => capStreamText([prev, "[fix] ✓ installed"].filter(Boolean).join("\n")));
+        if (gapRetriesAfterFix(gap) && activeTask && selectedProject) {
+          setBusy("Installed. Restarting the task…");
+          void agentClient.createTask({
+            title: activeTask.title,
+            description: activeTask.description,
+            runner: activeTask.runnerId || selectedRunner || undefined,
+            model: activeTask.model || selectedModel || undefined,
+            projectName: selectedProject.name,
+            workDir: selectedProject.path,
+            videoEnabled: videoSummaryEnabled,
+          }).then((task) => {
+            setTaskList((prev) => [task, ...prev.filter((row) => row.id !== task.id)]);
+            setActiveTaskId(task.id);
+            setBusy(`Started ${task.title}`);
+            setRefreshNonce((value) => value + 1);
+          }).catch((err) => {
+            setBusy(`Installed, but retry failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+        }
+      } else {
+        setBusy(`Install failed: ${ev.error || "unknown error"}`);
+        setStreamedOutput((prev) => capStreamText([prev, `[fix] ✗ install failed: ${ev.error || "unknown error"}`].filter(Boolean).join("\n")));
+      }
+    });
+  }
 
 	  const slashCommandSuggestions = useMemo(
 	    () => slashCommandsForRunner(selectedRunner, composer),
@@ -2906,8 +3069,17 @@ export default function VibeCodingView({
             <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
               {activeGraphRunId ? (
                 <DeepAskGraphPanel run={graphRun} liveOutput={graphNodeOutput} />
-              ) : conversationTurns.length > 0 || showLiveOutput || streamHealth ? (
+              ) : conversationTurns.length > 0 || showLiveOutput || streamHealth || activeTaskGap ? (
                 <div className="space-y-4">
+                  {activeTaskGap ? (
+                    <TaskCapabilityGapCard
+                      gap={activeTaskGap}
+                      running={taskGapFixRunning}
+                      startedAt={taskGapFixStartedAt}
+                      now={taskGapFixNow}
+                      onRun={runTaskGapFix}
+                    />
+                  ) : null}
                   {activeFailureDiagnosis ? (
                     <div className="max-w-[92%] rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-rose-100">
                       <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-rose-300">

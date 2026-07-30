@@ -112,6 +112,10 @@ export interface Task {
    *  tmuxSession is the human name ("yaver-<task>"). */
   tmuxSessionId?: string;
   tmuxSession?: string;
+  /** Structured task capability gap from POST /tasks. Missing runner/toolchain
+   *  preflight failures carry the same routed object as preview gaps, so the
+   *  Vibing surface can render Install + streamed retry instead of prose. */
+  capabilityGap?: unknown;
 }
 
 export interface FeedbackWorkAgentConfig {
@@ -2099,9 +2103,15 @@ export class AgentClient {
     if (!res.ok) {
       const cloudRequired = await decodeCloudWorkspaceRequiredError(res);
       if (cloudRequired) throw cloudRequired;
-      throw new Error(await responseErrorMessage(res, `Failed to create task: ${res.status}`));
+      const err: any = new Error(await responseErrorMessage(res, `Failed to create task: ${res.status}`));
+      try {
+        const data = await res.clone().json();
+        err.capabilityGap = data?.capabilityGap;
+        err.errorSummary = data?.errorSummary;
+      } catch {}
+      throw err;
     }
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     return {
       id: data.taskId,
       title,
@@ -2109,6 +2119,7 @@ export class AgentClient {
       status: data.status,
       runnerId: data.runnerId || opts?.runner,
       output: [],
+      capabilityGap: data.capabilityGap,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -2162,10 +2173,17 @@ export class AgentClient {
     if (!res.ok) {
       const cloudRequired = await decodeCloudWorkspaceRequiredError(res);
       if (cloudRequired) throw cloudRequired;
-      throw new Error(await responseErrorMessage(res, `Failed to create task: ${res.status}`));
+      const err: any = new Error(await responseErrorMessage(res, `Failed to create task: ${res.status}`));
+      try {
+        const data = await res.clone().json();
+        err.capabilityGap = data?.capabilityGap;
+        err.errorSummary = data?.errorSummary;
+      } catch {}
+      throw err;
     }
     const data = await res.json().catch(() => ({}));
-    return this.getTask(data.taskId);
+    const task = await this.getTask(data.taskId);
+    return { ...task, capabilityGap: data.capabilityGap || task.capabilityGap };
   }
 
   async listTasks(limit?: number): Promise<Task[]> {
@@ -2202,6 +2220,7 @@ export class AgentClient {
         deviceName: this.host ?? undefined,
         tmuxSessionId: t.tmuxSessionId || undefined,
         tmuxSession: t.tmuxSession || undefined,
+        capabilityGap: t.capabilityGap || undefined,
       }));
       this.cacheTasks(tasks);
       return tasks;
@@ -2240,6 +2259,7 @@ export class AgentClient {
       deviceName: this.host ?? undefined,
       tmuxSessionId: t.tmuxSessionId || undefined,
       tmuxSession: t.tmuxSession || undefined,
+      capabilityGap: t.capabilityGap || undefined,
     };
   }
 
