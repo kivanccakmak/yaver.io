@@ -812,6 +812,18 @@ export default function ProjectsView({
                         </div>
                       </div>
                       {target.reason ? <div className="mt-2 text-xs text-rose-700 dark:text-rose-300">{target.reason}</div> : null}
+                      {target.checks?.length ? (
+                        <div className="mt-2 grid gap-1">
+                          {target.checks.map((check) => (
+                            <div key={`${target.id}-${check.id}`} className="flex min-w-0 items-start gap-2 text-[11px] text-surface-500">
+                              <span className={`mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full ${check.ok ? "bg-emerald-500" : "bg-rose-500"}`} />
+                              <span className="min-w-0 truncate">
+                                {check.label}{check.reason ? ` · ${check.reason}` : ""}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                   ))}
                 </div>

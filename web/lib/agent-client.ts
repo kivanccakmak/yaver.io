@@ -664,12 +664,21 @@ export interface RemoteRuntimeTarget {
   surface?: string;
   displaySurface?: string;
   viewport?: RemoteRuntimeViewport;
+  checks?: RemoteRuntimeCheck[];
+  roleHint?: string;
 }
 
 export interface RemoteRuntimeViewport {
   label?: string;
   width: number;
   height: number;
+}
+
+export interface RemoteRuntimeCheck {
+  id: string;
+  label: string;
+  ok: boolean;
+  reason?: string;
 }
 
 export interface RemoteRuntimeCapabilities {

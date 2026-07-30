@@ -41,12 +41,21 @@ type RemoteRuntimeTarget struct {
 	Surface        string                 `json:"surface,omitempty"`
 	DisplaySurface string                 `json:"displaySurface,omitempty"`
 	Viewport       *RemoteRuntimeViewport `json:"viewport,omitempty"`
+	Checks         []RemoteRuntimeCheck   `json:"checks,omitempty"`
+	RoleHint       string                 `json:"roleHint,omitempty"`
 }
 
 type RemoteRuntimeViewport struct {
 	Label  string `json:"label,omitempty"`
 	Width  int    `json:"width"`
 	Height int    `json:"height"`
+}
+
+type RemoteRuntimeCheck struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type RemoteRuntimeCapabilities struct {
@@ -693,6 +702,7 @@ func cloneRemoteRuntimeCapabilities(in RemoteRuntimeCapabilities) RemoteRuntimeC
 	out.Targets = append([]RemoteRuntimeTarget(nil), in.Targets...)
 	for i := range out.Targets {
 		out.Targets[i].Viewport = cloneRemoteRuntimeViewport(in.Targets[i].Viewport)
+		out.Targets[i].Checks = append([]RemoteRuntimeCheck(nil), in.Targets[i].Checks...)
 	}
 	out.RemoteBuilders = append([]RemoteBuilderSummary(nil), in.RemoteBuilders...)
 	return out
@@ -1443,14 +1453,13 @@ func ensureIOSScaffold(ctx context.Context, workDir, framework string, emit func
 	return nil
 }
 
-// isRNSimulatorTarget reports whether a target is an RN sim/emulator we can
-// build-and-launch a guest RN app into (Apple sims via xcodebuild+simctl on
-// macOS; Android emulator/redroid via gradle+adb, which also runs on the Linux
-// Cloud Workspace so an Apple client can stream a Linux-hosted Android runtime).
+// isRNGuestRuntimeTarget reports whether a target can run a debug RN/Expo guest
+// app with Metro Fast Refresh. Apple simulator families use xcodebuild+simctl;
+// Android emulator/redroid/physical devices use Gradle+adb.
 func isRNSimulatorTarget(targetID string) bool {
 	switch targetID {
 	case "ios-simulator", "ipados-simulator", "watchos-simulator", "tvos-simulator", "visionos-simulator",
-		"android-emulator", "android-wear", "android-tv", "android-xr", "android-auto", remoteRuntimeRedroidTargetID:
+		"android-emulator", "android-device", "android-wear", "android-tv", "android-xr", "android-auto", remoteRuntimeRedroidTargetID:
 		return true
 	}
 	return false
@@ -1919,7 +1928,7 @@ func (s *HTTPServer) handleRemoteRuntimeSessionCommand(w http.ResponseWriter, r 
 			return
 		}
 		if !isRNSimulatorTarget(session.TargetID) {
-			jsonError(w, http.StatusBadRequest, fmt.Sprintf("run-guest not supported for target %q", session.TargetID))
+			jsonError(w, http.StatusBadRequest, runGuestUnsupportedReason(session.TargetID))
 			return
 		}
 		// In-flight guard: web Runtime Lab and the mobile Tasks tab both
@@ -2021,6 +2030,19 @@ func (s *HTTPServer) handleRemoteRuntimeSessionCommand(w http.ResponseWriter, r 
 		})
 	default:
 		jsonError(w, http.StatusBadRequest, fmt.Sprintf("unsupported command %q", req.Command))
+	}
+}
+
+func runGuestUnsupportedReason(targetID string) string {
+	switch targetID {
+	case remoteRuntimeIOSDeviceTargetID:
+		return "run-guest for ios-device needs the physical-device native path: build for iphoneos, install with devicectl, launch with devicectl, then stream/control through WebDriverAgent. Use iOS Simulator for closed-loop Fast Refresh until that path is enabled."
+	case "browser-window":
+		return "run-guest is for native runtime targets; browser-window uses the browser dev-server lane."
+	case desktopScreenTargetID:
+		return "run-guest is for mobile runtime targets; desktop-screen streams the host desktop/app directly."
+	default:
+		return fmt.Sprintf("run-guest not supported for target %q", targetID)
 	}
 }
 

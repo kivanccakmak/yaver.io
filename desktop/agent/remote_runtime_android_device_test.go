@@ -34,6 +34,7 @@ func stubAdb(t *testing.T, deviceLines string) {
 
 const usbAndroidLine = "R52W60BEDXD          device usb:1-1 product:panther model:Pixel_7 device:panther transport_id:1"
 const wifiAndroidLine = "192.168.1.50:5555      device product:bluejay model:Pixel_6a device:bluejay transport_id:2"
+const unauthorizedAndroidLine = "R52W60BEDXD          unauthorized usb:1-1 transport_id:1"
 
 func TestProbeAndroidDeviceTarget_DisabledWhenNoDevice(t *testing.T) {
 	stubAdb(t, "")
@@ -49,11 +50,34 @@ func TestProbeAndroidDeviceTarget_DisabledWhenNoDevice(t *testing.T) {
 	}
 }
 
+func TestProbeAndroidDeviceTarget_NamesUnauthorizedDevice(t *testing.T) {
+	stubAdb(t, unauthorizedAndroidLine)
+	target := probeAndroidDeviceTarget()
+	if target.Enabled {
+		t.Fatalf("unauthorized Android device must not enable the stream target")
+	}
+	if !strings.Contains(target.Reason, "not authorized") || !strings.Contains(target.Reason, "tap Allow") {
+		t.Fatalf("reason should name the authorization route, got %q", target.Reason)
+	}
+	found := false
+	for _, check := range target.Checks {
+		if check.ID == "device" && !check.OK && strings.Contains(check.Reason, "not authorized") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("checks should expose unauthorized device state, got %+v", target.Checks)
+	}
+}
+
 func TestProbeAndroidDeviceTarget_EnabledWithPhysicalDevice(t *testing.T) {
 	stubAdb(t, usbAndroidLine)
 	target := probeAndroidDeviceTarget()
 	if !target.Enabled {
 		t.Fatalf("expected enabled with a USB device attached; reason=%q", target.Reason)
+	}
+	if len(target.Checks) < 2 || !target.Checks[0].OK || !target.Checks[1].OK {
+		t.Fatalf("expected adb + device checks ok, got %+v", target.Checks)
 	}
 	serial, err := resolveAttachedAndroidDeviceSerial(context.Background())
 	if err != nil {

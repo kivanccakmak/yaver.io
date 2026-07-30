@@ -36,16 +36,17 @@ func TestRuntimeTargetFor_KnownAndUnknown(t *testing.T) {
 	}
 }
 
-// The exact error strings the old switch arms returned must survive
-// the refactor — viewers/tests key off them.
-func TestRuntimeTarget_IOSErrorStringsPreserved(t *testing.T) {
+// The iOS simulator input path must fail loudly when WDA-backed gestures are
+// unavailable. A silent no-op looks exactly like a frozen stream.
+func TestRuntimeTarget_IOSErrorStringsNameWDA(t *testing.T) {
 	ios := iosSimulatorTarget{}
 	if err := ios.Swipe(context.Background(), "booted", 0, 0, 1, 1, 100); err == nil ||
-		!strings.Contains(err.Error(), "swipe is not implemented for ios-simulator yet") {
+		!strings.Contains(err.Error(), "ios-simulator swipe requires WebDriverAgent") {
 		t.Fatalf("ios swipe error changed: %v", err)
 	}
 	if err := ios.Key(context.Background(), "booted", "home"); err == nil ||
-		!strings.Contains(err.Error(), "is only supported for Android sessions right now") {
+		!strings.Contains(err.Error(), "ios-simulator key") ||
+		!strings.Contains(err.Error(), "requires WebDriverAgent") {
 		t.Fatalf("ios key error changed: %v", err)
 	}
 	if !strings.HasSuffix(fmt.Sprintf("%T", ios), "iosSimulatorTarget") || ios.CanEncodeRTPH264() {
@@ -82,13 +83,14 @@ func TestRuntimeTarget_AndroidDeviceAttachResolvesSerial(t *testing.T) {
 	}
 }
 
-// agentCanEncodeRTPH264 still routes through the interface and keeps
-// its old answers (the var seam tests depend on stays intact).
+// agentCanEncodeRTPH264 gates target encodability through the selected capture
+// method. Android can encode through adb, but when the preferred capture is the
+// screenshot fallback the negotiated streamer must not advertise an RTP track.
 func TestAgentCanEncodeRTPH264_StillMatchesTargets(t *testing.T) {
 	stubAdb(t, usbAndroidLine)
 	for _, id := range []string{"android-emulator", "android-device"} {
-		if !agentCanEncodeRTPH264(id) {
-			t.Fatalf("%s should encode RTP with adb present", id)
+		if agentCanEncodeRTPH264(id) {
+			t.Fatalf("%s should stay JPEG-only while preferred capture is screenshot fallback", id)
 		}
 	}
 	if agentCanEncodeRTPH264("ios-simulator") {

@@ -57,6 +57,11 @@ var (
 	wdaClients   = map[string]*wdaClient{}
 )
 
+var (
+	attachedIOSDevicesForRuntime = attachedIOSDevices
+	wdaStatusForRuntime          = func(ctx context.Context) error { return wdaClientFor(wdaBaseURL()).Status(ctx) }
+)
+
 func wdaClientFor(base string) *wdaClient {
 	wdaClientsMu.Lock()
 	defer wdaClientsMu.Unlock()
@@ -86,7 +91,7 @@ func attachedIOSDevices(ctx context.Context) []wireDevice {
 }
 
 func resolveAttachedIOSDeviceUDID(ctx context.Context) (string, error) {
-	for _, d := range attachedIOSDevices(ctx) {
+	for _, d := range attachedIOSDevicesForRuntime(ctx) {
 		if d.UDID != "" {
 			return d.UDID, nil
 		}
@@ -105,26 +110,82 @@ func probeIOSDeviceTarget() RemoteRuntimeTarget {
 		RuntimeHostClass: "macos-ios",
 		HostOS:           runtime.GOOS,
 		RequiredCLI:      "xcrun devicectl + WebDriverAgent",
+		Surface:          "phone",
+		DisplaySurface:   "physical iPhone/iPad",
+		RoleHint:         "physical-device-runtime",
 	}
 	if runtime.GOOS != "darwin" {
 		target.Enabled = false
 		target.Reason = "Requires a macOS host with Xcode (real-device control needs WebDriverAgent built + signed)."
+		target.Checks = []RemoteRuntimeCheck{{ID: "host", Label: "macOS + Xcode host", OK: false, Reason: target.Reason}}
 		return target
 	}
 	if _, err := exec.LookPath("xcrun"); err != nil {
 		target.Enabled = false
 		target.Reason = "xcrun not found. Install Xcode command line tools or Xcode."
+		target.Checks = []RemoteRuntimeCheck{{ID: "xcrun", Label: "Xcode device tools", OK: false, Reason: target.Reason}}
 		return target
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	if _, err := resolveAttachedIOSDeviceUDID(ctx); err != nil {
+	checks, reason := probeIOSDeviceRuntimeChecks(ctx)
+	target.Checks = checks
+	if reason != "" {
 		target.Enabled = false
-		target.Reason = err.Error()
+		target.Reason = reason
 		return target
 	}
 	target.Enabled = true
 	return target
+}
+
+func probeIOSDeviceRuntimeChecks(ctx context.Context) ([]RemoteRuntimeCheck, string) {
+	checks := []RemoteRuntimeCheck{
+		{ID: "xcrun", Label: "Xcode device tools", OK: true},
+	}
+	devices := attachedIOSDevicesForRuntime(ctx)
+	if len(devices) == 0 {
+		reason := "no physical iPhone/iPad attached — connect one over USB (`yaver wire`), trust the Mac, and ensure WebDriverAgent is installed + forwarded"
+		return append(checks, RemoteRuntimeCheck{ID: "device", Label: "Paired iPhone/iPad", OK: false, Reason: reason}), reason
+	}
+	checks = append(checks, RemoteRuntimeCheck{
+		ID:     "device",
+		Label:  "Paired iPhone/iPad",
+		OK:     true,
+		Reason: iosDeviceCheckLabel(devices[0]),
+	})
+	wdaCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	if err := wdaStatusForRuntime(wdaCtx); err != nil {
+		reason := fmt.Sprintf("WebDriverAgent is not reachable at %s — start WDA on the iPhone and forward localhost:8100 before opening the physical-device stream", wdaBaseURL())
+		return append(checks, RemoteRuntimeCheck{ID: "wda-control", Label: "WDA control endpoint", OK: false, Reason: err.Error()}), reason
+	}
+	checks = append(checks, RemoteRuntimeCheck{ID: "wda-control", Label: "WDA control endpoint", OK: true, Reason: wdaBaseURL()})
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		checks = append(checks, RemoteRuntimeCheck{
+			ID:     "stream-publisher",
+			Label:  "H.264 stream publisher",
+			OK:     false,
+			Reason: "ffmpeg not on PATH; WebRTC can still use JPEG data-channel frames, but WDA MJPEG→H.264 publishing needs `yaver install remote-runtime`",
+		})
+	} else {
+		checks = append(checks, RemoteRuntimeCheck{ID: "stream-publisher", Label: "H.264 stream publisher", OK: true, Reason: wdaMjpegURL()})
+	}
+	return checks, ""
+}
+
+func iosDeviceCheckLabel(d wireDevice) string {
+	parts := []string{}
+	if d.Name != "" {
+		parts = append(parts, d.Name)
+	}
+	if d.OS != "" {
+		parts = append(parts, d.OS)
+	}
+	if d.UDID != "" {
+		parts = append(parts, d.UDID)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // iosDeviceTarget implements runtimeTarget over WebDriverAgent.

@@ -23,7 +23,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -75,19 +77,103 @@ func probeAndroidDeviceTarget() RemoteRuntimeTarget {
 		RuntimeHostClass: runtimeHostClassForAndroid(),
 		HostOS:           runtime.GOOS,
 		RequiredCLI:      "adb",
+		Surface:          "phone",
+		DisplaySurface:   "physical Android",
+		RoleHint:         "physical-device-runtime",
 	}
-	if findAndroidToolPath("adb") == "" {
+	if _, err := resolveAndroidTool("adb"); err != nil {
 		target.Enabled = false
 		target.Reason = "adb not found. Run `yaver install remote-runtime` to provision platform-tools."
+		target.Checks = []RemoteRuntimeCheck{{ID: "adb", Label: "Android platform-tools", OK: false, Reason: target.Reason}}
 		return target
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	if _, err := resolveAttachedAndroidDeviceSerial(ctx); err != nil {
+	checks, reason := probeAndroidDeviceRuntimeChecks(ctx)
+	target.Checks = checks
+	if reason != "" {
 		target.Enabled = false
-		target.Reason = err.Error()
+		target.Reason = reason
 		return target
 	}
 	target.Enabled = true
 	return target
+}
+
+func probeAndroidDeviceRuntimeChecks(ctx context.Context) ([]RemoteRuntimeCheck, string) {
+	checks := []RemoteRuntimeCheck{{ID: "adb", Label: "Android platform-tools", OK: true}}
+	state, err := androidPhysicalDeviceADBState(ctx)
+	if err != nil {
+		reason := "adb devices failed: " + err.Error()
+		return append(checks, RemoteRuntimeCheck{ID: "device", Label: "Authorized physical Android", OK: false, Reason: reason}), reason
+	}
+	switch {
+	case state.authorized != "":
+		checks = append(checks, RemoteRuntimeCheck{
+			ID:     "device",
+			Label:  "Authorized physical Android",
+			OK:     true,
+			Reason: state.authorized,
+		})
+	case state.unauthorized != "":
+		reason := fmt.Sprintf("Android device %s is attached but not authorized — enable USB debugging and tap Allow on the phone", state.unauthorized)
+		checks = append(checks, RemoteRuntimeCheck{ID: "device", Label: "Authorized physical Android", OK: false, Reason: reason})
+		return checks, reason
+	case state.offline != "":
+		reason := fmt.Sprintf("Android device %s is attached but offline — reconnect USB or run `adb reconnect`, then accept the RSA prompt", state.offline)
+		checks = append(checks, RemoteRuntimeCheck{ID: "device", Label: "Authorized physical Android", OK: false, Reason: reason})
+		return checks, reason
+	default:
+		reason := "no physical Android device attached — connect one over USB (`yaver wire`) or wifi (`yaver wireless`), enable USB debugging, and accept the RSA prompt"
+		checks = append(checks, RemoteRuntimeCheck{ID: "device", Label: "Authorized physical Android", OK: false, Reason: reason})
+		return checks, reason
+	}
+	if _, err := exec.LookPath("adb"); err == nil || findAndroidToolPath("adb") != "" {
+		checks = append(checks, RemoteRuntimeCheck{ID: "stream-publisher", Label: "Screenrecord stream publisher", OK: true, Reason: "adb screenrecord"})
+	}
+	return checks, ""
+}
+
+type androidPhysicalADBState struct {
+	authorized   string
+	unauthorized string
+	offline      string
+}
+
+func androidPhysicalDeviceADBState(ctx context.Context) (androidPhysicalADBState, error) {
+	adbPath, err := resolveAndroidTool("adb")
+	if err != nil {
+		return androidPhysicalADBState{}, err
+	}
+	out, err := exec.CommandContext(ctx, adbPath, "devices", "-l").Output()
+	if err != nil {
+		return androidPhysicalADBState{}, err
+	}
+	var state androidPhysicalADBState
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "List of devices") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || strings.HasPrefix(fields[0], "emulator-") {
+			continue
+		}
+		serial := fields[0]
+		switch fields[1] {
+		case "device":
+			if state.authorized == "" {
+				state.authorized = serial
+			}
+		case "unauthorized":
+			if state.unauthorized == "" {
+				state.unauthorized = serial
+			}
+		case "offline":
+			if state.offline == "" {
+				state.offline = serial
+			}
+		}
+	}
+	return state, nil
 }

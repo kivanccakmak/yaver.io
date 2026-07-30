@@ -197,3 +197,15 @@ func TestHandleRemoteRuntimeSessionCommand_RunGuestDedupesWhileBuilding(t *testi
 		t.Fatalf("status = %#v, want building", body["status"])
 	}
 }
+
+func TestRunGuestUnsupportedReason_NamesIOSPhysicalPath(t *testing.T) {
+	got := runGuestUnsupportedReason("ios-device")
+	for _, want := range []string{"physical-device native path", "devicectl", "WebDriverAgent"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("ios-device run-guest reason missing %q: %s", want, got)
+		}
+	}
+	if !isRNSimulatorTarget("android-device") {
+		t.Fatalf("android-device should use the RN guest build/install path")
+	}
+}

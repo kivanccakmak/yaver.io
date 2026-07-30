@@ -32,6 +32,52 @@ func TestProbeIOSDeviceTarget_Identity(t *testing.T) {
 	}
 }
 
+func TestProbeIOSDeviceRuntimeChecks_DisablesWhenWDAIsMissing(t *testing.T) {
+	oldDevices := attachedIOSDevicesForRuntime
+	oldWDA := wdaStatusForRuntime
+	t.Cleanup(func() {
+		attachedIOSDevicesForRuntime = oldDevices
+		wdaStatusForRuntime = oldWDA
+	})
+	attachedIOSDevicesForRuntime = func(context.Context) []wireDevice {
+		return []wireDevice{{UDID: "PHONE-1", Name: "Test iPhone", Platform: "ios", OS: "26.5"}}
+	}
+	wdaStatusForRuntime = func(context.Context) error {
+		return context.DeadlineExceeded
+	}
+	checks, reason := probeIOSDeviceRuntimeChecks(context.Background())
+	if reason == "" || !strings.Contains(reason, "WebDriverAgent is not reachable") {
+		t.Fatalf("missing WDA should be the disabling reason, got %q", reason)
+	}
+	if len(checks) < 3 || !checks[1].OK || checks[2].OK || checks[2].ID != "wda-control" {
+		t.Fatalf("checks should show device ok then WDA failed, got %+v", checks)
+	}
+}
+
+func TestProbeIOSDeviceRuntimeChecks_EnablesOnlyAfterWDAAnswers(t *testing.T) {
+	oldDevices := attachedIOSDevicesForRuntime
+	oldWDA := wdaStatusForRuntime
+	t.Cleanup(func() {
+		attachedIOSDevicesForRuntime = oldDevices
+		wdaStatusForRuntime = oldWDA
+	})
+	attachedIOSDevicesForRuntime = func(context.Context) []wireDevice {
+		return []wireDevice{{UDID: "PHONE-1", Name: "Test iPhone", Platform: "ios", OS: "26.5"}}
+	}
+	wdaStatusForRuntime = func(context.Context) error { return nil }
+	checks, reason := probeIOSDeviceRuntimeChecks(context.Background())
+	if reason != "" {
+		t.Fatalf("WDA reachable should not disable ios-device: %q", reason)
+	}
+	seen := map[string]bool{}
+	for _, check := range checks {
+		seen[check.ID] = check.OK
+	}
+	if !seen["device"] || !seen["wda-control"] {
+		t.Fatalf("expected device and WDA checks ok, got %+v", checks)
+	}
+}
+
 func TestRemoteRuntimeCapabilities_IncludeIOSDevice(t *testing.T) {
 	for _, fw := range []string{"swift", "flutter"} {
 		caps := remoteRuntimeCapabilitiesForProject(t.TempDir(), fw)
