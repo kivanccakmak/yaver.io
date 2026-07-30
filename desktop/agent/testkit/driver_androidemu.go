@@ -323,6 +323,7 @@ func repairGeneratedAVDConfig(avd string) (bool, error) {
 	}
 	avdDir := filepath.Dir(cfg)
 	changed := false
+	generatedTemplate := strings.Contains(string(data), "<build>") || strings.Contains(string(data), "<temp>")
 	var lines []string
 	for _, line := range strings.Split(string(data), "\n") {
 		k, v, ok := strings.Cut(line, "=")
@@ -348,6 +349,11 @@ func repairGeneratedAVDConfig(avd string) (bool, error) {
 				line = "disk.dataPartition.path=" + filepath.Join(avdDir, "userdata-qemu.img")
 				changed = true
 			}
+		case "disk.dataPartition.size":
+			if generatedTemplate && androidAVDPartitionSizeTooLarge(value) {
+				line = "disk.dataPartition.size=2G"
+				changed = true
+			}
 		}
 		lines = append(lines, line)
 	}
@@ -358,6 +364,22 @@ func repairGeneratedAVDConfig(avd string) (bool, error) {
 		return false, fmt.Errorf("repair AVD %q generated config: %w", name, err)
 	}
 	return true, nil
+}
+
+func androidAVDPartitionSizeTooLarge(value string) bool {
+	v := strings.ToUpper(strings.TrimSpace(value))
+	if strings.HasSuffix(v, "GB") {
+		v = strings.TrimSpace(strings.TrimSuffix(v, "GB"))
+	} else if strings.HasSuffix(v, "G") {
+		v = strings.TrimSpace(strings.TrimSuffix(v, "G"))
+	} else {
+		return false
+	}
+	var n int
+	if _, err := fmt.Sscanf(v, "%d", &n); err != nil {
+		return false
+	}
+	return n > 4
 }
 
 // kvmAvailable reports whether /dev/kvm is exposed to this process.

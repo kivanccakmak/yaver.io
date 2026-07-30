@@ -135,6 +135,7 @@ func TestMalformedAVDConfigIsNamedBeforeBoot(t *testing.T) {
 		"avd.id=<build>",
 		"avd.name=<build>",
 		"disk.dataPartition.path=<temp>",
+		"disk.dataPartition.size=10G",
 	}, "\n")
 	if err := os.WriteFile(filepath.Join(dir, "config.ini"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write config.ini: %v", err)
@@ -163,6 +164,7 @@ func TestGeneratedAVDConfigRepairClearsPlaceholders(t *testing.T) {
 		"avd.id=<build>",
 		"avd.name=<build>",
 		"disk.dataPartition.path=<temp>",
+		"disk.dataPartition.size=10G",
 	}, "\n")
 	cfg := filepath.Join(dir, "config.ini")
 	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
@@ -185,6 +187,7 @@ func TestGeneratedAVDConfigRepairClearsPlaceholders(t *testing.T) {
 		"avd.id=wear",
 		"avd.name=wear",
 		"disk.dataPartition.path=" + filepath.Join(dir, "userdata-qemu.img"),
+		"disk.dataPartition.size=2G",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("repaired config missing %q:\n%s", want, got)
@@ -192,6 +195,38 @@ func TestGeneratedAVDConfigRepairClearsPlaceholders(t *testing.T) {
 	}
 	if malformed, remedy := avdConfigMalformed("wear"); malformed {
 		t.Fatalf("repaired config is still malformed:\n%s", remedy)
+	}
+}
+
+func TestGeneratedAVDConfigRepairKeepsExplicitSmallPartition(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".android", "avd", "wear.avd")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir avd: %v", err)
+	}
+	body := strings.Join([]string{
+		"image.sysdir.1 = system-images/android-34/android-wear/arm64-v8a/",
+		"avd.id=<build>",
+		"avd.name=<build>",
+		"disk.dataPartition.path=<temp>",
+		"disk.dataPartition.size=3G",
+	}, "\n")
+	cfg := filepath.Join(dir, "config.ini")
+	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
+		t.Fatalf("write config.ini: %v", err)
+	}
+
+	if _, err := repairGeneratedAVDConfig("wear"); err != nil {
+		t.Fatalf("repairGeneratedAVDConfig: %v", err)
+	}
+	data, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatalf("read config.ini: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "disk.dataPartition.size=3G") {
+		t.Fatalf("small explicit partition was changed:\n%s", got)
 	}
 }
 
