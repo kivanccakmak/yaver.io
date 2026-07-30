@@ -118,10 +118,37 @@ test("RuntimeLabView consumes the shared classifier instead of private relay reg
   const src = readFileSync(join(webRoot, "components/dashboard/RuntimeLabView.tsx"), "utf8");
   assert.match(src, /classifyRuntimeTargetProbeFailure/, "RuntimeLabView must use the shared failure policy");
   assert.match(src, /repairRelayAndReloadTargets/, "RuntimeLabView must expose relay credential repair for relay-auth probe failures");
+  assert.match(src, /relayRepairFailure/, "RuntimeLabView must keep explicit state when deterministic relay repair fails");
+  assert.match(src, /Fix relay repair with AI/, "RuntimeLabView must offer an AI fallback after deterministic relay repair fails");
+  assert.match(src, /relayAuthFallbackContext/, "the AI fallback must carry runtime relay-auth stack context");
   assert.doesNotMatch(
     src,
     /device not connected to relay\|only reachable over a relay/,
     "RuntimeLabView must not reintroduce the old inline relay regex branch",
+  );
+});
+
+test("RuntimeLab relay repair failure preserves the original relay-auth classification", () => {
+  const src = readFileSync(join(webRoot, "components/dashboard/RuntimeLabView.tsx"), "utf8");
+  assert.match(
+    src,
+    /const probeError = error \|\| "Relay authentication failed while probing runtime targets\."/,
+    "repair must capture the relay-auth probe error before clearing the visible error",
+  );
+  assert.match(
+    src,
+    /setRelayRepairFailure\(\{ probeError, repairError: message, at: Date\.now\(\) \}\);\s*setError\(probeError\);/s,
+    "a failed repair must restore the original relay-auth error so the card remains on the deterministic relay-auth branch",
+  );
+  assert.match(
+    src,
+    /Repair endpoint: POST \/settings\/repair-relay through agentClient\.repairRelayPassword\(\)/,
+    "fallback context must tell the coding task which deterministic route failed",
+  );
+  assert.match(
+    src,
+    /Preserve stable browser and Hermes\/native lanes/,
+    "fallback prompt must protect existing browser and native render lanes",
   );
 });
 

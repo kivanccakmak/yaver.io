@@ -1078,6 +1078,11 @@ export default function RuntimeLabView({
   const [error, setError] = useState<string | null>(null);
   const [recoveringAgentAuth, setRecoveringAgentAuth] = useState(false);
   const [relayRepairBusy, setRelayRepairBusy] = useState(false);
+  const [relayRepairFailure, setRelayRepairFailure] = useState<{
+    probeError: string;
+    repairError: string;
+    at: number;
+  } | null>(null);
   const [showAdvancedTargets, setShowAdvancedTargets] = useState(false);
   const [webPreviewUrl, setWebPreviewUrl] = useState<string | null>(null);
   const [webPreviewPanelOpen, setWebPreviewPanelOpen] = useState(false);
@@ -2264,7 +2269,10 @@ export default function RuntimeLabView({
   // runner/model resolution) — no new endpoint. attachTaskSession is what the
   // chat send already does, so the fix streams into the same chat pane.
   const fixTaskRunning = !!(fixTaskId && activeTaskStream?.id === fixTaskId && taskStatusMeansRunnerIsCoding(activeTaskStream?.status));
-  const dispatchBuildFix = useCallback(async (errorText: string) => {
+  const dispatchBuildFix = useCallback(async (
+    errorText: string,
+    opts?: { titlePrefix?: string; promptIntro?: string; context?: string; label?: string },
+  ) => {
     if (fixTaskBusy || !selectedProject) return;
     if (selectedRunnerRow && selectedRunnerRow.ready === false) {
       // Say so instead of failing silently — route into the sign-in flow.
@@ -2277,10 +2285,14 @@ export default function RuntimeLabView({
       // Bounded: keep the END of the captured output — that is where the
       // compiler states the failure.
       const bounded = errorText.trim().slice(-4000);
-      const prompt = `The dev preview build failed. Fix the underlying cause, then verify the build compiles. Build error follows:\n\n${bounded}`;
+      const prompt = [
+        opts?.promptIntro || "The dev preview build failed. Fix the underlying cause, then verify the build compiles.",
+        opts?.context ? `\nContext:\n${opts.context}` : "",
+        `\nFailure follows:\n\n${bounded}`,
+      ].filter(Boolean).join("\n");
       const effectiveModel = safeModelForRunner(selectedRunner, selectedModel, availableModels);
       const task = await agentClient.createTask({
-        title: prompt.replace(/\s+/g, " ").slice(0, 80),
+        title: `${opts?.titlePrefix || "Fix runtime failure"}: ${bounded.replace(/\s+/g, " ").slice(0, 56)}`.slice(0, 80),
         description: prompt,
         runner: selectedRunner || undefined,
         model: effectiveModel,
@@ -2290,7 +2302,7 @@ export default function RuntimeLabView({
       });
       setFixTaskId(task.id);
       attachTaskSession(task);
-      appendLog(`fix task ${task.id} started with ${selectedRunner || "default runner"}`);
+      appendLog(`${opts?.label || "fix"} task ${task.id} started with ${selectedRunner || "default runner"}`);
     } catch (err) {
       appendLog(`fix task failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -2309,15 +2321,18 @@ export default function RuntimeLabView({
   // Rendered INSIDE the failure boxes, directly under the title and ABOVE any
   // log dump — the route to the fix must never be crowded out by advisory
   // content, in pixels or in order.
-  const renderFixWithRunnerRow = (errorText: string) => (
+  const renderFixWithRunnerRow = (
+    errorText: string,
+    opts?: { titlePrefix?: string; promptIntro?: string; context?: string; label?: string; buttonLabel?: string },
+  ) => (
     <div className="mt-2 flex flex-wrap items-center gap-2">
       <button
         type="button"
         disabled={fixTaskBusy || fixTaskRunning || !selectedProject || !selectedRunner}
-        onClick={() => void dispatchBuildFix(errorText)}
+        onClick={() => void dispatchBuildFix(errorText, opts)}
         className="rounded-md bg-[#7c5cff] px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {fixWithRunnerLabel}
+        {opts?.buttonLabel || fixWithRunnerLabel}
       </button>
       {fixTaskRunning ? (
         <span className="text-[11px] text-[#667085] dark:text-[#9aa3af]">Streaming in the chat pane.</span>
@@ -2369,6 +2384,7 @@ export default function RuntimeLabView({
     if (!project) return;
     setBusy(true);
     setError(null);
+    setRelayRepairFailure(null);
     setCaps(null);
     setSession(null);
     const runtimeFramework = runtimeFrameworkForProject(project);
@@ -2495,7 +2511,9 @@ export default function RuntimeLabView({
 
   const repairRelayAndReloadTargets = useCallback(async () => {
     if (!selectedProject || relayRepairBusy) return;
+    const probeError = error || "Relay authentication failed while probing runtime targets.";
     setRelayRepairBusy(true);
+    setRelayRepairFailure(null);
     setError(null);
     appendLog("repairing relay credentials before loading targets");
     try {
@@ -2508,11 +2526,12 @@ export default function RuntimeLabView({
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       appendLog(`relay credential repair failed: ${message}`);
-      setError(`Relay credential repair failed: ${message}`);
+      setRelayRepairFailure({ probeError, repairError: message, at: Date.now() });
+      setError(probeError);
     } finally {
       setRelayRepairBusy(false);
     }
-  }, [appendLog, loadCapabilities, relayRepairBusy, selectedProject]);
+  }, [appendLog, error, loadCapabilities, relayRepairBusy, selectedProject]);
 
   const createSession = useCallback(async (targetId: string) => {
     if (!selectedProject) return;
@@ -2886,6 +2905,19 @@ export default function RuntimeLabView({
   }, [appendLog, busy, caps, connectedDevice?.id, createSession, intent, savedRuntimeTargetFor, selectedProject, selectedProjectIsSavedDefault, session, webPreviewPanelOpen]);
 
   const targetProbeFailurePlan = error ? classifyRuntimeTargetProbeFailure(error) : null;
+  const relayAuthFallbackContext = relayRepairFailure ? [
+    "Incident: Runtime Lab target probing hit a relay-auth failure. The deterministic relay credential repair button was tried and failed.",
+    `Project: ${selectedProject?.name || "(none)"}`,
+    `Framework: ${runtimeFrameworkForProject(selectedProject) || "unknown"}`,
+    `Runner: ${runnerBoxName || "(unknown)"} (${machineRoles?.runnerDeviceId || connectedDevice?.id || "none"})`,
+    `Renderer: ${effectiveRenderBoxName || "(unknown)"} (${effectiveRenderDeviceId || "none"})`,
+    `Machine split active: ${machineSplitActive ? "yes" : "no"}`,
+    `Workspace slicing: ${machineRoles?.workspace || "default"}`,
+    `Selected coding runner: ${selectedRunner || "default"} ${selectedModel ? `model=${selectedModel}` : ""}`.trim(),
+    `Repair endpoint: POST /settings/repair-relay through agentClient.repairRelayPassword()`,
+    `Repair error: ${relayRepairFailure.repairError.slice(0, 1000)}`,
+    "Do not ask the user for keychain, relay password, or private credentials. Inspect and fix product plumbing across web RuntimeLab, relay auth refresh, agent/client credential refresh, and mobile parity. Preserve stable browser and Hermes/native lanes.",
+  ].join("\n") : "";
 
   // Whenever the probe-failure card is visible, answer the user's first
   // question unprompted: does a connection to the render box exist at all?
@@ -3045,6 +3077,12 @@ export default function RuntimeLabView({
                     {RELAY_CREDENTIAL_REMEDY} Refresh the relay password here, then retry the same target probe.
                   </div>
                 ) : null}
+                {targetProbeFailurePlan.kind === "relay-auth" && relayRepairFailure ? (
+                  <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-900 dark:text-amber-100">
+                    Relay repair was attempted and failed: <span className="font-semibold">{relayRepairFailure.repairError}</span>. The
+                    next route is an AI investigation with the relay-auth stack attached, because the deterministic fixer did not complete.
+                  </div>
+                ) : null}
                 {targetProbeFailurePlan.kind === "relay-presence" ? (
                   // The routing-config throw ("only reachable over a relay…")
                   // already names its own cause + remedy; this sentence is for
@@ -3076,6 +3114,22 @@ export default function RuntimeLabView({
                     >
                       {relayRepairBusy ? "Refreshing relay..." : "Refresh relay password & retry"}
                     </button>
+                  ) : null}
+                  {targetProbeFailurePlan.kind === "relay-auth" && relayRepairFailure ? (
+                    renderFixWithRunnerRow(
+                      `${relayRepairFailure.probeError}\n\nDeterministic relay repair failed:\n${relayRepairFailure.repairError}`,
+                      {
+                        titlePrefix: "Fix relay auth repair",
+                        buttonLabel: fixTaskBusy
+                          ? "Dispatching relay fix..."
+                          : fixTaskRunning
+                            ? `${selectedRunnerName} is fixing relay auth...`
+                            : "Fix relay repair with AI",
+                        label: "relay-auth fix",
+                        promptIntro: "Runtime target probing failed because the relay refused this browser's account relay password. The deterministic relay repair route was tried and failed. Fix the product plumbing, then verify Runtime Lab Load Targets no longer dead-ends.",
+                        context: relayAuthFallbackContext,
+                      },
+                    )
                   ) : null}
                   {targetProbeFailurePlan.retry ? (
                     <button
