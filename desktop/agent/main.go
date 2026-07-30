@@ -3845,6 +3845,12 @@ func runServe(args []string) {
 		// recorder. Non-blocking; the recorder emits clip_ready over
 		// the vibe-preview SSE channel when the MP4 is mux-ready.
 		MaybeRecordTaskSummary(task)
+
+		// Proof package: same toggle, richer artifact — commit evidence,
+		// summary markdown, named capture failures, and the feedback-SDK
+		// fix-proof-ready push. Runs after the clip bridge so the clip id
+		// is already on the task copy. Self-gating and non-blocking.
+		BuildTaskProof(task, httpServer.blackboxMgr)
 	}
 	// Defensive sweep — flip stuck "recording" entries to "stale" if
 	// the recorder somehow died without finalizing.
@@ -10075,6 +10081,54 @@ func execOpen(name string, args ...string) {
 	go func() { _ = cmd.Wait() }()
 }
 
+var reexecAfterIdentityRepair = reexecAsServe
+
+func shortLogID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
+}
+
+func adoptCanonicalDeviceIDFromHeartbeat(startDeviceID string, hb *HeartbeatResult, restart func()) bool {
+	if hb == nil {
+		return false
+	}
+	canonical := strings.TrimSpace(hb.CanonicalDeviceID)
+	if canonical == "" || canonical == strings.TrimSpace(startDeviceID) {
+		return false
+	}
+	from := strings.TrimSpace(hb.RepairedDeviceIDFrom)
+	if from == "" {
+		from = startDeviceID
+	}
+	cfgNow, err := LoadConfig()
+	if err != nil || cfgNow == nil {
+		log.Printf("[identity] Convex repaired stale device_id %s → %s, but config reload failed: %v", shortLogID(from), shortLogID(canonical), err)
+		return false
+	}
+	if strings.TrimSpace(cfgNow.DeviceID) != strings.TrimSpace(startDeviceID) {
+		log.Printf("[identity] Convex returned canonical device_id %s, but disk already says %s; skipping in-process adoption",
+			shortLogID(canonical), shortLogID(cfgNow.DeviceID))
+		return false
+	}
+	cfgNow.DeviceID = canonical
+	if err := SaveConfig(cfgNow); err != nil {
+		log.Printf("[identity] Convex repaired stale device_id %s → %s, but saving config failed: %v", shortLogID(from), shortLogID(canonical), err)
+		return false
+	}
+	if restart != nil {
+		log.Printf("[identity] Repaired stale device_id %s → %s from heartbeat hardware proof; restarting agent so relay/bus/task state use the canonical id",
+			shortLogID(from), shortLogID(canonical))
+		restart()
+	} else {
+		log.Printf("[identity] Repaired stale device_id %s → %s from heartbeat hardware proof; restart was not requested",
+			shortLogID(from), shortLogID(canonical))
+	}
+	return true
+}
+
 func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr *TaskManager, httpServer *HTTPServer) {
 	// 5 min instead of 30 s: the P2P bus (see bus.go) now carries
 	// live peer presence between devices for free. Convex only
@@ -10165,6 +10219,9 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 	}
 	lastPublicEndpoints := publicEndpointsWithAutoIP(cfgAtStart, heartbeatPort)
 	authExpiredLogged := false
+	adoptCanonicalDeviceID := func(hb *HeartbeatResult) bool {
+		return adoptCanonicalDeviceIDFromHeartbeat(deviceID, hb, reexecAfterIdentityRepair)
+	}
 
 	// Self-heal: if our token is valid (not 401) but the backend keeps
 	// rejecting the heartbeat as if this device doesn't exist — the device row
@@ -10253,10 +10310,23 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 				httpServer.authExpired.Store(true)
 			}
 			notifyAuthExpiredOnce()
+		} else if errors.Is(err, ErrDeviceIDStale) || errors.Is(err, ErrDeviceIDAmbiguous) {
+			if errors.Is(err, ErrDeviceIDAmbiguous) {
+				log.Printf("[identity] initial heartbeat blocked: multiple owned rows match this hardware. Open Devices and keep only the intended row, then run `yaver auth` on this machine. Detail: %v", err)
+			} else {
+				log.Printf("[identity] initial heartbeat blocked: configured device_id is stale and Convex could not safely map this hardware to one owned row. Use Reclaim/Re-auth from the dashboard or run `yaver auth` on this machine. Detail: %v", err)
+			}
+			if httpServer != nil {
+				httpServer.authExpired.Store(true)
+			}
+			notifyAuthExpiredOnce()
 		} else {
 			log.Printf("initial heartbeat failed: %v", err)
 		}
 	} else {
+		if adoptCanonicalDeviceID(hbInit) {
+			return
+		}
 		if err := syncConnectionPreferencesFromConvex(hbInit.ConnectionPreferences); err != nil {
 			log.Printf("[heartbeat] connection preference sync failed: %v", err)
 		}
@@ -10349,6 +10419,17 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 						}
 					}
 				}
+			} else if errors.Is(err, ErrDeviceIDStale) || errors.Is(err, ErrDeviceIDAmbiguous) {
+				heartbeatFailStreak = 0
+				if errors.Is(err, ErrDeviceIDAmbiguous) {
+					log.Printf("[identity] heartbeat blocked: multiple owned rows match this hardware. Open Devices and keep only the intended row, then run `yaver auth` on this machine. Detail: %v", err)
+				} else {
+					log.Printf("[identity] heartbeat blocked: configured device_id is stale and Convex could not safely map this hardware to one owned row. Use Reclaim/Re-auth from the dashboard or run `yaver auth` on this machine. Detail: %v", err)
+				}
+				if httpServer != nil {
+					httpServer.authExpired.Store(true)
+				}
+				notifyAuthExpiredOnce()
 			} else {
 				log.Printf("heartbeat failed: %v", err)
 				// Non-auth failure with a token we believe is valid. If this
@@ -10381,6 +10462,9 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 		// the beat + retry both failed (Convex unreachable / auth bad) — the
 		// claim endpoints would fail too, so skip this cycle.
 		if hbResult == nil {
+			return
+		}
+		if adoptCanonicalDeviceID(hbResult) {
 			return
 		}
 		// Decide whether to poll the claim queues:

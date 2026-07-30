@@ -1843,6 +1843,14 @@ func RegisterDevice(baseURL string, r RegisterDeviceRequest) (string, error) {
 // ErrAuthExpired is returned when a 401 response indicates the token has expired.
 var ErrAuthExpired = fmt.Errorf("auth token expired (401)")
 
+// ErrDeviceIDStale is returned when Convex no longer has this device_id and
+// could not safely map it to exactly one row for the same owner + hardware.
+var ErrDeviceIDStale = fmt.Errorf("device identity stale")
+
+// ErrDeviceIDAmbiguous is returned when more than one owned device row matches
+// this hardware fingerprint, so automatic adoption would be a guess.
+var ErrDeviceIDAmbiguous = fmt.Errorf("device identity ambiguous")
+
 // DeviceMetricsSample is an optional CPU/RAM snapshot piggybacked onto a
 // heartbeat. Folding it into the heartbeat (every 5 min) replaces the old
 // standalone metricsLoop that fired /devices/metrics every 60s — ~43.8k
@@ -1881,6 +1889,13 @@ type HeartbeatResult struct {
 	GatingSupported       bool
 	PendingRescue         bool
 	PendingPublish        bool
+	// CanonicalDeviceID is non-empty when Convex accepted this heartbeat under
+	// a surviving row that matches the same authenticated owner + hardwareId,
+	// because the agent's persisted device_id pointed at a stale/deleted row.
+	// The running process must adopt it and restart so relay/bus/task state all
+	// use one identity again.
+	CanonicalDeviceID    string
+	RepairedDeviceIDFrom string
 	// DesiredAgentVersion is non-empty when a surface asked this box to
 	// update while it was unreachable. "latest" or a pinned release.
 	// Deliberately NOT folded into GatingSupported: that flag means "the
@@ -2061,7 +2076,15 @@ func SendHeartbeat(baseURL, token, deviceID string, runners []RunnerInfo, instal
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("heartbeat failed (status %d): %s", resp.StatusCode, string(respBody))
+		bodyText := strings.TrimSpace(string(respBody))
+		switch {
+		case strings.Contains(bodyText, "DEVICE_ID_STALE"):
+			return nil, fmt.Errorf("%w: %s", ErrDeviceIDStale, bodyText)
+		case strings.Contains(bodyText, "IDENTITY_DRIFT_AMBIGUOUS"):
+			return nil, fmt.Errorf("%w: %s", ErrDeviceIDAmbiguous, bodyText)
+		default:
+			return nil, fmt.Errorf("heartbeat failed (status %d): %s", resp.StatusCode, bodyText)
+		}
 	}
 	if _, ok := payload["hardwareProfile"]; ok {
 		markHardwareProfileSent()
@@ -2080,6 +2103,8 @@ func SendHeartbeat(baseURL, token, deviceID string, runners []RunnerInfo, instal
 		PendingRescue         *bool                  `json:"pendingRescue"`
 		PendingPublish        *bool                  `json:"pendingPublish"`
 		DesiredAgentVersion   *string                `json:"desiredAgentVersion"`
+		CanonicalDeviceID     *string                `json:"canonicalDeviceId"`
+		RepairedDeviceIDFrom  *string                `json:"repairedDeviceIdFrom"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&heartbeatResp); err != nil {
 		// Beat succeeded (200) but the body was unreadable — return a
@@ -2095,6 +2120,12 @@ func SendHeartbeat(baseURL, token, deviceID string, runners []RunnerInfo, instal
 	}
 	if heartbeatResp.DesiredAgentVersion != nil {
 		result.DesiredAgentVersion = strings.TrimSpace(*heartbeatResp.DesiredAgentVersion)
+	}
+	if heartbeatResp.CanonicalDeviceID != nil {
+		result.CanonicalDeviceID = strings.TrimSpace(*heartbeatResp.CanonicalDeviceID)
+	}
+	if heartbeatResp.RepairedDeviceIDFrom != nil {
+		result.RepairedDeviceIDFrom = strings.TrimSpace(*heartbeatResp.RepairedDeviceIDFrom)
 	}
 	return result, nil
 }
