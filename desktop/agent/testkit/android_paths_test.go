@@ -23,3 +23,21 @@ func TestResolveTestkitCommandPath_FindsManagedAndroidSDK(t *testing.T) {
 		t.Fatalf("resolveTestkitCommandPath(adb) = %q, want %q", got, bin)
 	}
 }
+
+func TestResolveTestkitCommandPath_FindsStandardAndroidSDK(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", "")
+	t.Setenv("ANDROID_HOME", "")
+	t.Setenv("ANDROID_SDK_ROOT", "")
+	bin := filepath.Join(home, "Library", "Android", "sdk", "emulator", "emulator")
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveTestkitCommandPath("emulator"); got != bin {
+		t.Fatalf("resolveTestkitCommandPath(emulator) = %q, want %q", got, bin)
+	}
+}

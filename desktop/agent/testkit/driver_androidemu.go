@@ -640,16 +640,7 @@ func avdSystemImageMissing(avd string) (bool, string) {
 	if sysdir == "" {
 		return false, ""
 	}
-	roots := []string{
-		strings.TrimSpace(os.Getenv("ANDROID_SDK_ROOT")),
-		strings.TrimSpace(os.Getenv("ANDROID_HOME")),
-		filepath.Join(home, "Library", "Android", "sdk"),
-		filepath.Join(home, "Android", "Sdk"),
-	}
-	for _, root := range roots {
-		if root == "" {
-			continue
-		}
+	for _, root := range testkitAndroidSDKRoots() {
 		if info, err := os.Stat(filepath.Join(root, sysdir)); err == nil && info.IsDir() {
 			return false, "" // present
 		}

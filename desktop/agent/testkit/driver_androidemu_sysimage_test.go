@@ -97,6 +97,32 @@ func TestSystemImageProbeUsesAndroidAVDHome(t *testing.T) {
 	}
 }
 
+func TestSystemImageProbeUsesManagedAndroidSDKRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ANDROID_SDK_ROOT", "")
+	t.Setenv("ANDROID_HOME", "")
+
+	const sysdir = "system-images/android-35/google_apis/arm64-v8a/"
+	writeAVD(t, home, "managed_phone", sysdir)
+
+	missing, remedy := avdSystemImageMissing("managed_phone")
+	if !missing {
+		t.Fatal("missing managed SDK system image was reported as installed")
+	}
+	if !strings.Contains(remedy, "system-images;android-35;google_apis;arm64-v8a") {
+		t.Fatalf("remedy did not name the exact managed SDK package: %s", remedy)
+	}
+
+	managedSDK := filepath.Join(home, ".yaver", "runtimes", "android-sdk")
+	if err := os.MkdirAll(filepath.Join(managedSDK, sysdir), 0o755); err != nil {
+		t.Fatalf("mkdir managed sysimage: %v", err)
+	}
+	if missing, remedy := avdSystemImageMissing("managed_phone"); missing {
+		t.Fatalf("installed managed SDK system image was still reported missing: %s", remedy)
+	}
+}
+
 func TestMalformedAVDConfigIsNamedBeforeBoot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
