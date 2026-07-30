@@ -28,5 +28,6 @@ assert(/probeDeviceStatus\(\{[\s\S]*deviceId: d\.id[\s\S]*usableTunnelUrls/.test
 assert(!/d\.online === true/.test(dashboardPage.slice(dashboardPage.indexOf("const autoConnectTriedRef"), dashboardPage.indexOf("const refreshConnectedRunners"))), "dashboard auto-connect does not treat heartbeat-only online as browser-reachable");
 
 const vibeView = readFileSync(join(root, "components/dashboard/VibeCodingView.tsx"), "utf8");
-assert(/const explicitReady = explicitRunner \? ready\.find/.test(vibeView), "Vibe only auto-selects an explicit runner when it is ready");
-assert(/!selectedRunner \|\| !selectedStillReady/.test(vibeView), "Vibe falls forward when the selected runner becomes not ready");
+assert(/const explicitInstalled = explicitRunner \? installed\.find/.test(vibeView), "Vibe keeps the machine primary runner selected when it is installed");
+assert(/!selectedRunner \|\| !selectedStillAvailable/.test(vibeView), "Vibe only falls forward when the selected runner is absent, not merely blocked");
+assert(/activeFailureSignInRunner/.test(vibeView), "Vibe failed task card exposes runner sign-in recovery for auth failures");

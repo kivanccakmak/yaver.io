@@ -868,11 +868,11 @@ export default function VibeCodingView({
         const installed = (runnerRows || []).filter((runner) => runner.installed);
         const ready = installed.filter((runner) => runner.ready);
         const explicitRunner = connectedDevice ? primaryRunnerByDevice[connectedDevice.id] : "";
-        const explicitReady = explicitRunner ? ready.find((runner) => runner.id === explicitRunner) : undefined;
-        const selectedStillReady = selectedRunner ? ready.some((runner) => runner.id === selectedRunner) : false;
-        if (explicitReady && selectedRunner !== explicitReady.id) {
-          setSelectedRunner(explicitReady.id);
-        } else if (!selectedRunner || !selectedStillReady) {
+        const explicitInstalled = explicitRunner ? installed.find((runner) => runner.id === explicitRunner) : undefined;
+        const selectedStillAvailable = selectedRunner ? installed.some((runner) => runner.id === selectedRunner) : false;
+        if (explicitInstalled && selectedRunner !== explicitInstalled.id) {
+          setSelectedRunner(explicitInstalled.id);
+        } else if (!selectedRunner || !selectedStillAvailable) {
           const seededRunner = connectedDevice
             ? preferredDefaultRunnerForDevice(
                 connectedDevice,
@@ -1803,10 +1803,21 @@ export default function VibeCodingView({
     }
   }
 
-  async function startSelectedRunnerSignIn(confirm = false) {
-    if (!selectedRunnerRow) return;
-    if (selectedRunnerRow.id !== "claude" && selectedRunnerRow.id !== "codex") {
-      setRunnerAuthError(`${selectedRunnerRow.name} does not expose browser sign-in here.`);
+  function runnerNameForId(runnerId: string): string {
+    const row = runners.find((runner) => runner.id === runnerId);
+    if (row?.name) return row.name;
+    if (runnerId === "claude") return "Claude Code";
+    if (runnerId === "codex") return "OpenAI Codex";
+    if (runnerId === "opencode") return "OpenCode";
+    return runnerId;
+  }
+
+  async function startRunnerSignIn(runnerId: string, confirm = false) {
+    const id = runnerId.trim();
+    if (!id) return;
+    const name = runnerNameForId(id);
+    if (id !== "claude" && id !== "codex") {
+      setRunnerAuthError(`${name} does not expose browser sign-in here.`);
       return;
     }
     setRunnerAuthBusy(true);
@@ -1814,12 +1825,12 @@ export default function VibeCodingView({
     setRunnerAuthDeclined(null);
     setRunnerAuthCallbackUrl("");
     setRunnerAuthStatus({
-      runner: selectedRunnerRow.id,
+      runner: id,
       status: "starting",
     });
     try {
       const res = await agentClient.runnerBrowserAuthStart({
-        runner: selectedRunnerRow.id,
+        runner: id,
         trigger: confirm ? "confirmed" : "explicit",
         confirm,
       });
@@ -1830,7 +1841,7 @@ export default function VibeCodingView({
         setRunnerAuthBusy(false);
         setRunnerAuthStatus(null);
         setRunnerAuthDeclined({
-          reason: res.reason || `${selectedRunnerRow.name} is already signed in on that machine.`,
+          reason: res.reason || `${name} is already signed in on that machine.`,
           reauthable: res.reauthable !== false,
         });
         return;
@@ -1855,6 +1866,11 @@ export default function VibeCodingView({
       setRunnerAuthStatus(null);
       setRunnerAuthError(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  async function startSelectedRunnerSignIn(confirm = false) {
+    if (!selectedRunnerRow) return;
+    await startRunnerSignIn(selectedRunnerRow.id, confirm);
   }
 
   async function submitRunnerAuthCode() {
@@ -1917,15 +1933,21 @@ export default function VibeCodingView({
     );
   }, [providerRepos, providerSearch]);
 
-	  const activeFailureDiagnosis = useMemo(() => {
-	    if (activeTask?.status !== "failed") return null;
-	    return diagnoseRunnerFailure({
+  const activeFailureDiagnosis = useMemo(() => {
+    if (activeTask?.status !== "failed") return null;
+    return diagnoseRunnerFailure({
       runner: activeTask.runnerId || selectedRunner,
       model: activeTask.model || selectedModel,
       output: [Array.isArray(activeTask.output) ? activeTask.output.join("\n") : String(activeTask.output || ""), activeTask.resultText || "", liveOutput || ""].join("\n"),
       failedAt: activeTask.finishedAt || activeTask.updatedAt || activeTask.createdAt,
-	    });
-	  }, [activeTask, liveOutput, selectedModel, selectedRunner]);
+    });
+  }, [activeTask, liveOutput, selectedModel, selectedRunner]);
+
+  const activeFailureSignInRunner = useMemo(() => {
+    const runner = String(activeFailureDiagnosis?.runner || "").trim();
+    if (activeFailureDiagnosis?.kind !== "auth" && activeFailureDiagnosis?.kind !== "auth-revoked") return "";
+    return runner === "claude" || runner === "codex" ? runner : "";
+  }, [activeFailureDiagnosis]);
 
   const activeTaskGap = useMemo(
     () => parseCapabilityGap(activeTask?.capabilityGap),
@@ -3092,6 +3114,31 @@ export default function VibeCodingView({
                       <div className="text-sm font-semibold">{activeFailureDiagnosis.title}</div>
                       <div className="mt-1 text-[13px] leading-5 text-rose-100/85">{activeFailureDiagnosis.reason}</div>
                       <div className="mt-2 text-[12px] leading-5 text-rose-100/75">{activeFailureDiagnosis.remedy}</div>
+                      {activeFailureSignInRunner ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            onClick={() => {
+                              setSelectedRunner(activeFailureSignInRunner);
+                              void startRunnerSignIn(activeFailureSignInRunner);
+                            }}
+                            disabled={runnerAuthBusy}
+                            className="rounded-xl border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-xs font-semibold text-rose-50 hover:bg-rose-300/15 disabled:opacity-40"
+                          >
+                            {runnerAuthBusy ? "Opening sign-in…" : `Sign in to ${runnerNameForId(activeFailureSignInRunner)}`}
+                          </button>
+                          <button
+                            onClick={() => void agentClient.testRunner(activeFailureSignInRunner, { model: activeTask?.model || selectedModel || undefined }).then((res) => {
+                              setBusy(res.ok ? `${runnerNameForId(activeFailureSignInRunner)} test passed.` : (res.error || res.output || `${runnerNameForId(activeFailureSignInRunner)} still needs attention.`));
+                              setRefreshNonce((value) => value + 1);
+                            }).catch((err) => {
+                              setBusy(err instanceof Error ? err.message : String(err));
+                            })}
+                            className="rounded-xl border border-surface-700 bg-surface-950/70 px-3 py-2 text-xs font-semibold text-surface-200 hover:border-surface-600"
+                          >
+                            Test runner
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                   {conversationTurns.map((turn, index) => (

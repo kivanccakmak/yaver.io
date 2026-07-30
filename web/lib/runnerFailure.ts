@@ -1,6 +1,7 @@
 export type RunnerFailureKind =
   | "model-not-found"
   | "model-not-supported"
+  | "auth-revoked"
   | "auth"
   | "provider-transport"
   | "subprocess"
@@ -69,20 +70,32 @@ export function diagnoseRunnerFailure(args: {
     };
   }
 
+  if (lower.includes("token has been revoked") || lower.includes("oauth access token has been revoked")) {
+    return {
+      kind: "auth-revoked",
+      title: "Runner OAuth grant was revoked",
+      reason: `${runnerLabel(runner)} reached the provider, but this machine's saved OAuth grant has been revoked.`,
+      remedy: "Start the runner sign-in flow from this card to issue a fresh credential, then run Test before retrying the chat.",
+      runner,
+      model,
+      probe: args.probe || undefined,
+      failedAt,
+    };
+  }
+
   if (
     lower.includes("not authenticated") ||
     lower.includes("not logged in") ||
     lower.includes("please sign in") ||
     lower.includes("invalid bearer token") ||
     lower.includes("unauthorized") ||
-    lower.includes("expired token") ||
-    lower.includes("token has been revoked")
+    lower.includes("expired token")
   ) {
     return {
       kind: "auth",
       title: "Runner sign-in is invalid",
       reason: `${runnerLabel(runner)} could not authenticate the provider request.`,
-      remedy: "Run the runner sign-in flow for this machine, then run Test again.",
+      remedy: "Start the runner sign-in flow for this machine, then run Test again.",
       runner,
       model,
       probe: args.probe || undefined,
