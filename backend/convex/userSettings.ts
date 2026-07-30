@@ -461,6 +461,34 @@ function seedOpenCodePrimaryRunnerRow(
   return next;
 }
 
+const OBSOLETE_CODEX_MODEL_IDS = new Set(["o3-mini", "gpt-5-codex", "gpt-5.3-codex"]);
+const CURRENT_CODEX_MODEL_ID = "gpt-5.4";
+
+type PrimaryRunnerRow = { deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string };
+
+export function normalizePrimaryRunnerRowsForClient(
+  rows: PrimaryRunnerRow[] | undefined,
+): PrimaryRunnerRow[] | undefined {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+  return rows.map((row) => {
+    if (
+      String(row.runnerId || "").trim().toLowerCase() === "codex" &&
+      OBSOLETE_CODEX_MODEL_IDS.has(String(row.model || "").trim())
+    ) {
+      return { ...row, model: CURRENT_CODEX_MODEL_ID };
+    }
+    return row;
+  });
+}
+
+function normalizeSettingsForClient<T extends { primaryRunnerByDevice?: PrimaryRunnerRow[] } | null>(settings: T): T {
+  if (!settings?.primaryRunnerByDevice) return settings;
+  return {
+    ...settings,
+    primaryRunnerByDevice: normalizePrimaryRunnerRowsForClient(settings.primaryRunnerByDevice),
+  };
+}
+
 // Exported: devices.resolveDeviceSig reuses this so the relay's SIGNATURE
 // auth path learns the caller's entitlement too — before that, only the
 // password path resolved isPaid/plan and sig-authenticated callers were all
@@ -605,10 +633,11 @@ async function patchOwnedDeviceRuntimeProjectCache(
 export const get = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const settings = await ctx.db
       .query("userSettings")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .first();
+    return normalizeSettingsForClient(settings);
   },
 });
 
@@ -618,10 +647,11 @@ export const getByToken = query({
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.tokenHash);
     if (!session) return null;
-    return await ctx.db
+    const settings = await ctx.db
       .query("userSettings")
       .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
       .first();
+    return normalizeSettingsForClient(settings);
   },
 });
 
@@ -826,6 +856,11 @@ export const set = internalMutation({
         args.deployPreferences as Record<string, string | null | undefined>,
       );
     }
+    const normalizedPrimaryRunnerRows = normalizePrimaryRunnerRowsForClient(
+      (patch.primaryRunnerByDevice as PrimaryRunnerRow[] | undefined) ??
+        (existing?.primaryRunnerByDevice as PrimaryRunnerRow[] | undefined),
+    );
+    if (normalizedPrimaryRunnerRows !== undefined) patch.primaryRunnerByDevice = normalizedPrimaryRunnerRows;
     if (existing) {
       await ctx.db.patch(existing._id, patch);
     } else {
@@ -1024,6 +1059,11 @@ export const setByToken = mutation({
         args.deployPreferences as Record<string, string | null | undefined>,
       );
     }
+    const normalizedPrimaryRunnerRows = normalizePrimaryRunnerRowsForClient(
+      (patch.primaryRunnerByDevice as PrimaryRunnerRow[] | undefined) ??
+        (existing?.primaryRunnerByDevice as PrimaryRunnerRow[] | undefined),
+    );
+    if (normalizedPrimaryRunnerRows !== undefined) patch.primaryRunnerByDevice = normalizedPrimaryRunnerRows;
     if (existing) {
       await ctx.db.patch(existing._id, patch);
     } else {
