@@ -36,6 +36,18 @@ func TestCodexBuiltinDefaultModelMatchesCatalogue(t *testing.T) {
 	if got := GetRunnerConfig("codex").Model; got != "gpt-5.4" {
 		t.Fatalf("codex default model = %q, want gpt-5.4", got)
 	}
+	models := fallbackRunnerModels("codex")
+	if len(models) == 0 {
+		t.Fatal("codex fallback catalogue is empty")
+	}
+	if got := models[0].ID; got != "gpt-5.4" {
+		t.Fatalf("codex fallback catalogue default = %q, want gpt-5.4", got)
+	}
+	for _, model := range models {
+		if model.ID == "gpt-5.3-codex" {
+			t.Fatal("codex fallback catalogue must not offer stale gpt-5.3-codex")
+		}
+	}
 }
 
 func TestLooksLikeAuthFailureDetectsRevokedClaudeOAuth(t *testing.T) {

@@ -33,8 +33,8 @@
 //      YAVER_WEBRTC_SOURCE (default "yavertest").
 //      YAVER_WEBRTC_TOKEN overrides ~/.yaver/config.json for cross-box dogfood.
 
-import { readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, execSync } from "node:child_process";
@@ -46,6 +46,7 @@ const SURFACE = process.argv[2] || "both";
 const SOURCE = process.env.YAVER_WEBRTC_SOURCE || "yavertest";
 const OUT = process.env.YAVER_OUT_DIR || "/tmp/yaver-webrtc";
 const PLAYWRIGHT_VIDEO = process.env.YAVER_WEBRTC_NATIVE_VIDEO === "1";
+const CHROMIUM_PROFILE_ROOT = process.env.YAVER_CHROMIUM_PROFILE_ROOT || tmpdir();
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 
@@ -297,17 +298,21 @@ async function main() {
   for (const s of surfaces) {
     const w = s === "mobile" ? 420 : 1280;
     const h = s === "mobile" ? 860 : 800;
-    const browser = await chromium.launch({
+    mkdirSync(CHROMIUM_PROFILE_ROOT, { recursive: true });
+    const chromiumProfileDir = mkdtempSync(join(CHROMIUM_PROFILE_ROOT, `yaver-webrtc-${s}-profile-`));
+    const context = await chromium.launchPersistentContext(chromiumProfileDir, {
       headless: process.env.HEADED !== "1",
       timeout: Number(process.env.YAVER_WEBRTC_BROWSER_TIMEOUT_MS || 20_000),
       executablePath: process.env.YAVER_CHROMIUM_PATH || undefined,
-      args: ["--no-sandbox", "--disable-gpu", "--autoplay-policy=no-user-gesture-required"],
-    });
-    const context = await browser.newContext({
       viewport: { width: w, height: h },
       ...(PLAYWRIGHT_VIDEO ? { recordVideo: { dir: join(OUT, "videos"), size: { width: w, height: h } } } : {}),
+      args: [
+        "--no-sandbox",
+        "--disable-gpu",
+        "--autoplay-policy=no-user-gesture-required",
+      ],
     });
-    const driver = await context.newPage();
+    const driver = context.pages()[0] || await context.newPage();
     const stopFrameRecorder = startFrameRecorder(driver, s);
     let videoPath = "";
     let frameRecordingPath = "";
@@ -326,7 +331,8 @@ async function main() {
         try { videoPath = await video.path(); } catch {}
       }
       frameRecordingPath = await stopFrameRecorder();
-      await browser.close().catch(() => {});
+      await context.close().catch(() => {});
+      rmSync(chromiumProfileDir, { recursive: true, force: true });
       if (videoPath) console.log(`  [${s}] recording ${videoPath}`);
       if (frameRecordingPath) console.log(`  [${s}] frame-recording ${frameRecordingPath}`);
     }

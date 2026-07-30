@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   HETZNER_OPENCODE_MODEL,
   isModelCompatibleWithRunnerId,
+  preferredDefaultModelForRunner,
   resolveModelForRemoteSend,
 } from "./remoteCodingSelection.ts";
 
@@ -36,4 +37,9 @@ test("OpenCode send resolves past stale selected Codex model", () => {
   });
 
   assert.equal(resolved, "zai-coding-plan/glm-5.2");
+});
+
+test("Codex default does not reintroduce rejected gpt-5.3-codex", () => {
+  assert.equal(preferredDefaultModelForRunner("codex", { name: "ubuntu-4gb-hel1-1", os: "linux" }, null), "gpt-5.4");
+  assert.equal(preferredDefaultModelForRunner("codex", { name: "ubuntu-4gb-hel1-1", os: "linux" }, "kivanc@example.com"), "gpt-5.4");
 });

@@ -2488,10 +2488,7 @@ function useLiveOpenCodeByDevice(
 // migrated away in mobile DeviceContext.loadSettings).
 export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
   claude: "claude-opus-4-7",
-  // Codex-native model — general gpt-5.x require API billing and error on a
-  // ChatGPT-account Codex login ("not supported when using Codex with a
-  // ChatGPT account").
-  codex: "gpt-5.3-codex",
+  codex: "gpt-5.4",
   opencode: "zai-coding-plan/glm-4.7",
 };
 
@@ -2563,7 +2560,7 @@ export function preferredDefaultModelForRunner(
       return "claude-opus-4-7";
     }
     if (normalized === "codex" && !isKivancMacBook(device)) {
-      return "gpt-5.3-codex";
+      return "gpt-5.4";
     }
   }
   return DEFAULT_MODEL_BY_RUNNER[normalized] || null;

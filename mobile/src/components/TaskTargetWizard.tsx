@@ -103,14 +103,6 @@ const MODELS_BY_RUNNER: Record<TaskTarget["runner"], { id: string; label: string
     { id: "claude-sonnet-4-5", label: "Sonnet 4.5" },
   ],
   codex: [
-    // Yaver's primary use case is BYOK with ChatGPT Max / Pro plans —
-    // the Codex CLI accepts those accounts but the OpenAI API rejects
-    // them for the "API-only" models (gpt-5.5, gpt-5.5-pro) with:
-    //   "The 'gpt-5.5-pro' model is not supported when using Codex
-    //    with a ChatGPT account."
-    // We don't surface those at all so a free-tier vibing user never
-    // ends up in the crash loop their plan doesn't allow.
-    { id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
     { id: "gpt-5.4", label: "GPT-5.4" },
     { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
   ],

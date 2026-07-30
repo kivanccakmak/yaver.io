@@ -3897,14 +3897,12 @@ func fallbackRunnerModels(runnerID string) []runnerModelInfo {
 		}
 	case "codex":
 		return []runnerModelInfo{
-			// Default to the Codex-native model: general gpt-5.x require
-			// API billing and error on a ChatGPT-subscription Codex login
-			// ("model is not supported when using Codex with a ChatGPT
-			// account"). gpt-5.3-codex is the one that works there.
-			{ID: "gpt-5.3-codex", Name: "GPT-5.3 Codex", Source: "builtin", IsDefault: true},
+			// Keep this list aligned with builtinRunners["codex"].Model.
+			// A stale fallback catalog re-poisons web/mobile pickers even
+			// when the spawn path has the right default.
+			{ID: "gpt-5.4", Name: "GPT-5.4", Source: "builtin", IsDefault: true},
 			{ID: "gpt-5.5", Name: "GPT-5.5", Source: "builtin", IsDefault: false},
 			{ID: "gpt-5.5-pro", Name: "GPT-5.5 Pro", Source: "builtin", IsDefault: false},
-			{ID: "gpt-5.4", Name: "GPT-5.4", Source: "builtin", IsDefault: false},
 			{ID: "gpt-5.4-mini", Name: "GPT-5.4 Mini", Source: "builtin", IsDefault: false},
 		}
 	case "opencode":

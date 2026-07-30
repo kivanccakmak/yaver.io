@@ -234,9 +234,7 @@ AsyncStorage.getItem("@yaver/debug_logs_enabled").then((val) => {
 // inheriting Codex's gpt-5.4 or Claude's opus when switching to it.
 export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
   claude: "claude-opus-4-7",
-  // Codex-native model — general gpt-5.x error on a ChatGPT-account login
-  // ("not supported when using Codex with a ChatGPT account").
-  codex: "gpt-5.3-codex",
+  codex: "gpt-5.4",
 };
 
 function deviceRunnerReadyFromHeartbeat(device: Pick<Device, "runners" | "installedRunnerIds">): boolean {
@@ -2869,11 +2867,12 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           // Drop legacy / dead model identifiers when loading so a stale
           // selection from a previous app version doesn't keep forcing
           // the picker into a broken state. Codex CLI's old default
-          // `o3-mini` 400s on ChatGPT-account auth and `gpt-5-codex`
-          // was a transitional intermediate — both are now stripped so
+          // `o3-mini` 400s on ChatGPT-account auth, `gpt-5-codex`
+          // was a transitional intermediate, and `gpt-5.3-codex`
+          // is now rejected by current Codex installs — all are stripped so
           // preferredDefaultModelForRunner substitutes the current
           // default (`gpt-5.4`, OpenAI's latest GPT-5 release).
-          const obsoleteModels = new Set(["o3-mini", "gpt-5-codex"]);
+          const obsoleteModels = new Set(["o3-mini", "gpt-5-codex", "gpt-5.3-codex"]);
           for (const row of rows as Array<{ deviceId?: string; runnerId?: string; model?: string; mode?: string; provider?: string }>) {
             if (!row?.deviceId || !row?.runnerId) continue;
             runners[String(row.deviceId)] = String(row.runnerId);

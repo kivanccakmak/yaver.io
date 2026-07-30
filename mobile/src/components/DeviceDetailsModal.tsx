@@ -40,7 +40,6 @@ const MODELS_BY_RUNNER: Record<string, ReadonlyArray<{ id: string; label: string
     { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
   ],
   codex: [
-    { id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
     { id: "gpt-5.4", label: "GPT-5.4" },
     { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
   ],

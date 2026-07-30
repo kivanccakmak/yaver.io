@@ -510,7 +510,6 @@ const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string; isDefaul
   ],
   codex: [
     { id: "gpt-5.4", name: "GPT-5.4", isDefault: true, source: "device-inventory" },
-    { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", source: "device-inventory" },
     { id: "gpt-5-codex", name: "GPT-5 Codex", source: "device-inventory" },
     { id: "gpt-5", name: "GPT-5", source: "device-inventory" },
     { id: "gpt-5-mini", name: "GPT-5 Mini", source: "device-inventory" },

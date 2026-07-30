@@ -12,8 +12,8 @@
 //   remote box: Mac with Xcode/simulators
 //   client: Ubuntu Chromium
 
-import { accessSync, constants, mkdirSync, readFileSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
+import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import http from "node:http";
@@ -33,6 +33,7 @@ const EXPECT_BROWSER_LOGS = (process.env.YAVER_RUNTIME_EXPECT_BROWSER_LOGS || ""
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+const CHROMIUM_PROFILE_ROOT = process.env.YAVER_CHROMIUM_PROFILE_ROOT || tmpdir();
 
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
@@ -236,22 +237,27 @@ if (browserExecutable) {
     process.exit(8);
   }
 }
-let browser;
+let context;
+mkdirSync(CHROMIUM_PROFILE_ROOT, { recursive: true });
+const chromiumProfileDir = mkdtempSync(join(CHROMIUM_PROFILE_ROOT, `yaver-webrtc-${TARGET}-profile-`));
 try {
-  browser = await chromium.launch({
+  context = await chromium.launchPersistentContext(chromiumProfileDir, {
     headless: true,
     executablePath: browserExecutable || undefined,
-    args: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"],
+    viewport: { width: 1280, height: 800 },
+    ...(PLAYWRIGHT_VIDEO ? { recordVideo: { dir: join(OUT, "videos"), size: { width: 1280, height: 800 } } } : {}),
+    args: [
+      "--no-sandbox",
+      "--autoplay-policy=no-user-gesture-required",
+    ],
   });
 } catch (e) {
   const message = String(e?.message || e).split(/\r?\n/)[0].slice(0, 240);
   console.log(`VERDICT=NAMED · ${TARGET}:browser-launch:${message}`);
+  rmSync(chromiumProfileDir, { recursive: true, force: true });
   process.exit(8);
 }
-const page = await browser.newPage({
-  viewport: { width: 1280, height: 800 },
-  ...(PLAYWRIGHT_VIDEO ? { recordVideo: { dir: join(OUT, "videos"), size: { width: 1280, height: 800 } } } : {}),
-});
+const page = context.pages()[0] || await context.newPage();
 const stopRecording = startRecorder(page, TARGET);
 
 try {
@@ -331,7 +337,8 @@ try {
 } finally {
   const mp4 = await stopRecording().catch(() => "");
   await page.close().catch(() => {});
-  await browser.close().catch(() => {});
+  await context.close().catch(() => {});
+  rmSync(chromiumProfileDir, { recursive: true, force: true });
   server.close();
   if (sessionID) {
     const del = await agent(`/remote-runtime/sessions/${sessionID}`, {
