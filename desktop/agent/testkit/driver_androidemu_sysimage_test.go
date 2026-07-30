@@ -13,10 +13,12 @@ package testkit
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeAVD(t *testing.T, home, name, sysdir string) {
@@ -298,6 +300,36 @@ func TestWaitForAdbDeviceNamesUnauthorized(t *testing.T) {
 		t.Fatal("unauthorized adb device waited for timeout instead of naming the auth problem")
 	}
 	for _, want := range []string{"unauthorized", "ADB_VENDOR_KEYS", "emulator-5554"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%s", want, err)
+		}
+	}
+}
+
+func TestWaitForAdbDeviceForAVDNamesCallerDeadline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := waitForAdbDeviceForAVD(ctx, time.Minute, "Medium_Phone_API_36.0")
+	if err == nil {
+		t.Fatal("expected canceled context to return a named AVD wait error")
+	}
+	for _, want := range []string{"Medium_Phone_API_36.0", "caller deadline", "context canceled"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%s", want, err)
+		}
+	}
+}
+
+func TestWaitForBootCompleteNamesCallerDeadline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := waitForBootComplete(ctx, "emulator-5554", time.Minute)
+	if err == nil {
+		t.Fatal("expected canceled context to return a named boot wait error")
+	}
+	for _, want := range []string{"emulator-5554", "caller deadline", "context canceled"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q:\n%s", want, err)
 		}

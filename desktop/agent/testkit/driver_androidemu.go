@@ -495,10 +495,14 @@ func waitForAdbDevice(ctx context.Context, timeout time.Duration) (string, error
 
 func waitForAdbDeviceForAVD(ctx context.Context, timeout time.Duration, avd string) (string, error) {
 	deadline := time.Now().Add(timeout)
+	started := time.Now()
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			if strings.TrimSpace(avd) != "" {
+				return "", fmt.Errorf("no adb device for AVD %q before caller deadline after %s: %w", avd, time.Since(started).Round(time.Second), ctx.Err())
+			}
+			return "", fmt.Errorf("no adb device before caller deadline after %s: %w", time.Since(started).Round(time.Second), ctx.Err())
 		default:
 		}
 		out, _ := runCtx(ctx, "adb", "devices")
@@ -541,10 +545,11 @@ func adbOnlineDeviceFromList(out string) (string, error) {
 // returns 1 (Android's "boot animation finished" signal).
 func waitForBootComplete(ctx context.Context, deviceID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	started := time.Now()
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("device %s did not finish booting before caller deadline after %s: %w", deviceID, time.Since(started).Round(time.Second), ctx.Err())
 		default:
 		}
 		out, _ := runCtx(ctx, "adb", "-s", deviceID, "shell", "getprop", "sys.boot_completed")
