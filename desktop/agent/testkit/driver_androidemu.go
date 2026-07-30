@@ -373,7 +373,11 @@ func androidAVDPartitionSizeTooLarge(value string) bool {
 	} else if strings.HasSuffix(v, "G") {
 		v = strings.TrimSpace(strings.TrimSuffix(v, "G"))
 	} else {
-		return false
+		var bytes int64
+		if _, err := fmt.Sscanf(v, "%d", &bytes); err != nil {
+			return false
+		}
+		return bytes > 4*1024*1024*1024
 	}
 	var n int
 	if _, err := fmt.Sscanf(v, "%d", &n); err != nil {

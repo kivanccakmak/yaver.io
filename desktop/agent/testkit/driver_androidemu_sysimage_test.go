@@ -230,6 +230,38 @@ func TestGeneratedAVDConfigRepairKeepsExplicitSmallPartition(t *testing.T) {
 	}
 }
 
+func TestGeneratedAVDConfigRepairCompactsBytePartition(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".android", "avd", "auto.avd")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir avd: %v", err)
+	}
+	body := strings.Join([]string{
+		"image.sysdir.1 = system-images/android-35-ext15/android-automotive/arm64-v8a/",
+		"avd.id = <build>",
+		"avd.name = <build>",
+		"disk.dataPartition.path = <temp>",
+		"disk.dataPartition.size = 6442450944",
+	}, "\n")
+	cfg := filepath.Join(dir, "config.ini")
+	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
+		t.Fatalf("write config.ini: %v", err)
+	}
+
+	if _, err := repairGeneratedAVDConfig("auto"); err != nil {
+		t.Fatalf("repairGeneratedAVDConfig: %v", err)
+	}
+	data, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatalf("read config.ini: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "disk.dataPartition.size=2G") {
+		t.Fatalf("oversized byte partition was not compacted:\n%s", got)
+	}
+}
+
 func TestSystemImageProbeStaysQuietWhenItCannotKnow(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
