@@ -1275,8 +1275,13 @@ func PrewarmMobileProjects() {
 		log.Printf("[mobile-scan]   %s (%s, SDK %s) — %s [%s]", p.Name, p.Framework, sdk, status, p.Path)
 	}
 
-	// Pre-build dev clients for Expo/RN projects that don't have one
-	// This runs in background — user can start hot reload immediately for projects that already have builds
+	if envTruthy(os.Getenv("YAVER_DISABLE_STARTUP_PREBUILD")) {
+		log.Printf("[mobile-prebuild] startup prebuild disabled by YAVER_DISABLE_STARTUP_PREBUILD=1")
+		return
+	}
+
+	// Pre-build dev clients for Expo/RN projects that don't have one.
+	// This runs in background — user can start hot reload immediately for projects that already have builds.
 	for _, p := range projects {
 		if (p.Framework == "expo" || p.Framework == "react-native") && !p.HasDevBuild {
 			go prebuildExpoProject(p)
