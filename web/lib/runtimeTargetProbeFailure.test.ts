@@ -34,6 +34,20 @@ test("relay route configuration failures are deterministic, not LLM fixes", () =
   assert.equal(plan.showFixWithRunner, false);
 });
 
+test("relay credential failures repair relay credentials instead of routing to a runner", () => {
+  for (const cause of [
+    "Relay authentication failed. Check the relay password or sign in again. invalid relay password",
+    'HTTP 401: {"ok":false,"code":"relay_password_invalid","error":"invalid relay password"}',
+    "relay password missing — sign in again to fetch it",
+  ]) {
+    const plan = classifyRuntimeTargetProbeFailure(cause);
+    assert.equal(plan.kind, "relay-auth");
+    assert.equal(plan.retry, true);
+    assert.equal(plan.useRunnerFallback, false);
+    assert.equal(plan.showFixWithRunner, false, "relay credential refresh is deterministic, not an LLM task");
+  }
+});
+
 test("machine role doctor render failures are deterministic repair routes", () => {
   for (const cause of [
     // Stable-code form emitted by ensureMachineRolesReady — codes, not prose,
@@ -103,6 +117,7 @@ test("ordinary target probe failures still route to the coding runner", () => {
 test("RuntimeLabView consumes the shared classifier instead of private relay regexes", () => {
   const src = readFileSync(join(webRoot, "components/dashboard/RuntimeLabView.tsx"), "utf8");
   assert.match(src, /classifyRuntimeTargetProbeFailure/, "RuntimeLabView must use the shared failure policy");
+  assert.match(src, /repairRelayAndReloadTargets/, "RuntimeLabView must expose relay credential repair for relay-auth probe failures");
   assert.doesNotMatch(
     src,
     /device not connected to relay\|only reachable over a relay/,

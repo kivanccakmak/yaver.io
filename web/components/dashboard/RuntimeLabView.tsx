@@ -40,6 +40,7 @@ import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
 import { machineRolesSplitActive, type MachineRolesRow } from "@/lib/useMachineRoles";
 import { classifyRuntimeTargetProbeFailure } from "@/lib/runtimeTargetProbeFailure";
+import { RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
 import { ScreenContextChip } from "./ScreenContextChip";
 // Read-aloud must never recite Yaver's own prompt header — see lib/promptFraming.ts.
@@ -1076,6 +1077,7 @@ export default function RuntimeLabView({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recoveringAgentAuth, setRecoveringAgentAuth] = useState(false);
+  const [relayRepairBusy, setRelayRepairBusy] = useState(false);
   const [showAdvancedTargets, setShowAdvancedTargets] = useState(false);
   const [webPreviewUrl, setWebPreviewUrl] = useState<string | null>(null);
   const [webPreviewPanelOpen, setWebPreviewPanelOpen] = useState(false);
@@ -2491,6 +2493,27 @@ export default function RuntimeLabView({
     }
   }, [appendLog, loadCapabilities, onReconnect, recoveringAgentAuth, selectedProject]);
 
+  const repairRelayAndReloadTargets = useCallback(async () => {
+    if (!selectedProject || relayRepairBusy) return;
+    setRelayRepairBusy(true);
+    setError(null);
+    appendLog("repairing relay credentials before loading targets");
+    try {
+      const result = await agentClient.repairRelayPassword();
+      if (!result.ok) {
+        throw new Error(result.error || "relay credential refresh failed");
+      }
+      appendLog("relay credentials refreshed; retrying target probe");
+      await loadCapabilities(selectedProject);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      appendLog(`relay credential repair failed: ${message}`);
+      setError(`Relay credential repair failed: ${message}`);
+    } finally {
+      setRelayRepairBusy(false);
+    }
+  }, [appendLog, loadCapabilities, relayRepairBusy, selectedProject]);
+
   const createSession = useCallback(async (targetId: string) => {
     if (!selectedProject) return;
     setBusy(true);
@@ -2870,6 +2893,7 @@ export default function RuntimeLabView({
   // the periodic devices refresh from turning this into a probe storm.
   useEffect(() => {
     if (!error || !effectiveRenderDeviceId || isAgentAuthErrorMessage(error)) return;
+    if (targetProbeFailurePlan?.kind === "relay-auth") return;
     if (
       renderConnCheck &&
       renderConnCheck.deviceId === effectiveRenderDeviceId &&
@@ -2878,7 +2902,7 @@ export default function RuntimeLabView({
       return;
     }
     void probeRenderConnectivity(effectiveRenderDeviceId);
-  }, [error, effectiveRenderDeviceId, probeRenderConnectivity, renderConnCheck]);
+  }, [error, effectiveRenderDeviceId, probeRenderConnectivity, renderConnCheck, targetProbeFailurePlan?.kind]);
 
   return (
     <div
@@ -3016,6 +3040,11 @@ export default function RuntimeLabView({
               // machine, so this branch names the box and offers deterministic
               // routes instead of "Fix with <runner>".
               <div className="mt-2 space-y-2">
+                {targetProbeFailurePlan.kind === "relay-auth" ? (
+                  <div className="text-xs">
+                    {RELAY_CREDENTIAL_REMEDY} Refresh the relay password here, then retry the same target probe.
+                  </div>
+                ) : null}
                 {targetProbeFailurePlan.kind === "relay-presence" ? (
                   // The routing-config throw ("only reachable over a relay…")
                   // already names its own cause + remedy; this sentence is for
@@ -3038,11 +3067,21 @@ export default function RuntimeLabView({
                   </div>
                 ) : null}
                 <div className="flex flex-wrap items-center gap-2">
+                  {targetProbeFailurePlan.kind === "relay-auth" ? (
+                    <button
+                      type="button"
+                      onClick={() => void repairRelayAndReloadTargets()}
+                      disabled={busy || relayRepairBusy}
+                      className="rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-800 disabled:opacity-40 dark:text-amber-100"
+                    >
+                      {relayRepairBusy ? "Refreshing relay..." : "Refresh relay password & retry"}
+                    </button>
+                  ) : null}
                   {targetProbeFailurePlan.retry ? (
                     <button
                       type="button"
                       onClick={() => void loadCapabilities()}
-                      disabled={busy || machinesBusy || machineRecoverBusy}
+                      disabled={busy || machinesBusy || machineRecoverBusy || relayRepairBusy}
                       className="rounded-md border border-[#d7dce3] bg-white px-3 py-1.5 text-xs font-semibold text-[#475467] disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
                     >
                       Retry probe

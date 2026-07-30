@@ -70,15 +70,77 @@ export const DEVICE_CARD_SURFACE_DEFAULT =
 export const DEVICE_CARD_SURFACE_CONNECTED =
   "border-success/50 bg-success-soft/50 dark:border-success/40 dark:bg-[rgba(34,54,44,0.86)]";
 
+/** Verified reachable, but not the browser's active session. */
+export const DEVICE_CARD_SURFACE_REACHABLE =
+  "border-emerald-300/70 bg-emerald-50/60 dark:border-emerald-500/25 dark:bg-[rgba(32,46,42,0.72)]";
+
+/** Heartbeat-only: alive somewhere, not proven from this browser. */
+export const DEVICE_CARD_SURFACE_CLAIMED =
+  "border-sky-300/60 bg-sky-50/55 dark:border-sky-500/25 dark:bg-[rgba(32,40,52,0.70)]";
+
+/** Pairing/sign-in/auth work required before this browser can use it. */
+export const DEVICE_CARD_SURFACE_AUTH =
+  "border-amber-300/70 bg-amber-50/60 dark:border-amber-500/30 dark:bg-[rgba(54,46,31,0.72)]";
+
+/** A failed probe or no live signal. Quiet, but visibly not healthy. */
+export const DEVICE_CARD_SURFACE_OFFLINE =
+  "border-rose-300/55 bg-rose-50/45 dark:border-rose-500/25 dark:bg-[rgba(50,36,42,0.70)]";
+
+export type DeviceCardSurfaceState =
+  | "connected"
+  | "reachable"
+  | "claimed"
+  | "auth"
+  | "offline"
+  | "default";
+
+export interface DeviceCardSurfaceStateInput {
+  lifecycle?: string | null;
+  reach?: {
+    state?: string | null;
+    unreachable?: boolean | null;
+    verified?: boolean | null;
+  } | null;
+  needsAuth?: boolean | null;
+  probeState?: string | null;
+}
+
+export function deviceCardSurfaceState(input: DeviceCardSurfaceStateInput): DeviceCardSurfaceState {
+  const lifecycle = String(input.lifecycle || "").trim();
+  const reachState = String(input.reach?.state || "").trim();
+  const probeState = String(input.probeState || "").trim();
+  if (input.reach?.unreachable || reachState === "unreachable" || probeState === "unreachable" || lifecycle === "offline") {
+    return "offline";
+  }
+  if (input.needsAuth || lifecycle === "bootstrap" || lifecycle === "yaver-auth-expired" || probeState === "auth-expired") {
+    return "auth";
+  }
+  if (input.reach?.verified || reachState === "reachable" || lifecycle === "connected") {
+    return "reachable";
+  }
+  if (reachState === "claimed" || lifecycle === "ready-to-connect") {
+    return "claimed";
+  }
+  return "default";
+}
+
 /**
  * Surface classes for a device card. Takes the already-computed boolean so the
  * call site is forced to name its evidence (`isBrowserConnectedToDevice(...)`)
  * rather than smuggling in a name/index comparison here.
  */
-export function deviceCardSurfaceClasses(isConnectedDevice: boolean): string {
-  return isConnectedDevice
-    ? DEVICE_CARD_SURFACE_CONNECTED
-    : DEVICE_CARD_SURFACE_DEFAULT;
+export function deviceCardSurfaceClasses(
+  isConnectedDevice: boolean,
+  state: DeviceCardSurfaceState = "default",
+): string {
+  if (isConnectedDevice || state === "connected") return DEVICE_CARD_SURFACE_CONNECTED;
+  switch (state) {
+    case "reachable": return DEVICE_CARD_SURFACE_REACHABLE;
+    case "claimed": return DEVICE_CARD_SURFACE_CLAIMED;
+    case "auth": return DEVICE_CARD_SURFACE_AUTH;
+    case "offline": return DEVICE_CARD_SURFACE_OFFLINE;
+    default: return DEVICE_CARD_SURFACE_DEFAULT;
+  }
 }
 
 // ── Status line ────────────────────────────────────────────────────────────

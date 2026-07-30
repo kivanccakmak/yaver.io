@@ -2,7 +2,10 @@
 // failures. Keep this out of RuntimeLabView so relay-presence routing is not
 // an inline regex that every surface has to rediscover.
 
+import { isRelayCredentialDenyMessage } from "./relayAuth";
+
 export type RuntimeTargetProbeFailureKind =
+  | "relay-auth"
   | "relay-presence"
   | "relay-route"
   | "agent-verb-skew"
@@ -21,6 +24,19 @@ export const RELAY_DEVICE_NOT_CONNECTED_REASON = "connectivity.relay.device_not_
 export function classifyRuntimeTargetProbeFailure(error: string | null | undefined): RuntimeTargetProbeFailurePlan {
   const raw = String(error || "");
   const lower = raw.toLowerCase();
+
+  // The relay refused THIS browser's account relay password before the request
+  // reached the render machine. That is a deterministic credential refresh,
+  // never a coding task: routing this to "Fix with runner" just asks an LLM on
+  // a box it cannot reach to repair a browser-side relay secret.
+  if (isRelayCredentialDenyMessage(raw)) {
+    return {
+      kind: "relay-auth",
+      retry: true,
+      useRunnerFallback: false,
+      showFixWithRunner: false,
+    };
+  }
 
   // An /ops verb the agent has never heard of is VERSION SKEW — the web
   // shipped a call the installed agent predates. Deterministic fix (update

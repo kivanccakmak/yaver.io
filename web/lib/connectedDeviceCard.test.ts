@@ -29,9 +29,14 @@ import { fileURLToPath } from "node:url";
 
 import {
   connectedStatusLine,
+  DEVICE_CARD_SURFACE_AUTH,
+  DEVICE_CARD_SURFACE_CLAIMED,
   DEVICE_CARD_SURFACE_CONNECTED,
   DEVICE_CARD_SURFACE_DEFAULT,
+  DEVICE_CARD_SURFACE_OFFLINE,
+  DEVICE_CARD_SURFACE_REACHABLE,
   deviceCardSurfaceClasses,
+  deviceCardSurfaceState,
   isBrowserConnectedToDevice,
   noteDeviceReachRttMs,
   readDeviceReachRttMs,
@@ -119,16 +124,35 @@ test("reach samples are keyed by deviceId and expire", () => {
 test("surface classes differ, tint both themes, and stay non-shouty", () => {
   assert.equal(deviceCardSurfaceClasses(true), DEVICE_CARD_SURFACE_CONNECTED);
   assert.equal(deviceCardSurfaceClasses(false), DEVICE_CARD_SURFACE_DEFAULT);
+  assert.equal(deviceCardSurfaceClasses(false, "reachable"), DEVICE_CARD_SURFACE_REACHABLE);
+  assert.equal(deviceCardSurfaceClasses(false, "claimed"), DEVICE_CARD_SURFACE_CLAIMED);
+  assert.equal(deviceCardSurfaceClasses(false, "auth"), DEVICE_CARD_SURFACE_AUTH);
+  assert.equal(deviceCardSurfaceClasses(false, "offline"), DEVICE_CARD_SURFACE_OFFLINE);
+  assert.equal(deviceCardSurfaceClasses(true, "offline"), DEVICE_CARD_SURFACE_CONNECTED);
   assert.notEqual(DEVICE_CARD_SURFACE_CONNECTED, DEVICE_CARD_SURFACE_DEFAULT);
+  assert.notEqual(DEVICE_CARD_SURFACE_AUTH, DEVICE_CARD_SURFACE_DEFAULT);
+  assert.notEqual(DEVICE_CARD_SURFACE_OFFLINE, DEVICE_CARD_SURFACE_DEFAULT);
   // Both themes must be styled — a light-only tint is invisible in dark mode.
   assert.ok(/dark:/.test(DEVICE_CARD_SURFACE_CONNECTED), "connected surface must style dark mode");
   assert.ok(/dark:/.test(DEVICE_CARD_SURFACE_DEFAULT), "default surface must style dark mode");
+  assert.ok(/dark:/.test(DEVICE_CARD_SURFACE_AUTH), "auth surface must style dark mode");
+  assert.ok(/dark:/.test(DEVICE_CARD_SURFACE_OFFLINE), "offline surface must style dark mode");
   // Success/brand vocabulary, at low opacity — never a solid alert fill.
   assert.ok(/success/.test(DEVICE_CARD_SURFACE_CONNECTED), "use the theme's success tokens");
   assert.ok(
     !/\bbg-success\b(?!-)/.test(DEVICE_CARD_SURFACE_CONNECTED),
     "a solid success fill is an alert, not an affordance",
   );
+});
+
+test("card surface state follows the row's own lifecycle and reachability", () => {
+  assert.equal(deviceCardSurfaceState({ lifecycle: "connected", reach: { state: "reachable", verified: true } }), "reachable");
+  assert.equal(deviceCardSurfaceState({ lifecycle: "ready-to-connect", reach: { state: "claimed" } }), "claimed");
+  assert.equal(deviceCardSurfaceState({ lifecycle: "bootstrap", reach: { state: "claimed" } }), "auth");
+  assert.equal(deviceCardSurfaceState({ lifecycle: "yaver-auth-expired" }), "auth");
+  assert.equal(deviceCardSurfaceState({ lifecycle: "ready-to-connect", reach: { state: "unreachable", unreachable: true } }), "offline");
+  assert.equal(deviceCardSurfaceState({ lifecycle: "offline" }), "offline");
+  assert.equal(deviceCardSurfaceState({}), "default");
 });
 
 // ── structure — the call site in DevicesView.tsx ───────────────────────────
@@ -153,8 +177,13 @@ test("the connected card is selected by deviceId, not name and not index", () =>
   );
   assert.match(
     block,
-    /deviceCardSurfaceClasses\(isConnectedCard\)/,
-    "the card surface must be driven by the id-derived flag",
+    /deviceCardSurfaceClasses\(isConnectedCard,\s*cardSurfaceState\)/,
+    "the card surface must keep the id-derived connected flag and add row-local status tint",
+  );
+  assert.match(
+    block,
+    /const cardSurfaceState = deviceCardSurfaceState\(\{\s*lifecycle,\s*reach,\s*needsAuth: device\.needsAuth,\s*probeState: device\.probeState,\s*\}\);/,
+    "non-connected card tint must be derived from this row's own lifecycle/reach fields",
   );
 });
 

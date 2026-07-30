@@ -33,6 +33,7 @@ import { classifyTransport, fetchRelayHealth, type TransportInfo } from "@/lib/t
 import {
   connectedStatusLine,
   deviceCardSurfaceClasses,
+  deviceCardSurfaceState,
   isBrowserConnectedToDevice,
   noteDeviceReachRttMs,
   readDeviceReachRttMs,
@@ -3588,6 +3589,12 @@ export default function DevicesView({
             const reach = deriveBrowserReach(device, getLastFailure(device.id));
             const canAct = canBrowserActOnDevice(lifecycle, reach);
             const cta = deviceCtaLabel(lifecycle, reach);
+            const cardSurfaceState = deviceCardSurfaceState({
+              lifecycle,
+              reach,
+              needsAuth: device.needsAuth,
+              probeState: device.probeState,
+            });
             // ── "You are on THIS one." ────────────────────────────────────
             // Keyed on deviceId equality ONLY. Never `device.name` (two agents
             // on one box register the same name — that is what made the user
@@ -3619,7 +3626,7 @@ export default function DevicesView({
             <div
               key={device.id}
               aria-current={isConnectedCard ? "true" : undefined}
-              className={`card flex items-start gap-4 border shadow-sm dark:shadow-[0_18px_40px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.03)] ${deviceCardSurfaceClasses(isConnectedCard)}`}
+              className={`card flex items-start gap-4 border shadow-sm dark:shadow-[0_18px_40px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.03)] ${deviceCardSurfaceClasses(isConnectedCard, cardSurfaceState)}`}
             >
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-500 dark:bg-[rgba(18,19,24,0.92)] dark:text-surface-300">
                 <DeviceIcon
