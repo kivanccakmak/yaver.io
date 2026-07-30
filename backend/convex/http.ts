@@ -2600,6 +2600,10 @@ http.route({
       // tell "no request" from "a request for a version". Absent on an
       // old backend, which older agents correctly read as no request.
       desiredAgentVersion: heartbeatResult?.desiredAgentVersion ?? null,
+      // Present only when devices.heartbeat repaired a stale local device_id
+      // by matching the authenticated owner + stable hardware fingerprint.
+      canonicalDeviceId: heartbeatResult?.canonicalDeviceId ?? null,
+      repairedDeviceIdFrom: heartbeatResult?.repairedDeviceIdFrom ?? null,
     });
   }),
 });

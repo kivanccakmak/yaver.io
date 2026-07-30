@@ -1179,12 +1179,37 @@ export const heartbeat = mutation({
     const session = await validateSessionInternal(ctx, args.tokenHash);
     if (!session) throw new Error("Unauthorized");
 
-    const device = await ctx.db
+    let device = await ctx.db
       .query("devices")
       .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
       .unique();
 
-    if (!device) throw new Error("Device not found");
+    let canonicalDeviceId: string | undefined;
+    let repairedDeviceIdFrom: string | undefined;
+    if (!device && args.hardwareId) {
+      // Snowball guard, 2026-07-30: a box can keep a deleted/stale
+      // config.device_id after duplicate-row cleanup. The token is valid, the
+      // hardware fingerprint is stable, and the user still owns exactly one
+      // surviving row for that hardware, so the product can repair the identity
+      // inside the existing heartbeat mutation instead of burning a new poller
+      // or making the user SSH in. This is deliberately scoped to the same
+      // authenticated user and an unambiguous hardware match; anything else is
+      // a named failure, not a guess.
+      const sameHardware = await ctx.db
+        .query("devices")
+        .withIndex("by_hardwareId", (q) => q.eq("hardwareId", args.hardwareId!))
+        .collect();
+      const ownedMatches = sameHardware.filter((d) => d.userId === session.user._id);
+      if (ownedMatches.length === 1) {
+        device = ownedMatches[0];
+        canonicalDeviceId = device.deviceId;
+        repairedDeviceIdFrom = args.deviceId;
+      } else if (ownedMatches.length > 1) {
+        throw new Error("IDENTITY_DRIFT_AMBIGUOUS: multiple owned device rows match this hardware; choose one from the dashboard before reconnecting");
+      }
+    }
+
+    if (!device) throw new Error("DEVICE_ID_STALE: device row not found and no unambiguous owned hardware match exists");
     if (device.userId !== session.user._id) throw new Error("Unauthorized");
 
     const patch: Record<string, unknown> = {
@@ -1335,7 +1360,7 @@ export const heartbeat = mutation({
     try {
       const managed = await ctx.db
         .query("cloudMachines")
-        .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+        .withIndex("by_deviceId", (q) => q.eq("deviceId", device.deviceId))
         .first();
       if (managed) {
         const cp: Record<string, unknown> = {};
@@ -1394,7 +1419,7 @@ export const heartbeat = mutation({
       const incomingFlight = args.flightEvents.slice(-60);
       const existing = await ctx.db
         .query("deviceFlightEvents")
-        .withIndex("by_device", (q) => q.eq("deviceId", args.deviceId))
+        .withIndex("by_device", (q) => q.eq("deviceId", device.deviceId))
         .collect();
       // Dedup on the event's own identity rather than on arrival order: an
       // agent that retries a heartbeat, or re-sends its buffer after a failed
@@ -1406,7 +1431,7 @@ export const heartbeat = mutation({
         seen.add(key);
         await ctx.db.insert("deviceFlightEvents", {
           userId: device.userId,
-          deviceId: args.deviceId,
+          deviceId: device.deviceId,
           session: ev.session,
           kind: ev.kind,
           detail: ev.detail,
@@ -1419,7 +1444,7 @@ export const heartbeat = mutation({
       // by_device_at yields ascending `at`, so the oldest rows are the prefix.
       const all = await ctx.db
         .query("deviceFlightEvents")
-        .withIndex("by_device_at", (q) => q.eq("deviceId", args.deviceId))
+        .withIndex("by_device_at", (q) => q.eq("deviceId", device.deviceId))
         .collect();
       if (all.length > FLIGHT_EVENT_CAP) {
         for (const row of all.slice(0, all.length - FLIGHT_EVENT_CAP)) {
@@ -1434,7 +1459,7 @@ export const heartbeat = mutation({
     if (args.metricsSamples && args.metricsSamples.length > 0) {
       for (const m of args.metricsSamples) {
         await ctx.db.insert("deviceMetrics", {
-          deviceId: args.deviceId,
+          deviceId: device.deviceId,
           timestamp: m.timestampMs,
           cpuPercent: m.cpuPercent,
           memoryUsedMb: m.memoryUsedMb,
@@ -1446,7 +1471,7 @@ export const heartbeat = mutation({
       const stale = await ctx.db
         .query("deviceMetrics")
         .withIndex("by_deviceId", (q) =>
-          q.eq("deviceId", args.deviceId).lt("timestamp", cutoff)
+          q.eq("deviceId", device.deviceId).lt("timestamp", cutoff)
         )
         .collect();
       for (const entry of stale) {
@@ -1460,13 +1485,13 @@ export const heartbeat = mutation({
     const pendingRescueRow = await ctx.db
       .query("agentRescueCommands")
       .withIndex("by_device_status", (q) =>
-        q.eq("deviceId", args.deviceId).eq("status", "pending")
+        q.eq("deviceId", device.deviceId).eq("status", "pending")
       )
       .first();
     const pendingPublishRow = await ctx.db
       .query("publishJobs")
       .withIndex("by_device_status", (q) =>
-        q.eq("deviceId", args.deviceId).eq("status", "queued")
+        q.eq("deviceId", device.deviceId).eq("status", "queued")
       )
       .first();
 
@@ -1481,6 +1506,8 @@ export const heartbeat = mutation({
       // version rather than a boolean because it's a single field read
       // we already have in hand — no extra query to save.
       desiredAgentVersion: device.desiredAgentVersion ?? null,
+      canonicalDeviceId,
+      repairedDeviceIdFrom,
     };
   },
 });
