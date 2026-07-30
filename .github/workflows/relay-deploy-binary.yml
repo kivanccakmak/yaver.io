@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Relay version to deploy (default = latest in versions.json)"
+        description: "Relay version to deploy. Empty = versions.json relay when released, otherwise newest existing relay/v* release."
         required: false
         default: ""
 
@@ -62,9 +62,24 @@ jobs:
           V='${{ github.event.inputs.version }}'
           if [ -z "$V" ]; then
             V=$(node -e "console.log(JSON.parse(require('fs').readFileSync('versions.json','utf8')).relay)")
+            if ! gh release view "relay/v${V}" --json tagName >/dev/null 2>&1; then
+              FALLBACK=$(gh release list --limit 200 \
+                | awk -F'\t' '$3 ~ /^relay\/v/ { sub(/^relay\/v/, "", $3); print $3; exit }')
+              if [ -z "$FALLBACK" ]; then
+                echo "::error::versions.json relay=$V has no relay/v$V release, and no relay/v* release fallback exists."
+                exit 1
+              fi
+              echo "::warning::versions.json relay=$V has no relay/v$V release; deploying newest existing relay release v$FALLBACK instead."
+              V="$FALLBACK"
+            fi
+          elif ! gh release view "relay/v${V}" --json tagName >/dev/null 2>&1; then
+            echo "::error::Requested relay version v$V has no release relay/v$V."
+            exit 1
           fi
           echo "RELAY_VERSION=$V" >> "$GITHUB_ENV"
           echo "Deploying yaver-relay v$V"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Download release tarball
         run: |
