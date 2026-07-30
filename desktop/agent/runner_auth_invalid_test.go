@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -133,5 +135,33 @@ func TestDetectRunnerRuntimeStatus_OpenCodeOverrideFlipsConfigured(t *testing.T)
 	}
 	if !strings.Contains(got.Warning, "rejected") {
 		t.Fatalf("expected warning to mention rejection, got %q", got.Warning)
+	}
+}
+
+func TestCheckRunnerReadyRejectsWarningOnlyNotReadyStatus(t *testing.T) {
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := filepath.Join(bin, "opencode")
+	if err := os.WriteFile(opencodePath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", home)
+	t.Setenv("GLM_API_KEY", "glm-test")
+	t.Setenv("ZAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	MarkRunnerAuthInvalidReason("opencode", "OpenCode provider rejected the configured model.")
+	defer ClearRunnerAuthInvalid("opencode")
+	err := CheckRunnerReady(GetRunnerConfig("opencode"), t.TempDir())
+	if err == nil {
+		t.Fatal("CheckRunnerReady must reject Ready=false even when the cause is carried in Warning")
+	}
+	if !strings.Contains(err.Error(), "OpenCode provider rejected") {
+		t.Fatalf("CheckRunnerReady error = %q, want warning cause", err.Error())
 	}
 }

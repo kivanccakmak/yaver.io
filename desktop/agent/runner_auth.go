@@ -89,8 +89,14 @@ func CheckRunnerReady(runner RunnerConfig, workDir string) error {
 		return err
 	}
 	status := DetectRunnerRuntimeStatus(runner, workDir)
-	if !status.Ready && strings.TrimSpace(status.Error) != "" {
-		return fmt.Errorf("%s", status.Error)
+	if !status.Ready {
+		if msg := strings.TrimSpace(status.Error); msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+		if msg := strings.TrimSpace(status.Warning); msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+		return fmt.Errorf("%s is not ready", firstNonEmpty(strings.TrimSpace(runner.Name), strings.TrimSpace(runner.RunnerID), strings.TrimSpace(runner.Command), "runner"))
 	}
 	if err := checkRunnerWorkDirWritable(runner, workDir); err != nil {
 		return err
