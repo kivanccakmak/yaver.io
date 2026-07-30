@@ -626,6 +626,38 @@ func TestCloseSession_IsIdempotentAndDoesNotPanic(t *testing.T) {
 	mgr.CloseSession("rr_unknown") // should also be a no-op
 }
 
+func TestRemoteRuntimeEventsBacklogUntilViewerChannelOpens(t *testing.T) {
+	live := &remoteRuntimeLiveState{sessionID: "rr_events"}
+
+	live.sendEventJSON(map[string]any{"type": "browser-log", "message": "early"})
+
+	live.mu.Lock()
+	if got := len(live.eventBacklog); got != 1 {
+		t.Fatalf("event backlog length = %d, want 1", got)
+	}
+	if live.eventBacklog[0]["message"] != "early" {
+		t.Fatalf("backlogged event = %#v", live.eventBacklog[0])
+	}
+	live.mu.Unlock()
+}
+
+func TestRemoteRuntimeEventsBacklogIsBounded(t *testing.T) {
+	live := &remoteRuntimeLiveState{sessionID: "rr_events"}
+
+	for i := 0; i < remoteRuntimeEventBacklogMax+10; i++ {
+		live.sendEventJSON(map[string]any{"type": "browser-log", "seq": i})
+	}
+
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	if got := len(live.eventBacklog); got != remoteRuntimeEventBacklogMax {
+		t.Fatalf("event backlog length = %d, want %d", got, remoteRuntimeEventBacklogMax)
+	}
+	if live.eventBacklog[0]["seq"] != 10 {
+		t.Fatalf("backlog did not discard oldest events first: first=%#v", live.eventBacklog[0])
+	}
+}
+
 // Compile-time fixture: a successful WebRTC handshake actually opens
 // the data channels. We don't use this in the main flow because real
 // loopback DTLS makes tests flaky in CI, but we keep the helper around

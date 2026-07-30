@@ -12,7 +12,7 @@
 //   remote box: Mac with Xcode/simulators
 //   client: Ubuntu Chromium
 
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { accessSync, constants, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -227,11 +227,27 @@ async function waitBrowserLogs(page, needles, ms) {
 
 let sessionID = "";
 const server = await serveReceiver();
-const browser = await chromium.launch({
-  headless: true,
-  executablePath: process.env.YAVER_CHROMIUM_PATH || undefined,
-  args: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"],
-});
+const browserExecutable = (process.env.YAVER_CHROMIUM_PATH || "").trim();
+if (browserExecutable) {
+  try {
+    accessSync(browserExecutable, constants.X_OK);
+  } catch (e) {
+    console.log(`VERDICT=NAMED · ${TARGET}:browser-executable:${browserExecutable}:${e?.code || "not-executable"}`);
+    process.exit(8);
+  }
+}
+let browser;
+try {
+  browser = await chromium.launch({
+    headless: true,
+    executablePath: browserExecutable || undefined,
+    args: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"],
+  });
+} catch (e) {
+  const message = String(e?.message || e).split(/\r?\n/)[0].slice(0, 240);
+  console.log(`VERDICT=NAMED · ${TARGET}:browser-launch:${message}`);
+  process.exit(8);
+}
 const page = await browser.newPage({
   viewport: { width: 1280, height: 800 },
   ...(PLAYWRIGHT_VIDEO ? { recordVideo: { dir: join(OUT, "videos"), size: { width: 1280, height: 800 } } } : {}),
@@ -318,7 +334,10 @@ try {
   await browser.close().catch(() => {});
   server.close();
   if (sessionID) {
-    const del = await agent(`/remote-runtime/sessions/${sessionID}`, { method: "DELETE" }).catch((e) => ({ res: { status: 0 }, text: String(e) }));
+    const del = await agent(`/remote-runtime/sessions/${sessionID}`, {
+      method: "DELETE",
+      signal: AbortSignal.timeout(5000),
+    }).catch((e) => ({ res: { status: 0 }, text: String(e) }));
     console.log(`delete HTTP ${del.res.status}`);
   }
   if (mp4) console.log(`recording ${mp4}`);

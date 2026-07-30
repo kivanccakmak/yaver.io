@@ -68,6 +68,7 @@ type remoteRuntimeLiveState struct {
 	streamCancel context.CancelFunc
 	lastFrame    []byte
 	lastFrameAt  time.Time
+	eventBacklog []map[string]any
 
 	// lease is the P5 single-writer control lease. Nil-check-safe:
 	// callers use ensureLease() which lazily inits with the default
@@ -116,6 +117,7 @@ type remoteRuntimeControlRequest struct {
 const remoteRuntimeMaxJPEGDataChannelBytes = 60 * 1024
 const remoteRuntimeJPEGDataChannelChunkBytes = 12 * 1024
 const remoteRuntimeFrameCaptureBudget = 20 * time.Second
+const remoteRuntimeEventBacklogMax = 50
 
 func (m *RemoteRuntimeManager) Attach(sessionID string) (RemoteRuntimeSession, error) {
 	session, ok := m.Get(sessionID)
@@ -472,6 +474,7 @@ func (m *RemoteRuntimeManager) ApplyWebRTCOffer(sessionID string, offer webrtc.S
 	// the viewer whether to expect a video track (rtp-h264-v1) or
 	// JPEG payloads on framesDC (datachannel-jpeg-v1).
 	eventsDC.OnOpen(func() {
+		live.flushEventBacklog()
 		live.sendEventJSON(map[string]any{
 			"type":      "ready",
 			"sessionId": sessionID,
@@ -623,25 +626,60 @@ func (live *remoteRuntimeLiveState) sendEventJSON(payload map[string]any) {
 	live.mu.Lock()
 	channels := make([]*webrtc.DataChannel, 0, len(live.peers))
 	for _, p := range live.peers {
-		if p != nil && p.eventsDC != nil {
+		if p != nil && p.eventsDC != nil && p.eventsDC.ReadyState() == webrtc.DataChannelStateOpen {
 			channels = append(channels, p.eventsDC)
 		}
 	}
-	live.mu.Unlock()
-
 	if len(channels) == 0 {
+		live.queueEventLocked(payload)
+		live.mu.Unlock()
 		return
 	}
+	live.mu.Unlock()
+
 	buf, err := json.Marshal(payload)
 	if err != nil {
 		return
 	}
 	text := string(buf)
 	for _, dc := range channels {
-		if dc.ReadyState() != webrtc.DataChannelStateOpen {
+		_ = dc.SendText(text)
+	}
+}
+
+func (live *remoteRuntimeLiveState) queueEventLocked(payload map[string]any) {
+	live.eventBacklog = append(live.eventBacklog, payload)
+	if overflow := len(live.eventBacklog) - remoteRuntimeEventBacklogMax; overflow > 0 {
+		copy(live.eventBacklog, live.eventBacklog[overflow:])
+		live.eventBacklog = live.eventBacklog[:remoteRuntimeEventBacklogMax]
+	}
+}
+
+func (live *remoteRuntimeLiveState) flushEventBacklog() {
+	live.mu.Lock()
+	channels := make([]*webrtc.DataChannel, 0, len(live.peers))
+	for _, p := range live.peers {
+		if p != nil && p.eventsDC != nil && p.eventsDC.ReadyState() == webrtc.DataChannelStateOpen {
+			channels = append(channels, p.eventsDC)
+		}
+	}
+	if len(channels) == 0 || len(live.eventBacklog) == 0 {
+		live.mu.Unlock()
+		return
+	}
+	backlog := append([]map[string]any(nil), live.eventBacklog...)
+	live.eventBacklog = nil
+	live.mu.Unlock()
+
+	for _, payload := range backlog {
+		buf, err := json.Marshal(payload)
+		if err != nil {
 			continue
 		}
-		_ = dc.SendText(text)
+		text := string(buf)
+		for _, dc := range channels {
+			_ = dc.SendText(text)
+		}
 	}
 }
 

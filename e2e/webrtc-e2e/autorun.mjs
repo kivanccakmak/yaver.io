@@ -128,10 +128,12 @@ function parseVerdict(stdout, fallbackLabel) {
 }
 
 function parseRunResult(res, label) {
+  const parsed = parseVerdict(res.stdout || "", label);
+  if (parsed.detail && !parsed.detail.startsWith("no verdict line")) return parsed;
   if (res.error?.code === "ETIMEDOUT") {
     return { verdict: "SILENT", detail: `target timed out after ${TARGET_TIMEOUT_MS}ms: ${label}` };
   }
-  return parseVerdict(res.stdout || "", label);
+  return parsed;
 }
 
 function copyHarnessToClient() {

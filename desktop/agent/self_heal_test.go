@@ -140,3 +140,37 @@ func TestHasReconcilableDrift_gates(t *testing.T) {
 		})
 	}
 }
+
+func TestStartupSelfHealMayApplyRejectsGoRunTempBinary(t *testing.T) {
+	path := filepath.Join(os.TempDir(), "go-build123", "b001", "exe", "agent")
+	rep := &SelfHealReport{RunningBinary: YaverInstall{Path: path}}
+
+	ok, reason := startupSelfHealMayApply(rep)
+	if ok {
+		t.Fatal("startup self-heal must not apply from a go run temp binary")
+	}
+	if reason == "" {
+		t.Fatal("expected a report-only reason")
+	}
+}
+
+func TestStartupSelfHealMayApplyRejectsNonYaverExecutableName(t *testing.T) {
+	rep := &SelfHealReport{RunningBinary: YaverInstall{Path: "/opt/yaver-dev/agent"}}
+
+	ok, reason := startupSelfHealMayApply(rep)
+	if ok {
+		t.Fatal("startup self-heal must not apply from a dev executable named agent")
+	}
+	if reason == "" {
+		t.Fatal("expected a report-only reason")
+	}
+}
+
+func TestStartupSelfHealMayApplyAllowsReleaseShapedBinary(t *testing.T) {
+	rep := &SelfHealReport{RunningBinary: YaverInstall{Path: "/Users/test/.yaver/bin/1.99.389/darwin-arm64/yaver"}}
+
+	ok, reason := startupSelfHealMayApply(rep)
+	if !ok {
+		t.Fatalf("startup self-heal should apply from release-shaped yaver binary: %s", reason)
+	}
+}

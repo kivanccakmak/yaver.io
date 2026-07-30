@@ -43,6 +43,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,8 +53,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"crypto/sha256"
-	"encoding/hex"
 	"runtime"
 	"sort"
 	"strings"
@@ -719,6 +719,10 @@ func runSelfHealOnStartup() {
 		if rep.NeedsSelfPull {
 			log.Printf("[self-heal]   - GitHub has v%s; canonical is v%s. Run `yaver self heal --apply --self-update`.", rep.LatestRelease, rep.Canonical.Version)
 		}
+		if ok, reason := startupSelfHealMayApply(rep); !ok {
+			log.Printf("[self-heal] report-only on this boot: %s", reason)
+			return
+		}
 
 		// Auto-reconcile. Restricted to siblings that are: writable, not
 		// managed (apt/brew would just revert us on next upgrade), not
@@ -736,6 +740,30 @@ func runSelfHealOnStartup() {
 			log.Printf("[self-heal] could not reconcile: %s", errMsg)
 		}
 	}()
+}
+
+func startupSelfHealMayApply(rep *SelfHealReport) (bool, string) {
+	if rep == nil {
+		return false, "no self-heal report"
+	}
+	running := strings.TrimSpace(rep.RunningBinary.Path)
+	if running == "" {
+		return false, "running binary path is unknown"
+	}
+	real := running
+	if resolved, err := filepath.EvalSymlinks(running); err == nil {
+		real = resolved
+	}
+	base := strings.ToLower(filepath.Base(real))
+	if base != "yaver" && base != "yaver.exe" {
+		return false, fmt.Sprintf("running executable %q is not a release-shaped yaver binary", real)
+	}
+	if tmp := strings.TrimSpace(os.TempDir()); tmp != "" {
+		if rel, err := filepath.Rel(filepath.Clean(tmp), filepath.Clean(real)); err == nil && rel != "." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != ".." {
+			return false, fmt.Sprintf("running executable %q is under the OS temp directory", real)
+		}
+	}
+	return true, ""
 }
 
 // hasReconcilableDrift returns true when at least one sibling install
