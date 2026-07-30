@@ -5653,11 +5653,26 @@ http.route({
 
 // ── Platform Config ──────────────────────────────────────────────────
 
-/** GET /config — Public platform config (relay servers, runners, models). No auth required. */
+/** GET /config — Platform config (relay servers, runners, models).
+ *
+ * No auth: public relay metadata only.
+ * Bearer auth: same public metadata plus the caller's per-user relay password
+ * on relay server entries, so browser dashboards can reach owned boxes through
+ * /d/<deviceId>/... without ever receiving the platform relay secret.
+ */
 http.route({
   path: "/config",
   method: "GET",
-  handler: httpAction(async (ctx) => {
+  handler: httpAction(async (ctx, request) => {
+    let userRelayUrl: string | undefined;
+    let userRelayPassword: string | undefined;
+    const authHeader = request.headers.get("Authorization");
+    if (authHeader?.startsWith("Bearer ")) {
+      const tokenHash = await sha256Hex(authHeader.slice(7));
+      const settings = await ctx.runQuery(api.userSettings.getByToken, { tokenHash });
+      userRelayUrl = typeof settings?.relayUrl === "string" ? settings.relayUrl : undefined;
+      userRelayPassword = typeof settings?.relayPassword === "string" ? settings.relayPassword : undefined;
+    }
     const [config, runners, models] = await Promise.all([
       ctx.runQuery(internal.platformConfig.getClientConfig, {}),
       ctx.runQuery(api.aiRunners.list, {}),
@@ -5672,6 +5687,10 @@ http.route({
           ? parsed.map((server) => {
               if (!server || typeof server !== "object" || Array.isArray(server)) return server;
               const { password: _password, ...publicServer } = server as Record<string, unknown>;
+              const httpUrl = typeof publicServer.httpUrl === "string" ? publicServer.httpUrl : "";
+              if (userRelayPassword && (!userRelayUrl || userRelayUrl === httpUrl)) {
+                return { ...publicServer, password: userRelayPassword };
+              }
               return publicServer;
             })
           : [];
@@ -5695,8 +5714,7 @@ http.route({
         headers: {
           "Content-Type": "application/json",
           "Access-Control-Allow-Origin": "*",
-          // Cache for 5 minutes — config doesn't change often
-          "Cache-Control": "public, max-age=300",
+          "Cache-Control": userRelayPassword ? "private, no-store" : "public, max-age=300",
         },
       }
     );
