@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { agentClient, type InfraSummary } from "@/lib/agent-client";
+import { ENABLE_GUEST_FEATURES } from "@/lib/launchFlags";
 
 function fmtBytes(n?: number) {
   if (!n) return "0 B";
@@ -218,14 +219,14 @@ export default function InfraView() {
                 summary.sandbox.enabledMode === "host"
                   ? "All tasks"
                   : summary.sandbox.enabledMode === "guests"
-                    ? "Guests only"
+                    ? ENABLE_GUEST_FEATURES ? "Guests only" : "Direct host"
                     : "Direct host"
               }
               sub={
                 summary.sandbox.enabledMode === "host"
                   ? "all agent tasks isolated"
                   : summary.sandbox.enabledMode === "guests"
-                    ? "shared infra isolated"
+                    ? ENABLE_GUEST_FEATURES ? "shared infra isolated" : "tasks run on host"
                     : "tasks run on host"
               }
             />
@@ -240,7 +241,9 @@ export default function InfraView() {
             {summary.sandbox.recommendedReason ? ` · ${summary.sandbox.recommendedReason}` : ""}
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
-            <button onClick={() => sandboxQuickstart("guests")} disabled={sandboxBusy !== null || !summary.sandbox.docker} className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300 disabled:opacity-50">Enable guest isolation</button>
+            {ENABLE_GUEST_FEATURES ? (
+              <button onClick={() => sandboxQuickstart("guests")} disabled={sandboxBusy !== null || !summary.sandbox.docker} className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300 disabled:opacity-50">Enable guest isolation</button>
+            ) : null}
             <button onClick={() => sandboxQuickstart("host")} disabled={sandboxBusy !== null || !summary.sandbox.docker} className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-700 dark:text-indigo-300 disabled:opacity-50">Containerize all tasks</button>
             {!summary.sandbox.imageReady && summary.sandbox.docker && (
               <button onClick={buildSandbox} disabled={sandboxBusy !== null} className="rounded-xl border border-surface-700 bg-surface-900 px-3 py-2 text-sm text-surface-300 disabled:opacity-50">Build image</button>
@@ -270,15 +273,17 @@ export default function InfraView() {
           </div>
         </Section>
 
-        <Section title="Sharing" subtitle="Host-side guest access posture">
-          <div className="grid gap-3 md:grid-cols-2">
-            <Metric label="Accepted guests" value={`${summary.sharing.acceptedGuests}`} sub="active shared access" />
-            <Metric label="Pending invites" value={`${summary.sharing.pendingGuests}`} sub="awaiting acceptance" />
-          </div>
-          <div className="mt-3 rounded-2xl border border-surface-800 bg-surface-950/60 p-4 text-sm text-surface-400">
-            Mobile guest controls live under the existing Guest Access screen. MCP now sees this same infra posture through `infra_summary`.
-          </div>
-        </Section>
+        {ENABLE_GUEST_FEATURES ? (
+          <Section title="Sharing" subtitle="Host-side guest access posture">
+            <div className="grid gap-3 md:grid-cols-2">
+              <Metric label="Accepted guests" value={`${summary.sharing.acceptedGuests}`} sub="active shared access" />
+              <Metric label="Pending invites" value={`${summary.sharing.pendingGuests}`} sub="awaiting acceptance" />
+            </div>
+            <div className="mt-3 rounded-2xl border border-surface-800 bg-surface-950/60 p-4 text-sm text-surface-400">
+              Mobile guest controls live under the existing Guest Access screen. MCP now sees this same infra posture through `infra_summary`.
+            </div>
+          </Section>
+        ) : null}
       </div>
 
       <Section title="Network" subtitle="Local interfaces visible to the agent">

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 
 const root = join(process.cwd(), "web");
 
-test("DevicesView hides duplicate needs-auth siblings only behind role-bearing rows", () => {
+test("DevicesView collapses duplicate host rows to the operational row", () => {
   const src = readFileSync(join(root, "components/dashboard/DevicesView.tsx"), "utf8");
   const duplicateBlock = src.slice(
     src.indexOf("function duplicateHostKey"),
@@ -19,17 +19,32 @@ test("DevicesView hides duplicate needs-auth siblings only behind role-bearing r
   );
   assert.match(
     src,
-    /const hasRoleBearingSibling = group\.some\(\s*\(device\) => !device\.needsAuth && roleRank\(device\.id\) < 5,/s,
-    "a duplicate sibling may be hidden only when a non-auth sibling carries a product role",
+    /function operationRank\(device: Pick<Device, "online" \| "needsAuth" \| "workspaceLive" \| "peerState" \| "probeState" \| "lastTunnelEvent">\)/,
+    "duplicate resolution must rank rows by the operation that actually works",
   );
   assert.match(
     src,
-    /if \(device\.needsAuth && roleRank\(device\.id\) >= 5\) hidden\.add\(device\.id\);/,
-    "the role-bearing row must remain visible even if an auth-recovery duplicate exists",
+    /operationRank\(a\) - operationRank\(b\)/,
+    "a stale primary row must not hide a reachable replacement for the same host",
   );
   assert.doesNotMatch(
     duplicateBlock,
     /agentVersion/,
     "duplicate resolution must not prefer a row by agent version",
+  );
+});
+
+test("dashboard sidebar uses the same operational duplicate ranking", () => {
+  const src = readFileSync(join(root, "app/dashboard/page.tsx"), "utf8");
+
+  assert.match(
+    src,
+    /function operationRank\(device: Pick<Device, "online" \| "needsAuth" \| "workspaceLive" \| "peerState" \| "probeState" \| "lastTunnelEvent">\)/,
+    "sidebar duplicate resolution must share the operation-first ranking",
+  );
+  assert.match(
+    src,
+    /operationRank\(a\) - operationRank\(b\)/,
+    "sidebar must keep the reachable duplicate instead of a stale role row",
   );
 });

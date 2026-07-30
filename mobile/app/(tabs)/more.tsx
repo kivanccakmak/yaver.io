@@ -35,6 +35,7 @@ import {
 } from "../../src/lib/guests";
 import { useAuth } from "../../src/context/AuthContext";
 import { getUserSettings } from "../../src/lib/auth";
+import { ENABLE_GUEST_FEATURES } from "../../src/lib/launchFlags";
 
 // Optional-tool ids that are owner-only (experimental robotics / lab hardware).
 // Hidden from non-owners regardless of the optional-tool preference.
@@ -1972,6 +1973,7 @@ export function GitProviderSection({ c }: { c: ReturnType<typeof useColors> }) {
 // ── Guest Access Section ──────────────────────────────────────────
 
 export function GuestAccessSection({ c }: { c: ReturnType<typeof useColors> }) {
+  if (!ENABLE_GUEST_FEATURES) return null;
   const { token } = useAuth();
   const { guestInvitations, acceptGuestInvitation, refreshDevices, connectionStatus } = useDevice();
   const connected = connectionStatus === "connected";
@@ -2962,12 +2964,12 @@ export default function MoreScreen() {
 
           <Pressable
             style={[s.quickCard, { backgroundColor: c.bgCard, borderColor: c.border }]}
-            onPress={connected ? (() => router.navigate("/(tabs)/guests" as any)) : handleTutorials}
+            onPress={handleTutorials}
           >
-            <Text style={[s.quickIcon, { color: c.textMuted }]}>{connected ? "\u2192" : "\u2302"}</Text>
-            <Text style={[s.quickLabel, { color: c.textPrimary }]}>{connected ? "Guests" : "Tutorials"}</Text>
+            <Text style={[s.quickIcon, { color: c.textMuted }]}>{"\u2302"}</Text>
+            <Text style={[s.quickLabel, { color: c.textPrimary }]}>Tutorials</Text>
             <Text style={[s.quickDesc, { color: c.textMuted }]} numberOfLines={2}>
-              {connected ? "Invite others" : "Setup and guides"}
+              Setup and guides
             </Text>
           </Pressable>
         </View>

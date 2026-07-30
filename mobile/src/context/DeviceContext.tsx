@@ -25,6 +25,7 @@ import { getConvexSiteUrl, getLocalSecret, getUserSettings, saveUserSettings, LO
 import { approveDeviceCode } from "../lib/deviceCodeApprove";
 import { fetchPendingDeviceApprovals, pendingApprovalDeviceLabel } from "../lib/pendingApprovals";
 import { appLog } from "../lib/logger";
+import { ENABLE_GUEST_FEATURES } from "../lib/launchFlags";
 import { sameDeviceList } from "../lib/deviceListEquality";
 import { beaconListener, type DiscoveredDevice } from "../lib/beacon";
 import { fetchPairInfo, submitPair } from "../lib/pairDevice";
@@ -1326,7 +1327,8 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
       if (devicesRes.ok) {
         const data = await devicesRes.json();
-        const raw = data.devices || data || [];
+        const rawAll = data.devices || data || [];
+        const raw = ENABLE_GUEST_FEATURES ? rawAll : rawAll.filter((d: any) => !Boolean(d?.isGuest));
         appLog("info", `Found ${raw.length} device(s) for ${user?.email || user?.id || "unknown-user"}`);
         setDeviceListError(null);
         const connectedDeviceId = quicClient.isConnected ? activeDevice?.id : null;
@@ -1403,11 +1405,11 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
             priorityMode: d.priorityMode,
             useHostApiKeys: d.useHostApiKeys,
             allowGuestProvidedApiKeys: d.allowGuestProvidedApiKeys,
-            sharedWithGuests: d.sharedWithGuests,
+            sharedWithGuests: ENABLE_GUEST_FEATURES ? d.sharedWithGuests : undefined,
             sharesAllProjects: d.sharesAllProjects,
-            sharedProjects: Array.isArray(d.sharedProjects) ? d.sharedProjects : undefined,
+            sharedProjects: ENABLE_GUEST_FEATURES && Array.isArray(d.sharedProjects) ? d.sharedProjects : undefined,
             sharesAllRunners: d.sharesAllRunners,
-            sharedRunners: Array.isArray(d.sharedRunners) ? d.sharedRunners : undefined,
+            sharedRunners: ENABLE_GUEST_FEATURES && Array.isArray(d.sharedRunners) ? d.sharedRunners : undefined,
             sessionBinding: d.sessionBinding,
             deviceClass: d.deviceClass,
             edgeProfile: d.edgeProfile,
@@ -1499,16 +1501,20 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // Fetch pending guest invitations
-      try {
-        const hosts = await fetchGuestHosts(token);
-        setGuestInvitations(hosts.pending || []);
-        // `active` used to be dropped here, which is why mobile had no
-        // active-hosts surface at all — you could accept a share on the phone
-        // but never leave one. Web drives its leave UI off exactly this array.
-        setActiveHosts(hosts.active || []);
-      } catch {
-        // Non-critical — don't fail device refresh
+      if (ENABLE_GUEST_FEATURES) {
+        try {
+          const hosts = await fetchGuestHosts(token);
+          setGuestInvitations(hosts.pending || []);
+          // `active` used to be dropped here, which is why mobile had no
+          // active-hosts surface at all — you could accept a share on the phone
+          // but never leave one. Web drives its leave UI off exactly this array.
+          setActiveHosts(hosts.active || []);
+        } catch {
+          // Non-critical — don't fail device refresh
+        }
+      } else {
+        setGuestInvitations([]);
+        setActiveHosts([]);
       }
     } catch (e) {
       appLog("error", `refreshDevices error: ${e}`);

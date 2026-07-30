@@ -33,6 +33,7 @@ import {
   type PublicUserLookup,
 } from "../../src/lib/guests";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
+import { ENABLE_GUEST_FEATURES } from "../../src/lib/launchFlags";
 
 // Guest access — one mobile screen that covers host (my guests) and guest
 // (join as guest) flows. Hosts can invite by email OR by public user id,
@@ -93,6 +94,11 @@ async function fetchProjectsFromDevice(
 }
 
 export default function GuestsScreen() {
+  if (!ENABLE_GUEST_FEATURES) return null;
+  return <GuestsEnabledScreen />;
+}
+
+function GuestsEnabledScreen() {
   const c = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();

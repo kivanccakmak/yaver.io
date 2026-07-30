@@ -148,7 +148,6 @@ export default function DevelopersPage() {
               ["pr-rules", "Pull Request Rules"],
               ["feedback-sdk", "Feedback SDK & Test Loop"],
               ["unity", "Unity Developer Cases"],
-              ["guest-access", "Guest Access & Config"],
               ["sdk-token-security", "SDK Token Security"],
               ["sdk", "SDK — Embed Yaver"],
               ["project-wizard", "Project Wizard & SaaS Starter"],
@@ -317,7 +316,7 @@ export default function DevelopersPage() {
               {
                 title: "1. Mobile App (yaver.io)",
                 install: "App Store / Play Store",
-                desc: "Native container app for testing third-party RN apps. Controls AI agents from your phone (tasks, feedback, hot reload). Direct LAN + relay connections. Guest code acceptance for collaboration.",
+                desc: "Native container app for testing third-party RN apps. Controls AI agents from your phone (tasks, feedback, hot reload). Direct LAN + relay connections for your own devices.",
               },
               {
                 title: "2. Go Agent (yaver)",
@@ -332,7 +331,7 @@ export default function DevelopersPage() {
               {
                 title: "4. Web Dashboard (yaver.io/dashboard)",
                 install: "No install — open in browser",
-                desc: "Browser-based workspace. Same features as the desktop app but runs entirely in the browser. Always connects via relay (browsers cannot access localhost). OAuth login, guest code for collaboration.",
+                desc: "Browser-based workspace. Same features as the desktop app but runs entirely in the browser. Always connects via relay because browsers cannot use the native LAN beacon.",
               },
               {
                 title: "5. Feedback SDK",
@@ -2650,105 +2649,6 @@ CLI Agent ◄──QUIC──────────────── Relay (:
               Feedback SDK docs
             </Link>{" "}
             for quick start, API reference, agent integration, and configuration options.
-          </Prose>
-        </section>
-
-        {/* ─── Guest Access & Config ─── */}
-        <section className="mb-20">
-          <SectionHeading id="guest-access">Guest Access &amp; Config</SectionHeading>
-          <Prose>
-            Share your machine with anyone &mdash; no team or subscription needed.
-            Invite by email, they accept from the Yaver app. Guests can run tasks
-            and use dev server but cannot access shell, vault, or sessions.
-          </Prose>
-          <Terminal title="Guest Management">
-            <Comment># Invite a guest</Comment>
-            <Cmd>yaver guests invite cousin@gmail.com</Cmd>
-            <Output>Invitation sent. Invite code: K7WP3N</Output>
-            <Divider />
-            <Comment># Configure limits</Comment>
-            <Cmd>yaver guests config cousin@gmail.com limit=3600 mode=scheduled</Cmd>
-            <Output>Config updated for cousin@gmail.com</Output>
-            <Divider />
-            <Comment># Restrict to specific runners</Comment>
-            <Cmd>yaver guests config cousin@gmail.com runners=claude,codex</Cmd>
-            <Output>Config updated for cousin@gmail.com</Output>
-            <Divider />
-            <Comment># View usage stats</Comment>
-            <Cmd>yaver guests usage</Cmd>
-            <Output>GUEST                           NAME                  SECONDS</Output>
-            <Output>cousin@gmail.com                Cousin                1842</Output>
-            <Divider />
-            <Comment># List all guests</Comment>
-            <Cmd>yaver guests list</Cmd>
-            <Divider />
-            <Comment># Revoke access</Comment>
-            <Cmd>yaver guests remove cousin@gmail.com</Cmd>
-          </Terminal>
-          <Prose>
-            <strong>Config options:</strong>
-          </Prose>
-          <div className="overflow-x-auto my-4">
-            <table className="w-full text-sm text-left text-surface-300">
-              <thead className="text-xs text-surface-400 uppercase border-b border-surface-700">
-                <tr>
-                  <th className="px-4 py-2">Setting</th>
-                  <th className="px-4 py-2">Values</th>
-                  <th className="px-4 py-2">Default</th>
-                  <th className="px-4 py-2">Description</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-surface-800">
-                <tr>
-                  <td className="px-4 py-2 font-mono text-surface-200">limit</td>
-                  <td className="px-4 py-2">seconds/day</td>
-                  <td className="px-4 py-2">unlimited</td>
-                  <td className="px-4 py-2">Daily task-seconds cap</td>
-                </tr>
-                <tr>
-                  <td className="px-4 py-2 font-mono text-surface-200">mode</td>
-                  <td className="px-4 py-2">always, idle-only, scheduled</td>
-                  <td className="px-4 py-2">always</td>
-                  <td className="px-4 py-2">When the guest can use the machine</td>
-                </tr>
-                <tr>
-                  <td className="px-4 py-2 font-mono text-surface-200">runners</td>
-                  <td className="px-4 py-2">comma-separated IDs</td>
-                  <td className="px-4 py-2">all</td>
-                  <td className="px-4 py-2">Which AI runners the guest can use</td>
-                </tr>
-                <tr>
-                  <td className="px-4 py-2 font-mono text-surface-200">preset</td>
-                  <td className="px-4 py-2">machine-only, machine-with-host-keys, desktop-control, desktop-control-with-host-keys</td>
-                  <td className="px-4 py-2">machine-only</td>
-                  <td className="px-4 py-2">High-level share mode for coding-only vs host-key vs future remote desktop sessions</td>
-                </tr>
-                <tr>
-                  <td className="px-4 py-2 font-mono text-surface-200">tunnels</td>
-                  <td className="px-4 py-2">true, false</td>
-                  <td className="px-4 py-2">false</td>
-                  <td className="px-4 py-2">Allow the guest to use host-approved local forwarded endpoints such as DB/devserver/VNC views</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <Prose>
-            Config (limits, runners, usage mode) syncs via Convex. Project access
-            is managed P2P on each agent. The agent checks guest limits on every
-            request and tracks usage locally, flushing to Convex every 60 seconds.
-          </Prose>
-          <Prose>
-            For guest project slicing, the backend stores only the selected
-            project names attached to that guest grant/config so web, mobile,
-            and CLI can render the same allowlist. It does not store repo
-            contents, source files, prompts, task output, or logs for this
-            feature.
-          </Prose>
-          <Prose>
-            <strong>API endpoints:</strong> <code>GET/POST /guests/config</code> (agent),{" "}
-            <code>GET /guests/usage</code> (agent).{" "}
-            <strong>MCP tools:</strong> <code>guest_config</code>,{" "}
-            <code>guest_usage</code>.
           </Prose>
         </section>
 

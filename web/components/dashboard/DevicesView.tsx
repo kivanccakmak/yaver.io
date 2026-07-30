@@ -11,7 +11,7 @@ import { RecycleBoxDialog } from "@/components/dashboard/RecycleBoxDialog";
 import { DevicePowerModal } from "@/components/dashboard/DevicePowerModal";
 import { ManagedCloudSummary } from "@/components/dashboard/ManagedCloudPanel";
 import WakeProgress, { ParkedSummary } from "@/components/dashboard/WakeProgress";
-import { HIDE_PAID_UI } from "@/lib/launchFlags";
+import { ENABLE_GUEST_FEATURES, HIDE_PAID_UI } from "@/lib/launchFlags";
 import { CONVEX_URL } from "@/lib/constants";
 import { agentClient, AgentClient, isRunnerBrowserAuthTerminal, requestAgentUpdateViaConvex, type AgentUpdateStatus, type ConnectAttemptDiagnostic, type OpenCodeConfigSummary, type OpenCodeModelSummary, type OpenCodeProviderSummary, type RunnerBrowserAuthSession, type RunnerTestResult } from "@/lib/agent-client";
 import { runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
@@ -415,6 +415,20 @@ function duplicateHostKey(device: Pick<Device, "isGuest" | "platform" | "name">)
   const name = String(device.name || "").trim().toLowerCase().replace(/\.local$/, "");
   if (!platform || !name) return null;
   return `${platform}:${name}`;
+}
+
+function stableAliasRank(device: Pick<Device, "alias">): number {
+  const alias = String(device.alias || "").trim().toLowerCase();
+  if (!alias) return 1;
+  return /-\d+$/.test(alias) ? 2 : 0;
+}
+
+function operationRank(device: Pick<Device, "online" | "needsAuth" | "workspaceLive" | "peerState" | "probeState" | "lastTunnelEvent">): number {
+  if (device.workspaceLive) return 0;
+  if (device.probeState === "ok") return 1;
+  if (device.online || device.peerState === "online" || device.lastTunnelEvent?.online === true) return 2;
+  if (!device.needsAuth) return 3;
+  return 4;
 }
 
 function formatRunnerChipLabel(runner: string): string {
@@ -1247,6 +1261,7 @@ function sharedGuestLabels(device: Pick<Device, "sharedGuests">): string[] {
 }
 
 function deviceShareSummary(device: Pick<Device, "isGuest" | "hostName" | "sharedWithGuests" | "sharedGuests" | "sharesAllProjects" | "sharedProjects" | "sharedRunners" | "runners">) {
+  if (!ENABLE_GUEST_FEATURES) return null;
   const hasSharedState = device.isGuest || device.sharedWithGuests;
   if (!hasSharedState) return null;
   const sharedProjects = Array.isArray(device.sharedProjects) ? device.sharedProjects.filter(Boolean) : [];
@@ -3357,12 +3372,16 @@ export default function DevicesView({
     const hidden = new Set<string>();
     for (const group of byHost.values()) {
       if (group.length < 2) continue;
-      const hasRoleBearingSibling = group.some(
-        (device) => !device.needsAuth && roleRank(device.id) < 5,
-      );
-      if (!hasRoleBearingSibling) continue;
+      const canonical = [...group].sort(
+        (a, b) =>
+          operationRank(a) - operationRank(b) ||
+          roleRank(a.id) - roleRank(b.id) ||
+          Number(Boolean(a.needsAuth)) - Number(Boolean(b.needsAuth)) ||
+          stableAliasRank(a) - stableAliasRank(b) ||
+          String(a.alias || a.id).localeCompare(String(b.alias || b.id)),
+      )[0];
       for (const device of group) {
-        if (device.needsAuth && roleRank(device.id) >= 5) hidden.add(device.id);
+        if (device.id !== canonical.id) hidden.add(device.id);
       }
     }
     return hidden;
@@ -5583,8 +5602,8 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
       })
     : null;
   const allRunners = (device.runners || []).map((r) => r?.runnerId || "").filter(Boolean);
-  const allSharedRunners = device.sharedRunners || [];
-  const allGuests = (device.sharedGuests || []).map((g) => g.name || g.email || "").filter(Boolean);
+  const allSharedRunners = ENABLE_GUEST_FEATURES ? device.sharedRunners || [] : [];
+  const allGuests = ENABLE_GUEST_FEATURES ? (device.sharedGuests || []).map((g) => g.name || g.email || "").filter(Boolean) : [];
   const sysUnknown = <span className="text-surface-600">—</span>;
   // Runtime/system blobs come back from the agent's /info when LAN-reachable.
   // Accept loose keys since this shape differs between agent versions (cpu,

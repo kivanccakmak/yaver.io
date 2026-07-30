@@ -15,36 +15,40 @@ async function installDashboardRoutes(page: import("@playwright/test").Page) {
     page.on("console", (message) => console.log(`[dashboard-v1-devices:browser] ${message.type()} ${message.text()}`));
   }
   const now = Date.now();
-  const realDevice = {
+  const stalePrimaryDevice = {
     deviceId: "linux-real",
     name: TARGET_DEVICE_NAME,
     alias: "linux",
+    platform: "linux",
+    host: "127.0.0.1",
+    port: 19080,
+    isOnline: false,
+    lastHeartbeat: now - 1000 * 60 * 60,
+    needsAuth: false,
+    agentVersion: "1.99.389",
+    deviceClass: "dedicated",
+    publicEndpoints: [],
+    sharedWithGuests: true,
+    sharedGuests: [{ name: "Serhat Fatih Uzun", email: "serhat@example.test" }],
+    runners: [
+      { id: "codex", name: "Codex", installed: true, authenticated: true, preferred: true },
+    ],
+  };
+  const onlineDuplicate = {
+    deviceId: "linux-duplicate-auth",
+    name: TARGET_DEVICE_NAME,
+    alias: "linux-3",
     platform: "linux",
     host: "127.0.0.1",
     port: 18080,
     isOnline: true,
     lastHeartbeat: now,
     needsAuth: false,
-    agentVersion: "1.99.389",
-    deviceClass: "dedicated",
-    publicEndpoints: [],
-    runners: [
-      { id: "codex", name: "Codex", installed: true, authenticated: true, preferred: true },
-    ],
-  };
-  const staleAuthDuplicate = {
-    deviceId: "linux-duplicate-auth",
-    name: TARGET_DEVICE_NAME,
-    alias: "linux-3",
-    platform: "linux",
-    host: "127.0.0.1",
-    port: 18081,
-    isOnline: true,
-    lastHeartbeat: now,
-    needsAuth: true,
     agentVersion: "1.99.259",
     deviceClass: "dedicated",
     publicEndpoints: [],
+    sharedWithGuests: true,
+    sharedGuests: [{ name: "Serhat Fatih Uzun", email: "serhat@example.test" }],
     runners: [],
   };
 
@@ -82,7 +86,7 @@ async function installDashboardRoutes(page: import("@playwright/test").Page) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ devices: [realDevice, staleAuthDuplicate] }),
+        body: JSON.stringify({ devices: [stalePrimaryDevice, onlineDuplicate] }),
       });
       return;
     }
@@ -173,10 +177,11 @@ test.describe("v1 devices dashboard", () => {
     const main = page.locator("main, [role=main], .dashboard-main").first();
     await expect(page.getByText("Join as a guest")).toHaveCount(0);
     await expect(page.getByText(/invite a guest/i)).toHaveCount(0);
+    await expect(page.getByText(/shared with/i)).toHaveCount(0);
+    await expect(page.getByText("Serhat Fatih Uzun")).toHaveCount(0);
     await expect(main.getByRole("heading", { name: TARGET_DEVICE_NAME })).toHaveCount(1);
-    await expect(main.getByText("@linux", { exact: true })).toHaveCount(1);
-    await expect(main.getByText("@linux-3", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("@linux-3", { exact: true })).toHaveCount(0);
+    await expect(main.getByText("@linux-3", { exact: true })).toHaveCount(1);
+    await expect(page.getByText("@linux", { exact: true })).toHaveCount(0);
   });
 
   test("does not deep-link into the guest surface while guest access is launch-disabled", async ({ page }) => {

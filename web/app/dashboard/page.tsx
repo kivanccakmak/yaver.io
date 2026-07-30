@@ -327,6 +327,20 @@ function duplicateHostKey(device: Pick<Device, "isGuest" | "platform" | "name">)
   return `${platform}:${name}`;
 }
 
+function stableAliasRank(device: Pick<Device, "alias">): number {
+  const alias = String(device.alias || "").trim().toLowerCase();
+  if (!alias) return 1;
+  return /-\d+$/.test(alias) ? 2 : 0;
+}
+
+function operationRank(device: Pick<Device, "online" | "needsAuth" | "workspaceLive" | "peerState" | "probeState" | "lastTunnelEvent">): number {
+  if (device.workspaceLive) return 0;
+  if (device.probeState === "ok") return 1;
+  if (device.online || device.peerState === "online" || device.lastTunnelEvent?.online === true) return 2;
+  if (!device.needsAuth) return 3;
+  return 4;
+}
+
 function formatRunnerChipLabel(runner: string): string {
   const cleaned = String(runner || "").trim();
   if (!cleaned) return cleaned;
@@ -426,6 +440,7 @@ function sharedGuestLabels(device: Pick<Device, "sharedGuests">): string[] {
 }
 
 function deviceAccessSummary(device: Pick<Device, "isGuest" | "sharedWithGuests" | "sharedGuests" | "sharesAllProjects" | "sharedProjects" | "sharedRunners" | "runners">) {
+  if (!ENABLE_GUEST_FEATURES) return null;
   const hasSharedState = device.isGuest || device.sharedWithGuests;
   if (!hasSharedState) return null;
   const sharedProjects = Array.isArray(device.sharedProjects) ? device.sharedProjects.filter(Boolean) : [];
@@ -686,7 +701,7 @@ function DeviceConnectCard({
             {accessScopeLabel(device)}
           </span>
         ) : null}
-        {!device.isGuest && device.sharedWithGuests ? (
+        {ENABLE_GUEST_FEATURES && !device.isGuest && device.sharedWithGuests ? (
           <span className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 dark:text-sky-200">
             Shared
           </span>
@@ -722,7 +737,7 @@ function DeviceConnectCard({
         ))}
       </div>
 
-      {shareSummary ? (
+      {ENABLE_GUEST_FEATURES && shareSummary ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {shareSummary.projectLabel ? (
             <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
@@ -741,7 +756,7 @@ function DeviceConnectCard({
         </div>
       ) : null}
 
-      {shareSummary && shareSummary.guestChips.length > 0 ? (
+      {ENABLE_GUEST_FEATURES && shareSummary && shareSummary.guestChips.length > 0 ? (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           <span className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 dark:text-sky-200">
             Shared With
@@ -759,7 +774,7 @@ function DeviceConnectCard({
         </div>
       ) : null}
 
-      {shareSummary && shareSummary.runnerChips.length > 0 ? (
+      {ENABLE_GUEST_FEATURES && shareSummary && shareSummary.runnerChips.length > 0 ? (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           <span className="rounded-full border border-violet-500/40 bg-violet-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-700 dark:text-violet-200">
             Agents
@@ -2741,10 +2756,16 @@ export default function DashboardPage() {
     const hidden = new Set<string>();
     for (const group of byHost.values()) {
       if (group.length < 2) continue;
-      const hasRoleBearingSibling = group.some((device) => !device.needsAuth && sidebarRoleRank(device.id) < 5);
-      if (!hasRoleBearingSibling) continue;
+      const canonical = [...group].sort(
+        (a, b) =>
+          operationRank(a) - operationRank(b) ||
+          sidebarRoleRank(a.id) - sidebarRoleRank(b.id) ||
+          Number(Boolean(a.needsAuth)) - Number(Boolean(b.needsAuth)) ||
+          stableAliasRank(a) - stableAliasRank(b) ||
+          String(a.alias || a.id).localeCompare(String(b.alias || b.id)),
+      )[0];
       for (const device of group) {
-        if (device.needsAuth && sidebarRoleRank(device.id) >= 5) hidden.add(device.id);
+        if (device.id !== canonical.id) hidden.add(device.id);
       }
     }
     return hidden;
