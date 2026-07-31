@@ -47,6 +47,7 @@ import { connectionManager } from "../../src/lib/connectionManager";
 import { shouldPollDevStatus } from "../../src/lib/devStatusPolling";
 import { detectCompileFailure } from "../../src/lib/compileFailure";
 import { previewBundlePath } from "../../src/lib/previewBundlePath";
+import { browserLaneProbeLine, doctorBrowserLane, shouldRunBrowserLaneDoctor, type BrowserLaneProbeResult } from "../../src/lib/browserLaneDoctor";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../../src/lib/previewPhase";
 import { handlePreviewScreenMessage } from "../../src/lib/screenContextBridge";
 import {
@@ -755,6 +756,9 @@ export default function AppsScreen() {
   const [webRuntimeLogOpen, setWebRuntimeLogOpen] = useState(false);
   const [webRuntimeIssueCount, setWebRuntimeIssueCount] = useState(0);
   const [webPreviewProbe, setWebPreviewProbe] = useState<PreviewProbeState | null>(null);
+  const [browserLaneProbe, setBrowserLaneProbe] = useState<BrowserLaneProbeResult | null>(null);
+  const browserLaneDoctorRunningRef = useRef(false);
+  const browserLaneDoctorRanForKeyRef = useRef("");
   const webPreviewLogScrollRef = useRef<ScrollView>(null);
   useEffect(() => () => { if (webPreviewRetryTimer.current) clearTimeout(webPreviewRetryTimer.current); }, []);
   useEffect(() => {
@@ -802,6 +806,9 @@ export default function AppsScreen() {
     setWebRuntimeLogOpen(false);
     setWebRuntimeIssueCount(0);
     setWebPreviewProbe(null);
+    setBrowserLaneProbe(null);
+    browserLaneDoctorRunningRef.current = false;
+    browserLaneDoctorRanForKeyRef.current = "";
     webPreviewRenderWatchdogFiredRef.current = false;
     setWebPreviewStartedAt(Date.now());
     setWebPreviewLastLogAt(null);
@@ -2161,6 +2168,32 @@ export default function AppsScreen() {
     (devStatus ? isWebServedStatus(devStatus) : false) ||
     webPreviewLogs.some((line) => /\b(listening|serving on|compiled|ready|running)\b/i.test(line));
 
+  const runBrowserLaneDoctor = useCallback((reason: string) => {
+    if (!showWebView || !bundleUrl || webPreviewContentLoaded) return;
+    const key = `${bundleUrl}|${reason}`;
+    if (browserLaneDoctorRunningRef.current || browserLaneDoctorRanForKeyRef.current === key) return;
+    browserLaneDoctorRunningRef.current = true;
+    browserLaneDoctorRanForKeyRef.current = key;
+    setWebRuntimeLogOpen(true);
+    setWebPreviewLogs((prev) => appendPreviewLogLine(prev, `[doctor] probing browser lane after ${reason}…`));
+    void doctorBrowserLane(quicClient, 45).then((probe) => {
+      if (!probe) {
+        setWebPreviewLogs((prev) => appendPreviewLogLine(prev, "[doctor] browser lane probe unavailable"));
+        return;
+      }
+      setBrowserLaneProbe(probe);
+      setWebPreviewLogs((prev) => appendPreviewLogLine(prev, browserLaneProbeLine(probe)));
+      if (!probe.ok) {
+        setWebPreviewFailed(true);
+        setWebRuntimeIssueCount((count) => Math.max(count, 1));
+      }
+    }).catch((err) => {
+      setWebPreviewLogs((prev) => appendPreviewLogLine(prev, `[doctor] browser lane probe failed: ${err instanceof Error ? err.message : String(err)}`));
+    }).finally(() => {
+      browserLaneDoctorRunningRef.current = false;
+    });
+  }, [bundleUrl, showWebView, webPreviewContentLoaded]);
+
   // ── Capability gap card ────────────────────────────────────────────────
   // The gap can reach us on three carriers and we take whichever we have: the
   // 412 body (synchronous refusal), the /dev/events error frame (the async
@@ -2240,9 +2273,10 @@ export default function AppsScreen() {
       try { path = new URL(bundleUrl).pathname; } catch {}
       setWebPreviewLogs((prev) => appendPreviewLogLine(prev, `[preview] server is listening but the WebView did not render after 20s (${path}; ${probe})`));
       setWebPreviewFailed(true);
+      runBrowserLaneDoctor("ready-without-render");
     }, 20000);
     return () => clearTimeout(id);
-  }, [showWebView, bundleUrl, webPreviewContentLoaded, webPreviewFailed, webPreviewServerLooksReady, webPreviewProbe]);
+  }, [showWebView, bundleUrl, webPreviewContentLoaded, webPreviewFailed, webPreviewServerLooksReady, webPreviewProbe, runBrowserLaneDoctor]);
 
   const visibleProjects = projects.filter((p) => {
     if (search.trim()) {
@@ -3476,6 +3510,16 @@ export default function AppsScreen() {
                     setWebPreviewLogs((prev) => appendPreviewLogLine(prev, line));
                     if (isPreviewRuntimeIssueLevel(level)) {
                       setWebRuntimeIssueCount((count) => Math.min(99, count + 1));
+                      if (shouldRunBrowserLaneDoctor({
+                        showWebView,
+                        bundleUrl,
+                        contentLoaded: webPreviewContentLoaded,
+                        failed: webPreviewFailed,
+                        serverLooksReady: webPreviewServerLooksReady,
+                        logLine: line,
+                      })) {
+                        runBrowserLaneDoctor(level === "error" ? "webview-error" : "webview-warning");
+                      }
                       // Console evidence is client-only — the agent cannot see
                       // inside the WebView, so a page crash may escalate even
                       // when agent health says the SERVER is healthy.
@@ -3610,9 +3654,18 @@ export default function AppsScreen() {
                     {activeGap ? gapCard : null}
                     <Ionicons name="alert-circle-outline" size={40} color={c.error} />
                     <Text style={[s.previewFailTitle, { color: c.error }]}>
-                      {compileCard ? compileCard.title : fallbackTitle}
+                      {browserLaneProbe && !browserLaneProbe.ok
+                        ? `Browser lane stopped at ${browserLaneProbe.stage}`
+                        : compileCard ? compileCard.title : fallbackTitle}
                     </Text>
-                    {compileCard ? (
+                    {browserLaneProbe && !browserLaneProbe.ok ? (
+                      <Text style={[s.previewSubtle, { color: c.textPrimary, textAlign: "left" }]} selectable>
+                        {[
+                          browserLaneProbe.detail || "The agent probed the same browser lane and it did not render.",
+                          browserLaneProbe.remedy ? `Remedy: ${browserLaneProbe.remedy}` : "",
+                        ].filter(Boolean).join("\n")}
+                      </Text>
+                    ) : compileCard ? (
                       <Text style={[s.previewSubtle, { color: c.textPrimary, textAlign: "left" }]} selectable>
                         {compileCard.detail}
                       </Text>
