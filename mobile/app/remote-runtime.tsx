@@ -585,6 +585,7 @@ function buildRemoteRuntimeViewerHtml(baseUrl: string, headers: Record<string, s
       const videoEl = document.getElementById("video");
       const rootEl = document.getElementById("root");
       let objectUrl = null;
+      let imagePending = false;
 
       // The live render surface. RTP paints into <video> (intrinsic size is
       // videoWidth/videoHeight); JPEG paints into <img> (naturalWidth/Height).
@@ -622,6 +623,25 @@ function buildRemoteRuntimeViewerHtml(baseUrl: string, headers: Record<string, s
       function setStatus(note) {
         statusEl.textContent = note;
         post({ type: "status", note });
+      }
+      function displayFrameBlob(blob, how) {
+        if (imagePending) return;
+        imagePending = true;
+        const previousUrl = objectUrl;
+        const nextUrl = URL.createObjectURL(blob);
+        frameEl.onload = function () {
+          imagePending = false;
+          objectUrl = nextUrl;
+          if (previousUrl) URL.revokeObjectURL(previousUrl);
+          if (how === "relay-jpeg") setStatus("Relay frame polling active (still frames, ~1 fps).");
+          reportFirstFrame(how);
+        };
+        frameEl.onerror = function () {
+          imagePending = false;
+          URL.revokeObjectURL(nextUrl);
+          setStatus("JPEG frame arrived but this surface could not decode it.");
+        };
+        frameEl.src = nextUrl;
       }
       async function sendControl(body) {
         const res = await fetch(cfg.baseUrl + "/remote-runtime/sessions/" + encodeURIComponent(cfg.sessionId) + "/control", {
@@ -680,11 +700,7 @@ function buildRemoteRuntimeViewerHtml(baseUrl: string, headers: Record<string, s
               const data = !res.ok ? await res.json().catch(() => ({})) : null;
               if (!res.ok) throw new Error(data && data.error ? data.error : "Frame fetch failed");
               const blob = await res.blob();
-              if (objectUrl) URL.revokeObjectURL(objectUrl);
-              objectUrl = URL.createObjectURL(blob);
-              frameEl.src = objectUrl;
-              setStatus("Relay frame polling active (still frames, ~1 fps).");
-              reportFirstFrame("relay-jpeg");
+              displayFrameBlob(blob, "relay-jpeg");
             } catch (error) {
               setStatus(error.message || String(error));
             } finally {
@@ -767,9 +783,7 @@ function buildRemoteRuntimeViewerHtml(baseUrl: string, headers: Record<string, s
             event.channel.onmessage = (msg) => {
               const blob = jpegBlobFromMessage(msg.data);
               if (!blob) return;
-              if (objectUrl) URL.revokeObjectURL(objectUrl);
-              objectUrl = URL.createObjectURL(blob);
-              frameEl.src = objectUrl;
+              displayFrameBlob(blob, "jpeg-datachannel");
             };
           }
           if (event.channel.label === "events") {

@@ -4517,6 +4517,7 @@ func (s *HTTPServer) taskInfoFromTask(task *Task, r *http.Request) TaskInfo {
 		SessionID:  task.SessionID,
 		Output:     output,
 		ResultText: task.ResultText,
+		Failure:    task.Failure,
 		CostUSD:    task.CostUSD,
 		Turns:      task.Turns,
 		PendingFollowUps: append([]PendingFollowUp{},

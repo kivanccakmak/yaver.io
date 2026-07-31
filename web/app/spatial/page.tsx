@@ -498,6 +498,7 @@ function TerminalPane({ task, cfg }: { task: Task; cfg: BridgeConfig }) {
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<any>(null);
   const writtenLinesRef = useRef<number>(0);
+  const failureLine = task.status === "failed" ? compactTaskFailure(task) : "";
 
   useEffect(() => {
     let term: any;
@@ -566,8 +567,32 @@ function TerminalPane({ task, cfg }: { task: Task; cfg: BridgeConfig }) {
         </span>
       </div>
       <div ref={ref} style={{ flex: 1, minHeight: 0 }} />
+      {failureLine ? (
+        <div
+          style={{
+            borderTop: "1px solid rgba(248,113,113,0.28)",
+            color: "#fecaca",
+            fontSize: 11,
+            lineHeight: 1.35,
+            padding: "8px 10px",
+            background: "rgba(127,29,29,0.18)",
+          }}
+        >
+          {failureLine}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function compactTaskFailure(task: Task): string {
+  const f = task.failure;
+  const title = String(f?.title || "").trim();
+  const reason = String(f?.reason || "").trim();
+  if (title && reason) return `${title}: ${reason}`;
+  if (title) return title;
+  if (reason) return reason;
+  return "Task failed. Open Yaver on your phone or web dashboard for the fix.";
 }
 
 function FloatingOrb({

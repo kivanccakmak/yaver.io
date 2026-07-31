@@ -1024,6 +1024,25 @@ type TaskResumeOptions struct {
 	Mode     string `json:"mode,omitempty"`
 }
 
+type TaskFailureFix struct {
+	Type      string `json:"type"`
+	RunnerID  string `json:"runnerId,omitempty"`
+	TestAfter bool   `json:"testAfter,omitempty"`
+}
+
+type TaskFailureDiagnosis struct {
+	Kind       string          `json:"kind"`
+	Code       string          `json:"code"`
+	Title      string          `json:"title"`
+	Reason     string          `json:"reason"`
+	Remedy     string          `json:"remedy"`
+	RunnerID   string          `json:"runnerId,omitempty"`
+	Model      string          `json:"model,omitempty"`
+	Probe      string          `json:"probe,omitempty"`
+	DetectedAt time.Time       `json:"detectedAt"`
+	Fix        *TaskFailureFix `json:"fix,omitempty"`
+}
+
 type PendingFollowUp struct {
 	Input   string            `json:"input"`
 	Images  []ImageAttachment `json:"images,omitempty"`
@@ -1071,16 +1090,17 @@ type Task struct {
 	// schedule with resume enabled re-fires, so the run picks up where the
 	// previous fire left off (claude/glm via SessionID, opencode via
 	// --continue, codex via exec resume). Default false = fresh spawn.
-	ResumeLast   bool               `json:"-"`
-	Output       string             `json:"output"`
-	ResultText   string             // Extracted clean result text from Claude
-	CostUSD      float64            // Total API cost
-	InputTokens  int                // Tokens consumed (prompt + cache reads + cache creation)
-	OutputTokens int                // Tokens produced by the model
-	Turns        []ConversationTurn // Full conversation history
-	CreatedAt    time.Time          `json:"created_at"`
-	StartedAt    *time.Time         `json:"started_at,omitempty"`
-	FinishedAt   *time.Time         `json:"finished_at,omitempty"`
+	ResumeLast   bool                  `json:"-"`
+	Output       string                `json:"output"`
+	ResultText   string                // Extracted clean result text from Claude
+	Failure      *TaskFailureDiagnosis `json:"failure,omitempty"`
+	CostUSD      float64               // Total API cost
+	InputTokens  int                   // Tokens consumed (prompt + cache reads + cache creation)
+	OutputTokens int                   // Tokens produced by the model
+	Turns        []ConversationTurn    // Full conversation history
+	CreatedAt    time.Time             `json:"created_at"`
+	StartedAt    *time.Time            `json:"started_at,omitempty"`
+	FinishedAt   *time.Time            `json:"finished_at,omitempty"`
 
 	WorkDir string `json:"workDir,omitempty"` // per-task workDir (auto-detected from prompt)
 	// Runner/render machine split (task_ensure_clone.go): git identity the
@@ -1311,14 +1331,15 @@ type TaskInfo struct {
 	// leaked into every label and a task that ran on a sibling box
 	// looked like it ran on whichever device the phone was focused
 	// on at view time.
-	DeviceName   string             `json:"deviceName,omitempty"`
-	SessionID    string             `json:"sessionId,omitempty"`
-	Output       string             `json:"output,omitempty"`
-	ResultText   string             `json:"resultText,omitempty"`
-	CostUSD      float64            `json:"costUsd,omitempty"`
-	InputTokens  int                `json:"inputTokens,omitempty"`
-	OutputTokens int                `json:"outputTokens,omitempty"`
-	Turns        []ConversationTurn `json:"turns,omitempty"`
+	DeviceName   string                `json:"deviceName,omitempty"`
+	SessionID    string                `json:"sessionId,omitempty"`
+	Output       string                `json:"output,omitempty"`
+	ResultText   string                `json:"resultText,omitempty"`
+	Failure      *TaskFailureDiagnosis `json:"failure,omitempty"`
+	CostUSD      float64               `json:"costUsd,omitempty"`
+	InputTokens  int                   `json:"inputTokens,omitempty"`
+	OutputTokens int                   `json:"outputTokens,omitempty"`
+	Turns        []ConversationTurn    `json:"turns,omitempty"`
 	// PendingFollowUps lets chat surfaces render user messages that were
 	// accepted while the runner was still working. The agent already owns the
 	// queue; hiding it made a successful second send look dropped after the
@@ -3213,7 +3234,11 @@ func (tm *TaskManager) startProcess(task *Task) error {
 					// instead of waiting for the user to discover the
 					// stale state by failing another task. Mirrors the
 					// mobile ErrorMessage.detectRunnerAuthFailure patterns.
-					if hitRunner, reason := ClassifyRunnerAuthFailure(task.Output); hitRunner != "" {
+					if ok, reason := ClassifyRunnerAuthFailureFor(task.RunnerID, task.Output+"\n"+task.ResultText); ok {
+						hitRunner := normalizeRunnerID(task.RunnerID)
+						MarkRunnerAuthInvalidReason(hitRunner, reason)
+						log.Printf("[task %s] auth-failure pattern detected for runner %q — invalidated runner auth status: %s", task.ID, hitRunner, reason)
+					} else if hitRunner, reason := ClassifyRunnerAuthFailure(task.Output); hitRunner != "" {
 						MarkRunnerAuthInvalidReason(hitRunner, reason)
 						log.Printf("[task %s] auth-failure pattern detected for runner %q — invalidated runner auth status: %s", task.ID, hitRunner, reason)
 						// Next periodic heartbeat (~30s) propagates the
@@ -3264,6 +3289,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			// revoked." and exited ZERO. A runner that reports its own auth
 			// death politely must not be believed about everything else.
 			ObserveRunnerAuthFromOutput(task.RunnerID, task.Output+"\n"+task.ResultText, string(task.Status))
+			task.Failure = diagnoseTaskFailure(task, finishNow)
 			// Save assistant response as conversation turn
 			if task.ResultText != "" {
 				task.Turns = append(task.Turns, ConversationTurn{
@@ -4415,6 +4441,7 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			SessionID:    t.SessionID,
 			Output:       output,
 			ResultText:   t.ResultText,
+			Failure:      t.Failure,
 			CostUSD:      t.CostUSD,
 			InputTokens:  t.InputTokens,
 			OutputTokens: t.OutputTokens,
@@ -4702,6 +4729,7 @@ func (tm *TaskManager) GetChainStatus(chainID string) []TaskInfo {
 				StartedAt:    t.StartedAt,
 				FinishedAt:   t.FinishedAt,
 				ResultText:   t.ResultText,
+				Failure:      t.Failure,
 				CostUSD:      t.CostUSD,
 				InputTokens:  t.InputTokens,
 				OutputTokens: t.OutputTokens,

@@ -145,6 +145,21 @@ function copyHarnessToClient() {
     join(HERE, "receiver.html"),
     `${CLIENT_SSH}:${CLIENT_WORKDIR}/`,
   ]);
+  const install = `
+    set -eu
+    cd ${shellQuote(CLIENT_WORKDIR)}
+    node -e "import('playwright').then(()=>process.exit(0)).catch(()=>process.exit(1))" >/dev/null 2>&1 && exit 0
+    command -v npm >/dev/null 2>&1 || { echo "NAMED client setup: npm is required to install the Playwright harness dependency"; exit 42; }
+    [ -f package.json ] || npm init -y >/dev/null
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-save --no-audit --no-fund playwright
+  `;
+  const installed = runWithInput("ssh", [CLIENT_SSH, "sh", "-s"], install, {
+    timeout: Number(process.env.YAVER_WEBRTC_CLIENT_SETUP_TIMEOUT_MS || 180_000),
+    env: { YAVER_WEBRTC_TOKEN: "" },
+  });
+  if (installed.status !== 0) {
+    throw new Error(`client setup failed on ${CLIENT_SSH}: install Playwright in ${CLIENT_WORKDIR} or set YAVER_WEBRTC_CLIENT_SSH to a prepared browser host`);
+  }
 }
 
 function runClientNode(script, args, env, label) {

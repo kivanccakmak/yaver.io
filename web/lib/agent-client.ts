@@ -116,6 +116,9 @@ export interface Task {
    *  preflight failures carry the same routed object as preview gaps, so the
    *  Vibing surface can render Install + streamed retry instead of prose. */
   capabilityGap?: unknown;
+  /** Structured terminal task failure from the agent. Surfaces should prefer
+   *  this over parsing output text, and keep text parsing only for older agents. */
+  failure?: unknown;
 }
 
 export interface FeedbackWorkAgentConfig {

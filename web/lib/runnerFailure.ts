@@ -9,6 +9,7 @@ export type RunnerFailureKind =
 
 export interface RunnerFailureDiagnosis {
   kind: RunnerFailureKind;
+  code?: string;
   title: string;
   reason: string;
   remedy: string;
@@ -16,6 +17,54 @@ export interface RunnerFailureDiagnosis {
   model?: string;
   probe?: string;
   failedAt?: number;
+  fix?: {
+    type: string;
+    runnerId?: string;
+    testAfter?: boolean;
+  };
+}
+
+export interface TaskFailureWire {
+  kind?: string;
+  code?: string;
+  title?: string;
+  reason?: string;
+  remedy?: string;
+  runnerId?: string;
+  model?: string;
+  probe?: string;
+  detectedAt?: number | string | Date;
+  fix?: {
+    type?: string;
+    runnerId?: string;
+    testAfter?: boolean;
+  };
+}
+
+export function runnerFailureFromTaskFailure(failure?: TaskFailureWire | null): RunnerFailureDiagnosis | null {
+  if (!failure || typeof failure !== "object") return null;
+  const kind = runnerFailureKindFromWire(failure.kind, failure.code);
+  if (!kind) return null;
+  const title = String(failure.title || "").trim();
+  const reason = String(failure.reason || "").trim();
+  const remedy = String(failure.remedy || "").trim();
+  if (!title || !reason || !remedy) return null;
+  return {
+    kind,
+    code: String(failure.code || "").trim() || undefined,
+    title,
+    reason,
+    remedy,
+    runner: String(failure.runnerId || failure.fix?.runnerId || "").trim() || undefined,
+    model: String(failure.model || "").trim() || undefined,
+    probe: String(failure.probe || "").trim() || undefined,
+    failedAt: normalizeTime(failure.detectedAt),
+    fix: failure.fix?.type ? {
+      type: String(failure.fix.type),
+      runnerId: String(failure.fix.runnerId || "").trim() || undefined,
+      testAfter: !!failure.fix.testAfter,
+    } : undefined,
+  };
 }
 
 export function diagnoseRunnerFailure(args: {
@@ -134,6 +183,16 @@ export function diagnoseRunnerFailure(args: {
     };
   }
 
+  return null;
+}
+
+function runnerFailureKindFromWire(kind?: string, code?: string): RunnerFailureKind | null {
+  const k = String(kind || "").trim().toLowerCase();
+  const c = String(code || "").trim().toLowerCase();
+  if (k === "runner_auth") return c.includes("oauth_revoked") ? "auth-revoked" : "auth";
+  if (k === "runner_model") return c.includes("not_found") ? "model-not-found" : "model-not-supported";
+  if (k === "runner_provider_transport") return "provider-transport";
+  if (k === "runner_subprocess") return "subprocess";
   return null;
 }
 

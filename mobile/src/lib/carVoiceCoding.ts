@@ -36,6 +36,12 @@ export interface CarVoiceTaskRef {
   id: string;
   status: string;
   resultText?: string;
+  failure?: {
+    title?: string;
+    reason?: string;
+    remedy?: string;
+    code?: string;
+  };
   /** Output lines, when resultText is absent. */
   output?: string[];
 }
@@ -129,7 +135,10 @@ export function isReadCodeRequest(transcript: string): boolean {
  */
 export function summarizeForReadback(task: CarVoiceTaskRef): string {
   const status = (task.status || "").toLowerCase();
+  const failure = task.failure;
+  const failureLine = failure?.title || failure?.reason || failure?.remedy || "";
   const body = (task.resultText && task.resultText.trim()) ||
+    (failureLine && String(failureLine).trim()) ||
     (task.output && task.output.filter(Boolean).join(" ").trim()) ||
     "";
 

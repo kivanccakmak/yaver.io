@@ -1304,6 +1304,14 @@ const TaskCard = React.memo(TaskCardInner, (prev, next) => prev.item === next.it
 // the most informative thing we can find. ANSI is stripped because
 // codex/opencode tend to colour stderr.
 function extractTaskErrorMessage(task: Task): string {
+  const structured = task.failure;
+  if (structured?.title || structured?.reason || structured?.remedy) {
+    return [
+      structured.title,
+      structured.reason,
+      structured.remedy,
+    ].map((v) => String(v || "").trim()).filter(Boolean).join("\n");
+  }
   const stripAnsi = (s: string) => s.replace(/\x1B\[[0-9;]*[A-Za-z]/g, "");
   const result = task.resultText ? stripAnsi(task.resultText).trim() : "";
   if (result) return result;

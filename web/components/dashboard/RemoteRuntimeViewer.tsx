@@ -243,7 +243,30 @@ export default function RemoteRuntimeViewer({
     let pumpActive = false;
     let watchdogId: number | null = null;
     let fallbackTransportOverride = false;
+    let jpegDecodePending = false;
     const sessionId = session.id;
+    const displayJpegBlob = (blob: Blob) => {
+      if (jpegDecodePending) return;
+      const img = imgRef.current;
+      if (!img) return;
+      jpegDecodePending = true;
+      const previousUrl = jpegUrlRef.current;
+      const url = URL.createObjectURL(blob);
+      img.onload = () => {
+        jpegDecodePending = false;
+        jpegUrlRef.current = url;
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
+        setConnected(true);
+        setMediaState("jpeg");
+        markFrame();
+      };
+      img.onerror = () => {
+        jpegDecodePending = false;
+        URL.revokeObjectURL(url);
+        setViewerNote("JPEG frame arrived but the browser could not decode it.");
+      };
+      img.src = url;
+    };
     const startFramePump = (note: string) => {
       if (pumpActive) return;
       pumpActive = true;
@@ -253,13 +276,7 @@ export default function RemoteRuntimeViewer({
         try {
           const blob = await agentClient.fetchRemoteRuntimeFrame(sessionId);
           if (cancelled || !pumpActive) return;
-          revokeJpeg();
-          const url = URL.createObjectURL(blob);
-          jpegUrlRef.current = url;
-          if (imgRef.current) imgRef.current.src = url;
-          setConnected(true);
-          setMediaState("jpeg");
-          markFrame();
+          displayJpegBlob(blob);
         } catch (err) {
           if (!cancelled) setViewerNote(err instanceof Error ? err.message : String(err));
         } finally {
@@ -479,12 +496,7 @@ export default function RemoteRuntimeViewer({
             if (cancelled) return;
             const blob = jpegBlobFromMessage(msg.data);
             if (!blob) return;
-            revokeJpeg();
-            const url = URL.createObjectURL(blob);
-            jpegUrlRef.current = url;
-            if (imgRef.current) imgRef.current.src = url;
-            setMediaState("jpeg");
-            markFrame();
+            displayJpegBlob(blob);
           };
         }
       };

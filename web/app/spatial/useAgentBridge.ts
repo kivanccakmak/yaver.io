@@ -31,6 +31,19 @@ export interface Task {
   startedAt?: string;
   createdAt?: string;
   runnerId?: string;
+  model?: string;
+  failure?: {
+    kind?: string;
+    code?: string;
+    title?: string;
+    reason?: string;
+    remedy?: string;
+    runnerId?: string;
+    model?: string;
+    probe?: string;
+    detectedAt?: string | number;
+    fix?: { type?: string; runnerId?: string; testAfter?: boolean };
+  };
   inputTokens?: number;
   outputTokens?: number;
 }

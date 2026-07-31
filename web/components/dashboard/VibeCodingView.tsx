@@ -67,7 +67,7 @@ import {
 } from "@/lib/pending-cloud-dispatch";
 import { CloudWorkspaceRequiredError } from "@/lib/cloud-workspace-required";
 import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
-import { diagnoseRunnerFailure, formatFailureTime } from "@/lib/runnerFailure";
+import { diagnoseRunnerFailure, formatFailureTime, runnerFailureFromTaskFailure } from "@/lib/runnerFailure";
 import { isRawRunnerCommand } from "@/lib/raw-runner-command";
 import PreviewPane from "./PreviewPane";
 import { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice } from "./DevicesView";
@@ -1935,6 +1935,8 @@ export default function VibeCodingView({
 
   const activeFailureDiagnosis = useMemo(() => {
     if (activeTask?.status !== "failed") return null;
+    const structured = runnerFailureFromTaskFailure(activeTask.failure as any);
+    if (structured) return structured;
     return diagnoseRunnerFailure({
       runner: activeTask.runnerId || selectedRunner,
       model: activeTask.model || selectedModel,

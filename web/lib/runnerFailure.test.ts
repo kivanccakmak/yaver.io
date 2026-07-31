@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { diagnoseRunnerFailure } from "./runnerFailure";
+import { diagnoseRunnerFailure, runnerFailureFromTaskFailure } from "./runnerFailure";
 
 const providerNotFound = diagnoseRunnerFailure({
   runner: "claude",
@@ -52,5 +52,22 @@ const subprocess = diagnoseRunnerFailure({
 assert.equal(subprocess?.kind, "subprocess");
 
 assert.equal(diagnoseRunnerFailure({ error: "" }), null);
+
+const typedRevoked = runnerFailureFromTaskFailure({
+  kind: "runner_auth",
+  code: "runner.claude.oauth_revoked",
+  title: "Runner OAuth grant was revoked",
+  reason: "Claude Code's OAuth access token has been revoked.",
+  remedy: "Start the runner sign-in flow from this task, then run Test before retrying.",
+  runnerId: "claude",
+  model: "claude-sonnet-4",
+  probe: "subprocess",
+  detectedAt: "2026-07-30T12:00:00Z",
+  fix: { type: "runner_browser_auth", runnerId: "claude", testAfter: true },
+});
+assert.equal(typedRevoked?.kind, "auth-revoked");
+assert.equal(typedRevoked?.code, "runner.claude.oauth_revoked");
+assert.equal(typedRevoked?.runner, "claude");
+assert.equal(typedRevoked?.fix?.type, "runner_browser_auth");
 
 console.log("ok runner failure auth plumbing");

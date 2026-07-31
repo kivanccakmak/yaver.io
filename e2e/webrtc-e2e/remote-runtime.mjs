@@ -81,7 +81,7 @@ html,body{margin:0;background:#000;height:100%;overflow:hidden}
 #img{display:none}
 </style><video id=v autoplay playsinline muted></video><img id=img>
 <script>
-window.__yv={offer:null,transport:null,events:[],channels:[],mode:null,ice:null,err:null,video:false,img:false};
+window.__yv={offer:null,transport:null,events:[],channels:[],mode:null,ice:null,err:null,video:false,img:false,frames:0,decoded:0,imgErrors:0,imgPending:false,lastImageError:null};
 let pc=null,lastBlob=null;
 const jpegChunks=new Map();
 function jpegBlobFromMessage(data){
@@ -131,11 +131,26 @@ window.makeOffer=function(){
           ch.onmessage=function(msg){
             const blob=jpegBlobFromMessage(msg.data);
             if(!blob) return;
+            window.__yv.frames++;
+            if(window.__yv.imgPending) return;
+            window.__yv.imgPending=true;
             window.__yv.mode="jpeg-dc";
-            if(lastBlob) URL.revokeObjectURL(lastBlob);
+            const previousBlob=lastBlob;
             lastBlob=URL.createObjectURL(blob);
             const img=document.getElementById("img");
-            img.onload=function(){ window.__yv.img=true; };
+            img.onload=function(){
+              window.__yv.img=true;
+              window.__yv.decoded++;
+              window.__yv.imgPending=false;
+              if(previousBlob) URL.revokeObjectURL(previousBlob);
+            };
+            img.onerror=function(e){
+              window.__yv.imgErrors++;
+              window.__yv.imgPending=false;
+              window.__yv.lastImageError=String(e&&e.type||"image decode error");
+              URL.revokeObjectURL(lastBlob);
+              lastBlob=previousBlob;
+            };
             img.src=lastBlob; img.style.display="block";
           };
         }
@@ -325,6 +340,10 @@ try {
         if (frameError) {
           console.log(`NAMED ${JSON.stringify(state).slice(0, 500)}`);
           console.log(`VERDICT=NAMED · ${TARGET}:frame-error:${String(frameError.error).slice(0, 240)}`);
+          process.exitCode = 7;
+        } else if (state.frames > 0) {
+          console.log(`NAMED ${JSON.stringify(state).slice(0, 700)}`);
+          console.log(`VERDICT=NAMED · ${TARGET}:frame-display:received=${state.frames}:decoded=${state.decoded || 0}:errors=${state.imgErrors || 0}:pending=${state.imgPending ? "yes" : "no"}`);
           process.exitCode = 7;
         } else {
           console.log(`SILENT ${JSON.stringify(state).slice(0, 500)}`);

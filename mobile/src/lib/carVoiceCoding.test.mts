@@ -63,6 +63,22 @@ test("summarizeForReadback leads with status and stays one short sentence", () =
   assert.match(summarizeForReadback({ id: "t", status: "review" }), /review/i);
 });
 
+test("summarizeForReadback can name structured task failure without reading logs", () => {
+  const spoken = summarizeForReadback({
+    id: "t",
+    status: "failed",
+    failure: {
+      title: "Runner OAuth grant was revoked",
+      reason: "Claude Code's OAuth access token has been revoked.",
+      remedy: "Start the runner sign-in flow from this task, then run Test before retrying.",
+      code: "runner.claude.oauth_revoked",
+    },
+    output: ["stack trace", "/Users/kivanccakmak/private/file.ts"],
+  });
+  assert.match(spoken, /^That failed\. Runner OAuth grant was revoked/);
+  assert.ok(!spoken.includes("/Users/"), spoken);
+});
+
 test("summarizeForReadback refuses to read code-shaped output", () => {
   const codey: CarVoiceTaskRef = {
     id: "t",

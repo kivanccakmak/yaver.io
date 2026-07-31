@@ -47,12 +47,17 @@ function extractChownCommand(raw: string): string {
 function detectRunnerAuthFailure(haystack: string): "claude" | "codex" | null {
   const m = haystack.toLowerCase();
   const looksLikeClaude =
+    m.includes("oauth access token has been revoked") ||
+    m.includes("token has been revoked") ||
+    m.includes("please run /login") ||
     (m.includes("not logged in") && (m.includes("/login") || m.includes("please run"))) ||
     m.includes("invalid bearer token") ||
     m.includes("invalid authentication credentials") ||
     m.includes("claude code-credentials");
   if (looksLikeClaude) return "claude";
   const looksLikeCodex =
+    m.includes("refresh_token_reused") ||
+    m.includes("token_expired") ||
     (m.includes("sign in required") && (m.includes("codex") || m.includes("chatgpt"))) ||
     m.includes("codex login --device-auth") ||
     (m.includes("not authenticated") && m.includes("codex"));

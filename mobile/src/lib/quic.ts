@@ -523,6 +523,20 @@ export interface Task {
   tmuxPaneId?: string;
   /** True if this task was adopted from an existing tmux session. */
   isAdopted?: boolean;
+  /** Structured terminal task failure from the agent. Prefer this over parsing
+   *  output text; text parsing remains for older agents. */
+  failure?: {
+    kind?: string;
+    code?: string;
+    title?: string;
+    reason?: string;
+    remedy?: string;
+    runnerId?: string;
+    model?: string;
+    probe?: string;
+    detectedAt?: string | number;
+    fix?: { type?: string; runnerId?: string; testAfter?: boolean };
+  };
   /** Chain ID if this task is part of a sequential chain. */
   chainId?: string;
   /** 0-based position in the chain. */
