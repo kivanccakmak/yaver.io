@@ -59,6 +59,7 @@ func TestBrowserPoolUsesIsolatedChromeRuntime(t *testing.T) {
 	code := stripGoLineCommentsForTest(string(src))
 
 	for _, want := range []string{
+		"chromedp.ExecPath(",
 		"chromedp.UserDataDir(",
 		"chromedp.Env(",
 		"XDG_RUNTIME_DIR=",

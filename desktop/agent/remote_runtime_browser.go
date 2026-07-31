@@ -84,7 +84,9 @@ func (p *browserWindowPool) open(ctx context.Context, width, height int) (*brows
 	if err != nil {
 		return nil, fmt.Errorf("prepare browser-window runtime: %w", err)
 	}
+	browserPath := browserWindowChromeExecPath()
 	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(browserPath),
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("mute-audio", true),
@@ -282,6 +284,18 @@ func browserWindowLaunchError(err error) error {
 		return fmt.Errorf("launch headless chromium: %s: %w (install Chrome or Chromium)", reason, err)
 	}
 	return fmt.Errorf("launch headless chromium: %s: %w", reason, err)
+}
+
+func browserWindowChromeExecPath() string {
+	if p := DiscoverChromeBinary(); p != "" {
+		return p
+	}
+	for _, bin := range []string{"microsoft-edge", "edge", "chrome"} {
+		if p, err := exec.LookPath(bin); err == nil && chromeBinaryUsable(p) {
+			return p
+		}
+	}
+	return "google-chrome"
 }
 
 func browserWindowLaunchErrorReason(err error) string {
