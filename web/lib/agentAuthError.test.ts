@@ -28,6 +28,9 @@ test("matches the agent's real auth-failure shapes", () => {
     "HTTP 403",
     "401 Unauthorized",
     "Forbidden",
+    "Relay authentication failed. Check the relay password or sign in again. invalid relay password",
+    "too many invalid relay password attempts",
+    '{"ok":false,"code":"relay_password_missing","error":"relay password missing — sign in again to fetch it"}',
   ];
   for (const s of shapes) {
     assert.equal(isAgentAuthErrorMessage(s), true, `should match: ${s}`);
@@ -52,6 +55,7 @@ test("does not match ordinary operation failures", () => {
 test("remedy names an action, not a status code", () => {
   assert.match(AGENT_AUTH_REMEDY, /yaver auth/);
   assert.match(AGENT_AUTH_REMEDY, /[Rr]econnect/);
+  assert.match(AGENT_AUTH_REMEDY, /relay auth/);
 });
 
 test("dashboard views share the ONE matcher (no private copies)", () => {

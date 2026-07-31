@@ -10,16 +10,23 @@
 // the cross-surface-parity defect in miniature — hoisted here so every view
 // consumes the same truth.
 //
+import { isRelayAuthFailure } from "./relayAuth";
+
 // Keep this in sync with the agent's actual failure shapes:
 //   - `invalid token` / `unauthorized` / `forbidden` — agent HTTP auth reject
 //   - `session expired` / `agent auth expired` / `convex session is expired`
 //     — the /health authExpired lane and agent-client's connect error text
 //   - bare `http 401` / `http 403` — responseErrorMessage's fallback when the
 //     body carried no detail
+//   - relay credential denies (`relay_password_missing`,
+//     `invalid relay password`, 429 too many invalid attempts) — the request
+//     never reached the agent, but the UI route is the same deterministic
+//     reconnect/refresh path. Never send these to "Fix with runner".
 
 export function isAgentAuthErrorMessage(message: string | null | undefined): boolean {
   const lower = String(message || "").toLowerCase();
   return (
+    isRelayAuthFailure(message) ||
     lower.includes("invalid token") ||
     lower.includes("session expired") ||
     lower.includes("agent auth expired") ||
@@ -34,4 +41,4 @@ export function isAgentAuthErrorMessage(message: string | null | undefined): boo
 /** The standard remedy sentence to render next to an auth-shaped failure —
  *  names the fix instead of leaving a raw status code on screen. */
 export const AGENT_AUTH_REMEDY =
-  "Agent auth expired or mismatched. Reconnect this machine (or run `yaver auth` on it), then retry.";
+  "Agent or relay auth expired/mismatched. Reconnect this machine (or run `yaver auth` on it), then retry.";
