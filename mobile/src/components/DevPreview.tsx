@@ -24,6 +24,7 @@ import { mustUseNativePreview as mustUseNativePreviewLane } from "../lib/devLane
 import { PREVIEW_READY_SCRIPT, PREVIEW_LANE_SCRIPT } from "../lib/previewReadyScript";
 import { detectCompileFailure } from "../lib/compileFailure";
 import { previewBundlePath } from "../lib/previewBundlePath";
+import { browserLaneProbeLine, doctorBrowserLane, type BrowserLaneProbeResult } from "../lib/browserLaneDoctor";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../lib/previewPhase";
 import { handlePreviewScreenMessage } from "../lib/screenContextBridge";
 import {
@@ -180,6 +181,9 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
   // Rolling tail of dev-server log lines, for the starting + failure panels.
   const [logLines, setLogLines] = useState<string[]>([]);
   const [previewProbe, setPreviewProbe] = useState<PreviewProbeState | null>(null);
+  const [browserLaneProbe, setBrowserLaneProbe] = useState<BrowserLaneProbeResult | null>(null);
+  const browserLaneDoctorRunningRef = useRef(false);
+  const browserLaneDoctorRanForKeyRef = useRef("");
   // The named capability gap behind a failed start (missing Flutter/toolchain),
   // produced by the agent and carried on the /dev/events error frame AND
   // /dev/status. This screen is the OTHER browser-preview implementation: it
@@ -207,12 +211,36 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
   const wasRunning = useRef(false);
   const webViewRef = useRef<WebView>(null);
   const previewLogScrollRef = useRef<ScrollView>(null);
+  const reportedBundlePath = previewBundlePath(status as any);
+  const bundleUrl = reportedBundlePath ? quicClient.getDevServerBundleUrl(reportedBundlePath) : "";
 
   useEffect(() => {
     if (!showPreview || logLines.length === 0) return;
     const id = setTimeout(() => previewLogScrollRef.current?.scrollToEnd({ animated: true }), 30);
     return () => clearTimeout(id);
   }, [showPreview, logLines.length]);
+
+  const runBrowserLaneDoctor = useCallback((reason: string) => {
+    if (!showPreview || !bundleUrl || webContentLoaded) return;
+    const key = `${bundleUrl}|${reason}`;
+    if (browserLaneDoctorRunningRef.current || browserLaneDoctorRanForKeyRef.current === key) return;
+    browserLaneDoctorRunningRef.current = true;
+    browserLaneDoctorRanForKeyRef.current = key;
+    pushLog(`[doctor] probing browser lane after ${reason}…`);
+    void doctorBrowserLane(quicClient, 45).then((probe) => {
+      if (!probe) {
+        pushLog("[doctor] browser lane probe unavailable");
+        return;
+      }
+      setBrowserLaneProbe(probe);
+      pushLog(browserLaneProbeLine(probe));
+      if (!probe.ok) setPreviewFailed(true);
+    }).catch((err) => {
+      pushLog(`[doctor] browser lane probe failed: ${err instanceof Error ? err.message : String(err)}`);
+    }).finally(() => {
+      browserLaneDoctorRunningRef.current = false;
+    });
+  }, [bundleUrl, pushLog, showPreview, webContentLoaded]);
 
   // Auto-retry the WebView while the framework's web server is still compiling
   // (agent returns 503 {status:"starting"} or refuses the connection). Up to
@@ -224,13 +252,14 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
       // button) rather than an Alert that dismisses to a black WebView.
       setWebStarting(false);
       setPreviewFailed(true);
+      runBrowserLaneDoctor("webview-retry-exhausted");
       return;
     }
     webRetryCount.current += 1;
     setWebStarting(true);
     if (webRetryTimer.current) clearTimeout(webRetryTimer.current);
     webRetryTimer.current = setTimeout(() => setWebViewKey((k) => k + 1), 2500);
-  }, []);
+  }, [runBrowserLaneDoctor]);
 
   // Reset the preview's progress/failure state for a fresh open or manual retry.
   const resetPreviewProgress = useCallback(() => {
@@ -241,6 +270,9 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
     setWebStarting(false);
     setLogLines([]);
     setPreviewProbe(null);
+    setBrowserLaneProbe(null);
+    browserLaneDoctorRunningRef.current = false;
+    browserLaneDoctorRanForKeyRef.current = "";
   }, []);
 
   // Reset the retry budget whenever a fresh preview opens or the WebView loads.
@@ -720,14 +752,12 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
     ]);
   }, []);
 
-  if (!status) return null;
-
   // WHICH url the preview loads — previewBundlePath (shared with apps.tsx;
   // the app's two browser-preview implementations, a fix in one is not a
   // fix) applies the agent-is-authority rule, the single legacy
   // "/dev/"+webPort override, and the empty-url guard.
-  const reportedBundlePath = previewBundlePath(status as any);
-  const bundleUrl = reportedBundlePath ? quicClient.getDevServerBundleUrl(reportedBundlePath) : "";
+  if (!status) return null;
+
   const projectLabel = projectLabelFromStatus(status);
   const frameworkLabel = status.framework || "app";
   const portLabel = status.port ? `port ${status.port}` : null;
@@ -1083,6 +1113,7 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                         // with apps.tsx via previewPhase.ts).
                         pushLog(previewTimeoutExplanation(m.state?.reason, status?.framework));
                         setPreviewFailed(true);
+                        runBrowserLaneDoctor("render-probe-timeout");
                       }
                     } else if (m && m.t === "yaver-rendered") {
                       setPreviewProbe((m.state || null) as PreviewProbeState | null);
@@ -1213,9 +1244,18 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                       ) : null}
 	                      <Ionicons name="alert-circle-outline" size={40} color="#ef4444" />
 	                      <Text style={styles.previewFailTitle}>
-	                        {compileCard ? compileCard.title : fallbackTitle}
+	                        {browserLaneProbe && !browserLaneProbe.ok
+	                          ? `Browser lane stopped at ${browserLaneProbe.stage}`
+	                          : compileCard ? compileCard.title : fallbackTitle}
 	                      </Text>
-	                      {compileCard ? (
+	                      {browserLaneProbe && !browserLaneProbe.ok ? (
+	                        <Text style={[styles.previewSubtle, { textAlign: "left" }]} selectable>
+	                          {[
+	                            browserLaneProbe.detail || "The agent probed the same browser lane and it did not render.",
+	                            browserLaneProbe.remedy ? `Remedy: ${browserLaneProbe.remedy}` : "",
+	                          ].filter(Boolean).join("\n")}
+	                        </Text>
+	                      ) : compileCard ? (
 	                        <Text style={[styles.previewSubtle, { textAlign: "left" }]} selectable>
 	                          {compileCard.detail}
 	                        </Text>
