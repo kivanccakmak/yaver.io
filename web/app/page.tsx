@@ -6,19 +6,18 @@ import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/use-auth";
 
 // Canonical definitional one-liner — picked up by AI search
-// (ChatGPT, Claude) and SEO as the answer to "what is Yaver?". Framed
-// around the factual wedge (self-hosted on-device RN dev client, no
-// third-party dev-portal gate) rather than specific competitor names,
-// per LEGAL_SAFETY.md §2 (trademark) and §3 (comparative claims).
+// (ChatGPT, Claude) and SEO as the answer to "what is Yaver?". Keep
+// the public framing centered on the CLI + real-device render loop;
+// MCP is an integration path, not the whole product.
 const LANDING_TAGLINE =
-  "Yaver is an open-source MCP server for Claude Code, Codex, and OpenCode. It builds on your own machine, hot-reloads the real app on your iPhone or Android, and sends screenshots, logs, and repro context back to your coding agent when you shake the phone.";
+  "Yaver is an open-source tool for vibing on real apps from your phone. Install the CLI, sign in with OAuth, let Claude Code, Codex, or OpenCode build on your own machine, and Yaver hot-reloads the result on your iPhone or Android.";
 
 const SUPPORTED_SURFACES = ["iOS", "Android"];
 
 const LANDING_FAQ: ReadonlyArray<{ q: string; a: string }> = [
   {
     q: "What is Yaver?",
-    a: "Yaver is an open-source MCP server plus phone app. You register it in Claude Code, Codex, or OpenCode; the agent builds on your own machine; the result hot-reloads on your paired iPhone or Android.",
+    a: "Yaver is an open-source CLI, agent, and phone app for the AI app-building loop. You sign in once, pair your phone, ask Claude Code, Codex, or OpenCode to build, and Yaver renders the result on your real iPhone or Android.",
   },
   {
     q: "Is it a WebView?",
@@ -45,17 +44,17 @@ const LANDING_FAQ: ReadonlyArray<{ q: string; a: string }> = [
 const LANDING_HOWTO_STEPS: ReadonlyArray<{ name: string; text: string; url?: string }> = [
   {
     name: "Install the Yaver CLI",
-    text: "Run npm install -g yaver-cli, or let npx pull the MCP server on first use.",
+    text: "Run npm install -g yaver-cli on the machine where your projects live.",
     url: "https://yaver.io/download",
   },
   {
-    name: "Install a Yaver surface app",
-    text: "Download Yaver for iOS or Android and sign in with the same account.",
+    name: "Sign in and pair your phone",
+    text: "Run yaver auth, then sign in to the iOS or Android app with the same OAuth account.",
     url: "https://yaver.io/download",
   },
   {
-    name: "Build and hot-reload",
-    text: "Ask the agent to build something. Yaver runs it on your own machine, compiles the bundle, and hot-reloads it on your paired phone.",
+    name: "Vibe, render, capture",
+    text: "Ask your coding agent to build. Yaver runs it on your machine, renders it on your phone, and sends shake-captured context back to the agent.",
     url: "https://yaver.io/manuals/cli-setup",
   },
 ];
@@ -162,7 +161,7 @@ export default function HomePage() {
       <section className="px-6 pb-10 pt-20 md:pt-28">
         <div className="mx-auto max-w-5xl text-center">
           <p className="mb-3 text-xs font-semibold uppercase tracking-[0.25em] text-surface-400">
-            Open-source MCP for real-device app loops
+            Open-source real-device app loops
           </p>
           <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
@@ -186,10 +185,10 @@ export default function HomePage() {
           </p>
 
           <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-surface-300 sm:text-base md:text-[17px]">
-            Register Yaver in Claude Code, Codex, or OpenCode. The agent builds
-            on your own machine, the app hot-reloads on your real phone, and
-            shake-to-capture sends screenshots, logs, and repro context back to
-            the agent.
+            Install the CLI, sign in with OAuth, and pair your phone. Claude
+            Code, Codex, or OpenCode keeps coding on your machine while Yaver
+            renders the app on your real device and sends shake-captured context
+            back into the loop.
           </p>
 
           <div className="mx-auto mt-6 flex max-w-2xl flex-wrap items-center justify-center gap-2">
@@ -204,43 +203,40 @@ export default function HomePage() {
           </div>
 
           <div className="mt-7 flex flex-col items-center justify-center gap-2">
-            {/* MCP-first hero: register Yaver in your coding agent — no global
-                install needed, npx pulls it on first run. Then the agent calls
-                yaver_lazy_setup to sign in and pair the phone in-chat. */}
-            <div className="w-full max-w-xl text-left">
-              <p className="mb-2 text-center text-[11px] text-surface-500">
-                Register Yaver as an MCP server, then pair your phone from inside the agent chat:
-              </p>
-              <div className="space-y-1.5 rounded-lg border border-surface-800 bg-surface-950 px-4 py-3 font-mono text-[12px] leading-relaxed">
-                <div className="text-surface-500"># Claude Code:</div>
-                <div className="text-surface-600">
-                  $ <span className="select-all break-all text-surface-200">claude mcp add --scope user yaver -- npx -y yaver-cli yaver-mcp</span>
+            <div className="w-full max-w-lg text-left">
+              <div className="rounded-lg border border-surface-800 bg-surface-950 px-4 py-3 font-mono text-[12px] leading-relaxed">
+                <div>
+                  <span className="text-surface-500">$</span>{" "}
+                  <span className="select-all break-all text-surface-200">npm install -g yaver-cli</span>
                 </div>
-                <div className="text-surface-500"># Codex:</div>
-                <div className="text-surface-600">
-                  $ <span className="select-all break-all text-surface-200">codex mcp add yaver -- npx -y yaver-cli yaver-mcp</span>
+                <div>
+                  <span className="text-surface-500">$</span>{" "}
+                  <span className="select-all break-all text-surface-200">yaver auth</span>
                 </div>
-                <div className="text-surface-500"># OpenCode:</div>
-                <div className="text-surface-600">
-                  $ <span className="select-all break-all text-surface-200">npx -y -p yaver-cli yaver mcp setup opencode</span>
-                </div>
-                <div className="my-1.5 h-px bg-surface-800/60" />
-                <div className="text-surface-500"># then, in the agent chat:</div>
-                <div className="select-all break-all text-emerald-300">call yaver_lazy_setup</div>
               </div>
-              <p className="mt-2 text-center text-[11px] text-surface-600">
+              <div className="mt-3 flex flex-col justify-center gap-2 sm:flex-row">
+                <Link
+                  href="/download"
+                  className="inline-flex items-center justify-center rounded-lg bg-surface-50 px-4 py-2.5 text-sm font-semibold text-surface-950 transition hover:bg-surface-200"
+                >
+                  Install Yaver
+                </Link>
+                <a
+                  href="#demo"
+                  className="inline-flex items-center justify-center rounded-lg border border-surface-700 px-4 py-2.5 text-sm font-semibold text-surface-200 transition hover:border-surface-500 hover:text-surface-50"
+                >
+                  Watch the loop
+                </a>
+              </div>
+              <p className="mt-3 text-center text-[11px] leading-relaxed text-surface-600">
+                Want setup inside Claude Code, Codex, or OpenCode? Register the
+                MCP server and call{" "}
                 <code className="rounded bg-surface-900 px-1.5 py-0.5 text-surface-400">
                   yaver_lazy_setup
-                </code>{" "}
-                surfaces the sign-in link and pairs your phone in-chat.{" "}
+                </code>
+                .{" "}
                 <Link href="/docs/mcp" className="underline hover:text-surface-300">
-                  full MCP guide &rarr;
-                </Link>
-              </p>
-              <p className="mt-1 text-center text-[11px] text-surface-700">
-                Prefer the global CLI?{" "}
-                <Link href="/download" className="underline hover:text-surface-400">
-                  npm install -g yaver-cli &rarr;
+                  MCP guide &rarr;
                 </Link>
               </p>
             </div>
@@ -286,14 +282,14 @@ export default function HomePage() {
       <section id="get-started" className="border-t border-surface-800/60 px-6 py-16">
         <div className="mx-auto max-w-5xl">
           <h2 className="mb-10 text-center text-2xl font-bold text-surface-50 md:text-3xl">
-            The whole loop
+            Start the loop
           </h2>
           <div className="grid gap-6 md:grid-cols-2 md:items-start">
             {/* Column 1 — Install the agent (the dense one) */}
             <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
               <div className="mb-3 flex items-center gap-2">
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#6366f1]/10 text-sm font-bold text-[#6366f1]">1</span>
-                <span className="text-sm font-semibold text-surface-100">Connect your machine</span>
+                <span className="text-sm font-semibold text-surface-100">Install and sign in</span>
               </div>
               <div className="terminal">
                 <div className="terminal-header">
@@ -307,10 +303,10 @@ export default function HomePage() {
                 </div>
               </div>
               <p className="mt-3 text-[11px] text-surface-500">
-                Recommended: <code>npm install -g yaver-cli</code>. Installs the
-                agent, feedback transport, and the RN push toolchain in one go;{" "}
-                <code>yaver auth</code> starts the agent automatically. Install
-                and update Yaver through npm only.{" "}
+                <code>npm install -g yaver-cli</code> installs the local agent,
+                feedback transport, and RN push toolchain. <code>yaver auth</code>{" "}
+                opens OAuth and starts the agent automatically. Install and
+                update Yaver through npm only.{" "}
                 <Link href="/download" className="underline hover:text-surface-300">
                   See install instructions
                 </Link>.
@@ -327,7 +323,7 @@ export default function HomePage() {
             <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
               <div className="mb-3 flex items-center gap-2">
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#6366f1]/10 text-sm font-bold text-[#6366f1]">2</span>
-                <span className="text-sm font-semibold text-surface-100">Install a Yaver surface app</span>
+                <span className="text-sm font-semibold text-surface-100">Pair the phone app</span>
               </div>
               <div className="mt-1 flex flex-col gap-2">
                 <a href="https://apps.apple.com/us/app/yaver-io/id6760467669" target="_blank" rel="noopener noreferrer"
@@ -342,7 +338,7 @@ export default function HomePage() {
                 </a>
               </div>
               <p className="mt-3 text-[11px] text-surface-500">
-                Sign in with the same OAuth account you used for <code>yaver auth</code>. The app auto-pairs with your dev machine over LAN, or via relay on cellular &mdash; no QR code, no IP to type.
+                Sign in with the same OAuth account you used for <code>yaver auth</code>. The app finds your dev machine over LAN, or via relay on cellular &mdash; no QR code, no IP to type.
               </p>
               <p className="mt-2 text-[11px] text-surface-500">
                 For React Native, the normal flow is Hermes bundle reload into Yaver on the phone, not a native Xcode install.
@@ -353,7 +349,7 @@ export default function HomePage() {
             <div className="rounded-xl border border-surface-800 bg-surface-900/50 p-5">
               <div className="mb-3 flex items-center gap-2">
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#6366f1]/10 text-sm font-bold text-[#6366f1]">3</span>
-                <span className="text-sm font-semibold text-surface-100">Build, reload, capture</span>
+                <span className="text-sm font-semibold text-surface-100">Vibe, render, capture</span>
               </div>
               <div className="terminal">
                 <div className="terminal-header">
@@ -363,14 +359,16 @@ export default function HomePage() {
                 </div>
                 <div className="terminal-body space-y-1 text-[12px]">
                   <div className="text-surface-500"># Ask the agent to build your app</div>
-                  <div className="text-surface-500"># Yaver compiles and pushes the bundle</div>
+                  <div className="text-surface-500"># Yaver renders it on the paired phone</div>
                   <div className="my-1 h-px bg-surface-800/60" />
                   <div><span className="text-surface-400">$</span> <span className="text-surface-200">yaver push</span></div>
                   <div className="text-[11px] text-green-400/80">{"\u2192 Hermes bundle loaded on your paired phone"}</div>
                 </div>
               </div>
               <p className="mt-3 text-[11px] text-surface-500">
-                Shake the phone to send the screenshot, logs, and repro context back to the same coding agent.
+                Shake the phone to send the screenshot, logs, and repro context
+                back to the same coding agent. MCP is available when you want
+                the agent to drive Yaver directly from chat.
               </p>
             </div>
             </div>
@@ -387,12 +385,12 @@ export default function HomePage() {
           <div className="grid gap-4 md:grid-cols-3">
             {[
               {
-                t: "MCP first",
-                d: "Your coding agent calls Yaver tools directly. No new AI account, no Yaver API key, no extra billing layer.",
+                t: "CLI first",
+                d: "One npm install gives you the local agent, OAuth sign-in, real-device rendering, and the optional MCP bridge for agent chat.",
               },
               {
-                t: "Real phone loop",
-                d: "The app runs on the device where mobile bugs actually happen: gestures, sensors, real network, and real performance.",
+                t: "Vibing on the device",
+                d: "The app runs where mobile bugs actually happen: gestures, sensors, real network, and real performance.",
               },
               {
                 t: "Own-machine by default",
