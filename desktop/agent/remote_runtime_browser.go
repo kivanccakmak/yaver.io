@@ -38,6 +38,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +63,7 @@ type browserWindowEntry struct {
 	lastUsedAt    time.Time
 	url           string
 	eventSink     func(map[string]any)
+	runtimeRoot   string
 }
 
 type browserWindowPool struct {
@@ -78,12 +80,24 @@ func (p *browserWindowPool) open(ctx context.Context, width, height int) (*brows
 	if height <= 0 {
 		height = 800
 	}
+	runtimeEnv, err := newBrowserWindowRuntime()
+	if err != nil {
+		return nil, fmt.Errorf("prepare browser-window runtime: %w", err)
+	}
 	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("mute-audio", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("hide-scrollbars", false),
+		chromedp.Flag("data-path", runtimeEnv.dataDir),
+		chromedp.Flag("disk-cache-dir", runtimeEnv.cacheDir),
+		chromedp.UserDataDir(runtimeEnv.profileDir),
+		chromedp.Env(
+			"HOME="+runtimeEnv.homeDir,
+			"TMPDIR="+runtimeEnv.tmpDir,
+			"XDG_RUNTIME_DIR="+runtimeEnv.xdgRuntimeDir,
+		),
 		chromedp.WindowSize(width, height),
 	)
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), allocOpts...)
@@ -133,12 +147,10 @@ func (p *browserWindowPool) open(ctx context.Context, width, height int) (*brows
 	if err := bootFailure; err != nil {
 		browserCancel()
 		allocCancel()
+		_ = runtimeEnv.cleanup()
 		// Only claim the browser is missing when it actually is — otherwise
 		// report what failed. Misattributing this cost real debugging time.
-		if errors.Is(err, exec.ErrNotFound) || strings.Contains(err.Error(), "executable file not found") {
-			return nil, fmt.Errorf("launch headless chromium: %w (install Chrome or Chromium)", err)
-		}
-		return nil, fmt.Errorf("launch headless chromium: %w", err)
+		return nil, browserWindowLaunchError(err)
 	}
 
 	// Turn on touch emulation, or Pinch dispatches events that never become a
@@ -177,6 +189,7 @@ func (p *browserWindowPool) open(ctx context.Context, width, height int) (*brows
 		height:        height,
 		createdAt:     now,
 		lastUsedAt:    now,
+		runtimeRoot:   runtimeEnv.root,
 	}
 	p.mu.Lock()
 	p.entries[entry.id] = entry
@@ -213,7 +226,83 @@ func (p *browserWindowPool) close(deviceID string) bool {
 	}
 	e.browserCancel()
 	e.allocCancel()
+	if e.runtimeRoot != "" {
+		_ = os.RemoveAll(e.runtimeRoot)
+	}
 	return true
+}
+
+type browserWindowRuntime struct {
+	root          string
+	homeDir       string
+	profileDir    string
+	xdgRuntimeDir string
+	tmpDir        string
+	cacheDir      string
+	dataDir       string
+}
+
+func newBrowserWindowRuntime() (browserWindowRuntime, error) {
+	root, err := os.MkdirTemp("", "yaver-browser-window-*")
+	if err != nil {
+		return browserWindowRuntime{}, err
+	}
+	rt := browserWindowRuntime{
+		root:          root,
+		homeDir:       filepath.Join(root, "home"),
+		profileDir:    filepath.Join(root, "profile"),
+		xdgRuntimeDir: filepath.Join(root, "runtime"),
+		tmpDir:        filepath.Join(root, "tmp"),
+		cacheDir:      filepath.Join(root, "cache"),
+		dataDir:       filepath.Join(root, "data"),
+	}
+	for _, dir := range []string{rt.homeDir, rt.profileDir, rt.xdgRuntimeDir, rt.tmpDir, rt.cacheDir, rt.dataDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			_ = rt.cleanup()
+			return browserWindowRuntime{}, err
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			_ = rt.cleanup()
+			return browserWindowRuntime{}, err
+		}
+	}
+	return rt, nil
+}
+
+func (rt browserWindowRuntime) cleanup() error {
+	if rt.root == "" {
+		return nil
+	}
+	return os.RemoveAll(rt.root)
+}
+
+func browserWindowLaunchError(err error) error {
+	reason := browserWindowLaunchErrorReason(err)
+	if reason == ReasonBrowserWindowChromeMissing {
+		return fmt.Errorf("launch headless chromium: %s: %w (install Chrome or Chromium)", reason, err)
+	}
+	return fmt.Errorf("launch headless chromium: %s: %w", reason, err)
+}
+
+func browserWindowLaunchErrorReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := strings.ToLower(err.Error())
+	if errors.Is(err, exec.ErrNotFound) || strings.Contains(text, "executable file not found") {
+		return ReasonBrowserWindowChromeMissing
+	}
+	if strings.Contains(text, "failed to create socket directory") ||
+		strings.Contains(text, "xdg_runtime_dir") ||
+		strings.Contains(text, "runtime dir") {
+		return ReasonBrowserWindowChromeRuntimeDir
+	}
+	if strings.Contains(text, "processsingleton") ||
+		strings.Contains(text, "singleton") ||
+		strings.Contains(text, "profile directory") {
+		return ReasonBrowserWindowChromeProfile
+	}
+	return ReasonBrowserWindowChromeLaunch
 }
 
 func (p *browserWindowPool) setEventSink(deviceID string, sink func(map[string]any)) bool {

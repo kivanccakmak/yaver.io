@@ -8,12 +8,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -83,6 +85,100 @@ func TestBrowserPoolCloseUnknown(t *testing.T) {
 	pool := &browserWindowPool{entries: map[string]*browserWindowEntry{}}
 	if pool.close("does-not-exist") {
 		t.Fatalf("close on unknown id should return false")
+	}
+}
+
+func TestBrowserPoolCloseCleansRuntimeRoot(t *testing.T) {
+	root := t.TempDir() + "/browser-runtime"
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("mkdir runtime root: %v", err)
+	}
+	marker := root + "/profile-marker"
+	if err := os.WriteFile(marker, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	pool := &browserWindowPool{entries: map[string]*browserWindowEntry{
+		"bw_test": {
+			id:            "bw_test",
+			browserCancel: func() {},
+			allocCancel:   func() {},
+			runtimeRoot:   root,
+		},
+	}}
+	if !pool.close("bw_test") {
+		t.Fatalf("close should return true for known id")
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("runtime root still exists after close: err=%v", err)
+	}
+}
+
+func TestBrowserWindowRuntimeCreatesIsolatedDirs(t *testing.T) {
+	rt, err := newBrowserWindowRuntime()
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.cleanup() })
+
+	dirs := []string{rt.homeDir, rt.profileDir, rt.xdgRuntimeDir, rt.tmpDir, rt.cacheDir, rt.dataDir}
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		if dir == "" {
+			t.Fatalf("runtime contains an empty directory path: %+v", rt)
+		}
+		if seen[dir] {
+			t.Fatalf("runtime directory reused within one session: %s", dir)
+		}
+		seen[dir] = true
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatalf("runtime dir %s missing: %v", dir, err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("runtime path %s is not a directory", dir)
+		}
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Fatalf("runtime dir %s mode=%o, want 700", dir, got)
+		}
+	}
+	if !strings.HasPrefix(rt.profileDir, rt.root) || !strings.HasPrefix(rt.xdgRuntimeDir, rt.root) {
+		t.Fatalf("profile/runtime dirs must live under the session root: %+v", rt)
+	}
+}
+
+func TestBrowserWindowLaunchErrorReason(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "missing",
+			err:  exec.ErrNotFound,
+			want: ReasonBrowserWindowChromeMissing,
+		},
+		{
+			name: "runtime dir",
+			err:  errors.New("Failed to create socket directory"),
+			want: ReasonBrowserWindowChromeRuntimeDir,
+		},
+		{
+			name: "profile singleton",
+			err:  errors.New("Failed to create a ProcessSingleton for your profile directory"),
+			want: ReasonBrowserWindowChromeProfile,
+		},
+		{
+			name: "generic",
+			err:  errors.New("chrome failed to start"),
+			want: ReasonBrowserWindowChromeLaunch,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := browserWindowLaunchErrorReason(tc.err); got != tc.want {
+				t.Fatalf("reason=%q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

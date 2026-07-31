@@ -39,4 +39,12 @@ const (
 	// CapabilityGap.Resource (the numbers) and CapabilityGap.Reclaim (the
 	// route that frees them).
 	ReasonCapabilityInsufficientDisk = "capability.insufficient_disk"
+	// Browser-window is a real remote-runtime operation, not just "Chrome is
+	// on PATH". These reason codes let every surface distinguish "install a
+	// browser" from "the browser exists but its profile/runtime directory is
+	// unusable".
+	ReasonBrowserWindowChromeMissing    = "browser_window.chrome_missing"
+	ReasonBrowserWindowChromeProfile    = "browser_window.chrome_profile_lock"
+	ReasonBrowserWindowChromeRuntimeDir = "browser_window.chrome_runtime_dir"
+	ReasonBrowserWindowChromeLaunch     = "browser_window.chrome_launch_failed"
 )

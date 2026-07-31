@@ -51,6 +51,28 @@ func TestBrowserPoolBootsFromChromedpContext(t *testing.T) {
 	}
 }
 
+func TestBrowserPoolUsesIsolatedChromeRuntime(t *testing.T) {
+	src, err := os.ReadFile("remote_runtime_browser.go")
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+	code := stripGoLineCommentsForTest(string(src))
+
+	for _, want := range []string{
+		"chromedp.UserDataDir(",
+		"chromedp.Env(",
+		"XDG_RUNTIME_DIR=",
+		"TMPDIR=",
+		"HOME=",
+		`chromedp.Flag("disk-cache-dir"`,
+		`chromedp.Flag("data-path"`,
+	} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("browser-window launcher missing %q; Chrome can reuse a stale profile/runtime singleton and fail while reachability is green", want)
+		}
+	}
+}
+
 // The "install Chrome" hint must be reserved for an actually-missing browser.
 // Attaching it to every failure is what made the context bug so expensive.
 func TestBrowserLaunchOnlyBlamesMissingChromeWhenItIsMissing(t *testing.T) {
