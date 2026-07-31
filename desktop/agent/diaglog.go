@@ -194,6 +194,40 @@ func (d *diagLogger) logf(lvl diagLevel, tag, format string, args ...interface{}
 	}
 }
 
+// writeRaw appends an already-formatted line to the FILE only — no level
+// filter, no journal mirror, no re-tagging.
+//
+// It exists for the stdlib log bridge (diag_stdlib_bridge.go). Those lines
+// arrive pre-formatted, carry their own timestamp, and have already been
+// written to stderr by the bridge; mirroring them again here would double
+// every line in journald. Rotation and the disk-full kill-switch still apply,
+// so the bridge cannot grow agent.log past the ceiling in diagMaxBytes.
+func (d *diagLogger) writeRaw(p []byte) {
+	if d == nil || len(p) == 0 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.disabled {
+		return
+	}
+	if d.f == nil && !d.openLocked() {
+		return
+	}
+	n, err := d.f.Write(p)
+	if err != nil {
+		// Most likely the disk filled. Stop rather than spin on every line.
+		d.disabled = true
+		_ = d.f.Close()
+		d.f = nil
+		return
+	}
+	d.written += int64(n)
+	if d.written >= diagMaxBytes {
+		d.rotateLocked()
+	}
+}
+
 func (d *diagLogger) openLocked() bool {
 	f, err := os.OpenFile(d.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {

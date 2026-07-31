@@ -770,7 +770,18 @@ func notifyConvexAuthExpired(cfg *Config, httpPort int) {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		log.Printf("[auth-expired-convex] Convex returned %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		body := strings.TrimSpace(string(snippet))
+		// An identity rejection is not a transient error and not a network
+		// problem: it means this box has NO remaining way to announce that it
+		// needs signing in, so every surface will render it as merely
+		// unreachable. Say that, with the remedy, instead of forwarding a
+		// Convex stack trace nobody can act on.
+		if kind := classifyBootstrapRejection(resp.StatusCode, body); kind != identityConflictNone {
+			log.Printf("[auth-expired-convex] %s (%s) — Convex said: %s",
+				deviceIdentityConflictRemedy(kind, cfg.DeviceID), ReasonDeviceIdentityConflict, body)
+			return
+		}
+		log.Printf("[auth-expired-convex] Convex returned %d: %s", resp.StatusCode, body)
 		return
 	}
 	log.Printf("[auth-expired-convex] Marked device %s as needs-auth so clients can show re-auth UI", cfg.DeviceID[:8])
@@ -884,7 +895,18 @@ func notifyConvexBootstrap(cfg *Config, httpPort int) {
 		}
 		if resp.StatusCode >= 400 {
 			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-			log.Printf("[bootstrap-convex] Convex returned %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+			body := strings.TrimSpace(string(snippet))
+			// Same identity rejection as notifyConvexAuthExpired, reached on
+			// the boot path instead of mid-session. A box that starts up into
+			// this state never appears as NEEDS AUTH anywhere, so the operator
+			// must be told here too — this retries every 30s and would
+			// otherwise print the same stack trace forever.
+			if kind := classifyBootstrapRejection(resp.StatusCode, body); kind != identityConflictNone {
+				log.Printf("[bootstrap-convex] %s (%s) — Convex said: %s",
+					deviceIdentityConflictRemedy(kind, cfg.DeviceID), ReasonDeviceIdentityConflict, body)
+				return
+			}
+			log.Printf("[bootstrap-convex] Convex returned %d: %s", resp.StatusCode, body)
 			return
 		}
 		log.Printf("[bootstrap-convex] Registered as needs-auth (device %s)", cfg.DeviceID[:8])

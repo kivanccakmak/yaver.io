@@ -205,8 +205,11 @@ type HTTPServer struct {
 	tlsCert        tls.Certificate
 	tlsFingerprint string
 
-	// Auth status — set by heartbeat loop when token expires
-	authExpired atomic.Bool
+	// Auth status — set by heartbeat loop when token expires.
+	// sessionExpiredFlag (not a bare atomic.Bool) so every Store here also
+	// reaches the process-wide mirror that the relay tunnel goroutine reads;
+	// see relay_auth_signal.go for the incident that requires it.
+	authExpired sessionExpiredFlag
 	// True while a manual update request is running. Prevents duplicate
 	// self-update attempts from web/mobile clients.
 	agentUpdateRunning atomic.Bool

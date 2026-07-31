@@ -2304,6 +2304,12 @@ var isDaemonProcess bool
 func runServe(args []string) {
 	isDaemonProcess = true
 
+	// Point stdlib log at agent.log BEFORE the guaranteed first line below, so
+	// that line — and every log.Printf after it — lands in the file `yaver
+	// logs`, doctor and support bundles actually read, instead of journald
+	// only. See diag_stdlib_bridge.go for the outage this closes.
+	installStdlibLogBridge()
+
 	// FIRST LINE OF SERVE. Unconditional, before flags, config, auth or any
 	// path that can fail.
 	//
@@ -11441,6 +11447,19 @@ func runRelayTunnel(ctx context.Context, relayAddr, agentAddr, deviceID, token, 
 					password = fresh
 					backoff = time.Second // reset; we have new creds
 					continue
+				} else if fresh == "" {
+					// /settings did not answer at all. On this path that
+					// usually means the session token is dead too — the
+					// refetch needs it — so say which lever is left instead
+					// of dropping into a silent backoff.
+					log.Printf("[RELAY %s] Relay refused the password and Convex /settings returned nothing — "+
+						"cannot self-heal from here; run `yaver auth` on this machine to restore the tunnel", relayAddr)
+				} else {
+					// Convex handed back the SAME password the relay just
+					// refused. Retrying it is provably useless; the loop
+					// below will do so anyway, so at least name the deadlock.
+					log.Printf("[RELAY %s] Convex returned the same relay password the relay just refused — "+
+						"credentials are stale on this machine; run `yaver auth` here to restore the tunnel", relayAddr)
 				}
 			case relayAuthDeviceMismatch:
 				log.Printf("[RELAY %s] Password owner does not own deviceId %q — cannot self-heal; "+
@@ -11448,8 +11467,20 @@ func runRelayTunnel(ctx context.Context, relayAddr, agentAddr, deviceID, token, 
 				// No retry helps — a password refetch or a token refresh cannot
 				// change who owns the deviceId. Fall through to backoff.
 			case relayAuthUnknown:
-				// Old relay or an error shape we do not recognise. Fall through
-				// to the plain backoff loop; no self-heal to attempt.
+				// relayAuthUnknown is also what every ORDINARY transport error
+				// lands on — dial timeouts, connection refused, a relay
+				// restarting. Those are already covered by the "Connection
+				// lost" line above and must not be re-logged, or a flapping
+				// network drowns the file.
+				//
+				// A refusal we could not classify is different: the relay
+				// answered and said no, and we did not understand why. That is
+				// a diagnosis the next reader needs, because it is exactly the
+				// shape a relay older than this agent produces.
+				if strings.Contains(strings.ToLower(err.Error()), "registration rejected") {
+					log.Printf("[RELAY %s] Registration refused with an unrecognised reason (%v) — "+
+						"no automatic remedy; relay may be older than this agent", relayAddr, err)
+				}
 			}
 		}
 
@@ -11557,6 +11588,19 @@ const (
 // string ("invalid relay credentials (password or session token)") so an old
 // relay still gets treated as bad-password (the historic behaviour).
 func classifyRelayAuthFailure(err error) relayAuthFailureKind {
+	return classifyRelayAuthFailureWithSignals(err, agentSessionKnownExpired())
+}
+
+// classifyRelayAuthFailureWithSignals is the pure form: everything it decides
+// comes from its arguments, so a test can drive the legacy path without
+// touching process-wide state.
+//
+// sessionKnownExpired is what the AGENT already knows about its own Convex
+// session at the moment the relay refused it. It is consulted ONLY on the
+// legacy fallthrough — a modern relay's `reason=` verdict is authoritative and
+// must never be second-guessed, because the relay is the only party that knows
+// which of the two credentials it actually rejected.
+func classifyRelayAuthFailureWithSignals(err error, sessionKnownExpired bool) relayAuthFailureKind {
 	if err == nil {
 		return relayAuthUnknown
 	}
@@ -11569,12 +11613,26 @@ func classifyRelayAuthFailure(err error) relayAuthFailureKind {
 	case strings.Contains(msg, "reason=bad_password"):
 		return relayAuthBadPassword
 	}
-	// Legacy fallthrough: an older relay emits the collapsed
-	// "invalid relay credentials (password or session token)". Assume
-	// bad-password so the pre-fix self-heal path is preserved.
+	// Legacy fallthrough: an older relay collapses both credentials into one
+	// sentence — "invalid relay credentials (password or session token)", or
+	// plain "invalid relay password". The prose cannot tell them apart.
+	//
+	// The box can. If our own session is already known dead, then a password
+	// refetch is a PROVABLE no-op: refreshRelayPasswordFromConvex authenticates
+	// with the same token, so it can only return the stale value we already
+	// hold. Answering bad-password here is what made ubuntu-4gb-hel1-1 retry a
+	// deterministically-invalid credential every 60s for hours while the actual
+	// remedy (repairRelaySessionToken) sat one case away, unreachable. See
+	// relay_auth_signal.go.
+	//
+	// With no evidence of a dead session we keep the historical answer, so a
+	// genuinely rotated password still self-heals on relays too old to say so.
 	if strings.Contains(msg, "invalid relay credentials") ||
 		(strings.Contains(msg, "password") &&
 			(strings.Contains(msg, "invalid") || strings.Contains(msg, "rejected") || strings.Contains(msg, "denied"))) {
+		if sessionKnownExpired {
+			return relayAuthDeadToken
+		}
 		return relayAuthBadPassword
 	}
 	return relayAuthUnknown

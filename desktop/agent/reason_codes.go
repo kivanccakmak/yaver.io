@@ -47,4 +47,19 @@ const (
 	ReasonBrowserWindowChromeProfile    = "browser_window.chrome_profile_lock"
 	ReasonBrowserWindowChromeRuntimeDir = "browser_window.chrome_runtime_dir"
 	ReasonBrowserWindowChromeLaunch     = "browser_window.chrome_launch_failed"
+	// ReasonDeviceIdentityConflict is "this machine's deviceId is registered to
+	// DIFFERENT hardware or a different key". Convex's markBootstrap
+	// authenticates a token-dead box on the (deviceId, hardwareId, publicKey)
+	// triple — the one proof that survives an expired session — and rejects a
+	// mismatch outright. That rejection is correct and must never be relaxed;
+	// it is what stops a stranger toggling someone else's device row.
+	//
+	// The consequence is what needs a name. A box that fails this check has NO
+	// channel left to say "I am alive and need signing in": needsAuth is never
+	// set, so every surface can only render "unreachable", and the user is
+	// told to check a network that is fine. Seen live on ubuntu-4gb-hel1-1
+	// (2026-07-31), where a second daemon (yaver-sim, a separate service
+	// account) ran from a COPIED config carrying the same deviceId, so
+	// whichever registered last owned the row and locked the other one out.
+	ReasonDeviceIdentityConflict = "device.identity_conflict"
 )
