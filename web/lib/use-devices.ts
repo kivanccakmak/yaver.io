@@ -38,6 +38,21 @@ export interface Device {
   lastSeen: string;
   online: boolean;
   publicKey?: string;
+  /**
+   * A short-lived sign-in code this machine is offering, present ONLY while its
+   * own session is dead — which is precisely when no other channel to it works.
+   *
+   * The box publishes it on its heartbeat (outbound HTTPS, no relay, no inbound
+   * port, no reachability), because the alternative it shipped with was logging
+   * the code to a machine nobody can reach. Surfaces render it as an Approve
+   * button; approving mints a fresh session and the box signs itself back in.
+   *
+   * Not a credential: authorizeDeviceCode derives the account from the
+   * APPROVER's bearer token, so holding this code without already being signed
+   * in as the owner authorizes nothing. Convex expires it at 15 minutes, so a
+   * surface never has to decide whether it is still live.
+   */
+  pendingAuthCode?: string;
   hardwareId?: string;
   hardwareProfile?: {
     os?: string;
@@ -401,6 +416,9 @@ function mergeDeviceEntries(existing: Device, incoming: Device): Device {
     online: base.online || other.online,
     publicKey: base.publicKey || other.publicKey,
     hardwareId: base.hardwareId || other.hardwareId,
+    // Either half may carry the rescue code; losing it in the merge would drop
+    // the only route back to a box nothing else can reach.
+    pendingAuthCode: base.pendingAuthCode || other.pendingAuthCode,
     hardwareProfile: base.hardwareProfile || other.hardwareProfile,
     lastTunnelEvent: (() => {
       const baseAt = base.lastTunnelEvent?.at || 0;
@@ -660,6 +678,13 @@ export function useDevices(token: string | null): DevicesState & { hiddenIds: Se
         lastSeen: heartbeatMs > 0 ? new Date(heartbeatMs).toISOString() : "",
         online,
         publicKey: d.publicKey,
+        // The rescue code, when this box is offering one. Convex has already
+        // expired anything older than 15 minutes, so a truthy value here is a
+        // code that can still be approved right now.
+        pendingAuthCode:
+          typeof d.pendingAuthCode === "string" && d.pendingAuthCode
+            ? d.pendingAuthCode
+            : undefined,
         hardwareId: d.hardwareId ?? d.hwid,
         hardwareProfile: d.hardwareProfile ?? undefined,
         resourcePressure: d.resourcePressure ?? undefined,

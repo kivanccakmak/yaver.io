@@ -1,5 +1,7 @@
 "use client";
 
+import { ApproveSignInLane } from "./ApproveSignInLane";
+
 import Link from "next/link";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Device, type DeviceStorage, hideDevice, unhideAll } from "@/lib/use-devices";
@@ -3783,6 +3785,16 @@ export default function DevicesView({
                       ) : null}
                       <DeviceLifecycleBadge device={device} />
                     </div>
+                    {/* The route back for a machine nothing can reach. Renders
+                        only while the box is actually offering a code, so it
+                        costs zero pixels on a healthy card — and when it does
+                        appear it is an action, not another status chip. */}
+                    <ApproveSignInLane
+                      deviceName={device.alias || device.name || "This machine"}
+                      pendingAuthCode={device.pendingAuthCode}
+                      token={token}
+                      convexSiteUrl={CONVEX_URL}
+                    />
                     <div className="mt-1 flex flex-wrap items-center gap-1">
                       {/* The connected card states its LIVE path in prose
                           ("Connected · Yaver public relay · 604ms") and drops
