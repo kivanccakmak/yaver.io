@@ -2594,6 +2594,16 @@ http.route({
         typeof body.relayConnected === "boolean" ? body.relayConnected : undefined,
       canReboot:
         typeof body.canReboot === "boolean" ? body.canReboot : undefined,
+      // Bounded and shape-checked: a device code is ABCD-1234. Anything else is
+      // dropped rather than stored, so this field can never become a channel for
+      // arbitrary agent-controlled text on a row every surface renders.
+      pendingAuthCode:
+        typeof body.pendingAuthCode === "string" &&
+        /^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(body.pendingAuthCode)
+          ? body.pendingAuthCode
+          : typeof body.pendingAuthCode === "string"
+            ? ""
+            : undefined,
       hardwareId: body.hardwareId || undefined,
       hardwareProfile: body.hardwareProfile || undefined,
       deviceClass: body.deviceClass || undefined,

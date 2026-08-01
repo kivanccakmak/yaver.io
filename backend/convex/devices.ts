@@ -223,6 +223,7 @@ type ListedDevice = {
   lastTunnelEvent?: Doc<"devices">["lastTunnelEvent"];
   relayConnected?: boolean;
   canReboot?: boolean;
+  pendingAuthCode?: string;
   isGuest: boolean;
   hostUserId?: string;
   hostName?: string;
@@ -1115,6 +1116,7 @@ export const heartbeat = mutation({
     publicEndpoints: v.optional(v.array(v.string())),
     relayConnected: v.optional(v.boolean()),
     canReboot: v.optional(v.boolean()),
+    pendingAuthCode: v.optional(v.string()),
     hardwareId: v.optional(v.string()),
     hardwareProfile: v.optional(hardwareProfileValidator),
     deviceClass: v.optional(
@@ -1311,6 +1313,19 @@ export const heartbeat = mutation({
       args.canReboot !== device.canReboot
     ) {
       patch.canReboot = args.canReboot;
+    }
+    // The rescue code a dead-session box is offering. Stamped with its own
+    // timestamp because surfaces must expire it on their own: a box that goes
+    // fully offline stops heartbeating, so the LAST value it sent would
+    // otherwise sit on the row forever and render an Approve button for a code
+    // that died 15 minutes later. lastSeen cannot stand in for it — a healthy
+    // box heartbeats constantly with no code at all.
+    if (
+      args.pendingAuthCode !== undefined &&
+      args.pendingAuthCode !== device.pendingAuthCode
+    ) {
+      patch.pendingAuthCode = args.pendingAuthCode;
+      patch.pendingAuthCodeAt = args.pendingAuthCode ? Date.now() : undefined;
     }
     // Capture hardwareId on heartbeats too — older agents that
     // were registered before the field existed will pick it up
@@ -1940,6 +1955,11 @@ export const listMyDevices = query({
       lastTunnelEvent: d.lastTunnelEvent,
       relayConnected: d.relayConnected ?? false,
       canReboot: d.canReboot ?? false,
+      pendingAuthCode:
+        d.pendingAuthCode && d.pendingAuthCodeAt &&
+        Date.now() - d.pendingAuthCodeAt < 15 * 60 * 1000
+          ? d.pendingAuthCode
+          : undefined,
       agentVersion: d.agentVersion,
       agentVersionReportedAt: d.agentVersionReportedAt,
       isGuest: false as boolean,
@@ -2022,6 +2042,14 @@ export const listMyDevices = query({
           lastTunnelEvent: d.lastTunnelEvent,
           relayConnected: d.relayConnected ?? false,
           canReboot: d.canReboot ?? false,
+          // Surfaces render this as an Approve button. Expired here rather than
+          // on each surface, so five clients cannot disagree about whether a
+          // 15-minute code is still live.
+          pendingAuthCode:
+            d.pendingAuthCode && d.pendingAuthCodeAt &&
+            Date.now() - d.pendingAuthCodeAt < 15 * 60 * 1000
+              ? d.pendingAuthCode
+              : undefined,
           isGuest: true,
           hostUserId: String(grant.hostUserId),
           hostName: host.fullName,
@@ -2090,6 +2118,14 @@ export const listMyDevices = query({
           lastTunnelEvent: d.lastTunnelEvent,
           relayConnected: d.relayConnected ?? false,
           canReboot: d.canReboot ?? false,
+          // Surfaces render this as an Approve button. Expired here rather than
+          // on each surface, so five clients cannot disagree about whether a
+          // 15-minute code is still live.
+          pendingAuthCode:
+            d.pendingAuthCode && d.pendingAuthCodeAt &&
+            Date.now() - d.pendingAuthCodeAt < 15 * 60 * 1000
+              ? d.pendingAuthCode
+              : undefined,
           isGuest: true,
           hostUserId: String(access.hostUserId),
           hostName: host.fullName,

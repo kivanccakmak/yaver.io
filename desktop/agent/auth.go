@@ -1959,6 +1959,28 @@ func SendHeartbeat(baseURL, token, deviceID string, runners []RunnerInfo, instal
 	// "no permission on this machine" and offer the opt-in grant, instead of
 	// showing a Reboot button that can only fail when tapped.
 	payload["canReboot"] = canRebootHost()
+	// The rescue code this box is currently offering, if any.
+	//
+	// beginSelfNomination creates a device code when the relay refuses this box
+	// with reason=dead_token, so an owner who is already signed in somewhere can
+	// sign it back in with one tap. It used to only LOG the code — which is
+	// circular, because the whole premise is that nobody can reach this machine
+	// to read its log. currentSelfNominatedCode() had zero consumers: a correct
+	// producer that shipped to nothing.
+	//
+	// The heartbeat is the one channel that still works in exactly this state.
+	// It is outbound HTTPS to Convex and needs no relay, no inbound port and no
+	// reachability — the same property that lets a dead-session box still pull a
+	// queued agent update. So the code rides here, and surfaces render it as an
+	// Approve button on the device card.
+	//
+	// Safe to publish, and not a credential: authorizeDeviceCode derives the
+	// account from the APPROVER's bearer token, so holding this code without
+	// already being signed in as the owner authorizes nothing. It is an
+	// invitation. The minted session token never travels this way — the box
+	// polls for it over the same channel `yaver auth` uses. Empty string when
+	// nothing is pending, so the field also clears itself.
+	payload["pendingAuthCode"] = currentSelfNominatedCode()
 	// Coerce nil slices to empty arrays so JSON encodes them as `[]` not
 	// `null`. The Convex http wrapper treats Array-valued localIps as
 	// "deliberate clear", but `null` short-circuits to `undefined` and

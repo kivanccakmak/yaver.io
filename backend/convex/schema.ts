@@ -522,6 +522,13 @@ export default defineSchema({
     // probing the box, and offer the opt-in grant instead of a dead button.
     // A boolean capability: no paths, no secrets (privacy contract).
     canReboot: v.optional(v.boolean()),
+    // Short-lived device code this box is offering so an owner who is already
+    // signed in elsewhere can sign it back in with one tap. Present only while
+    // the box's own session is dead, which is precisely when no other channel
+    // to it works. An invitation, not a credential: redeeming it requires the
+    // approver's bearer token, so publishing it grants a stranger nothing.
+    pendingAuthCode: v.optional(v.string()),
+    pendingAuthCodeAt: v.optional(v.number()),
     createdAt: v.number(),
     // Bootstrap state: true when agent is running without a valid token.
     // Clients show a "NEEDS AUTH" badge and can auto-pair via relay.
