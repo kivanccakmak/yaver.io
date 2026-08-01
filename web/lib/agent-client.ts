@@ -3627,7 +3627,41 @@ export class AgentClient {
     // allow-list includes X-Relay-Password (httpserver.go), and a box that
     // receives it directly simply ignores it.
     const rolesActive = !!(this.taskRouteDeviceId || this.renderRouteDeviceId);
-    const pw = this._activeRelayUrl ? this.activeRelayPassword : rolesActive ? this.routingRelayPassword : null;
+    // Last resort: the URL we are ABOUT TO DIAL is a relay we configured.
+    //
+    // The two conditions above ask whether a relay FLAG is set, not whether the
+    // request is going to a relay. Any client whose baseUrl points at a relay
+    // while _activeRelayUrl is unset — a card probing a device it never
+    // "connected" to, a view built before the transport resolved — sends the
+    // request with a bearer and no password, and the relay refuses it.
+    //
+    // Captured from the live dashboard 2026-08-01 with a request interceptor:
+    //
+    //   401  pw=ABSENT  https://public.yaver.io/d/9b6f9ec8…/projects
+    //   200  pw=len48   https://public.yaver.io/d/2ed7da41…/tasks?limit=5
+    //
+    // Same page, same session, same valid 48-char password — attached to one
+    // request and not the other. The bare one answers 401 relay_password_missing,
+    // and connection-error.ts renders that as "Relay refused: account relay
+    // password missing or stale", which blames the account for a header this
+    // client simply did not send. Machines with a direct path (Private network)
+    // were unaffected, which is what made it look per-machine for days.
+    //
+    // Probe the operation, not the proxy: match the actual target against the
+    // configured relay list. This only ever ADDS a password when the destination
+    // is provably one of our own relays, and a box that receives it directly
+    // ignores it.
+    const base = this.baseUrl;
+    const relayForBase = base
+      ? this.relayServers.find(
+          (r) => typeof r.httpUrl === "string" && r.httpUrl && base.startsWith(r.httpUrl),
+        )
+      : undefined;
+    const pw = this._activeRelayUrl
+      ? this.activeRelayPassword
+      : rolesActive
+        ? this.routingRelayPassword
+        : (relayForBase?.password ?? null);
     if (pw) {
       h["X-Relay-Password"] = pw;
     }
