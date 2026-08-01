@@ -3341,7 +3341,7 @@ export default function DevicesView({
           <span>
             Device list as of{" "}
             <span className="font-mono">{new Date(devicesFetchedAt).toLocaleTimeString()}</span>
-            {" · "}reachability is only verified for machines you open or refresh
+            {" · "}every machine was probed, not just the one you opened
           </span>
         ) : null}
       </div>
