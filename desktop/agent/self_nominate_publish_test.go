@@ -95,3 +95,43 @@ func TestPendingAuthCodeIsShapeCheckedServerSide(t *testing.T) {
 			"put arbitrary text on a row every surface renders")
 	}
 }
+
+// A relay-password DEADLOCK must offer a rescue, not prescribe a shell visit.
+//
+// When the relay refuses our credentials and Convex either does not answer or
+// hands back the very password that was just refused, retrying is provably
+// useless. The loop used to log "run `yaver auth` on this machine to restore
+// the tunnel" and back off — the exact remedy this chain exists to delete.
+//
+// Measured 2026-08-01: `linux-2` sat in that state, heartbeating to Convex every
+// minute, on the current agent, unreachable, while the dashboard read "Alive ·
+// can't reach (Relay refused: account relay password missing or stale)". The
+// account-level repair endpoint answered "already in sync" — correctly, because
+// the account was never the problem. Only that box's cached copy was, and only a
+// shell could fix it.
+//
+// A box in this state still reaches Convex outbound, which is the whole premise
+// of self-nomination.
+func TestRelayPasswordDeadlockOffersARescue(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+
+	if !strings.Contains(body, "func offerRelayRescue(") {
+		t.Fatal("offerRelayRescue is gone — a relay-password deadlock is back to telling " +
+			"the user to walk to the machine")
+	}
+	// Both deadlock branches, not just one. The fresh=="" branch and the
+	// same-password branch are different failures with the same dead end.
+	if n := strings.Count(body, "offerRelayRescue("); n < 3 {
+		t.Fatalf("offerRelayRescue is referenced %d times (want the definition plus BOTH "+
+			"deadlock branches) — one of them still dead-ends", n)
+	}
+	// The old remedy must not be what a deadlocked box prints.
+	if strings.Contains(body, "run `yaver auth` on this machine to restore the tunnel\", relayAddr)") &&
+		!strings.Contains(body, "no Convex URL configured on this machine") {
+		t.Fatal("the shell-visit remedy is back on the deadlock path")
+	}
+}

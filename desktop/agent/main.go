@@ -11464,16 +11464,16 @@ func runRelayTunnel(ctx context.Context, relayAddr, agentAddr, deviceID, token, 
 				} else if fresh == "" {
 					// /settings did not answer at all. On this path that
 					// usually means the session token is dead too — the
-					// refetch needs it — so say which lever is left instead
-					// of dropping into a silent backoff.
+					// refetch needs it.
 					log.Printf("[RELAY %s] Relay refused the password and Convex /settings returned nothing — "+
-						"cannot self-heal from here; run `yaver auth` on this machine to restore the tunnel", relayAddr)
+						"asking to be signed in again from another surface", relayAddr)
+					offerRelayRescue(relayAddr)
 				} else {
 					// Convex handed back the SAME password the relay just
-					// refused. Retrying it is provably useless; the loop
-					// below will do so anyway, so at least name the deadlock.
+					// refused. Retrying it is provably useless.
 					log.Printf("[RELAY %s] Convex returned the same relay password the relay just refused — "+
-						"credentials are stale on this machine; run `yaver auth` here to restore the tunnel", relayAddr)
+						"credentials are stale on this machine; asking to be signed in again from another surface", relayAddr)
+					offerRelayRescue(relayAddr)
 				}
 			case relayAuthPinMismatch:
 				// Re-ask the control plane which key is authentic. This does
@@ -11679,6 +11679,44 @@ func classifyRelayAuthFailureWithSignals(err error, sessionKnownExpired bool) re
 // Called ONLY from the relay reconnect path when classifyRelayAuthFailure
 // returns relayAuthDeadToken, because refetching the password when the
 // session is dead is a provable no-op (see the comment in the caller).
+// offerRelayRescue asks to be signed in again from a surface the owner already
+// holds, instead of telling them to walk to this machine.
+//
+// Both callers are relay-password DEADLOCKS: the relay refused our credentials
+// and Convex either did not answer or handed back the very password that was
+// just refused. Retrying is provably useless, so the loop used to log
+// "run `yaver auth` on this machine to restore the tunnel" and back off.
+//
+// That remedy is the thing this whole chain exists to delete. Measured
+// 2026-08-01: `linux-2` sat in exactly this state — heartbeating to Convex every
+// minute, on the current agent, and unreachable — while the dashboard read
+// "Alive · can't reach (Relay refused: account relay password missing or
+// stale)". A shell on the box was the only way out, and the account-level
+// repair endpoint correctly answered "already in sync" because the account was
+// never the problem: this machine's cached copy was.
+//
+// A box in this state can still reach Convex outbound — it is heartbeating —
+// which is the entire premise of self-nomination. So it mints a device code and
+// publishes it on its heartbeat, the owner taps Approve on a phone or in a
+// browser, and a FRESH session arrives with a relay password that works. No
+// shell, no LAN, no physical access.
+//
+// Note this is NOT the dead-token case: the session here may be perfectly
+// valid, which is why classifyRelayAuthFailure routed us to bad-password rather
+// than to repairRelaySessionToken. Re-signing in is still the correct lever,
+// because a new session carries a new relay password, and that is precisely the
+// credential that is stale. Rate-limited to one code per 10 minutes by
+// beginSelfNomination, so a box looping on a refusal cannot mint codes forever.
+func offerRelayRescue(relayAddr string) {
+	cfg, err := LoadConfig()
+	if err != nil || cfg == nil || strings.TrimSpace(cfg.ConvexSiteURL) == "" {
+		log.Printf("[RELAY %s] Cannot ask for a rescue code — no Convex URL configured on this machine; "+
+			"run `yaver auth` here to restore the tunnel", relayAddr)
+		return
+	}
+	beginSelfNomination(cfg.ConvexSiteURL, nil)
+}
+
 func repairRelaySessionToken(ctx context.Context) {
 	// The heavy-lifting live in the same module — send a soft signal that
 	// the current auth token is dead. auth_recover.go's watcher noticed
