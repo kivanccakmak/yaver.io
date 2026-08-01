@@ -18,23 +18,15 @@ if grep -q '^org.gradle.jvmargs=' gradle.properties 2>/dev/null; then
   fi
 fi
 
-# Pull Android signing creds + Play service account path from the Yaver
-# vault (project="mobile" + globals). Vault values win when present;
-# values that don't exist in the vault pass through from the parent env.
-# CI workflows that rely on GitHub-secret env vars just don't store them
-# in the vault (or run against a host that has no vault).
-if command -v yaver >/dev/null 2>&1; then
-  eval "$(yaver vault env --project mobile 2>/dev/null || true)"
-fi
-
-# Vault-locked fallback (mirrors deploy-testflight.sh's
-# ~/.appstoreconnect/yaver.env and deploy-web.sh's auto-source). After the
-# auth token rotates >1x, `yaver vault env` returns "wrong passphrase or
-# corrupted vault"; `yaver deploy all` runs this non-interactively so
-# YAVER_VAULT_PASSPHRASE can't be supplied. ~/.androidplay/yaver.env is
-# gitignored — pre-seed it with the Play exports the build/upload need
-# (PLAY_STORE_KEY_FILE, ANDROID_RELEASE_SHA256, any keystore overrides).
-# Vault values still win when readable; this only fills the gap.
+# Android signing creds + Play service account path. ~/.androidplay/yaver.env
+# is gitignored — pre-seed it with the exports the build/upload need
+# (PLAY_STORE_KEY_FILE, ANDROID_RELEASE_SHA256, any keystore overrides). In CI
+# they arrive as GitHub secrets in the parent env.
+#
+# This used to be a fallback behind `yaver vault env`. It is now the source: the
+# vault call swallowed its own failure, and `yaver deploy all` runs this
+# non-interactively, so a locked vault could not even be reported let alone
+# unlocked.
 if [ -f "$HOME/.androidplay/yaver.env" ]; then
   # shellcheck source=/dev/null
   set -a; source "$HOME/.androidplay/yaver.env"; set +a

@@ -60,20 +60,15 @@ hydrate_native_dependency_artifacts
 # parent env. Locally: `yaver vault add APP_STORE_KEY_PATH --project mobile`.
 # In CI: just don't put the secret in the vault — GitHub Actions env vars
 # pass through unchanged.
-if command -v yaver >/dev/null 2>&1; then
-  eval "$(yaver vault env --project mobile 2>/dev/null || true)"
-fi
 
-# Vault-locked fallback (mirrors deploy-web.sh's ~/.androidplay/yaver.env).
-# After kivanc's auth token rotates more than once, `yaver vault env`
-# returns "wrong passphrase or corrupted vault" until YAVER_VAULT_PASSPHRASE
-# is supplied — and `yaver deploy all` runs this script non-interactively,
-# so there's no chance to set it. Without this, the script dies at the
-# APP_STORE_KEY_PATH:? guard below with a misleading "secret not set"
-# error when the real cause is a locked vault. `~/.appstoreconnect/yaver.env`
-# is gitignored and pre-seeded with all four App Store Connect exports
-# (see CLAUDE.md "iOS — TestFlight"). Vault values still win when readable;
-# this only fills the gap when the vault can't be opened.
+# App Store Connect credentials. `~/.appstoreconnect/yaver.env` is gitignored
+# and pre-seeded with all four exports (see CLAUDE.md "iOS — TestFlight"); in
+# CI they arrive as GitHub secrets in the parent env.
+#
+# This used to be a fallback behind `yaver vault env`. It is now the source.
+# The vault call swallowed its own failure, so a locked vault died further down
+# at the APP_STORE_KEY_PATH:? guard reading "secret not set" — naming the wrong
+# cause, non-interactively, with no chance to supply a passphrase.
 if [ -f "$HOME/.appstoreconnect/yaver.env" ]; then
   # shellcheck source=/dev/null
   set -a; source "$HOME/.appstoreconnect/yaver.env"; set +a

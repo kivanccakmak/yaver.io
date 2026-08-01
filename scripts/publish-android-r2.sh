@@ -42,9 +42,6 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # --- credentials (mirror deploy-playstore.sh: vault wins, env-file fills gap) --
-if command -v yaver >/dev/null 2>&1; then
-  eval "$(yaver vault env --project mobile 2>/dev/null || true)"
-fi
 if [ -f "$HOME/.androidplay/yaver.env" ]; then
   set -a; . "$HOME/.androidplay/yaver.env"; set +a
 fi

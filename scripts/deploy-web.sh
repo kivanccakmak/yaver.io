@@ -7,30 +7,19 @@ set -euo pipefail
 # node_modules, .next, .open-next). Matches the CI guard in
 # release-web.yml (raised 10→15 MB in ddd5868d — demo videos push it over).
 #
-# Credentials (CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID) can come from
-# the existing environment OR from the Yaver vault (project="web" plus
-# globals). Vault values win when present — the vault is the deliberate
-# source of truth. To bypass (e.g. in CI), don't store the values in
-# the vault and set them via GitHub secrets instead.
-
-if command -v yaver >/dev/null 2>&1; then
-  eval "$(yaver vault env --project web 2>/dev/null || true)"
-  # Pull the mobile-project vault too — passkey assetlinks need the
-  # Play app-signing SHA-256 from there. `yaver vault add
-  # ANDROID_RELEASE_SHA256 --project mobile --value <fingerprint>` is
-  # how the user feeds in the Play Console value without committing
-  # it to the repo.
-  eval "$(yaver vault env --project mobile 2>/dev/null || true)"
-fi
-
-# Vault-locked fallback. After kivanc's auth token rotates, `yaver vault
-# env` returns "wrong passphrase" until YAVER_VAULT_PASSPHRASE is set
-# to the previous token. Without this fallback, deploy-web silently
-# ships assetlinks.json without ANDROID_RELEASE_SHA256, breaking
-# passkey on Play-distributed Android builds. Source a gitignored env
-# file if present — same pattern as ~/.appstoreconnect/yaver.env for
-# TestFlight (see CLAUDE.md "TestFlight env-file fallback"). Vault
-# values still win when readable; this only fills gaps.
+# Credentials (CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, and
+# ANDROID_RELEASE_SHA256 for passkey assetlinks) come from the parent
+# environment (GitHub secrets in CI) or from the gitignored env file below.
+#
+# They deliberately do NOT come from `yaver vault` any more. The vault call
+# that used to sit here swallowed its own failure (`|| true`), so a locked or
+# lost vault produced no message and the deploy failed later — or worse,
+# silently shipped assetlinks.json without ANDROID_RELEASE_SHA256, breaking
+# passkey on Play-distributed builds with nothing in the output to say why.
+# The env file was already winning anyway: it is sourced after the vault.
+#
+# A v2 vault is master-key encrypted and unrecoverable if that key is lost, so
+# no deploy may depend on it. See the vault audit (2026-08-01).
 if [ -f "$HOME/.androidplay/yaver.env" ]; then
   # shellcheck source=/dev/null
   set -a; source "$HOME/.androidplay/yaver.env"; set +a
@@ -40,11 +29,16 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEPLOY_DIR="$REPO_ROOT/web"
 MAX_SIZE_MB=15
 
-# Append the production Play app-signing SHA-256 to assetlinks.json
-# right before the build when ANDROID_RELEASE_SHA256 is in the vault.
-# The dev keystore fingerprint stays in tracked assetlinks.json for
-# `yaver wireless push` testing; this step adds the prod one without
-# committing it. Skipped silently when the vault key is empty.
+# Append the production Play app-signing SHA-256 to assetlinks.json right
+# before the build. The dev keystore fingerprint stays in tracked
+# assetlinks.json for `yaver wireless push` testing; this step adds the prod
+# one without committing it.
+#
+# This used to be "skipped silently when the vault key is empty" — a deploy that
+# succeeds while shipping an assetlinks.json that breaks passkey enrolment on
+# every Play-distributed build, with nothing at runtime naming the cause. It is
+# now loud, because the credential has exactly one source and a missing one is
+# a shipped defect, not a no-op.
 ASSETLINKS_PATH="$REPO_ROOT/web/public/.well-known/assetlinks.json"
 if [ -f "$ASSETLINKS_PATH" ] && [ -n "${ANDROID_RELEASE_SHA256:-}" ]; then
   if command -v jq >/dev/null 2>&1; then
@@ -56,10 +50,28 @@ if [ -f "$ASSETLINKS_PATH" ] && [ -n "${ANDROID_RELEASE_SHA256:-}" ]; then
         else .[0].target.sha256_cert_fingerprints += [$sha]
         end
     ' "$ASSETLINKS_PATH" > "$TMP" && mv "$TMP" "$ASSETLINKS_PATH"
-    echo "assetlinks.json: production SHA-256 merged from yaver vault (mobile project)."
+    echo "assetlinks.json: production Play SHA-256 merged."
   else
-    echo "WARN: jq not found — skipping ANDROID_RELEASE_SHA256 merge into assetlinks.json."
+    echo "ERROR: jq not found — cannot merge ANDROID_RELEASE_SHA256 into assetlinks.json." >&2
+    echo "       Shipping without it breaks passkey enrolment on Play-distributed builds." >&2
+    echo "       Fix: install jq (brew install jq), then re-run." >&2
+    exit 1
   fi
+elif [ -f "$ASSETLINKS_PATH" ]; then
+  echo "ERROR: ANDROID_RELEASE_SHA256 is not set — assetlinks.json would ship WITHOUT the" >&2
+  echo "       Play app-signing fingerprint. Passkey enrolment then fails on every" >&2
+  echo "       Play-distributed Android build, and nothing at runtime names this cause." >&2
+  echo "" >&2
+  echo "       Get it: Play Console -> Setup -> App integrity -> App signing key certificate (SHA-256)." >&2
+  echo "       Then:   mkdir -p ~/.androidplay" >&2
+  echo "               echo 'export ANDROID_RELEASE_SHA256=\"AA:BB:CC:...\"' >> ~/.androidplay/yaver.env" >&2
+  echo "" >&2
+  echo "       To ship the web app knowingly without Android passkey support, set" >&2
+  echo "       YAVER_ALLOW_MISSING_ASSETLINKS_SHA=1 for this run." >&2
+  if [ "${YAVER_ALLOW_MISSING_ASSETLINKS_SHA:-}" != "1" ]; then
+    exit 1
+  fi
+  echo "       YAVER_ALLOW_MISSING_ASSETLINKS_SHA=1 set — continuing without it." >&2
 fi
 
 # 1. Calculate deployed directory size (excluding node_modules and .next)

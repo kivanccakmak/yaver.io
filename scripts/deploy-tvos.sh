@@ -92,9 +92,6 @@ if [ "$UPLOAD" != "1" ]; then
   exit 0
 fi
 
-if command -v yaver >/dev/null 2>&1; then
-  eval "$(yaver vault env --project mobile 2>/dev/null || true)"
-fi
 if [ -f "$HOME/.appstoreconnect/yaver.env" ]; then
   set -a; source "$HOME/.appstoreconnect/yaver.env"; set +a
 fi

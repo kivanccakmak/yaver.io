@@ -5,17 +5,15 @@ set -eo pipefail
 #
 # Portable across machines. Secrets resolution order, first hit wins:
 #
-#   1. yaver vault env --project backend  (preferred for local devs;
-#      sync via `yaver vault sync` so every machine has the key)
-#   2. CONVEX_DEPLOY_KEY env var          (CI path; GitHub Actions sets
-#      this from the repo secret of the same name)
+#   1. CONVEX_DEPLOY_KEY env var (CI path; GitHub Actions sets this from the
+#      repo secret of the same name, and local devs export it or use a
+#      gitignored env file)
 #
-# Set the vault entry once on any machine:
+# `yaver vault` is deliberately not consulted: a v2 vault is master-key
+# encrypted and unrecoverable if that key is lost, and the call swallowed its
+# own failure so the deploy reported a missing key rather than a locked vault.
 #
-#   yaver vault add CONVEX_DEPLOY_KEY --project backend --value <key>
-#   yaver vault sync   # push to your other machines
-#
-# Or paste it inline for a one-shot deploy:
+# Paste it inline for a one-shot deploy:
 #
 #   CONVEX_DEPLOY_KEY=<key> ./scripts/deploy-convex.sh
 #
@@ -24,9 +22,6 @@ set -eo pipefail
 
 cd "$(dirname "$0")/.."
 
-if command -v yaver >/dev/null 2>&1; then
-  eval "$(yaver vault env --project backend 2>/dev/null || true)"
-fi
 
 # Prefer the rotated CONVEX_DEPLOY_KEY_2 if present; the older
 # CONVEX_DEPLOY_KEY name still works as a fallback for CI workflows
