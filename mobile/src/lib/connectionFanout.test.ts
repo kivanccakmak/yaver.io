@@ -62,3 +62,16 @@ test("the mobile twin matches web, logic for logic", () => {
   const theirs = strip(readFileSync(new URL("../../../web/lib/connectionFanout.ts", here), "utf8"));
   assert.equal(mine, theirs, "web and mobile connectionFanout have drifted apart");
 });
+
+// STRUCTURE — the phone's pool-warm pass must use the shared plan, and must
+// keep the health filter that stopped the reconnect storm.
+test("mobile warms its pool from the shared plan, with the health filter intact", () => {
+  const src = readFileSync(new URL("../context/DeviceContext.tsx", import.meta.url), "utf8");
+  assert.match(src, /planConnectionFanout\(\{/, "the warm pass must build a plan");
+  assert.match(src, /mode: connectionMode/, "the user preference must reach the warm pass");
+  // The filter is what prevents warming machines with stale LAN/Tailscale
+  // addresses — the documented cause of the storm. The plan picks WHO is worth
+  // pooling; this picks who is in a state to be pooled at all.
+  assert.match(src, /d\.online &&\s*!d\.needsAuth/, "the health filter was removed — the reconnect storm returns");
+  assert.match(src, /!unreachableSet\.has\(d\.id\)/, "unreachable machines are being warmed again");
+});

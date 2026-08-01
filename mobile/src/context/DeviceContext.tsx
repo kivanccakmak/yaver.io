@@ -18,6 +18,7 @@ import { router } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { quicClient, RecoveryResult, RelayServer, TunnelServer, type OpenCodeConfigSummary } from "../lib/quic";
 import { connectionManager } from "../lib/connectionManager";
+import { planConnectionFanout, fanoutModeFromSettings, type FanoutMode } from "../lib/connectionFanout";
 import { connectGiveUpMessage } from "../lib/platformTransport";
 import { classifyRelayLimit, explainRelayDeny } from "../lib/relayDeny";
 import { useAuth } from "./AuthContext";
@@ -1166,6 +1167,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   // single-box. Mirrored into connectionManager so runnerClient()/
   // renderClient() route without per-surface copies.
   const [machineRoles, setMachineRolesState] = useState<MachineRolesRow | null>(null);
+  // Connection fan-out preference, from the SAME userSettings payload the roles
+  // arrive in — no extra call. Unset means "all"; see connectionFanout.ts.
+  const [connectionMode, setConnectionMode] = useState<FanoutMode>("all");
   // UI preference that follows the user across phones. Loaded from
   // userSettings on mount (see settings-load effect below) and
   // persisted through saveUserSettings on change.
@@ -2915,6 +2919,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         // route to runnerDeviceId, previews stay on renderDeviceId, via
         // connectionManager.runnerClient()/renderClient(). Same Convex rows
         // the web Settings card + Vibing header edit.
+        setConnectionMode(fanoutModeFromSettings(settings));
         const roleRows = settings.machineRolesByProject;
         if (Array.isArray(roleRows)) {
           const favorite = roleRows.find((r) => r && !r.projectName && r.runnerDeviceId) || null;
@@ -4132,20 +4137,37 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   // existing focused-auto-connect logic owns that.
   useEffect(() => {
     if (!token || !relaysReady || userDisconnected) return;
+    // Membership and ORDER come from the shared plan (connectionFanout.ts), the
+    // same one the web dashboard uses, so the two surfaces cannot disagree about
+    // which machine should serve. It orders by the account's seeded roles —
+    // runner, render, then their secondaries — and honours the user's
+    // connectionMode preference ("single" pools just the leader).
+    //
+    // The health filter below is NOT redundant with it and must stay. The
+    // reconnect storm this comment block records came from warming machines
+    // with stale LAN/Tailscale addresses, not from warming several machines:
+    // the plan decides WHO is worth pooling, `online && !needsAuth &&
+    // !unreachable` decides who is in a state to be pooled at all. Dropping
+    // either one brings back a different bug.
+    const fanoutPlan = planConnectionFanout({
+      devices: devices.map((d) => ({ deviceId: d.id, isOnline: d.online })),
+      seed: {
+        runnerDeviceId: machineRoles?.runnerDeviceId,
+        secondaryRunnerDeviceId: machineRoles?.secondaryRunnerDeviceId,
+        renderDeviceId: machineRoles?.renderDeviceId,
+        secondaryRenderDeviceId: machineRoles?.secondaryRenderDeviceId,
+      },
+      mode: connectionMode,
+      isOwner: true,
+    });
     const warmIds = new Set(
       [
+        // The focused device and the account's primary/secondary always stay
+        // pooled regardless of the plan: the user is looking at one of them.
         activeDevice?.id,
         primaryDeviceId,
         secondaryDeviceId,
-        // Runner/render split: with a split active, BOTH role boxes stay
-        // pooled by default — chat dispatch needs the runner box live and
-        // previews need the render box live, at the same time. Relay
-        // transport supports this per-request (path-addressed), so two
-        // concurrent pooled clients are just two `/d/<id>/` prefixes.
-        machineRoles?.runnerDeviceId,
-        machineRoles?.secondaryRunnerDeviceId,
-        machineRoles?.renderDeviceId,
-        machineRoles?.secondaryRenderDeviceId,
+        ...fanoutPlan.targets.map((t) => t.deviceId),
       ].filter((id): id is string => typeof id === "string" && id.length > 0),
     );
     if (warmIds.size === 0) return;
