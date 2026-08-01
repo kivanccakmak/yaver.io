@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { CONVEX_URL } from "@/lib/constants";
 import { machineRolesSaveErrorMessage } from "./machineRolesErrors";
+import { fanoutModeFromSettings, type FanoutMode } from "./connectionFanout";
 
 export { machineRolesSaveErrorMessage } from "./machineRolesErrors";
 
@@ -40,6 +41,9 @@ export function machineRolesSplitActive(row: MachineRolesRow | null | undefined)
 export function useMachineRoles(token: string | null) {
   const [favorite, setFavorite] = useState<MachineRolesRow | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // The connection fan-out preference rides the SAME /settings read — no extra
+  // call. See connectionFanout.ts; unset means "all".
+  const [connectionMode, setConnectionMode] = useState<FanoutMode>("all");
 
   const reload = useCallback(async () => {
     if (!token) return;
@@ -51,6 +55,7 @@ export function useMachineRoles(token: string | null) {
       const data = await res.json().catch(() => ({}));
       const rows: MachineRolesRow[] = data?.settings?.machineRolesByProject || [];
       setFavorite(rows.find((r) => !r.projectName) || null);
+      setConnectionMode(fanoutModeFromSettings(data?.settings));
     } finally {
       setLoaded(true);
     }
@@ -87,5 +92,5 @@ export function useMachineRoles(token: string | null) {
     setFavorite(null);
   }, [token]);
 
-  return { favorite, loaded, reload, save, clear };
+  return { favorite, loaded, reload, save, clear, connectionMode };
 }

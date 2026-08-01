@@ -19,6 +19,7 @@ import RemoteDesktopModal from "@/components/dashboard/RemoteDesktopModal";
 import { agentClient, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary } from "@/lib/agent-client";
 import { CONVEX_URL } from "@/lib/constants";
 import { useMachineRoles } from "@/lib/useMachineRoles";
+import { planConnectionFanout } from "@/lib/connectionFanout";
 import { fetchGuestHosts, acceptGuestInvitation, type GuestInvitation } from "@/lib/guests";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
@@ -1347,9 +1348,25 @@ export default function DashboardPage() {
     }
     probedForCurrentTabOpenRef.current = true;
     let cancelled = false;
+    // FAN-OUT. Which machines get a verified path, and in what order, is the
+    // account's seeded primary/secondary — not "whichever card you opened".
+    // Default is every machine; connectionMode "single" downgrades to one. A
+    // metered account is bounded and told what was withheld, because a
+    // silently shortened list is the "reachability is only verified for
+    // machines you open" problem wearing a policy as an excuse.
+    const fanout = planConnectionFanout({
+      devices: devices.map((d) => ({ deviceId: d.id, name: d.name, isOnline: d.isOnline })),
+      seed: machineRoles.favorite,
+      mode: machineRoles.connectionMode,
+      isOwner: user?.isOwner === true,
+    });
+    const byId = new Map(devices.map((d) => [d.id, d]));
+    const planned = fanout.targets
+      .map((t) => byId.get(t.deviceId))
+      .filter((d): d is (typeof devices)[number] => Boolean(d));
     const refreshProbes = async () => {
       const nextEntries = await Promise.all(
-        devices.map(async (device) => {
+        planned.map(async (device) => {
           try {
             const probe = await agentClient.probeDeviceStatus({
               host: device.host,
@@ -1373,13 +1390,22 @@ export default function DashboardPage() {
         }),
       );
       if (cancelled) return;
-      setProbeStates(Object.fromEntries(nextEntries));
+      // Deferred machines get an explicit state rather than being absent: "we
+      // did not check this one, and here is why" is a different fact from "we
+      // checked and it failed", and only one of them is true.
+      const deferredEntries = fanout.deferred.map((d) => [d.deviceId, {
+        ok: false,
+        checkedAt: new Date().toISOString(),
+        error: d.reason,
+        diagnostics: [],
+      } satisfies DeviceStatusProbe] as const);
+      setProbeStates(Object.fromEntries([...nextEntries, ...deferredEntries]));
     };
     void refreshProbes();
     return () => {
       cancelled = true;
     };
-  }, [activeTab, token, devices, relayReady]);
+  }, [activeTab, token, devices, relayReady, machineRoles.favorite, machineRoles.connectionMode, user?.isOwner]);
 
   useEffect(() => { const u = agentClient.on("connectionState", setConnState); return u; }, []);
 

@@ -159,3 +159,25 @@ test("the preference actually governs the plan", () => {
   assert.equal(plan.targets.length, 1);
   assert.ok(plan.deferred.length > 0, "a downgrade must still report what it withheld");
 });
+
+// STRUCTURE — the plan must drive the real probe loop, not sit beside it.
+test("the dashboard probe loop is driven by the fan-out plan", () => {
+  const src = readFileSync(new URL("../app/dashboard/page.tsx", import.meta.url), "utf8");
+  assert.match(src, /planConnectionFanout\(\{/, "page.tsx must build a plan");
+  assert.match(src, /planned\.map\(async \(device\)/, "it must probe the PLANNED targets, not every device blindly");
+  assert.ok(
+    !/devices\.map\(async \(device\) => \{[\s\S]{0,200}probeDeviceStatus/.test(src),
+    "the old unordered probe-everything loop is back — seeded roles are being ignored",
+  );
+  assert.match(src, /fanout\.deferred\.map/, "deferred machines must get a stated reason, never silent absence");
+  assert.match(src, /machineRoles\.connectionMode/, "the user preference must reach the loop");
+});
+
+// The preference must ride the settings read the surface already performs.
+test("connectionMode costs no extra Convex call", () => {
+  const src = readFileSync(new URL("./useMachineRoles.ts", import.meta.url), "utf8");
+  assert.match(src, /fanoutModeFromSettings\(data\?\.settings\)/,
+    "connectionMode must be parsed from the SAME /settings response, not fetched separately");
+  const fetches = (src.match(/await fetch\(/g) || []).length;
+  assert.ok(fetches <= 3, `useMachineRoles makes ${fetches} fetches — a preference must not add one`);
+});
