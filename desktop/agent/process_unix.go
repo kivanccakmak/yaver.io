@@ -44,16 +44,56 @@ func stableAutoStartExecutablePath(exePath string) string {
 	return filepath.Join(base, "current", platform, name)
 }
 
+// pathsSameFile reports whether two paths name the same file on disk.
+//
+// os.Stat follows symlinks, so this answers the question string comparison
+// cannot: ".../bin/current/linux-arm64/yaver" and
+// ".../bin/1.99.386/linux-arm64/yaver" are different strings and, when
+// `current` is a symlink to `1.99.386`, the same inode.
+func pathsSameFile(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
+}
+
 func ensureStableAutoStartExecutable(exePath string) string {
 	stablePath := stableAutoStartExecutablePath(exePath)
 	if stablePath == exePath {
 		return exePath
 	}
+	// String inequality is NOT path inequality, and that distinction destroyed
+	// a box. `current` is itself a symlink to a version directory, so
+	// .../bin/current/<platform>/yaver and .../bin/<version>/<platform>/yaver
+	// routinely name the SAME FILE. The old guard compared strings only, so it
+	// ran os.Remove on the RUNNING BINARY and then symlinked that path to
+	// itself. The result is ELOOP: exec fails, systemd reports status 203, and
+	// the unit sits in "activating" with restarts climbing while nothing in
+	// the agent's own logs explains it — because the agent can no longer
+	// start. ubuntu-4gb-hel1-1, 2026-08-01; recovered only by hand from
+	// yaver.previous.
+	if pathsSameFile(stablePath, exePath) {
+		return exePath
+	}
 	if err := os.MkdirAll(filepath.Dir(stablePath), 0755); err != nil {
 		return exePath
 	}
-	_ = os.Remove(stablePath)
-	if err := os.Symlink(exePath, stablePath); err != nil {
+	// Create the link atomically. remove-then-symlink leaves a window in which
+	// NOTHING exists at stablePath, and if the symlink call then fails, the
+	// binary a supervisor is about to exec is simply gone. Rename over the
+	// target instead: either the old entry or the new link is always present.
+	tmpLink := stablePath + ".tmp-link"
+	_ = os.Remove(tmpLink)
+	if err := os.Symlink(exePath, tmpLink); err != nil {
+		return exePath
+	}
+	if err := os.Rename(tmpLink, stablePath); err != nil {
+		_ = os.Remove(tmpLink)
 		return exePath
 	}
 	return stablePath
