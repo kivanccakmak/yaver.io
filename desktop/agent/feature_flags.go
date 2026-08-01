@@ -32,6 +32,33 @@ const ENABLE_GUEST_FEATURES = false
 // registered root.
 const ENABLE_DEPLOY_WEBHOOK = false
 
+// ENABLE_VAULT gates the encrypted local secret store (`yaver vault`).
+//
+// OFF for v1. The vault is not in the v1 critical path — auth token, relay
+// password, device id and device signing keys all live in config.json and
+// device.key, and `serve` has always tolerated an unopenable vault — but its
+// failures were loud, recurring and misleading, and it has repeatedly wedged
+// the product:
+//
+//   - a v2 vault is master-key encrypted, so a lost master.key is
+//     unrecoverable by design, and the error surfaces arbitrarily later as
+//     "wrong passphrase or corrupted vault";
+//   - every sign-in used to re-key it toward the auth token and destroy it;
+//   - every deploy script consulted it first and swallowed the failure, so a
+//     locked vault was reported as a missing credential.
+//
+// The first two are now fixed and the third removed, but the remaining value
+// in v1 is nil: its consumers are peripheral cells (Apple TV, robotics,
+// circuit, camera, printer, IR, mesh) that are not v1 surfaces. Leaving it
+// enabled means shipping a subsystem that can only cost users something.
+//
+// OFF means: not opened at boot, not migrated, not re-keyed, and never
+// consulted by a cell — which degrades to "not configured", the same path it
+// already takes when the vault is locked. Turn it back on with
+// YAVER_ENABLE_VAULT=1 on a single box, or flip this constant when the
+// Keychain-primary redesign lands.
+const ENABLE_VAULT = false
+
 // Per-feature env overrides. These let an operator open ONE feature on ONE box
 // without a rebuild; the constants above remain the product-wide default. An
 // override can only ever turn something ON, never off — so reading the
@@ -42,6 +69,7 @@ const (
 	envEnableHostShare       = "YAVER_ENABLE_HOST_SHARE"
 	envEnableSupportSessions = "YAVER_ENABLE_SUPPORT_SESSIONS"
 	envEnableDeployWebhook   = "YAVER_ENABLE_DEPLOY_WEBHOOK"
+	envEnableVault           = "YAVER_ENABLE_VAULT"
 )
 
 // featureEnvEnabled reads an override by env-var NAME. It delegates to the
@@ -88,4 +116,10 @@ func DeployWebhookEnabled() bool {
 func featureDisabledMessage(feature, envVar string) string {
 	return feature + " is disabled on this machine (launch default). " +
 		"The owner can enable it by starting the agent with " + envVar + "=1."
+}
+
+// VaultEnabled reports whether the local encrypted secret store is available.
+// See ENABLE_VAULT for why it ships off in v1.
+func VaultEnabled() bool {
+	return ENABLE_VAULT || featureEnvEnabled(envEnableVault)
 }

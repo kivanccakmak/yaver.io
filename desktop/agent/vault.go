@@ -123,6 +123,12 @@ var ErrVaultIsLegacyV1 = fmt.Errorf("vault is in legacy v1 format (passphrase-en
 // NewVaultStoreV2 with the master key.
 var ErrVaultIsV2 = fmt.Errorf("vault is in v2 format (master-key encrypted); use NewVaultStoreV2 instead")
 
+// ErrVaultDisabled is returned whenever the vault is consulted while the
+// feature is off (the v1 default). It is deliberately actionable rather than
+// alarming: a disabled vault is a product decision, not a fault, and users
+// spent a long time reading vault errors as breakage.
+var ErrVaultDisabled = fmt.Errorf("the local vault is disabled in this build — set YAVER_ENABLE_VAULT=1 to turn it on for this machine")
+
 // vaultTombstoneTTL is how long a delete marker lingers before GC. Long
 // enough that the slowest peer has plenty of opportunity to sync.
 const vaultTombstoneTTL = 30 * 24 * time.Hour

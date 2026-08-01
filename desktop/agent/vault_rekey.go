@@ -125,6 +125,9 @@ func pushPrevAuthToken(chain []string, tok, exclude string) []string {
 // disk → "wrong passphrase or corrupted vault" until the user
 // supplies YAVER_VAULT_PASSPHRASE manually).
 func rekeyVaultBetweenTokens(oldToken, newToken string) {
+	if !VaultEnabled() {
+		return
+	}
 	if strings.TrimSpace(os.Getenv("YAVER_VAULT_PASSPHRASE")) != "" {
 		return
 	}

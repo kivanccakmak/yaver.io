@@ -110,9 +110,17 @@ func TestTargetCIWorkflow_AllTargetsCovered(t *testing.T) {
 // stored once — the gating UI would show "missing secrets" forever
 // even though the values are sitting in the right vault.
 func TestTargetDefaultVaultProject_AllTargetsCovered(t *testing.T) {
+	// The vault ships OFF in v1 (feature_flags.go: ENABLE_VAULT). This test
+	// exercises vault behaviour, so it opts in explicitly rather than relying
+	// on a package-wide default that would hide the shipped configuration.
+	t.Setenv(envEnableVault, "1")
 	for _, name := range BuildTargetNames() {
+		if targetsWithoutVaultProject[name] {
+			continue // credentials come from the environment, not a vault scope
+		}
 		if _, ok := targetDefaultVaultProject[name]; !ok {
-			t.Errorf("target %q has no targetDefaultVaultProject entry — UIs can't fall back from a phone-project slug to the canonical vault scope without it", name)
+			t.Errorf("target %q is in neither targetDefaultVaultProject nor targetsWithoutVaultProject — "+
+				"say which, or the capability UI points users at a vault scope the credential was never in", name)
 		}
 	}
 }

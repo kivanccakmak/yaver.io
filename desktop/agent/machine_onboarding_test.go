@@ -20,6 +20,10 @@ func setupMachineOnboardingTestEnv(t *testing.T) {
 }
 
 func TestGitLabVaultEntryOptionalPrefersHostSpecificKey(t *testing.T) {
+	// The vault ships OFF in v1 (feature_flags.go: ENABLE_VAULT). This test
+	// exercises vault behaviour, so it opts in explicitly rather than relying
+	// on a package-wide default that would hide the shipped configuration.
+	t.Setenv(envEnableVault, "1")
 	setupMachineOnboardingTestEnv(t)
 
 	if _, err := setGitLabVaultEntry("code.example.com", "glpat-test", "custom host"); err != nil {
@@ -39,6 +43,10 @@ func TestGitLabVaultEntryOptionalPrefersHostSpecificKey(t *testing.T) {
 }
 
 func TestCollectMachineOnboardingStatusUsesHostScopedGitLabVault(t *testing.T) {
+	// The vault ships OFF in v1 (feature_flags.go: ENABLE_VAULT). This test
+	// exercises vault behaviour, so it opts in explicitly rather than relying
+	// on a package-wide default that would hide the shipped configuration.
+	t.Setenv(envEnableVault, "1")
 	setupMachineOnboardingTestEnv(t)
 
 	if err := upsertGitCredential("code.example.com", "alice", "clone-token"); err != nil {
@@ -74,6 +82,10 @@ func TestCollectMachineOnboardingStatusUsesHostScopedGitLabVault(t *testing.T) {
 }
 
 func TestApplyMachineOnboardingRemoveLocalRemovesAllGitLabVaultKeysWithoutHost(t *testing.T) {
+	// The vault ships OFF in v1 (feature_flags.go: ENABLE_VAULT). This test
+	// exercises vault behaviour, so it opts in explicitly rather than relying
+	// on a package-wide default that would hide the shipped configuration.
+	t.Setenv(envEnableVault, "1")
 	setupMachineOnboardingTestEnv(t)
 
 	if err := upsertGitCredential("gitlab.com", "alice", "clone-token"); err != nil {

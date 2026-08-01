@@ -42,6 +42,24 @@ func runVault(args []string) {
 		os.Exit(0)
 	}
 
+	// Off in v1. Say so plainly and name the switch — users have spent a lot of
+	// time reading "wrong passphrase or corrupted vault" and concluding the
+	// product was broken. "Turned off" is a much better answer than a
+	// cryptographic failure, and it is the truthful one here.
+	if !VaultEnabled() {
+		fmt.Fprintln(os.Stderr, "yaver vault is disabled in this build.")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "  v1 keeps secrets in the OS keychain and in gitignored env files instead;")
+		fmt.Fprintln(os.Stderr, "  nothing in auth, connectivity or deploys depends on the vault any more.")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "  To enable it on this machine for the cells that use it")
+		fmt.Fprintln(os.Stderr, "  (Apple TV, robotics, circuit, camera, printer, IR, mesh):")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "      export YAVER_ENABLE_VAULT=1")
+		fmt.Fprintln(os.Stderr, "")
+		os.Exit(2)
+	}
+
 	switch args[0] {
 	case "add":
 		runVaultAdd(args[1:])

@@ -324,6 +324,12 @@ func persistRotatedAuthToken(cfg *Config, newToken string) error {
 // SetAuthToken can rekey the in-memory store + disk in lockstep so
 // the vault key chain never lags the token chain.
 func tryOpenAgentVault(cfg *Config, vaultPassFlag string) (*VaultStore, error) {
+	// Off in v1: no open, no migration, no rekey, and no boot-time warning.
+	// The warning was the loudest part — every start printed a vault problem on
+	// machines that never used the vault.
+	if !VaultEnabled() {
+		return nil, ErrVaultDisabled
+	}
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
@@ -2552,7 +2558,10 @@ func runServe(args []string) {
 	// rekeyVaultBetweenTokens fix at the right moment: every later
 	// SetAuthToken in this process can rekey the live store in place.
 	if vs, err := tryOpenAgentVault(cfg, *vaultPass); err != nil {
-		log.Printf("Warning: vault unavailable on early boot: %v — will retry after token validation", err)
+		// A disabled vault is not a warning — it is the configured state.
+		if !errors.Is(err, ErrVaultDisabled) {
+			log.Printf("Warning: vault unavailable on early boot: %v — will retry after token validation", err)
+		}
 	} else {
 		setRuntimeVaultStore(vs)
 		log.Printf("Vault unlocked early (%d entries) — runtime store now tracks rotations.", len(vs.List("*")))
@@ -3694,7 +3703,12 @@ func runServe(args []string) {
 		httpServer.vaultStore = vs
 		log.Printf("Vault attached (%d entries) from early-boot runtime store.", len(vs.List("*")))
 	} else if vs, err := tryOpenAgentVault(cfg, *vaultPass); err != nil {
-		log.Printf("Warning: vault unavailable: %v", err)
+		// Second of two boot-time open attempts. A disabled vault is the
+		// configured state, not a warning — reporting it here still printed a
+		// vault problem on every start of every machine.
+		if !errors.Is(err, ErrVaultDisabled) {
+			log.Printf("Warning: vault unavailable: %v", err)
+		}
 	} else {
 		httpServer.vaultStore = vs
 		setRuntimeVaultStore(vs)

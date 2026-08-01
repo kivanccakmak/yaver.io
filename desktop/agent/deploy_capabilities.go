@@ -180,6 +180,21 @@ var targetDefaultVaultProject = map[string]string{
 	"vercel":               "web",
 }
 
+// targetsWithoutVaultProject are targets whose credentials deliberately do NOT
+// live in a vault project.
+//
+// npm publishes with NPM_TOKEN from the environment, and v1 removed the vault
+// from every deploy path anyway (feature_flags.go: ENABLE_VAULT). Mapping it to
+// one of mobile/backend/web would invent a fallback scope that can never
+// resolve, and the capability UI would then report "missing secrets" pointing
+// at a vault the credential was never in.
+//
+// An explicit exemption is the point: a target missing from BOTH maps is a
+// genuine oversight and the coverage test still catches it.
+var targetsWithoutVaultProject = map[string]bool{
+	"npm": true,
+}
+
 // targetPlatformLock returns the GOOS the target is locked to (single
 // value), derived from the target's required Tools[].Platforms list.
 // Empty string when the target works on any platform. If different

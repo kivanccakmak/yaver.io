@@ -57,6 +57,13 @@ func boolOrDefault(v *bool, fallback bool) bool {
 }
 
 func openVaultOptional() (*VaultStore, error) {
+	// v1 ships with the vault off. Every caller of this function already
+	// handles the error by degrading to "not configured", which is the same
+	// path they take when the vault is locked — so gating here turns the whole
+	// subsystem inert without touching a single consumer.
+	if !VaultEnabled() {
+		return nil, ErrVaultDisabled
+	}
 	if pass := strings.TrimSpace(os.Getenv("YAVER_VAULT_PASSPHRASE")); pass != "" {
 		// Manual override — caller picked a stable passphrase, don't
 		// silently flip them to v2 (mirrors openVaultE).

@@ -53,6 +53,10 @@ func TestVaultRekeyTo_ReencryptsUnderNewKey(t *testing.T) {
 // vault.enc end-to-end so subsequent openVault under the new token
 // works without YAVER_VAULT_PASSPHRASE.
 func TestSetAuthToken_RekeysVault(t *testing.T) {
+	// The vault ships OFF in v1 (feature_flags.go: ENABLE_VAULT). This test
+	// exercises vault behaviour, so it opts in explicitly rather than relying
+	// on a package-wide default that would hide the shipped configuration.
+	t.Setenv(envEnableVault, "1")
 	vaultDirForTest(t)
 
 	cfg := &Config{AuthToken: "token-A"}
@@ -204,10 +208,32 @@ func TestOpenVaultE_FallsBackToPreviousAuthToken(t *testing.T) {
 		t.Fatalf("expected PreviousAuthToken cleared after auto-rekey, got %q", persisted.PreviousAuthToken)
 	}
 
-	// And the vault now opens cleanly under token-B without the
-	// fallback path running again.
-	if _, err := NewVaultStore(DerivePassphraseFromToken("token-B")); err != nil {
-		t.Fatalf("vault not openable under current token after rekey: %v", err)
+	// And the vault now opens cleanly WITHOUT the fallback path running again.
+	//
+	// This assertion used to demand it open under token-B via the v1
+	// passphrase chain, and had been failing since openVaultE started
+	// migrating recovered vaults to v2: after a successful recovery the vault
+	// is master-key encrypted, so the v1 constructor correctly answers
+	// ErrVaultIsV2. Asserting the v1 outcome was asserting the bug that the v2
+	// redesign exists to remove — a vault whose readability depends on the
+	// current auth token.
+	//
+	// The right invariant is the v2 one: the recovered vault opens under the
+	// machine's master key, and keeps doing so no matter how the token rotates.
+	cfg2, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	masterKey, err := EnsureMasterKey(resolveUserIDForVault(cfg2), cfg2.DeviceID)
+	if err != nil {
+		t.Fatalf("master key unavailable after recovery: %v", err)
+	}
+	reopened, err := NewVaultStoreV2(masterKey, cfg2.DeviceID)
+	if err != nil {
+		t.Fatalf("vault not openable under the master key after recovery: %v", err)
+	}
+	if e, err := reopened.Get("", "k"); err != nil || e == nil || e.Value != "v" {
+		t.Fatalf("entry lost after recovery+migration: %+v err=%v", e, err)
 	}
 	if _, err := NewVaultStore(DerivePassphraseFromToken("token-A")); err == nil {
 		t.Fatal("expected old token to no longer decrypt after rekey")
@@ -244,6 +270,10 @@ func TestOpenVaultE_NoFallbackWhenWrongCurrentAndNoPrevious(t *testing.T) {
 // rotation when even the PreviousAuthToken fallback no longer
 // matches what's on disk.
 func TestSetAuthToken_RekeysRuntimeStoreInPlace(t *testing.T) {
+	// The vault ships OFF in v1 (feature_flags.go: ENABLE_VAULT). This test
+	// exercises vault behaviour, so it opts in explicitly rather than relying
+	// on a package-wide default that would hide the shipped configuration.
+	t.Setenv(envEnableVault, "1")
 	vaultDirForTest(t)
 
 	cfg := &Config{AuthToken: "token-A"}

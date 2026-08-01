@@ -17,6 +17,10 @@ import (
 // before any keychain access) and the cell falls back to ~/.yaver files under
 // the temp HOME — no keychain prompt, no pollution of the real config.
 func TestCircuitServicePrimitivesE2E(t *testing.T) {
+	// The vault ships OFF in v1 (feature_flags.go: ENABLE_VAULT). This test
+	// exercises vault behaviour, so it opts in explicitly rather than relying
+	// on a package-wide default that would hide the shipped configuration.
+	t.Setenv(envEnableVault, "1")
 	t.Setenv("HOME", t.TempDir())
 
 	// isolate the process-global controller cache from other tests
