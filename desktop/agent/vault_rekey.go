@@ -29,6 +29,7 @@ package main
 // vault access, which still recovers without re-authentication.
 
 import (
+	"errors"
 	"log"
 	"os"
 	"strings"
@@ -127,7 +128,17 @@ func rekeyVaultBetweenTokens(oldToken, newToken string) {
 	if strings.TrimSpace(os.Getenv("YAVER_VAULT_PASSPHRASE")) != "" {
 		return
 	}
+	// A v2 vault is master-key encrypted and DELIBERATELY independent of the
+	// auth token. Touching it on rotation is not merely unnecessary, it was
+	// destructive: RekeyTo used to re-key a v2 vault to a token-derived key
+	// while leaving the v2 layout flag set, so master.key stopped opening it
+	// and the next rotation lost the trail for good. Rotation must be a no-op
+	// here. RekeyTo now refuses too — belt and braces, because this path is
+	// reached from every sign-in and the damage was silent.
 	if vs := currentRuntimeVaultStore(); vs != nil {
+		if vs.IsV2() {
+			return
+		}
 		if err := vs.RekeyTo(DerivePassphraseFromToken(newToken)); err != nil {
 			log.Printf("[vault] rekey runtime store to new token failed: %v", err)
 		}
@@ -142,6 +153,12 @@ func rekeyVaultBetweenTokens(oldToken, newToken string) {
 	}
 	vs, err := NewVaultStore(DerivePassphraseFromToken(oldToken))
 	if err != nil {
+		// ErrVaultIsV2 is the expected, healthy answer for every box that has
+		// migrated: there is nothing for token rotation to do. Logging it as a
+		// failure taught users their vault was broken on every single sign-in.
+		if errors.Is(err, ErrVaultIsV2) {
+			return
+		}
 		log.Printf("[vault] rekey: cannot open under previous token: %v", err)
 		return
 	}

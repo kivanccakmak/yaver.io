@@ -816,11 +816,37 @@ func (vs *VaultStore) save(salt []byte) error {
 // re-enter YAVER_VAULT_PASSPHRASE. The vault must already be
 // unlocked — the caller is expected to have opened it under the
 // previous passphrase.
+// IsV2 reports whether this store is master-key encrypted. Token rotation is
+// meaningless for a v2 vault — that independence is the entire point of the v2
+// redesign — so callers in the auth path use this to skip themselves.
+func (vs *VaultStore) IsV2() bool {
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+	return vs.formatV2
+}
+
+// RekeyTo re-encrypts the vault under a passphrase-derived key.
+//
+// It REFUSES on a v2 vault, and that refusal is the fix for a silent
+// data-destroying bug. RekeyTo sets vs.key from the passphrase but never
+// cleared vs.formatV2, so calling it on a master-key vault wrote the file in v2
+// layout encrypted with a TOKEN-derived key. master.key could no longer open
+// it. Because rekeyVaultBetweenTokens ran on every auth-token rotation, each
+// sign-in quietly re-keyed the vault away from its own master key, and the next
+// rotation made it unrecoverable — surfacing later as "Error opening vault
+// (v2): wrong passphrase or corrupted vault" with no event anywhere near the
+// sign-in that caused it. Observed on this developer's MacBook twice, and the
+// reason the vault has repeatedly wedged the product.
+//
+// A v2 vault is re-keyed only by RekeyToMasterKey.
 func (vs *VaultStore) RekeyTo(newPassphrase string) error {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
 	if !vs.unlocked {
 		return fmt.Errorf("vault is locked — open it first")
+	}
+	if vs.formatV2 {
+		return ErrVaultIsV2
 	}
 	salt := make([]byte, saltLen)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
