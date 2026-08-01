@@ -11,7 +11,6 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
@@ -482,10 +481,25 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]}>
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
+      {/* Keyboard handling: let the PLATFORM do it.
+        *
+        * This was a KeyboardAvoidingView with behavior="padding" wrapping a
+        * ScrollView — a combination that reliably hides the very field you are
+        * typing into. "padding" only adds space at the BOTTOM of the container;
+        * it never scrolls the focused input into view. On a form already taller
+        * than the screen (five OAuth buttons above the email field) the padding
+        * lands below the fold and the input stays behind the keyboard. Reported
+        * on TestFlight 2026-08-01: the email field was invisible while typing.
+        *
+        * automaticallyAdjustKeyboardInsets is the current standard answer on
+        * iOS — UIKit adjusts the scroll view's contentInset for the keyboard and
+        * scrolls the first responder into view, with no JS measurement, no
+        * offset constant to tune per device, and correct behaviour for the
+        * accessory bar and split/floating keyboards that manual math gets wrong.
+        *
+        * Android is handled by the manifest (windowSoftInputMode=adjustResize),
+        * which is why no wrapper is needed there either. */}
+      <View style={{ flex: 1 }}>
         <ScrollView
           contentContainerStyle={[
             styles.scrollContainer,
@@ -493,6 +507,9 @@ export default function LoginScreen() {
             isTabletPortrait && styles.scrollContainerTabletPortrait,
           ]}
           keyboardShouldPersistTaps="handled"
+          automaticallyAdjustKeyboardInsets
+          keyboardDismissMode="interactive"
+          contentInsetAdjustmentBehavior="automatic"
         >
           <View style={[styles.shell, isTabletLandscape && styles.shellLandscape]}>
             <View
@@ -870,7 +887,7 @@ export default function LoginScreen() {
             </Text>
           </View>
         </ScrollView>
-      </KeyboardAvoidingView>
+      </View>
     </SafeAreaView>
   );
 }
