@@ -23,6 +23,9 @@
 // + Bearer) — there is no shared apiFetch helper in this app.
 
 import { getConvexSiteUrlSync as getConvexSiteUrl } from "./backendConfig";
+import { approveFailureMessage } from "./approveFailureMessage";
+
+export { approveFailureMessage };
 
 export interface DeviceCodeInfo {
   /** Hostname the box reported when it created the code. */
@@ -74,7 +77,7 @@ export async function fetchDeviceCodeInfo(userCode: string): Promise<DeviceCodeI
   const code = normalizeUserCode(userCode);
   if (!code) return null;
   try {
-    const res = await fetch(
+    const res = await boundedFetch(
       `${getConvexSiteUrl()}/auth/device-code/info?user_code=${encodeURIComponent(code)}`,
     );
     if (!res.ok) return null;
@@ -83,6 +86,31 @@ export async function fetchDeviceCodeInfo(userCode: string): Promise<DeviceCodeI
     return null;
   }
 }
+
+/**
+ * Both calls here are request/response, so both are wall-clock bounded.
+ *
+ * RN's `fetch` has NO default timeout — it hangs forever — and that is not
+ * hypothetical on this screen: an unbounded await on the rescue path leaves the
+ * Approve button spinning with no cause while the machine it was meant to
+ * rescue stays dead. Same law that produced ConnectAttemptGuard after
+ * NetInfo.fetch() pinned the pill at "Connecting" for 30+ minutes.
+ *
+ * AbortController, not a bare race, so the socket is actually released rather
+ * than abandoned while still holding a connection.
+ */
+const APPROVE_TIMEOUT_MS = 12_000;
+
+async function boundedFetch(url: string, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), APPROVE_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...(init || {}), signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 
 export interface ApproveResult {
   ok: boolean;
@@ -100,7 +128,7 @@ export async function approveDeviceCode(userCode: string, token: string): Promis
   if (!code) return { ok: false, error: "That code looks malformed." };
   if (!token) return { ok: false, error: "Sign in on this phone first, then approve." };
   try {
-    const res = await fetch(`${getConvexSiteUrl()}/auth/device-code/authorize`, {
+    const res = await boundedFetch(`${getConvexSiteUrl()}/auth/device-code/authorize`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -110,10 +138,17 @@ export async function approveDeviceCode(userCode: string, token: string): Promis
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      return { ok: false, error: detail || `Authorization failed (${res.status}).` };
+      return { ok: false, error: approveFailureMessage(res.status, detail) };
     }
     return { ok: true };
   } catch (err: any) {
-    return { ok: false, error: err?.message || "Couldn't authorize the machine." };
+    // An abort is the deadline firing, not a mystery — say which one it was.
+    if (err?.name === "AbortError") {
+      return {
+        ok: false,
+        error: "The approval request timed out. Check your connection and try again.",
+      };
+    }
+    return { ok: false, error: "Couldn't reach Yaver to approve the machine. Check your connection." };
   }
 }
