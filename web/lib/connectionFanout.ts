@@ -54,6 +54,14 @@
 /** How many machines a surface connects to. */
 export type FanoutMode = "all" | "single";
 
+/** Read the user's preference out of the /settings payload a surface already
+ *  holds. Unset, unknown, or malformed all mean "all": fan-out is the product
+ *  default, and a value nobody recognises must not silently become a
+ *  downgrade the user never asked for. */
+export function fanoutModeFromSettings(settings: { connectionMode?: unknown } | null | undefined): FanoutMode {
+  return (settings?.connectionMode === "single") ? "single" : "all";
+}
+
 /** Why a machine is in the plan — surfaces render this, so it must be honest. */
 export type FanoutRole =
   | "primary-runner"

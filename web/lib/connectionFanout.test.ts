@@ -12,6 +12,7 @@ import {
   planConnectionFanout,
   resolveSeededRole,
   METERED_FANOUT_LIMIT,
+  fanoutModeFromSettings,
   type FanoutCandidate,
 } from "./connectionFanout.ts";
 
@@ -139,4 +140,22 @@ test("Vibing resolves its render machine through the seeded roles", () => {
     "the resolution site is reading the raw seed again instead of resolveSeededRole",
   );
   assert.match(resolution, /seededRender\.deviceId/, "it must use the resolved role");
+});
+
+// --- the user preference ------------------------------------------------------
+test("fan-out is the default for anything that is not an explicit downgrade", () => {
+  for (const settings of [null, undefined, {}, { connectionMode: "all" }, { connectionMode: "" }, { connectionMode: "nonsense" }, { connectionMode: 3 }]) {
+    assert.equal(fanoutModeFromSettings(settings as never), "all", JSON.stringify(settings));
+  }
+});
+
+test("only the explicit value downgrades", () => {
+  assert.equal(fanoutModeFromSettings({ connectionMode: "single" }), "single");
+});
+
+test("the preference actually governs the plan", () => {
+  const settings = { connectionMode: "single" };
+  const plan = planConnectionFanout({ devices, seed, mode: fanoutModeFromSettings(settings), isOwner: true });
+  assert.equal(plan.targets.length, 1);
+  assert.ok(plan.deferred.length > 0, "a downgrade must still report what it withheld");
 });

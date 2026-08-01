@@ -956,6 +956,11 @@ export default defineSchema({
     // the user record (not per-device) so the preference roams across
     // phones/web logins.
     multiTargetMode: v.optional(v.boolean()),
+    // How many machines a surface connects to at once: "all" (default) or
+    // "single". Unset means "all" — fan-out is the product default and this
+    // field exists only to let a user downgrade. Read by every surface out of
+    // the /settings payload they already fetch, so it costs no extra call.
+    connectionMode: v.optional(v.string()),
     // Rare/specialized More-tab tools the user explicitly wants visible.
     // Stored as string IDs only, no per-device details or sensitive data.
     // Omitted/empty = keep the default More menu focused.
