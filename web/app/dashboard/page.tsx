@@ -1355,7 +1355,7 @@ export default function DashboardPage() {
     // silently shortened list is the "reachability is only verified for
     // machines you open" problem wearing a policy as an excuse.
     const fanout = planConnectionFanout({
-      devices: devices.map((d) => ({ deviceId: d.id, name: d.name, isOnline: d.isOnline })),
+      devices: devices.map((d) => ({ deviceId: d.id, name: d.name, isOnline: d.online })),
       seed: machineRoles.favorite,
       mode: machineRoles.connectionMode,
       isOwner: user?.isOwner === true,
