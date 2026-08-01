@@ -107,6 +107,23 @@ enum MachineRegistry {
         /// Runner/render machine split rows (same Convex rows the web edits).
         /// Additive decode — older payload shapes leave it nil.
         let machineRolesByProject: [MachineRolesRow]?
+        /// Connection fan-out preference: "all" (default) or "single". Same
+        /// userSettings field web and mobile read, out of the SAME /settings
+        /// response this struct already decodes — a preference that cost an
+        /// extra call per surface would be a poor trade for a preference.
+        /// Additive: nil on older payloads, which correctly means "all".
+        let connectionMode: String?
+    }
+
+    /// The fan-out preference as a decision, not a raw string.
+    ///
+    /// Mirrors web/lib/connectionFanout.ts::fanoutModeFromSettings, including
+    /// its asymmetry: ONLY the exact value "single" downgrades. Unset, unknown
+    /// or malformed all mean "all", because fan-out is the product default and
+    /// a value nobody recognises must never silently become a downgrade the
+    /// user did not ask for.
+    static func fanoutIsSingle(_ settings: UserSettings?) -> Bool {
+        settings?.connectionMode == "single"
     }
 
     /// One runner/render split row. Row without projectName = the account-wide
@@ -192,7 +209,7 @@ enum MachineRegistry {
             throw AgentError(message: "Couldn't load relay settings (\(http.statusCode)).")
         }
         return (try? JSONDecoder().decode(UserSettingsEnvelope.self, from: data).settings)
-            ?? UserSettings(relayUrl: nil, relayPassword: nil, machineRolesByProject: nil)
+            ?? UserSettings(relayUrl: nil, relayPassword: nil, machineRolesByProject: nil, connectionMode: nil)
     }
 
     /// GET /guests/list — who this account has shared with. The host-side TV
