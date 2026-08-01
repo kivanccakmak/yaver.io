@@ -72,7 +72,7 @@ import DevicesView, { preferredDefaultModelForRunner, preferredDefaultRunnerForD
 import { CapabilityShelf } from "@/components/dashboard/CapabilityShelf";
 import RawFailureBanner, { announceRawFailure } from "@/components/dashboard/RawFailureBanner";
 import { SessionDeathError } from "@/lib/rawFailure";
-import { isRelayCredentialDeny, RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
+import { isRelayCredentialDeny, isRelayTunnelDown, RELAY_CREDENTIAL_REMEDY, RELAY_TUNNEL_DOWN_REMEDY } from "@/lib/relayAuth";
 import { usableTunnelUrls } from "@/lib/endpoints";
 import { classifyFetchError, summarizeFailures } from "@/lib/connection-error";
 import { clearLastFailure, recordLastFailure } from "@/lib/probe-backoff";
@@ -3340,7 +3340,14 @@ export default function DashboardPage() {
                 ) : connState === "error" ? (
                   (() => {
                     const authExpired = connectDiagnostics.some((d) => d.authExpired);
-                    const anyReached = connectDiagnostics.some((d) => d.status && d.status > 0);
+                    // A 502/503/504 on the RELAY leg is the relay saying it has
+                    // no tunnel to forward to — the agent was never contacted.
+                    // Counting it as "reached" is what made this panel claim
+                    // "Agent responded" about an unreachable box (2026-07-31).
+                    const relayTunnelDown = connectDiagnostics.some((d) => isRelayTunnelDown(d));
+                    const anyReached = connectDiagnostics.some(
+                      (d) => d.status && d.status > 0 && !isRelayTunnelDown(d),
+                    );
                     // A relay-lane 401 whose body is the RELAY's own verdict
                     // ("relay password missing …" / "invalid relay password",
                     // relay/server.go:1903,1916) is a CREDENTIAL failure on
@@ -3360,6 +3367,8 @@ export default function DashboardPage() {
                       ? "Agent reachable, but its Convex session is expired"
                       : relayCredentialDenied
                         ? "Relay refused the request — your account's relay password is missing or stale"
+                        : relayTunnelDown
+                          ? "Relay tunnel down — this machine is not registered with the relay"
                         : anyReached
                           ? "Agent responded, but the connection was rejected"
                           : relayCount === 0

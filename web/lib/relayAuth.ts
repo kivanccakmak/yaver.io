@@ -168,6 +168,54 @@ export function isRelayCredentialDeny(diag: {
   return isRelayCredentialDenyMessage(diag.error);
 }
 
+/** Diagnostic-shaped helper: the relay ANSWERED, and had nothing to forward to.
+ *
+ *  This is the unfixed half of the 2026-07-28 misattribution. That incident
+ *  taught the panel that a relay 401 is not the agent's verdict; the 502 case
+ *  was left behind, and it is the one that actually fires when a box's session
+ *  dies. Live on ubuntu-4gb-hel1-1 (2026-07-31): the box's Convex session
+ *  expired, so the relay refused its registration and held no tunnel, so every
+ *  web probe came back 502 — and `anyReached` (status > 0) read that as "the
+ *  agent responded". The panel then said "Agent responded, but the connection
+ *  was rejected" about a machine the relay had never been able to contact, and
+ *  offered a re-auth flow that rides the very tunnel that is missing.
+ *
+ *  A gateway status on the RELAY leg means the opposite of reached. Callers
+ *  must therefore exclude these from any "did anything answer" tally, not just
+ *  order the headline around them. */
+export function isRelayTunnelDown(diag: {
+  path?: string;
+  status?: number;
+  error?: string;
+  /** The relay body's stable `code`, when the caller parsed it. */
+  code?: string;
+}): boolean {
+  if (diag.path !== "relay") return false;
+  // A credential deny is a different failure with a different remedy; never
+  // let one be counted as both.
+  if (isRelayCredentialDenyCode(diag.code)) return false;
+  const code = diag.code?.trim() || relayDenyCodeFromBody(diag.error);
+  if (
+    code === RELAY_DENY_CODES.deviceNotConnected ||
+    code === RELAY_DENY_CODES.deviceOwnerMismatch
+  ) {
+    return true;
+  }
+  if (code && isRelayCredentialDenyCode(code)) return false;
+  // Prose/status fallback for relays that predate the stable codes — which is
+  // every deployed one until public.yaver.io is redeployed by hand
+  // (memory/project_public_relay_deploy_drift).
+  return diag.status === 502 || diag.status === 503 || diag.status === 504;
+}
+
+/** The copy every surface should render when the relay has no tunnel to the
+ *  box. It must NOT suggest anything that travels through the relay, because
+ *  nothing can: the only lever is on the machine itself. */
+export const RELAY_TUNNEL_DOWN_REMEDY =
+  "The relay is up but has no tunnel to this machine, so nothing reached the agent. " +
+  "That is what a box with an expired session looks like from here — it cannot register with the relay. " +
+  "Run `yaver auth` on the machine itself; re-auth from the web rides the tunnel that is missing.";
+
 /** The copy every surface should render for a relay credential deny. */
 export const RELAY_CREDENTIAL_REMEDY =
   "The relay refused the request because this browser has no valid account relay password — " +

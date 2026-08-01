@@ -26,6 +26,7 @@ import {
   isRelayCredentialDeny,
   isRelayCredentialDenyCode,
   isRelayCredentialDenyMessage,
+  isRelayTunnelDown,
   relayDenyCodeFromBody,
   RELAY_DENY_CODES,
 } from "./relayAuth";
@@ -186,5 +187,73 @@ test("the diagnostic gate prefers an explicitly-parsed code over the prose", () 
   assert.equal(
     isRelayCredentialDeny({ path: "tunnel", status: 401, code: "relay_password_missing" }),
     false,
+  );
+});
+
+
+// --- the 502 half of the same misattribution -------------------------------
+//
+// 2026-07-31, ubuntu-4gb-hel1-1: session expired -> relay refused the box's
+// registration -> relay held no tunnel -> every web probe came back 502.
+// `anyReached` counted status>0 as "the agent answered", so the panel said
+// "Agent responded, but the connection was rejected" about a machine the
+// relay had never contacted, and offered a re-auth that rides the missing
+// tunnel. Same lesson as the 401 case above, one status class later.
+
+test("a relay gateway status is NOT the agent answering", () => {
+  for (const status of [502, 503, 504]) {
+    assert.equal(isRelayTunnelDown({ path: "relay", status }), true, `status ${status}`);
+  }
+  // The stable code is authoritative even when the status is not a gateway one.
+  assert.equal(
+    isRelayTunnelDown({
+      path: "relay",
+      status: 404,
+      error: '{"ok":false,"code":"relay.device_not_connected","error":"device not connected to relay"}',
+    }),
+    true,
+  );
+  assert.equal(
+    isRelayTunnelDown({ path: "relay", status: 502, code: "relay.device_owner_mismatch" }),
+    true,
+  );
+});
+
+test("tunnel-down and credential-deny are never the same failure", () => {
+  // A credential deny has a different remedy (sign in again HERE) than a dead
+  // tunnel (sign in on the BOX). Counting one as the other sends the user to
+  // press a button that cannot help.
+  const credentialDeny = { path: "relay", status: 401, code: "relay_password_missing" };
+  assert.equal(isRelayCredentialDeny(credentialDeny), true);
+  assert.equal(isRelayTunnelDown(credentialDeny), false);
+
+  const tunnelDown = { path: "relay", status: 502 };
+  assert.equal(isRelayTunnelDown(tunnelDown), true);
+  assert.equal(isRelayCredentialDeny(tunnelDown), false);
+});
+
+test("the lane gate holds: only the relay leg can be tunnel-down", () => {
+  assert.equal(isRelayTunnelDown({ path: "direct", status: 502 }), false);
+  assert.equal(isRelayTunnelDown({ path: "tunnel", status: 503 }), false);
+  // An AGENT 502 that transited a working relay is indistinguishable from a
+  // relay 502 at this layer, and is correctly treated as tunnel-down: either
+  // way nothing the user can do from the browser reaches that box.
+  assert.equal(isRelayTunnelDown({ path: "relay", status: 200 }), false);
+});
+
+// STRUCTURE — a signal with no consumer is not shipped. The panel must both
+// order the headline around tunnel-down AND stop counting it as "reached".
+test("the connect-error panel consumes isRelayTunnelDown", () => {
+  const page = readFileSync(new URL("../app/dashboard/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /isRelayTunnelDown/, "page.tsx must import and use the shared classifier");
+  assert.match(
+    page,
+    /Relay tunnel down — this machine is not registered with the relay/,
+    "the tunnel-down headline must exist",
+  );
+  assert.match(
+    page,
+    /d\.status && d\.status > 0 && !isRelayTunnelDown\(d\)/,
+    "anyReached must EXCLUDE relay gateway errors, or the old copy still wins",
   );
 });
