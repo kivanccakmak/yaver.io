@@ -296,3 +296,32 @@ export function summarizeFailures(diags: ConnectAttemptDiagnostic[]): Classified
   }
   return classified[0] ?? null;
 }
+
+/** True when a FAILED reachability probe is not evidence that the box is down.
+ *
+ * The distinction matters because the two cases need opposite advice. A relay
+ * that answers 502 / `relay.device_not_connected`, or refuses our account
+ * credential, has told us about ITSELF — the agent was never contacted, and it
+ * may be perfectly healthy behind a missing tunnel. Convex heartbeats keep
+ * flowing in exactly that state, which is why a device card can truthfully read
+ * "Alive · last agent signal just now" at the same moment a probe fails.
+ *
+ * Telling that user to power-cycle the machine is worse than saying nothing: it
+ * is confidently wrong, it costs them a reboot of a working box, and it hides
+ * the real remedy (sign the box in / restore its tunnel). Observed on
+ * 2026-08-01, where the Vibing panel said "not answering on any path … power it
+ * on" about a machine the Devices panel showed as alive and heartbeating. */
+export function probeFailureAllowsBoxAlive(errText: string | null | undefined): boolean {
+  const m = String(errText || "").toLowerCase();
+  return (
+    m.includes("device not connected to relay") ||
+    m.includes("relay.device_not_connected") ||
+    m.includes("device_owner_mismatch") ||
+    m.includes("http 502") ||
+    m.includes("http 503") ||
+    m.includes("http 504") ||
+    m.includes("relay password") ||
+    m.includes("relay refused") ||
+    m.includes("reason=dead_token")
+  );
+}

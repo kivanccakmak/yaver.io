@@ -41,6 +41,7 @@ import type { Device } from "@/lib/use-devices";
 import { machineRolesSaveErrorMessage, machineRolesSplitActive, type MachineRolesRow } from "@/lib/useMachineRoles";
 import { classifyRuntimeTargetProbeFailure } from "@/lib/runtimeTargetProbeFailure";
 import { RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
+import { probeFailureAllowsBoxAlive } from "@/lib/connection-error";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
 import { ScreenContextChip } from "./ScreenContextChip";
 // Read-aloud must never recite Yaver's own prompt header — see lib/promptFraming.ts.
@@ -2432,7 +2433,9 @@ export default function RuntimeLabView({
     const connLine = conn
       ? conn.ok
         ? ` Connection to ${boxName}: OK via ${conn.path || "relay"} (${conn.rttMs}ms).`
-        : ` Connection to ${boxName}: NONE (${conn.error}) — the agent on it is not answering on any path, so no remote repair can reach it.`
+        : probeFailureAllowsBoxAlive(conn.error)
+          ? ` Connection to ${boxName}: NONE (${conn.error}) — the relay has no tunnel to it, so the agent was never contacted and may still be running.`
+          : ` Connection to ${boxName}: NONE (${conn.error}) — the agent on it is not answering on any path, so no remote repair can reach it.`
       : "";
     try {
       const result = await agentClient.callOps("machine_repair", {
@@ -3042,7 +3045,16 @@ export default function RuntimeLabView({
                   </span>
                 ) : (
                   <span className="font-medium">
-                    ✗ No connection to {effectiveRenderBoxName} — {renderConnCheck.error || "no relay, tunnel, or direct path answered"}. The agent on that box is not answering on any path, so nothing remote can repair it. Power it on (or power-cycle it), or pick another render machine.
+                    ✗ No connection to {effectiveRenderBoxName} — {renderConnCheck.error || "no relay, tunnel, or direct path answered"}.{" "}
+                    {probeFailureAllowsBoxAlive(renderConnCheck.error) ? (
+                      <>
+                        The relay answered about itself, not about the box: it has no tunnel to {effectiveRenderBoxName}, so the agent was never contacted and may well be running. Sign that box in (`yaver auth` on the machine) or use Recover below — a power-cycle would not address this.
+                      </>
+                    ) : (
+                      <>
+                        No relay, tunnel, or direct path answered, so nothing remote can repair it. Power it on (or power-cycle it), or pick another render machine.
+                      </>
+                    )}
                     {renderBoxPressure ? (
                       <span className="mt-1 block">
                         Its last heartbeat reported {renderBoxPressure.canFork === false
