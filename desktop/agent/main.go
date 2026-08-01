@@ -11698,6 +11698,16 @@ func repairRelaySessionToken(ctx context.Context) {
 		// this path emits a diagnostic and drops a marker file that the
 		// user's phone (or an ops verb) can consume to prompt for re-auth.
 		markRelaySessionExpired()
+
+		// …and ask to be rescued. Marking the session expired only helps a
+		// surface that can already reach this box; a box refused by the relay
+		// is reachable by nothing. Self-nomination creates a device code the
+		// owner can approve from a phone that is already signed in, which is
+		// the one channel a dead credential cannot block. Rate-limited and
+		// best-effort — see auth_self_nominate.go.
+		if cfg, err := LoadConfig(); err == nil && cfg != nil {
+			beginSelfNomination(cfg.ConvexSiteURL, nil)
+		}
 	}()
 }
 
