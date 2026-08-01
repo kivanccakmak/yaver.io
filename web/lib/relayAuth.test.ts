@@ -257,3 +257,36 @@ test("the connect-error panel consumes isRelayTunnelDown", () => {
     "anyReached must EXCLUDE relay gateway errors, or the old copy still wins",
   );
 });
+
+// CROSS-SURFACE PARITY: five independent copies, one sentence.
+//
+// web + mobile are TS twins; tvOS, watchOS and Wear are native and inherit
+// nothing. The only defence against five surfaces giving five different
+// diagnoses for the same failure is a test that reads all five files.
+test("every surface says the same thing about a dead relay tunnel", () => {
+  const here = new URL(".", import.meta.url);
+  const phrases = [
+    "no tunnel to this machine",
+    "cannot register with the relay",
+    "rides the tunnel that is missing",
+  ];
+  const surfaces: Array<[string, string]> = [
+    ["web", "./relayAuth.ts"],
+    ["mobile", "../../mobile/src/lib/relayAuth.ts"],
+    ["tvOS", "../../tvos/YaverTV/FailureSignals.swift"],
+    ["watchOS", "../../watch/YaverWatch/BoxLifecycle.swift"],
+    ["wear", "../../wear/app/src/main/kotlin/io/yaver/wear/BoxLifecycle.kt"],
+  ];
+  for (const [name, rel] of surfaces) {
+    const src = readFileSync(new URL(rel, here), "utf8");
+    for (const phrase of phrases) {
+      assert.ok(src.includes(phrase), `${name} is missing "${phrase}" — the surfaces have drifted`);
+    }
+    // None of them may send the user to another surface to re-auth: that flow
+    // travels through the tunnel that is missing.
+    assert.ok(
+      !/re-auth from the web (?!rides)/i.test(src),
+      `${name} offers web re-auth for a dead tunnel — the circular remedy`,
+    );
+  }
+});

@@ -25,6 +25,25 @@ import SwiftUI
 
 /// The canonical box-wake phase ladder. Labels + percents are pinned to the
 /// mobile `wakeMachine.ts` PHASE_META so every surface reads the same.
+/// What to SAY when the relay answered and had no tunnel to the box.
+///
+/// Distinct from `.needsAuth`, which already carries its own remedy ("Signed
+/// out — `yaver auth` on the box"). Tunnel-down is the case where the relay
+/// refused the BOX's registration, so the agent was never contacted and may be
+/// perfectly healthy — a state the watch previously had no words for.
+///
+/// Copied verbatim from web/lib/relayAuth.ts::RELAY_TUNNEL_DOWN_REMEDY and its
+/// mobile and tvOS twins. A user who reads one diagnosis on their phone and a
+/// different one on their wrist learns that Yaver's answer depends on which
+/// screen they picked up. It deliberately does not offer re-auth from another
+/// surface: that flow rides the very tunnel that is missing.
+enum RelayFailureCopy {
+    static let tunnelDownRemedy =
+        "The relay is up but has no tunnel to this machine, so nothing reached the agent. "
+        + "That is what a box with an expired session looks like from here — it cannot register with the relay. "
+        + "Run `yaver auth` on the machine itself; re-auth from the web rides the tunnel that is missing."
+}
+
 enum WakePhase: String, CaseIterable, Identifiable {
     case asleep
     case waking      // mobile: requested

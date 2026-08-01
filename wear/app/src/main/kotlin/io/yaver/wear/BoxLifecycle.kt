@@ -47,6 +47,25 @@ import java.util.concurrent.TimeUnit
 object BoxLifecycle {
 
     /** The wake ladder. `percent` fills the bar; `label` is the short chip word. */
+    /**
+     * What to SAY when the relay answered and had no tunnel to the box.
+     *
+     * Distinct from the signed-out phase, which carries its own remedy.
+     * Tunnel-down is the case where the relay refused the BOX's registration,
+     * so the agent was never contacted and may be perfectly healthy — a state
+     * Wear previously had no words for.
+     *
+     * Copied verbatim from web/lib/relayAuth.ts RELAY_TUNNEL_DOWN_REMEDY and
+     * its mobile, tvOS and watchOS twins. It deliberately does not offer
+     * re-auth from another surface: that flow rides the tunnel that is missing.
+     */
+    object RelayFailureCopy {
+        const val TUNNEL_DOWN_REMEDY =
+            "The relay is up but has no tunnel to this machine, so nothing reached the agent. " +
+                "That is what a box with an expired session looks like from here — it cannot register with the relay. " +
+                "Run `yaver auth` on the machine itself; re-auth from the web rides the tunnel that is missing."
+    }
+
     enum class WakePhase(val label: String, val percent: Int) {
         ASLEEP("Asleep", 0),
         WAKING("Waking", 8),
