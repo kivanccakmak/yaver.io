@@ -1041,7 +1041,17 @@ export default function DashboardPage() {
       const r = await fetch(`${CONVEX_URL}/config`);
       let relays: any[] = [];
       if (r.ok) relays = (await r.json()).relayServers || [];
-      const sr = await fetch(`${CONVEX_URL}/settings`, { headers: { Authorization: `Bearer ${token}` } });
+      const sr = await fetch(`${CONVEX_URL}/settings`, {
+        // no-store: this response is USER-SPECIFIC and shares its URL with
+        // every other caller. /config had exactly this bug — a cacheable
+        // anonymous copy was served to signed-in callers, stripping the relay
+        // password, and every relay dial then answered 401
+        // relay_password_missing while the UI blamed the account. The server
+        // now sends Vary: Authorization; this makes the client immune too,
+        // including to a copy cached before that fix shipped.
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (sr.ok) {
         const sd = await sr.json();
         const pw = sd.settings?.relayPassword || sd.relayPassword;
@@ -1233,11 +1243,35 @@ export default function DashboardPage() {
       // Fetch user settings to get relay password override + primary device
       if (token) {
         try {
-          const sr = await fetch(`${CONVEX_URL}/settings`, { headers: { Authorization: `Bearer ${token}` } });
+          const sr = await fetch(`${CONVEX_URL}/settings`, {
+        // no-store: this response is USER-SPECIFIC and shares its URL with
+        // every other caller. /config had exactly this bug — a cacheable
+        // anonymous copy was served to signed-in callers, stripping the relay
+        // password, and every relay dial then answered 401
+        // relay_password_missing while the UI blamed the account. The server
+        // now sends Vary: Authorization; this makes the client immune too,
+        // including to a copy cached before that fix shipped.
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${token}` },
+      });
           if (sr.ok) {
             const sd = await sr.json();
             const pw = sd.settings?.relayPassword || sd.relayPassword;
-            if (pw) { relays = relays.map((r: any) => ({ ...r, password: pw })); }
+            if (pw) {
+              relays = relays.map((r: any) => ({ ...r, password: pw }));
+            } else {
+              // Signed in, but no relay password came back. Publishing the list
+              // anyway installs relays that can only ever answer 401
+              // relay_password_missing — which the UI then renders as "Relay
+              // refused: account relay password missing or stale", blaming the
+              // account for a fetch that simply did not deliver. Drop the relay
+              // lane instead: direct and tunnel paths still work, and a machine
+              // with no path says so honestly rather than reporting a credential
+              // fault the user cannot act on.
+              console.warn("[relay] signed in but /settings returned no relay password — " +
+                "not installing a relay list that could only fail authentication");
+              relays = [];
+            }
             if (!cancelled && opts?.syncPrimary) {
               setPrimaryDeviceId(sd.settings?.primaryDeviceId ?? null);
               setSecondaryDeviceId(sd.settings?.secondaryDeviceId ?? null);
