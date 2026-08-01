@@ -123,3 +123,52 @@ export function isRelayAuthFailure(message: string | null | undefined): boolean 
 
   return false;
 }
+
+/** True when the relay ANSWERED and had nothing to forward to.
+ *
+ *  Twin of web/lib/relayAuth.ts::isRelayTunnelDown — same shape, same wording,
+ *  because a user who reads one diagnosis on their phone and a different one in
+ *  the browser learns that Yaver's answer depends on which screen they picked
+ *  up, which is the opposite of what a named cause is for.
+ *
+ *  This is the failure a box in the wild actually produces. On 2026-08-01
+ *  ubuntu-4gb-hel1-1's Convex session expired, so the relay refused its
+ *  registration and held no tunnel; every client probe came back 502. Anything
+ *  that counts "an HTTP status arrived" as "the agent answered" then reports a
+ *  machine that was never contacted as having rejected the connection — and
+ *  offers a re-auth flow that travels through the very tunnel that is missing.
+ *
+ *  A gateway status on the RELAY leg means the opposite of reached, so callers
+ *  must exclude these from any "did anything answer" tally, not merely order
+ *  their copy around them. */
+export function isRelayTunnelDown(diag: {
+  path?: string;
+  status?: number;
+  error?: string;
+  code?: string;
+}): boolean {
+  if (diag.path !== "relay") return false;
+  // A credential deny is a different failure with a different remedy; never
+  // let one be counted as both.
+  if (isRelayDenyCode(diag.code)) return false;
+  const code = diag.code?.trim() || relayDenyCodeFromBody(diag.error);
+  if (
+    code === RELAY_DENY_CODES.deviceNotConnected ||
+    code === RELAY_DENY_CODES.deviceOwnerMismatch
+  ) {
+    return true;
+  }
+  if (code && isRelayDenyCode(code)) return false;
+  // Prose/status fallback for relays that predate the stable codes.
+  return diag.status === 502 || diag.status === 503 || diag.status === 504;
+}
+
+/** The copy every surface renders when the relay has no tunnel to the box.
+ *
+ *  It must NOT suggest anything that travels through the relay, because nothing
+ *  can: the only lever is on the machine itself. Twin of
+ *  web/lib/relayAuth.ts::RELAY_TUNNEL_DOWN_REMEDY. */
+export const RELAY_TUNNEL_DOWN_REMEDY =
+  "The relay is up but has no tunnel to this machine, so nothing reached the agent. " +
+  "That is what a box with an expired session looks like from here — it cannot register with the relay. " +
+  "Run `yaver auth` on the machine itself; re-auth from the web rides the tunnel that is missing.";
