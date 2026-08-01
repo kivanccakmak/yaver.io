@@ -47,6 +47,15 @@ import { readFileSync } from 'fs';
 const CONVEX = process.env.CONVEX_SITE_URL || 'https://perceptive-minnow-557.eu-west-1.convex.site';
 const APP = process.env.WEB_URL || 'https://yaver.io';
 const ENV_PATH = process.env.YAVER_ENV_FILE || '/Users/kivanccakmak/Workspace/yaver.io/.env.test';
+// "latest", not a pin, and that is not a shortcut — it is the only value the
+// agent will act on. claimAndApplyAgentUpdateRequest refuses anything else
+// outright ("this agent can only track `latest`"), and it refuses AFTER
+// ClaimAgentUpdateRequest has already cleared desiredAgentVersion — so a pinned
+// request is consumed and discarded, the surface is told {ok:true}, and nothing
+// ever reports that the update evaporated. Measured 2026-08-01: six machines
+// queued for 1.99.395, all six silently unchanged 12 minutes later.
+// TARGET_VERSION below is only used to decide WHICH boxes are stale.
+const QUEUE_VERSION = process.env.YAVER_QUEUE_VERSION || 'latest';
 const TARGET_VERSION = process.env.YAVER_TARGET_VERSION || '1.99.395';
 const APPLY = process.argv.includes('--apply');
 
@@ -145,15 +154,15 @@ try {
   if (!stale.length) {
     console.log(`every machine already reports ${TARGET_VERSION} or newer`);
   } else if (!APPLY) {
-    console.log(`would queue ${TARGET_VERSION} for ${stale.length}: ${stale.map((r) => r.name).join(', ')}`);
+    console.log(`would queue ${QUEUE_VERSION} for ${stale.length}: ${stale.map((r) => r.name).join(', ')}`);
   } else {
     for (const r of stale) {
       const res = await api(token, '/devices/request-update', {
         method: 'POST',
-        body: JSON.stringify({ deviceId: r.id, version: TARGET_VERSION }),
+        body: JSON.stringify({ deviceId: r.id, version: QUEUE_VERSION }),
       });
       const ok = res.status === 200 && res.body?.ok !== false;
-      console.log(`  ${ok ? 'queued  ' : 'FAILED  '} ${r.name.padEnd(22)} -> ${TARGET_VERSION}` +
+      console.log(`  ${ok ? 'queued  ' : 'FAILED  '} ${r.name.padEnd(22)} -> ${QUEUE_VERSION}` +
         (ok ? '' : `  (HTTP ${res.status} ${String(res.text).slice(0, 90)})`));
       if (!ok) exitCode = 1;
     }

@@ -2700,15 +2700,47 @@ http.route({
     if (!body || typeof body.deviceId !== "string") {
       return errorResponse("deviceId required", 400);
     }
+    // Refuse a pin the agent cannot honour, HERE, where the caller is still
+    // listening.
+    //
+    // claimAndApplyAgentUpdateRequest only ever installs `latest`. Anything else
+    // it logs and drops — and it drops it AFTER ClaimAgentUpdateRequest has
+    // already cleared desiredAgentVersion, so a pinned request is consumed and
+    // discarded in one motion. Until now this endpoint answered
+    // {ok:true, requestedVersion:"1.99.395"} to exactly that, and nothing ever
+    // reported the loss.
+    //
+    // Measured 2026-08-01: six machines queued for 1.99.395, every request
+    // acknowledged, all six silently unchanged 12 minutes later. Re-queued as
+    // "latest" and three updated within four minutes — the pin was the only
+    // difference. That is a false green on the one lever that works when a box
+    // cannot be reached by anything else.
+    //
+    // Rejecting beats accepting-then-losing: the caller finds out at the moment
+    // it asks, and the remedy is in the sentence.
+    const requestedVersion =
+      typeof body.version === "string" ? body.version.trim() : "";
+    if (requestedVersion && requestedVersion.toLowerCase() !== "latest") {
+      return errorResponse(
+        `Yaver agents can only update to "latest", not a pinned version like ${requestedVersion}. ` +
+          `Request "latest" instead, or run \`yaver update\` on the machine to pin it.`,
+        400,
+        "pinned_version_unsupported",
+      );
+    }
     try {
       const out = await ctx.runMutation(api.devices.requestAgentUpdate, {
         tokenHash,
         deviceId: body.deviceId,
-        version: typeof body.version === "string" ? body.version : undefined,
+        version: requestedVersion || undefined,
       });
       return jsonResponse({ ...out, ok: true });
     } catch (e: any) {
-      return errorResponse(e?.message || "request failed", 400);
+      // Never echo e.message: after a Convex boundary it is a decorated stack
+      // with file paths and a request id. thrownSentinel decodes what matters.
+      const s = thrownSentinel(e);
+      if (s === "Unauthorized") return errorResponse("Unauthorized", 401, "unauthorized");
+      return errorResponse("Could not queue the update for that machine.", 400);
     }
   }),
 });

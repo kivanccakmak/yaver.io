@@ -113,3 +113,18 @@ test("a login form never echoes a decorated Convex stack back to the user", () =
   assert.ok(!httpTs.includes('errorResponse(e.message || "Verification failed"'),
     "2FA login echoes e.message — same leak, on the login path");
 });
+
+test("a pinned agent version is refused at request time, not consumed and lost", () => {
+  // claimAndApplyAgentUpdateRequest installs only `latest`; anything else it
+  // logs and drops — AFTER the claim has already cleared desiredAgentVersion.
+  // So a pinned request used to be acknowledged with {ok:true} and then vanish.
+  // Measured 2026-08-01: six machines queued for 1.99.395, all acknowledged,
+  // all silently unchanged 12 minutes later; re-queued as "latest" and three
+  // updated within four minutes.
+  assert.ok(httpCode.includes("pinned_version_unsupported"),
+    "/devices/request-update no longer rejects a pinned version — it is back to " +
+    "accepting a request the agent will silently discard, on the one lever that " +
+    "works when a box cannot be reached by anything else");
+  assert.match(httpCode, /can only update to "latest"/,
+    "the refusal no longer names the remedy");
+});
