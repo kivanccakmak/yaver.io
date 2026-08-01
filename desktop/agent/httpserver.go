@@ -2247,6 +2247,29 @@ func (s *HTTPServer) isApprovedGuest(userID string) bool {
 // combined with per-request cache TTL (see cachedTokenInfo) the end-to-end
 // cutoff is a handful of seconds even if the mobile app never talks to this agent.
 func (s *HTTPServer) refreshGuestList(ctx context.Context) {
+	// The whole guest family ships OFF in v1 (feature_flags.go:
+	// ENABLE_GUEST_FEATURES) — guest sessions, scopes, delegated SDK tokens,
+	// host share and support sessions. Polling Convex for a subsystem that is
+	// switched off is pure cost, and it is cost PER AGENT: two calls every ten
+	// seconds, ~17k/day per machine, on every box every user connects.
+	//
+	// Measured on prod 2026-08-01 with the dashboard closed and the boxes idle:
+	// guests:getGuestUserIds and guests:getGuestConfig were the two busiest
+	// functions in the deployment at 46 calls each per 90 seconds — together
+	// roughly 40% of all function calls, buying nothing. The file's own comment
+	// below records that this poll "dominated our Convex bill (~660K function
+	// calls/period)" once already; the adaptive backoff added then does not
+	// help here, because it only slows down when the host has no guest rows at
+	// all, and a single stale grant (even a REVOKED one) pins it to the fast
+	// cadence forever.
+	//
+	// When the flag opens, this returns to the adaptive behaviour below
+	// unchanged.
+	if !GuestAccessEnabled() {
+		log.Printf("[GUESTS] guest features are disabled — not polling Convex for guest lists or configs")
+		return
+	}
+
 	prevGuests := map[string]bool{}
 	fetchOnce := func() bool {
 		if ids, err := FetchGuestUserIds(s.convexURL, s.token, s.deviceID); err == nil {
