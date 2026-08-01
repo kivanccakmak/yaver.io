@@ -921,9 +921,28 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
               <Pressable onPress={() => void handleReload("fast")} style={styles.headerBtn} accessibilityLabel="Fast Reload">
                 <Text style={styles.headerBtnReload}>Fast</Text>
               </Pressable>
-              <Pressable onPress={() => void handleReload("full")} style={styles.headerBtn} accessibilityLabel="Full Reload">
-                <Text style={styles.headerBtnReloadFull}>Full</Text>
-              </Pressable>
+              {/* Full reload pushes a new Hermes bundle to the MOBILE SDK
+                * listener. In the browser-preview lane there is no such
+                * listener by construction — the project is served as a Metro
+                * WEB bundle — so the tap could only ever end in
+                *
+                *   Reload Failed
+                *   No mobile SDK listener or browser bundle preview is connected on this agent.
+                *
+                * an alert whose only affordance is OK. Reported from TestFlight
+                * 2026-08-01 on todo-rn, whose own card two screens earlier read
+                * "mode · browser preview": the app already held the fact that
+                * made the action impossible, and offered it anyway.
+                *
+                * Not offering an impossible action is the cheapest rung of the
+                * failure ladder — the one the user never has to see. Fast
+                * covers refresh in this lane; Full returns with the native
+                * lane. */}
+              {mustUseNativePreview ? (
+                <Pressable onPress={() => void handleReload("full")} style={styles.headerBtn} accessibilityLabel="Full Reload">
+                  <Text style={styles.headerBtnReloadFull}>Full</Text>
+                </Pressable>
+              ) : null}
               <Pressable onPress={handleStop} style={styles.headerBtn}>
                 <Text style={styles.headerBtnStop}>{status.stopActionLabel || "Stop Serving"}</Text>
               </Pressable>
