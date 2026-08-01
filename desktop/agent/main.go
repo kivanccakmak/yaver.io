@@ -11461,6 +11461,17 @@ func runRelayTunnel(ctx context.Context, relayAddr, agentAddr, deviceID, token, 
 					log.Printf("[RELAY %s] Convex returned the same relay password the relay just refused — "+
 						"credentials are stale on this machine; run `yaver auth` here to restore the tunnel", relayAddr)
 				}
+			case relayAuthPinMismatch:
+				// Re-ask the control plane which key is authentic. This does
+				// NOT relax the check — the pin still has to match on the next
+				// dial; we are only refusing to treat a published rotation as
+				// permanently fatal. See relay_pin_selfheal.go.
+				if fresh := refreshRelayPinFromConvex(relayAddr, currentRelayPin(relayAddr)); fresh != "" {
+					log.Printf("[RELAY %s] Relay identity rotated — re-pulled the authoritative SPKI pin from platform config; retrying", relayAddr)
+					backoff = time.Second
+					continue
+				}
+				log.Printf("[RELAY %s] %s", relayAddr, relayPinMismatchRemedy(relayAddr))
 			case relayAuthDeviceMismatch:
 				log.Printf("[RELAY %s] Password owner does not own deviceId %q — cannot self-heal; "+
 					"user must sign in on this device or fix its identity", relayAddr, deviceID)
@@ -11579,6 +11590,7 @@ const (
 	relayAuthBadPassword                         // Convex password no longer matches — refetch may help.
 	relayAuthDeadToken                           // Session token missing/expired/foreign — refetching password is a no-op.
 	relayAuthDeviceMismatch                      // Password owner does not own the deviceId — no self-heal.
+	relayAuthPinMismatch                         // Relay's TLS identity != pinned SPKI. A rotation and an attack look identical here.
 )
 
 // classifyRelayAuthFailure parses the relay's wire error into one of the
@@ -11605,6 +11617,13 @@ func classifyRelayAuthFailureWithSignals(err error, sessionKnownExpired bool) re
 		return relayAuthUnknown
 	}
 	msg := strings.ToLower(err.Error())
+	// Checked first: a pin mismatch aborts the TLS handshake, so it happens
+	// BEFORE any credential is ever presented. Letting it fall through to the
+	// credential branches would blame a password for a failure that never got
+	// far enough to use one.
+	if strings.Contains(msg, "spki pin mismatch") {
+		return relayAuthPinMismatch
+	}
 	switch {
 	case strings.Contains(msg, "reason=dead_token"):
 		return relayAuthDeadToken
