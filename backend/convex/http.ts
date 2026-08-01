@@ -52,8 +52,68 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
-function errorResponse(message: string, status = 400): Response {
-  return jsonResponse({ error: message }, status);
+function errorResponse(message: string, status = 400, code?: string): Response {
+  return jsonResponse(code ? { error: message, code } : { error: message }, status);
+}
+
+/**
+ * Yaver's code-entry failures are thrown as bare sentinels inside mutations
+ * (`throw new Error("INVALID_CODE")` in deviceCode.ts / totp.ts) and read back
+ * here, in an httpAction, after crossing a Convex boundary — and the boundary
+ * DECORATES the message. What arrives is not "INVALID_CODE" but roughly:
+ *
+ *     [CONVEX M(deviceCode:authorizeDeviceCode)] [Request ID: …] Server Error
+ *     Uncaught Error: INVALID_CODE
+ *         at handler (../convex/deviceCode.ts:319:13)
+ *
+ * so every `e.message === "INVALID_CODE"` comparison was false, and every wrong
+ * code in the product fell through to its catch-all. Measured against prod
+ * 2026-08-01, signed in, POST /auth/device-code/authorize with a mistyped code:
+ *
+ *     500 {"error":"Failed to authorize"}
+ *
+ * A server error for a typo — on the one path an unreachable box is rescued
+ * through. The specific, actionable answers existed at BOTH ends (this file
+ * mapped four sentinels to 404/410/409/429; DeviceCodeClient.tsx rendered a
+ * distinct sentence for each) and neither could ever run. It hit five sites:
+ * device-code authorize, TOTP enable, TOTP disable, and TOTP login.
+ *
+ * Substring, not equality, because it is correct for BOTH the bare sentinel and
+ * the decorated form — so this keeps working whichever way the boundary behaves
+ * in a future Convex release, rather than silently reverting to 500s.
+ */
+const CODE_ENTRY_SENTINELS = [
+  "INVALID_CODE",
+  "CODE_EXPIRED",
+  "CODE_ALREADY_USED",
+  "TOO_MANY_ATTEMPTS",
+  "INVALID_PENDING",
+  "PENDING_EXPIRED",
+  // Account linking / merge threw the same way and drifted the same way: a bad
+  // link token answered 400 with a decorated stack instead of 410.
+  "INVALID_LINK_TOKEN",
+  "TARGET_USER_NOT_FOUND",
+  "IDENTITY_ALREADY_LINKED",
+  // Mutations that reject an unauthenticated caller throw this bare string, so
+  // it lost its 401 to the same boundary and surfaced as a 400.
+  "Unauthorized",
+] as const;
+
+type CodeEntrySentinel = (typeof CODE_ENTRY_SENTINELS)[number];
+
+function thrownSentinel(e: unknown): CodeEntrySentinel | null {
+  const raw = String((e as { message?: unknown } | null)?.message ?? e ?? "");
+  for (const s of CODE_ENTRY_SENTINELS) {
+    if (raw.includes(s)) return s;
+  }
+  return null;
+}
+
+/** The machine-readable code that rides beside the sentence, so surfaces key off
+ *  a stable token instead of an HTTP status or a regex over prose. Clients that
+ *  match on status keep working; clients that match on this cannot drift. */
+function sentinelCode(s: CodeEntrySentinel): string {
+  return s.toLowerCase();
 }
 
 const PROMPT_FREE_METADATA_DENIED_KEYS = new Set([
@@ -1237,8 +1297,8 @@ http.route({
       const result = await ctx.runMutation(api.auth.requestEmailVerification, { tokenHash });
       return jsonResponse(result);
     } catch (e: any) {
-      if (e?.message === "Unauthorized") return errorResponse("Unauthorized", 401);
-      return errorResponse(e?.message || "Could not request verification email", 400);
+      if (thrownSentinel(e) === "Unauthorized") return errorResponse("Unauthorized", 401, "unauthorized");
+      return errorResponse("Could not request verification email", 400);
     }
   }),
 });
@@ -1635,8 +1695,8 @@ http.route({
       });
       return jsonResponse(result);
     } catch (e: any) {
-      if (e?.message === "Unauthorized") return errorResponse("Unauthorized", 401);
-      return errorResponse(e?.message || "Failed to start OAuth linking", 400);
+      if (thrownSentinel(e) === "Unauthorized") return errorResponse("Unauthorized", 401, "unauthorized");
+      return errorResponse("Failed to start OAuth linking", 400);
     }
   }),
 });
@@ -1663,10 +1723,11 @@ http.route({
       });
       return jsonResponse(result);
     } catch (e: any) {
-      if (e?.message === "INVALID_LINK_TOKEN") return errorResponse("Invalid or expired link token", 410);
-      if (e?.message === "TARGET_USER_NOT_FOUND") return errorResponse("Target user not found", 404);
-      if (e?.message === "IDENTITY_ALREADY_LINKED") return errorResponse("Identity already linked to another account", 409);
-      return errorResponse(e?.message || "Failed to complete OAuth linking", 400);
+      const s = thrownSentinel(e);
+      if (s === "INVALID_LINK_TOKEN") return errorResponse("Invalid or expired link token", 410, sentinelCode(s));
+      if (s === "TARGET_USER_NOT_FOUND") return errorResponse("Target user not found", 404, sentinelCode(s));
+      if (s === "IDENTITY_ALREADY_LINKED") return errorResponse("Identity already linked to another account", 409, sentinelCode(s));
+      return errorResponse("Failed to complete OAuth linking", 400);
     }
   }),
 });
@@ -1817,8 +1878,8 @@ http.route({
       });
       return jsonResponse(result);
     } catch (e: any) {
-      if (e?.message === "Unauthorized") return errorResponse("Unauthorized", 401);
-      return errorResponse(e?.message || "Failed to cancel merge", 400);
+      if (thrownSentinel(e) === "Unauthorized") return errorResponse("Unauthorized", 401, "unauthorized");
+      return errorResponse("Failed to cancel merge", 400);
     }
   }),
 });
@@ -5177,8 +5238,8 @@ http.route({
       });
       return jsonResponse({ ok: true });
     } catch (e: any) {
-      if (e?.message === "Unauthorized") return errorResponse("Unauthorized", 401);
-      return errorResponse(e?.message || "Failed to register push token", 400);
+      if (thrownSentinel(e) === "Unauthorized") return errorResponse("Unauthorized", 401, "unauthorized");
+      return errorResponse("Failed to register push token", 400);
     }
   }),
 });
@@ -5301,8 +5362,9 @@ http.route({
       });
       return jsonResponse(result);
     } catch (e: any) {
-      if (e.message === "INVALID_CODE") return errorResponse("Invalid verification code", 401);
-      return errorResponse(e.message || "Failed to enable TOTP", 400);
+      const s = thrownSentinel(e);
+      if (s === "INVALID_CODE") return errorResponse("Invalid verification code", 401, sentinelCode(s));
+      return errorResponse("Failed to enable TOTP", 400);
     }
   }),
 });
@@ -5323,8 +5385,9 @@ http.route({
       await ctx.runMutation(api.totp.disableTotp, { tokenHash, code: body.code });
       return jsonResponse({ ok: true });
     } catch (e: any) {
-      if (e.message === "INVALID_CODE") return errorResponse("Invalid verification code", 401);
-      return errorResponse(e.message || "Failed to disable TOTP", 400);
+      const s = thrownSentinel(e);
+      if (s === "INVALID_CODE") return errorResponse("Invalid verification code", 401, sentinelCode(s));
+      return errorResponse("Failed to disable TOTP", 400);
     }
   }),
 });
@@ -5389,11 +5452,15 @@ http.route({
       });
       return jsonResponse(result);
     } catch (e: any) {
-      if (e.message === "INVALID_CODE") return errorResponse("Invalid code", 401);
-      if (e.message === "INVALID_PENDING") return errorResponse("Invalid or expired session", 404);
-      if (e.message === "PENDING_EXPIRED") return errorResponse("Session expired, please login again", 410);
-      if (e.message === "TOO_MANY_ATTEMPTS") return errorResponse("Too many attempts, please login again", 429);
-      return errorResponse(e.message || "Verification failed", 400);
+      const s = thrownSentinel(e);
+      if (s === "INVALID_CODE") return errorResponse("Invalid code", 401, sentinelCode(s));
+      if (s === "INVALID_PENDING") return errorResponse("Invalid or expired session", 404, sentinelCode(s));
+      if (s === "PENDING_EXPIRED") return errorResponse("Session expired, please login again", 410, sentinelCode(s));
+      if (s === "TOO_MANY_ATTEMPTS") return errorResponse("Too many attempts, please login again", 429, sentinelCode(s));
+      // Never echo e.message: after the boundary it is a decorated Convex stack
+      // trace with file paths and a request id, which is both unreadable to the
+      // user and more than a login form should disclose.
+      return errorResponse("Verification failed", 400);
     }
   }),
 });
@@ -5589,10 +5656,23 @@ http.route({
       });
       return jsonResponse({ ok: true });
     } catch (e: any) {
-      if (e.message === "INVALID_CODE") return errorResponse("Invalid code", 404);
-      if (e.message === "CODE_EXPIRED") return errorResponse("Code expired", 410);
-      if (e.message === "CODE_ALREADY_USED") return errorResponse("Code already used", 409);
-      if (e.message === "TOO_MANY_ATTEMPTS") return errorResponse("Too many attempts", 429);
+      const s = thrownSentinel(e);
+      if (s === "INVALID_CODE") {
+        return errorResponse(
+          "That code does not match any machine waiting to be signed in. Check the code and try again.",
+          404, sentinelCode(s));
+      }
+      if (s === "CODE_EXPIRED") {
+        return errorResponse(
+          "That code has expired. Codes are short-lived — get a fresh one from the machine and try again.",
+          410, sentinelCode(s));
+      }
+      if (s === "CODE_ALREADY_USED") {
+        return errorResponse("That code has already been used.", 409, sentinelCode(s));
+      }
+      if (s === "TOO_MANY_ATTEMPTS") {
+        return errorResponse("Too many attempts on that code. Get a fresh one and try again.", 429, sentinelCode(s));
+      }
       return errorResponse("Failed to authorize", 500);
     }
   }),

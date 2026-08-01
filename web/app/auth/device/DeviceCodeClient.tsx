@@ -349,12 +349,21 @@ export default function DeviceCodeClient({
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({ error: "Unknown error" }));
-        if (res.status === 404) {
+        // Key off the stable `code` the backend now sends, and fall back to the
+        // status. Both used to be unreachable: the sentinels these branches
+        // classify were compared with === against a message that had crossed a
+        // Convex boundary and been decorated, so every wrong code arrived here
+        // as a 500 and rendered the catch-all "Failed to authorize" — a server
+        // error for a typo. See thrownSentinel() in backend/convex/http.ts.
+        const code = typeof data?.code === "string" ? data.code : "";
+        if (code === "invalid_code" || res.status === 404) {
           setErrorMsg("Invalid code. Check the code in your terminal and try again.");
-        } else if (res.status === 410) {
+        } else if (code === "code_expired" || res.status === 410) {
           setErrorMsg(expiredCodeMessage);
-        } else if (res.status === 409) {
+        } else if (code === "code_already_used" || res.status === 409) {
           setErrorMsg("This code has already been used.");
+        } else if (code === "too_many_attempts" || res.status === 429) {
+          setErrorMsg("Too many attempts on that code. Get a fresh one and try again.");
         } else {
           setErrorMsg(data.error || "Something went wrong.");
         }
@@ -376,7 +385,15 @@ export default function DeviceCodeClient({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token) return;
+    if (!token) {
+      // A bare `return` here meant the button did LITERALLY NOTHING whenever the
+      // session check had not finished or the stored token was rejected: no
+      // error, no spinner, no cause — the user cannot tell a dead click from a
+      // slow network, on the screen they came to rescue a machine from.
+      setErrorMsg("You are not signed in on this browser yet. Reload the page, sign in, then enter the code again.");
+      setStatus("error");
+      return;
+    }
     handleAuthorize(code, token);
   };
 
