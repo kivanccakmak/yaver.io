@@ -31,6 +31,20 @@
 
 import Foundation
 
+/// The slice of AgentClient's error this file needs.
+///
+/// FailureSignals is documented as Foundation-only so `swiftc` alone can prove
+/// it, without Xcode, a simulator, or an Apple TV (tvos/README.md). That
+/// property had ROTTED: a direct reference to the concrete `AgentError` pulled
+/// in AgentClient.swift, which pulls BoxTarget, and the README's own verify
+/// command stopped compiling — so nobody had been running the checks it
+/// promises. Depending on a local protocol instead restores it; AgentError
+/// conforms in one line and gains nothing it did not already have.
+protocol AgentErrorCoded: Error {
+    var code: String? { get }
+    var message: String { get }
+}
+
 /// The ROUTE a capability gap carries. method + path + stream is what makes a
 /// remedy tappable rather than a sentence about a remedy.
 struct GapFix: Equatable, Sendable {
@@ -80,7 +94,7 @@ enum FailureSignals {
     /// httpserver.go companionScopeDeniedMessage). The shim lives here and
     /// nowhere else; do not copy the string into a view.
     static func isSessionScopeDenied(_ error: Error) -> Bool {
-        if let agentError = error as? AgentError {
+        if let agentError = error as? AgentErrorCoded {
             if agentError.code == sessionScopeDenied { return true }
             if agentError.message.contains("scoped token cannot access this endpoint") { return true }
         }
@@ -132,6 +146,23 @@ enum FailureSignals {
         }
         return TargetProbePlan(kind: .other, retry: false, useRunnerFallback: false, showFixWithRunner: true)
     }
+
+    /// What to SAY when the relay has no tunnel to the box.
+    ///
+    /// classifyTargetProbeFailure already recognises this case, but a plan with
+    /// no sentence leaves the TV rendering a generic failure for a cause we
+    /// have precisely identified. Copied verbatim from
+    /// web/lib/relayAuth.ts::RELAY_TUNNEL_DOWN_REMEDY and its mobile twin — a
+    /// user who reads one diagnosis on their phone and a different one on the
+    /// TV learns that Yaver's answer depends on which screen they picked up.
+    ///
+    /// It deliberately does NOT offer re-auth from another surface: that flow
+    /// travels through the very tunnel that is missing. The only lever is on
+    /// the machine itself.
+    static let relayTunnelDownRemedy =
+        "The relay is up but has no tunnel to this machine, so nothing reached the agent. "
+        + "That is what a box with an expired session looks like from here — it cannot register with the relay. "
+        + "Run `yaver auth` on the machine itself; re-auth from the web rides the tunnel that is missing."
 
     // ── 1. Capability gap ─────────────────────────────────────────────────
 

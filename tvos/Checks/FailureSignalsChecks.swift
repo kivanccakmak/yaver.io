@@ -226,6 +226,22 @@ eq(FailureSignals.runnerAuthLivenessLine(now: t0, startedAt: t0, lastOutputAt: t
 eq(FailureSignals.shortDuration(59_400), "59s", "31e")
 eq(FailureSignals.shortDuration(60_000), "1m 0s", "31f")
 
+// ── relay tunnel down: the TV must say the same sentence as the phone ──────
+//
+// classifyTargetProbeFailure already recognised this case; a plan with no
+// sentence left the TV rendering a generic failure for a cause we had precisely
+// identified. The wording is shared with web/lib/relayAuth.ts and its mobile
+// twin on purpose.
+let tunnelDown = FailureSignals.relayTunnelDownRemedy
+eq(tunnelDown.contains("no tunnel to this machine") ? "y" : "n", "y", "32a")
+eq(tunnelDown.contains("yaver auth") ? "y" : "n", "y", "32b")
+// It must NOT send the user to another surface: that flow rides the missing
+// tunnel. This is the circular remedy the web dashboard offered on 2026-07-31.
+eq(tunnelDown.contains("rides the tunnel that is missing") ? "y" : "n", "y", "32c")
+// And the classifier must still route the real wire code here.
+eq(String(describing: FailureSignals.classifyTargetProbeFailure(
+    "{\"code\":\"relay.device_not_connected\"}").kind), "relayPresence", "32d")
+
 // ── report ────────────────────────────────────────────────────────────────
 
 if failures == 0 {

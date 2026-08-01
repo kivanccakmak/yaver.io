@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct AgentError: Error, LocalizedError {
+struct AgentError: AgentErrorCoded, LocalizedError {
     let message: String
     /// The structured capability gap the agent attached to this refusal, when
     /// it attached one. `message` stays exactly what it always was — a shipped
