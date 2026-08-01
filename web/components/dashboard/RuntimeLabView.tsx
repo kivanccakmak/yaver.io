@@ -42,6 +42,7 @@ import { machineRolesSaveErrorMessage, machineRolesSplitActive, type MachineRole
 import { classifyRuntimeTargetProbeFailure } from "@/lib/runtimeTargetProbeFailure";
 import { RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
 import { probeFailureAllowsBoxAlive } from "@/lib/connection-error";
+import { resolveSeededRole } from "@/lib/connectionFanout";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
 import { ScreenContextChip } from "./ScreenContextChip";
 // Read-aloud must never recite Yaver's own prompt header — see lib/promptFraming.ts.
@@ -1438,10 +1439,29 @@ export default function RuntimeLabView({
     () => (devices || []).filter((d) => !d.isGuest),
     [devices],
   );
-  // The box that will actually answer the target probe / serve previews:
-  // explicit render role → runner (renders too) → the connected device.
-  const effectiveRenderDeviceId =
-    machineRoles?.renderDeviceId || machineRoles?.runnerDeviceId || connectedDevice?.id || null;
+  // The box that will actually answer the target probe / serve previews.
+  //
+  // The account's SEEDED roles decide this, in order: primary render →
+  // secondary render → the runner box (a single-machine setup, not a
+  // degradation). Only when no role is seeded at all does it fall back to
+  // whatever device happens to be open.
+  //
+  // The old expression was `renderDeviceId || runnerDeviceId || connectedDevice`
+  // — it never consulted the seeded SECONDARY, so a dead primary render had no
+  // fallback and the panel simply reported failure while a perfectly good
+  // secondary sat unused (magara, 2026-08-01).
+  const seededRender = useMemo(
+    () =>
+      resolveSeededRole("render", machineRoles, (id) =>
+        // Prefer a machine we have actually reached. The only verified answer
+        // we hold here is the render probe, so an unreachable primary demotes
+        // to the seeded secondary; everything else is treated as usable rather
+        // than assumed dead.
+        renderConnCheck && renderConnCheck.deviceId === id && renderConnCheck.ok === false ? false : true,
+      ),
+    [machineRoles, renderConnCheck],
+  );
+  const effectiveRenderDeviceId = seededRender.deviceId || connectedDevice?.id || null;
   const effectiveRenderBoxName = effectiveRenderDeviceId
     ? deviceNameById.get(effectiveRenderDeviceId) || effectiveRenderDeviceId.slice(0, 8)
     : null;

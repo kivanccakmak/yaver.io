@@ -7,6 +7,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import {
   planConnectionFanout,
   resolveSeededRole,
@@ -121,4 +122,21 @@ test("a render role with no render seed uses the runner box, undegraded", () => 
 
 test("runner resolution honours its own secondary", () => {
   assert.equal(resolveSeededRole("runner", seed, (id) => id !== "ubuntu").deviceId, "ofis2");
+});
+
+// STRUCTURE — a signal with no consumer is not shipped. Vibing is the surface
+// that picked a renderer the account never nominated, so it must be the one
+// resolving through the seeded roles.
+test("Vibing resolves its render machine through the seeded roles", () => {
+  const src = readFileSync(new URL("../components/dashboard/RuntimeLabView.tsx", import.meta.url), "utf8");
+  assert.match(src, /resolveSeededRole\(\s*"render"/, "Vibing must call resolveSeededRole for the render box");
+  // Scoped to the RESOLUTION site. The editor's draft pre-fill legitimately
+  // reads renderDeviceId || runnerDeviceId — it is showing what is configured,
+  // not deciding which box serves.
+  const resolution = src.slice(src.indexOf("const effectiveRenderDeviceId"), src.indexOf("const effectiveRenderBoxName"));
+  assert.ok(
+    !/machineRoles\?\.renderDeviceId/.test(resolution),
+    "the resolution site is reading the raw seed again instead of resolveSeededRole",
+  );
+  assert.match(resolution, /seededRender\.deviceId/, "it must use the resolved role");
 });
