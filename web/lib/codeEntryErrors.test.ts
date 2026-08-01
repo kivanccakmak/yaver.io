@@ -128,3 +128,23 @@ test("a pinned agent version is refused at request time, not consumed and lost",
   assert.match(httpCode, /can only update to "latest"/,
     "the refusal no longer names the remedy");
 });
+
+test("auth-dependent JSON responses declare Vary: Authorization", () => {
+  // GET /config returns the same URL to everyone and a DIFFERENT body: anonymous
+  // callers get the public relay list, signed-in callers get it with their
+  // per-user relay password attached. Without Vary, a cache may serve the
+  // anonymous copy to an authenticated request — and did.
+  //
+  // Measured 2026-08-01: /config with a bearer token returned relay servers with
+  // NO password, byte-identical to anonymous; the same fetch with
+  // cache:"no-store" returned a 48-char password. Downstream that surfaced as
+  // 401 relay_password_missing on every relay dial, a dashboard reading "Relay
+  // refused: account relay password missing or stale", and a remedy of "sign in
+  // again" that cannot work — signing in re-fetches the same cached response.
+  const i = httpCode.indexOf("function jsonResponse(");
+  assert.ok(i > 0, "jsonResponse is gone — re-point this test at whatever replaced it");
+  const body = httpCode.slice(i, i + 600);
+  assert.match(body, /Vary:\s*"Authorization"/,
+    "jsonResponse no longer sets Vary: Authorization — an anonymous /config response " +
+    "can be cached and served to signed-in callers, stripping their relay password");
+});

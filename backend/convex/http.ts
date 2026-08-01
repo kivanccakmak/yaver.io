@@ -48,6 +48,32 @@ function jsonResponse(data: unknown, status = 200): Response {
     headers: {
       "Content-Type": "application/json",
       "Access-Control-Allow-Origin": "*",
+      // Vary: Authorization — the anonymous and signed-in answers share a URL.
+      //
+      // GET /config returns the SAME url to everyone but a DIFFERENT body: an
+      // anonymous caller gets the public relay list, a signed-in caller gets the
+      // same list with their per-user relay password attached. Without this
+      // header a cache is entitled to serve the anonymous copy to an
+      // authenticated request — and it did.
+      //
+      // Measured 2026-08-01. Fetching /config with a bearer token returned relay
+      // servers with NO password, byte-identical to the anonymous response; the
+      // identical same fetch with `cache: "no-store"` returned the password
+      // (48 chars). The browser had a password-less copy cached under that URL.
+      //
+      // The user-visible shape was three layers away from the cause: every relay
+      // dial answered 401 relay_password_missing, the dashboard rendered
+      // "Relay refused: account relay password missing or stale", and its remedy
+      // said "sign in again" — which CANNOT work, because signing in re-fetches
+      // the same cached response. Two machines were unreachable from the web for
+      // days behind that, while a third stayed usable only because it had a
+      // direct LAN path that never touches the relay.
+      //
+      // Set on the shared helper rather than on /config alone: every endpoint
+      // here varies its body by Authorization, so any of them can be poisoned
+      // the same way. Declaring a Vary on the few responses that do not depend
+      // on the header costs nothing.
+      Vary: "Authorization",
     },
   });
 }
@@ -5837,6 +5863,28 @@ http.route({
           "Content-Type": "application/json",
           "Access-Control-Allow-Origin": "*",
           "Cache-Control": userRelayPassword ? "private, no-store" : "public, max-age=300",
+          // MUST accompany the line above. Cacheability here depends on WHO is
+          // asking, but the URL does not — so without Vary a cache is entitled
+          // to hand an authenticated caller the anonymous body it stored.
+          //
+          // That is not theoretical; it is this account's outage. Measured
+          // 2026-08-01: GET /config with a bearer token returned relay servers
+          // with NO password, byte-identical to the anonymous response, while
+          // the same request with `cache: "no-store"` returned the 48-char
+          // password. One logged-out fetch makes a password-less body public
+          // and cacheable for five minutes; every signed-in fetch in that window
+          // can be served it.
+          //
+          // The symptom was three layers downstream and pointed the wrong way:
+          // every relay dial answered 401 relay_password_missing, the dashboard
+          // rendered "Relay refused: account relay password missing or stale",
+          // and the remedy read "sign in again" — which CANNOT work, because
+          // signing in re-fetches the very response that is cached. Two machines
+          // were unreachable from the web behind that, and repair-relay kept
+          // answering "already in sync" because the account was never wrong.
+          // A third machine stayed usable only because it had a direct LAN path
+          // that never touches the relay, which is what made it look per-machine.
+          Vary: "Authorization",
         },
       }
     );
