@@ -62,4 +62,21 @@ const (
 	// account) ran from a COPIED config carrying the same deviceId, so
 	// whichever registered last owned the row and locked the other one out.
 	ReasonDeviceIdentityConflict = "device.identity_conflict"
+	// Remote-box repair codes. Each names a fault that took a real box down on
+	// 2026-07-31/08-01 and that remote_repair can diagnose over SSH.
+	//
+	// ReasonAgentBinaryUnrunnable is "the ExecStart target cannot be exec'd".
+	// The 08-01 instance was ELOOP: an update left the binary as a symlink to
+	// its own path, so systemd reported status 203 and parked the unit in
+	// 'activating' forever. Distinct from not-serving because the remedy is a
+	// file restore, not a restart.
+	ReasonAgentBinaryUnrunnable = "agent.binary_unrunnable"
+	// ReasonAgentNotServing is "the supervisor calls it active and /health
+	// answers nothing" — the false green this codebase keeps re-learning.
+	ReasonAgentNotServing = "agent.not_serving"
+	// ReasonRelayPinStale is "this box pins a relay identity the control plane
+	// no longer publishes". The handshake is refused before any credential is
+	// sent, and the refusal reads as a possible MITM, so it must never be
+	// reported as an auth problem.
+	ReasonRelayPinStale = "connectivity.relay.pin_stale"
 )
