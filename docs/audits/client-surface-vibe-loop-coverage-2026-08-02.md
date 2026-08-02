@@ -97,3 +97,79 @@ or cannot show a result — so the honest status is the matrix, not a green tick
    the product's design.
 3. **Glass** — cheapest real addition: reuse the mobile arc with the glass route and a
    glass viewport profile. Only worth it once glass diverges from mobile.
+
+---
+
+## Addendum (2026-08-03): tvOS and visionOS, measured
+
+Asked directly: can the black → red → black colour loop run on tvOS or visionOS?
+
+**Today: no. But that is NOT-IMPLEMENTED, not impossible — and the distinction
+matters, because "impossible" is how a surface stays untested forever.** Exactly
+one item below is a genuine platform limit; everything else is missing product
+code we could write.
+
+- **The driver is not the problem.** Both simulators exist and are scriptable
+  right now: `xcrun simctl boot`, XCUITest for interaction, and
+  `xcrun simctl io <udid> screenshot` for PIXELS — the same verdict the web and
+  mobile arcs use. (This Mac had `YaverTV-AppStore-1080p` and
+  `Apple Vision Pro` simulators booted earlier today.) Playwright cannot reach
+  them, but that only means a second harness, not an impossible one.
+- **The product is the problem**, in two places, and both are ours to fix.
+- **`WKWebView` does not exist on tvOS** — Apple ships no WebKit UI control
+  there. **visionOS has full WKWebView.**
+- **…but tvOS does not need one, and this correction matters.** A first pass of
+  this addendum called tvOS's missing WebView a blocker. It is not: pixels can
+  come from the BOX as a stream, and **tvOS already ships a viewer** —
+  `tvos/YaverTV/Views/DroidStreamView.swift` polls `GET /droid/frame` and
+  renders the returned PNG (AVPlayer cannot play the agent's MJPEG, so it polls
+  frames at ~2 fps). The agent side already exists too
+  (`remote_runtime*.go`, the `native-webrtc` reach). So the terminal signal for
+  a tvOS colour loop is a streamed FRAME from ubuntu-4gb, sampled with the same
+  `classifyVibeColor` the browser arcs use — no browser required on the TV at
+  all. Reading a colour out of a 2 fps PNG poll is strictly easier than reading
+  it out of an iframe.
+
+Evidence for the two missing capabilities:
+
+| Check | tvOS | visionOS |
+|---|---|---|
+| A verb that CREATES a task | **none** — `AgentClient.swift` exposes `listTasks()` and **zero POST verbs** | **none** — inherits the same client |
+| A surface that renders pixels to read back | **YES** — `Views/DroidStreamView.swift` polls `/droid/frame` and renders PNG | not yet, but `WKWebView` is available AND the same stream view can be shared |
+| Own client code | full client layer | **1 file** (`YaverVisionApp.swift`) + **12 shared** `../tvos/YaverTV/*.swift` |
+
+So there is exactly **ONE** missing capability, not two: the loop's step one —
+send "change the login background to red" — has no caller on either surface.
+The terminal signal is already solved on tvOS and solvable two ways on visionOS.
+
+That single gap is a small, well-scoped change: one `func createTask` on the
+shared `AgentClient`, which both surfaces inherit.
+
+**The revert leg is NOT the blocker.** Worth stating because it is the
+intuitive guess: the web/mobile arcs revert with a **separate new task**, not a
+follow-up, so the missing `/tasks/{id}/continue` caller on native surfaces does
+not by itself prevent the colour loop. Task CREATION does.
+
+### What it would take, in order
+
+1. **`createTask` on the tvOS `AgentClient`** — visionOS gets it free through the
+   12 shared sources, which is the same reason the shared layer exists.
+2. **A render surface.** tvOS has no browser and `WKWebView` on tvOS is not a
+   supported control, so tvOS realistically needs a different verdict (task
+   reached `completed`, or a streamed frame) rather than pixels. visionOS DOES
+   have a full browser engine available, so a `WKWebView` preview there could
+   read pixels exactly like the mobile arc.
+3. **A driver.** Playwright cannot reach either. These are XCUITest targets on
+   the tvOS/visionOS simulators — a different harness from `e2e/`, which is why
+   this is a project, not a spec file.
+
+**Recommendation:** visionOS is the one worth doing — it can host a real preview
+and shares its client with tvOS, so `createTask` + a WebView pane buys a genuine
+pixel loop on a headset. tvOS should get a non-pixel verdict instead; waiting
+for a preview it cannot render is how a surface stays "untested" forever.
+
+Related build note found while deploying this: `visionos/YaverVision/` carried a
+stale 87-line copy of `FailureSignals.swift` while `project.yml` ALSO shares the
+666-line tvOS original. Two `enum FailureSignals` in one module — the visionOS
+archive failed outright (`filename "FailureSignals.swift" used twice`). The
+copy was exactly the drift the project's own comment forbids, and was removed.
