@@ -17,6 +17,11 @@ export type RuntimeTargetProbeFailurePlan = {
   showFixWithRunner: boolean;
 };
 
+/** Stable code the agent returns when a named project is not on that box.
+ *  Mirrors ReasonProjectNotOnThisMachine in
+ *  desktop/agent/project_missing_reply.go — keep the two in step. */
+export const PROJECT_NOT_ON_THIS_MACHINE_CODE = "project_not_on_this_machine";
+
 export const RELAY_DEVICE_NOT_CONNECTED_CODE = "relay.device_not_connected";
 export const RELAY_DEVICE_NOT_CONNECTED_REASON = "connectivity.relay.device_not_connected";
 
@@ -119,14 +124,29 @@ export function classifyRuntimeTargetProbeFailure(error: string | null | undefin
   // the other box.
   //
   // This is deterministic, and under a runner/render split it usually has a
-  // one-tap answer: the project the user picked exists on the RUNNER box (the
-  // picker merges every machine's projects by NAME, so it offered a project the
-  // render box never had). Hence useRunnerFallback: true — rendering on the
-  // runner box is the actual fix, not a workaround.
+  // one-tap answer. CORRECTED 2026-08-02: an earlier version of this comment
+  // said the picker "merges every machine's projects by NAME". That was carried
+  // from a stale note and is wrong — there is no cross-device aggregation
+  // anywhere (RuntimeLabView.tsx:1355 and VibeCodingView.tsx:804 both call
+  // agentClient.listProjects(), a single connection to the CONNECTED box).
+  // The real shape: the list is read from the connected/runner box while the
+  // probe targets the render box, so the render box is answering about a list
+  // it never supplied. Hence useRunnerFallback: true — rendering where the list
+  // came from is the actual fix, not a workaround. See
+  // web/lib/projectMachineMismatch.ts, which states it from the device ids.
   //
   // retry: false on purpose. Re-probing cannot conjure a directory; a Retry
   // button here would be a false hope, and offering one is its own small lie.
   if (
+    // CODE FIRST. The agent now returns `project_not_on_this_machine` with the
+    // available projects (desktop/agent/project_missing_reply.go). Keying off
+    // the code means the sentence can be reworded — it already has been twice —
+    // without every surface's regex drifting, which is exactly how mobile ended
+    // up with three different relay-auth matchers, none a superset of the rest.
+    lower.includes(PROJECT_NOT_ON_THIS_MACHINE_CODE) ||
+    // Prose fallback for agents older than this change. Kept deliberately: a
+    // box that has not updated must still get the deterministic route rather
+    // than being escalated to a coding agent.
     lower.includes("on this machine — check") ||
     lower.includes("on this machine - check") ||
     (lower.includes("no mobile project named") && lower.includes("on this machine")) ||

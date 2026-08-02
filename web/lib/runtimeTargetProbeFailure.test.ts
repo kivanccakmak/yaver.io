@@ -186,3 +186,23 @@ test("relay credential failures still win over the project matcher", () => {
     "auth",
   );
 });
+
+// The agent now returns a stable code plus the box's actual inventory
+// (desktop/agent/project_missing_reply.go). Keying off the code lets the
+// sentence change without every surface's regex drifting.
+test("the stable project code classifies without any prose match", () => {
+  const plan = classifyRuntimeTargetProbeFailure(
+    '{"ok":false,"code":"project_not_on_this_machine","requestedProject":"x","availableProjects":["sfmg"]}',
+  );
+  assert.equal(plan.kind, "project-missing");
+  assert.equal(plan.showFixWithRunner, false);
+});
+
+test("the new agent sentence (no CLI remedy) still classifies", () => {
+  assert.equal(
+    classifyRuntimeTargetProbeFailure(
+      'no mobile project named "yaver / mobile" on this machine — it has 2 mobile projects (see availableProjects)',
+    ).kind,
+    "project-missing",
+  );
+});
