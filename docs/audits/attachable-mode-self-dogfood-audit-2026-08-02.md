@@ -515,3 +515,70 @@ the trap the escape-ownership rules exist to prevent.
 that means the feature is not finished, only started. Kotlin/Swift matter least
 (the viewer owns their trigger, `remote_runtime.go:709`); `web` and `flutter`
 have real in-app SDKs and should get it next.
+
+## 10. Cross-surface badge ledger + dismissal
+
+| SDK | Badge | Detection | Default | Verified |
+|---|---|---|---|---|
+| mobile app | ✅ header + attach surface | attach sentinel / lane state | on | tsx 13/13 |
+| react-native | ✅ | `NativeModules.YaverInfo` | `modeBadge: true` | tsc clean |
+| web | ✅ | `window.__yaverLane` | `modeBadge: true` | tsc clean |
+| flutter | ✅ | `window.__yaverLane` via conditional import | widget placement | `dart analyze` clean |
+| kotlin | ✅ | **explicit only** — `yaver.streamed` / `setStreamed()` | opt-in via `attach()` | ⚠️ **nothing compiles it** |
+| swift | ✅ | **explicit only** — `YAVER_STREAMED` / `setStreamed(_:)` | opt-in via `attach(to:)` | `swift build` clean |
+| unity | ✅ | **explicit only** — `YAVER_STREAMED` / `SetStreamed()` | opt-in via `Attach()` | ⚠️ metadata only — **not compiled** |
+
+### Why the native SDKs detect differently
+
+A native or Unity app is **never** a Hermes guest — the container loads React
+Native bytecode, and there is no mechanism by which Kotlin/Swift/Unity code runs
+inside it (stated at the top of `YaverFeedback.kt` since that SDK was written).
+So `NativeModules.YaverInfo` has no counterpart.
+
+What actually happens is **streaming**: the app runs on a box in Redroid, a
+simulator or a desktop player, and the pixels arrive elsewhere. That is a real
+"you are not looking at the installed build" situation, so it earns the mark.
+
+**Platform sniffing was refused.** `Build.FINGERPRINT.contains("generic")`,
+`#if targetEnvironment(simulator)` and `Application.isEditor` would each tell a
+developer running their OWN emulator that they are inside Yaver. A false claim
+about which build you are looking at is worse than no claim: it teaches people
+to ignore the mark, which costs more than never having shown it. Detection is
+therefore explicit and **fails closed** — absent evidence, say nothing.
+
+### Dismissal
+
+"Hide for now" on every surface, plus a programmatic control
+(`hideYaverModeBadge`, `YaverFeedback.hideModeBadge`,
+`YaverModeBadgeController.hide`, `YaverModeBadge.hide`).
+
+User dismissal is **per-run and in memory, never persisted**. A permanently
+hidden badge recreates exactly the problem it exists to prevent — a tester who
+cannot tell an unbuilt branch from the installed app and cannot find the way
+back. Polite means not nagging within a session; it does not mean permanent
+amnesia about which build you are looking at.
+
+App-level opt-out (`modeBadge: false`) IS permanent, because that is a developer
+making an informed choice rather than someone clearing their screen for a
+minute. `runtimeMode.test.mts` has a negative control asserting the copy
+promises only "for now" and never "don't show again".
+
+### Two verification gaps, both pre-existing
+
+**Unity CI cannot compile anything.** `unity-sdk-tests.yml` gates on a
+`UNITY_LICENSE` secret that is not set, and exits 1 before the package
+validation or the EditMode tests ever run. Dispatched on this branch
+(run 30750880012) it failed in 23s at that gate — exactly as the last run on
+`main` did on 2026-07-27. So `YaverModeBadge.cs` has had its package metadata
+validated locally (`node scripts/validate-unity-package.mjs` → ok) and has
+**not been compiled by anything**. Closing this needs the secret, which is not
+something a code change can supply.
+
+### The other gap
+
+**The Kotlin SDK has no build file and no CI job anywhere** — `find` shows only
+`src/` and a README, and no workflow references `sdk/feedback/kotlin`. So
+`YaverModeBadge.kt` is written but **nothing has compiled it**, here or in CI.
+That is a pre-existing hole (the whole Kotlin SDK is in it, not just this file),
+and it is worth closing with a minimal Gradle module + a CI job — an SDK nothing
+compiles is the definition of an unverified guard.
