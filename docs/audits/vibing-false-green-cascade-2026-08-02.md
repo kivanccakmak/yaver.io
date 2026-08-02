@@ -343,3 +343,72 @@ Measured this session, so the audit is not read as a general indictment:
 
 Everything P0 is deterministic, free at runtime, and would have prevented
 today's cascade outright.
+
+---
+
+## 15. Live confirmations after the first fixes (same night)
+
+Three further screenshots from the owner's own session, each confirming or
+sharpening a finding above. Nothing below was deployed at the time — the fixes
+sit on `vibing-false-green-fixes`, so the live surface was still the old code.
+
+**§1 confirmed, then eliminated by configuration.** With `ubuntu` set as BOTH
+runner and renderer ("MACHINES / ubuntu-4gb-hel1-1 runs and renders"), the
+project-missing failure vanished and the preview rendered — "Web UI bundle
+ready: 45 files", login screen painted. That is the cross-machine project
+identity defect proving itself from the other direction: the project was never
+absent, it was absent *on the render box*. §1's fix (identity = `(deviceId,
+path)`) remains the durable answer; single-boxing is a workaround.
+
+**§6 confirmed, at its worst.** One viewport contained both:
+
+    sidebar:  runner: Codex   ✓ SIGNED IN
+    chat:     Could not start OpenAI Codex: runner not ready:
+              Codex's token has expired and could not be refreshed.
+
+So the chip is not stale — it contradicts a fact rendered beside it. Root cause
+located precisely: the agent ships `authConfigured` / `authPresent` /
+`authVerified` and documents the difference in the struct
+(`runner_auth.go:29-31`); all three reach the browser
+(`use-devices.ts:128-132`, `DevicesView.tsx:531-533`); the chip
+(`app/dashboard/page.tsx` `runnerAuthIssue`) reads only `authConfigured`. Fixed
+by `web/lib/runnerChipState.ts` — proof is now the only path to a tick.
+
+Worth stating plainly: the *dispatch* path behaved WELL here. It refused before
+spending an LLM run and named the cause in one sentence with the remedy. That
+is §10's ladder working — the cheap check caught it and no tokens were burned.
+The defect that remains is purely that the chip disagreed with it.
+
+**§7 sharpened — the picker fix was only half.** After the catalogues were
+reordered, the live session still showed `MODEL / gpt-5.4`, because the model is
+a **stored per-device setting**. Re-ordering a list does not migrate a saved
+value; mobile already learned this (`DeviceContext.loadSettings` migrates the
+older `o3-mini` / `gpt-5-codex` intermediates away) and web had no equivalent.
+`resolveUsableModel()` + `seededLedger()` now handle it. **This was found by
+`e2e/vibing-truth-loop.mjs` running against the real account, not by reading
+code** — which is the entire argument for the closed loop.
+
+## 16. What is landed vs. what is not
+
+Landed on `vibing-false-green-fixes`, all guards green (154/154), `tsc` clean:
+
+| Commit | Fixes |
+|---|---|
+| `a07b6a1d3` | picker catalogues stop overriding the agent; compat model + ledger |
+| `1f3b82749` | project-missing stops buying an LLM run |
+| `19a0a388c` | CI gates all 154 guards by globbing; 4 hidden reds fixed |
+| `b747da9a5` | green tick requires proof; the Vibing closed loop |
+
+NOT done, and not claimed:
+
+1. `resolveUsableModel()` is tested but **not wired** to the stored setting, so
+   a saved `gpt-5.4` still displays until changed by hand. Wiring it means
+   auto-migrating a user's saved value — mobile sets the precedent, but it is
+   the owner's call.
+2. `runnerChipState()` is tested but **not yet consumed** by
+   `app/dashboard/page.tsx` / `DevicesView.tsx`. Until it is, the chip still
+   lies. (Landing a producer without its consumer is the very defect §6 is
+   about; it is called out here rather than left to be discovered.)
+3. `RunnerPreflightByID` is still voice-only (`voice_dispatch.go:70`). The
+   Vibing dispatch path got there by another route, so this is now P1, not P0.
+4. Nothing is deployed. Branch not merged.
