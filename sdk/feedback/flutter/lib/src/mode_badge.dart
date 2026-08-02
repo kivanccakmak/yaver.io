@@ -47,6 +47,41 @@ enum YaverModeBadgeCorner {
 ///
 /// Renders [SizedBox.shrink] in a normal build, so leaving it in costs your
 /// real users nothing.
+/// Per-RUN dismissal, shared by every mounted badge.
+///
+/// Deliberately in memory, not preferences. A permanently hidden badge
+/// recreates exactly the problem the badge exists to prevent: a tester who
+/// cannot tell an unbuilt branch from the installed app, and cannot find the
+/// way back. Polite means not nagging within a session — it does not mean
+/// permanent amnesia about which build you are looking at.
+///
+/// An APP that wants it gone for good simply does not place the widget.
+class YaverModeBadgeController extends ChangeNotifier {
+  /// The single instance every badge listens to.
+  static final YaverModeBadgeController instance = YaverModeBadgeController._();
+
+  YaverModeBadgeController._();
+
+  bool _hidden = false;
+
+  /// Whether the mark is hidden for the rest of this run.
+  bool get hidden => _hidden;
+
+  /// Hide for the rest of this run. Returns on next launch.
+  void hide() {
+    if (_hidden) return;
+    _hidden = true;
+    notifyListeners();
+  }
+
+  /// Bring it back — e.g. when the app enters a new preview context.
+  void show() {
+    if (!_hidden) return;
+    _hidden = false;
+    notifyListeners();
+  }
+}
+
 class YaverModeBadge extends StatelessWidget {
   /// Which corner to sit in.
   final YaverModeBadgeCorner corner;
@@ -68,6 +103,17 @@ class YaverModeBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final lane = detectYaverLane();
     if (!force && lane == 'standalone') return const SizedBox.shrink();
+
+    return ListenableBuilder(
+      listenable: YaverModeBadgeController.instance,
+      builder: (context, _) {
+        if (YaverModeBadgeController.instance.hidden) return const SizedBox.shrink();
+        return _buildMark(context, lane);
+      },
+    );
+  }
+
+  Widget _buildMark(BuildContext context, String lane) {
 
     final positioned = switch (corner) {
       YaverModeBadgeCorner.bottomLeft => const (bottom: 28.0, left: 12.0, top: null, right: null),
@@ -128,9 +174,19 @@ class YaverModeBadge extends StatelessWidget {
         ),
         content: Text(
           '$detail\n\nUse Yaver\'s own controls — shake the device, or close the '
-          'preview — to return to the installed app.',
+          'preview — to return to the installed app.\n\n'
+          'Hiding the mark lasts until the next launch, so nobody forgets which '
+          'build they are testing.',
         ),
         actions: [
+          // Polite means closeable. "for now", never "don't show again".
+          TextButton(
+            onPressed: () {
+              YaverModeBadgeController.instance.hide();
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('Hide for now'),
+          ),
           TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close')),
         ],
       ),

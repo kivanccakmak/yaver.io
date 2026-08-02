@@ -5,7 +5,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  BADGE_HIDE_EXPLANATION,
+  BADGE_HIDE_LABEL,
   planRevert,
+  shouldShowModeBadge,
   resolveRuntimeMode,
   runtimeModeBadge,
   type RuntimeMode,
@@ -109,4 +112,26 @@ test("totality: no mode falls through undefined", () => {
     assert.notEqual(runtimeModeBadge(mode), undefined, `${mode} badge undefined`);
     assert.notEqual(planRevert(mode), undefined, `${mode} plan undefined`);
   }
+});
+
+// ── Dismissal ──────────────────────────────────────────────────────────────
+
+test("the badge hides when the user asks, and when the app opts out", () => {
+  assert.equal(shouldShowModeBadge({ mode: "guest-hermes" }), true);
+  assert.equal(shouldShowModeBadge({ mode: "guest-hermes", userHidThisRun: true }), false);
+  assert.equal(shouldShowModeBadge({ mode: "guest-hermes", appOptedOut: true }), false);
+});
+
+test("the installed app never shows it, dismissal or not", () => {
+  assert.equal(shouldShowModeBadge({ mode: "installed" }), false);
+  assert.equal(shouldShowModeBadge({ mode: "installed", userHidThisRun: false }), false);
+});
+
+test("NEGATIVE CONTROL: the Hide affordance must promise only THIS RUN", () => {
+  // A permanent hide recreates the problem the badge exists to prevent — a
+  // tester who can't tell an unbuilt branch from the installed app. If this
+  // copy ever says "never" or "don't show again", that promise has been made.
+  assert.match(BADGE_HIDE_LABEL, /for now/i);
+  assert.doesNotMatch(BADGE_HIDE_LABEL, /never|again/i);
+  assert.match(BADGE_HIDE_EXPLANATION, /next launch|comes back/i);
 });

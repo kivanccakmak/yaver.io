@@ -2754,6 +2754,25 @@ export class YaverFeedback {
    * the host page's CSS is arbitrary and a reset there must not be able to
    * hide the one thing telling the user where they are.
    */
+  /**
+   * Hide the "inside Yaver" mark for the rest of this page load.
+   *
+   * Per-LOAD only, and that is deliberate: a permanently hidden mark recreates
+   * the problem it exists to prevent — someone testing a preview who cannot
+   * tell it from the deployed site. An app that wants it gone for good passes
+   * `modeBadge: false` at init, which is a developer decision rather than a
+   * viewer clearing their screen.
+   */
+  static hideModeBadge(): void {
+    if (typeof document === 'undefined') return;
+    document.getElementById('yaver-mode-badge')?.remove();
+  }
+
+  /** Re-show it (e.g. after navigating into a new preview context). */
+  static showModeBadge(position = 'bottom-left'): void {
+    YaverFeedback.createModeBadge(position, YaverFeedback.lane);
+  }
+
   private static createModeBadge(position: string, lane: string): void {
     if (typeof document === 'undefined') return;
     if (document.getElementById('yaver-mode-badge')) return;
@@ -2789,8 +2808,14 @@ export class YaverFeedback {
             'Close the preview in Yaver to go back.'
           : 'This page is running inside Yaver, not as the site you normally visit. ' +
             'Use Yaver\'s controls to return.';
+      // Polite means closeable. "for now", never "don't show again": the mark
+      // returns on the next load so nobody forgets which build they're on.
       // eslint-disable-next-line no-alert
-      window.alert('Running inside Yaver\n\n' + detail);
+      const hide = window.confirm(
+        'Running inside Yaver\n\n' + detail +
+        '\n\nHide this mark for now? It comes back next time this page loads.',
+      );
+      if (hide) YaverFeedback.hideModeBadge();
     };
     badge.addEventListener('click', explain);
     badge.addEventListener('keydown', (e) => {
