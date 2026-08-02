@@ -100,8 +100,11 @@ enum FailureSignals {
     /// day: if a new relay verdict appears, it gets a code in the agent and a
     /// row here AND there in one change.
     enum TargetProbeKind: String, Sendable {
+        case auth
         case relayPresence = "relay-presence"
         case relayRoute = "relay-route"
+        case agentVerbSkew = "agent-verb-skew"
+        case projectMissing = "project-missing"
         case other
     }
 
@@ -114,9 +117,38 @@ enum FailureSignals {
 
     static let relayDeviceNotConnectedCode = "relay.device_not_connected"
     static let relayDeviceNotConnectedReason = "connectivity.relay.device_not_connected"
+    /// Mirrors ReasonProjectNotOnThisMachine (desktop/agent/project_missing_reply.go)
+    /// and PROJECT_NOT_ON_THIS_MACHINE_CODE (web/lib/runtimeTargetProbeFailure.ts).
+    static let projectNotOnThisMachineCode = "project_not_on_this_machine"
+
+    /// A relay CREDENTIAL refusal — the account's relay password is missing or
+    /// stale. Self-healable and emphatically not the agent's fault, so it must
+    /// never reach a coding runner.
+    private static func isRelayCredentialFailure(_ lower: String) -> Bool {
+        lower.contains("relay_password_missing")
+            || lower.contains("relay_password_invalid")
+            || lower.contains("relay_password_rate_limited")
+            || lower.contains("relay password missing")
+            || lower.contains("invalid relay password")
+            || lower.contains("relay password mismatch")
+            || lower.contains("too many invalid relay password attempts")
+            || lower.contains("reason=bad_password")
+            || lower.contains("relay authentication failed")
+    }
 
     static func classifyTargetProbeFailure(_ error: String?) -> TargetProbePlan {
         let lower = (error ?? "").lowercased()
+        if isRelayCredentialFailure(lower) {
+            return TargetProbePlan(kind: .auth, retry: true, useRunnerFallback: false, showFixWithRunner: false)
+        }
+        // An /ops verb the agent has never heard of is VERSION SKEW — the
+        // client shipped a call the installed agent predates. Deterministic fix
+        // (update the agent), so never route it to a coding runner: an LLM
+        // cannot add a verb to a released binary, and one such escalation
+        // already burned 121k tokens grepping the wrong repo (2026-07-28).
+        if lower.contains("unknown_verb") || lower.contains("unknown verb") {
+            return TargetProbePlan(kind: .agentVerbSkew, retry: true, useRunnerFallback: false, showFixWithRunner: false)
+        }
         if lower.contains(relayDeviceNotConnectedCode)
             || lower.contains(relayDeviceNotConnectedReason)
             || lower.contains("device not connected to relay") {
@@ -130,7 +162,42 @@ enum FailureSignals {
             || (lower.contains("runner/render split") && lower.contains("not reachable")) {
             return TargetProbePlan(kind: .relayPresence, retry: true, useRunnerFallback: true, showFixWithRunner: false)
         }
+        // The project is simply not on the render box. Deterministic: a coding
+        // agent cannot create a directory on a machine it is not running on,
+        // and asking it to burns a real LLM run (2026-08-02 cascade). Code
+        // first, prose fallback for agents older than that change.
+        if lower.contains(projectNotOnThisMachineCode)
+            || lower.contains("on this machine — check")
+            || lower.contains("on this machine - check")
+            || (lower.contains("no mobile project named") && lower.contains("on this machine")) {
+            return TargetProbePlan(kind: .projectMissing, retry: false, useRunnerFallback: true, showFixWithRunner: false)
+        }
         return TargetProbePlan(kind: .other, retry: false, useRunnerFallback: false, showFixWithRunner: true)
+    }
+
+    /// The TV sentence for a target-probe verdict, or nil when there is nothing
+    /// worth saying. Native surfaces cannot import web/lib, so this is a PORT,
+    /// not a shared module — keep it in step with the web copy by hand and let
+    /// the parity script below catch drift.
+    static func explainTargetProbe(_ plan: TargetProbePlan, renderBox: String?, runnerBox: String?) -> String? {
+        let render = (renderBox?.isEmpty == false) ? renderBox! : "the render machine"
+        switch plan.kind {
+        case .auth:
+            return "The relay refused this account's credentials, so the probe never reached \(render). Sign in again and retry — the box itself is fine."
+        case .relayPresence:
+            return "\(render) has no live relay connection, so the target probe never reached it. Bring that box online, or pick a different render machine."
+        case .relayRoute:
+            return "\(render) is only reachable over a relay from here, and that route is not available right now."
+        case .agentVerbSkew:
+            return "The agent on \(render) is older than this TV app and does not know the call it just received. Update it with `npm install -g yaver-cli@latest`, then retry."
+        case .projectMissing:
+            if let runner = runnerBox, !runner.isEmpty {
+                return "\(render) has no project by that name. The project list came from \(runner) — render there, or pick a project \(render) itself reports."
+            }
+            return "\(render) has no project by that name, so there is nothing there to render — the box itself is fine."
+        case .other:
+            return nil
+        }
     }
 
     // ── 1. Capability gap ─────────────────────────────────────────────────
