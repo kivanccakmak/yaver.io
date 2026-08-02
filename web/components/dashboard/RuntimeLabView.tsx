@@ -501,17 +501,32 @@ function normalizeRunnerId(runnerId?: string | null): string {
   return normalized;
 }
 
+// Used ONLY when the device inventory gave us nothing. Two defects fixed here
+// on 2026-08-02:
+//
+//  1. `source: "device-inventory"` was a LIE — these are hardcoded web
+//     constants that never touched the device. A provenance label that claims
+//     a stronger source than it has is the same class of bug as a green status
+//     over an unreachable box. They are labelled "fallback" now, so a reader
+//     can tell which of these the machine actually reported.
+//  2. `gpt-5.4` was `isDefault: true`, and a ChatGPT-account Codex login
+//     cannot run it at all — it 400s with "not supported when using Codex with
+//     a ChatGPT account". The agent's own fallbackRunnerModels (httpserver.go)
+//     already marks `gpt-5.3-codex` as the default; this list disagreed with
+//     it and won, because it renders closer to the user.
+//
+// See web/lib/runnerModelCompat.ts for the compatibility model.
 const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string; isDefault?: boolean; source?: string }>> = {
   claude: [
-    { id: "claude-opus-4-1", name: "Claude Opus 4.1", source: "device-inventory" },
-    { id: "claude-sonnet-4", name: "Claude Sonnet 4", isDefault: true, source: "device-inventory" },
+    { id: "claude-opus-4-1", name: "Claude Opus 4.1", source: "fallback" },
+    { id: "claude-sonnet-4", name: "Claude Sonnet 4", isDefault: true, source: "fallback" },
   ],
   codex: [
-    { id: "gpt-5.4", name: "GPT-5.4", isDefault: true, source: "device-inventory" },
-    { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", source: "device-inventory" },
-    { id: "gpt-5-codex", name: "GPT-5 Codex", source: "device-inventory" },
-    { id: "gpt-5", name: "GPT-5", source: "device-inventory" },
-    { id: "gpt-5-mini", name: "GPT-5 Mini", source: "device-inventory" },
+    { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", isDefault: true, source: "fallback" },
+    { id: "gpt-5-codex", name: "GPT-5 Codex", source: "fallback" },
+    { id: "gpt-5.4", name: "GPT-5.4", source: "fallback" },
+    { id: "gpt-5", name: "GPT-5", source: "fallback" },
+    { id: "gpt-5-mini", name: "GPT-5 Mini", source: "fallback" },
   ],
 };
 
@@ -763,9 +778,6 @@ function canRunGuestOnRemoteTarget(targetId?: string): boolean {
   return [
     "ios-simulator",
     "ipados-simulator",
-    "watchos-simulator",
-    "tvos-simulator",
-    "visionos-simulator",
     "android-emulator",
     "android-wear",
     "android-tv",
@@ -2690,12 +2702,17 @@ export default function RuntimeLabView({
     appendLog("stopping active preview");
     try {
       const result = await agentClient.stopDevServer();
-      const message = result.message || (result.verified ? "Preview stopped." : "Stop sent.");
+      const failed = result.ok === false || result.verified === false;
+      const message = result.message || (failed ? "Stop incomplete." : "Preview stopped.");
       appendLog(`stop preview: ${message}`);
-      setWebPreviewUrl(null);
-      setWebPreviewFrameReady(false);
+      if (failed) {
+        setError(message);
+      } else {
+        setWebPreviewUrl(null);
+        setWebPreviewFrameReady(false);
+      }
       setWebPreviewNote(message);
-      setBuildProgress(null);
+      if (!failed) setBuildProgress(null);
       if (result.buildsCancelled) appendLog(`cancelled ${result.buildsCancelled} in-flight build(s)`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Stop preview failed.";

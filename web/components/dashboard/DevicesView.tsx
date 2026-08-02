@@ -1302,6 +1302,8 @@ interface DevicesViewProps {
   onCloseWorkspace?: () => void;
   /** Device id currently opened as the active workspace, if any. */
   activeWorkspaceDeviceId?: string | null;
+  /** Device ids with live pooled web connections, including background role machines. */
+  connectedDeviceIds?: string[];
   /** Dashboard-owned workspace connection state. Passed down to avoid a second singleton subscription drifting from the shell. */
   workspaceConnectionState?: string;
   /** Last workspace connect error, shown on the selected device card. */
@@ -2802,9 +2804,20 @@ export const MODEL_OPTIONS_BY_RUNNER: Record<string, Array<{ id: string; label: 
     { id: "claude-sonnet-4-5", label: "Sonnet 4.5", hint: "prior Sonnet" },
     { id: "claude-haiku-4-5", label: "Haiku 4.5", hint: "fastest, cheapest" },
   ],
+  // ORDER MATTERS — the first entry is the default this picker applies, and on
+  // 2026-08-02 that was `gpt-5.4`, which a ChatGPT-account Codex login can
+  // never run ("The 'gpt-5.4' model is not supported when using Codex with a
+  // ChatGPT account"). The picker's default silently overrode BOTH declared
+  // defaults — `DEFAULT_MODEL_BY_RUNNER.codex` above and the agent's own
+  // `fallbackRunnerModels` (httpserver.go) — which already said gpt-5.3-codex.
+  // A Vibing task then spent a real LLM run discovering a 400 this repo had
+  // predicted in two places. Lead with the Codex-native model.
+  // See web/lib/runnerModelCompat.ts; general gpt-5.x need API billing, which
+  // the subscription-only rule forbids us from using.
   codex: [
-    { id: "gpt-5.4", label: "GPT-5.4", hint: "stable default fallback" },
+    { id: "gpt-5.3-codex", label: "GPT-5.3 Codex", hint: "works on a ChatGPT-account login" },
     { id: "gpt-5-codex", label: "GPT-5 Codex", hint: "agentic coding model" },
+    { id: "gpt-5.4", label: "GPT-5.4", hint: "needs API billing — not a ChatGPT-account login" },
     { id: "gpt-5-thinking", label: "GPT-5 Thinking", hint: "reasoning-heavy" },
     { id: "gpt-5", label: "GPT-5", hint: "general reasoning" },
     { id: "gpt-5-mini", label: "GPT-5 Mini", hint: "fastest, cheapest" },
@@ -3159,6 +3172,7 @@ export default function DevicesView({
   onOpen,
   onCloseWorkspace,
   activeWorkspaceDeviceId = null,
+  connectedDeviceIds = [],
   workspaceConnectionState,
   connectError = null,
   connectDiagnostics = [],
@@ -3677,6 +3691,7 @@ export default function DevicesView({
           {renderedDevices.map((device) => {
             const shareSummary = deviceShareSummary(device);
             const isSelectedWorkspace = activeWorkspaceDeviceId === device.id;
+            const isPooledConnected = connectedDeviceIds.includes(device.id);
             const isActiveWorkspace = canShowCloseWorkspace({
               activeWorkspaceDeviceId,
               deviceId: device.id,
@@ -4018,6 +4033,9 @@ export default function DevicesView({
                       })() : null}
                       {device.probeState === "ok" && device.probePath ? (
                         <span>· probed via {device.probePath}</span>
+                      ) : null}
+                      {isPooledConnected && !isActiveWorkspace ? (
+                        <span>· connected in background</span>
                       ) : null}
                       {device.probeState === "auth-expired" ? <span>· auth expired</span> : null}
                     </div>
@@ -4391,6 +4409,15 @@ export default function DevicesView({
                     >
                       <span aria-hidden>×</span>
                       Close Workspace
+                    </button>
+                  ) : isPooledConnected ? (
+                    <button
+                      onClick={() => onOpen?.(device)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200 dark:hover:bg-emerald-500/20"
+                      title="This machine already has a live background connection. Make it the focused workspace."
+                    >
+                      <span aria-hidden>●</span>
+                      Focus Workspace
                     </button>
                   ) : onOpen ? (
                     <button
