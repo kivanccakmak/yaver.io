@@ -23,13 +23,13 @@ for (const [name, p] of Object.entries(SURFACE_PROFILES)) {
 }
 
 // ── THE BUG: a narrowed desktop is not a phone ───────────────────────────
-const narrowedDesktop = { width: 393, height: 852, isMobile: false, hasTouch: false };
+const narrowedDesktop = { width: 393, height: 659, isMobile: false, hasTouch: false };
 const r = viewportMatchesSurface("mobile", narrowedDesktop);
 eq(r.ok, false, "a narrowed DESKTOP browser is rejected as mobile even at the exact phone size");
 ok(/narrowed desktop browser is not a phone/i.test(r.reason),
   "…and the reason says exactly why, since the width alone looked right");
 
-const realPhone = { width: 393, height: 852, isMobile: true, hasTouch: true };
+const realPhone = { width: 393, height: 659, isMobile: true, hasTouch: true };
 ok(viewportMatchesSurface("mobile", realPhone).ok, "genuine phone emulation passes");
 
 // Touch matters independently: RN-web renders a different tree without it.
@@ -49,9 +49,9 @@ eq(viewportMatchesSurface("web", { width: 900, height: 700, isMobile: false, has
   "a narrow window is NOT the dashboard — the Vibing panes stack and the loop drives a different UI");
 
 // ── tolerance is for chrome, not for a device class ──────────────────────
-ok(viewportMatchesSurface("mobile", { width: 393 - 20, height: 852 - 20, isMobile: true, hasTouch: true }).ok,
+ok(viewportMatchesSurface("mobile", { width: 393 - 20, height: 659 - 20, isMobile: true, hasTouch: true }).ok,
   "small deltas (browser chrome) are tolerated");
-eq(viewportMatchesSurface("mobile", { width: 393 - 200, height: 852, isMobile: true, hasTouch: true }).ok, false,
+eq(viewportMatchesSurface("mobile", { width: 393 - 200, height: 659, isMobile: true, hasTouch: true }).ok, false,
   "a large delta is a different device, not chrome");
 
 // ── watch is short as well as narrow ─────────────────────────────────────
@@ -59,6 +59,12 @@ eq(viewportMatchesSurface("watch", realPhone).ok, false,
   "a phone is not a watch — the watch's main failure mode is VERTICAL crowding, which a tall phone hides");
 
 eq(profileFor("mobile").playwrightDevice, "iPhone 15", "mobile maps to a real Playwright device descriptor");
+// The DESCRIPTOR is the source of truth, not a spec sheet. Playwright's iPhone
+// viewport is the VISIBLE area (Safari chrome excluded) — 659, not the 852
+// physical screen height. Guessing the latter made the guard reject genuine
+// iPhone emulation on its first real run.
+eq(profileFor("mobile").height, 659,
+  "mobile height is the descriptor's VISIBLE viewport, which is what window.innerHeight reports");
 eq(profileFor("tv").playwrightDevice, null, "tv has no browser descriptor — it is a separate native app");
 
 if (failures) { console.error(`\nsurfaceViewports: ${failures} FAILED`); process.exitCode = 1; }

@@ -59,7 +59,13 @@ export const SURFACE_PROFILES: Record<YaverSurface, SurfaceProfile> = {
   },
   mobile: {
     playwrightDevice: "iPhone 15",
-    width: 393, height: 852, deviceScaleFactor: 3,
+    // 659, not 852. Playwright's iPhone descriptors carry the VISIBLE viewport
+    // (Safari's chrome excluded), not the physical screen height — and the
+    // visible viewport is what window.innerHeight reports and what the app
+    // actually lays out against. 852 was a plausible-looking guess taken from
+    // the device spec sheet; the descriptor is the source of truth, and the
+    // guard caught the difference on its first real run.
+    width: 393, height: 659, deviceScaleFactor: 3,
     isMobile: true, hasTouch: true,
     why: "RN-web branches on touch + DPR + UA, not width alone. A narrowed desktop Chrome renders a tree no phone user ever sees.",
   },
