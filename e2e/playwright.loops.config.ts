@@ -24,8 +24,18 @@ export default defineConfig({
   workers: 1,
   reporter: [["line"]],
   use: {
-    trace: "retain-on-failure",
-    screenshot: "only-on-failure",
+    // ARTIFACTS ON EVERY RUN, PASS OR FAIL.
+    //
+    // These loops take 12-25 minutes and drive a real box, so a run you cannot
+    // review is a run you have to repeat. "retain-on-failure" was exactly
+    // wrong for a PIXEL verdict: the interesting evidence is what the preview
+    // actually showed frame by frame, and on a PASS that footage is the proof
+    // the colour really changed rather than the assertion being weak.
+    // Recording both directions (black → red → black) also makes the revert
+    // leg reviewable, which is the leg that has been failing.
+    trace: "on",
+    screenshot: "on",
+    video: "on",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 });

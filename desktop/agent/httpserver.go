@@ -11634,6 +11634,13 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		json.Unmarshal(call.Arguments, &a)
 		return mcpToolJSON(mcpRunnerAuthStatus(a.DeviceID))
+	case "runner_model_probe":
+		var a struct {
+			Runner string   `json:"runner"`
+			Models []string `json:"models"`
+		}
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpRunnerModelProbe(a.Runner, a.Models))
 	case "runner_auth_set":
 		var a struct {
 			DeviceID        string `json:"device_id"`
