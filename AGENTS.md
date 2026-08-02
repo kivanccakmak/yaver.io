@@ -129,6 +129,19 @@ absolute gap, not a flaky one. Rules, full version in [`CLAUDE.md`](CLAUDE.md):
 - **Closed loop is the method**: changes are verified through the real app via
   `e2e/tests/mobile-app-lane-matrix.spec.ts` — PIXELS / NAMED / SILENT, and
   SILENT is the only failing verdict.
+- **VIEWPORT IS A DEVICE CONTEXT, NOT A WINDOW SIZE.** The mobile arc MUST open
+  a NEW context with the full device descriptor
+  (`browser.newContext({ ...devices["iPhone 15 Pro"] })`) and then ASSERT the
+  viewport it got. `isMobile`, `hasTouch`, `deviceScaleFactor` and the UA are
+  **context** properties — `page.setViewportSize()` cannot change them — so a
+  desktop context resized to 393px is a narrow desktop browser, and RN-web
+  renders a DIFFERENT component tree for it. Shrinking the web dashboard and
+  calling it "mobile" is a false equivalence: the two share neither transport
+  ladder, auth storage key (`yaver.secure.yaver_auth_token` vs
+  `yaver_auth_token`), nor render path. Use `web/lib/surfaceViewports.ts`
+  (`profileFor` / `viewportMatchesSurface`) — one table, never a literal per
+  spec — and drive RN-web at `MOBILE_WEB_URL`, skipping when it is unset rather
+  than substituting the dashboard. Reference: `e2e/tests/vibe-color-loop.spec.ts`.
 
 ## Never hot-swap an unsigned agent binary onto macOS
 

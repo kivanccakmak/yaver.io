@@ -1,0 +1,56 @@
+appId: io.yaver.mobile
+---
+# Closed-loop check for the SECOND-message-stuck bug (2026-07-28):
+#   "I send message 1, then can't submit message 2 — the composer freezes."
+#
+# followup-visible.yaml only sends ONE follow-up, so it never caught this. The
+# assertion here is that after tapping send, the composer is USABLE AGAIN
+# IMMEDIATELY — the fire-and-forget fix — so a second message goes out without
+# waiting on the first one's network round-trip. A build with the old
+# round-trip-blocking composer fails at "type PROBE-2" (the input is disabled).
+#
+# Run: maestro test mobile/maestro/followup-second-message.yaml
+
+- launchApp:
+    clearState: false
+
+- tapOn:
+    text: "Tasks"
+    optional: true
+
+# Open the most recent task to get a follow-up composer.
+- tapOn:
+    text: "Helo"
+    optional: true
+- tapOn:
+    index: 0
+    text: ".*"
+    optional: true
+
+- assertVisible:
+    id: "followup-input"
+
+# ── Message 1 ──────────────────────────────────────────────────────────────
+- tapOn:
+    id: "followup-input"
+- inputText: "MAESTRO-PROBE-1"
+- tapOn:
+    id: "followup-send"
+
+# It must be on screen right away (optimistic turn).
+- extendedWaitUntil:
+    visible: "MAESTRO-PROBE-1"
+    timeout: 3000
+
+# ── Message 2, IMMEDIATELY ─────────────────────────────────────────────────
+# The whole point: the composer re-enabled without waiting for message 1's POST.
+# If the input were still disabled ("Sending…"), this tapOn/inputText fails.
+- tapOn:
+    id: "followup-input"
+- inputText: "MAESTRO-PROBE-2"
+- tapOn:
+    id: "followup-send"
+
+- extendedWaitUntil:
+    visible: "MAESTRO-PROBE-2"
+    timeout: 3000

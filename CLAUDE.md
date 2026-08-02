@@ -265,6 +265,28 @@ changing those.
   4. Cost-awareness is a product requirement, not just a house rule — it is the
      whole "lower dev opex" wedge. Cloud tool usage and deploys should report
      what they cost (`remote_cost`, `switch_cost` are the existing seams).
+- **CLOSED-LOOP TESTS: THE MOBILE SURFACE IS A DEVICE CONTEXT, NEVER A RESIZED
+  DESKTOP ONE.** Any browser-driven test of the mobile app MUST create a NEW
+  Playwright context with the full device descriptor
+  (`browser.newContext({ ...devices["iPhone 15 Pro"] })`) and assert the
+  viewport it actually got. This is not a nicety — `isMobile`, `hasTouch`,
+  `deviceScaleFactor` and the user agent are **context** properties that
+  `page.setViewportSize()` cannot change, so shrinking a desktop context to
+  393px yields a *narrow desktop browser*, and RN-web renders a **different
+  component tree** for it than for a phone. A green result there says nothing
+  about the app the user holds — it is the exact class of false confidence the
+  suite exists to prevent, reproduced inside the suite.
+  1. Use `web/lib/surfaceViewports.ts` (`profileFor(surface)` +
+     `viewportMatchesSurface`) — one table, not a literal per spec.
+  2. **Assert the viewport inside the arc**, so a context that silently came
+     back desktop-shaped fails loudly instead of passing quietly.
+  3. The mobile arc drives **RN-web at `MOBILE_WEB_URL`**, and SKIPS without
+     one. Never substitute the web dashboard at a small size: the two share
+     neither transport ladder, auth storage key
+     (`yaver.secure.yaver_auth_token` vs `yaver_auth_token`), nor render path.
+  4. Same law for every future surface (tablet, glass, TV): the profile comes
+     from the table, and the test proves it got it.
+  `e2e/tests/vibe-color-loop.spec.ts` is the reference implementation.
 - **A web/dev fix must NEVER regress the shipped native app.** The mobile app
   also runs as RN-web (`expo start`, driven by Playwright at iPhone viewport) —
   that is the only way to automate the REAL app instead of the web dashboard.
