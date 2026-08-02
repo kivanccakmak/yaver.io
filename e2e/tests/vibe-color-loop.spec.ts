@@ -212,16 +212,35 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
     await expect(page.locator("iframe").first(),
       "mobile: the browser-lane preview never rendered").toBeVisible({ timeout: 90_000 });
 
-    // KNOWN GAP, stated rather than hidden. tasks.tsx:5487 defines the composer
-    // ("Send another command…" / "What should the agent do?"), but the Tasks
-    // screen renders ZERO inputs in the RN-web build, so there is nowhere to
-    // send the vibe from. Everything up to and including the rendered preview
-    // is verified above; the arc cannot proceed past this point until the
-    // composer is reachable.
-    const composerCount = await page.locator("input,textarea").count();
-    expect(composerCount,
-      "mobile: the preview renders, but the RN-web Tasks screen exposes NO composer " +
-      "(tasks.tsx:5487 defines one), so a vibe cannot be sent from the app").toBeGreaterThan(0);
+    // The composer is NOT on the Tasks screen — it lives in a modal
+    // (tasks.tsx:5288+, autoFocus) that the screen opens on demand, which is
+    // why probing /tasks found zero inputs. The app opens it from its OWN route
+    // params (tasks.tsx:1536-1544: openNew / prompt / dir / runner), so the
+    // arc uses that seam rather than hunting for a floating button.
+    mobileSendVibe = async (text: string) => {
+      const base = (process.env.MOBILE_WEB_URL || "").replace(/\/$/, "");
+      await page.goto(
+        `${base}/tasks?openNew=1&dir=${encodeURIComponent(projectPath)}&prompt=${encodeURIComponent(text)}`,
+        { waitUntil: "domcontentloaded", timeout: 60_000 },
+      );
+      await page.waitForTimeout(14_000);
+      const composer = page.locator("input,textarea").first();
+      await expect(composer, "mobile: the compose modal did not open from openNew=1")
+        .toBeVisible({ timeout: 30_000 });
+      await page.getByText(/^(Send|Start|Run)$/i).first().click();
+      await page.waitForTimeout(6000);
+      // Back to the preview so the colour can be read.
+      await page.goto(`${base}/apps`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      await page.waitForTimeout(10_000);
+      const back = page.getByText(projectPath, { exact: true }).first();
+      if (await back.count()) {
+        await back.click().catch(() => {});
+        await page.waitForTimeout(8000);
+        const br = page.getByText(/^Browser Reload$/).first();
+        if (await br.count()) { await br.click().catch(() => {}); await page.waitForTimeout(20_000); }
+      }
+      return true;
+    };
   } else {
     await page.getByText(/^Vibing$/).first().click().catch(() => {});
   }
@@ -287,20 +306,31 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
   expect(base.rendered, "preview frame is empty — nothing to assert a colour against").toBe(true);
 
   // → target
-  const composer = page.getByPlaceholder(/Ask .* to change/i).first();
-  await composer.fill(`Change the login page background color to ${target}. Only the login screen background.`);
-  await page.getByRole("button", { name: /^Send$/ }).first().click();
-  await page.waitForTimeout(3000);
+  const targetPrompt = `Change the login page background color to ${target}. Only the login screen background.`;
+  if (mobileSendVibe) {
+    await mobileSendVibe(targetPrompt);
+  } else {
+    const composer = page.getByPlaceholder(/Ask .* to change/i).first();
+    await composer.fill(targetPrompt);
+    await page.getByRole("button", { name: /^Send$/ }).first().click();
+    await page.waitForTimeout(3000);
+  }
   const hit = await waitForColor(page, target, TURN_BUDGET_MS);
   expect(hit.ok, `preview never turned ${target} (last ${hit.color})`).toBe(true);
 
   // Revert as a SEPARATE task — exercises the new-task render path, not just a
   // follow-up on a warm session.
-  const newSession = page.getByRole("button", { name: /New session/i }).first();
-  if (await newSession.count()) { await newSession.click().catch(() => {}); await page.waitForTimeout(3000); }
-  await composer.fill("Revert the login page background color back to black.");
-  await page.getByRole("button", { name: /^Send$/ }).first().click();
-  await page.waitForTimeout(3000);
+  const revertPrompt = "Revert the login page background color back to black.";
+  if (mobileSendVibe) {
+    await mobileSendVibe(revertPrompt);
+  } else {
+    const newSession = page.getByRole("button", { name: /New session/i }).first();
+    if (await newSession.count()) { await newSession.click().catch(() => {}); await page.waitForTimeout(3000); }
+    const composer2 = page.getByPlaceholder(/Ask .* to change/i).first();
+    await composer2.fill(revertPrompt);
+    await page.getByRole("button", { name: /^Send$/ }).first().click();
+    await page.waitForTimeout(3000);
+  }
   const back = await waitForColor(page, "black", TURN_BUDGET_MS);
   expect(back.ok, `preview never reverted to black (last ${back.color})`).toBe(true);
 }
