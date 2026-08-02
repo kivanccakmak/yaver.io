@@ -504,7 +504,20 @@ test.describe("vibe colour closed loop", () => {
       // trick. That makes the mobile arc runnable from a revocable TOKEN with
       // no password anywhere — the same credential posture helpers/login.ts
       // already argues for.
-      if (creds().token) {
+      // …BUT ONLY WHEN THERE IS NO PASSWORD. This block used to run first
+      // unconditionally, which contradicted the skip message ten lines above:
+      // that message says the arc needs email+password precisely BECAUSE a
+      // seeded token restores the session while every device call still 401s.
+      // Running the token path first walked straight into the documented
+      // failure — the app rendered "Projects", so the screen assertion passed,
+      // but the list was EMPTY (no device credentials), and the arc died on a
+      // missing project row that a password sign-in shows immediately.
+      //
+      // Measured 2026-08-02 with a standalone probe: signing in through the
+      // app's own email flow yields "Connected · Primary · v1.99.397 ·
+      // ubuntu-4gb-hel1-1" and 33 projects including the target row. Same app,
+      // same box, same moment — only the credential path differed.
+      if (creds().token && !(creds().email && creds().password)) {
         const convexSite =
           process.env.E2E_CONVEX_URL ||
           process.env.NEXT_PUBLIC_CONVEX_SITE_URL ||
