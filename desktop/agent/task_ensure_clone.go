@@ -123,7 +123,12 @@ func (tm *TaskManager) pullBeforeSpawn(task *Task) {
 	summary := strings.TrimSpace(string(out))
 	switch {
 	case err != nil:
-		tm.emitTaskLine(task, fmt.Sprintf("[yaver] pre-task git pull skipped: %v — %s (continuing on the local tree)", err, taskGitFirstLine(summary)))
+		// Still non-fatal (advisory sync must never gate the task), but the line
+		// now NAMES the cause and carries the command that repairs it. A stale
+		// remote URL after an org move produced a bare "exit status 128" here
+		// and the runner silently edited an unknown-age tree on every task
+		// (2026-08-02). See task_git_pull_failure.go.
+		tm.emitTaskLine(task, describeGitPullFailure(fmt.Sprintf("%v", err), summary))
 	case strings.Contains(summary, "Already up to date"):
 		// Quiet: an up-to-date tree needs no narration.
 	default:

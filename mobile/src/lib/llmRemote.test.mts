@@ -27,14 +27,17 @@ test("requires a dispatch function", () => {
   assert.throws(() => createRemoteProvider({ dispatch: undefined as any }), /dispatch is required/);
 });
 
-test("forces runner=glm and forwards prompt + files + framework + schema", async () => {
-  const rec = recorder(() => ({ ok: true, edits: [], runner: "glm", model: "glm-4.7" }));
+// GLM is reached THROUGH OpenCode — llmRemote.ts dispatches runner "opencode"
+// and the model selects GLM inside it. The old expectation ("glm" as a runner
+// id) predates that split and asserted a runner the dispatcher never sends.
+test("forces runner=opencode and forwards prompt + files + framework + schema", async () => {
+  const rec = recorder(() => ({ ok: true, edits: [], runner: "opencode", model: "glm-4.7" }));
   const provider = createRemoteProvider({ dispatch: rec.dispatch });
   assert.equal(provider.id, "remote");
   await provider.editFiles({ ...baseReq, schema: { tables: [{ name: "todos" }] } as any });
   assert.equal(rec.calls.length, 1);
   const sent = rec.calls[0];
-  assert.equal(sent.runner, "glm");
+  assert.equal(sent.runner, "opencode");
   assert.equal(sent.prompt, "make the heading green");
   assert.equal(sent.framework, "react-native");
   assert.deepEqual(sent.files, [{ path: "app/index.tsx", content: "color: red" }]);

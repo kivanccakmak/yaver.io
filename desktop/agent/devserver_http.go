@@ -3192,9 +3192,15 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 				req.ProjectName = ref.Name
 			}
 		} else if req.ProjectName != "" {
-			jsonReply(w, http.StatusBadRequest, map[string]string{
-				"error": fmt.Sprintf("no mobile project named %q on this machine — check `yaver projects mobile`", req.ProjectName),
-			})
+			// STRUCTURED REFUSAL (2026-08-02). This used to return prose ending
+			// in "check `yaver projects mobile`" — true, and unreachable for a
+			// user on the web dashboard three hops from a shell on this box.
+			// The inventory was already scanned and in memory; it just never
+			// made it into the reply, so the browser escalated to a coding
+			// agent to answer a question a map lookup answers for free.
+			// See project_missing_reply.go.
+			jsonReply(w, http.StatusBadRequest,
+				buildProjectMissingReply(req.ProjectName, snapshotMobileProjects()))
 			return
 		}
 	}

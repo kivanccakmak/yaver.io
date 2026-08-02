@@ -144,22 +144,17 @@ jobs:
           node-version: "20"
       - name: Install tsx
         run: npm i -g tsx
-      # Un-wedgeable connect guard (deadline + monotonic attempt-id) w/ negative controls.
-      - name: connectGuard (wedge + attempt-id)
-        if: needs.changes.outputs.mobile == 'true'
-        run: tsx mobile/src/lib/connectGuard.test.ts
-      # Relay refusal classifier — stable code first, prose fallback.
-      - name: relayAuth classifier
-        if: needs.changes.outputs.mobile == 'true'
-        run: tsx mobile/src/lib/relayAuth.test.ts
-      # Native vs .web.ts beacon parity (drift is invisible to tsc, crashes at runtime).
-      - name: beacon native/web parity
-        if: needs.changes.outputs.mobile == 'true'
-        run: tsx mobile/src/lib/beaconParity.test.ts
-      # Web device-card "Unauthorized" false-positive classifier.
-      - name: web connection-error classifier
-        if: needs.changes.outputs.web == 'true'
-        run: tsx web/lib/connection-error.test.ts
+      # One guard is written against bun:test; without bun the sweep SKIPs it
+      # loudly rather than passing over it in silence. Install it so the run is
+      # complete rather than merely green.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      # ALL of them, globbed. This job used to NAME four tests while 150+ others
+      # never ran in CI — a hand-maintained list of tests rots exactly like a
+      # hand-maintained list of models: it does not get the memo.
+      - name: client guards (all of them — globbed, not listed)
+        run: ./scripts/run-client-guards.sh
 
   web-build:
     needs: changes

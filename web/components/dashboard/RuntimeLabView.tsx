@@ -43,6 +43,7 @@ import { classifyRuntimeTargetProbeFailure } from "@/lib/runtimeTargetProbeFailu
 import { RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
 import { probeFailureAllowsBoxAlive } from "@/lib/connection-error";
 import { resolveSeededRole } from "@/lib/connectionFanout";
+import { detectProjectMachineMismatch } from "@/lib/projectMachineMismatch";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
 import { ScreenContextChip } from "./ScreenContextChip";
 // Read-aloud must never recite Yaver's own prompt header — see lib/promptFraming.ts.
@@ -766,9 +767,6 @@ function canRunGuestOnRemoteTarget(targetId?: string): boolean {
   return [
     "ios-simulator",
     "ipados-simulator",
-    "watchos-simulator",
-    "tvos-simulator",
-    "visionos-simulator",
     "android-emulator",
     "android-wear",
     "android-tv",
@@ -1465,6 +1463,23 @@ export default function RuntimeLabView({
   const effectiveRenderBoxName = effectiveRenderDeviceId
     ? deviceNameById.get(effectiveRenderDeviceId) || effectiveRenderDeviceId.slice(0, 8)
     : null;
+  // Source/target split for the PROJECT LIST. loadProjects reads it from the
+  // CONNECTED box (agentClient.listProjects); the render probe targets
+  // effectiveRenderDeviceId. When those differ, every project on offer is one
+  // the render box was never asked about — which is exactly how a truthful
+  // "no project named X on this machine" reaches a user who can see the
+  // project in the picker. Knowable before the probe, from data already held.
+  const projectMachineMismatch = useMemo(
+    () =>
+      detectProjectMachineMismatch({
+        projectName: selectedProject?.name || null,
+        sourceDeviceId: connectedDevice?.id || null,
+        sourceName: connectedDevice?.id ? deviceNameById.get(connectedDevice.id) || null : null,
+        renderDeviceId: effectiveRenderDeviceId,
+        renderName: effectiveRenderBoxName,
+      }),
+    [selectedProject?.name, connectedDevice?.id, deviceNameById, effectiveRenderDeviceId, effectiveRenderBoxName],
+  );
   // The warden's last heartbeat word about the render box. Once the box is
   // dark this is the only evidence of WHY — it upgrades "no connection" to
   // "it reported fork exhaustion; power-cycle it" (mac mini, 2026-07-27).
@@ -2775,12 +2790,17 @@ export default function RuntimeLabView({
     appendLog("stopping active preview");
     try {
       const result = await agentClient.stopDevServer();
-      const message = result.message || (result.verified ? "Preview stopped." : "Stop sent.");
+      const failed = result.ok === false || result.verified === false;
+      const message = result.message || (failed ? "Stop incomplete." : "Preview stopped.");
       appendLog(`stop preview: ${message}`);
-      setWebPreviewUrl(null);
-      setWebPreviewFrameReady(false);
+      if (failed) {
+        setError(message);
+      } else {
+        setWebPreviewUrl(null);
+        setWebPreviewFrameReady(false);
+      }
       setWebPreviewNote(message);
-      setBuildProgress(null);
+      if (!failed) setBuildProgress(null);
       if (result.buildsCancelled) appendLog(`cancelled ${result.buildsCancelled} in-flight build(s)`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Stop preview failed.";
@@ -3136,6 +3156,32 @@ export default function RuntimeLabView({
                     The render machine <span className="font-semibold">{effectiveRenderBoxName || "(unknown)"}</span> has
                     no live relay connection, so the target probe never reached it. Bring that box online, or pick a
                     different render machine above.
+                  </div>
+                ) : null}
+                {targetProbeFailurePlan.kind === "project-missing" ? (
+                  // The project simply is not on the render box. Deterministic:
+                  // the picker merges every machine's projects by NAME, so it
+                  // can offer one the render box never had. Say WHICH box is
+                  // missing it and point at the runner box, which under a split
+                  // is where the project usually lives. Never "Fix with runner"
+                  // — an LLM cannot create a directory on a machine it is not
+                  // running on, and asking it to burns a real run.
+                  <div className="text-xs">
+                    <span className="font-semibold">{effectiveRenderBoxName || "The render machine"}</span> has no
+                    project by that name, so there is nothing there to render — the box itself is fine.
+                    {/* The project list is read from the CONNECTED box
+                        (agentClient.listProjects), while the render probe
+                        targets the render box — so under a split the render box
+                        is answering about a list it never supplied. When the
+                        device ids PROVE that, state it; otherwise say nothing
+                        speculative. (The earlier wording here guessed "usually
+                        lives on <runner>", which was inherited from a stale
+                        note and was not established by the code.) */}
+                    {projectMachineMismatch.mismatch ? (
+                      <> {projectMachineMismatch.reason} {projectMachineMismatch.action}</>
+                    ) : (
+                      <> Pick a project that exists on this machine.</>
+                    )}
                   </div>
                 ) : null}
                 {targetProbeFailurePlan.kind === "agent-verb-skew" ? (

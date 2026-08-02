@@ -80,6 +80,7 @@ import { clearLastFailure, recordLastFailure } from "@/lib/probe-backoff";
 import { HIDE_PAID_UI, ENABLE_GUEST_FEATURES } from "@/lib/launchFlags";
 import { parseDashboardChatIntent } from "@/lib/dashboard-chat-intent";
 import { decideComposerKey, insertNewline, newlineIsNative } from "@/lib/composerKeys";
+import { runnerChipState } from "@/lib/runnerChipState";
 import {
   activationBlockReason,
   activateTaskPlacement,
@@ -361,6 +362,27 @@ function runnerAuthIssue(
   // message that may not exist.
   if (runner.authConfigured === false || runner.needsAuth === true) {
     return `${runnerLabel(runner.id)} is installed but NOT signed in on this machine — sign it in, or pick a runner that is. Tasks sent to it will wait forever.`;
+  }
+
+  // AN OBSERVED REFUSAL OUTRANKS A LOCAL VOUCH (2026-08-02). This branch only
+  // ran when `ready === false`. On the owner's screen the row said
+  // authConfigured:true / ready:true — `codex login status` had vouched for a
+  // credential file the PROVIDER had already stopped accepting — while the chat
+  // printed "Codex's token has expired and could not be refreshed" in the SAME
+  // viewport. runnerChipState centralises the rule and its matcher is pinned by
+  // tests so a SyntaxError, an ECONNRESET, or a model-entitlement 400 is never
+  // mistaken for a dead credential (each would send the user through an OAuth
+  // flow that cannot fix their problem).
+  const observed = runnerChipState({
+    runnerLabel: runnerLabel(runner.id),
+    installed: runner.installed,
+    ready: runner.ready,
+    authConfigured: runner.authConfigured,
+    needsAuth: runner.needsAuth,
+    lastError: String(runner.error || runner.warning || "") || null,
+  });
+  if (observed.tone === "expired") {
+    return `${observed.detail} ${observed.action}`.trim();
   }
 
   if (runner.ready !== false) return null;
