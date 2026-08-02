@@ -12,7 +12,11 @@ import { monoFamily, spacing } from "../theme/tokens";
 export interface SmartRetrySuggestion {
   label: string;
   /** Raw key for analytics so we can see which suggestions get tapped. */
-  kind: "skip-git-repo-check" | "api-key-missing" | "node-modules" | "permission" | "chown-fix" | "runner-auth-needed";
+  kind: "skip-git-repo-check" | "api-key-missing" | "node-modules" | "permission" | "chown-fix" | "runner-auth-needed"
+    // Non-auth provider refusals. Separate kinds on purpose: each has a
+    // DIFFERENT action, and collapsing them into runner-auth-needed is what
+    // produced a "Sign in" button for an out-of-credit account.
+    | "billing" | "rate-limit" | "model-entitlement";
   /** Optional payload tied to the suggestion. For chown-fix this
    *  carries the exact `sudo chown -R …` command pulled out of the
    *  agent's preflight error so the UI can offer a Copy button without
@@ -53,6 +57,13 @@ function detectRunnerAuthFailure(haystack: string): "claude" | "codex" | null {
     (m.includes("not logged in") && (m.includes("/login") || m.includes("please run"))) ||
     m.includes("invalid bearer token") ||
     m.includes("invalid authentication credentials") ||
+    // Anthropic's ACTUAL wording. The matcher only had "revoked" and
+    // "/login", so a plain expiry — the commonest runner failure there is —
+    // matched nothing and offered no route at all.
+    m.includes("oauth token has expired") ||
+    m.includes("oauth session expired") ||
+    m.includes("authentication_error") ||
+    m.includes("authentication_failed") ||
     m.includes("claude code-credentials");
   if (looksLikeClaude) return "claude";
   const looksLikeCodex =
@@ -65,12 +76,80 @@ function detectRunnerAuthFailure(haystack: string): "claude" | "codex" | null {
   return null;
 }
 
+// THINGS THAT ARE NOT A BROKEN SIGN-IN (2026-08-02, from the providers' real
+// shapes). Each of these used to fall through to a generic handler, or worse
+// toward an OAuth flow that cannot fix them:
+//
+//   billing      400 "Your credit balance is too low…" — the credential is
+//                valid, the account cannot pay. Re-auth changes nothing.
+//   rate-limit   429 rate_limit_error / "API Error: Rate limit reached".
+//                Waiting fixes it; re-auth ALSO throws away a working session.
+//   entitlement  400 "The '<model>' model is not supported when using Codex
+//                with a ChatGPT account." Signing in cannot move a model onto
+//                a plan; picking another model can.
+//
+// Mirrors web/lib/runnerFailure.ts. Kept in step by
+// web/lib/mobileFailureParity.test.ts, because this is an independent copy and
+// this repo has already drifted three relay-auth matchers apart.
+export type NonAuthFailure = "billing" | "rate-limit" | "model-entitlement" | null;
+
+export function detectNonAuthProviderFailure(haystack: string): NonAuthFailure {
+  const m = String(haystack || "").toLowerCase();
+  if (!m) return null;
+  if (
+    m.includes("credit balance is too low") ||
+    m.includes("credit_balance_too_low") ||
+    m.includes("plans & billing")
+  ) return "billing";
+  if (
+    m.includes("rate_limit_error") ||
+    m.includes("rate limit reached") ||
+    m.includes("rate limit exceeded") ||
+    m.includes("too many requests")
+  ) return "rate-limit";
+  if (m.includes("model is not supported") && m.includes("account")) return "model-entitlement";
+  return null;
+}
+
+/** The sentence + the action for a non-auth provider failure. */
+export function describeNonAuthProviderFailure(kind: Exclude<NonAuthFailure, null>): { reason: string; action: string } {
+  switch (kind) {
+    case "billing":
+      return {
+        reason: "The provider refused the call for lack of credit — the sign-in itself is fine.",
+        action: "Top up or upgrade that provider account, then retry. Signing in again will not help.",
+      };
+    case "rate-limit":
+      return {
+        reason: "The provider throttled this request. The credential and the model are both fine.",
+        action: "Wait for the limit to reset and retry. Do not sign in again — a fresh token does not reset a quota.",
+      };
+    case "model-entitlement":
+      return {
+        reason: "The signed-in plan does not include the selected model.",
+        action: "Pick a different model for this machine. Signing in again cannot move a model onto a plan.",
+      };
+  }
+}
+
 export function detectSmartRetry(message: string): SmartRetrySuggestion | null {
   const raw = String(message || "");
   const m = raw.toLowerCase();
   if (!m) return null;
   // Subscription-OAuth failures take priority over generic api-key hints
   // — claude/codex auth needs the browser flow, never an API key.
+  // A billing / throttling / entitlement refusal is NOT a sign-in problem and
+  // must never produce a "Sign in to X" button — that is the dead end this
+  // whole change exists to remove.
+  const nonAuth = detectNonAuthProviderFailure(raw);
+  if (nonAuth) {
+    const d = describeNonAuthProviderFailure(nonAuth);
+    return {
+      label: nonAuth === "model-entitlement" ? "Change model" : nonAuth === "billing" ? "Open billing" : "Wait and retry",
+      kind: nonAuth === "model-entitlement" ? "model-entitlement" : nonAuth,
+      payload: d.action,
+    } as SmartRetrySuggestion;
+  }
   const runner = detectRunnerAuthFailure(raw);
   if (runner) {
     return {
