@@ -349,12 +349,29 @@ export default function DeviceCodeClient({
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({ error: "Unknown error" }));
-        if (res.status === 404) {
+        // CODE FIRST, status second — the same order mobile's
+        // approveFailureMessage.ts uses. A stable code survives a reworded
+        // body; a status alone cannot distinguish two 4xx that mean different
+        // things. These two surfaces are twins and a user who tries the phone
+        // and then the browser must not be told two different stories about one
+        // code (mobile/src/lib/deviceCodeApprove.test.ts asserts the parity).
+        const code = typeof (data as { code?: unknown })?.code === "string"
+          ? (data as { code: string }).code
+          : "";
+        if (code === "invalid_code" || res.status === 404) {
           setErrorMsg("Invalid code. Check the code in your terminal and try again.");
-        } else if (res.status === 410) {
+        } else if (code === "code_expired" || res.status === 410) {
           setErrorMsg(expiredCodeMessage);
-        } else if (res.status === 409) {
+        } else if (code === "code_already_used" || res.status === 409) {
           setErrorMsg("This code has already been used.");
+        } else if (code === "too_many_attempts" || res.status === 429) {
+          // Was MISSING entirely (fixed 2026-08-02): a rate-limited approval
+          // fell into the generic `data.error` branch, so the phone said "Too
+          // many attempts on that code. Get a fresh one" while the browser said
+          // whatever prose the backend happened to send — or "Something went
+          // wrong." Same fault, two stories, and only one of them told the user
+          // that a NEW code is what fixes it.
+          setErrorMsg("Too many attempts on that code. Get a fresh one and try again.");
         } else {
           setErrorMsg(data.error || "Something went wrong.");
         }

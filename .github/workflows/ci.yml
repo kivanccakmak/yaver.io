@@ -127,6 +127,44 @@ jobs:
       - name: Build CLI
         run: cd desktop/agent && go build -o yaver .
 
+  # Deterministic client-side guards: connectivity robustness, the
+  # false-positive-label classifiers, and every cross-surface parity check.
+  # Pure TS primitives (no react-native, no 16G node_modules, no credentials,
+  # no network). The CLOSED-LOOP e2e (e2e/vibe-e2e, e2e/false-positive-*.mjs,
+  # e2e/connectivity-truth-loop.mjs) are NOT here: they need the caller's real
+  # account creds + a live box, so they run manually.
+  #
+  # This job used to NAME the tests it ran, four at a time. 154 guards existed;
+  # 150 had never run in CI — including every connectivity guard the
+  # CONNECTIVITY ROBUSTNESS rule rests on, and one that was RED on main (the
+  # mobile/web device-code approvers had drifted apart on rate-limit copy) with
+  # nobody watching. A hand-maintained list of tests rots exactly like a
+  # hand-maintained list of models: it does not get the memo.
+  #
+  # scripts/run-client-guards.sh GLOBS instead. Add a *.test.ts next to the code
+  # it guards and it is gated on the next push — no edit to this file, nothing
+  # to forget. It is also the command you run locally, so the guard humans use
+  # is the guard the robot uses.
+  client-unit-tests:
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true' || needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install tsx
+        run: npm i -g tsx
+      # One guard is written against bun:test; without bun the sweep SKIPs it
+      # loudly rather than passing over it in silence. Install it so the run is
+      # complete rather than merely green.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: client guards (all of them — globbed, not listed)
+        run: ./scripts/run-client-guards.sh
+
   web-build:
     needs: changes
     if: needs.changes.outputs.web == 'true'
