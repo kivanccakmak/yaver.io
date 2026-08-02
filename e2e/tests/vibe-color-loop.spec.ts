@@ -203,11 +203,22 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
     // is the BROWSER lane, so take that one explicitly; WebRTC is a different
     // transport with different failure modes and picking it would test
     // something this spec does not claim to cover.
+    // Two legitimate states, and the sheet differs between them: with NO preview
+    // running the project offers "Browser Reload"; with one already running it
+    // offers "Stop" and the preview is already up. Demanding the first state
+    // makes the test order-dependent — it passed by hand and failed in the
+    // suite purely because an earlier run had left a preview alive.
     const browserReload = page.getByText(/^Browser Reload$/).first();
-    await expect(browserReload,
-      'mobile: the project sheet did not offer "Browser Reload"').toBeVisible({ timeout: 30_000 });
-    await browserReload.click();
-    await page.waitForTimeout(25_000);
+    if (await browserReload.count()) {
+      await browserReload.click();
+      await page.waitForTimeout(25_000);
+    } else {
+      const alreadyRunning = await page.locator("iframe").count();
+      expect(alreadyRunning,
+        'mobile: the project sheet offered neither "Browser Reload" nor a running preview')
+        .toBeGreaterThan(0);
+      await page.waitForTimeout(6000);
+    }
 
     await expect(page.locator("iframe").first(),
       "mobile: the browser-lane preview never rendered").toBeVisible({ timeout: 90_000 });
