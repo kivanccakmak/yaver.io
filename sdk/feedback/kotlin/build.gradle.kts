@@ -59,7 +59,7 @@ dependencies {
 // AGP still wants a manifest file to exist even when the namespace comes from
 // the DSL. Generating it keeps the source tree free of a file whose only
 // content would be an empty <manifest/>.
-val generateManifest by tasks.registering {
+val generateManifest = tasks.register("generateManifest") {
     val out = layout.buildDirectory.file("generated-manifest/AndroidManifest.xml")
     outputs.file(out)
     doLast {
