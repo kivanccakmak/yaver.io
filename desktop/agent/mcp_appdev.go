@@ -34,18 +34,60 @@ func mcpAppStoreStatus(bundleID string) interface{} {
 	return result
 }
 
+// mcpAppStoreTestFlight lists TestFlight builds for a bundle id.
+//
+// THIS VERB COULD NEVER SUCCEED (fixed 2026-08-02). It shelled out to
+// `xcrun altool --list-builds`, and modern altool has no such command — it
+// accepts only --upload-app / --validate-app / --notarization-*. Every single
+// call returned the same thing, on every surface that asked Yaver what was on
+// TestFlight:
+//
+//	ArgumentParsingFailure("Missing or no command argument specified.")
+//
+// It also read APP_STORE_API_KEY_ID / APP_STORE_API_ISSUER, which are not the
+// names anything else in this repo sets (APP_STORE_KEY_ID / _ISSUER), so even
+// against a working altool it would have passed empty credentials.
+//
+// The App Store Connect API path was already here and already working —
+// ascClient backs the store_* verbs and scripts/asc-max-build.py uses the same
+// endpoint from Python. So this now asks the API, which is also the only
+// source that can report processingState (the difference between "uploaded"
+// and "installable" that a deploy needs to distinguish).
 func mcpAppStoreTestFlight(bundleID string) interface{} {
-	// List TestFlight builds
-	out, err := runCmd("xcrun", "altool", "--list-builds", "--bundle-id", bundleID,
-		"--output-format", "json",
-		"--apiKey", os.Getenv("APP_STORE_API_KEY_ID"),
-		"--apiIssuer", os.Getenv("APP_STORE_API_ISSUER"))
-	if err != nil {
-		return map[string]interface{}{"error": fmt.Sprintf("xcrun altool: %s — %s", err, out)}
+	if strings.TrimSpace(bundleID) == "" {
+		return map[string]interface{}{"error": "bundle_id is required, e.g. io.yaver.mobile"}
 	}
-	var result interface{}
-	json.Unmarshal([]byte(out), &result)
-	return result
+	client, err := newASCClient("mobile")
+	if err != nil {
+		return map[string]interface{}{
+			"error": fmt.Sprintf("App Store Connect credentials unavailable: %v", err),
+			"remedy": "Set APP_STORE_KEY_PATH, APP_STORE_KEY_ID and APP_STORE_KEY_ISSUER " +
+				"(see ~/.appstoreconnect/yaver.env) or add them to the mobile vault project.",
+		}
+	}
+	app, err := client.AppByBundleID(bundleID)
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("resolve app %s: %v", bundleID, err)}
+	}
+	if app == nil {
+		return map[string]interface{}{"error": fmt.Sprintf("no App Store Connect app for bundle id %s", bundleID)}
+	}
+	builds, err := client.ListBuilds(app.ID)
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("list builds: %v", err)}
+	}
+	rows := make([]map[string]interface{}, 0, len(builds))
+	for _, b := range builds {
+		rows = append(rows, map[string]interface{}{
+			"build":           b.Version,
+			"id":              b.ID,
+			"uploaded_at":     b.UploadedDate,
+			"processing":      b.ProcessingState,
+			"expired":         b.Expired,
+			"installable_now": strings.EqualFold(b.ProcessingState, "VALID") && !b.Expired,
+		})
+	}
+	return map[string]interface{}{"bundle_id": bundleID, "app_id": app.ID, "count": len(rows), "builds": rows}
 }
 
 func mcpXcodeBuild(dir, scheme, destination string) interface{} {
