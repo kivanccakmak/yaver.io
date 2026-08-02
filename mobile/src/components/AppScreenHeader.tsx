@@ -3,6 +3,7 @@ import { StyleProp, StyleSheet, Text, View, ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "../context/ThemeContext";
 import { AppBackButton } from "./AppBackButton";
+import { YaverModeBadge } from "./YaverModeBadge";
 
 // AppScreenHeader is the canonical app bar for every screen the user
 // reaches via the More menu (Settings, Files, Builds, Healthmon, etc.)
@@ -45,7 +46,14 @@ export function AppScreenHeader({
       <Text style={[styles.title, { color: c.textPrimary }]} numberOfLines={1} ellipsizeMode="tail">
         {title}
       </Text>
-      <View style={styles.rightSlot}>{right}</View>
+      {/* The polite Y. Renders NOTHING in the plain installed app, so this is
+          free for the 99% case; it only appears when the user is looking at
+          something Yaver is standing in front of. Placed before `right` so a
+          screen's own actions keep their position. */}
+      <View style={styles.rightSlot}>
+        <YaverModeBadge />
+        {right}
+      </View>
     </View>
   );
 }
@@ -76,5 +84,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
+    // The mode badge shares this slot with a screen's own actions. Without a
+    // gap the Y sits flush against the first action and reads as part of it.
+    gap: 8,
   },
 });

@@ -36,6 +36,8 @@ import { useColors } from "../src/context/ThemeContext";
 import { useDevice } from "../src/context/DeviceContext";
 import { beaconListener, type DiscoveredDevice } from "../src/lib/beacon";
 import { adoptBootstrapDevice } from "../src/lib/pairDevice";
+import { loadBoxReadiness } from "../src/lib/boxInitStore";
+import { readinessSummary, type BoxReadiness } from "../src/lib/boxInit";
 import AirDropMacSetupButton from "../src/components/AirDropMacSetupButton";
 
 const INSTALL_CMD = "npm install -g yaver-cli && yaver auth";
@@ -156,6 +158,35 @@ export default function OnboardingPairScreen() {
     [token, user, refreshDevices],
   );
 
+  // ── Is the paired box actually able to run a coding task? ────────────────
+  //
+  // Pairing was the only success condition here, so a user could complete
+  // onboarding, land on Tasks, and hit "no runner" with no route back to the
+  // checklist that would have told them. computeBoxReadiness() has answered
+  // this the whole time — it was just buried ~5,000 lines into Settings.
+  //
+  // Advisory, never blocking: a box with no runner yet is still a paired box,
+  // and "Start coding" must stay the primary action. We only add the honest
+  // line and the route to fix it.
+  const [readiness, setReadiness] = useState<BoxReadiness | null>(null);
+  useEffect(() => {
+    const id = devices[0]?.id;
+    if (!paired || !id) return;
+    let alive = true;
+    loadBoxReadiness(id)
+      .then((r) => {
+        if (alive) setReadiness(r);
+      })
+      .catch(() => {
+        // Unknown readiness must not become a false "not ready" — leave null
+        // and say nothing rather than worry the user about a probe that
+        // failed for network reasons.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [paired, devices]);
+
   const goToTasks = useCallback(() => {
     router.replace("/(tabs)/tasks");
   }, []);
@@ -184,6 +215,14 @@ export default function OnboardingPairScreen() {
           <Text style={[styles.subtitle, { color: c.textSecondary }]}>
             {first?.name ? `${first.name} is paired with your account.` : "Your machine is paired with your account."}
           </Text>
+          {readiness && readiness.overall !== "ready" ? (
+            <Text style={[styles.subtitle, { color: readiness.overall === "not-ready" ? c.error : c.textMuted }]}>
+              {readiness.overall === "not-ready"
+                ? `No coding runner is ready on this box yet (${readinessSummary(readiness)}). ` +
+                  "Settings → Box setup installs one."
+                : `Box setup: ${readinessSummary(readiness)}.`}
+            </Text>
+          ) : null}
           <Pressable
             style={({ pressed }) => [styles.primaryBtn, { backgroundColor: c.accent }, pressed && { opacity: 0.8 }]}
             onPress={goToTasks}

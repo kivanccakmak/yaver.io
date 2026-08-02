@@ -68,6 +68,11 @@ export type { PairDeviceModalProps } from './PairDeviceModal';
 export { AuthOverlay } from './AuthOverlay';
 export { ShakeDetector } from './ShakeDetector';
 export { FloatingButton } from './FloatingButton';
+// The polite "you're inside Yaver" mark. Rendered automatically by the SDK's
+// overlay host when config.modeBadge !== false; exported so an app that manages
+// its own overlay tree can place it itself.
+export { YaverModeBadge } from './YaverModeBadge';
+export type { YaverModeBadgeProps } from './YaverModeBadge';
 export { FeedbackModal } from './FeedbackModal';
 export { QuickActionIcon } from './QuickActionIcon';
 export type { QuickActionIconProps } from './QuickActionIcon';

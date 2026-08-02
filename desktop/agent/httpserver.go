@@ -369,6 +369,21 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/health/deep", s.auth(s.handleHealthDeep))
 	mux.HandleFunc("/integrations/whatsapp/command", s.handleWhatsAppCommand)
 
+	// Attach Mode (Yaver rendering Yaver). /attach/start MINTS a capability and
+	// is therefore owner-bearer ONLY — s.auth, never attachOrAuth, or an
+	// attached page could mint itself a fresh capability forever. refresh/stop
+	// accept either the owner's bearer or the capability, since the attached
+	// surface must be able to keep itself alive and to detach itself.
+	// See attach_session.go for why this is a capability and not the session.
+	// The capability answer over plain HTTP. Attach Mode uses it to have the
+	// AGENT confirm a directory is Yaver's own checkout (identity, not a path
+	// guess); every surface uses it to know which preview lanes exist.
+	mux.HandleFunc("/project/preview-capabilities", s.auth(s.handleProjectPreviewCapabilities))
+
+	mux.HandleFunc("/attach/start", s.auth(s.handleAttachStart))
+	mux.HandleFunc("/attach/refresh", s.attachOrAuth(s.handleAttachRefresh))
+	mux.HandleFunc("/attach/stop", s.attachOrAuth(s.handleAttachStop))
+
 	// Authenticated
 	mux.HandleFunc("/tasks", s.auth(s.handleTasks))
 	mux.HandleFunc("/tasks/", s.auth(s.handleTaskByID))

@@ -147,6 +147,28 @@ export interface FeedbackConfig {
   /** URL of the Yaver agent (e.g. "http://192.168.1.10:18080"). If omitted, auto-discovery is used. */
   agentUrl?: string;
   /**
+   * Show the small "Y" mark while this app is running INSIDE Yaver's container
+   * (a Hermes-pushed development bundle), so a tester can tell it apart from
+   * the build they installed — and can find the way back.
+   *
+   * DEFAULT TRUE. The failure it prevents is silent and lands on a tester
+   * rather than a developer: an app that looks installed but is someone's
+   * branch produces "bug reports" against unfinished work, and a tester with
+   * no visible way out is simply stuck. That class should not be opt-in.
+   *
+   * Costs nothing in a standalone build — outside Yaver's container the badge
+   * renders null (the YaverInfo native module is absent), so shipping with it
+   * enabled has no effect on what your users see.
+   *
+   * Set false if your app already shows its own in-container indicator, or if
+   * a pixel-exact surface cannot spare 22 points in a corner.
+   */
+  modeBadge?: boolean;
+  /** Corner for the mode badge. Default 'bottom-left' — bottom-right is where
+   *  most apps put a FAB, and the badge must never compete with the app's own
+   *  primary action. */
+  modeBadgePosition?: 'bottom-left' | 'bottom-right' | 'top-left' | 'top-right';
+  /**
    * Enables the overlay's "App Store screenshots" action + the
    * `capture_store_shots` remote command. The host supplies the route
    * list (and a navigation ref) once; the SDK captures the real running

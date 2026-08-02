@@ -40,7 +40,7 @@ import {
   type CapabilityGap,
 } from "../lib/capabilityGap";
 import { formatFixElapsed, runCapabilityGapFix } from "../lib/capabilityGapFix";
-import { setActivePreviewLane, subscribeBrowserShake } from "../lib/feedbackTrigger";
+import { setActivePreviewLane, subscribeBrowserRender, subscribeBrowserShake } from "../lib/feedbackTrigger";
 import { subscribeSse } from "../lib/sseClient";
 import { useResponsiveLayout } from "../hooks/useResponsiveLayout";
 import { monoFamily } from "../theme/tokens";
@@ -738,6 +738,27 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
       setReloadLoading(false);
     }
   }, [bundleMounted, handleRunInYaver, mustUseNativePreview, nativeLoading, reloadLoading, showPreview, status?.running]);
+
+  // Post-task render for the BROWSER lane (2026-08-02).
+  //
+  // A coding turn that lands must refresh what the user is looking at. That
+  // worked only for WebRTC simulator targets; a browser-lane preview — the
+  // route Yaver-on-Yaver is steered to — had no listener at all, so "vibe,
+  // then watch it update" simply did not happen here.
+  //
+  // Must sit BELOW handleReload: the dep array is evaluated during render, so
+  // referencing the `const` above its declaration is a TDZ ReferenceError, not
+  // a lint nit.
+  //
+  // Atomicity is preserved for free — handleReload already returns early while
+  // `reloadLoading || nativeLoading`, so an auto-render and a manual Fast
+  // Reload tap coalesce instead of stacking.
+  useEffect(() => {
+    if (!showPreview) return;
+    return subscribeBrowserRender(() => {
+      void handleReload("fast");
+    });
+  }, [showPreview, handleReload]);
 
   const handleStop = useCallback(async () => {
     Alert.alert("Stop Serving Preview", "This will stop serving the current preview and close it on this device.", [

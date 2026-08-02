@@ -981,6 +981,34 @@ export interface RemoteRuntimeViewport {
   height: number;
 }
 
+/** Wire shape of desktop/agent attach_http.go's attachStartResponse. */
+export interface AttachSessionResult {
+  ok: boolean;
+  sessionId?: string;
+  expiresAt?: string;
+  workDir?: string;
+  /** Stable machine code (ATTACH_NOT_YAVER_CHECKOUT, ATTACH_OWNER_ONLY, …).
+   *  Switch on this; never on the prose. */
+  code?: string;
+  error?: string;
+  remedy?: string;
+}
+
+/** Wire shape of desktop/agent ProjectPreviewCapabilities. */
+export interface ProjectPreviewCapabilitiesWire {
+  framework?: string;
+  selfDevelopment?: boolean;
+  hasPairedDevice?: boolean;
+  reason?: string;
+  options?: Array<{
+    id: string;
+    label?: string;
+    supported?: boolean;
+    primary?: boolean;
+    reason?: string;
+  }>;
+}
+
 export interface RemoteRuntimeCapabilities {
   workDir: string;
   framework: string;
@@ -3656,6 +3684,57 @@ export class QuicClient {
       headers: this.authHeaders,
     }, 25000);
     if (!res.ok) throw new Error(`Failed to get project actions: ${res.status}`);
+    return res.json();
+  }
+
+  // ── Attach Mode (Yaver rendering Yaver) ──────────────────────────────────
+  //
+  // The capability the agent issues is an HttpOnly cookie; nothing here ever
+  // sees it, and nothing here should try to. These calls speak only in session
+  // ids, which are not secrets. See desktop/agent/attach_session.go for why
+  // that split is the whole security argument.
+
+  async startAttachSession(workDir: string): Promise<AttachSessionResult> {
+    this.assertConnected();
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/attach/start`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ workDir }),
+    });
+    const data = await res.json().catch(() => ({}));
+    // A failure carries a stable `code` + `remedy`; pass them through rather
+    // than flattening to a sentence the surface would have to regex.
+    return { ok: res.ok && data?.ok !== false, ...(data as object) } as AttachSessionResult;
+  }
+
+  async refreshAttachSession(sessionId: string): Promise<AttachSessionResult> {
+    this.assertConnected();
+    const res = await this.fetchWithTimeout(
+      `${this.baseUrl}/attach/refresh?sessionId=${encodeURIComponent(sessionId)}`,
+      { method: "POST", headers: this.authHeaders },
+    );
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok && data?.ok !== false, ...(data as object) } as AttachSessionResult;
+  }
+
+  async stopAttachSession(sessionId?: string | null): Promise<boolean> {
+    this.assertConnected();
+    const q = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : "";
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/attach/stop${q}`, {
+      method: "POST",
+      headers: this.authHeaders,
+    });
+    const data = await res.json().catch(() => ({}));
+    return res.ok && !!data?.ok;
+  }
+
+  /** The agent's own verdict on whether workDir is Yaver's checkout. Identity,
+   *  not a client-side path guess. */
+  async getProjectPreviewCapabilities(workDir: string): Promise<ProjectPreviewCapabilitiesWire> {
+    this.assertConnected();
+    const url = `${this.baseUrl}/project/preview-capabilities?workDir=${encodeURIComponent(workDir)}`;
+    const res = await this.fetchWithTimeout(url, { headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to get preview capabilities: ${res.status}`);
     return res.json();
   }
 

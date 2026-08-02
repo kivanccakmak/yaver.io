@@ -36,6 +36,7 @@ export 'src/discovery.dart';
 export 'src/feedback.dart';
 export 'src/floating_button.dart';
 export 'src/login_page.dart';
+export 'src/mode_badge.dart';
 export 'src/p2p_client.dart';
 export 'src/reload_actions.dart';
 export 'src/types.dart';
