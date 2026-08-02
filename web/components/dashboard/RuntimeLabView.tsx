@@ -3036,6 +3036,28 @@ export default function RuntimeLabView({
                     different render machine above.
                   </div>
                 ) : null}
+                {targetProbeFailurePlan.kind === "project-missing" ? (
+                  // The project simply is not on the render box. Deterministic:
+                  // the picker merges every machine's projects by NAME, so it
+                  // can offer one the render box never had. Say WHICH box is
+                  // missing it and point at the runner box, which under a split
+                  // is where the project usually lives. Never "Fix with runner"
+                  // — an LLM cannot create a directory on a machine it is not
+                  // running on, and asking it to burns a real run.
+                  <div className="text-xs">
+                    <span className="font-semibold">{effectiveRenderBoxName || "The render machine"}</span> has no
+                    project by that name, so there is nothing there to render — the box itself is fine.
+                    {machineSplitActive && runnerBoxName ? (
+                      <>
+                        {" "}Under this runner/render split the project usually lives on{" "}
+                        <span className="font-semibold">{runnerBoxName}</span>: render there, or pick a project that
+                        exists on {effectiveRenderBoxName || "the render machine"}.
+                      </>
+                    ) : (
+                      <> Pick a project that exists on this machine.</>
+                    )}
+                  </div>
+                ) : null}
                 {targetProbeFailurePlan.kind === "agent-verb-skew" ? (
                   // Version skew is deterministic: the installed agent predates
                   // a verb this dashboard calls. Never offer "Fix with runner"
