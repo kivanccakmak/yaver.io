@@ -18,7 +18,7 @@
  *
  * Run: npx tsx web/lib/failureSignalParity.test.ts
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -35,7 +35,13 @@ const SURFACES: Array<{ name: string; path: string }> = [
   { name: "tvOS", path: "tvos/YaverTV/FailureSignals.swift" },
   { name: "watchOS", path: "watch/YaverWatch/FailureSignals.swift" },
   { name: "Wear OS", path: "wear/app/src/main/kotlin/io/yaver/wear/FailureSignals.kt" },
-  { name: "visionOS", path: "visionos/YaverVision/FailureSignals.swift" },
+  // visionOS deliberately has NO copy: project.yml compiles the tvOS file
+  // directly (`path: ../tvos/YaverTV/FailureSignals.swift`). It briefly had one
+  // anyway, and the duplicate filename broke the visionOS archive outright —
+  // two `enum FailureSignals` in one module (2026-08-03). Pointing this guard
+  // at a per-surface copy would REQUIRE the very drift the sharing prevents,
+  // so visionOS is asserted below by SHARING, not by content.
+  { name: "visionOS", path: "tvos/YaverTV/FailureSignals.swift" },
 ];
 
 const sources = new Map<string, string>();
@@ -117,6 +123,22 @@ for (const name of FULL_POLICY_SURFACES) {
   const genericAuth = src.indexOf("not authenticated");
   ok(billing > 0 && genericAuth > 0 && billing < genericAuth,
     `${name} matches billing BEFORE the generic auth branch`);
+}
+
+
+// ── visionOS: parity by SHARING, not by copying ────────────────────────────
+//
+// The rows above give visionOS the tvOS file because that is literally what it
+// compiles. This asserts the arrangement itself, so "visionOS passes" can never
+// mean "visionOS quietly grew its own copy that happens to match today".
+{
+  const spec = readFileSync(join(repo, "visionos/project.yml"), "utf8");
+  ok(/path:\s*\.\.\/tvos\/YaverTV\/FailureSignals\.swift/.test(spec),
+    "visionOS must COMPILE the tvOS FailureSignals.swift, not carry a copy");
+  ok(!existsSync(join(repo, "visionos/YaverVision/FailureSignals.swift")),
+    "visionos/YaverVision/FailureSignals.swift is back — a second `enum FailureSignals` " +
+    "in the same module breaks the archive (\"filename used twice\"), which is exactly " +
+    "how the 2026-08-03 visionOS deploy failed");
 }
 
 if (failures) {

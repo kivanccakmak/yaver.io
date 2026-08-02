@@ -158,9 +158,31 @@ async function samplePreview(page: Page): Promise<{ px: number[]; rendered: bool
   return { px: modalColor(raw), rendered: looksRendered(raw) };
 }
 
-async function waitForColor(page: Page, want: string, budgetMs: number) {
+/**
+ * Poll the preview until it shows `want`.
+ *
+ * `refresh` exists because POLLING A STALE IFRAME PROVES NOTHING (2026-08-03).
+ * The mobile arc reloaded the preview ONCE, right after sending the prompt —
+ * i.e. before the runner had finished editing — and then watched that frozen
+ * frame for twelve minutes. Measured: the task reached `review`, the box's
+ * `git diff` showed login.tsx correctly changed (5 +++--, the same edit shape
+ * as the run that passed on web), and the arc still reported "preview never
+ * turned red". The product had done the work; the harness was looking at an old
+ * render and blaming it.
+ *
+ * The web arc gets away without this because the dashboard's own reload fires
+ * when the task lands. The mobile preview does not, so the arc must re-trigger
+ * it while waiting — otherwise the loop measures whoever reloaded last.
+ */
+async function waitForColor(
+  page: Page,
+  want: string,
+  budgetMs: number,
+  refresh?: () => Promise<unknown>,
+) {
   const deadline = Date.now() + budgetMs;
   let last = "unknown";
+  let polls = 0;
   while (Date.now() < deadline) {
     const s = await samplePreview(page).catch(() => null);
     if (s) {
@@ -168,6 +190,10 @@ async function waitForColor(page: Page, want: string, budgetMs: number) {
       if (last === want) return { ok: true, color: last };
     }
     await page.waitForTimeout(20_000);
+    polls++;
+    // Every ~60s. Often enough to catch the rebuild, rare enough not to fight
+    // a render that is already in flight.
+    if (refresh && polls % 3 === 0) await refresh().catch(() => {});
   }
   return { ok: false, color: last };
 }
@@ -227,6 +253,10 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
   // product — a harness bug that looked exactly like a product failure, right
   // down to the recorded video and trace.
   let mobileSendVibe: ((text: string) => Promise<unknown>) | null = null;
+  // Re-render the mobile preview mid-wait. Set by the mobile branch only; the
+  // web arc leaves it null because the dashboard reloads itself when a task
+  // lands. See waitForColor's comment for why polling without this lies.
+  let mobileReloadPreview: (() => Promise<unknown>) | null = null;
 
   // VIEWPORT FIRST. A loop that drives the right app at the wrong size tests a
   // layout no user ever sees — and reports green about it. Assert the surface
@@ -299,6 +329,24 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
 
     await expect(page.locator("iframe").first(),
       "mobile: the browser-lane preview never rendered").toBeVisible({ timeout: 90_000 });
+
+    // Re-render on demand while waiting for the colour. Same path the arc uses
+    // to open the preview in the first place: back to /apps, tap the project,
+    // take the Browser Reload lane. Without this the arc polls the frame it
+    // rendered BEFORE the runner edited anything.
+    mobileReloadPreview = async () => {
+      const base = (process.env.MOBILE_WEB_URL || "").replace(/\/$/, "");
+      await page.goto(`${base}/apps`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      await page.waitForTimeout(6000);
+      const row = page.getByText(projectPath, { exact: true }).first();
+      if (await row.count()) {
+        await row.click().catch(() => {});
+        await page.waitForTimeout(6000);
+        const br = page.getByText(/^Browser Reload$/).first();
+        if (await br.count()) { await br.click().catch(() => {}); await page.waitForTimeout(18_000); }
+      }
+      return true;
+    };
 
     // The composer is NOT on the Tasks screen — it lives in a modal
     // (tasks.tsx:5288+, autoFocus) that the screen opens on demand, which is
@@ -436,7 +484,7 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
     await page.getByRole("button", { name: /^Send$/ }).first().click();
     await page.waitForTimeout(3000);
   }
-  const hit = await waitForColor(page, target, TURN_BUDGET_MS);
+  const hit = await waitForColor(page, target, TURN_BUDGET_MS, mobileReloadPreview ?? undefined);
   expect(hit.ok, `preview never turned ${target} (last ${hit.color})`).toBe(true);
 
   // Revert as a SEPARATE task — exercises the new-task render path, not just a
@@ -452,7 +500,7 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
     await page.getByRole("button", { name: /^Send$/ }).first().click();
     await page.waitForTimeout(3000);
   }
-  const back = await waitForColor(page, "black", TURN_BUDGET_MS);
+  const back = await waitForColor(page, "black", TURN_BUDGET_MS, mobileReloadPreview ?? undefined);
   expect(back.ok, `preview never reverted to black (last ${back.color})`).toBe(true);
 }
 
