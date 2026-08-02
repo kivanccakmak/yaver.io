@@ -15,6 +15,10 @@ import { makeMobileAdapter } from "./adapters/mobile.mjs";
 
 const SURFACE = process.argv[2] || "web";
 const PHASE = process.env.VIBE_PHASE || "full";
+// Target colour for the vibe. Red by default now: the owner asked for red, and
+// red is also further from every failure artefact than green (a decoder with no
+// content paints rgb(0,135,0)).
+const TARGET_COLOR = process.env.VIBE_COLOR || "red";
 const OUT = process.env.YAVER_OUT_DIR || "/private/tmp/claude-501/-Users-kivanccakmak-Workspace-yaver-io/a54e4b04-2f01-4faa-8f6e-93e876b25afb/scratchpad";
 const FRAMES = join(OUT, `vibe_${SURFACE}_frames`);
 
@@ -48,7 +52,7 @@ async function main() {
       result = { verdict: c.ok ? "PHASE-OK" : "NAMED", reason: c.ok ? "reached baseline" : c.reason };
     } else {
       console.log(`vibe-e2e [${SURFACE}] · phase=full (black→green→black)`);
-      result = await runScenario(adapter, {});
+      result = await runScenario(adapter, { targetColor: TARGET_COLOR });
     }
   } catch (e) {
     result = { verdict: "SILENT", reason: `crashed: ${e?.message || e}` };

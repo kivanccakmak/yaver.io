@@ -18,6 +18,7 @@ export function classifyColor(css) {
   else return "other";
   if (r < 60 && g < 60 && b < 60) return "black";
   if (g > 90 && g > r + 40 && g > b + 40) return "green";
+  if (r > 90 && r > g + 40 && r > b + 40) return "red";
   return "other";
 }
 
@@ -59,13 +60,18 @@ export async function runScenario(adapter, opts = {}) {
     // render can take several minutes.
     const budget = opts.turnAndRenderMs ?? 12 * 60_000;
 
-    // 5–7. VIBE → green.
-    const sentGreen = await adapter.sendChat("Change the login page background color from black to green. Only the login screen background.");
-    if (!sentGreen) return named("could not SEND the 'green' message (composer never cleared — Send did not dispatch)");
-    record("CHAT → 'background to green' sent", true);
-    const afterGreen = await adapter.waitForBackground("green", budget);
-    record("ASSERT background == green", afterGreen.ok, `${afterGreen.color}`);
-    if (!afterGreen.ok) return named(`preview did not turn green in ${Math.round(budget / 60000)}min (got ${afterGreen.color}) — runner/render/edit`);
+    // 5–7. VIBE → the target colour. Parameterised (default green) so the same
+    // scenario can drive red without a second copy — a forked scenario is how
+    // two loops end up asserting subtly different things.
+    const target = opts.targetColor || "green";
+    const sentTarget = await adapter.sendChat(
+      `Change the login page background color from black to ${target}. Only the login screen background.`,
+    );
+    if (!sentTarget) return named(`could not SEND the '${target}' message (composer never cleared — Send did not dispatch)`);
+    record(`CHAT → 'background to ${target}' sent`, true);
+    const afterTarget = await adapter.waitForBackground(target, budget);
+    record(`ASSERT background == ${target}`, afterTarget.ok, `${afterTarget.color}`);
+    if (!afterTarget.ok) return named(`preview did not turn ${target} in ${Math.round(budget / 60000)}min (got ${afterTarget.color}) — runner/render/edit`);
 
     // Two TASKS, not one follow-up: start a fresh session so the revert is its
     // own task (exercises the new-task render path, not just a follow-up).
@@ -79,7 +85,7 @@ export async function runScenario(adapter, opts = {}) {
     record("ASSERT background == black (reverted)", afterBlack.ok, `${afterBlack.color}`);
     if (!afterBlack.ok) return named(`preview did not revert to black in ${Math.round(budget / 60000)}min (got ${afterBlack.color})`);
 
-    return { verdict: VERDICT.PIXELS, reason: "black → green → black observed end to end", steps };
+    return { verdict: VERDICT.PIXELS, reason: `black → ${target} → black observed end to end`, steps };
   } catch (e) {
     return { verdict: VERDICT.SILENT, reason: `unexpected: ${e?.message || e}`, steps };
   }
