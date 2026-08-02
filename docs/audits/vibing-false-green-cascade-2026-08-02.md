@@ -29,11 +29,23 @@ skipped** — the runner then edits a stale tree and says nothing.
 
 ---
 
-## 1. Project identity is a NAME, so it cannot be machine-scoped
+## 1. The project list and the render target are DIFFERENT MACHINES
 
-`RuntimeLabView.tsx:1357` logs `projects loaded: 36` — the union of every
-machine's projects. Identity is the display name (`yaver / mobile`), so the
-picker cannot express "this project exists on `ai-box` but not `render-box`".
+> **Corrected 2026-08-02, second pass.** The first version of this section said
+> the picker "merges ALL machines' projects with NAME-based identity". That was
+> carried over from a five-day-old note and is **wrong** — I asserted it without
+> grepping, which is the exact failure CLAUDE.md warns about ("grep the actual
+> code… when the doc and the code disagree, the doc is the bug"). There is no
+> cross-device aggregation anywhere: `RuntimeLabView.tsx:1355` and
+> `VibeCodingView.tsx:804` both call `agentClient.listProjects()`, a single
+> connection to the CONNECTED box. Nothing merges. The corrected mechanism is
+> below, and it is both simpler and easier to fix.
+
+`loadProjects` (`RuntimeLabView.tsx:1351-1360`) reads the list from the
+**connected** box. The render probe targets `effectiveRenderDeviceId` — the
+explicit render role, else the runner, else the connected box. Under a
+runner/render split those are DIFFERENT MACHINES, so every project offered is
+one the render box was never asked about.
 
 The user's split is `AI: ai-box · Render: render-box`. `yaver / mobile` lives on
 `ai-box`. The picker offered it anyway; the render probe went to `render-box`
@@ -52,11 +64,16 @@ identity … probe failed by name on render machine while the fix task got the
 other machine's absolute path shipped to the Linux box."* It was diagnosed five
 days ago and the identity model was never changed.
 
-**Fix:** project identity is `(deviceId, path)`, never the name. Where a chosen
-project is absent on the render machine but present on another, that is not an
-error — it is a **routing question with a deterministic answer**: *"`yaver /
-mobile` is on `ai-box`, not `render-box`. Render it there, or pick a project
-that exists here."* Two buttons, no LLM.
+**Fix (landed):** the browser already holds both ids, so the mismatch is
+knowable **before** the probe, for free. `web/lib/projectMachineMismatch.ts`
+detects it and states it as fact — *"came from <source>'s project list, but the
+render machine is <target> — <target> was never asked what it has"* — with the
+route *"render on <source>, or pick a project that <target> itself reports."*
+
+It reports a mismatch only when both device ids are known and differ. A single
+box, or an unknown id, yields silence: a project genuinely missing on one
+machine is a real missing project, and dressing it up as a routing problem
+would send the user chasing a split they do not have.
 
 ## 2. A 0-second "probe" is not a probe
 

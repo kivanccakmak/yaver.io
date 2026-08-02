@@ -40,6 +40,7 @@ import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
 import { machineRolesSplitActive, type MachineRolesRow } from "@/lib/useMachineRoles";
 import { classifyRuntimeTargetProbeFailure } from "@/lib/runtimeTargetProbeFailure";
+import { detectProjectMachineMismatch } from "@/lib/projectMachineMismatch";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
 import { ScreenContextChip } from "./ScreenContextChip";
 // Read-aloud must never recite Yaver's own prompt header — see lib/promptFraming.ts.
@@ -1439,6 +1440,23 @@ export default function RuntimeLabView({
   const effectiveRenderBoxName = effectiveRenderDeviceId
     ? deviceNameById.get(effectiveRenderDeviceId) || effectiveRenderDeviceId.slice(0, 8)
     : null;
+  // Source/target split for the PROJECT LIST. loadProjects reads it from the
+  // CONNECTED box (agentClient.listProjects); the render probe targets
+  // effectiveRenderDeviceId. When those differ, every project on offer is one
+  // the render box was never asked about — which is exactly how a truthful
+  // "no project named X on this machine" reaches a user who can see the
+  // project in the picker. Knowable before the probe, from data already held.
+  const projectMachineMismatch = useMemo(
+    () =>
+      detectProjectMachineMismatch({
+        projectName: selectedProject?.name || null,
+        sourceDeviceId: connectedDevice?.id || null,
+        sourceName: connectedDevice?.id ? deviceNameById.get(connectedDevice.id) || null : null,
+        renderDeviceId: effectiveRenderDeviceId,
+        renderName: effectiveRenderBoxName,
+      }),
+    [selectedProject?.name, connectedDevice?.id, deviceNameById, effectiveRenderDeviceId, effectiveRenderBoxName],
+  );
   // The warden's last heartbeat word about the render box. Once the box is
   // dark this is the only evidence of WHY — it upgrades "no connection" to
   // "it reported fork exhaustion; power-cycle it" (mac mini, 2026-07-27).
@@ -3047,12 +3065,16 @@ export default function RuntimeLabView({
                   <div className="text-xs">
                     <span className="font-semibold">{effectiveRenderBoxName || "The render machine"}</span> has no
                     project by that name, so there is nothing there to render — the box itself is fine.
-                    {machineSplitActive && runnerBoxName ? (
-                      <>
-                        {" "}Under this runner/render split the project usually lives on{" "}
-                        <span className="font-semibold">{runnerBoxName}</span>: render there, or pick a project that
-                        exists on {effectiveRenderBoxName || "the render machine"}.
-                      </>
+                    {/* The project list is read from the CONNECTED box
+                        (agentClient.listProjects), while the render probe
+                        targets the render box — so under a split the render box
+                        is answering about a list it never supplied. When the
+                        device ids PROVE that, state it; otherwise say nothing
+                        speculative. (The earlier wording here guessed "usually
+                        lives on <runner>", which was inherited from a stale
+                        note and was not established by the code.) */}
+                    {projectMachineMismatch.mismatch ? (
+                      <> {projectMachineMismatch.reason} {projectMachineMismatch.action}</>
                     ) : (
                       <> Pick a project that exists on this machine.</>
                     )}
