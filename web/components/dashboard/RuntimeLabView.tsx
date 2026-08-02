@@ -3022,7 +3022,7 @@ export default function RuntimeLabView({
       className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-3 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] sm:p-4 xl:[grid-template-columns:minmax(0,1fr)_10px_var(--runtime-chat-width)]"
       style={runtimeGridStyle}
     >
-      <div className="min-h-0 min-w-0 space-y-3 overflow-y-auto">
+      <div className="min-h-0 min-w-0 space-y-3 overflow-y-auto px-0.5">
         {!webPreviewPanelOpen ? (
         <div className="flex flex-wrap items-end gap-2">
           <label className="min-w-[260px] flex-1">
@@ -3030,7 +3030,7 @@ export default function RuntimeLabView({
             <select
               value={selectedPath}
               onChange={(e) => { setSelectedPath(e.target.value); setRuntimeProjectNote(null); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
-              className="h-10 w-full rounded-md border border-[#d7dce3] bg-white px-3 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec]"
+              className="h-10 w-full rounded-md border border-[#d7dce3] bg-white px-3 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-[#7c5cff]/70"
             >
               {projects.map((p) => (
                 <option key={p.path} value={p.path}>{p.name} · {p.framework || "unknown"}</option>

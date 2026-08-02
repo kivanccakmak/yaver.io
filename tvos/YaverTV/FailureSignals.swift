@@ -231,6 +231,95 @@ enum FailureSignals {
         }
     }
 
+    // ── 0c. Runner failure kinds ──────────────────────────────────────────
+    //
+    // Mirrors docs/architecture/FAILURE_SIGNALS.json — the canonical table every
+    // surface embeds. Native surfaces cannot import web/lib, so this is a copy;
+    // web/lib/failureSignalParity.test.ts fails when it drifts.
+    //
+    // THE LAW: a failure that is not about the credential must never route the
+    // user into a sign-in flow. Billing, throttling, model entitlement and a
+    // missing provider key are all VALID credentials failing for other reasons.
+    // Sending someone through OAuth for any of them is a dead end — and in the
+    // rate-limit case it also throws away a working session for nothing.
+    enum RunnerFailureKind: String, Sendable {
+        case auth
+        case authRevoked = "auth-revoked"
+        case billing
+        case rateLimit = "rate-limit"
+        case modelNotSupported = "model-not-supported"
+        case modelNotFound = "model-not-found"
+        case providerKey = "provider-key"
+        case unknown
+    }
+
+    /// Classify runner output. Ordered most-specific first: the generic auth
+    /// matcher would otherwise swallow billing and throttling, which is exactly
+    /// how a valid credential ended up being told to sign in again.
+    static func classifyRunnerFailure(_ output: String?) -> RunnerFailureKind {
+        let m = (output ?? "").lowercased()
+        if m.isEmpty { return .unknown }
+
+        if m.contains("credit balance is too low") || m.contains("credit_balance_too_low")
+            || m.contains("plans & billing") { return .billing }
+        if m.contains("rate_limit_error") || m.contains("rate limit reached")
+            || m.contains("rate limit exceeded") || m.contains("too many requests") { return .rateLimit }
+        if m.contains("ai_loadapikeyerror") || m.contains("api key is missing")
+            || m.contains("load api key") { return .providerKey }
+        if m.contains("model is not supported") || m.contains("does not have access to model")
+            || m.contains("unsupported model") { return .modelNotSupported }
+        if m.contains("providermodelnotfounderror") || m.contains("provider model not found")
+            || m.contains("invalid model") { return .modelNotFound }
+        if m.contains("oauth access token has been revoked") || m.contains("token has been revoked") {
+            return .authRevoked
+        }
+        if m.contains("oauth token has expired") || m.contains("oauth session expired")
+            || m.contains("authentication_error") || m.contains("authentication_failed")
+            || m.contains("not authenticated") || m.contains("not logged in")
+            || m.contains("please sign in") || m.contains("invalid bearer token")
+            || m.contains("unauthorized") || m.contains("expired token")
+            || m.contains("token_expired") || m.contains("please run /login")
+            || m.contains("run codex login") || m.contains("codex login --device-auth")
+            || m.contains("refresh_token_reused") { return .auth }
+        return .unknown
+    }
+
+    /// True only when signing the runner in again can actually fix it. A TV
+    /// showing a sign-in QR for an out-of-credit account wastes the one
+    /// interaction the surface has.
+    static func runnerFailureRoutesToSignIn(_ kind: RunnerFailureKind) -> Bool {
+        kind == .auth || kind == .authRevoked
+    }
+
+    /// The sentence + action in TV words, or nil when there is nothing to say.
+    static func explainRunnerFailure(_ kind: RunnerFailureKind) -> (reason: String, action: String)? {
+        switch kind {
+        case .auth:
+            return ("The coding agent's sign-in on that machine is no longer accepted.",
+                    "Sign it in again from this screen, or over SSH on the box.")
+        case .authRevoked:
+            return ("The coding agent's sign-in was revoked by the provider — a refresh cannot recover it.",
+                    "Sign in again to issue a new credential.")
+        case .billing:
+            return ("The provider refused the call for lack of credit. The sign-in itself is fine.",
+                    "Top up or upgrade that provider account. Signing in again will not help.")
+        case .rateLimit:
+            return ("The provider throttled the request. The credential and the model are both fine.",
+                    "Wait for the limit to reset, then retry. Do not sign in again.")
+        case .modelNotSupported:
+            return ("The signed-in plan does not include the selected model.",
+                    "Pick a different model for this machine. Signing in cannot move a model onto a plan.")
+        case .modelNotFound:
+            return ("That model id does not resolve on this machine.",
+                    "Pick a model the runner lists. OpenCode ids look like <providerId>/<modelId>.")
+        case .providerKey:
+            return ("The provider API key for that model is missing or was rejected.",
+                    "Set the key on that machine. This is separate from Yaver sign-in and from the runner's OAuth.")
+        case .unknown:
+            return nil
+        }
+    }
+
     // ── 1. Capability gap ─────────────────────────────────────────────────
 
     /// The wire code for a missing toolchain. Mirrors

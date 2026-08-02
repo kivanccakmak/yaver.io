@@ -225,7 +225,14 @@ export function diagnoseRunnerFailure(args: {
     lower.includes("authentication_failed") ||
     lower.includes("oauth session expired") ||
     lower.includes("please run /login") ||
-    lower.includes("run codex login")
+    lower.includes("run codex login") ||
+    // Found by web/lib/failureSignalParity.test.ts: the native surfaces and the
+    // Go agent all named these and web did not, so a Codex refresh-token reuse
+    // or a device-auth prompt rendered as `unknown` on the dashboard while the
+    // TV and the watch both routed it correctly.
+    lower.includes("token_expired") ||
+    lower.includes("refresh_token_reused") ||
+    lower.includes("codex login --device-auth")
   ) {
     return {
       kind: "auth",

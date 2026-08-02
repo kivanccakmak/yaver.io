@@ -68,6 +68,7 @@ import {
 import { CloudWorkspaceRequiredError } from "@/lib/cloud-workspace-required";
 import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
 import { diagnoseRunnerFailure, formatFailureTime, runnerFailureFromTaskFailure } from "@/lib/runnerFailure";
+import { describeSidecarNoise, partitionRunnerOutput } from "@/lib/runnerOutputNoise";
 import { isRawRunnerCommand } from "@/lib/raw-runner-command";
 import PreviewPane from "./PreviewPane";
 import { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice } from "./DevicesView";
@@ -3149,16 +3150,38 @@ export default function VibeCodingView({
                       turn={turn}
                     />
                   ))}
-                  {showLiveOutput ? (
-                    <div className="max-w-[92%] rounded-2xl border border-amber-500/20 bg-[#14110a] px-4 py-3 text-surface-200">
-                      <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-700 dark:text-amber-300">
-                        {activeTask?.status === "running" ? "Live output" : "Agent output"}
+                  {showLiveOutput ? (() => {
+                    // A runner's INTERNAL transport chatter is not the task's
+                    // verdict. Codex logs MCP-sidecar and websocket retries
+                    // loudly — on 2026-08-02 a run printed two red
+                    // `rmcp::transport` 401 blocks, retried past them, and
+                    // completed the task successfully. The transcript showed
+                    // the chatter and the owner reasonably read a working run
+                    // as broken. Demote it while the task is alive; surface
+                    // EVERYTHING once it has actually failed, so the auth
+                    // classifier and the user still get the full picture.
+                    const terminallyFailed = activeTask?.status === "failed";
+                    const { visible, noise } = partitionRunnerOutput(liveOutput, terminallyFailed);
+                    const note = describeSidecarNoise(noise);
+                    return (
+                      <div className="max-w-[92%] rounded-2xl border border-amber-500/20 bg-[#14110a] px-4 py-3 text-surface-200">
+                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-700 dark:text-amber-300">
+                          {activeTask?.status === "running" ? "Live output" : "Agent output"}
+                        </div>
+                        <div className="text-[13px] leading-6 break-words [&_pre]:whitespace-pre-wrap">
+                          <AssistantMarkdown text={visible} />
+                        </div>
+                        {note ? (
+                          // Say what was set aside and why. Silence would be its
+                          // own defect — the user watched something scroll past
+                          // and needs to know where it went.
+                          <div className="mt-2 border-t border-amber-500/15 pt-2 text-[11px] leading-4 text-surface-400">
+                            {note}
+                          </div>
+                        ) : null}
                       </div>
-                      <div className="text-[13px] leading-6 break-words [&_pre]:whitespace-pre-wrap">
-                        <AssistantMarkdown text={liveOutput} />
-                      </div>
-                    </div>
-                  ) : null}
+                    );
+                  })() : null}
                   {/* A dropped output stream is now NAMED and routed instead of
                       freezing the transcript on its last frame. `lost` carries
                       the button; `reattaching` narrates the ladder so the wait
