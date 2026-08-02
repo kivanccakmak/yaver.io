@@ -87,7 +87,11 @@ const page = await ctx.newPage();
 
 /** Screenshot the preview element and sample a pixel from it. */
 async function samplePreview(label) {
-  const el = page.locator('iframe, [data-preview], .preview-frame').first();
+  // The preview iframe specifically. The earlier `iframe, [data-preview],
+  // .preview-frame` union silently fell back to a full-page clip when no
+  // preview existed, which is how an empty panel got sampled and reported as a
+  // clean black baseline.
+  const el = page.locator('iframe').first();
   let buf;
   try { buf = await el.screenshot({ timeout: 15_000 }); }
   catch { buf = await page.screenshot({ clip: { x: 300, y: 300, width: 800, height: 700 } }); }
@@ -114,6 +118,18 @@ async function samplePreview(label) {
     for (const [k, v] of counts) if (v > n) { best = k; n = v; }
     return best.split(',').map(Number);
   }, dataUrl);
+}
+
+/** The target-card "Open" controls.
+ *
+ *  Deliberately NOT getByRole('button'): they are not <button> elements, so a
+ *  role query returned zero and the loop reported "no render target offered"
+ *  for a screen that plainly showed two. Match the visible text across anything
+ *  clickable instead — the user does not care what tag it is.
+ */
+function openControls() {
+  return page.locator('button, a, [role="button"], [class*="cursor-pointer"]')
+    .filter({ hasText: /^Open$/ });
 }
 
 async function waitForColor(want, budgetMs, label) {
@@ -160,20 +176,141 @@ try {
   step(`MACHINES — ${BOX} runs and renders`, bothRoles,
     bothRoles ? 'single-box: runner == renderer' : 'not reported as both roles');
 
-  // ── render the web-UI preview (browser lane, not WebRTC) ─────────────────
-  const loadTargets = page.getByRole('button', { name: /Load Targets/i }).first();
-  if (await loadTargets.count()) { await loadTargets.click().catch(() => {}); await sleep(6000); }
-  step('LOAD TARGETS', true);
+  // ── select the project explicitly ────────────────────────────────────────
+  // The composer is labelled "Ask codex to change <project>", so the WRONG
+  // project is silently drivable. The first run of this loop vibed against
+  // whatever happened to be selected.
+  // Option VALUES are absolute paths (/root/Workspace/yaver.io/mobile) while the
+  // visible LABEL is "yaver / mobile · expo". Match on the label and pick the
+  // EXACT project — a value-substring match happily selects yaver-todo-rn.
+  // WAIT for the catalogue to populate. The console logs "projects loaded: 36"
+  // seconds after the panel paints; reading the select before that gets a short
+  // list and silently selects whatever is first (a run picked "Bento / mobile"
+  // this way). Acting before the data arrives is the same defect this whole
+  // session has been removing from the product — it belongs out of the harness
+  // too.
+  const projectSelect = page.locator('select')
+    .filter({ has: page.locator('option', { hasText: /yaver \/ mobile/i }) }).first();
+  const listReady = await (async () => {
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      if (await projectSelect.count()) return true;
+      await sleep(2500);
+    }
+    return false;
+  })();
+  if (!listReady) {
+    verdict = 'NAMED';
+    reason = 'the project catalogue never listed "yaver / mobile" (still loading, or not on this box)';
+    throw new Error(reason);
+  }
+  let picked = '';
+  if (await projectSelect.count()) {
+    const opts = await projectSelect.locator('option').evaluateAll((els) =>
+      els.map((e) => ({ value: e.value, label: (e.textContent || '').trim() })));
+    const match = opts.find((o) => /^yaver \/ mobile\b/i.test(o.label));
+    if (match) {
+      await projectSelect.selectOption(match.value).catch(() => {});
+      picked = match.label;
+      await sleep(6000);
+    }
+  }
+  body = await page.evaluate(() => document.body.innerText);
+  // Verify against the COMPOSER, which names the project it will actually vibe
+  // ("Ask codex to change <project>"). Checking the page text alone passes on
+  // any screen that merely mentions the name somewhere.
+  const composerLabel = await page.getByPlaceholder(/Ask codex to change/i).first()
+    .getAttribute('placeholder').catch(() => '');
+  const projectOk = /yaver \/ mobile/i.test(composerLabel || '');
+  step('SELECT PROJECT yaver / mobile', projectOk,
+    projectOk ? `composer: "${composerLabel}"` : `composer is pointed elsewhere: "${composerLabel}" (picked "${picked}")`);
+  if (!projectOk) { verdict = 'NAMED'; reason = 'could not select yaver / mobile'; throw new Error(reason); }
 
-  const webUi = page.getByRole('button', { name: /^(Web UI|Browser|Fast Reload)$/i }).first();
-  if (await webUi.count()) { await webUi.click().catch(() => {}); }
-  await sleep(20_000);
-  step('RENDER web-UI preview (browser lane)', true);
+  // ── render the web-UI preview (browser lane, NOT WebRTC) ─────────────────
+  const loadTargets = page.getByRole('button', { name: /Load Targets/i }).first();
+  if (await loadTargets.count()) { await loadTargets.click().catch(() => {}); }
+  // Target discovery probes the box; a fixed sleep either wastes time or fires
+  // early. Poll for the first Open button instead, and NAME the timeout rather
+  // than reporting "no targets offered" for something that was merely slow.
+  const targetsReady = await (async () => {
+    const deadline = Date.now() + 90_000;
+    while (Date.now() < deadline) {
+      if (await openControls().count()) return true;
+      await sleep(3000);
+    }
+    return false;
+  })();
+  if (!targetsReady) {
+    // Capture what WAS on screen. Diagnosing a discovery timeout from a boolean
+    // is guesswork; a frame is evidence.
+    await page.screenshot({ path: `${OUT}/no-targets.png`, fullPage: false }).catch(() => {});
+  }
+  step('LOAD TARGETS', targetsReady, targetsReady ? '' : 'no render target appeared in 90s (frame: no-targets.png)');
+  if (!targetsReady) {
+    verdict = 'NAMED';
+    reason = 'target discovery produced nothing in 90s — the box never offered a render target';
+    throw new Error(reason);
+  }
+
+  // Open the BROWSER-LANE card by name. The target list also offers "WebRTC
+  // over browser"; picking the wrong card tests a different transport and would
+  // report green about something this loop does not cover.
+  // Some targets are collapsed behind "N show".
+  const showMore = page.getByText(/^\d+ show$/).first();
+  if (await showMore.count()) { await showMore.click().catch(() => {}); await sleep(2500); }
+
+  // Walk the Open buttons and pick the one whose CARD says "Web UI in browser".
+  // A CSS-ancestor filter proved brittle here; asking each button what card it
+  // sits in is both simpler and states the intent directly.
+  const openButtons = openControls();
+  const openCount = await openButtons.count();
+  let opened = '';
+  for (let i = 0; i < openCount; i++) {
+    const btn = openButtons.nth(i);
+    const cardText = await btn.evaluate((el) => {
+      let n = el;
+      for (let up = 0; up < 5 && n?.parentElement; up++) n = n.parentElement;
+      return (n?.innerText || '').slice(0, 200);
+    }).catch(() => '');
+    if (/web ui in browser/i.test(cardText)) {
+      await btn.click().catch(() => {});
+      opened = cardText.split('\n')[0];
+      break;
+    }
+  }
+  if (!opened) {
+    const targets = await openControls().evaluateAll((els) =>
+      els.map((e) => { let n = e; for (let u = 0; u < 5 && n?.parentElement; u++) n = n.parentElement;
+        return (n?.innerText || '').split('\n')[0]; }));
+    verdict = 'NAMED';
+    reason = `the "Web UI in browser" target was not offered (saw: ${targets.join(' | ') || 'none'})`;
+    throw new Error(reason);
+  }
+  step('OPEN "Web UI in browser" (browser lane, not WebRTC)', true, opened);
+
+  // VERIFY the preview actually exists before claiming it rendered. The first
+  // version of this loop asserted `true` unconditionally here and then sampled
+  // an empty panel — a false green in the harness itself, which is the exact
+  // defect class this suite exists to catch. A step must never report success
+  // it did not check.
+  const previewReady = await page.locator('iframe').first()
+    .waitFor({ state: 'visible', timeout: 90_000 }).then(() => true).catch(() => false);
+  step('RENDER web-UI preview (browser lane)', previewReady,
+    previewReady ? 'iframe visible' : 'no preview iframe appeared in 90s');
+  if (!previewReady) { verdict = 'NAMED'; reason = 'the browser-lane preview never rendered'; throw new Error(reason); }
+  await sleep(12_000);
 
   // ── baseline ─────────────────────────────────────────────────────────────
   const basePx = await samplePreview('baseline');
   const baseColor = classify(basePx);
-  step('BASELINE background read', baseColor !== 'unknown', `${basePx.join(',')} → ${baseColor}`);
+  // An all-black EMPTY panel and an all-black APP look identical to a sampler.
+  // Require the frame to carry some non-uniform content, or "black" is just a
+  // blank rectangle agreeing with us.
+  const looksRendered = await page.locator('iframe').first().screenshot({ timeout: 15_000 })
+    .then((b) => b.length > 6000).catch(() => false);
+  step('BASELINE background read', baseColor !== 'unknown' && looksRendered,
+    `${basePx.join(',')} → ${baseColor}${looksRendered ? '' : ' (frame looks EMPTY — not a rendered app)'}`);
+  if (!looksRendered) { verdict = 'NAMED'; reason = 'preview frame is empty; nothing to assert a colour against'; throw new Error(reason); }
 
   // ── vibe → red ───────────────────────────────────────────────────────────
   const composer = page.getByPlaceholder(/Ask codex to change/i).first();
