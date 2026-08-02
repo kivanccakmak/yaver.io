@@ -35,6 +35,7 @@ import {
 } from './types';
 import { AuthOverlay } from './AuthOverlay';
 import { QuickActionIcon } from './QuickActionIcon';
+import { YaverModeBadge } from './YaverModeBadge';
 import { VibeChatScreen } from './VibeChatScreen';
 import { DeployPanel } from './DeployPanel';
 import { listReachableDevices, RemoteDevice } from './auth';
@@ -181,6 +182,22 @@ function normalizeRunnerStatusRows(rows: RunnerAuthStatusRow[]): RunnerCardState
     };
   });
 }
+
+
+/**
+ * Renders the "inside Yaver" mark unless the app opted out.
+ *
+ * Lives here rather than in YaverModeBadge so the component stays a dumb view
+ * and the DEFAULT (`modeBadge !== false` → on) is expressed in exactly one
+ * place. Mounted from FeedbackModal because that is the component integrating
+ * apps already render — a default that required a new mount point would not be
+ * a default, it would be a feature request.
+ */
+const YaverModeBadgeGate: React.FC = () => {
+  const cfg = YaverFeedback.getConfig();
+  if (cfg?.modeBadge === false) return null;
+  return <YaverModeBadge position={cfg?.modeBadgePosition ?? 'bottom-left'} />;
+};
 
 export const FeedbackModal: React.FC = () => {
   const { width: winW, height: winH } = useWindowDimensions();
@@ -978,6 +995,7 @@ export const FeedbackModal: React.FC = () => {
       <>
         <AuthOverlay />
         <QuickActionIcon />
+        <YaverModeBadgeGate />
         <Modal
           visible={visible}
           animationType="slide"
@@ -1009,6 +1027,7 @@ export const FeedbackModal: React.FC = () => {
     <>
       <AuthOverlay />
       <QuickActionIcon />
+      <YaverModeBadgeGate />
       {visible && (
         <Modal
           visible={visible}

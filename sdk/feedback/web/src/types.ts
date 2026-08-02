@@ -1,6 +1,23 @@
 export interface FeedbackConfig {
   /** Yaver agent URL (e.g., http://192.168.1.100:18080 or relay URL) */
   agentUrl?: string;
+  /**
+   * Show the small "Y" mark while this page is running INSIDE Yaver (a browser
+   * -lane preview or a streamed WebRTC surface), so a tester can tell it apart
+   * from the site they normally visit — and can find the way back.
+   *
+   * DEFAULT TRUE. The failure it prevents is silent and lands on a tester
+   * rather than a developer: a preview that looks like production produces
+   * "bug reports" against unfinished work.
+   *
+   * Costs nothing standalone — `YaverFeedback.detectLane()` returns
+   * 'standalone' in a normal browser tab and the badge is never created, so
+   * shipping with it enabled has no effect on real users.
+   */
+  modeBadge?: boolean;
+  /** Corner for the mode badge. Default 'bottom-left' — 'bottom-right' is the
+   *  floating feedback button's default, and the two must not overlap. */
+  modeBadgePosition?: 'bottom-left' | 'bottom-right' | 'top-left' | 'top-right';
   /** Bearer auth token. Optional in 0.2+: omit to use the in-app sign-in modal. */
   authToken?: string;
   /**

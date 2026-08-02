@@ -36,6 +36,7 @@ package main
 // must not merely be greyed out for those stacks; it must not appear.
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 )
@@ -139,15 +140,39 @@ func DetectProjectPreviewCapabilities(workDir, frameworkHint string, hasPairedDe
 	// ── React Native / Expo — the only Hermes-capable stacks ─────────────
 	case hermesCapableFramework(framework):
 		if caps.SelfDevelopment {
-			// Not "greyed out": Yaver-into-Yaver is a refusal, and the option
-			// is replaced by the route that works.
-			caps.Options = append(caps.Options, ProjectPreviewOption{
-				ID: PreviewOptionRemoteRuntime, Label: "Stream over WebRTC",
-				Supported: true, Primary: true, Framework: framework,
-				Reason: "Yaver developing Yaver — the preview streams pixels so the escape stays in the phone's native chrome",
-			})
+			// Yaver-into-Yaver withholds HERMES — and only Hermes. The web
+			// lane is the route the refusal itself names
+			// (ShouldRefuseYaverSelfDevelopmentHermes: "refusing those would
+			// block the very route this guard steers people toward"), so it
+			// MUST be advertised here.
+			//
+			// It was not, until 2026-08-02. This arm offered exactly one
+			// option — Stream over WebRTC — and mobileProjectActions.ts's
+			// consuming rule is "a lane the agent doesn't offer is ABSENT,
+			// not greyed out". So Browser Reload did not exist as a button
+			// for Yaver's own repo: the refusal said "go this way" and the
+			// advertiser never drew the door. Attach Mode (Yaver rendering
+			// Yaver over the browser lane) was unreachable by construction.
+			//
+			// The pairing is now asserted by TestSelfDevOffersTheLaneTheRefusalNames:
+			// whatever ShouldRefuseYaverSelfDevelopmentHermes leaves legal,
+			// this arm must offer.
+			caps.Options = append(caps.Options,
+				ProjectPreviewOption{
+					ID: PreviewOptionDevServer, Label: "Browser Reload",
+					Supported: true, Primary: true, Framework: framework,
+					Reason: "Yaver developing Yaver — the RN web target renders in a WebView whose escape " +
+						"lives in the phone's native chrome, outside anything the previewed app can reach",
+				},
+				ProjectPreviewOption{
+					ID: PreviewOptionRemoteRuntime, Label: "Stream over WebRTC",
+					Supported: true, Framework: framework,
+					Reason: "streams pixels from a browser on the box; heavier than Browser Reload, same escape guarantee",
+				},
+			)
 			caps.Reason = "Yaver self-development: Hermes is withheld because loading Yaver into Yaver " +
-				"puts two shake/exit owners in one React Native process and the preview could not be exited."
+				"puts two shake/exit owners in one React Native process and the preview could not be exited. " +
+				"The web target is unaffected and is the primary route."
 		} else {
 			caps.Options = append(caps.Options,
 				ProjectPreviewOption{
@@ -244,4 +269,137 @@ func HermesOfferedFor(caps ProjectPreviewCapabilities) bool {
 		}
 	}
 	return false
+}
+
+// previewStrategyForOption maps a user-facing option onto the strategy whose
+// real dependencies ProbePreviewCapability knows how to attempt.
+func previewStrategyForOption(id string) (PreviewStrategy, bool) {
+	switch id {
+	case PreviewOptionHermes, PreviewOptionOpenNative:
+		return PreviewHermesBundle, true
+	case PreviewOptionRemoteRuntime:
+		return PreviewChromeWebRTC, true
+	default:
+		// dev-server (browser lane) and wire-push have no separate probe here:
+		// the browser lane is the LIGHTEST path and the one we fall back TO, so
+		// probing it as a precondition would be the blocking-preflight mistake
+		// (an advisory check standing in front of a capability that works).
+		return "", false
+	}
+}
+
+// RefineProjectPreviewCapabilitiesWithProbes turns the STATIC option list into
+// one that reflects what this box can actually do.
+//
+// Why this exists: DetectProjectPreviewCapabilities answers from framework
+// rules alone, so it reported `Supported: true` for Hermes and WebRTC on a box
+// with no node toolchain and no launchable browser. That is the
+// inventory-vs-operation failure this repo keeps re-learning — a tool on PATH
+// can be a stub, and "the stack supports it" is not "this machine can do it".
+//
+// ProbePreviewCapability already ATTEMPTS the underlying operations (it starts
+// the browser rather than checking PATH). It simply had no consumer on this
+// path. Now it does.
+//
+// Two invariants, both deliberate:
+//
+//  1. The BROWSER LANE IS NEVER DEMOTED. It stays first and primary regardless
+//     of probe outcomes — it is the lightest path and the fallback everything
+//     else degrades to, so putting a probe in front of it would be a blocking
+//     preflight ahead of a capability that already works.
+//  2. A lane the box cannot run is marked UNSUPPORTED WITH THE PROBE'S REMEDY,
+//     never silently dropped. The surface renders it disabled with a reason —
+//     hiding it would make the box lie by omission about a lane the stack does
+//     support.
+//
+// Bounded by ctx. On timeout the option keeps its static verdict: an unknown
+// answer must not become a false "unavailable".
+func RefineProjectPreviewCapabilitiesWithProbes(
+	ctx context.Context,
+	caps ProjectPreviewCapabilities,
+	workDir string,
+) ProjectPreviewCapabilities {
+	if len(caps.Options) == 0 {
+		return caps
+	}
+	// Probe each distinct strategy once — several options can share one.
+	reports := map[PreviewStrategy]PreviewCapabilityReport{}
+	for _, o := range caps.Options {
+		strategy, ok := previewStrategyForOption(o.ID)
+		if !ok || !o.Supported {
+			continue
+		}
+		if _, done := reports[strategy]; done {
+			continue
+		}
+		if ctx.Err() != nil {
+			return caps // out of time: keep the static answer, claim nothing
+		}
+		reports[strategy] = ProbePreviewCapability(ctx, strategy, workDir)
+	}
+
+	refined := make([]ProjectPreviewOption, 0, len(caps.Options))
+	for _, o := range caps.Options {
+		strategy, ok := previewStrategyForOption(o.ID)
+		if ok && o.Supported {
+			if rep, have := reports[strategy]; have && !rep.CanRun {
+				o.Supported = false
+				if rep.Remedy != "" {
+					o.Reason = rep.Remedy
+				} else if o.Reason == "" {
+					o.Reason = "this box cannot run that preview right now"
+				}
+				// A demoted option must never remain primary — that would
+				// point the surface's default at a dead end.
+				o.Primary = false
+			}
+		}
+		refined = append(refined, o)
+	}
+	caps.Options = refined
+	return ensureBrowserLaneLeads(caps)
+}
+
+// ensureBrowserLaneLeads keeps Browser Reload first and primary whenever it is
+// offered and runnable.
+//
+// The lane order IS the default: surfaces take the first supported option as
+// what a plain "render it" means. Browser Reload is the lightest path, the only
+// one available for Yaver-on-Yaver, and the one every other lane degrades to —
+// so if it is present and supported, it leads. Anything else silently changes
+// what the default render does.
+func ensureBrowserLaneLeads(caps ProjectPreviewCapabilities) ProjectPreviewCapabilities {
+	idx := -1
+	for i, o := range caps.Options {
+		if o.ID == PreviewOptionDevServer && o.Supported {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		// No runnable browser lane. Promote the first supported option so the
+		// surface still has a default rather than leading with a dead one.
+		for i := range caps.Options {
+			caps.Options[i].Primary = caps.Options[i].Supported && i == firstSupportedIndex(caps.Options)
+		}
+		return caps
+	}
+	for i := range caps.Options {
+		caps.Options[i].Primary = false
+	}
+	lead := caps.Options[idx]
+	lead.Primary = true
+	rest := append([]ProjectPreviewOption{}, caps.Options[:idx]...)
+	rest = append(rest, caps.Options[idx+1:]...)
+	caps.Options = append([]ProjectPreviewOption{lead}, rest...)
+	return caps
+}
+
+func firstSupportedIndex(opts []ProjectPreviewOption) int {
+	for i, o := range opts {
+		if o.Supported {
+			return i
+		}
+	}
+	return -1
 }

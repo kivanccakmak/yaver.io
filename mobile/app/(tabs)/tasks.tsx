@@ -56,7 +56,7 @@ import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { appTag } from "../../src/lib/appVersion";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
-import { rerenderActiveRemoteRuntimeSurface } from "../../src/lib/feedbackTrigger";
+import { rerenderActivePreviewSurface } from "../../src/lib/feedbackTrigger";
 import { mustUseNativePreview } from "../../src/lib/devLane";
 import {
   AgentStatus,
@@ -2415,6 +2415,10 @@ export default function TasksScreen() {
   } | null>(null);
   // Bumping this re-runs the stream effect — the "Reattach" route.
   const [streamReattachNonce, setStreamReattachNonce] = useState(0);
+  // Why the preview did NOT refresh when the turn landed. The whole point is
+  // that this is never empty-and-silent: a queued render that then doesn't
+  // happen is indistinguishable from a broken product unless it says why.
+  const [renderSkipNotice, setRenderSkipNotice] = useState<string | null>(null);
   useEffect(() => {
     // Cleanup previous SSE
     if (sseAbortRef.current) {
@@ -2601,12 +2605,35 @@ export default function TasksScreen() {
     };
   }, [selectedTask?.id, selectedTask?.status, streamReattachNonce]);
 
+  // The queued render intent lands here, once, when the turn reaches a
+  // renderable terminal state.
+  //
+  // This used to call rerenderActiveRemoteRuntimeSurface() directly, so it
+  // refreshed the WebRTC lane and ONLY the WebRTC lane — a browser-lane
+  // preview (the Yaver-on-Yaver route) never updated, and the failure was a
+  // bare `false` with no log and nothing on screen. Now the lane routing and
+  // the "why not" live in planPostTaskRender(), and a skip is shown rather
+  // than swallowed.
   useEffect(() => {
     if (!selectedTask || !taskStatusAllowsRuntimeRender(selectedTask.status)) return;
     const pending = pendingRuntimeRenderRef.current;
     if (!pending || pending.taskId !== selectedTask.id) return;
     pendingRuntimeRenderRef.current = null;
-    void rerenderActiveRemoteRuntimeSurface(pending.source, pending.workDir);
+    void (async () => {
+      const decision = await rerenderActivePreviewSurface({
+        source: pending.source,
+        workDir: pending.workDir,
+        taskStatus: selectedTask.status,
+      });
+      // "no preview open" is the ordinary case for someone who never opened
+      // one — not worth a banner. Everything else is a render the user had
+      // reason to expect and did not get, so it must say so.
+      if (decision.action === "skip" && decision.reason !== "no-active-surface") {
+        setRenderSkipNotice(decision.message);
+      } else {
+        setRenderSkipNotice(null);
+      }
+    })();
   }, [selectedTask?.id, selectedTask?.status]);
 
   // Second half of the same guard: a question that arrived over SSE for
@@ -6234,6 +6261,48 @@ export default function TasksScreen() {
                           </Text>
                         </Pressable>
                       ) : null}
+                    </View>
+                  </View>
+                ) : null}
+
+                {/* The turn landed but the preview did NOT refresh, and the
+                    user was given reason to expect it would. Before
+                    2026-08-02 this path returned a bare `false` with no log
+                    and no pixel — "task done, nothing happened" with nothing
+                    to act on. The sentence comes from planPostTaskRender so
+                    it names the actual cause (wrong streamed target, session
+                    ended) rather than a generic apology. */}
+                {renderSkipNotice ? (
+                  <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+                    <View
+                      style={{
+                        borderWidth: 1,
+                        borderRadius: 12,
+                        paddingHorizontal: 12,
+                        paddingVertical: 10,
+                        borderColor: c.warnBorder,
+                        backgroundColor: c.warnBg,
+                      }}
+                    >
+                      <Text style={{ color: c.textPrimary, fontSize: 13, lineHeight: 18 }}>
+                        {renderSkipNotice}
+                      </Text>
+                      <Pressable
+                        onPress={() => setRenderSkipNotice(null)}
+                        style={{
+                          marginTop: 8,
+                          alignSelf: "flex-start",
+                          borderWidth: 1,
+                          borderColor: c.warnBorder,
+                          borderRadius: 8,
+                          paddingHorizontal: 12,
+                          paddingVertical: 6,
+                        }}
+                      >
+                        <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "600" }}>
+                          Dismiss
+                        </Text>
+                      </Pressable>
                     </View>
                   </View>
                 ) : null}

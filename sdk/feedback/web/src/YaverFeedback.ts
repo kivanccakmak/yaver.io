@@ -179,6 +179,13 @@ export class YaverFeedback {
       YaverFeedback.setupKeyboardShortcut(shortcut);
     }
 
+    // The polite "you are inside Yaver" mark. Default ON (see FeedbackConfig):
+    // the failure it prevents is silent and lands on a tester, not a developer.
+    // Never created in the 'standalone' lane, so it costs real users nothing.
+    if (config.modeBadge !== false && lane !== 'standalone') {
+      YaverFeedback.createModeBadge(config.modeBadgePosition || 'bottom-left', lane);
+    }
+
     // Shake-to-feedback from the Yaver host. When this web app is previewed in
     // the Yaver mobile app's browser lane (a WebView), a phone shake can't reach
     // a web page — the phone has the accelerometer, not the DOM. So the Yaver
@@ -2728,6 +2735,68 @@ export class YaverFeedback {
       if (l === 'hermes' || l === 'browser' || l === 'webrtc') return l;
     } catch { /* noop */ }
     return 'standalone';
+  }
+
+  /**
+   * The polite "you're inside Yaver" mark: one small Y, low contrast, in a
+   * corner. Tapping opens a short explanation and names the way back.
+   *
+   * ── Why it is not the escape ────────────────────────────────────────────
+   *
+   * Yaver's host owns that (shake → overlay). This badge only tells you the
+   * gesture exists. Making it the exit would put the way out inside the
+   * previewed page, where the page could style over it or remove it — the trap
+   * the escape-ownership rules exist to prevent.
+   *
+   * ── Why it does not use the app's stylesheet ────────────────────────────
+   *
+   * Every rule is inline and the container is fixed + high z-index, because
+   * the host page's CSS is arbitrary and a reset there must not be able to
+   * hide the one thing telling the user where they are.
+   */
+  private static createModeBadge(position: string, lane: string): void {
+    if (typeof document === 'undefined') return;
+    if (document.getElementById('yaver-mode-badge')) return;
+
+    const positions: Record<string, string> = {
+      'bottom-right': 'bottom:20px;right:20px;',
+      'bottom-left': 'bottom:20px;left:20px;',
+      'top-right': 'top:20px;right:20px;',
+      'top-left': 'top:20px;left:20px;',
+    };
+    const badge = document.createElement('div');
+    badge.id = 'yaver-mode-badge';
+    badge.textContent = 'Y';
+    badge.setAttribute('role', 'button');
+    badge.setAttribute('tabindex', '0');
+    badge.setAttribute('aria-label', 'Running inside Yaver');
+    badge.style.cssText = [
+      'position:fixed;',
+      positions[position] || positions['bottom-left'],
+      'width:22px;height:22px;border-radius:11px;',
+      'display:flex;align-items:center;justify-content:center;',
+      'font:700 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;',
+      'color:#7C5CFF;background:rgba(124,92,255,0.14);',
+      'border:1px solid rgba(124,92,255,0.45);',
+      'cursor:pointer;z-index:2147483646;opacity:0.9;',
+      'box-sizing:content-box;',
+    ].join('');
+
+    const explain = () => {
+      const detail =
+        lane === 'browser'
+          ? 'This is a Yaver preview of your app, served from your box — not the deployed site. ' +
+            'Close the preview in Yaver to go back.'
+          : 'This page is running inside Yaver, not as the site you normally visit. ' +
+            'Use Yaver\'s controls to return.';
+      // eslint-disable-next-line no-alert
+      window.alert('Running inside Yaver\n\n' + detail);
+    };
+    badge.addEventListener('click', explain);
+    badge.addEventListener('keydown', (e) => {
+      if ((e as KeyboardEvent).key === 'Enter' || (e as KeyboardEvent).key === ' ') explain();
+    });
+    document.body.appendChild(badge);
   }
 
   private static createFloatingButton(position: string): void {

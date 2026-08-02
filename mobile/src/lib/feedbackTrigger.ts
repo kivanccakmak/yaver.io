@@ -3,6 +3,7 @@ import { Accelerometer } from "expo-sensors";
 import { AppState, type AppStateStatus, NativeEventEmitter, NativeModules, Platform } from "react-native";
 import { quicClient, type RemoteRuntimeSession } from "./quic";
 import { appLog } from "./logger";
+import { planPostTaskRender, type PostTaskRenderDecision } from "./previewReload";
 
 type FeedbackLaunchSource = "shake" | "native-guest-shake" | "remote-runtime";
 
@@ -26,6 +27,26 @@ const browserShakeListeners = new Set<() => void>();
 
 export function setActivePreviewLane(lane: PreviewLane): void {
   activePreviewLane = lane;
+}
+
+export function getActivePreviewLane(): PreviewLane {
+  return activePreviewLane;
+}
+
+/**
+ * Browser-lane render listeners. Mirrors subscribeBrowserShake: the preview
+ * surface (DevPreview / apps.tsx) owns the WebView, so it performs the actual
+ * refresh; this module only decides that one is due.
+ *
+ * Before 2026-08-02 there was no such registry, which is why a browser-lane
+ * preview never refreshed when a coding turn landed — the whole point of
+ * Attach Mode.
+ */
+const browserRenderListeners = new Set<(source: string) => void>();
+
+export function subscribeBrowserRender(cb: (source: string) => void): () => void {
+  browserRenderListeners.add(cb);
+  return () => browserRenderListeners.delete(cb);
 }
 
 /**
@@ -90,10 +111,69 @@ function canRunGuestOnRemoteTarget(targetId?: string): boolean {
   ].includes(String(targetId || ""));
 }
 
+/**
+ * Refresh whichever preview surface is actually open when a coding turn lands.
+ *
+ * This is the entry point Tasks should call. It used to be
+ * rerenderActiveRemoteRuntimeSurface() directly, which meant the browser lane
+ * never refreshed and the Yaver-on-Yaver case (WebRTC on a browser target)
+ * returned a bare `false` — task done, nothing rendered, nothing said.
+ *
+ * The decision is planPostTaskRender() in previewReload.ts (pure + tested);
+ * this function only performs the effect and reports the sentence.
+ */
+export async function rerenderActivePreviewSurface(opts: {
+  source?: string;
+  workDir?: string;
+  taskStatus?: string | null;
+}): Promise<PostTaskRenderDecision> {
+  const source = opts.source || "mobile-auto-render";
+  const session = activeRemoteRuntimeSession;
+  const decision = planPostTaskRender({
+    lane: activePreviewLane,
+    taskStatus: opts.taskStatus,
+    hasWebrtcSession: !!session?.id,
+    webrtcTargetCanRender: !session?.targetId || canRunGuestOnRemoteTarget(session.targetId),
+    webrtcTargetLabel: session?.targetLabel || session?.targetId,
+    inFlight: remoteRuntimeRenderInFlight,
+  });
+
+  if (decision.action === "skip") {
+    // Never silent. The old code's bare `return false` is exactly what made
+    // this unfalsifiable from the user's side.
+    appLog("info", `post-task render skipped (${decision.reason}) for ${source}: ${decision.message}`);
+    return decision;
+  }
+
+  if (decision.lane === "browser") {
+    appLog("info", `post-task render: refreshing browser-lane preview for ${source}`);
+    for (const cb of browserRenderListeners) {
+      try {
+        cb(source);
+      } catch {
+        // one bad listener mustn't block the others
+      }
+    }
+    return decision;
+  }
+
+  await rerenderActiveRemoteRuntimeSurface(source, opts.workDir);
+  return decision;
+}
+
 export async function rerenderActiveRemoteRuntimeSurface(source = "mobile-auto-render", workDir?: string): Promise<boolean> {
   const session = activeRemoteRuntimeSession;
-  if (!session?.id) return false;
-  if (session.targetId && !canRunGuestOnRemoteTarget(session.targetId)) return false;
+  if (!session?.id) {
+    appLog("info", `remote runtime render skipped: no active session (${source})`);
+    return false;
+  }
+  if (session.targetId && !canRunGuestOnRemoteTarget(session.targetId)) {
+    appLog(
+      "info",
+      `remote runtime render skipped: target ${session.targetId} cannot re-render in place (${source})`,
+    );
+    return false;
+  }
   if (remoteRuntimeRenderInFlight) {
     appLog("info", `remote runtime render already in flight; skipped ${source}`);
     return false;
