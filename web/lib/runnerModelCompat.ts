@@ -236,6 +236,77 @@ export class ModelCompatLedger {
 }
 
 /**
+ * Facts we have OBSERVED in production, with the date we saw them.
+ *
+ * This is evidence, not a guess — the distinction the whole file rests on. Each
+ * entry is a refusal someone actually watched a runner emit, so seeding them is
+ * the same act as learning them at runtime, just earlier. It is NOT a
+ * "supported models" table: nothing here claims a model WORKS.
+ *
+ * They carry the normal TTL, so if the provider later includes the model the
+ * seed ages out and the model returns to `unknown` — offered again, merely not
+ * led with. That is deliberate: a permanent seed would become a false red.
+ */
+const OBSERVED_REFUSALS: ReadonlyArray<{
+  runner: string; authKind: RunnerAuthKind; model: string; observedAt: string; note: string;
+}> = [
+  {
+    runner: "codex",
+    authKind: "subscription",
+    model: "gpt-5.4",
+    observedAt: "2026-08-02",
+    note: "Vibing dispatch: 400 invalid_request_error \"not supported when using Codex with a ChatGPT account\"",
+  },
+];
+
+/**
+ * A ledger pre-loaded with {@link OBSERVED_REFUSALS}. Callers that have no
+ * persisted ledger should use this rather than an empty one, so a model we have
+ * already watched fail is not re-dispatched on every fresh browser session.
+ */
+export function seededLedger(now: number = Date.now()): ModelCompatLedger {
+  const l = new ModelCompatLedger();
+  for (const f of OBSERVED_REFUSALS) {
+    const at = Date.parse(`${f.observedAt}T00:00:00Z`);
+    l.record(f.runner, f.authKind, f.model, Number.isFinite(at) ? at : now);
+  }
+  return l;
+}
+
+/**
+ * Resolve the model a dispatch should ACTUALLY use.
+ *
+ * The picker default was only half the 2026-08-02 bug: the model is also a
+ * STORED per-device setting, so a `gpt-5.4` chosen before the fix keeps being
+ * sent forever — re-ordering a list does not migrate a saved value. (The same
+ * lesson mobile already learned: DeviceContext.loadSettings migrates the older
+ * `o3-mini` / `gpt-5-codex` intermediates away.)
+ *
+ * Returns the stored model untouched unless we have OBSERVED it fail on this
+ * auth kind, in which case it returns the declared-safe model plus the reason,
+ * so the surface can say what it changed and why instead of silently swapping
+ * the user's choice.
+ */
+export function resolveUsableModel(
+  runner: string,
+  storedModel: string | null | undefined,
+  authKind: RunnerAuthKind = "subscription",
+  ledger: ModelCompatLedger = seededLedger(),
+  now: number = Date.now(),
+): { model: string | null; changed: boolean; reason?: string; action?: string } {
+  const stored = String(storedModel || "").trim();
+  if (!stored) return { model: declaredSafeDefault(runner), changed: false };
+  const why = explainModelIncompatibility(runner, stored, authKind, ledger, now);
+  if (!why || !why.suggestedModel) return { model: stored, changed: false };
+  return {
+    model: why.suggestedModel,
+    changed: true,
+    reason: `${stored} was saved for this machine, but ${why.reason.replace(/^.*? is /, "it is ")}`,
+    action: why.action,
+  };
+}
+
+/**
  * The verdict for one pair. `ledger` is optional — with no ledger we can still
  * distinguish "the default both sides declare" from "no evidence".
  */

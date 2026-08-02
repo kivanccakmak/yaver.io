@@ -241,5 +241,46 @@ ok(!codexBlock.includes('source: "device-inventory"'),
 ok(/codex:\s*["']gpt-5\.3-codex["']/.test(devicesView),
   "DEFAULT_MODEL_BY_RUNNER.codex must stay gpt-5.3-codex");
 
+
+// ── stored-model migration: the half the picker fix did not reach ──────────
+// Re-ordering a list does not migrate a SAVED value. After the picker fix
+// shipped, the live dashboard still showed `MODEL / gpt-5.4` because it was a
+// stored per-device setting — caught by e2e/vibing-truth-loop.mjs against the
+// real account, which is exactly what that loop is for.
+import { resolveUsableModel, seededLedger } from "./runnerModelCompat";
+
+const seeded = seededLedger();
+eq(seeded.has("codex", "subscription", "gpt-5.4"), true,
+  "the seeded ledger carries the refusal we actually observed on 2026-08-02");
+
+const migrated = resolveUsableModel("codex", "gpt-5.4", "subscription", seeded);
+eq(migrated.model, "gpt-5.3-codex", "a stored gpt-5.4 resolves to the model that works");
+eq(migrated.changed, true, "the swap is reported, never silent");
+ok(/saved for this machine/i.test(migrated.reason || ""),
+  "the reason says WHERE the bad value came from — otherwise the user cannot fix the setting");
+
+// NO FALSE REDS, again: a model we have no evidence against is left alone.
+const untouched = resolveUsableModel("codex", "gpt-5-codex", "subscription", seeded);
+eq(untouched.model, "gpt-5-codex", "a model with no observed refusal is NOT rewritten");
+eq(untouched.changed, false, "…and nothing is reported");
+
+// An API-key login keeps the user's choice — gpt-5.4 via a billed key is fine.
+eq(resolveUsableModel("codex", "gpt-5.4", "api-key", seeded).model, "gpt-5.4",
+  "an API-key login keeps gpt-5.4 — the refusal was subscription-only");
+
+// Empty stored value falls back to the declared-safe default, not to nothing.
+eq(resolveUsableModel("codex", "", "subscription", seeded).model, "gpt-5.3-codex",
+  "no stored model resolves to the declared-safe default");
+eq(resolveUsableModel("claude", "", "subscription", seeded).model, null,
+  "a runner we have no opinion on stays null rather than inventing a default");
+
+// The seed must EXPIRE like any other fact — otherwise it is a permanent lie.
+const longAfter = Date.parse("2026-08-02T00:00:00Z") + ModelCompatLedger.DEFAULT_TTL_MS + 1;
+eq(resolveUsableModel("codex", "gpt-5.4", "subscription", seededLedger(), longAfter).changed, false,
+  "NO FALSE RED: once the seed ages out, the user's stored choice is respected again");
+
+// Summary MUST be last: it was mid-file for one commit, so a failure in the
+// block below it would have printed "ALL PASS" above the failure. A test
+// harness that can misreport its own result is the bug this file is about.
 if (process.exitCode) console.error("\nrunnerModelCompat: FAILED");
 else console.log("\nrunnerModelCompat: ALL PASS");
