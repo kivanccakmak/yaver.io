@@ -334,7 +334,10 @@ func printSelfBrowserHints(runner string, loc *runnerLocation) {
 	case "claude":
 		fmt.Printf("    Sign in:  %sclaude /login\n", suffix)
 	case "codex":
-		fmt.Printf("    Sign in:  %scodex login\n", suffix)
+		// --device-auth: `suffix` is often `yaver ssh <box> -- `, i.e. this line
+		// is printed FOR a remote machine. Bare `codex login` opens a browser and
+		// waits on a localhost callback that nobody can complete over SSH.
+		fmt.Printf("    Sign in:  %scodex login --device-auth\n", suffix)
 	case "opencode":
 		fmt.Printf("    Sign in:  %sopencode auth login\n", suffix)
 	default:

@@ -11,9 +11,21 @@ package main
 //
 // RunnerPreflight checks the runner BEFORE dispatch so the surface can say
 // "your codex login expired — re-authenticate" up front, instead of launching a
-// doomed task. It cannot silently refresh a subscription OAuth token (claude /
-// codex tokens are re-auth-only), so "proactive" here means: detect early +
-// hand back an actionable CTA the voice/UI speaks, rather than a mid-task crash.
+// doomed task.
+//
+// CORRECTION (2026-08-02 audit). This header used to assert that Yaver "cannot
+// silently refresh a subscription OAuth token (claude / codex tokens are
+// re-auth-only)". For Codex that is FALSE, and the mistake was load-bearing: it is
+// why the product only ever detected-and-reported a problem that was PREVENTABLE.
+// codex-cli speaks a standard `grant_type=refresh_token` exchange, and a login can
+// stay alive for months on rotation alone. The renewal now lives in
+// runner_auth_refresh.go, driven by the keep-alive loop and the pre-spawn hook in
+// runner_auth_keepalive.go.
+//
+// So "proactive" now means what it should have meant: RENEW silently first, and fall
+// back to an actionable CTA only for the one case a machine genuinely cannot fix —
+// a refresh lineage that is gone (see ReasonRunnerCodexRefreshLineageLost). Claude
+// remains detect-and-report; it has no refresh lineage Yaver can drive today.
 
 import "strings"
 
@@ -70,7 +82,16 @@ func runnerHasAuthModel(id string) bool {
 func runnerReauthCommand(id string) string {
 	switch normalizeRunnerID(id) {
 	case "codex":
-		return "codex login"
+		// --device-auth, NOT bare `codex login`.
+		//
+		// The bare form opens a browser and waits on a localhost callback. The boxes
+		// that actually hit this are remote and headless — a Hetzner VPS, a Pi, an
+		// SSH-only server — where that flow cannot complete at all. Handing a user
+		// on a phone a command that is structurally impossible on the machine it
+		// names is a route-to-fix that routes into a wall. The device-code flow is
+		// the one that works from any browser, and Yaver already knows it (it is in
+		// the classifier and in detectCodexStatus's error text).
+		return "codex login --device-auth"
 	case "claude":
 		return "claude setup-token"
 	case "opencode":

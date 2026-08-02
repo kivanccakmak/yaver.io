@@ -321,7 +321,10 @@ type runnerProbe struct {
 func checkRunners(ctx context.Context, emit DiagEmit) {
 	runners := []runnerProbe{
 		{Name: "claude", Command: "claude", ProbeArgs: []string{"--version"}, AuthHint: "run `claude /login` to re-auth"},
-		{Name: "codex", Command: "codex", ProbeArgs: []string{"--version"}, AuthHint: "run `codex login` to re-auth"},
+		// --device-auth, not bare `codex login`: this hint is read on remote and
+		// headless boxes (a VPS, a Pi, an SSH-only server) where the browser
+		// callback flow cannot complete at all. See runner_preflight.go.
+		{Name: "codex", Command: "codex", ProbeArgs: []string{"--version"}, AuthHint: "run `codex login --device-auth` to re-auth"},
 		{Name: "opencode", Command: "opencode", ProbeArgs: []string{"--version"}, AuthHint: "`opencode auth login` or set provider API key"},
 	}
 	anyPresent := false
