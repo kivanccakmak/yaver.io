@@ -574,6 +574,10 @@ validated locally (`node scripts/validate-unity-package.mjs` → ok) and has
 **not been compiled by anything**. Closing this needs the secret, which is not
 something a code change can supply.
 
+**Deprioritised by the owner (2026-08-02): Unity is not important.** Recorded so
+a later session does not spend time on the license gate. The C# is committed and
+metadata-valid; treat it as best-effort until someone actually needs Unity.
+
 ### The other gap
 
 **The Kotlin SDK has no build file and no CI job anywhere** — `find` shows only
