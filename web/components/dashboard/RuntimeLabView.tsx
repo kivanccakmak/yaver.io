@@ -1746,14 +1746,39 @@ export default function RuntimeLabView({
     return () => { cancelled = true; };
   }, [connectedDevice?.id, selectedRunner, setOpenCodeConfigSnapshot]);
 
+  // SEED the model selection; never FIGHT the user for it.
+  //
+  // This effect used to call setSelectedModel(explicitModel) unconditionally
+  // whenever a machine default existed — with `selectedModel` in its own
+  // dependency array. So picking anything else in the dropdown re-ran the
+  // effect, saw the machine default still saved, and snapped the value back
+  // within a frame. The model was UNCHANGEABLE on any machine that had one
+  // saved, and the only way to change the saved value was… to select a
+  // different one first. A closed loop with no exit (2026-08-02: the owner
+  // could not move off a gpt-5.4 that his account cannot even run).
+  //
+  // The fix is to seed per (device, runner) and then leave the user alone. A
+  // selection that is still valid for the current runner is the user's, and an
+  // effect must not overwrite it.
+  const modelSeedKeyRef = useRef<string>("");
   useEffect(() => {
+    const seedKey = `${connectedDevice?.id || ""}|${normalizeRunnerId(selectedRunner)}`;
+    const alreadySeeded = modelSeedKeyRef.current === seedKey;
+    const currentIsValid = !!selectedModel && availableModels.some((model) => model.id === selectedModel);
+    // Same device+runner as last time and the pick still resolves → the user
+    // owns this value. Do nothing.
+    if (alreadySeeded && currentIsValid) return;
+    if (!availableModels.length) return;
+    modelSeedKeyRef.current = seedKey;
     const explicitModel = connectedDevice?.id ? primaryModelByDevice[connectedDevice.id] || opencodeSnapshot?.model || "" : "";
     if (explicitModel && availableModels.some((model) => model.id === explicitModel)) {
       setSelectedModel(explicitModel);
-    } else if (!selectedModel || !availableModels.some((model) => model.id === selectedModel)) {
+      return;
+    }
+    if (!currentIsValid) {
       setSelectedModel(availableModels.find((model) => model.isDefault)?.id || availableModels[0]?.id || "");
     }
-  }, [availableModels, connectedDevice?.id, opencodeSnapshot?.model, primaryModelByDevice, selectedModel]);
+  }, [availableModels, connectedDevice?.id, opencodeSnapshot?.model, primaryModelByDevice, selectedModel, selectedRunner]);
 
   useEffect(() => {
     if (!runnerAuthStatus?.id || ["completed", "failed", "cancelled", "account_not_eligible"].includes(runnerAuthStatus.status)) return;

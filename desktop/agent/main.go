@@ -2316,6 +2316,10 @@ func runServe(args []string) {
 	// only. See diag_stdlib_bridge.go for the outage this closes.
 	installStdlibLogBridge()
 
+	// Rehydrate models this box's runner logins have refused, so a fresh serve
+	// does not re-dispatch a model we already watched fail (model_support_ledger.go).
+	globalModelSupport.Load()
+
 	// FIRST LINE OF SERVE. Unconditional, before flags, config, auth or any
 	// path that can fail.
 	//

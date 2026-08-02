@@ -312,6 +312,21 @@ func effectiveModelFor(runnerID, taskModel, runnerModel string) string {
 		log.Printf("[task] dropping model %q — incompatible with runner %q; the CLI's own default wins", m, runnerID)
 		return ""
 	}
+	// AUTOFIX (2026-08-02). runnerModelCompatible is a NAME heuristic — it
+	// answers "is this model plausibly for this runner", which cannot answer
+	// "can THIS ACCOUNT run it". Entitlement lives on the provider's side, so
+	// the only thing that knows is the operation, and the operation already
+	// told us once: a 400 "The 'gpt-5.4' model is not supported when using
+	// Codex with a ChatGPT account". Without this the user re-ran the same
+	// doomed task forever, changing nothing, getting the identical error.
+	//
+	// Applying the SAME remedy this function already documents — drop the
+	// model, let the CLI use the default that is actually known to work on
+	// this box. See model_support_ledger.go.
+	if globalModelSupport.Refused(runnerID, m) {
+		log.Printf("[task] dropping model %q — %s on this machine has refused it; falling back to the CLI's own default", m, normalizeRunnerID(runnerID))
+		return ""
+	}
 	return m
 }
 
@@ -3234,6 +3249,16 @@ func (tm *TaskManager) startProcess(task *Task) error {
 					// instead of waiting for the user to discover the
 					// stale state by failing another task. Mirrors the
 					// mobile ErrorMessage.detectRunnerAuthFailure patterns.
+					// AUTOFIX (2026-08-02): learn a model the ACCOUNT cannot
+					// run, so the next task drops it and the CLI's own default
+					// runs instead. Without this the user re-ran the identical
+					// doomed task forever — same prompt, same model, same 400 —
+					// because nothing in the loop remembered the refusal.
+					// effectiveModelFor already implements the remedy; this
+					// gives it the fact it was missing. See
+					// model_support_ledger.go.
+					noteRunnerOutputForModelSupport(task.RunnerID, task.Output+"\n"+task.ResultText)
+
 					if ok, reason := ClassifyRunnerAuthFailureFor(task.RunnerID, task.Output+"\n"+task.ResultText); ok {
 						hitRunner := normalizeRunnerID(task.RunnerID)
 						MarkRunnerAuthInvalidReason(hitRunner, reason)

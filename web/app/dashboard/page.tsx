@@ -3056,7 +3056,6 @@ export default function DashboardPage() {
                             {connectedIsReauthing ? "…" : "Re-auth"}
                           </button>
                         ) : null}
-                        <button onClick={disconnect} className="text-[10px] text-danger hover:underline transition-colors">disconnect</button>
                       </div>
                     </div>
                     {connectedNeedsAuth ? (
@@ -3117,6 +3116,9 @@ export default function DashboardPage() {
                       // Old design had a status badge AND a button
                       // side-by-side which read as two separate
                       // controls.
+                      // Nothing to do = nothing to show. Only an ACTIONABLE
+                      // runner state earns a row here (see comment above).
+                      if (authed || !isCloud) return null;
                       return (
                         <div className="mt-1.5 flex items-center gap-2 text-[10px]">
                           <span className="text-surface-500">runner:</span>
