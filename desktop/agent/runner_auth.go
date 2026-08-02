@@ -492,12 +492,35 @@ func ClassifyRunnerAuthFailure(output string) (string, string) {
 		return "", ""
 	}
 
+	// BILLING AND THROTTLING ARE NOT AUTH FAILURES (2026-08-02, researched
+	// against the providers' real error shapes).
+	//
+	// Anthropic returns 400 invalid_request_error "Your credit balance is too
+	// low…" and 429 rate_limit_error. In BOTH cases the credential is valid.
+	// Marking the runner auth-invalid for either one is the same false red the
+	// model-entitlement branch used to produce: the dashboard tells the user to
+	// sign in, they do, nothing changes — and for a rate limit the re-auth also
+	// throws away a perfectly good session for no reason. Return early so the
+	// Claude/Codex matchers below cannot claim them.
+	if strings.Contains(m, "credit balance is too low") ||
+		strings.Contains(m, "credit_balance_too_low") ||
+		strings.Contains(m, "rate_limit_error") ||
+		strings.Contains(m, "rate limit reached") ||
+		strings.Contains(m, "rate limit exceeded") {
+		return "", ""
+	}
+
 	// Claude Code — its own wording, in the order of how conclusive it is.
 	// A revoked grant is terminal: no refresh token can rescue it.
 	if strings.Contains(m, "oauth access token has been revoked") ||
 		strings.Contains(m, "access token has been revoked") ||
 		strings.Contains(m, "token has been revoked") {
 		return "claude", "Claude Code's OAuth access token has been REVOKED by the provider — a refresh cannot recover it. Sign in again to issue a new one."
+	}
+	if strings.Contains(m, "oauth token has expired") ||
+		strings.Contains(m, "oauth session expired") ||
+		strings.Contains(m, "authentication_failed") {
+		return "claude", "Claude Code's OAuth token has expired and could not be refreshed. Sign in again."
 	}
 	if strings.Contains(m, "please run /login") || strings.Contains(m, "run /login") {
 		return "claude", "Claude Code answered `Please run /login` — this machine's credential is no longer accepted. Sign in again."
@@ -528,9 +551,26 @@ func ClassifyRunnerAuthFailure(output string) (string, string) {
 		(strings.Contains(m, "not authenticated") && strings.Contains(m, "codex")) {
 		return "codex", "Codex reported it is not authenticated on this machine. Sign in again."
 	}
-	if strings.Contains(m, "model is not supported") && strings.Contains(m, "chatgpt account") {
-		return "codex", "Codex's ChatGPT account does not carry the configured model. Sign in with an account on a plan that includes it, or change the model."
-	}
+	// A MODEL-ENTITLEMENT 400 IS NOT AN AUTH FAILURE (fixed 2026-08-02).
+	//
+	// This used to return ("codex", "…sign in with an account on a plan that
+	// includes it"), which made IsRunnerAuthFailureOutput report an auth
+	// failure, which called MarkRunnerAuthInvalidReason, which rendered the
+	// runner as "OpenAI Codex (sign-in needed)" across the dashboard — while
+	// the credential was working perfectly.
+	//
+	// Measured on the owner's box: the ONLY failure was
+	//   400 "The 'gpt-5.4' model is not supported when using Codex with a
+	//        ChatGPT account."
+	// and every surface then told him to sign in again. Re-authenticating
+	// cannot move a model onto a plan, so the advice was not merely useless —
+	// it hid the real cause (wrong model) behind a flow that could never fix
+	// it, and it marked a healthy login as broken. A false red with a dead-end
+	// remedy attached.
+	//
+	// The right handler is model_support_ledger.go, which records the refusal
+	// and lets effectiveModelFor drop the model so the CLI's own default runs.
+	// Deliberately NOT returning a runner here keeps the auth state honest.
 
 	// OpenCode — its failures name themselves.
 	if strings.Contains(m, "opencode") && (strings.Contains(m, "ai_apicallerror") ||

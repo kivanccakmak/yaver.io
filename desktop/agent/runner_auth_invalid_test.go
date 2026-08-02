@@ -28,7 +28,6 @@ func TestIsRunnerAuthFailureOutput_Codex(t *testing.T) {
 		"Sign in required. Run codex login --device-auth",
 		"codex: not authenticated, please sign in",
 		"Please run codex login --device-auth to set up ChatGPT auth",
-		`ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-5.3-codex' model is not supported when using Codex with a ChatGPT account."}}`,
 	}
 	for _, in := range cases {
 		got := IsRunnerAuthFailureOutput(in)
@@ -163,5 +162,56 @@ func TestCheckRunnerReadyRejectsWarningOnlyNotReadyStatus(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "OpenCode provider rejected") {
 		t.Fatalf("CheckRunnerReady error = %q, want warning cause", err.Error())
+	}
+}
+
+// A model the ACCOUNT is not entitled to is not a broken credential. Marking it
+// as one rendered "OpenAI Codex (sign-in needed)" over a working login and sent
+// the user into an OAuth flow that cannot move a model onto a plan. The refusal
+// is handled by model_support_ledger.go instead, which drops the model so the
+// CLI's own default runs.
+func TestIsRunnerAuthFailureOutput_ModelEntitlementIsNotAuth(t *testing.T) {
+	cases := []string{
+		`ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account."}}`,
+		`ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-5.3-codex' model is not supported when using Codex with a ChatGPT account."}}`,
+	}
+	for _, in := range cases {
+		if got := IsRunnerAuthFailureOutput(in); got != "" {
+			t.Errorf("model-entitlement 400 must NOT be an auth failure; IsRunnerAuthFailureOutput(%q) = %q", in, got)
+		}
+	}
+	// …and it must still be learned as a model refusal, or we would have traded
+	// a false red for a silent failure.
+	if m, _ := classifyUnsupportedModel(cases[0]); m != "gpt-5.4" {
+		t.Fatalf("the refusal must still be captured by the model ledger, got %q", m)
+	}
+}
+
+// Billing and throttling are not broken credentials. Marking either as an auth
+// failure tells the user to sign in, changes nothing, and for a rate limit
+// throws away a working session as well.
+func TestIsRunnerAuthFailureOutput_BillingAndRateLimitAreNotAuth(t *testing.T) {
+	for _, in := range []string{
+		`{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}`,
+		`{"type":"error","error":{"type":"rate_limit_error","message":"Number of requests has exceeded your rate limit"}}`,
+		"API Error: Rate limit reached",
+	} {
+		if got := IsRunnerAuthFailureOutput(in); got != "" {
+			t.Errorf("must NOT be an auth failure: %q -> %q", in, got)
+		}
+	}
+}
+
+// …but the providers' REAL OAuth-expiry wording must still route to sign-in.
+// The matcher previously only had "expired token", so Anthropic's actual
+// message fell through and the commonest runner failure got no route at all.
+func TestIsRunnerAuthFailureOutput_RealOAuthExpiryWording(t *testing.T) {
+	for _, in := range []string{
+		`{"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired. Please obtain a new token or refresh your existing token."}}`,
+		"Failed to authenticate: OAuth session expired and could not be refreshed",
+	} {
+		if got := IsRunnerAuthFailureOutput(in); got == "" {
+			t.Errorf("a real expired OAuth token MUST route to sign-in, got none for %q", in)
+		}
 	}
 }

@@ -1,6 +1,9 @@
 export type RunnerFailureKind =
   | "model-not-found"
   | "model-not-supported"
+  | "billing"
+  | "rate-limit"
+  | "provider-key"
   | "auth-revoked"
   | "auth"
   | "provider-transport"
@@ -91,7 +94,7 @@ export function diagnoseRunnerFailure(args: {
       reason: model
         ? `${runnerLabel(runner)} is signed in, but the subprocess could not open model ${model}.`
         : `${runnerLabel(runner)} is signed in, but the subprocess could not open the selected model.`,
-      remedy: "Pick a model listed for this runner on this machine, save it as the machine default, then run Test again before retrying the chat.",
+      remedy: "Pick a model listed for this runner on this machine, save it as the machine default, then run Test again. OpenCode models must be written `<providerId>/<modelId>` (e.g. `zai-coding-plan/glm-4.7`) — a bare model id never resolves.",
       runner,
       model,
       probe: args.probe || undefined,
@@ -111,7 +114,80 @@ export function diagnoseRunnerFailure(args: {
       reason: model
         ? `${runnerLabel(runner)} reached the provider, but the account cannot use ${model}.`
         : `${runnerLabel(runner)} reached the provider, but the account cannot use the selected model.`,
-      remedy: "Switch to a model your subscription supports, or sign in with the account that owns that model entitlement.",
+      // The cheap fix first. Re-authenticating cannot move a model onto a
+      // plan, so leading with "sign in" sent users into a flow that could
+      // never work (2026-08-02: a gpt-5.4 400 rendered the runner as
+      // "sign-in needed" over a perfectly good credential).
+      remedy: "Pick a different model for this machine — this one is not on the signed-in plan. Signing in again will not change that; only a different model or a different account will.",
+      runner,
+      model,
+      probe: args.probe || undefined,
+      failedAt,
+    };
+  }
+
+  // ── BILLING is not AUTH ──────────────────────────────────────────────────
+  // Anthropic returns 400 invalid_request_error "Your credit balance is too
+  // low to access the Anthropic API." The credential is valid; the account
+  // simply cannot pay for the call. Routing this to a sign-in flow is a dead
+  // end — the user re-auths, retries, and hits the identical wall.
+  if (
+    lower.includes("credit balance is too low") ||
+    lower.includes("credit_balance_too_low") ||
+    lower.includes("plans & billing") ||
+    (lower.includes("insufficient") && lower.includes("credit"))
+  ) {
+    return {
+      kind: "billing",
+      title: "The account is out of credit",
+      reason: `${runnerLabel(runner)} authenticated fine, but the provider refused the call for lack of credit.`,
+      remedy: "Top up or upgrade the plan for that provider account, then retry. Signing in again will not help — the credential is already valid.",
+      runner,
+      model,
+      probe: args.probe || undefined,
+      failedAt,
+    };
+  }
+
+  // ── RATE LIMIT is not AUTH, and is not permanent ─────────────────────────
+  // 429 rate_limit_error, or the CLI's own "API Error: Rate limit reached".
+  // The single most important property is that WAITING fixes it: telling the
+  // user to sign in both fails and destroys a working session.
+  if (
+    lower.includes("rate_limit_error") ||
+    lower.includes("rate limit reached") ||
+    lower.includes("rate limit exceeded") ||
+    lower.includes("too many requests") ||
+    lower.includes("429")
+  ) {
+    return {
+      kind: "rate-limit",
+      title: "Provider rate limit reached",
+      reason: `${runnerLabel(runner)} was throttled by the provider — the credential and the model are both fine.`,
+      remedy: "Wait for the limit to reset and retry. Do NOT sign in again; a fresh token does not reset a quota.",
+      runner,
+      model,
+      probe: args.probe || undefined,
+      failedAt,
+    };
+  }
+
+  // ── A MISSING PROVIDER KEY is its own fault ──────────────────────────────
+  // OpenCode loads credentials from env vars, opencode.json options.apiKey, or
+  // its auth store. AI_LoadAPIKeyError / "User not found" from a provider mean
+  // the KEY is missing or wrong — not that the Yaver runner is signed out, and
+  // not something the runner OAuth flow touches at all.
+  if (
+    lower.includes("ai_loadapikeyerror") ||
+    lower.includes("load api key") ||
+    lower.includes("api key is missing") ||
+    (lower.includes("user not found") && (lower.includes("opencode") || lower.includes("providerid") || lower.includes("openrouter")))
+  ) {
+    return {
+      kind: "provider-key",
+      title: "The provider key is missing or rejected",
+      reason: `${runnerLabel(runner)} started, but the provider credential for the selected model was not accepted.`,
+      remedy: "Set that provider's API key on this machine (env var, opencode.json `options.apiKey`, or `/connect`), then retry. This is separate from Yaver sign-in and from the runner's own OAuth.",
       runner,
       model,
       probe: args.probe || undefined,
@@ -138,7 +214,18 @@ export function diagnoseRunnerFailure(args: {
     lower.includes("please sign in") ||
     lower.includes("invalid bearer token") ||
     lower.includes("unauthorized") ||
-    lower.includes("expired token")
+    lower.includes("expired token") ||
+    // The strings the providers ACTUALLY emit (researched 2026-08-02). The
+    // matcher above only had "expired token", so Anthropic's real message —
+    // "OAuth token has expired. Please obtain a new token or refresh your
+    // existing token." — fell through to `unknown` and the user got no route
+    // at all for the single most common runner failure there is.
+    lower.includes("token has expired") ||
+    lower.includes("authentication_error") ||
+    lower.includes("authentication_failed") ||
+    lower.includes("oauth session expired") ||
+    lower.includes("please run /login") ||
+    lower.includes("run codex login")
   ) {
     return {
       kind: "auth",
