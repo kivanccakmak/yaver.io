@@ -197,6 +197,31 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
     await expect(row, `mobile: no project row for ${projectPath}`).toBeVisible({ timeout: 30_000 });
     await row.click();
     await page.waitForTimeout(12_000);
+
+    // Tapping a project opens an action sheet — "What do you want to do?" —
+    // offering WebRTC Reload / Browser Reload / Hermes (coming soon). This loop
+    // is the BROWSER lane, so take that one explicitly; WebRTC is a different
+    // transport with different failure modes and picking it would test
+    // something this spec does not claim to cover.
+    const browserReload = page.getByText(/^Browser Reload$/).first();
+    await expect(browserReload,
+      'mobile: the project sheet did not offer "Browser Reload"').toBeVisible({ timeout: 30_000 });
+    await browserReload.click();
+    await page.waitForTimeout(25_000);
+
+    await expect(page.locator("iframe").first(),
+      "mobile: the browser-lane preview never rendered").toBeVisible({ timeout: 90_000 });
+
+    // KNOWN GAP, stated rather than hidden. tasks.tsx:5487 defines the composer
+    // ("Send another command…" / "What should the agent do?"), but the Tasks
+    // screen renders ZERO inputs in the RN-web build, so there is nowhere to
+    // send the vibe from. Everything up to and including the rendered preview
+    // is verified above; the arc cannot proceed past this point until the
+    // composer is reachable.
+    const composerCount = await page.locator("input,textarea").count();
+    expect(composerCount,
+      "mobile: the preview renders, but the RN-web Tasks screen exposes NO composer " +
+      "(tasks.tsx:5487 defines one), so a vibe cannot be sent from the app").toBeGreaterThan(0);
   } else {
     await page.getByText(/^Vibing$/).first().click().catch(() => {});
   }
