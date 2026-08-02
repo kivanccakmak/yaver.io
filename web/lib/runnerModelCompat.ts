@@ -77,7 +77,20 @@ export type ModelCompatVerdict =
  * place to touch and every picker moves together.
  */
 export function codexSubscriptionSafeDefault(): string {
-  return "gpt-5.3-codex";
+  // MEASURED 2026-08-02, not inferred. `codex exec --model <id> "reply OK"` on
+  // two machines signed in with the owner's ChatGPT account:
+  //
+  //   WORKS     gpt-5.6-terra, gpt-5.6-sol, gpt-5.6-luna, gpt-5.5,
+  //             gpt-5.4, gpt-5.4-mini
+  //   REJECTED  gpt-5.6, gpt-5.5-pro, gpt-5.3-codex, gpt-5-thinking,
+  //             gpt-5, gpt-5-mini, o3
+  //
+  // This function returned `gpt-5.3-codex` for a few hours on the strength of
+  // the "-codex suffix means codex-safe" instinct. It is the one id in the
+  // list the subscription flatly refuses (withdrawn for ChatGPT auth
+  // 2026-06-02), and pointing every picker at it broke the vibe loop on every
+  // surface. OpenAI's own guidance names terra as the gpt-5.4 replacement.
+  return "gpt-5.6-terra";
 }
 
 /** The declared-safe default per runner, or null when we have no opinion. */
@@ -250,13 +263,32 @@ export class ModelCompatLedger {
 const OBSERVED_REFUSALS: ReadonlyArray<{
   runner: string; authKind: RunnerAuthKind; model: string; observedAt: string; note: string;
 }> = [
-  {
-    runner: "codex",
-    authKind: "subscription",
-    model: "gpt-5.4",
-    observedAt: "2026-08-02",
-    note: "Vibing dispatch: 400 invalid_request_error \"not supported when using Codex with a ChatGPT account\"",
-  },
+  // MEASURED, not transcribed from an error message. On 2026-08-02 this table
+  // contained exactly one row — `gpt-5.4` — and that row is what broke the
+  // product: the dispatch funnel below coerced every saved gpt-5.4 into the
+  // then-"safe" gpt-5.3-codex, which the subscription actually refuses. So a
+  // WORKING model was rewritten into a DEAD one on every task, on every
+  // surface, and the vibe loop failed on both.
+  //
+  // The rows below come from running the operation on two machines signed in
+  // with the owner's ChatGPT account (`codex exec --model <id> "reply OK"`):
+  //
+  //   WORKS     gpt-5.6-terra, gpt-5.6-sol, gpt-5.6-luna, gpt-5.5,
+  //             gpt-5.4, gpt-5.4-mini
+  //   REJECTED  everything listed here
+  //
+  // Adding a row on the strength of a single 400 is how the last one got here.
+  // Probe both directions before editing: a refusal that is really a rate
+  // limit, an outage, or a bad prompt costs users a working model.
+  ...(["gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.6", "gpt-5.5-pro", "gpt-5-thinking", "gpt-5", "gpt-5-mini", "o3"].map(
+    (model) => ({
+      runner: "codex",
+      authKind: "subscription" as RunnerAuthKind,
+      model,
+      observedAt: "2026-08-02",
+      note: "codex exec --model " + model + " → \"not supported when using Codex with a ChatGPT account\"",
+    }),
+  )),
 ];
 
 /**

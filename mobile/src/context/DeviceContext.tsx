@@ -2882,7 +2882,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           // is now rejected by current Codex installs — all are stripped so
           // preferredDefaultModelForRunner substitutes the current
           // default (`gpt-5.4`, OpenAI's latest GPT-5 release).
-          const obsoleteModels = new Set(["o3-mini", "gpt-5-codex", "gpt-5.3-codex"]);
+          // Probed against the real ChatGPT-account login 2026-08-02 (see
+          // backend/convex/userSettings.ts for the full measurement table).
+          const obsoleteModels = new Set(["o3-mini", "gpt-5-codex", "gpt-5.2-codex", "gpt-5.3-codex"]);
           for (const row of rows as Array<{ deviceId?: string; runnerId?: string; model?: string; mode?: string; provider?: string }>) {
             if (!row?.deviceId || !row?.runnerId) continue;
             runners[String(row.deviceId)] = String(row.runnerId);

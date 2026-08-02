@@ -461,8 +461,36 @@ function seedOpenCodePrimaryRunnerRow(
   return next;
 }
 
-const OBSOLETE_CODEX_MODEL_IDS = new Set(["o3-mini", "gpt-5-codex", "gpt-5.3-codex"]);
-const CURRENT_CODEX_MODEL_ID = "gpt-5.4";
+// WHICH CODEX MODEL A CHATGPT-ACCOUNT LOGIN CAN RUN IS A MOVING TARGET, AND
+// BOTH DIRECTIONS OF GUESS HAVE NOW SHIPPED BROKEN (settled 2026-08-02 by
+// PROBING THE ACCOUNT, not by reasoning about names).
+//
+// Run on the owner's box with `codex exec --model <id>`:
+//
+//   gpt-5.6-terra   WORKS
+//   gpt-5.6-luna    WORKS
+//   gpt-5.4         WORKS  (but OpenAI retires it for ChatGPT sign-in 2026-08-31)
+//   gpt-5.3-codex   REJECTED — "not supported when using Codex with a ChatGPT
+//                   account" (withdrawn for ChatGPT auth on 2026-06-02)
+//
+// The history here is a warning about naming instinct: "codex-native must be
+// the safe one" is intuitive and WRONG — gpt-5.3-codex is the dead one. A
+// change landed earlier the same day made every picker lead with it, which is
+// what actually broke the vibe loop on every surface (runner.model.not_supported
+// on each turn) while looking like a fix for the opposite problem.
+//
+// So the current id is the RECOMMENDED REPLACEMENT that also outlives the
+// 2026-08-31 retirement, and the obsolete set is every id measured or
+// announced as unusable on a subscription login. When this needs revisiting,
+// probe first: `codex exec --model <id> "reply OK"` on a box signed in with
+// the ChatGPT account. Do not infer from the id.
+const OBSOLETE_CODEX_MODEL_IDS = new Set([
+  "o3-mini",
+  "gpt-5-codex",
+  "gpt-5.2-codex",
+  "gpt-5.3-codex",
+]);
+const CURRENT_CODEX_MODEL_ID = "gpt-5.6-terra";
 
 type PrimaryRunnerRow = { deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string };
 

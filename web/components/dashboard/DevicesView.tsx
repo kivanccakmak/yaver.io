@@ -2585,10 +2585,16 @@ function useLiveOpenCodeByDevice(
 // migrated away in mobile DeviceContext.loadSettings).
 export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
   claude: "claude-opus-4-7",
-  // Codex-native model — general gpt-5.x require API billing and error on a
-  // ChatGPT-account Codex login ("not supported when using Codex with a
-  // ChatGPT account").
-  codex: "gpt-5.3-codex",
+  // MEASURED, NOT REASONED (2026-08-02). `codex exec --model <id>` on a box
+  // signed in with the ChatGPT account: gpt-5.6-terra WORKS, gpt-5.6-luna
+  // WORKS, gpt-5.4 WORKS but retires for ChatGPT sign-in on 2026-08-31, and
+  // gpt-5.3-codex is REJECTED ("not supported when using Codex with a ChatGPT
+  // account" — withdrawn for ChatGPT auth 2026-06-02).
+  //
+  // The "-codex suffix must mean codex-safe" instinct is what shipped this
+  // pointing at the dead one earlier today and broke the vibe loop on every
+  // surface. Probe before changing it.
+  codex: "gpt-5.6-terra",
   opencode: "zai-coding-plan/glm-4.7",
 };
 
@@ -2660,7 +2666,8 @@ export function preferredDefaultModelForRunner(
       return "claude-opus-4-7";
     }
     if (normalized === "codex" && !isKivancMacBook(device)) {
-      return "gpt-5.3-codex";
+      // Same measured answer as DEFAULT_MODEL_BY_RUNNER — see the note there.
+      return "gpt-5.6-terra";
     }
   }
   return DEFAULT_MODEL_BY_RUNNER[normalized] || null;
@@ -2845,14 +2852,26 @@ export const MODEL_OPTIONS_BY_RUNNER: Record<string, Array<{ id: string; label: 
   // predicted in two places. Lead with the Codex-native model.
   // See web/lib/runnerModelCompat.ts; general gpt-5.x need API billing, which
   // the subscription-only rule forbids us from using.
+  // EVERY ENTRY WAS RUN ON A REAL SUBSCRIPTION LOGIN BEFORE BEING LISTED
+  // (2026-08-02, `codex exec --model <id>` on BOTH the owner's Mac and the
+  // Linux box, cross-checked against developers.openai.com/codex/models):
+  //
+  //   WORKS     gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5,
+  //             gpt-5.4, gpt-5.4-mini
+  //   REJECTED  gpt-5.6, gpt-5.5-pro, gpt-5.3-codex, gpt-5-thinking,
+  //             gpt-5, gpt-5-mini, o3
+  //
+  // Yaver runs on the user's OWN subscription, never an API key, so a model
+  // that needs API billing is not "an advanced option" here — it is a task
+  // that cannot run. Offering one spends a real turn to discover a 400.
+  // Anything added to this list gets probed first.
   codex: [
-    { id: "gpt-5.3-codex", label: "GPT-5.3 Codex", hint: "works on a ChatGPT-account login" },
-    { id: "gpt-5-codex", label: "GPT-5 Codex", hint: "agentic coding model" },
-    { id: "gpt-5.4", label: "GPT-5.4", hint: "needs API billing — not a ChatGPT-account login" },
-    { id: "gpt-5-thinking", label: "GPT-5 Thinking", hint: "reasoning-heavy" },
-    { id: "gpt-5", label: "GPT-5", hint: "general reasoning" },
-    { id: "gpt-5-mini", label: "GPT-5 Mini", hint: "fastest, cheapest" },
-    { id: "o3", label: "o3", hint: "prior reasoning line" },
+    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "everyday default — verified on your plan" },
+    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "detail and polish" },
+    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "high-volume, repeatable work" },
+    { id: "gpt-5.5", label: "GPT-5.5", hint: "prior generation" },
+    { id: "gpt-5.4", label: "GPT-5.4", hint: "retires for ChatGPT sign-in on 2026-08-31" },
+    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "retires 2026-08-31 — use Luna instead" },
   ],
 };
 

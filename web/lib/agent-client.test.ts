@@ -49,11 +49,12 @@ test("web bundle preview URL preserves agent-minted signature in relay mode", ()
 // login that cannot run it. buildCreateTaskBody is the single funnel every web
 // dispatch passes through, so the request that leaves the browser must not
 // carry a model we have watched this runner refuse.
+// A model MEASURED as refused must be rewritten…
 {
   const coerced = buildCreateTaskBody({
-    title: "t", description: "d", runner: "codex", model: "gpt-5.4",
+    title: "t", description: "d", runner: "codex", model: "gpt-5.3-codex",
   });
-  if (coerced.model !== "gpt-5.3-codex") {
+  if (coerced.model !== "gpt-5.6-terra") {
     console.error(`FAIL dispatch still sends a model the login cannot run: ${String(coerced.model)}`);
     process.exitCode = 1;
   } else {
@@ -63,13 +64,29 @@ test("web bundle preview URL preserves agent-minted signature in relay mode", ()
   // NO FALSE RED: a model with no evidence against it is passed through
   // untouched — never silently override a deliberate choice.
   const untouched = buildCreateTaskBody({
-    title: "t", description: "d", runner: "codex", model: "gpt-5-codex",
+    title: "t", description: "d", runner: "codex", model: "gpt-5.5",
   });
-  if (untouched.model !== "gpt-5-codex") {
+  if (untouched.model !== "gpt-5.5") {
     console.error(`FAIL a model with no observed refusal was rewritten: ${String(untouched.model)}`);
     process.exitCode = 1;
   } else {
     console.log("ok   a model with no observed refusal is passed through untouched");
+  }
+
+  // AND A MODEL MEASURED TO WORK IS NEVER "CORRECTED" AWAY. This is the exact
+  // regression that broke the vibe loop: gpt-5.4 works on a subscription login
+  // (probed on two machines, 2026-08-02) but sat in OBSERVED_REFUSALS from a
+  // single 400, so the funnel rewrote it into gpt-5.3-codex — a model the
+  // account genuinely refuses. Coercion that fires on a working model is worse
+  // than no coercion at all.
+  const working = buildCreateTaskBody({
+    title: "t", description: "d", runner: "codex", model: "gpt-5.4",
+  });
+  if (working.model !== "gpt-5.4") {
+    console.error(`FAIL a WORKING model was coerced away: gpt-5.4 -> ${String(working.model)}`);
+    process.exitCode = 1;
+  } else {
+    console.log("ok   a model measured to work is dispatched as chosen");
   }
 
   // A runner we hold no opinion on is never rewritten either.

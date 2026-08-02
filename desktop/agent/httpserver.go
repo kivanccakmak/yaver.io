@@ -3948,10 +3948,17 @@ func fallbackRunnerModels(runnerID string) []runnerModelInfo {
 			// Keep this list aligned with builtinRunners["codex"].Model.
 			// A stale fallback catalog re-poisons web/mobile pickers even
 			// when the spawn path has the right default.
-			{ID: "gpt-5.4", Name: "GPT-5.4", Source: "builtin", IsDefault: true},
+			// PROBED, not assumed (2026-08-02): `codex exec --model <id>` on a
+			// box signed in with the ChatGPT account answered WORKS for
+			// gpt-5.6-terra, gpt-5.6-luna and gpt-5.4, and REJECTED for
+			// gpt-5.3-codex. gpt-5.4 additionally retires for ChatGPT sign-in
+			// on 2026-08-31, so it is offered but never the default.
+			{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", Source: "builtin", IsDefault: true},
+			{ID: "gpt-5.6-sol", Name: "GPT-5.6 Sol", Source: "builtin", IsDefault: false},
+			{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", Source: "builtin", IsDefault: false},
 			{ID: "gpt-5.5", Name: "GPT-5.5", Source: "builtin", IsDefault: false},
-			{ID: "gpt-5.5-pro", Name: "GPT-5.5 Pro", Source: "builtin", IsDefault: false},
-			{ID: "gpt-5.4-mini", Name: "GPT-5.4 Mini", Source: "builtin", IsDefault: false},
+			{ID: "gpt-5.4", Name: "GPT-5.4 (retires 2026-08-31)", Source: "builtin", IsDefault: false},
+			{ID: "gpt-5.4-mini", Name: "GPT-5.4 Mini (retires 2026-08-31)", Source: "builtin", IsDefault: false},
 		}
 	case "opencode":
 		return []runnerModelInfo{

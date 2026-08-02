@@ -38,8 +38,8 @@ const runtimeLab = readFileSync(join(root, "components/dashboard/RuntimeLabView.
 // because it renders closer to the user. So: the picker must AGREE with the
 // defaults, and the newest-sounding id is not the runnable one.
 // Model of the compatibility question: web/lib/runnerModelCompat.ts.
-assert(/codex:\s*"gpt-5\.3-codex"/.test(devicesView),
-  "DevicesView codex default is the Codex-native model a ChatGPT-account login can actually run");
+assert(/codex:\s*"gpt-5\.6-terra"/.test(devicesView),
+  "DevicesView codex default is a model PROBED to work on a subscription login");
 
 const modelOptionsStart = devicesView.indexOf("export const MODEL_OPTIONS_BY_RUNNER");
 const modelOptionsBody = modelOptionsStart >= 0 ? devicesView.slice(modelOptionsStart) : devicesView;
@@ -48,19 +48,40 @@ const codexOptions = modelOptionsBody.slice(
   modelOptionsBody.indexOf("],", modelOptionsBody.indexOf("codex: [")),
 );
 // ORDER MATTERS — the first entry is the default this picker applies.
-assert(/^\s*codex: \[\s*\{ id: "gpt-5\.3-codex"/.test(codexOptions),
+assert(/^\s*codex: \[\s*\{ id: "gpt-5\.6-terra"/.test(codexOptions),
   "the codex picker LEADS with the same model the declared defaults name");
-assert(!/\{ id: "gpt-5\.4"[^}]*isDefault: true/.test(codexOptions),
-  "gpt-5.4 is never the default — it needs API billing this product does not use");
-// It may still be OFFERED (a user with API billing exists), but only with the
-// constraint stated, so nobody picks it and then meets the 400 alone.
-assert(!/\{ id: "gpt-5\.4"/.test(codexOptions) || /gpt-5\.4"[^}]*(API billing|ChatGPT-account)/.test(codexOptions),
-  "if gpt-5.4 is offered at all, the hint names the API-billing constraint");
+// gpt-5.4 still WORKS on a subscription today, so it stays offered — but it
+// retires for ChatGPT sign-in on 2026-08-31, and a user who picks it without
+// being told that meets the failure alone, after the date, mid-task.
+assert(!/\{ id: "gpt-5\.4"/.test(codexOptions) || /gpt-5\.4"[^}]*2026-08-31/.test(codexOptions),
+  "if gpt-5.4 is offered, its hint must state the 2026-08-31 retirement");
 
 const fallbackStart = runtimeLab.indexOf("codex: [");
 const fallbackCodex = fallbackStart >= 0 ? runtimeLab.slice(fallbackStart, runtimeLab.indexOf("],", fallbackStart)) : "";
-assert(/\{ id: "gpt-5\.3-codex"[^}]*isDefault: true/.test(fallbackCodex),
-  "RuntimeLab's fallback catalogue defaults to the same model, not to a newer-sounding one");
+assert(/\{ id: "gpt-5\.6-terra"[^}]*isDefault: true/.test(fallbackCodex),
+  "RuntimeLab's fallback catalogue defaults to the same model the picker leads with");
+
+// NOTHING IN EITHER CODEX LIST MAY BE A MODEL THE SUBSCRIPTION REJECTS.
+//
+// Scoped to the CODEX blocks deliberately. An earlier draft of this guard
+// scanned the whole file and flagged `gpt-5-mini` in DevicesView — which lives
+// in the OpenCode BYO-key provider catalogue (`requiresKey: true`,
+// keyEnv OPENAI_API_KEY). That path bills the user's own OpenAI key, where the
+// model is perfectly valid; only the SUBSCRIPTION path rejects it. A guard
+// that cannot tell those apart would force a real capability out of the
+// product to satisfy a test.
+//
+// The rejected set is measured, not reasoned: `codex exec --model <id>` on two
+// machines signed in with the ChatGPT account, 2026-08-02. Both polarities of
+// guess have already shipped broken here, so evidence is the only admissible
+// argument for editing this list.
+for (const dead of ["gpt-5.3-codex", "gpt-5.2-codex", "gpt-5-thinking", "gpt-5-mini", "gpt-5.5-pro", "o3"]) {
+  const pat = new RegExp(`id: "${dead.replace(/\./g, "\\.")}"`);
+  assert(!pat.test(codexOptions),
+    `the codex picker offers ${dead}, which a ChatGPT-account Codex login rejects outright`);
+  assert(!pat.test(fallbackCodex),
+    `RuntimeLab's codex fallback offers ${dead}, which a ChatGPT-account login rejects outright`);
+}
 assert(!/\{ id: "gpt-5\.4"[^}]*isDefault: true/.test(fallbackCodex),
   "RuntimeLab does not re-introduce gpt-5.4 as the default behind the picker's back");
 // The fallback list is hardcoded web constants — it must not claim the device

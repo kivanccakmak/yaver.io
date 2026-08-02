@@ -1195,6 +1195,54 @@ When you fix connectivity/auth/lifecycle on one surface, grep the others for the
 same seam and either confirm shared-code coverage or land the native port in the
 same change. A per-surface parity table belongs in the handoff/commit.
 
+## HEADLESS FIRST, THEN CLOSED LOOP — and both must SNOWBALL
+
+**The order is not a preference, it is how you avoid spending a UI run to learn
+an API fact.** Every investigation and every feature goes:
+
+1. **HEADLESS FIRST — ask the machine directly.** `curl` the agent endpoint,
+   run the CLI verb, call the MCP tool, `codex exec --model <id>`, hit the
+   Convex route with a bearer token. It answers in seconds, its failure names
+   itself, and it cannot be confounded by a spinner, a stale bundle, or a
+   viewport.
+2. **CLOSED LOOP SECOND — prove it where the user lives.** Drive the REAL
+   surface (web dashboard; the RN app as RN-web in a true device context) and
+   read the terminal signal — PIXELS, never a status badge.
+
+Worked example, 2026-08-02, and the reason this rule is written down: a colour
+vibe loop failed on both surfaces for hours. Three browser runs of ~25 minutes
+each were spent on harness bugs before anyone asked the box directly. One
+headless probe — `codex exec --model <id> "reply OK"` — answered it in ninety
+seconds: `gpt-5.3-codex` was REJECTED by the ChatGPT-account subscription while
+`gpt-5.6-terra` WORKED, and every device was pinned to a model that could not
+run. No amount of browser automation could have said that; the API said it
+immediately. Symmetrically, no API call could have proven the picker renders,
+the preview refreshes, and the pixels actually change — that needed the loop.
+
+**Both layers SNOWBALL. Every incident must leave BOTH bigger than it found
+them** (this is the Snowball Principle applied to the test surface itself):
+
+- **The headless layer grows a VERB.** If the answer required ssh + a hand-
+  rolled python one-liner, that is a missing endpoint. Land it as an ops verb /
+  MCP tool / CLI subcommand so the next session — and every surface — can ask
+  the same question in one call. A question you can only answer by hand is a
+  product gap, not a research skill.
+- **The closed loop grows an ARC.** Every confirmed defect earns a check in the
+  loop that would have caught it, on the surface it broke. When a loop fails
+  for a HARNESS reason, fix the harness and keep the arc — never delete the
+  assertion to get green.
+- **Never let a probe stay ad-hoc.** The `codex exec` model probe above should
+  become a `runner_model_probe` verb; the "which models does this subscription
+  accept" answer belongs in the product, refreshed by measurement, not in a
+  session transcript.
+- **A guard that has never failed is a guess.** Break it, watch it fail, put it
+  back. Two guards shipped inverted here precisely because nobody did that.
+
+Corollary — **NEVER infer a fact you can measure.** "The `-codex` suffix must
+mean codex-safe" is the exact reasoning that pinned six machines to a dead
+model. Probe, then write the measurement into the code as a comment with its
+date, so the next reader inherits evidence instead of instinct.
+
 ## Tests
 
 ```bash

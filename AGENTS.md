@@ -78,6 +78,46 @@ broken heartbeat, dropped SSE frames, and a dead shake gesture on one screen
 while the other was fine. Cross-surface parity is this same rule wearing a
 different hat.
 
+## Headless first, then closed loop — and snowball BOTH
+
+**Rule of thumb for developing and testing anything in Yaver:**
+
+1. **HEADLESS FIRST — ask the machine directly.** `curl` the agent route, run
+   the CLI verb, call the MCP tool, `codex exec --model <id>`, hit Convex with
+   a bearer token. Seconds, not minutes; the failure names itself; no spinner,
+   stale bundle or viewport can confound it.
+2. **CLOSED LOOP SECOND — prove it where the user lives.** Drive the real
+   surface (web dashboard, or the RN app as RN-web in a genuine device
+   context) and judge on **PIXELS**, never a status badge.
+
+Why the order is load-bearing (2026-08-02): a colour vibe loop failed on both
+surfaces for hours and three ~25-minute browser runs were burned on harness
+bugs. One headless probe answered it in ninety seconds — `gpt-5.3-codex` is
+REJECTED by the ChatGPT-account subscription, `gpt-5.6-terra` WORKS, and all
+six of the owner's machines were pinned to a model that could not run. Browser
+automation could never have said that. Equally, no API call could prove the
+picker renders and the preview's pixels actually change — that needed the loop.
+Each layer answers what the other cannot; the cheap one goes first.
+
+**Both layers must grow with every incident** — the Snowball Principle applied
+to the test surface itself:
+
+- **Headless grows a VERB.** If answering took ssh plus a hand-rolled python
+  one-liner, that is a missing endpoint. Land it as an ops verb / MCP tool /
+  CLI subcommand so every surface and every future session can ask it in one
+  call. A question only answerable by hand is a product gap.
+- **The loop grows an ARC.** Every confirmed defect earns an assertion in the
+  loop that would have caught it, on the surface where it broke. If a loop
+  fails for a HARNESS reason, fix the harness and keep the assertion — never
+  delete it to get green.
+- **Never infer what you can measure.** "The `-codex` suffix must mean
+  codex-safe" is precisely the instinct that pinned six machines to a dead
+  model, in both directions, twice in one day. Probe, then write the
+  measurement into the code with its date so the next reader inherits evidence
+  instead of instinct.
+- **A guard that has never failed is a guess.** Break it, watch it fail,
+  restore it.
+
 ## Cross-Surface Task / Render UX Contract
 
 Tasks, Vibing, render pages, browser previews, native previews, remote-runtime

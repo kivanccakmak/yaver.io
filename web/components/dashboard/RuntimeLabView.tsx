@@ -525,11 +525,14 @@ const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string; isDefaul
     { id: "claude-sonnet-4", name: "Claude Sonnet 4", isDefault: true, source: "fallback" },
   ],
   codex: [
-    { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", isDefault: true, source: "fallback" },
-    { id: "gpt-5-codex", name: "GPT-5 Codex", source: "fallback" },
-    { id: "gpt-5.4", name: "GPT-5.4", source: "fallback" },
-    { id: "gpt-5", name: "GPT-5", source: "fallback" },
-    { id: "gpt-5-mini", name: "GPT-5 Mini", source: "fallback" },
+    // Measured against the real ChatGPT-account login 2026-08-02 — see
+    // DevicesView.DEFAULT_MODEL_BY_RUNNER. gpt-5.3-codex is REJECTED by the
+    // account; the "-codex" suffix does not mean codex-safe.
+    { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", isDefault: true, source: "fallback" },
+    { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", source: "fallback" },
+    { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", source: "fallback" },
+    { id: "gpt-5.5", name: "GPT-5.5", source: "fallback" },
+    { id: "gpt-5.4", name: "GPT-5.4 (retires 2026-08-31)", source: "fallback" },
   ],
 };
 
