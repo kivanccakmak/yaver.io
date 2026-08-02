@@ -70,19 +70,72 @@ done
 set -a; [ -f "$HOME/.appstoreconnect/yaver.env" ] && source "$HOME/.appstoreconnect/yaver.env"; set +a
 set -a; [ -f "$HOME/.yaver/local-secrets.env" ] && source "$HOME/.yaver/local-secrets.env"; set +a
 
-KC="${YAVER_CI_KEYCHAIN_PATH:-$HOME/Library/Keychains/yaver-ci.keychain-db}"
-if [ -n "${YAVER_CI_KEYCHAIN_PASSWORD:-}" ]; then
-  security unlock-keychain -p "$YAVER_CI_KEYCHAIN_PASSWORD" "$KC" >/dev/null 2>&1 || true
-  security set-keychain-settings "$KC" >/dev/null 2>&1 || true
-  security set-key-partition-list -S apple-tool:,apple:,codesign: \
-    -s -k "$YAVER_CI_KEYCHAIN_PASSWORD" "$KC" >/dev/null 2>&1 || true
-fi
+# WHERE THE DEVELOPER ID LIVES IS NOT A CONSTANT (2026-08-02).
+#
+# This looked in yaver-ci.keychain ONLY, and died with "no Developer ID
+# Application identity" on a Mac that had one — in login.keychain. Two Apple
+# identities are in play and they do not live together: TestFlight signs with
+# Apple DISTRIBUTION (yaver-ci.keychain here), while the CLI signs with
+# Developer ID APPLICATION, which is a login-keychain cert on this box. A
+# script that knows only one location reports "you have no certificate" when
+# the truth is "I looked in one place" — the inventory-vs-operation error, in
+# the failure message itself.
+#
+# So: try the CI keychain, then the user's default search list (which includes
+# login.keychain), and SAY which one answered. Unlocking is best-effort per
+# keychain — a locked login keychain in an SSH session is exactly what
+# YAVER_LOGIN_PASSWORD in ~/.yaver/local-secrets.env exists for.
+KC_CI="${YAVER_CI_KEYCHAIN_PATH:-$HOME/Library/Keychains/yaver-ci.keychain-db}"
+KC_LOGIN="${YAVER_LOGIN_KEYCHAIN_PATH:-$HOME/Library/Keychains/login.keychain-db}"
 
-SIGN_ID="$(security find-identity -v -p codesigning "$KC" 2>/dev/null \
-  | awk '/Developer ID Application/ {print $2; exit}')"
+unlock_keychain() {  # $1 = keychain path, $2 = password (may be empty)
+  [ -n "${2:-}" ] || return 0
+  [ -e "$1" ] || return 0
+  security unlock-keychain -p "$2" "$1" >/dev/null 2>&1 || true
+  security set-keychain-settings "$1" >/dev/null 2>&1 || true
+  security set-key-partition-list -S apple-tool:,apple:,codesign: \
+    -s -k "$2" "$1" >/dev/null 2>&1 || true
+}
+unlock_keychain "$KC_CI"    "${YAVER_CI_KEYCHAIN_PASSWORD:-}"
+unlock_keychain "$KC_LOGIN" "${YAVER_LOGIN_PASSWORD:-}"
+
+find_developer_id() {  # $1 = keychain path, or empty for the default search list
+  if [ -n "${1:-}" ]; then
+    security find-identity -v -p codesigning "$1" 2>/dev/null \
+      | awk '/Developer ID Application/ {print $2; exit}'
+  else
+    security find-identity -v -p codesigning 2>/dev/null \
+      | awk '/Developer ID Application/ {print $2; exit}'
+  fi
+}
+
+SIGN_ID=""; KC=""
+for candidate in "$KC_CI" "$KC_LOGIN" ""; do
+  [ -n "$candidate" ] && [ ! -e "$candidate" ] && continue
+  found="$(find_developer_id "$candidate")"
+  if [ -n "$found" ]; then
+    SIGN_ID="$found"
+    KC="$candidate"
+    echo "Signing identity $SIGN_ID from ${candidate:-the default keychain search list}"
+    break
+  fi
+done
+
 if [ -z "$SIGN_ID" ]; then
-  echo "no Developer ID Application identity in $KC — cannot sign darwin binaries."
-  echo "Gatekeeper would quarantine them, so this is fatal rather than a warning."
+  echo "No 'Developer ID Application' identity found in any of:" >&2
+  echo "  $KC_CI" >&2
+  echo "  $KC_LOGIN" >&2
+  echo "  the default keychain search list" >&2
+  echo >&2
+  echo "This is the cert that signs the CLI binaries — NOT the Apple" >&2
+  echo "Distribution cert TestFlight uses, so a working TestFlight deploy" >&2
+  echo "does not imply this one exists. Check with:" >&2
+  echo "  security find-identity -v -p codesigning | grep 'Developer ID'" >&2
+  echo "If it lists one, the keychain holding it is locked: set" >&2
+  echo "YAVER_LOGIN_PASSWORD / YAVER_CI_KEYCHAIN_PASSWORD in" >&2
+  echo "~/.yaver/local-secrets.env (0600) and re-run." >&2
+  echo >&2
+  echo "Gatekeeper would quarantine unsigned binaries, so this is fatal." >&2
   exit 1
 fi
 
@@ -96,8 +149,15 @@ fi
 for arch in arm64 amd64; do
   BIN="$OUT/yaver-darwin-$arch"
   echo "== Signing darwin/$arch =="
-  codesign --force --timestamp --options runtime \
-    --sign "$SIGN_ID" --keychain "$KC" "$BIN"
+  # --keychain only when we resolved a specific one; with the default search
+  # list an empty --keychain argument would make codesign fail on a path of "".
+  if [ -n "$KC" ]; then
+    codesign --force --timestamp --options runtime \
+      --sign "$SIGN_ID" --keychain "$KC" "$BIN"
+  else
+    codesign --force --timestamp --options runtime \
+      --sign "$SIGN_ID" "$BIN"
+  fi
   codesign --verify --verbose=2 "$BIN"
 
   if [ "$say_notarize" = "1" ]; then
