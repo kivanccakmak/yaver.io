@@ -233,3 +233,44 @@ export function planRevert(mode: RuntimeMode): RevertPlan | null {
       };
   }
 }
+
+// ── Dismissal ───────────────────────────────────────────────────────────────
+//
+// The badge is polite, which means it can be closed. Two ways, deliberately
+// different in scope:
+//
+//   • THE USER taps "Hide" on the sheet. Lasts for THIS RUN only.
+//   • THE APP passes modeBadge:false (or calls the SDK's setter). Permanent,
+//     because the developer made an informed choice.
+//
+// User dismissal is per-run on purpose. A permanently hidden badge recreates
+// exactly the problem it exists to prevent: a tester who cannot tell an
+// unbuilt branch from the installed app, and cannot find the way back. Being
+// polite means not nagging within a session — it does not mean permanent
+// amnesia about which build you are looking at. A fresh launch, a new attach
+// session or a newly loaded guest bundle is a new context, and the user is
+// entitled to be told again.
+//
+// This is the single place that rule is written down; every SDK mirrors it.
+
+export type BadgeDismissalScope = "run" | "never";
+
+export interface BadgeVisibilityInput {
+  mode: RuntimeMode;
+  /** The app opted out at init (config.modeBadge === false). */
+  appOptedOut?: boolean;
+  /** The user tapped Hide during this run. */
+  userHidThisRun?: boolean;
+}
+
+export function shouldShowModeBadge(input: BadgeVisibilityInput): boolean {
+  if (input.mode === "installed") return false;
+  if (input.appOptedOut) return false;
+  if (input.userHidThisRun) return false;
+  return true;
+}
+
+/** What the "Hide" affordance should say, so the user knows it is not forever. */
+export const BADGE_HIDE_LABEL = "Hide for now";
+export const BADGE_HIDE_EXPLANATION =
+  "Hidden until you next launch this build. It comes back so nobody forgets which app they're testing.";

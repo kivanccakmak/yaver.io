@@ -25,9 +25,12 @@ import { Modal, Pressable, Text, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useColors } from "../context/ThemeContext";
 import {
+  BADGE_HIDE_EXPLANATION,
+  BADGE_HIDE_LABEL,
   planRevert,
   resolveRuntimeMode,
   runtimeModeBadge,
+  shouldShowModeBadge,
   type RuntimeMode,
 } from "../lib/runtimeMode";
 import { ATTACH_SENTINEL_KEY } from "../lib/attachMode";
@@ -41,6 +44,10 @@ export interface YaverModeBadgeProps {
   /** Performs the way-back. The badge never reverts by itself — it asks the
    *  owner of the escape to do it, because only that layer can. */
   onRevert?: (mode: RuntimeMode) => void | Promise<void>;
+  /** Host opt-out. Permanent, unlike the user's per-run Hide, because this is
+   *  a developer making an informed choice rather than someone clearing their
+   *  screen for a minute. */
+  disabled?: boolean;
 }
 
 export function YaverModeBadge(props: YaverModeBadgeProps) {
@@ -48,6 +55,10 @@ export function YaverModeBadge(props: YaverModeBadgeProps) {
   const [sentinel, setSentinel] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [reverting, setReverting] = useState(false);
+  // Per-RUN only, hence component state rather than storage. See
+  // BADGE_HIDE_EXPLANATION: a permanently hidden badge recreates the problem
+  // the badge exists to prevent.
+  const [hidden, setHidden] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -86,8 +97,12 @@ export function YaverModeBadge(props: YaverModeBadgeProps) {
     }
   }, [mode, props]);
 
-  // The installed app shows nothing at all.
+  // The installed app shows nothing at all; nor does a badge the user hid or
+  // the app opted out of.
   if (!badge) return null;
+  if (!shouldShowModeBadge({ mode, userHidThisRun: hidden, appOptedOut: props.disabled })) {
+    return null;
+  }
 
   const markColor = badge.tone === "dev" ? c.accent : c.textMuted;
 
@@ -168,6 +183,22 @@ export function YaverModeBadge(props: YaverModeBadgeProps) {
                   "around this one, which is what makes it impossible to lose."}
               </Text>
             )}
+
+            {/* Polite means closeable. Per-run only — the label says "for
+                now" and the explanation says when it returns, so the user is
+                never surprised by it coming back. */}
+            <Pressable
+              onPress={() => {
+                setHidden(true);
+                setOpen(false);
+              }}
+              style={{ paddingVertical: 10, alignItems: "center" }}
+            >
+              <Text style={{ color: c.textMuted, fontSize: 13 }}>{BADGE_HIDE_LABEL}</Text>
+            </Pressable>
+            <Text style={{ color: c.textMuted, fontSize: 11, textAlign: "center", lineHeight: 15 }}>
+              {BADGE_HIDE_EXPLANATION}
+            </Text>
 
             <Pressable onPress={() => setOpen(false)} style={{ paddingVertical: 10, alignItems: "center" }}>
               <Text style={{ color: c.textMuted, fontSize: 13 }}>Close</Text>

@@ -28,7 +28,7 @@
 // the trap the container's escape-ownership rules exist to prevent — the guest
 // could style over it, or unmount it, and the tester would be stuck.
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, NativeModules, Pressable, Text, View } from 'react-native';
 
 /** True only inside Yaver's container: the YaverInfo native module is
@@ -42,6 +42,51 @@ function isInsideYaver(): boolean {
   }
 }
 
+/**
+ * Per-RUN dismissal, shared by every mounted badge.
+ *
+ * Deliberately in memory, not storage. A permanently hidden badge recreates
+ * exactly the problem the badge exists to prevent: a tester who cannot tell an
+ * unbuilt branch from the installed app, and cannot find the way back. Polite
+ * means not nagging within a session — it does not mean permanent amnesia
+ * about which build you are looking at. A relaunch is a new context.
+ *
+ * An APP that wants it gone for good passes `modeBadge: false` at init. That is
+ * a developer making an informed choice, which is a different thing from a
+ * tester clearing their screen for a minute.
+ */
+let hiddenThisRun = false;
+const hideListeners = new Set<() => void>();
+
+/** Hide the mark for the rest of this run. Exposed on YaverFeedback so a host
+ *  can wire its own "hide" control, and used by the sheet's own button. */
+export function hideYaverModeBadge(): void {
+  hiddenThisRun = true;
+  hideListeners.forEach((l) => {
+    try {
+      l();
+    } catch {
+      /* one bad listener mustn't block the others */
+    }
+  });
+}
+
+/** Bring it back — e.g. when a NEW guest bundle loads and the context changed. */
+export function showYaverModeBadge(): void {
+  hiddenThisRun = false;
+  hideListeners.forEach((l) => {
+    try {
+      l();
+    } catch {
+      /* noop */
+    }
+  });
+}
+
+export function isYaverModeBadgeHidden(): boolean {
+  return hiddenThisRun;
+}
+
 export interface YaverModeBadgeProps {
   /** Corner to sit in. Default bottom-left: bottom-right is where most apps
    *  put a FAB, and the badge must never compete with the app's own action. */
@@ -53,9 +98,19 @@ export interface YaverModeBadgeProps {
 
 export function YaverModeBadge({ position = 'bottom-left', force = false }: YaverModeBadgeProps) {
   const [open, setOpen] = useState(false);
+  const [, bump] = useState(0);
+
+  useEffect(() => {
+    const listener = () => bump((n) => n + 1);
+    hideListeners.add(listener);
+    return () => {
+      hideListeners.delete(listener);
+    };
+  }, []);
 
   // Standalone builds render nothing at all — zero cost, zero pixels.
   if (!force && !isInsideYaver()) return null;
+  if (hiddenThisRun) return null;
 
   const vertical = position.startsWith('top') ? { top: 44 } : { bottom: 28 };
   const horizontal = position.endsWith('left') ? { left: 12 } : { right: 12 };
@@ -118,6 +173,22 @@ export function YaverModeBadge({ position = 'bottom-left', force = false }: Yave
               Shake the device to open Yaver's overlay, where "Back to Yaver" returns you to the
               installed app.
             </Text>
+            {/* Polite means closeable. "for now", never "don't show again":
+                the badge returns next launch so nobody forgets which build
+                they're testing. */}
+            <Pressable
+              onPress={() => {
+                hideYaverModeBadge();
+                setOpen(false);
+              }}
+              style={{ paddingVertical: 10, alignItems: 'center' }}
+            >
+              <Text style={{ color: '#8a8a96', fontSize: 13 }}>Hide for now</Text>
+            </Pressable>
+            <Text style={{ color: '#6b6b76', fontSize: 11, textAlign: 'center', lineHeight: 15 }}>
+              Hidden until you next launch this build.
+            </Text>
+
             <Pressable onPress={() => setOpen(false)} style={{ paddingVertical: 10, alignItems: 'center' }}>
               <Text style={{ color: '#8a8a96', fontSize: 13 }}>Close</Text>
             </Pressable>
