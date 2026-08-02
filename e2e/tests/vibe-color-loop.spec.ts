@@ -314,6 +314,21 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
     new RegExp(`${BOX}|runs and renders`, "i"),
   );
 
+  // EVERYTHING BELOW UNTIL THE BASELINE IS THE DASHBOARD'S UI, NOT THE APP'S.
+  //
+  // The mobile branch above already did the equivalent work in the app's own
+  // idiom: it picked the project by PATH row, took the "Browser Reload" lane
+  // explicitly, and asserted the preview iframe. Then control fell through to
+  // here and ran the dashboard steps anyway — a `<select>` of projects, an
+  // "Ask … to change" composer placeholder, a "Load Targets" button, a
+  // "Web UI in browser" card. The RN app renders none of those, so the mobile
+  // arc died at the `<select>` EVERY time (`resolved to 0 elements`, 63×) and
+  // had never once reached the vibe it exists to test — while the coverage
+  // audit listed mobile as "TESTED — RN-web, phone viewport".
+  //
+  // That is the suite's own false-confidence failure mode, so the gate is
+  // explicit rather than a shared selector that happens to match twice.
+  if (surface !== "mobile") {
   // Project. Option VALUES are absolute paths while the LABEL reads
   // "yaver / mobile · expo", so match the label — a value-substring match
   // happily selects yaver-todo-rn.
@@ -362,6 +377,7 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
   await expect(page.locator("iframe").first(), "the browser-lane preview must render")
     .toBeVisible({ timeout: 90_000 });
   await page.waitForTimeout(12_000);
+  } // end dashboard-only setup
 
   // Baseline. An EMPTY panel and a black app are identical to a sampler, so
   // require real content before trusting any colour reading.
