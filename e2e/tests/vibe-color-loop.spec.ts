@@ -300,7 +300,13 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
     // "yaver / mobile" display name — the same project wears different names on
     // the two surfaces, which is why this arc cannot reuse the web selector.
     const projectPath = process.env.VIBE_PROJECT_PATH || "/root/Workspace/yaver.io/mobile";
-    const row = page.getByText(projectPath, { exact: true }).first();
+    // NOT exact-text on the full path: the app TRUNCATES it in the list
+    // ("/root/Workspace/yaver.io/demo/mob…"), so an exact match can never hit —
+    // measured from the run-7 screenshot, which showed a healthy, connected
+    // Projects screen and a row the locator could not see. Match the tail
+    // segment instead, which is what survives truncation.
+    const projectLeaf = projectPath.split("/").filter(Boolean).slice(-2).join("/");
+    const row = page.getByText(new RegExp(projectLeaf.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).first();
     await expect(row, `mobile: no project row for ${projectPath}`).toBeVisible({ timeout: 30_000 });
     await row.click();
     await page.waitForTimeout(12_000);
@@ -338,7 +344,13 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
       const base = (process.env.MOBILE_WEB_URL || "").replace(/\/$/, "");
       await page.goto(`${base}/apps`, { waitUntil: "domcontentloaded", timeout: 60_000 });
       await page.waitForTimeout(6000);
-      const row = page.getByText(projectPath, { exact: true }).first();
+      // NOT exact-text on the full path: the app TRUNCATES it in the list
+    // ("/root/Workspace/yaver.io/demo/mob…"), so an exact match can never hit —
+    // measured from the run-7 screenshot, which showed a healthy, connected
+    // Projects screen and a row the locator could not see. Match the tail
+    // segment instead, which is what survives truncation.
+    const projectLeaf = projectPath.split("/").filter(Boolean).slice(-2).join("/");
+    const row = page.getByText(new RegExp(projectLeaf.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).first();
       if (await row.count()) {
         await row.click().catch(() => {});
         await page.waitForTimeout(6000);
@@ -368,7 +380,7 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
       // Back to the preview so the colour can be read.
       await page.goto(`${base}/apps`, { waitUntil: "domcontentloaded", timeout: 60_000 });
       await page.waitForTimeout(10_000);
-      const back = page.getByText(projectPath, { exact: true }).first();
+      const back = page.getByText(new RegExp(projectPath.split("/").filter(Boolean).slice(-2).join("/"))).first();
       if (await back.count()) {
         await back.click().catch(() => {});
         await page.waitForTimeout(8000);
