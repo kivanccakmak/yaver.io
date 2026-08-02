@@ -132,6 +132,24 @@ async function waitForColor(page: Page, want: string, budgetMs: number) {
 }
 
 /** Drive one full black → target → black arc on whichever surface is loaded. */
+/**
+ * Fail immediately if the surface is sitting on its sign-in screen.
+ *
+ * Without this the mobile arc spent FORTY MINUTES clicking for a "Vibing" tab
+ * that could never appear, then timed out pointing at a `waitForTimeout` — a
+ * dead end with no stated cause, which is precisely the defect this whole suite
+ * exists to remove from the product. A test may not do what it forbids.
+ */
+async function assertSignedIn(page: Page, surface: YaverSurface) {
+  const body = await page.evaluate(() => document.body?.innerText || "");
+  const onLogin = /Continue with (Apple|Google|GitHub|GitLab|Microsoft|Email)/i.test(body)
+    && !/Vibing|Devices/i.test(body);
+  expect(onLogin,
+    `${surface} is on the SIGN-IN screen — the seeded session was not accepted. ` +
+    `RN-web reads yaver.secure.yaver_auth_token AND yaver.secure.yaver_user; ` +
+    `seeding only the token leaves the app logged out.`).toBe(false);
+}
+
 async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
   // VIEWPORT FIRST. A loop that drives the right app at the wrong size tests a
   // layout no user ever sees — and reports green about it. Assert the surface
@@ -145,6 +163,8 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
   }));
   const vpCheck = viewportMatchesSurface(surface, vp);
   expect(vpCheck.ok, `${surface} viewport: ${vpCheck.reason} (saw ${vp.width}x${vp.height}, touch=${vp.hasTouch}, mobileUA=${vp.isMobile})`).toBe(true);
+
+  await assertSignedIn(page, surface);
 
   // Vibing
   await page.getByText(/^Vibing$/).first().click().catch(() => {});
@@ -281,11 +301,17 @@ test.describe("vibe colour closed loop", () => {
       // seeding the wrong one leaves the app on its login screen forever.
       storageState: undefined,
     });
+    // Seed BOTH keys. auth.ts reads yaver_auth_token AND yaver_user through
+    // secureStoreCompat, which namespaces web storage as "yaver.secure.<key>".
+    // Seeding only the token leaves the app on its sign-in screen — which is
+    // exactly what happened, and cost a forty-minute run to notice.
     const token = process.env.YAVER_TEST_TOKEN || "";
+    const userJson = process.env.YAVER_TEST_USER || "";
     if (token) {
-      await mobileCtx.addInitScript((t) => {
+      await mobileCtx.addInitScript(({ t, u }) => {
         localStorage.setItem("yaver.secure.yaver_auth_token", t as string);
-      }, token);
+        if (u) localStorage.setItem("yaver.secure.yaver_user", u as string);
+      }, { t: token, u: userJson });
     }
     const page = await mobileCtx.newPage();
     try {
