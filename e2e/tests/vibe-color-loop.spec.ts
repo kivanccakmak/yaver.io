@@ -166,8 +166,29 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
 
   await assertSignedIn(page, surface);
 
-  // Vibing
-  await page.getByText(/^Vibing$/).first().click().catch(() => {});
+  // Navigate to the vibe surface. The dashboard has a "Vibing" nav item; the
+  // MOBILE app has bottom tabs (Tasks / Projects / More) whose labels render
+  // doubled (icon + label), so an exact-text match on "Projects" misses.
+  if (surface === "mobile") {
+    // Mobile bottom tabs (Tasks / Projects / More). Labels render doubled
+    // (icon + label), so an exact-text match on "Projects" misses.
+    await page.locator('[role=button],button,a').filter({ hasText: /Projects/ }).last()
+      .click().catch(() => {});
+    await page.waitForTimeout(8000);
+
+    // ROUTE CHANGED BUT VIEW DID NOT — measured 2026-08-02 on the RN-web build.
+    // The URL becomes /apps while the screen still renders the Tasks list
+    // ("Active · N", "Review · N"). Assert the VIEW, never the URL: a router
+    // that navigates without re-rendering is exactly the false green this suite
+    // exists to catch, and checking page.url() would have passed it.
+    const afterNav = await page.evaluate(() => document.body?.innerText || "");
+    expect(/Active · \d|Review · \d/.test(afterNav),
+      `mobile: the Projects tab changed the route to ${page.url()} but the VIEW is still the Tasks list — ` +
+      `the RN-web build navigates without re-rendering, so the project/preview surface is unreachable.`)
+      .toBe(false);
+  } else {
+    await page.getByText(/^Vibing$/).first().click().catch(() => {});
+  }
   await page.waitForTimeout(8000);
 
   const body = await page.evaluate(() => document.body.innerText);
@@ -301,22 +322,29 @@ test.describe("vibe colour closed loop", () => {
       // seeding the wrong one leaves the app on its login screen forever.
       storageState: undefined,
     });
-    // Seed BOTH keys. auth.ts reads yaver_auth_token AND yaver_user through
-    // secureStoreCompat, which namespaces web storage as "yaver.secure.<key>".
-    // Seeding only the token leaves the app on its sign-in screen — which is
-    // exactly what happened, and cost a forty-minute run to notice.
-    const token = process.env.YAVER_TEST_TOKEN || "";
-    const userJson = process.env.YAVER_TEST_USER || "";
-    if (token) {
-      await mobileCtx.addInitScript(({ t, u }) => {
-        localStorage.setItem("yaver.secure.yaver_auth_token", t as string);
-        if (u) localStorage.setItem("yaver.secure.yaver_user", u as string);
-      }, { t: token, u: userJson });
-    }
     const page = await mobileCtx.newPage();
     try {
       await page.goto(mobileUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
-      await page.waitForTimeout(8000);
+      await page.waitForTimeout(9000);
+
+      // SIGN IN THROUGH THE APP'S OWN FLOW, not by seeding storage.
+      //
+      // The first attempt seeded yaver.secure.yaver_auth_token directly and the
+      // app stayed logged out: auth.ts reads a user record too, and the web
+      // dashboard never stores one, so the shape was not copyable. Driving the
+      // real "Continue with Email" flow is both what a user does and what
+      // actually works — verified: the app reaches
+      // "Tasks · Connected · Primary · ubuntu-4gb-hel1-1".
+      const emailBtn = page.getByText(/Continue with Email/i).first();
+      if (await emailBtn.count()) {
+        await emailBtn.click();
+        await page.waitForTimeout(4000);
+        await page.getByPlaceholder("Email").first().fill(creds().email);
+        await page.getByPlaceholder("Password").first().fill(creds().password);
+        await page.getByText(/^Sign In$/).first().click();
+        await page.waitForTimeout(15_000);
+      }
+
       await runVibeArc(page, "red", "mobile");
     } finally {
       await mobileCtx.close().catch(() => {});
