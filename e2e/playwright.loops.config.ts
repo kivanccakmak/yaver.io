@@ -16,7 +16,7 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./tests",
-  testMatch: ["**/vibe-color-loop.spec.ts"],
+  testMatch: ["**/vibe-color-loop.spec.ts", "**/mobile-tab-navigation.spec.ts"],
   // A vibe turn is a real runner round trip plus a rebuild plus a reload.
   timeout: 45 * 60_000,
   expect: { timeout: 30_000 },

@@ -124,6 +124,32 @@ export async function initWhisper(
 ): Promise<void> {
   if (isModelReady && whisperContext) return;
   if (isInitializing) return;
+
+  // WHISPER.RN IS NATIVE-ONLY. NEVER require() IT ON WEB.
+  //
+  // whisper.rn's entry does `TurboModuleRegistry.get('RNWhisper')` at MODULE
+  // LOAD. On react-native-web TurboModuleRegistry is undefined, so the require
+  // throws `Cannot read properties of undefined (reading 'get')` the moment
+  // this function is reached — not when speech is used, but during the app's
+  // speech pre-init on startup.
+  //
+  // Measured 2026-08-02 driving the RN-web build: that fatal fired on load and
+  // again on navigation, and the Projects tab changed the URL to /apps while
+  // the view never left the Tasks list. A native module imported on web is the
+  // drift class CLAUDE.md names — invisible to `tsc`, fatal at runtime, on the
+  // surface least likely to be tested.
+  //
+  // Bailing with a NAMED error rather than silently: on-device speech genuinely
+  // cannot work in a browser, and a caller that gets a clear sentence can fall
+  // back to a cloud provider. A silent no-op would leave the mic dead with no
+  // explanation, which is the same defect wearing a quieter coat.
+  if (Platform.OS === "web") {
+    throw new Error(
+      "On-device speech (whisper.rn) is native-only and cannot run in a browser. " +
+      "Pick a cloud speech provider for the web surface.",
+    );
+  }
+
   isInitializing = true;
 
   try {

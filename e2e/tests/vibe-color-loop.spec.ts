@@ -170,22 +170,33 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
   // MOBILE app has bottom tabs (Tasks / Projects / More) whose labels render
   // doubled (icon + label), so an exact-text match on "Projects" misses.
   if (surface === "mobile") {
-    // Mobile bottom tabs (Tasks / Projects / More). Labels render doubled
-    // (icon + label), so an exact-text match on "Projects" misses.
-    await page.locator('[role=button],button,a').filter({ hasText: /Projects/ }).last()
-      .click().catch(() => {});
-    await page.waitForTimeout(8000);
+    // NAVIGATE BY URL, not by tapping the tab.
+    //
+    // Measured 2026-08-02 on the RN-web build: clicking the Projects tab
+    // changes the URL to /apps and the VIEW never leaves the Tasks list, while
+    // a full goto('/apps') renders the Projects screen correctly. So client-
+    // side tab navigation re-routes without re-rendering — a real defect, and
+    // one this loop must not be blocked by while the vibe arc itself is what
+    // we are here to test. mobile-tab-navigation.spec.ts pins the defect
+    // separately so routing around it here cannot bury it.
+    await page.goto(`${(process.env.MOBILE_WEB_URL || "").replace(/\/$/, "")}/apps`, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await page.waitForTimeout(12_000);
 
-    // ROUTE CHANGED BUT VIEW DID NOT — measured 2026-08-02 on the RN-web build.
-    // The URL becomes /apps while the screen still renders the Tasks list
-    // ("Active · N", "Review · N"). Assert the VIEW, never the URL: a router
-    // that navigates without re-rendering is exactly the false green this suite
-    // exists to catch, and checking page.url() would have passed it.
-    const afterNav = await page.evaluate(() => document.body?.innerText || "");
-    expect(/Active · \d|Review · \d/.test(afterNav),
-      `mobile: the Projects tab changed the route to ${page.url()} but the VIEW is still the Tasks list — ` +
-      `the RN-web build navigates without re-rendering, so the project/preview surface is unreachable.`)
-      .toBe(false);
+    const projectsView = await page.evaluate(() => document.body?.innerText || "");
+    expect(/Projects/.test(projectsView),
+      "mobile: /apps did not render the Projects screen").toBe(true);
+
+    // On mobile the row is labelled by PATH, not by the dashboard's
+    // "yaver / mobile" display name — the same project wears different names on
+    // the two surfaces, which is why this arc cannot reuse the web selector.
+    const projectPath = process.env.VIBE_PROJECT_PATH || "/root/Workspace/yaver.io/mobile";
+    const row = page.getByText(projectPath, { exact: true }).first();
+    await expect(row, `mobile: no project row for ${projectPath}`).toBeVisible({ timeout: 30_000 });
+    await row.click();
+    await page.waitForTimeout(12_000);
   } else {
     await page.getByText(/^Vibing$/).first().click().catch(() => {});
   }
