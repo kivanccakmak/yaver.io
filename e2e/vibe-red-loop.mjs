@@ -105,14 +105,20 @@ async function samplePreview(label) {
     c.width = img.width; c.height = img.height;
     const g = c.getContext('2d');
     g.drawImage(img, 0, 0);
-    // Sample a band across the middle and take the modal colour, so a logo or
-    // a button under the centre point cannot decide the verdict.
-    const y = Math.floor(img.height * 0.55);
+    // Sample a GRID over the whole frame, not one row.
+    //
+    // A single band at 55% height ran straight through the sign-in BUTTONS,
+    // whose fill is #1a1a1a — so a fully red login screen sampled as "black"
+    // and the loop reported failure for a vibe that had plainly worked. The
+    // background is most of the area, so a grid lets it win on its own merits
+    // instead of depending on which row happens to miss the controls.
     const counts = new Map();
-    for (let x = Math.floor(img.width * 0.1); x < img.width * 0.9; x += 4) {
-      const d = g.getImageData(x, y, 1, 1).data;
-      const k = `${d[0]},${d[1]},${d[2]}`;
-      counts.set(k, (counts.get(k) || 0) + 1);
+    for (let yy = Math.floor(img.height * 0.05); yy < img.height * 0.95; yy += 8) {
+      for (let xx = Math.floor(img.width * 0.05); xx < img.width * 0.95; xx += 8) {
+        const d = g.getImageData(xx, yy, 1, 1).data;
+        const k = `${d[0]},${d[1]},${d[2]}`;
+        counts.set(k, (counts.get(k) || 0) + 1);
+      }
     }
     let best = '0,0,0', n = -1;
     for (const [k, v] of counts) if (v > n) { best = k; n = v; }
