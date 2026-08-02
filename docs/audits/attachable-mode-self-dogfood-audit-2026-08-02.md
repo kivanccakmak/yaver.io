@@ -586,3 +586,41 @@ metadata-valid; treat it as best-effort until someone actually needs Unity.
 That is a pre-existing hole (the whole Kotlin SDK is in it, not just this file),
 and it is worth closing with a minimal Gradle module + a CI job — an SDK nothing
 compiles is the definition of an unverified guard.
+
+## 11. Unity removed, Kotlin made verifiable (2026-08-02)
+
+Both verification gaps in §10 are closed, in opposite directions.
+
+**Unity: deleted.** Owner's call ("not important at all"). It was never
+published — `docs/unity-openupm-publishing.md` described *prep*, and no release
+was ever cut — and all four of its CI jobs were permanently red on a
+`UNITY_LICENSE` secret that is not set, exiting before they compiled anything.
+A permanently-red job is worse than no job: it trains people to ignore CI.
+
+Removed as one unit so nothing dangles: `sdk/feedback/unity/`,
+`sdk/feedback/test-app/unity/`, `unity-sdk-tests.yml`, `unity-sample-ci.yml`,
+four unity jobs inside `ci.yml`, `package-feedback-unity` + its dispatch input
+in `release-sdk.yml`, `scripts/validate-unity-package.mjs`, and two unity-only
+docs. `CLAUDE.md` and `sdk/feedback/README.md` both claimed a Unity SDK and *no*
+Kotlin/Swift ones; both now match what is on disk.
+
+**Kotlin: given a build.** It shipped source-only — no build file, no CI job,
+nothing anywhere that compiled it — so every change landed there was unverified
+by construction, including its own unit test, which had never run. That is the
+familiar shape: the inventory says "there is a Kotlin SDK", the operation says
+nothing has ever built it.
+
+It now has an Android library module (AGP 8.5, minSdk 21) and a
+`kotlin-sdk-tests` job. Two traps the build had to dodge, both worth keeping:
+
+- the source uses `src/main/kotlin`, not AGP's default layout, so `sourceSets`
+  points at what exists rather than moving six files and losing their history;
+- unit tests get a real `org.json`, because android.jar's stub throws
+  "not mocked" for every method — which would make a passing `ReloadActions`
+  test impossible and a failing one uninformative.
+
+Gradle was deliberately NOT run locally: an Android toolchain belongs in CI, and
+this machine is shared with other sessions.
+
+**Badge ledger, corrected:** react-native, web, flutter, kotlin, swift. Unity is
+gone. Every remaining surface now has something that compiles it.
