@@ -175,7 +175,17 @@ for abi in arm64-v8a armeabi-v7a x86 x86_64; do
   src=$(find "$WORKLETS_ANDROID/build/intermediates/cxx/RelWithDebInfo" -path "*/obj/$abi/libworklets.so" -print -quit 2>/dev/null || true)
   if [ -n "$src" ]; then
     mkdir -p "$WORKLETS_EXPECTED/$abi"
-    cp "$src" "$WORKLETS_EXPECTED/$abi/libworklets.so"
+    dst="$WORKLETS_EXPECTED/$abi/libworklets.so"
+    # SAME FILE IS NOT A FAILURE (2026-08-02). AGP can make these two paths
+    # resolve to one inode, and `cp a a` then exits NON-ZERO with "are
+    # identical (not copied)". Under `set -e` that killed the deploy right
+    # after "BUILD SUCCESSFUL" and before bundleRelease — so the log's last
+    # useful line said success, no .aab was ever produced, and nothing reached
+    # Play. A bridge step that is already satisfied must be a no-op, not a
+    # fatal error.
+    if [ ! -e "$dst" ] || ! [ "$src" -ef "$dst" ]; then
+      cp -f "$src" "$dst"
+    fi
   fi
 done
 if [ ! -f "$WORKLETS_EXPECTED/arm64-v8a/libworklets.so" ]; then
