@@ -305,6 +305,9 @@ func NewHTTPServer(port int, token, ownerUserID, deviceID, convexURL, hostname s
 		hostShareWorkspaceMgr: hostShareWorkspaceMgr,
 		heartbeatKick:         make(chan struct{}, 1),
 	}
+	// Lets a credential recovery re-dispatch whatever the user typed while the
+	// runner was signed out, without threading a TaskManager into the auth paths.
+	registerParkedTurnReplay(taskMgr)
 	if s.finalizeMgr != nil && taskMgr != nil {
 		s.finalizeMgr.SetPlacementConfig(TaskIngressPlacementConfig{
 			ConvexURL:     convexURL,
@@ -1672,6 +1675,10 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// folds any "authConfigured flipped false" results into the dev
 	// incidents Convex stream the mobile app already consumes.
 	go s.runnerAuthHealthLoop(ctx)
+	// Keeps this box's Codex credential alive while nobody is watching. The health
+	// loop above only OBSERVES (and its probe cannot even see expiry); this one
+	// renews. Silent by contract — see runner_auth_keepalive.go.
+	go s.codexCredentialKeepaliveLoop(ctx)
 
 	log.Printf("HTTP server listening on %s:%d", bindHost, s.port)
 	if len(s.allowedCIDRs) > 0 {
@@ -5428,6 +5435,45 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 	}
 	if strings.TrimSpace(body.Input) == "" {
 		jsonError(w, http.StatusBadRequest, "input is required")
+		return
+	}
+
+	// Keep the credential alive BEFORE spawning the turn.
+	//
+	// This is the exact seam the 2026-08-02 audit found missing: /tasks/{id}/continue
+	// went straight to the spawn, so a follow-up on a stale Codex token spent the
+	// user's prompt on a process that could only 401 — and the prompt was then gone.
+	// Because a fresh Codex process starts per turn, renewing here is both the
+	// keep-alive and the workaround for openai/codex#17041.
+	//
+	// Silent on success, and non-blocking on a transient failure (see
+	// ensureRunnerCredentialFreshForTurn). Only a credential that genuinely cannot
+	// serve this turn stops us — and then we PARK the prompt rather than burn it.
+	turnRunner := strings.TrimSpace(body.Runner)
+	if turnRunner == "" {
+		if existing, ok := s.taskMgr.GetTask(id); ok && existing != nil {
+			turnRunner = existing.RunnerID
+		}
+	}
+	if cred := ensureRunnerCredentialFreshForTurn(r.Context(), turnRunner); !cred.Healthy() {
+		parked := s.taskMgr.ParkPendingTurn(id, body.Input, body.Images, TaskResumeOptions{
+			RunnerID: body.Runner,
+			Model:    body.Model,
+			Mode:     body.Mode,
+		})
+		log.Printf("[HTTP] Task %s follow-up parked — codex credential not usable: %s", id, cred.Reason)
+		jsonReply(w, http.StatusConflict, map[string]interface{}{
+			"ok":     false,
+			"taskId": id,
+			"code":   cred.Code,
+			"error":  cred.Reason,
+			// parked=true is the promise the surface renders against: the user's
+			// words were kept, and they run automatically once auth is restored.
+			// Without it the only honest UI is "type that again".
+			"parked":     parked,
+			"reauthable": cred.Reauthable,
+			"runner":     normalizeRunnerID(turnRunner),
+		})
 		return
 	}
 

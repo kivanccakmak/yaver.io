@@ -2594,6 +2594,27 @@ func (tm *TaskManager) waitForSessionSlot(task *Task) {
 
 // startProcess spawns the configured runner with the task's prompt.
 func (tm *TaskManager) startProcess(task *Task) error {
+	// Keep the runner's credential alive before we spend anything on this spawn.
+	//
+	// startProcess is the ONE seam every dispatch passes through — new tasks,
+	// follow-ups, MCP calls, webhooks, the scheduler, voice. Putting the
+	// keep-alive here rather than at each call site is the difference between
+	// fixing the path the 2026-08-02 report happened to describe (a follow-up
+	// from the phone) and fixing the class.
+	//
+	// Free when there is nothing to do: one file read and a base64 decode, no
+	// fork, no network, no tokens (see refreshCodexCredentialIfNeeded). It only
+	// reaches the network inside the renewal window — precisely when a spawn
+	// would otherwise be about to 401.
+	//
+	// Deliberately NON-FATAL. A renewal that cannot happen must not stop a task
+	// whose credential is still valid; the callers that need to REFUSE a
+	// dispatch (continueTask parks the prompt) decide that themselves with the
+	// same verdict. Blocking here on a network blip would invent an outage.
+	if res := ensureRunnerCredentialFreshForTurn(context.Background(), task.RunnerID); !res.Healthy() {
+		log.Printf("[task %s] runner credential not renewable before spawn (%s): %s", task.ID, res.Outcome, res.Reason)
+	}
+
 	// Wait for other Claude Code sessions to finish (if --wait-for-session is set)
 	tm.waitForSessionSlot(task)
 
@@ -3213,7 +3234,10 @@ func (tm *TaskManager) startProcess(task *Task) error {
 					// instead of waiting for the user to discover the
 					// stale state by failing another task. Mirrors the
 					// mobile ErrorMessage.detectRunnerAuthFailure patterns.
-					if hitRunner, reason := ClassifyRunnerAuthFailure(task.Output); hitRunner != "" {
+					// Tail only — see runnerAuthClassifyTail. Scanning the whole
+					// output let a task that merely PRINTED an auth string (this
+					// repo's own source is full of them) sign a healthy runner out.
+					if hitRunner, reason := ClassifyRunnerAuthFailure(runnerAuthClassifyTail(task.Output)); hitRunner != "" {
 						MarkRunnerAuthInvalidReason(hitRunner, reason)
 						log.Printf("[task %s] auth-failure pattern detected for runner %q — invalidated runner auth status: %s", task.ID, hitRunner, reason)
 						// Next periodic heartbeat (~30s) propagates the

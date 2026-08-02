@@ -831,6 +831,18 @@ func startRunnerBrowserAuthSession(runner string, tr tenantRuntime, onTerminal f
 				if state.Runner == "claude" && !tr.Enabled {
 					ensureClaudeOnboardingForLocalHome()
 				}
+				// A completed sign-in is the OTHER proof that the blocker
+				// cleared — and on a headless box it is the ONLY one, because
+				// `codex login --device-auth` establishes a brand-new
+				// credential rather than renewing an old one, so the keep-alive
+				// refresh path never runs.
+				//
+				// Without this, the whole parked-turn promise breaks exactly
+				// where the user is most likely to see it: they get told "your
+				// message will send once you're signed in", they go and sign in
+				// on the box, and nothing happens. A recovery path that does
+				// not resume the work is not a recovery.
+				replayParkedTurnsAfterAuthRecovery(state.Runner + " sign-in completed")
 			}
 			refreshRunnerBrowserAuthSnapshot(state)
 		})
@@ -1419,6 +1431,11 @@ func (s *HTTPServer) handleRunnerAuthCredentialsImport(w http.ResponseWriter, r 
 	if runner == "claude" && !tr.Enabled {
 		ensureClaudeOnboardingForLocalHome()
 	}
+	// Imported credentials are the third way a blocked runner becomes usable
+	// again (browser sign-in and keep-alive renewal are the other two). Every one
+	// of them must resume the work the user parked, or the promise only holds on
+	// whichever path the last author happened to think about.
+	replayParkedTurnsAfterAuthRecovery(runner + " credentials imported")
 	log.Printf("[runner-auth] imported %s credentials to %s (%d bytes)", runner, dest, len(creds))
 	jsonReply(w, http.StatusOK, map[string]any{
 		"ok":     true,

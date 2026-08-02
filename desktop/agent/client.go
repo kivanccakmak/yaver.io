@@ -772,10 +772,36 @@ func httpContinueTask(ctx context.Context, client *http.Client, baseURL, authHea
 	defer resp.Body.Close()
 
 	var result struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
+		OK         bool   `json:"ok"`
+		Error      string `json:"error"`
+		Code       string `json:"code"`
+		Parked     bool   `json:"parked"`
+		Reauthable bool   `json:"reauthable"`
+		Runner     string `json:"runner"`
 	}
 	json.NewDecoder(resp.Body).Decode(&result)
+	// PARKED is not FAILED. The agent kept this prompt and will replay it into
+	// the same session once the runner is signed in again — so the CLI must not
+	// report it as an error the user should retype past. Same contract mobile
+	// and web render (reason_codes.go); keyed off `parked`/`code`, never prose.
+	//
+	// The CLI matters most here, not least: it is the surface you are ON when
+	// you SSH to a headless box to fix the credential, so it is the one most
+	// likely to be watching when the replay fires.
+	if !result.OK && result.Parked {
+		runner := strings.TrimSpace(result.Runner)
+		if runner == "" {
+			runner = "the runner"
+		}
+		fmt.Printf("[task %s] message saved — %s needs signing in on this machine; it will send by itself once you are.\n", taskID, runner)
+		if result.Reauthable && strings.EqualFold(runner, "codex") {
+			fmt.Printf("           sign in with: codex login --device-auth\n")
+		}
+		if strings.TrimSpace(result.Error) != "" {
+			fmt.Printf("           %s\n", strings.TrimSpace(result.Error))
+		}
+		return taskID, nil
+	}
 	if !result.OK {
 		return taskID, fmt.Errorf("continue: %s", result.Error)
 	}

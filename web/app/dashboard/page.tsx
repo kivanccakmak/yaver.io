@@ -115,6 +115,7 @@ import {
   type PendingCloudDispatch,
 } from "@/lib/pending-cloud-dispatch";
 import { CloudWorkspaceRequiredError } from "@/lib/cloud-workspace-required";
+import { ParkedTurnError, parkedTurnNotice } from "@/lib/parkedTurn";
 import StudioPanel from "@/components/dashboard/StudioPanel";
 import QAPanel from "@/components/dashboard/QAPanel";
 import WebTestsPanel from "@/components/dashboard/WebTestsPanel";
@@ -2588,6 +2589,19 @@ export default function DashboardPage() {
               queued: true,
             },
           ];
+        });
+        return;
+      }
+      // PARKED is not FAILED. The agent kept this prompt and replays it into the
+      // same session once the runner's credential is restored, so peeling the
+      // message and handing the text back would make the user resend it — and
+      // then it runs twice when the replay fires. Mirrors the queued-dispatch
+      // shape above, which is the same situation with a different blocker.
+      if (err instanceof ParkedTurnError) {
+        const notice = parkedTurnNotice(err);
+        setChatMsgs((prev) => {
+          const base = prev.slice(0, Math.max(0, prev.length - 1));
+          return [...base, { role: "assistant", text: notice.line, queued: true }];
         });
         return;
       }

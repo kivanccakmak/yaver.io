@@ -31,6 +31,7 @@ import { cacheTaskList, cacheTaskOutput, getCachedTaskList, getDeletedTaskIds } 
 // loads AsyncStorage, so importing it here is import-safe.
 import { appLog } from "./logger";
 import { describeDirectProbeFailure, isUnroutableFailure } from "./directProbeFailure";
+import { ParkedTurnError, type ParkedTurnRejection } from "./parkedTurn";
 import { reattachDelayMs } from "./taskStreamRecovery";
 
 /**
@@ -2747,6 +2748,26 @@ export class QuicClient {
         );
       }
       throw e;
+    }
+    // 409 = the agent refused to spend this prompt on a runner it already knows
+    // cannot serve it, and PARKED the words instead (desktop/agent: continueTask →
+    // ParkPendingTurn). This is the good outcome, not a failure: the follow-up
+    // runs by itself the moment the credential is restored, so the message must
+    // NOT read like "send it again".
+    //
+    // Keyed off the structured `code`, never a regex on prose — mobile already
+    // carries three divergent relay-auth matchers and they drift by construction.
+    if (res.status === 409) {
+      let parked: ParkedTurnRejection | null = null;
+      try {
+        parked = (await res.json()) as ParkedTurnRejection;
+      } catch {
+        // fall through to the generic error below
+      }
+      if (parked?.parked) {
+        throw new ParkedTurnError(parked);
+      }
+      if (parked?.error) throw new Error(parked.error);
     }
     if (!res.ok) throw new Error(`Failed to continue task: ${res.status}`);
   }

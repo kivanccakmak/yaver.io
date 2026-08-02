@@ -11,6 +11,7 @@ import { CONVEX_URL } from "@/lib/constants";
 import { decodeCloudWorkspaceRequiredError } from "@/lib/cloud-workspace-required";
 import { classifyRelayLimit, explainRelayDeny } from "./relayDeny";
 import { resolveUsableModel } from "./runnerModelCompat";
+import { ParkedTurnError, type ParkedTurnRejection } from "./parkedTurn";
 import { isUsablePublicEndpoint } from "./endpoints";
 import { planReconnect } from "./reconnectLadder";
 import webPkg from "../package.json";
@@ -2370,6 +2371,19 @@ export class AgentClient {
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ input }),
     });
+    // 409 = the agent kept the prompt instead of spending it on a runner it
+    // already knows cannot serve it. Not a failure — a promise. Keyed off the
+    // structured `code`, never a regex on the sentence.
+    if (res.status === 409) {
+      let parked: ParkedTurnRejection | null = null;
+      try {
+        parked = (await res.json()) as ParkedTurnRejection;
+      } catch {
+        // fall through to the generic error below
+      }
+      if (parked?.parked) throw new ParkedTurnError(parked);
+      if (parked?.error) throw new Error(parked.error);
+    }
     if (!res.ok) throw new Error(`Failed to continue task: ${res.status}`);
   }
 

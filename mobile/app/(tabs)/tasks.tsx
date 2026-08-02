@@ -100,6 +100,7 @@ import { DevPreview } from "../../src/components/DevPreview";
 import { Badge } from "../../src/components/Badge";
 import { ScreenContextChip } from "../../src/components/ScreenContextChip";
 import RunnerAuthModal from "../../src/components/RunnerAuthModal";
+import { ParkedTurnError, parkedTurnNotice } from "../../src/lib/parkedTurn";
 import { OpenCodeConfigModal } from "../../src/components/OpenCodeConfigModal";
 import {
   runYaverAgent,
@@ -4021,6 +4022,45 @@ export default function TasksScreen() {
       // Input already cleared optimistically above — just refresh.
       await fetchTasks();
     } catch (err) {
+      // PARKED is not FAILED, and the difference is load-bearing.
+      //
+      // When the agent answers 409 `parked:true` it KEPT the user's words and
+      // will replay them into this same session the moment the runner's
+      // credential is restored. Doing the normal failure dance here — roll the
+      // message back out of the UI and say "tap Send to try again" — would make
+      // the user retype it, and then the prompt runs TWICE when the replay
+      // fires. So: leave the optimistic turn on screen (it is real work that is
+      // genuinely queued), and say so in one line, with the sign-in as the only
+      // action when signing in is what unblocks it.
+      if (err instanceof ParkedTurnError) {
+        const notice = parkedTurnNotice(err);
+        setIsSendingFollowUp(false);
+        Alert.alert(
+          "Message saved",
+          notice.line,
+          notice.action
+            ? [
+                { text: "Later", style: "cancel" },
+                {
+                  text: notice.action.label,
+                  // The existing in-place sign-in modal, not a route push: it
+                  // runs the device-auth flow against the machine that is
+                  // actually blocked and returns the user to this task, which
+                  // is the whole point of a route-to-fix.
+                  onPress: () =>
+                    openRunnerAuthModal(
+                      err.runner || "codex",
+                      // Same target resolution the rest of this screen uses, so
+                      // the sign-in lands on the machine that is actually
+                      // blocked rather than whichever device is merely focused.
+                      (selectedTask ? deviceForTask(selectedTask)?.id || selectedTask.deviceId : null) || activeDevice?.id || null,
+                    ),
+                },
+              ]
+            : [{ text: "OK" }],
+        );
+        return;
+      }
       // The send failed, so the message never reached the runner. Take the
       // optimistic turn back out rather than leaving a phantom message.
       rollbackOptimisticTurn();
