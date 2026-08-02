@@ -216,8 +216,25 @@ echo "Build $CURRENT_BUILD → $NEW_BUILD"
 ls -la /tmp/Yaver.xcarchive 2>/dev/null || true
 rm -rf /tmp/Yaver.xcarchive
 
+# DERIVED DATA MUST OUTLIVE /tmp (2026-08-02).
+#
+# This passed `-derivedDataPath /tmp/YaverBuild`. macOS purges /tmp, so the
+# incremental build cache was gone by the next deploy and EVERY archive was a
+# cold build: measured at 2,270 compiled files, 5.8 GB of build products, and
+# ~45 minutes of wall clock for a change that touched a handful of TS files.
+# The script was already the incremental path in every other respect — no
+# `clean`, no `prebuild` — so the one flag was the whole cost.
+#
+# ~/.yaver/build/ios persists, is owner-only, and is outside the repo so it
+# can never be swept by a `git clean`. Override with YAVER_IOS_DERIVED_DATA if
+# a run genuinely wants a throwaway cache (a signing-cache bisect, say).
+DERIVED="${YAVER_IOS_DERIVED_DATA:-$HOME/.yaver/build/ios}"
+mkdir -p "$DERIVED"
+CACHE_STATE="warm"
+[ -d "$DERIVED/Build" ] || CACHE_STATE="COLD (first archive here — expect the slow one)"
+
 # Archive
-echo "Archiving..."
+echo "Archiving... (derived data: $DERIVED — $CACHE_STATE)"
 xcodebuild -workspace Yaver.xcworkspace -scheme Yaver -configuration Release \
   -archivePath /tmp/Yaver.xcarchive archive \
   DEVELOPMENT_TEAM="${APPLE_TEAM_ID:?Set APPLE_TEAM_ID}" CODE_SIGN_STYLE=Automatic \
@@ -226,7 +243,7 @@ xcodebuild -workspace Yaver.xcworkspace -scheme Yaver -configuration Release \
   -authenticationKeyPath "$AUTH_KEY" \
   -authenticationKeyID "$AUTH_KEY_ID" \
   -authenticationKeyIssuerID "$AUTH_KEY_ISSUER" \
-  -derivedDataPath /tmp/YaverBuild 2>&1 | tee /tmp/arch_full.log | tail -3
+  -derivedDataPath "$DERIVED" 2>&1 | tee /tmp/arch_full.log | tail -3
 
 # Verify archive was created
 if [ ! -d /tmp/Yaver.xcarchive ]; then
