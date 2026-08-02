@@ -115,6 +115,13 @@ struct TaskSummary: Decodable, Identifiable {
 
 struct TaskList: Decodable { let tasks: [TaskSummary] }
 
+/// POST /tasks answers either the bare task or `{task:{…}}` depending on route
+/// age. Accepting both is not defensiveness for its own sake: the task has
+/// ALREADY been created by the time we decode, so failing on envelope shape
+/// would report an error for work that is running — the worst possible lie,
+/// because the user retries and gets two.
+struct TaskEnvelope: Decodable { let task: TaskSummary }
+
 /// A project the box knows about (GET /projects). The TV lists these to pick one
 /// to preview. `framework` decides how it renders on the TV: an RN/Android app
 /// runs in redroid and streams via /droid/frame; a web app (next/vite) is

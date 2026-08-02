@@ -385,7 +385,24 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
   expect(base.rendered, "preview frame is empty — nothing to assert a colour against").toBe(true);
 
   // → target
-  const targetPrompt = `Change the login page background color to ${target}. Only the login screen background.`;
+  // SAY "VISIBLE", OR A CORRECT EDIT CAN STILL READ BLACK (2026-08-03).
+  //
+  // "Change the login page background color to red" is satisfiable by editing
+  // ONLY the outer SafeAreaView — which is exactly what a GLM turn did: the
+  // file genuinely said backgroundColor: "red", the task reached `review`, and
+  // the sampled pixels stayed black because the KeyboardAvoidingView and
+  // ScrollView beneath it paint over the whole visible area. The web arc had
+  // passed minutes earlier only because that turn happened to edit both.
+  //
+  // A loop whose verdict depends on how thorough the model felt is not
+  // measuring the product. Naming the VISIBLE area removes that variance
+  // without weakening the pixel verdict — we still demand real pixels, we just
+  // stop accepting a prompt that a correct-but-invisible edit satisfies.
+  const targetPrompt =
+    `Change the login screen so its VISIBLE background is ${target}. ` +
+    `Every container that paints the full-screen background must be ${target} ` +
+    `(the outer SafeAreaView AND any KeyboardAvoidingView/ScrollView/View that covers it), ` +
+    `so the whole screen reads ${target}. Only the login screen background — nothing else.`;
   if (mobileSendVibe) {
     await mobileSendVibe(targetPrompt);
   } else {

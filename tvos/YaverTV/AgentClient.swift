@@ -214,6 +214,52 @@ actor AgentClient {
         return (try JSONDecoder().decode(TaskList.self, from: data)).tasks
     }
 
+    /// START a vibe from a native surface (POST /tasks).
+    ///
+    /// THE ONE CAPABILITY THAT MADE EVERY NATIVE SURFACE UNVIBEABLE (2026-08-03).
+    /// Before this, `AgentClient` had `listTasks()` and NO POST verb at all, on
+    /// tvOS, visionOS (which shares this file), watch and Wear. Those surfaces
+    /// could WATCH work happen and never START it — which is why the coverage
+    /// audit reads "untested" when the honest word is "unable". It is also why
+    /// the colour closed loop cannot run there: step one of the loop is
+    /// "send: change the login background to red".
+    ///
+    /// Deliberately mirrors the web dispatch funnel's body
+    /// (`buildCreateTaskBody`) so a task started from a TV is indistinguishable
+    /// from one started in the dashboard — same runner/model resolution on the
+    /// agent, same failure classification coming back. Leaving `runner`/`model`
+    /// empty is the CORRECT default: the agent then applies the account's
+    /// per-device primary (userSettings.primaryRunnerByDevice), which is the
+    /// same precedence the phone gets. A TV inventing its own default is how
+    /// surfaces drift onto a model the subscription cannot run.
+    @discardableResult
+    func createTask(
+        title: String,
+        description: String,
+        workDir: String,
+        projectName: String = "",
+        runner: String = "",
+        model: String = ""
+    ) async throws -> TaskSummary {
+        var body: [String: Any] = [
+            "title": title,
+            "description": description,
+            "workDir": workDir,
+        ]
+        if !projectName.isEmpty { body["projectName"] = projectName }
+        if !runner.isEmpty { body["runner"] = runner }
+        if !model.isEmpty { body["model"] = model }
+
+        let data = try await request("POST", path: "/tasks", jsonBody: body,
+                                     failure: "couldn't start the task")
+        // The agent answers either the bare task or {task:{…}} depending on
+        // route age; accept both rather than fail a started task on shape.
+        if let wrapped = try? JSONDecoder().decode(TaskEnvelope.self, from: data) {
+            return wrapped.task
+        }
+        return try JSONDecoder().decode(TaskSummary.self, from: data)
+    }
+
     /// Projects the box knows about (GET /projects → {projects:[…]} or a bare
     /// array). For the TV to browse and pick one to preview.
     func listProjects() async throws -> [ProjectSummary] {
