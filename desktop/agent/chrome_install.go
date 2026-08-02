@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -98,6 +99,26 @@ var macOSBrowserBundlePaths = []string{
 // on Ubuntu exits non-zero (or prints an install prompt) instead of reporting
 // a version, which is exactly the case a PATH lookup cannot distinguish.
 func chromeBinaryUsable(path string) bool {
+	// A SNAP THAT PASSES --version STILL CANNOT DRIVE THIS LANE.
+	//
+	// This is the inventory-vs-operation trap in its purest form. Measured on
+	// ubuntu-4gb-hel1-1 (2026-08-02): `/snap/bin/chromium --version` succeeds,
+	// so the probe below says "usable" — and then the actual launch dies with
+	//
+	//	cannot create temporary directory for the root file system
+	//
+	// because the lane hands the browser a private HOME/TMPDIR under
+	// /tmp/yaver-browser-window-*, and snap confinement cannot see it. The
+	// probe answered a question ("does it print a version?") that was not the
+	// question that mattered ("can it start inside our sandbox?").
+	//
+	// Snap is therefore excluded structurally rather than probed: the
+	// confinement is a property of the packaging, not a transient condition, so
+	// no probe outcome should ever promote one. /usr/bin/google-chrome on the
+	// same box renders about:blank fine with the identical environment.
+	if chromeBinaryIsSnapConfined(path) {
+		return false
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
@@ -106,6 +127,43 @@ func chromeBinaryUsable(path string) bool {
 	}
 	s := strings.ToLower(string(out))
 	return strings.Contains(s, "chrome") || strings.Contains(s, "chromium")
+}
+
+// chromeBinaryIsSnapConfined reports whether a browser path is backed by snap.
+//
+// Three shapes, all seen on Ubuntu:
+//   - /snap/bin/chromium — a symlink to /usr/bin/snap;
+//   - /usr/bin/chromium-browser — a tiny shell shim that execs the snap (the
+//     one on the box is 2.4 KB, dated 2020, and is NOT a browser at all);
+//   - anything resolving under /snap/.
+//
+// Checked by resolving the link AND reading a small shim, because the shim's
+// own path looks entirely ordinary.
+func chromeBinaryIsSnapConfined(path string) bool {
+	if path == "" {
+		return false
+	}
+	if strings.HasPrefix(path, "/snap/") {
+		return true
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		if strings.HasPrefix(resolved, "/snap/") || filepath.Base(resolved) == "snap" {
+			return true
+		}
+	}
+	// A real browser binary is tens of MB; a shim is a couple of KB. Only read
+	// something small enough to be a script — never slurp an actual browser.
+	info, err := os.Stat(path)
+	if err != nil || info.Size() > 64*1024 {
+		return false
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(body), "snap run") ||
+		strings.Contains(string(body), "/snap/bin") ||
+		strings.Contains(string(body), "snap install chromium")
 }
 
 // EnsureChromeInstalled installs a browser when none is usable, best-effort, at

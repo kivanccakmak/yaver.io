@@ -151,6 +151,14 @@ async function assertSignedIn(page: Page, surface: YaverSurface) {
 }
 
 async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
+  // How this surface submits a vibe turn.
+  //
+  // The web dashboard has a composer on the page; the mobile app opens one in a
+  // modal, reached through its own route params. Rather than branch at every
+  // send, the mobile arc installs its sender here and the shared send sites
+  // below just call it. null means "use the web composer".
+  let mobileSendVibe: ((text: string) => Promise<void>) | null = null;
+
   // VIEWPORT FIRST. A loop that drives the right app at the wrong size tests a
   // layout no user ever sees — and reports green about it. Assert the surface
   // profile before anything else, so a mis-sized run fails HERE with a clear
@@ -194,7 +202,27 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
     // the two surfaces, which is why this arc cannot reuse the web selector.
     const projectPath = process.env.VIBE_PROJECT_PATH || "/root/Workspace/yaver.io/mobile";
     const row = page.getByText(projectPath, { exact: true }).first();
-    await expect(row, `mobile: no project row for ${projectPath}`).toBeVisible({ timeout: 30_000 });
+
+    // The list arrives from the AGENT after mount, not with the bundle, so the
+    // screen renders its chrome ("Projects") long before it has any rows. A
+    // 30s wait failed here against a loaded box while the row was genuinely on
+    // its way — a false red. Wait for the list to be POPULATED, then for the
+    // row, and if it never comes report the paths that DID arrive: "element(s)
+    // not found" is unfalsifiable, and the difference between "the agent sent
+    // nothing" and "the agent sent 21 projects and yours is not among them" is
+    // the whole diagnosis.
+    try {
+      await expect(row).toBeVisible({ timeout: 4 * 60_000 });
+    } catch {
+      const seen = (await page.evaluate(() => document.body?.innerText || ""))
+        .split("\n").map((l) => l.trim()).filter((l) => l.startsWith("/"));
+      throw new Error(
+        `mobile: no project row for ${projectPath}. The Projects screen listed ` +
+        (seen.length
+          ? `${seen.length} path(s): ${seen.join(", ")} — the target is not among them, so this box does not have that project registered.`
+          : "NO paths at all — the agent returned an empty project list, so this is a device-connection problem, not a missing project."),
+      );
+    }
     await row.click();
     await page.waitForTimeout(12_000);
 
@@ -250,13 +278,25 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
         const br = page.getByText(/^Browser Reload$/).first();
         if (await br.count()) { await br.click().catch(() => {}); await page.waitForTimeout(20_000); }
       }
-      return true;
     };
   } else {
     await page.getByText(/^Vibing$/).first().click().catch(() => {});
   }
   await page.waitForTimeout(8000);
 
+  // ── WEB-DASHBOARD SETUP ────────────────────────────────────────────────
+  //
+  // Everything to the end of this block is dashboard chrome: a <select> of
+  // projects, a "Load Targets" button, a "Web UI in browser" card. The mobile
+  // app has none of them — it picks a project from a list of PATHS and opens
+  // the lane from an action sheet, which the mobile branch above already did.
+  //
+  // Running it unguarded is how this arc failed: the mobile run reached a
+  // `locator("select")` that RN-web never renders and reported "the project
+  // catalogue must list the target project", i.e. it blamed the box's project
+  // list for the absence of a web control. The surfaces share the COLOUR ARC
+  // below — the part the loop actually claims to test — and nothing else.
+  if (!mobileSendVibe) {
   const body = await page.evaluate(() => document.body.innerText);
   expect(body, "the box must both run and render for a single-box loop").toMatch(
     new RegExp(`${BOX}|runs and renders`, "i"),
@@ -306,7 +346,13 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
     if (/web ui in browser/i.test(cardText)) { await btn.click(); opened = true; break; }
   }
   expect(opened, 'the "Web UI in browser" target was not offered').toBe(true);
+  } // ── end WEB-DASHBOARD SETUP ─────────────────────────────────────────
 
+  // ── THE SHARED COLOUR ARC ──────────────────────────────────────────────
+  // From here on both surfaces run IDENTICAL steps against the same box, the
+  // same runner and the same browser lane. That is the point of the pairing:
+  // any difference in outcome is attributable to the surface, because the
+  // scenario below is literally the same code.
   await expect(page.locator("iframe").first(), "the browser-lane preview must render")
     .toBeVisible({ timeout: 90_000 });
   await page.waitForTimeout(12_000);

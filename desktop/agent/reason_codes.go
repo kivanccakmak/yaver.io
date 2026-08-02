@@ -47,6 +47,15 @@ const (
 	ReasonBrowserWindowChromeProfile    = "browser_window.chrome_profile_lock"
 	ReasonBrowserWindowChromeRuntimeDir = "browser_window.chrome_runtime_dir"
 	ReasonBrowserWindowChromeLaunch     = "browser_window.chrome_launch_failed"
+	// ReasonBrowserWindowChromeSnapConfined is "the browser we found is a snap,
+	// and a snap cannot enter the private HOME/TMPDIR this lane hands it".
+	//
+	// A DISTINCT code from chrome_missing on purpose: a browser IS installed,
+	// so "install Chrome" reads as nonsense and an installer button would be a
+	// no-op. The remedy is to install the UNCONFINED build (the .deb from
+	// Google, or `snap remove chromium` plus the distro package) — a different
+	// action with a different button.
+	ReasonBrowserWindowChromeSnapConfined = "browser_window.chrome_snap_confined"
 	// ReasonDeviceIdentityConflict is "this machine's deviceId is registered to
 	// DIFFERENT hardware or a different key". Convex's markBootstrap
 	// authenticates a token-dead box on the (deviceId, hardwareId, publicKey)

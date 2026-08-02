@@ -242,15 +242,28 @@ type browserWindowRuntime struct {
 	tmpDir        string
 	cacheDir      string
 	dataDir       string
+	// unprotect lifts this tree's reaper protection. Called by cleanup().
+	unprotect func()
 }
 
 func newBrowserWindowRuntime() (browserWindowRuntime, error) {
 	root, err := os.MkdirTemp("", "yaver-browser-window-*")
 	if err != nil {
-		return browserWindowRuntime{}, err
+		// A failure HERE is almost always the disk, and it is the first thing
+		// that fails when the disk is full — MkdirTemp cannot write the dir.
+		return browserWindowRuntime{}, fmt.Errorf("create browser runtime dir: %w", err)
 	}
+	// Tell the reaper this tree is live.
+	//
+	// These profiles are 50-133 MB each and the lane creates one PER LAUNCH.
+	// cleanup() removes it on a clean stop — but a crash, a kill or an agent
+	// restart never reaches cleanup, so they accumulate: on 2026-08-02 three
+	// stranded ones held 237 MB on a box that then could not start Chrome at
+	// all. The periodic reaper collects the strandeds; this registration is
+	// what stops it collecting a profile a live browser is sitting in.
 	rt := browserWindowRuntime{
 		root:          root,
+		unprotect:     ReapProtect(root, "browser lane"),
 		homeDir:       filepath.Join(root, "home"),
 		profileDir:    filepath.Join(root, "profile"),
 		xdgRuntimeDir: filepath.Join(root, "runtime"),
@@ -274,6 +287,13 @@ func newBrowserWindowRuntime() (browserWindowRuntime, error) {
 func (rt browserWindowRuntime) cleanup() error {
 	if rt.root == "" {
 		return nil
+	}
+	// Lift the protection FIRST. If RemoveAll fails (a busy mount, a stray
+	// file), the tree must still become reapable — otherwise a failed cleanup
+	// creates a permanently protected leak, which is worse than the unprotected
+	// leak this whole change exists to fix.
+	if rt.unprotect != nil {
+		rt.unprotect()
 	}
 	return os.RemoveAll(rt.root)
 }
@@ -305,6 +325,42 @@ func browserWindowLaunchErrorReason(err error) string {
 	text := strings.ToLower(err.Error())
 	if errors.Is(err, exec.ErrNotFound) || strings.Contains(text, "executable file not found") {
 		return ReasonBrowserWindowChromeMissing
+	}
+	// SNAP-CONFINED BROWSER. Measured on ubuntu-4gb-hel1-1, 2026-08-02:
+	//
+	//	cannot create temporary directory for the root file system:
+	//	No such file or directory
+	//
+	// That is snap-confine, not Chrome. The lane gives the browser a PRIVATE
+	// HOME/TMPDIR/XDG_RUNTIME_DIR under /tmp/yaver-browser-window-*; a snap
+	// cannot see them, so it dies before Chrome starts. Reproduced by hand on
+	// the box: /snap/bin/chromium and /usr/bin/chromium-browser (the snap shim)
+	// both emit this string verbatim and exit 1, while /usr/bin/google-chrome
+	// renders about:blank fine with the identical environment.
+	//
+	// This message was previously unclassified, so it fell through to the
+	// generic launch branch and the phone rendered "Remedy: the preview URL
+	// refused the connection — the dev server bound a different port, or died
+	// after /dev/start returned; check /dev/status". Every word of that is
+	// wrong: the dev server was healthy and serving.
+	//
+	// NOT classified as insufficient disk, though the incident that surfaced it
+	// began with a full disk. The box now has 1.9 GB free and reproduces this
+	// error exactly — mapping it to disk would send users to reclaim space that
+	// is already there, which is a FALSE RED and no better than the false green
+	// it replaced. Genuine exhaustion says "no space left on device"; that is
+	// matched below on its own terms.
+	if strings.Contains(text, "cannot create temporary directory for the root file system") ||
+		strings.Contains(text, "snap-confine") ||
+		strings.Contains(text, "cannot open path of the current working directory") {
+		return ReasonBrowserWindowChromeSnapConfined
+	}
+	// GENUINE disk exhaustion, by its own unambiguous wording.
+	// capability.insufficient_disk already existed with no producer; this is
+	// its first one, and diskguard_scan / the reaper are the route it names.
+	if strings.Contains(text, "no space left on device") ||
+		strings.Contains(text, "enospc") {
+		return ReasonCapabilityInsufficientDisk
 	}
 	if strings.Contains(text, "failed to create socket directory") ||
 		strings.Contains(text, "xdg_runtime_dir") ||
