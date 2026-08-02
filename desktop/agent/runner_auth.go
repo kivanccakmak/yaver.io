@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -80,6 +81,21 @@ type RunnerRuntimeStatus struct {
 	AuthSource   string `json:"authSource,omitempty"`
 	Warning      string `json:"warning,omitempty"`
 	Error        string `json:"error,omitempty"`
+	// Code is the STRUCTURED name for whatever Warning/Error says in prose —
+	// one of the reason_codes.go values, or "" when there is nothing wrong.
+	//
+	// Why it exists (2026-08-02): every field above this one is a sentence, so
+	// every surface that wanted to branch on WHY a runner is unusable had to
+	// regex the sentence. That is how mobile ended up carrying three different
+	// relay-auth matchers, none a superset of the others, all silently drifting
+	// as the wording changed. CLAUDE.md states the rule outright — "structured
+	// and named, never prose" — and this channel was the one still violating it
+	// while the task-dispatch channel had already been fixed.
+	//
+	// Additive on purpose: Warning/Error keep their exact meaning and wording,
+	// so nothing that reads them today changes behaviour. New consumers key off
+	// Code; old ones keep working.
+	Code string `json:"code,omitempty"`
 }
 
 // CheckRunnerReady verifies the binary exists and that any runner-specific
@@ -201,6 +217,15 @@ func DetectRunnerRuntimeStatus(runner RunnerConfig, workDir string) RunnerRuntim
 	// `claude auth status` that cheerfully reports loggedIn:true off a revoked
 	// token. Checked AFTER the proof above so a rejection always wins.
 	if reason, rejected := runnerAuthFailureRecent(id); rejected {
+		// An observed provider rejection is a structured state too, not just a
+		// sentence — otherwise a surface that wants to distinguish "refused by
+		// the provider" from "never signed in" is back to reading prose.
+		switch id {
+		case "codex":
+			status.Code = ReasonRunnerCodexNotAuthenticated
+		case "claude":
+			status.Code = ReasonRunnerClaudeAuthRequired
+		}
 		status.AuthConfigured = false
 		// A 401 from the provider is the strongest possible evidence, so the
 		// answer stays verified — just negative.
@@ -509,7 +534,12 @@ func ClassifyRunnerAuthFailure(output string) (string, string) {
 		strings.Contains(m, "please run `codex login`") ||
 		strings.Contains(m, "please run codex login") ||
 		strings.Contains(m, "run `codex login`") {
-		return "codex", "Codex asked for `codex login` — this machine's ChatGPT credential is no longer accepted. Sign in again."
+		// Quote what Codex actually said (that is the evidence), then name the
+		// sign-in that WORKS on this machine. "Sign in again" with no command is
+		// a remedy the user cannot act on, and the obvious guess — bare
+		// `codex login` — is the one form that cannot complete on the remote,
+		// headless boxes where this fires most.
+		return "codex", "Codex asked for `codex login` — this machine's ChatGPT credential is no longer accepted. Sign in again with `codex login --device-auth`."
 	}
 	if strings.Contains(m, "refresh_token_reused") {
 		return "codex", "Codex's refresh token was rejected as already-used (refresh_token_reused). Sign in again to issue a fresh one."
@@ -620,6 +650,31 @@ func runnerCapabilityName(runnerID string) string {
 }
 
 func runnerCapabilityReason(runnerID string, status RunnerRuntimeStatus) (code, reason, action string, blocked bool) {
+	// Prefer the STRUCTURED code over grepping the sentence.
+	//
+	// The legacy branches below decide by substring-matching status.Error, and
+	// that had already rotted: the codex branch tests for "not authenticated"
+	// while detectCodexStatus actually writes "Codex is installed but no
+	// credentials were found". Those strings have never matched, so the codex
+	// capability-blocked path was dead code — a runner with no credential at all
+	// reported itself as not blocked. Nobody noticed, because a prose matcher
+	// fails silently and looks exactly like "nothing is wrong".
+	//
+	// This is the whole argument for reason codes in one function.
+	if c := strings.TrimSpace(status.Code); c != "" {
+		switch c {
+		case ReasonRunnerCodexNotAuthenticated:
+			return c, "Codex is installed but not authenticated on this machine.", "Sign in with `codex login --device-auth`, or import subscription credentials from an already-signed-in user-owned device.", true
+		case ReasonRunnerCodexCredentialExpired:
+			return c, "Codex's credential on this machine has expired and could not be renewed automatically.", "Sign in again with `codex login --device-auth`.", true
+		case ReasonRunnerCodexCredentialCorrupt:
+			return c, "Codex's credential file on this machine is unreadable — a write was interrupted.", "Sign in again with `codex login --device-auth` to write a fresh credential.", true
+		case ReasonRunnerCodexCredentialIsCopy:
+			return c, "This machine's Codex credential is a copy of another machine's and cannot be renewed here.", "Sign in on THIS machine with `codex login --device-auth` so it owns its own credential.", true
+		case ReasonRunnerCodexLinuxSandboxBlocked:
+			return c, "This Linux machine is blocking the sandbox Codex needs for execution.", "Fix the Linux sandbox prerequisites on the host before running Codex.", true
+		}
+	}
 	switch runnerID {
 	case "codex":
 		if strings.Contains(strings.ToLower(status.Error), "not authenticated") {
@@ -1160,11 +1215,60 @@ func detectCodexStatus() RunnerRuntimeStatus {
 	// Ordered ahead of the file probe on purpose: a credentials file proves a
 	// login happened once, not that it still works. Trusting the file first is
 	// what let a stale token report "signed in" and strand the caller.
+	// The expiry oracle runs FIRST, because it is both cheaper and strictly more
+	// truthful than the CLI probe below.
+	//
+	// Measured 2026-08-02: `codex login status` returns "Logged in using ChatGPT" in
+	// 0.08 s WITHOUT reading the access token's `exp` — so it answers "a credential
+	// file exists", not "a credential works", and it says the same thing over a
+	// ten-day-dead token. The token is a plain JWT in a file we already own, so the
+	// real expiry costs one read and one base64 decode: no fork, no network, no
+	// tokens. Preferring the fork over the file was the false green.
+	if doc, err := readCodexCredentialDoc(codexAuthPath()); err == nil {
+		fresh := codexCredentialFreshnessOf(doc, time.Now())
+		switch {
+		case fresh.Known && fresh.Expired:
+			// KNOWN dead. Say so, and say what fixes it — this box is very likely
+			// headless, where the plain `codex login` browser flow cannot complete.
+			status.AuthConfigured = false
+			status.AuthPresent = true
+			status.AuthVerified = true // verified — negatively
+			status.Ready = false
+			status.Warning = "Codex's access token on this machine expired " +
+				time.Since(fresh.ExpiresAt).Round(time.Minute).String() +
+				" ago and could not be renewed automatically. Sign in again with `codex login --device-auth`."
+			// A credential that is present but dead is a DIFFERENT state from
+			// one that was never established — the remedy is the same command,
+			// but the sentence a surface should show is not, and "not
+			// authenticated" would tell a user to redo a sign-in they did.
+			status.Code = ReasonRunnerCodexCredentialExpired
+			return status
+		case fresh.Known:
+			status.AuthConfigured = true
+			status.AuthPresent = true
+			status.AuthSource = "codex auth.json (" + fresh.describe(time.Now()) + ")"
+			return status
+		}
+		// Expiry unreadable (an opaque or future token shape) — fall through to the
+		// CLI probe rather than guessing.
+	} else if !errors.Is(err, errNoCodexCredential) {
+		// Empty or unparseable auth.json: the fingerprint of a write killed
+		// mid-flight, which on a small box means OOM. This is a real, nameable
+		// state — not "no credentials found", which would send the user looking
+		// for a login they already did.
+		status.AuthConfigured = false
+		status.Ready = false
+		status.Error = err.Error() + " Sign in again with `codex login --device-auth`."
+		status.Code = ReasonRunnerCodexCredentialCorrupt
+		return status
+	}
+
 	if codexLoginStatusOK() {
 		status.AuthConfigured = true
-		// `codex login status` reads ~/.codex/auth.json and checks shape/expiry
+		// `codex login status` reads ~/.codex/auth.json and checks shape
 		// locally. Same limit as claude's: it cannot see a server-side
-		// revocation. PRESENT, not VERIFIED.
+		// revocation — and, measured, it does not read expiry either.
+		// PRESENT, not VERIFIED.
 		status.AuthPresent = true
 		status.AuthSource = "codex login status"
 		return status
@@ -1188,6 +1292,7 @@ func detectCodexStatus() RunnerRuntimeStatus {
 	}
 	status.Ready = false
 	status.Error = "Codex is installed but no credentials were found. Run `codex login --device-auth` and complete ChatGPT Plus/Pro plan OAuth in the browser, or import credentials from an already-signed-in user-owned device. Checked: " + strings.Join(codexAuthCandidatePaths(), ", ") + "."
+	status.Code = ReasonRunnerCodexNotAuthenticated
 	return status
 }
 

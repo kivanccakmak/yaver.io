@@ -63,6 +63,11 @@ type MirrorAcceptPayload struct {
 	// ExpiresAtTS is the provider-reported expiry of the token inside
 	// the credentials.json. 0 = unknown.
 	ExpiresAtTS int64 `json:"expiresAt,omitempty"`
+	// Force overrides the conditional-seeding guard (see
+	// guardCodexMirrorOverwrite). Off by default on purpose: the default must be
+	// the safe one, because the unsafe one silently breaks a DIFFERENT machine
+	// than the one running the command.
+	Force bool `json:"force,omitempty"`
 }
 
 // MirrorResult is returned from successful accept.
@@ -216,8 +221,33 @@ func AcceptMirrorPayload(_ context.Context, payload MirrorAcceptPayload) (Mirror
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return MirrorResult{}, fmt.Errorf("mkdir %s: %w", filepath.Dir(dest), err)
 	}
+	// CONDITIONAL SEEDING — never clobber a healthy credential of a different
+	// lineage.
+	//
+	// A Codex refresh token ROTATES: every renewal consumes the old one. So copying
+	// one file onto a machine that already has a working, DIFFERENT credential does
+	// not "update" anything — it installs a second holder of somebody else's
+	// rotating token, and the next renewal on either box invalidates the other. That
+	// is the oscillation behind "it signed me out again": fix box A, box B dies; fix
+	// B, A dies. Under RFC 9700's reuse-detection guidance a replayed token can also
+	// revoke the whole family, taking every machine down at once.
+	//
+	// This is the exact anti-pattern the published Codex CI/VPS guidance warns about
+	// ("every run overwrites the refreshed auth.json with the original, increasingly
+	// stale secret"), and Yaver shipped it as the recommended path. Mirroring is a
+	// BOOTSTRAP for a box that has no credential — not a sync.
+	if err := guardCodexMirrorOverwrite(runner, dest, data, payload.Force); err != nil {
+		return MirrorResult{}, err
+	}
 	if err := os.WriteFile(dest, data, 0o600); err != nil {
 		return MirrorResult{}, fmt.Errorf("write %s: %w", dest, err)
+	}
+	if runner == "codex" {
+		// Record that this credential is a COPY. The keep-alive reads this to know
+		// it must not renew a lineage another machine also holds — renewing here is
+		// precisely what would kill the source box.
+		writeCodexLineageMarker(dest, payload.SourceHost, data)
+		invalidateCodexLoginStatusCache()
 	}
 	// The credential store just changed under us; a cached "signed out" would
 	// make the very next status poll contradict the write we just did.
