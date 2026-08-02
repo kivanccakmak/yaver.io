@@ -254,237 +254,32 @@ jobs:
       - name: Build and test Feedback SDK (React Native)
         run: cd sdk/feedback/react-native && npm ci && npm run test:ci
 
-  unity-sdk-tests:
+  # The Kotlin SDK shipped SOURCE-ONLY: no build file, no CI job, nothing that
+  # compiled it. Every change landed there — including its own unit test — was
+  # unverified by construction. This job is the guard; sdk/feedback/kotlin now
+  # carries a real Gradle build so "it compiles" is a fact rather than a hope.
+  kotlin-sdk-tests:
     needs: changes
-    if: |
-      needs.changes.outputs.sdk == 'true' &&
-      (github.event_name != 'pull_request' ||
-       github.event.pull_request.head.repo.full_name == github.repository)
+    if: needs.changes.outputs.sdk == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
-          lfs: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Verify Unity license secret
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-        run: |
-          if [ -z "$UNITY_LICENSE" ]; then
-            echo "Missing UNITY_LICENSE GitHub Actions secret."
-            exit 1
-          fi
-      - name: Validate Unity package metadata
-        run: node scripts/validate-unity-package.mjs
-      - name: Run Unity package EditMode tests
-        id: unity_sdk_editmode
-        uses: game-ci/unity-test-runner@v4
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-        with:
-          githubToken: ${{ secrets.GITHUB_TOKEN }}
-          packageMode: true
-          projectPath: sdk/feedback/unity
-          unityVersion: 2021.3.45f1
-          testMode: EditMode
-          artifactsPath: artifacts/unity-sdk
-          coverageOptions: generateAdditionalMetrics;generateHtmlReport;generateBadgeReport;assemblyFilters:+Yaver.*
-      - name: Upload Unity test artifacts
+          distribution: "temurin"
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile Kotlin Feedback SDK
+        run: cd sdk/feedback/kotlin && gradle --no-daemon assembleDebug
+      - name: Run Kotlin Feedback SDK unit tests
+        run: cd sdk/feedback/kotlin && gradle --no-daemon testDebugUnitTest
+      - name: Upload Kotlin test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: unity-sdk-test-artifacts
-          path: artifacts/unity-sdk
+          name: kotlin-sdk-test-report
+          path: sdk/feedback/kotlin/build/reports/tests/
           if-no-files-found: ignore
-      - name: Upload Unity SDK coverage
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unity-sdk-coverage
-          path: ${{ steps.unity_sdk_editmode.outputs.coveragePath }}
-          if-no-files-found: ignore
-
-  unity-sample-editor-tests:
-    needs: changes
-    if: |
-      needs.changes.outputs.sdk == 'true' &&
-      (github.event_name != 'pull_request' ||
-       github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Verify Unity license secret
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-        run: |
-          if [ -z "$UNITY_LICENSE" ]; then
-            echo "Missing UNITY_LICENSE GitHub Actions secret."
-            exit 1
-          fi
-      - name: Cache Unity Library
-        uses: actions/cache@v4
-        with:
-          path: sdk/feedback/test-app/unity/Library
-          key: unity-sample-library-${{ runner.os }}-${{ hashFiles('sdk/feedback/test-app/unity/Packages/manifest.json', 'sdk/feedback/test-app/unity/ProjectSettings/ProjectVersion.txt', 'sdk/feedback/test-app/unity/Assets/**', 'sdk/feedback/unity/**') }}
-          restore-keys: |
-            unity-sample-library-${{ runner.os }}-
-      - name: Run sample project EditMode tests
-        id: sample_editmode
-        uses: game-ci/unity-test-runner@v4
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-        with:
-          githubToken: ${{ secrets.GITHUB_TOKEN }}
-          projectPath: sdk/feedback/test-app/unity
-          unityVersion: 2021.3.45f1
-          testMode: EditMode
-          artifactsPath: artifacts/unity-sample-tests
-          coverageOptions: generateAdditionalMetrics;generateHtmlReport;generateBadgeReport;assemblyFilters:+Yaver.*
-      - name: Upload sample test artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unity-sample-test-artifacts
-          path: artifacts/unity-sample-tests
-          if-no-files-found: ignore
-      - name: Upload sample EditMode coverage
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unity-sample-editmode-coverage
-          path: ${{ steps.sample_editmode.outputs.coveragePath }}
-          if-no-files-found: ignore
-
-  unity-sample-playmode-tests:
-    needs: changes
-    if: |
-      needs.changes.outputs.sdk == 'true' &&
-      (github.event_name != 'pull_request' ||
-       github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Verify Unity license secret
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-        run: |
-          if [ -z "$UNITY_LICENSE" ]; then
-            echo "Missing UNITY_LICENSE GitHub Actions secret."
-            exit 1
-          fi
-      - name: Cache Unity Library
-        uses: actions/cache@v4
-        with:
-          path: sdk/feedback/test-app/unity/Library
-          key: unity-sample-playmode-library-${{ runner.os }}-${{ hashFiles('sdk/feedback/test-app/unity/Packages/manifest.json', 'sdk/feedback/test-app/unity/ProjectSettings/ProjectVersion.txt', 'sdk/feedback/test-app/unity/Assets/**', 'sdk/feedback/unity/**') }}
-          restore-keys: |
-            unity-sample-playmode-library-${{ runner.os }}-
-      - name: Run sample project PlayMode tests
-        id: sample_playmode
-        uses: game-ci/unity-test-runner@v4
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-        with:
-          githubToken: ${{ secrets.GITHUB_TOKEN }}
-          projectPath: sdk/feedback/test-app/unity
-          unityVersion: 2021.3.45f1
-          testMode: PlayMode
-          artifactsPath: artifacts/unity-sample-playmode-tests
-          coverageOptions: generateAdditionalMetrics;generateHtmlReport;generateBadgeReport;assemblyFilters:+Yaver.*
-      - name: Upload sample playmode test artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unity-sample-playmode-test-artifacts
-          path: artifacts/unity-sample-playmode-tests
-          if-no-files-found: ignore
-      - name: Upload sample PlayMode coverage
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unity-sample-playmode-coverage
-          path: ${{ steps.sample_playmode.outputs.coveragePath }}
-          if-no-files-found: ignore
-
-  unity-sample-builds:
-    needs: changes
-    if: |
-      needs.changes.outputs.sdk == 'true' &&
-      (github.event_name != 'pull_request' ||
-       github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - targetPlatform: StandaloneWindows64
-            buildMethod: YaverBuildTools.BuildWindows64
-            buildName: desktop-windows64
-          - targetPlatform: StandaloneLinux64
-            buildMethod: YaverBuildTools.BuildLinux64
-            buildName: desktop-linux64
-          - targetPlatform: Android
-            buildMethod: YaverBuildTools.BuildAndroid
-            buildName: mobile-android
-          - targetPlatform: WebGL
-            buildMethod: YaverBuildTools.BuildWebGL
-            buildName: webgl
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          lfs: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Verify Unity license secret
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-        run: |
-          if [ -z "$UNITY_LICENSE" ]; then
-            echo "Missing UNITY_LICENSE GitHub Actions secret."
-            exit 1
-          fi
-      - name: Cache Unity Library
-        uses: actions/cache@v4
-        with:
-          path: sdk/feedback/test-app/unity/Library
-          key: unity-sample-build-library-${{ matrix.targetPlatform }}-${{ hashFiles('sdk/feedback/test-app/unity/Packages/manifest.json', 'sdk/feedback/test-app/unity/ProjectSettings/ProjectVersion.txt', 'sdk/feedback/test-app/unity/Assets/**', 'sdk/feedback/unity/**') }}
-          restore-keys: |
-            unity-sample-build-library-${{ matrix.targetPlatform }}-
-            unity-sample-build-library-
-      - if: matrix.targetPlatform == 'Android'
-        uses: jlumbroso/free-disk-space@main
-      - name: Build sample project
-        uses: game-ci/unity-builder@v4
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-        with:
-          projectPath: sdk/feedback/test-app/unity
-          unityVersion: 2021.3.45f1
-          targetPlatform: ${{ matrix.targetPlatform }}
-          buildMethod: ${{ matrix.buildMethod }}
-          buildsPath: build
-          buildName: ${{ matrix.buildName }}
-          customParameters: -yaverBuildOutput Builds/CI/${{ matrix.buildName }} -yaverBuildManifest .yaver-build/unity/ci-build-result.json
-      - name: Upload sample build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: unity-sample-${{ matrix.buildName }}
-          path: build/${{ matrix.targetPlatform }}
-          if-no-files-found: warn
 
   pi-image-validate:
     needs: changes

@@ -733,7 +733,7 @@ Three facts worth not rediscovering:
   load into the Yaver container — they take `native-webrtc` or a standalone
   install via `yaver wire push`.
 - **There is no native Kotlin/Swift feedback SDK.** `sdk/feedback/` ships
-  react-native, web, flutter, unity, browser-extension. Don't import one.
+  react-native, web, flutter, kotlin, swift, browser-extension. Don't import one.
 - **The viewer owns the feedback trigger** for streamed apps:
   `remote_runtime.go:709` `case "launch-feedback"` pushes
   `feedback-launch-request` down the events DataChannel. That's how kt/swift get
