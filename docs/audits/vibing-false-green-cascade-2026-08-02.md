@@ -401,14 +401,30 @@ Landed on `vibing-false-green-fixes`, all guards green (154/154), `tsc` clean:
 
 NOT done, and not claimed:
 
-1. `resolveUsableModel()` is tested but **not wired** to the stored setting, so
-   a saved `gpt-5.4` still displays until changed by hand. Wiring it means
-   auto-migrating a user's saved value — mobile sets the precedent, but it is
-   the owner's call.
-2. `runnerChipState()` is tested but **not yet consumed** by
-   `app/dashboard/page.tsx` / `DevicesView.tsx`. Until it is, the chip still
-   lies. (Landing a producer without its consumer is the very defect §6 is
-   about; it is called out here rather than left to be discovered.)
-3. `RunnerPreflightByID` is still voice-only (`voice_dispatch.go:70`). The
-   Vibing dispatch path got there by another route, so this is now P1, not P0.
-4. Nothing is deployed. Branch not merged.
+1. Project identity is still the display NAME, not `(deviceId, path)` (§1).
+   Single-boxing the runner and renderer hides it; a split brings it back.
+2. The remedy is still a CLI string rather than structured `availableProjects`
+   the surface can render as a picker (§3).
+3. Headline and CTA can still describe different faults in one panel (§4).
+4. `RunnerPreflightByID` is still voice-only (`voice_dispatch.go:70`). Demoted
+   to P2: the Vibing dispatch path reaches an equivalent refusal by another
+   route, verified live — it named the expired token and spent no tokens.
+5. **Nothing is deployed.** Branch not merged. Every live screenshot in §15 was
+   taken against the OLD code, which is why the fixes are not visible there.
+
+### Landed after §15 was written
+
+| Commit | Fixes |
+|---|---|
+| `04e7888e0` | wires `runnerChipState` into `runnerAuthIssue` — the producer now has a consumer |
+| `b64784b53` | `buildCreateTaskBody` coerces the model at the single dispatch funnel, so a stored `gpt-5.4` can no longer leave the browser |
+| `aa48da78c` | a failed pre-task pull names its cause, says whether it can ever succeed, and carries the repair command (§8) |
+
+The model fix deliberately coerces the REQUEST rather than rewriting the user's
+saved setting: the stored choice stays theirs to change, while the dispatch
+that would provably 400 is repaired in flight. No silent mutation of
+configuration.
+
+Verification at the time of writing: 155/155 client guards green, `web` tsc
+clean, agent builds. `TestGuestShareLinuxStack_*` fail on this machine with and
+without these changes (Docker-environment dependent) — confirmed by stashing.
