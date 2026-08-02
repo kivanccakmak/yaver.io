@@ -7,7 +7,7 @@ import { useAuth } from "../../src/context/AuthContext";
 import { useColors } from "../../src/context/ThemeContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import ManagedCloudCard from "../../src/components/ManagedCloudCard";
-import { HIDE_PAID_UI } from "../../src/lib/launchFlags";
+import { ENABLE_GUEST_FEATURES, HIDE_PAID_UI } from "../../src/lib/launchFlags";
 import {
   deriveWakeView,
   isParkedStatus,
@@ -221,7 +221,10 @@ export default function InfraScreen() {
   }
 
   async function refreshGuests() {
-    if (!token) return;
+    if (!ENABLE_GUEST_FEATURES || !token) {
+      setGuests([]);
+      return;
+    }
     try {
       const list = await listGuests(token);
       setGuests(list);
@@ -903,68 +906,28 @@ export default function InfraScreen() {
             )}
           </Section>
 
-          <Section c={c} title="Sharing" subtitle="Guest access posture — who has a key to this machine">
-            <View style={styles.metricGrid}>
-              <Metric c={c} label="Accepted" value={`${summary.sharing.acceptedGuests}`} sub="active guests" />
-              <Metric c={c} label="Pending" value={`${summary.sharing.pendingGuests}`} sub="pending invites" />
-            </View>
-            {guests.length > 0 ? (
-              <View style={{ gap: 8, marginTop: 10 }}>
-                {guests.slice(0, 12).map((g) => (
-                  <View key={g.email} style={[card(c), { gap: 4 }]}>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                      <View
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: 4,
-                          backgroundColor:
-                            g.status === "accepted"
-                              ? "#22c55e"
-                              : g.status === "pending"
-                                ? "#f59e0b"
-                                : c.textMuted,
-                        }}
-                      />
-                      <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "700", flex: 1 }} numberOfLines={1}>
+          {ENABLE_GUEST_FEATURES ? (
+            <Section c={c} title="Sharing" subtitle="Guest access posture — who has a key to this machine">
+              <View style={styles.metricGrid}>
+                <Metric c={c} label="Accepted" value={`${summary.sharing.acceptedGuests}`} sub="active guests" />
+                <Metric c={c} label="Pending" value={`${summary.sharing.pendingGuests}`} sub="pending invites" />
+              </View>
+              {guests.length > 0 ? (
+                <View style={{ gap: 8, marginTop: 10 }}>
+                  {guests.slice(0, 12).map((g) => (
+                    <View key={g.email} style={[card(c), { gap: 4 }]}>
+                      <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "700" }} numberOfLines={1}>
                         {g.fullName?.trim() || g.email}
                       </Text>
-                      <Text style={{ color: c.textMuted, fontSize: 10, fontWeight: "700", textTransform: "uppercase" }}>
-                        {g.status}
-                      </Text>
                     </View>
-                    {g.fullName ? (
-                      <Text style={{ color: c.textMuted, fontSize: 11 }} numberOfLines={1}>
-                        {g.email}
-                      </Text>
-                    ) : null}
-                    {g.inviteCode && g.status === "pending" ? (
-                      <Text style={{ color: c.accent, fontSize: 11, fontWeight: "700", letterSpacing: 0.6 }}>
-                        Code {g.inviteCode}
-                      </Text>
-                    ) : null}
-                    {g.proposedDeviceIds && g.proposedDeviceIds.length > 0 ? (
-                      <Text style={{ color: c.textMuted, fontSize: 10 }}>
-                        Scoped to {g.proposedDeviceIds.length} device{g.proposedDeviceIds.length === 1 ? "" : "s"}
-                      </Text>
-                    ) : null}
-                  </View>
-                ))}
-                {guests.length > 12 ? (
-                  <Text style={{ color: c.textMuted, fontSize: 11, textAlign: "center" }}>
-                    +{guests.length - 12} more
-                  </Text>
-                ) : null}
-              </View>
-            ) : (
-              <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 8 }}>
-                Nobody is sharing this machine yet. Invite from the Guests tab.
-              </Text>
-            )}
-            <Pressable onPress={() => router.navigate("/(tabs)/guests" as any)} style={[actionBtn(c), { backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1, marginTop: 8 }]}>
-              <Text style={{ color: c.textPrimary, fontWeight: "700" }}>Open guest controls</Text>
-            </Pressable>
-          </Section>
+                  ))}
+                </View>
+              ) : null}
+              <Pressable onPress={() => router.navigate("/(tabs)/guests" as any)} style={[actionBtn(c), { backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1, marginTop: 8 }]}>
+                <Text style={{ color: c.textPrimary, fontWeight: "700" }}>Open guest controls</Text>
+              </Pressable>
+            </Section>
+          ) : null}
 
           <Section c={c} title="Containerization" subtitle="Whether remote Yaver tasks run directly on the host or inside Docker">
             <View style={styles.metricGrid}>
@@ -975,14 +938,14 @@ export default function InfraScreen() {
                   summary.sandbox.enabledMode === "host"
                     ? "All tasks"
                     : summary.sandbox.enabledMode === "guests"
-                      ? "Guests only"
+                      ? ENABLE_GUEST_FEATURES ? "Guests only" : "Direct host"
                       : "Direct host"
                 }
                 sub={
                   summary.sandbox.enabledMode === "host"
                     ? "all agent tasks isolated"
                     : summary.sandbox.enabledMode === "guests"
-                      ? "shared infra isolated"
+                      ? ENABLE_GUEST_FEATURES ? "shared infra isolated" : "tasks run on host"
                       : "tasks run on host"
                 }
               />
@@ -1000,7 +963,9 @@ export default function InfraScreen() {
               <Text style={{ color: c.textMuted, fontSize: 11 }}>
                 {summary.sandbox.enabledMode === "off"
                   ? "Remote dev tasks are currently running directly on the host."
-                  : `Yaver is configured to containerize ${summary.sandbox.enabledMode === "host" ? "all tasks" : "guest-triggered tasks"} on this machine.`}
+                  : `Yaver is configured to containerize ${
+                      summary.sandbox.enabledMode === "host" || !ENABLE_GUEST_FEATURES ? "all tasks" : "guest-triggered tasks"
+                    } on this machine.`}
               </Text>
               {!!summary.sandbox.recommendedReason && (
                 <Text style={{ color: c.textMuted, fontSize: 11 }}>
@@ -1009,13 +974,15 @@ export default function InfraScreen() {
               )}
             </View>
             <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
-              <Pressable
-                onPress={() => enableContainers("guests")}
-                disabled={!!busy || !summary.sandbox.docker}
-                style={[actionBtn(c), { backgroundColor: c.accent + "22", flex: 1, opacity: busy || !summary.sandbox.docker ? 0.6 : 1 }]}
-              >
-                <Text style={{ color: c.accent, fontWeight: "700" }}>Enable guest isolation</Text>
-              </Pressable>
+              {ENABLE_GUEST_FEATURES ? (
+                <Pressable
+                  onPress={() => enableContainers("guests")}
+                  disabled={!!busy || !summary.sandbox.docker}
+                  style={[actionBtn(c), { backgroundColor: c.accent + "22", flex: 1, opacity: busy || !summary.sandbox.docker ? 0.6 : 1 }]}
+                >
+                  <Text style={{ color: c.accent, fontWeight: "700" }}>Enable guest isolation</Text>
+                </Pressable>
+              ) : null}
               <Pressable
                 onPress={() => enableContainers("host")}
                 disabled={!!busy || !summary.sandbox.docker}

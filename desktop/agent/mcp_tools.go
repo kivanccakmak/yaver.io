@@ -3809,7 +3809,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	deployAllTools := []map[string]interface{}{
 		{
 			"name":        "deploy_all",
-			"description": "Run the full deploy fan-out sequentially: Convex backend, Cloudflare web, npm CLI, TestFlight (iOS embeds watch/tv/vision), Play internal (Android + Wear/AndroidTV/Auto). Beta/internal channels ONLY — NEVER App Store or Play production. Preflight (go build) hard-gates the run; force=true bypasses. dryRun lists steps without invoking them. Writes ~/n2n_deploy_report.md.",
+			"description": "Owner-only full deploy fan-out, equivalent to the canonical `./deploy/deploy.sh all` path: Convex backend, Cloudflare web, npm CLI, TestFlight (iOS embeds watch/tv/vision), Play internal (Android + Wear/AndroidTV/Auto). Beta/internal channels ONLY — NEVER App Store or Play production. Preflight (go build) hard-gates the run; force=true bypasses. dryRun lists steps without invoking them. Writes ~/n2n_deploy_report.md.",
 			"inputSchema": map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{

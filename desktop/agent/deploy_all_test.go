@@ -103,7 +103,7 @@ func TestRunDeployAll_TestflightKeychainRetries(t *testing.T) {
 			calls = append(calls, cmd)
 			n := len(calls)
 			mu.Unlock()
-			if n == 1 && strings.Contains(cmd, "deploy-testflight.sh") {
+			if n == 1 && strings.Contains(cmd, "deploy/deploy.sh ios") {
 				return "codesign failed: keychain locked", errors.New("exit 65")
 			}
 			return "TestFlight upload ok", nil
@@ -122,6 +122,15 @@ func TestRunDeployAll_TestflightKeychainRetries(t *testing.T) {
 	}
 	if !strings.Contains(calls[1], "unlock-keychain") {
 		t.Fatalf("retry command should include unlock-keychain, got %q", calls[1])
+	}
+}
+
+func TestDefaultDeployStepsUseCanonicalDeployEntrypoint(t *testing.T) {
+	steps := DefaultDeploySteps("/repo")
+	for _, step := range steps {
+		if !strings.Contains(step.Command, "deploy/deploy.sh") {
+			t.Fatalf("step %s bypasses the canonical deploy entrypoint: %q", step.Name, step.Command)
+		}
 	}
 }
 

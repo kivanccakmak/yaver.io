@@ -30,6 +30,15 @@ type persistedTask struct {
 	Failure         *TaskFailureDiagnosis `json:"failure,omitempty"`
 	CostUSD         float64               `json:"cost_usd,omitempty"`
 	Turns           []ConversationTurn    `json:"turns,omitempty"`
+	WorkDir         string                `json:"work_dir,omitempty"`
+	VideoClipID     string                `json:"video_clip_id,omitempty"`
+	VideoStatus     string                `json:"video_status,omitempty"`
+	ProofStatus     string                `json:"proof_status,omitempty"`
+	CommitSHA       string                `json:"commit_sha,omitempty"`
+	CommitSubject   string                `json:"commit_subject,omitempty"`
+	CommitBranch    string                `json:"commit_branch,omitempty"`
+	DiffShortstat   string                `json:"diff_shortstat,omitempty"`
+	FeedbackID      string                `json:"feedback_id,omitempty"`
 	CreatedAt       time.Time             `json:"created_at"`
 	StartedAt       *time.Time            `json:"started_at,omitempty"`
 	FinishedAt      *time.Time            `json:"finished_at,omitempty"`
@@ -84,6 +93,15 @@ func snapshotPersistedTasks(tasks map[string]*Task) []persistedTask {
 			Failure:         t.Failure,
 			CostUSD:         t.CostUSD,
 			Turns:           append([]ConversationTurn(nil), t.Turns...),
+			WorkDir:         t.WorkDir,
+			VideoClipID:     t.VideoClipID,
+			VideoStatus:     t.VideoStatus,
+			ProofStatus:     t.ProofStatus,
+			CommitSHA:       t.CommitSHA,
+			CommitSubject:   t.CommitSubject,
+			CommitBranch:    t.CommitBranch,
+			DiffShortstat:   t.DiffShortstat,
+			FeedbackID:      t.FeedbackID,
 			CreatedAt:       t.CreatedAt,
 			StartedAt:       t.StartedAt,
 			FinishedAt:      t.FinishedAt,
@@ -161,6 +179,15 @@ func (s *TaskStore) Load() map[string]*Task {
 			Failure:         r.Failure,
 			CostUSD:         r.CostUSD,
 			Turns:           r.Turns,
+			WorkDir:         r.WorkDir,
+			VideoClipID:     r.VideoClipID,
+			VideoStatus:     r.VideoStatus,
+			ProofStatus:     r.ProofStatus,
+			CommitSHA:       r.CommitSHA,
+			CommitSubject:   r.CommitSubject,
+			CommitBranch:    r.CommitBranch,
+			DiffShortstat:   r.DiffShortstat,
+			FeedbackID:      r.FeedbackID,
 			CreatedAt:       r.CreatedAt,
 			StartedAt:       r.StartedAt,
 			FinishedAt:      finishedAt,

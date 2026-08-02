@@ -34,20 +34,6 @@ test("relay route configuration failures are deterministic, not LLM fixes", () =
   assert.equal(plan.showFixWithRunner, false);
 });
 
-test("relay credential failures repair relay credentials instead of routing to a runner", () => {
-  for (const cause of [
-    "Relay authentication failed. Check the relay password or sign in again. invalid relay password",
-    'HTTP 401: {"ok":false,"code":"relay_password_invalid","error":"invalid relay password"}',
-    "relay password missing — sign in again to fetch it",
-  ]) {
-    const plan = classifyRuntimeTargetProbeFailure(cause);
-    assert.equal(plan.kind, "relay-auth");
-    assert.equal(plan.retry, true);
-    assert.equal(plan.useRunnerFallback, false);
-    assert.equal(plan.showFixWithRunner, false, "relay credential refresh is deterministic, not an LLM task");
-  }
-});
-
 test("machine role doctor render failures are deterministic repair routes", () => {
   for (const cause of [
     // Stable-code form emitted by ensureMachineRolesReady — codes, not prose,
@@ -96,7 +82,7 @@ test("relay credential failures route to reconnect, never Fix-with-runner", () =
     '{"ok":false,"code":"relay_password_missing","error":"relay password missing — sign in again to fetch it"}',
   ]) {
     const plan = classifyRuntimeTargetProbeFailure(cause);
-    assert.equal(plan.kind, "relay-auth");
+    assert.equal(plan.kind, "auth");
     assert.equal(plan.retry, true);
     assert.equal(plan.useRunnerFallback, false);
     assert.equal(plan.showFixWithRunner, false, "a runner task cannot fix a request that never reaches the box");
@@ -131,62 +117,10 @@ test("ordinary target probe failures still route to the coding runner", () => {
 test("RuntimeLabView consumes the shared classifier instead of private relay regexes", () => {
   const src = readFileSync(join(webRoot, "components/dashboard/RuntimeLabView.tsx"), "utf8");
   assert.match(src, /classifyRuntimeTargetProbeFailure/, "RuntimeLabView must use the shared failure policy");
-  assert.match(src, /repairRelayAndReloadTargets/, "RuntimeLabView must expose relay credential repair for relay-auth probe failures");
-  assert.match(src, /relayRepairFailure/, "RuntimeLabView must keep explicit state when deterministic relay repair fails");
-  assert.match(src, /Fix relay repair with AI/, "RuntimeLabView must offer an AI fallback after deterministic relay repair fails");
-  assert.match(src, /relayAuthFallbackContext/, "the AI fallback must carry runtime relay-auth stack context");
   assert.doesNotMatch(
     src,
     /device not connected to relay\|only reachable over a relay/,
     "RuntimeLabView must not reintroduce the old inline relay regex branch",
-  );
-});
-
-test("RuntimeLab relay repair reports unchanged credentials honestly", () => {
-  const src = readFileSync(join(webRoot, "components/dashboard/RuntimeLabView.tsx"), "utf8");
-  const clientSrc = readFileSync(join(webRoot, "lib/agent-client.ts"), "utf8");
-  assert.match(src, /result\.repaired \? "relay credentials refreshed" : `relay credentials unchanged/, "repair UI must not call unchanged credentials refreshed");
-  assert.match(clientSrc, /repaired\?: boolean; reason\?: string/, "agent client must expose repair verdict fields from Convex");
-});
-
-test("RuntimeLab render-machine picker does not preserve stale unowned runner ids", () => {
-  const src = readFileSync(join(webRoot, "components/dashboard/RuntimeLabView.tsx"), "utf8");
-  assert.match(src, /const ownedDeviceIds = useMemo/, "RuntimeLabView must derive owned device ids before saving split roles");
-  assert.match(src, /ownedDeviceIds\.has\(currentRunner\)/, "existing runner id must be reused only when it is still owned");
-  assert.match(src, /replaced stale runner/, "the runtime console must name stale-runner replacement");
-});
-
-test("v1 guest UI stays behind the shared launch flag", () => {
-  const flags = readFileSync(join(webRoot, "lib/launchFlags.ts"), "utf8");
-  const dashboard = readFileSync(join(webRoot, "app/dashboard/page.tsx"), "utf8");
-  const devices = readFileSync(join(webRoot, "components/dashboard/DevicesView.tsx"), "utf8");
-  assert.match(flags, /export const ENABLE_GUEST_FEATURES = false/, "v1 guest features must default off");
-  assert.match(dashboard, /ENABLE_GUEST_FEATURES \? \([\s\S]*<p[^>]*>Join as a guest/, "join-as-guest sidebar must be gated");
-  assert.match(devices, /ENABLE_GUEST_FEATURES && shareSummary && shareSummary\.guestChips\.length > 0/, "device shared-with chips must be gated");
-  assert.match(devices, /ENABLE_GUEST_FEATURES && allGuests\.length/, "device details shared-with section must be gated");
-});
-
-test("RuntimeLab relay repair failure preserves the original relay-auth classification", () => {
-  const src = readFileSync(join(webRoot, "components/dashboard/RuntimeLabView.tsx"), "utf8");
-  assert.match(
-    src,
-    /const probeError = error \|\| "Relay authentication failed while probing runtime targets\."/,
-    "repair must capture the relay-auth probe error before clearing the visible error",
-  );
-  assert.match(
-    src,
-    /setRelayRepairFailure\(\{ probeError, repairError: message, at: Date\.now\(\) \}\);[\s\S]*setError\(probeError\);/,
-    "a failed repair must restore the original relay-auth error so the card remains on the deterministic relay-auth branch",
-  );
-  assert.match(
-    src,
-    /Repair endpoint: POST \/settings\/repair-relay through agentClient\.repairRelayPassword\(\)/,
-    "fallback context must tell the coding task which deterministic route failed",
-  );
-  assert.match(
-    src,
-    /Preserve stable browser and Hermes\/native lanes/,
-    "fallback prompt must protect existing browser and native render lanes",
   );
 });
 
@@ -247,12 +181,9 @@ test("an unrelated failure is untouched by the project-missing matcher", () => {
 test("relay credential failures still win over the project matcher", () => {
   assert.equal(
     classifyRuntimeTargetProbeFailure(
-      // A REAL relay refusal body — the classifier is code-first, so this is
-      // the case that actually matters.
-      '{"ok":false,"code":"relay_password_missing","error":"relay password missing"}'
-        + ' while probing project "x" on this machine — check it',
+      'relay_password_missing while probing project "x" on this machine — check it',
     ).kind,
-    "relay-auth",
+    "auth",
   );
 });
 

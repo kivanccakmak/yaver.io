@@ -1,6 +1,7 @@
 package main
 
-// deploy_all.go — P9 orchestration verb. Runs the full deploy fan-out
+// deploy_all.go — P9 orchestration verb. MCP counterpart to the canonical
+// `./deploy/deploy.sh all` path. Runs the full deploy fan-out
 // (infra + every beta/internal channel the work touched) sequentially,
 // collects per-step results, and writes ~/n2n_deploy_report.md. The
 // verb never touches production (App Store / Play production) — only
@@ -96,24 +97,24 @@ func DefaultDeploySteps(repoRoot string) []DeployStep {
 	return []DeployStep{
 		{
 			Name: "convex", Channel: "infra", WorkDir: filepath.Join(repoRoot, "backend"),
-			Command: "npx convex deploy --yes", Timeout: 5 * time.Minute,
+			Command: filepath.Join(repoRoot, "deploy", "deploy.sh") + " backend", Timeout: 5 * time.Minute,
 		},
 		{
 			Name: "web-cloudflare", Channel: "infra", WorkDir: repoRoot,
-			Command: "./scripts/deploy-web.sh", Timeout: 15 * time.Minute,
+			Command: "./deploy/deploy.sh cloudflare", Timeout: 15 * time.Minute,
 		},
 		{
 			Name: "cli-npm", Channel: "infra", WorkDir: filepath.Join(repoRoot, "cli"),
-			Command: "npm publish", Timeout: 10 * time.Minute, Optional: true,
+			Command: filepath.Join(repoRoot, "deploy", "deploy.sh") + " npm", Timeout: 10 * time.Minute, Optional: true,
 		},
 		{
 			Name: "testflight-ios", Channel: "beta", WorkDir: repoRoot,
-			Command: "source ~/.appstoreconnect/yaver.env && ./scripts/deploy-testflight.sh",
+			Command: "./deploy/deploy.sh ios",
 			Timeout: 45 * time.Minute,
 		},
 		{
 			Name: "playstore-android", Channel: "internal", WorkDir: repoRoot,
-			Command: "JAVA_HOME=$(/usr/libexec/java_home -v 17) ./scripts/deploy-playstore.sh && PLAY_STORE_KEY_FILE=keys/google-play-service-account.json python3 scripts/upload-playstore.py",
+			Command: "./deploy/deploy.sh android",
 			Timeout: 45 * time.Minute,
 		},
 	}

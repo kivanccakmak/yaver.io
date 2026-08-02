@@ -114,7 +114,13 @@ enum FailureSignals {
     /// day: if a new relay verdict appears, it gets a code in the agent and a
     /// row here AND there in one change.
     enum TargetProbeKind: String, Sendable {
-        case relayAuth = "relay-auth"
+        // Raw values are the CROSS-SURFACE names — they must match
+        // web/lib/runtimeTargetProbeFailure.ts exactly. This one said
+        // "relay-auth" while web said "auth", and the parity guard missed it
+        // because it asked whether the source *contained* "auth" — which
+        // "relay-auth" does. Two surfaces naming one failure differently is the
+        // drift that guard exists to catch, so it now compares whole values.
+        case relayAuth = "auth"
         case relayPresence = "relay-presence"
         case relayRoute = "relay-route"
         case agentVerbSkew = "agent-verb-skew"

@@ -1,7 +1,5 @@
 "use client";
 
-import { ApproveSignInLane } from "./ApproveSignInLane";
-
 import Link from "next/link";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Device, type DeviceStorage, hideDevice, unhideAll } from "@/lib/use-devices";
@@ -28,6 +26,7 @@ import {
   deviceStatusLabel,
   canBrowserActOnDevice,
   deviceCtaLabel,
+  canShowCloseWorkspace,
   type BrowserReach,
   type DeviceLifecycleState,
 } from "@/lib/device-lifecycle";
@@ -49,7 +48,7 @@ import {
   stopManagedCloudMachine,
 } from "@/lib/managed-cloud";
 import { leaveSharedAccess } from "@/lib/guests";
-import { classifyFetchError, type ClassifiedFailure } from "@/lib/connection-error";
+import { classifyDiagnostic, classifyFetchError, summarizeFailures, type ClassifiedFailure } from "@/lib/connection-error";
 import {
   probeAllowed,
   probeFailed,
@@ -61,7 +60,6 @@ import {
   getLastFailure,
   subscribeLastFailure,
 } from "@/lib/probe-backoff";
-import { reauthFailureLine } from "@/lib/reauthFailure";
 import type { useMachineRoles, MachineRolesRow } from "@/lib/useMachineRoles";
 
 function transportToneClasses(tone: TransportInfo["tone"]): string {
@@ -418,6 +416,28 @@ function isDormantUnreachableDevice(
   if (Boolean(device.tunnelUrl) || Boolean(device.publicEndpoints?.length)) return false;
   const age = lastSeenAgeMs(device.lastSeen);
   return age !== null && age >= DORMANT_DEVICE_HIDE_MS;
+}
+
+function duplicateHostKey(device: Pick<Device, "isGuest" | "platform" | "name">): string | null {
+  if (device.isGuest) return null;
+  const platform = String(device.platform || "").trim().toLowerCase();
+  const name = String(device.name || "").trim().toLowerCase().replace(/\.local$/, "");
+  if (!platform || !name) return null;
+  return `${platform}:${name}`;
+}
+
+function stableAliasRank(device: Pick<Device, "alias">): number {
+  const alias = String(device.alias || "").trim().toLowerCase();
+  if (!alias) return 1;
+  return /-\d+$/.test(alias) ? 2 : 0;
+}
+
+function operationRank(device: Pick<Device, "online" | "needsAuth" | "workspaceLive" | "peerState" | "probeState" | "lastTunnelEvent">): number {
+  if (device.workspaceLive) return 0;
+  if (device.probeState === "ok") return 1;
+  if (device.online || device.peerState === "online" || device.lastTunnelEvent?.online === true) return 2;
+  if (!device.needsAuth) return 3;
+  return 4;
 }
 
 function formatRunnerChipLabel(runner: string): string {
@@ -1250,6 +1270,7 @@ function sharedGuestLabels(device: Pick<Device, "sharedGuests">): string[] {
 }
 
 function deviceShareSummary(device: Pick<Device, "isGuest" | "hostName" | "sharedWithGuests" | "sharedGuests" | "sharesAllProjects" | "sharedProjects" | "sharedRunners" | "runners">) {
+  if (!ENABLE_GUEST_FEATURES) return null;
   const hasSharedState = device.isGuest || device.sharedWithGuests;
   if (!hasSharedState) return null;
   const sharedProjects = Array.isArray(device.sharedProjects) ? device.sharedProjects.filter(Boolean) : [];
@@ -1290,26 +1311,18 @@ interface DevicesViewProps {
   onCloseWorkspace?: () => void;
   /** Device id currently opened as the active workspace, if any. */
   activeWorkspaceDeviceId?: string | null;
+  /** Device ids with live pooled web connections, including background role machines. */
+  connectedDeviceIds?: string[];
+  /** Dashboard-owned workspace connection state. Passed down to avoid a second singleton subscription drifting from the shell. */
+  workspaceConnectionState?: string;
+  /** Last workspace connect error, shown on the selected device card. */
+  connectError?: string | null;
+  /** Last workspace connect transport attempts, shown on the selected device card. */
+  connectDiagnostics?: ConnectAttemptDiagnostic[];
   /** Count of devices hidden via the Hide button — surfaced for the "show all" link. */
   hiddenCount?: number;
   /** Navigate to the dedicated Yaver Cloud page (slim summary card links here). */
   onNavigateCloud?: () => void;
-  /**
-   * Last connect failure + the per-candidate ladder that produced it.
-   *
-   * `app/dashboard/page.tsx` has been PASSING both of these since they landed,
-   * while this interface never declared them — so `npm run build` fails on
-   * `github/main` today with "Property 'connectError' does not exist on type
-   * DevicesViewProps" (a bare `tsc --noEmit` reports the same, one error, and
-   * nothing else). Declared here so the tree type-checks again.
-   *
-   * NOTE FOR WHOEVER OWNS THE CONNECT-FAILURE PANEL: these are accepted and
-   * not yet rendered. A producer with no consumer is half a change — the card
-   * should name the failed candidate and offer the route to its fix. Land the
-   * consumer against these props rather than re-plumbing new ones.
-   */
-  connectError?: string | null;
-  connectDiagnostics?: ConnectAttemptDiagnostic[];
   /** Shared runner/render role settings hook from dashboard/page.tsx. */
   machineRoles?: ReturnType<typeof useMachineRoles>;
 }
@@ -1513,6 +1526,88 @@ function DeviceLifecycleBadge({ device }: { device: Device }) {
         {label}
       </span>
     </>
+  );
+}
+
+function ConnectAttemptLabel({ diag }: { diag: ConnectAttemptDiagnostic }) {
+  const classified = diag.ok ? null : classifyDiagnostic(diag);
+  const stage =
+    diag.path === "relay"
+      ? `relay${diag.relayId ? `:${diag.relayId}` : ""}`
+      : diag.path === "tunnel"
+        ? "tunnel"
+        : "direct";
+  const verdict = diag.ok
+    ? "ok"
+    : diag.authExpired
+      ? "auth expired"
+      : classified?.label || (diag.status ? `HTTP ${diag.status}` : diag.error || "failed");
+  return (
+    <div className="grid grid-cols-[6rem_minmax(0,1fr)_auto] items-center gap-2 text-[10px] leading-5">
+      <span className="font-mono text-slate-500 dark:text-surface-500">{stage}</span>
+      <span className={diag.ok ? "text-emerald-700 dark:text-emerald-300" : "truncate text-amber-700 dark:text-amber-200"} title={classified?.raw || diag.error || verdict}>
+        {verdict}
+      </span>
+      {diag.durationMs != null ? (
+        <span className="font-mono text-slate-400 dark:text-surface-600">{diag.durationMs}ms</span>
+      ) : null}
+    </div>
+  );
+}
+
+function DeviceConnectFailurePanel({
+  device,
+  error,
+  diagnostics,
+}: {
+  device: Device;
+  error?: string | null;
+  diagnostics: ConnectAttemptDiagnostic[];
+}) {
+  const summary = summarizeFailures(diagnostics);
+  const lastSignal = formatLastSeen(device.lastSeen);
+  const title = summary?.label || "Could not open workspace";
+  const detail =
+    summary?.detail ||
+    error ||
+    (device.lastSeen
+      ? `No workspace connection is open. Last agent signal was ${lastSignal}.`
+      : "No workspace connection is open and this machine has not sent a recent agent signal.");
+  const action =
+    summary?.suggestedAction ||
+    (device.online || hasRecentLiveSignal(device)
+      ? "Retry connect; if it fails again, restart Yaver on the machine so it re-establishes its relay tunnel."
+      : "Start Yaver on the machine, then refresh this card.");
+
+  return (
+    <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50/80 p-3 text-xs dark:border-amber-500/30 dark:bg-amber-500/10">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded border border-amber-400/50 bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-200">
+          Connect failed
+        </span>
+        <span className="text-[11px] text-slate-500 dark:text-surface-500">
+          Last signal {lastSignal}
+        </span>
+      </div>
+      <div className="mt-2 font-semibold text-amber-800 dark:text-amber-200">{title}</div>
+      <div className="mt-1 text-slate-700 dark:text-surface-300">{detail}</div>
+      {error && error !== title && error !== detail ? (
+        <div className="mt-1 break-words font-mono text-[10px] text-slate-500 dark:text-surface-500">{error}</div>
+      ) : null}
+      {diagnostics.length > 0 ? (
+        <div className="mt-3 rounded-md border border-amber-300/70 bg-white/60 p-2 dark:border-amber-500/20 dark:bg-surface-950/35">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-surface-500">
+            Attempt stages
+          </div>
+          <div className="space-y-0.5">
+            {diagnostics.map((diag, index) => (
+              <ConnectAttemptLabel key={`${diag.path}:${diag.relayId || "none"}:${index}`} diag={diag} />
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div className="mt-2 text-[11px] text-slate-600 dark:text-surface-400">{action}</div>
+    </div>
   );
 }
 
@@ -2298,8 +2393,7 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
           for (const row of rows) {
             if (!row?.deviceId || !row?.runnerId) continue;
             runners[row.deviceId] = row.runnerId;
-            const model = usableSavedModelForRunner(row.runnerId, row.model);
-            if (model) models[row.deviceId] = model;
+            if (row.model) models[row.deviceId] = row.model;
             if (row.mode) modes[row.deviceId] = row.mode;
             if (row.provider) providers[row.deviceId] = row.provider;
           }
@@ -2491,18 +2585,12 @@ function useLiveOpenCodeByDevice(
 // migrated away in mobile DeviceContext.loadSettings).
 export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
   claude: "claude-opus-4-7",
-  codex: "gpt-5.4",
+  // Codex-native model — general gpt-5.x require API billing and error on a
+  // ChatGPT-account Codex login ("not supported when using Codex with a
+  // ChatGPT account").
+  codex: "gpt-5.3-codex",
   opencode: "zai-coding-plan/glm-4.7",
 };
-
-const OBSOLETE_MODEL_IDS = new Set(["o3-mini", "gpt-5-codex", "gpt-5.3-codex"]);
-
-function usableSavedModelForRunner(runnerId: string | null | undefined, model: string | null | undefined): string {
-  const value = String(model || "").trim();
-  if (!value) return "";
-  if (String(runnerId || "").trim().toLowerCase() === "codex" && OBSOLETE_MODEL_IDS.has(value)) return "";
-  return value;
-}
 
 export function isKivancAccount(email: string | null | undefined): boolean {
   const normalized = String(email || "").trim().toLowerCase();
@@ -2572,7 +2660,7 @@ export function preferredDefaultModelForRunner(
       return "claude-opus-4-7";
     }
     if (normalized === "codex" && !isKivancMacBook(device)) {
-      return "gpt-5.4";
+      return "gpt-5.3-codex";
     }
   }
   return DEFAULT_MODEL_BY_RUNNER[normalized] || null;
@@ -2747,9 +2835,20 @@ export const MODEL_OPTIONS_BY_RUNNER: Record<string, Array<{ id: string; label: 
     { id: "claude-sonnet-4-5", label: "Sonnet 4.5", hint: "prior Sonnet" },
     { id: "claude-haiku-4-5", label: "Haiku 4.5", hint: "fastest, cheapest" },
   ],
+  // ORDER MATTERS — the first entry is the default this picker applies, and on
+  // 2026-08-02 that was `gpt-5.4`, which a ChatGPT-account Codex login can
+  // never run ("The 'gpt-5.4' model is not supported when using Codex with a
+  // ChatGPT account"). The picker's default silently overrode BOTH declared
+  // defaults — `DEFAULT_MODEL_BY_RUNNER.codex` above and the agent's own
+  // `fallbackRunnerModels` (httpserver.go) — which already said gpt-5.3-codex.
+  // A Vibing task then spent a real LLM run discovering a 400 this repo had
+  // predicted in two places. Lead with the Codex-native model.
+  // See web/lib/runnerModelCompat.ts; general gpt-5.x need API billing, which
+  // the subscription-only rule forbids us from using.
   codex: [
-    { id: "gpt-5.4", label: "GPT-5.4", hint: "stable default fallback" },
+    { id: "gpt-5.3-codex", label: "GPT-5.3 Codex", hint: "works on a ChatGPT-account login" },
     { id: "gpt-5-codex", label: "GPT-5 Codex", hint: "agentic coding model" },
+    { id: "gpt-5.4", label: "GPT-5.4", hint: "needs API billing — not a ChatGPT-account login" },
     { id: "gpt-5-thinking", label: "GPT-5 Thinking", hint: "reasoning-heavy" },
     { id: "gpt-5", label: "GPT-5", hint: "general reasoning" },
     { id: "gpt-5-mini", label: "GPT-5 Mini", hint: "fastest, cheapest" },
@@ -3104,11 +3203,16 @@ export default function DevicesView({
   onOpen,
   onCloseWorkspace,
   activeWorkspaceDeviceId = null,
+  connectedDeviceIds = [],
+  workspaceConnectionState,
+  connectError = null,
+  connectDiagnostics = [],
   hiddenCount = 0,
   onNavigateCloud,
   machineRoles,
 }: DevicesViewProps) {
-  const agentConnectionState = useAgentConnectionState();
+  const observedAgentConnectionState = useAgentConnectionState();
+  const agentConnectionState = workspaceConnectionState ?? observedAgentConnectionState;
   const connectedAgentDeviceId = useConnectedAgentDeviceId();
   const failureRegistryVersion = useFailureRegistryVersion();
   // Subscribed here (not per-iteration — hooks can't be) so a Ping landing on
@@ -3285,12 +3389,10 @@ export default function DevicesView({
     },
     [activeWorkspaceDeviceId, machineRoles, primaryDeviceId, token],
   );
-  const actionableDevices = devices.filter((device) => !isDormantUnreachableDevice(device));
-  const dormantDevices = devices.filter((device) => isDormantUnreachableDevice(device));
   // Role-first, deterministic order: primary, AI runner, renderer, fallbacks,
   // then everything else alphabetically. Fetch order varies per refresh and
   // reads as random — the machines the account gave meaning to lead the list.
-  const roleRank = (id: string): number => {
+  const roleRank = useCallback((id: string): number => {
     const fav = machineRoles?.favorite;
     if (id === primaryDeviceId) return 0;
     if (id === fav?.runnerDeviceId) return 1;
@@ -3298,7 +3400,48 @@ export default function DevicesView({
     if (id === secondaryDeviceId) return 3;
     if (id === fav?.secondaryRunnerDeviceId || id === fav?.secondaryRenderDeviceId) return 4;
     return 5;
-  };
+  }, [
+    primaryDeviceId,
+    secondaryDeviceId,
+    machineRoles?.favorite?.runnerDeviceId,
+    machineRoles?.favorite?.renderDeviceId,
+    machineRoles?.favorite?.secondaryRunnerDeviceId,
+    machineRoles?.favorite?.secondaryRenderDeviceId,
+  ]);
+  const duplicateAuthSiblingIds = useMemo(() => {
+    const byHost = new Map<string, Device[]>();
+    for (const device of devices) {
+      const key = duplicateHostKey(device);
+      if (!key) continue;
+      const list = byHost.get(key) || [];
+      list.push(device);
+      byHost.set(key, list);
+    }
+
+    const hidden = new Set<string>();
+    for (const group of byHost.values()) {
+      if (group.length < 2) continue;
+      const canonical = [...group].sort(
+        (a, b) =>
+          operationRank(a) - operationRank(b) ||
+          roleRank(a.id) - roleRank(b.id) ||
+          Number(Boolean(a.needsAuth)) - Number(Boolean(b.needsAuth)) ||
+          stableAliasRank(a) - stableAliasRank(b) ||
+          String(a.alias || a.id).localeCompare(String(b.alias || b.id)),
+      )[0];
+      for (const device of group) {
+        if (device.id !== canonical.id) hidden.add(device.id);
+      }
+    }
+    return hidden;
+  }, [
+    devices,
+    roleRank,
+  ]);
+  const isHiddenStaleDevice = (device: Device): boolean =>
+    isDormantUnreachableDevice(device) || duplicateAuthSiblingIds.has(device.id);
+  const actionableDevices = devices.filter((device) => !isHiddenStaleDevice(device));
+  const dormantDevices = devices.filter((device) => isHiddenStaleDevice(device));
   const renderedDevices = [...(showDormantDevices ? devices : actionableDevices)].sort(
     (a, b) =>
       roleRank(a.id) - roleRank(b.id) ||
@@ -3313,7 +3456,7 @@ export default function DevicesView({
             <button
               onClick={() => setShowDormantDevices((value) => !value)}
               className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-700 dark:text-amber-200 hover:bg-amber-500/15"
-              title="Reveal stale devices with no recent agent signal and no usable public path"
+              title="Reveal stale devices and duplicate auth-recovery rows"
             >
               {showDormantDevices ? "Hide stale devices" : `Show stale devices (${dormantDevices.length})`}
             </button>
@@ -3343,7 +3486,7 @@ export default function DevicesView({
           <span>
             Device list as of{" "}
             <span className="font-mono">{new Date(devicesFetchedAt).toLocaleTimeString()}</span>
-            {" · "}every machine was probed, not just the one you opened
+            {" · "}reachability is only verified for machines you open or refresh
           </span>
         ) : null}
       </div>
@@ -3573,7 +3716,7 @@ export default function DevicesView({
           ) : null}
           {!showDormantDevices && dormantDevices.length > 0 ? (
             <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-200">
-              {dormantDevices.length} stale device{dormantDevices.length === 1 ? "" : "s"} hidden because they have no recent agent signal and no usable relay/tunnel path.
+              {dormantDevices.length} stale device{dormantDevices.length === 1 ? "" : "s"} hidden because they have no recent agent signal, no usable relay/tunnel path, or are duplicate auth-recovery rows for a role-bearing machine.
             </div>
           ) : null}
           {/* HN-LAUNCH-HIDE-PAID: hide the "Yaver Cloud — rent a managed box" banner. */}
@@ -3582,7 +3725,17 @@ export default function DevicesView({
           ) : null}
           {renderedDevices.map((device) => {
             const shareSummary = deviceShareSummary(device);
-            const isActiveWorkspace = activeWorkspaceDeviceId === device.id;
+            const isSelectedWorkspace = activeWorkspaceDeviceId === device.id;
+            const isPooledConnected = connectedDeviceIds.includes(device.id);
+            const isActiveWorkspace = canShowCloseWorkspace({
+              activeWorkspaceDeviceId,
+              deviceId: device.id,
+              connectionState: agentConnectionState,
+            });
+            const showConnectFailure =
+              isSelectedWorkspace &&
+              agentConnectionState === "error" &&
+              (Boolean(connectError) || connectDiagnostics.length > 0);
             const sshCommand = sshCommandForDevice(device);
             const directSSHHost = directSSHHostForDevice(device);
             const sshHref = directSSHHost ? `ssh://${directSSHHost}` : null;
@@ -3604,19 +3757,12 @@ export default function DevicesView({
               needsAuth: device.needsAuth,
               probeState: device.probeState,
             });
-            // ── "You are on THIS one." ────────────────────────────────────
-            // Keyed on deviceId equality ONLY. Never `device.name` (two agents
-            // on one box register the same name — that is what made the user
-            // open a circuit-sim cell's workspace believing it was the box) and
-            // never the list index (`renderedDevices` re-sorts by role,
-            // lifecycle and managed state on essentially every heartbeat).
-            //
-            // Everything derived from `agentClient` below this line is
-            // SINGLETON state: it describes exactly one device. Rendering any
-            // of it on a card whose id differs is the identity-mixing defect
-            // from the 2026-07-28 device-status incident (a row's own
-            // `needsAuth` printed beside the *connected* agent's version). So
-            // both the transport and the latency are read inside this guard.
+            // WHICH CARD AM I ON? Keyed off device.id — never the name, never
+            // the index. The incident this pins was two identically-named
+            // machines and a status line assembled from two different devices,
+            // so a value composed from the `agentClient` singleton may only
+            // land on the card whose id actually matches it.
+            // Guard: web/lib/connectedDeviceCard.test.ts.
             const isConnectedCard = isBrowserConnectedToDevice(
               device.id,
               connectedAgentDeviceId,
@@ -3785,18 +3931,8 @@ export default function DevicesView({
                       ) : null}
                       <DeviceLifecycleBadge device={device} />
                     </div>
-                    {/* The route back for a machine nothing can reach. Renders
-                        only while the box is actually offering a code, so it
-                        costs zero pixels on a healthy card — and when it does
-                        appear it is an action, not another status chip. */}
-                    <ApproveSignInLane
-                      deviceName={device.alias || device.name || "This machine"}
-                      pendingAuthCode={device.pendingAuthCode}
-                      token={token}
-                      convexSiteUrl={CONVEX_URL}
-                    />
                     <div className="mt-1 flex flex-wrap items-center gap-1">
-                      {/* The connected card states its LIVE path in prose
+                      {/* The connected card states the live session once
                           ("Connected · Yaver public relay · 604ms") and drops
                           the transport chip, which would otherwise print the
                           same words twice a centimetre apart. Every other card
@@ -3980,6 +4116,9 @@ export default function DevicesView({
                       {device.probeState === "ok" && device.probePath ? (
                         <span>· probed via {device.probePath}</span>
                       ) : null}
+                      {isPooledConnected && !isActiveWorkspace ? (
+                        <span>· connected in background</span>
+                      ) : null}
                       {device.probeState === "auth-expired" ? <span>· auth expired</span> : null}
                     </div>
                   </div>
@@ -4104,6 +4243,13 @@ export default function DevicesView({
                     />
                   </div>
                 </div>
+                {showConnectFailure ? (
+                  <DeviceConnectFailurePanel
+                    device={device}
+                    error={connectError}
+                    diagnostics={connectDiagnostics}
+                  />
+                ) : null}
                 {rescueOpenDeviceId === device.id ? (
                   <RescueInlinePanel
                     device={device}
@@ -4165,17 +4311,13 @@ export default function DevicesView({
                           }));
                           setTimeout(() => onRefresh().catch(() => {}), 1200);
                         } else {
-                          // Same formatter as the sidebar in app/dashboard/page.tsx.
-                          // This file used to carry its own copy — the repo's
-                          // defining bug is the duplicated derive.
+                          const summary = r.diagnostics
+                            .map((d) => `${d.path}/${d.step}: ${d.ok ? "ok" : d.error || "fail"}`)
+                            .join(" · ");
                           setRescueStatus((prev) => ({
                             ...prev,
                             [device.id]: {
-                              msg: reauthFailureLine(r, {
-                                name: device.name,
-                                alias: device.alias,
-                                secondaryAgents: device.secondaryAgents,
-                              }),
+                              msg: `Re-auth failed${r.error ? `: ${r.error}` : ""}. ${summary}`,
                               tone: "err",
                             },
                           }));
@@ -4230,7 +4372,7 @@ export default function DevicesView({
                     ))}
                   </div>
                 ) : null}
-                {ENABLE_GUEST_FEATURES && shareSummary && shareSummary.guestChips.length > 0 ? (
+                {shareSummary && shareSummary.guestChips.length > 0 ? (
                   <div className="mt-3">
                     <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-surface-400">
                       Shared with
@@ -4349,6 +4491,15 @@ export default function DevicesView({
                     >
                       <span aria-hidden>×</span>
                       Close Workspace
+                    </button>
+                  ) : isPooledConnected ? (
+                    <button
+                      onClick={() => onOpen?.(device)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200 dark:hover:bg-emerald-500/20"
+                      title="This machine already has a live background connection. Make it the focused workspace."
+                    >
+                      <span aria-hidden>●</span>
+                      Focus Workspace
                     </button>
                   ) : onOpen ? (
                     <button
@@ -5560,8 +5711,8 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
       })
     : null;
   const allRunners = (device.runners || []).map((r) => r?.runnerId || "").filter(Boolean);
-  const allSharedRunners = device.sharedRunners || [];
-  const allGuests = (device.sharedGuests || []).map((g) => g.name || g.email || "").filter(Boolean);
+  const allSharedRunners = ENABLE_GUEST_FEATURES ? device.sharedRunners || [] : [];
+  const allGuests = ENABLE_GUEST_FEATURES ? (device.sharedGuests || []).map((g) => g.name || g.email || "").filter(Boolean) : [];
   const sysUnknown = <span className="text-surface-600">—</span>;
   // Runtime/system blobs come back from the agent's /info when LAN-reachable.
   // Accept loose keys since this shape differs between agent versions (cpu,
@@ -5818,7 +5969,7 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
           </div>
         </div>
       ) : null}
-      {ENABLE_GUEST_FEATURES && allGuests.length ? (
+      {allGuests.length ? (
         <div className="mt-3">
           <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-500">
             Shared with

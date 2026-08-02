@@ -1,8 +1,5 @@
-export function machineRolesSaveErrorMessage(statusOrMessage: number | string, body?: unknown): string {
-  const status = typeof statusOrMessage === "number" ? statusOrMessage : 0;
-  const raw = typeof statusOrMessage === "string"
-    ? statusOrMessage.trim()
-    : typeof body === "object" && body && "error" in body
+export function machineRolesSaveErrorMessage(status: number, body: unknown): string {
+  const raw = typeof body === "object" && body && "error" in body
     ? String((body as { error?: unknown }).error || "")
     : "";
   const lower = raw.toLowerCase();

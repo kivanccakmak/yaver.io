@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { probeFailureAllowsBoxAlive } from "./connection-error.ts";
+import { probeFailureAllowsBoxAlive } from "./connection-error";
 
 test("a relay verdict is about the RELAY, not proof the box is down", () => {
   for (const msg of [

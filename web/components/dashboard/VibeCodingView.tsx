@@ -412,6 +412,9 @@ export default function VibeCodingView({
   mobileWorkers,
   selectedPreviewTarget,
   onSelectPreviewTarget,
+  onReconnect: _onReconnect,
+  onRepairRelay: _onRepairRelay,
+  onQueueTunnelReset: _onQueueTunnelReset,
 }: {
   devices: Device[];
   connectedDevice: Device | null;
@@ -420,6 +423,9 @@ export default function VibeCodingView({
   mobileWorkers: PreviewTarget[];
   selectedPreviewTarget: PreviewTarget | null;
   onSelectPreviewTarget: (deviceId: string | null) => void;
+  onReconnect?: () => Promise<void> | void;
+  onRepairRelay?: (deviceId: string) => Promise<unknown>;
+  onQueueTunnelReset?: () => Promise<unknown>;
 }) {
   const { token, user } = useAuth();
   const { primaryRunnerByDevice, primaryModelByDevice, opencodeConfigByDevice } = usePrimaryRunnerByDevice(token);

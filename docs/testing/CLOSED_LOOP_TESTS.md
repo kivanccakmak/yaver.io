@@ -89,7 +89,7 @@ src=blob:>`). This is the lane the user confirmed works end to end.
 
 | # | Case | Guest | Receiver | Transport | Status |
 |---|---|---|---|---|---|
-| 3.1 | RN app streams to web browser | yaver-todo-rn (Expo web) | Chromium (webui) | JPEG-DC | design ✅ / product-confirmed working; automated pixel-assert TODO |
+| 3.1 | RN app streams to web browser | yaver-todo-rn (Expo web) | Chromium (webui) | JPEG-DC | ✅ **PIXELS**; mobile-viewport guard now fails running agents that omit `displaySurface=mobile-web` |
 | 3.2 | RN app streams to mobile RN-web | yaver-todo-rn | RN-web (mobile) | JPEG-DC | design ✅; automated TODO |
 | 3.3 | Flutter app streams to web browser | yaver-todo-flutter (Flutter web) | Chromium | JPEG-DC | design ✅; note: Flutter web serves index even on compile-fail (`project_flutter_web_compile_fail_serves_blank`) — assert real widgets, not HTTP 200 |
 | 3.4 | Vibe-controlled color flip over the stream | either | either | JPEG-DC | design ✅ — reuses §2 vibe command, verifies on the WebRTC frame instead of the iframe |
@@ -97,6 +97,21 @@ src=blob:>`). This is the lane the user confirmed works end to end.
 **Pixel assert on JPEG-DC:** the received frame is an `<img>`, not a `<video>`
 — read it by drawing the `<img>` to a canvas and sampling, exactly as the RTP
 receiver samples `<video>` in §4. A blank/placeholder `<img>` = SILENT.
+`remote-runtime-browser-jpeg.spec.ts` also sends real `/control` input into the
+browser-window target and requires the next JPEG frame signature to change, so
+the pass proves both initial pixels and a closed input→render→stream loop.
+With `E2E_EXPECT_MOBILE_VIEWPORT=1`, it also preflights
+`/remote-runtime/capabilities` and requires RN/Flutter `browser-window` to
+advertise `displaySurface="mobile-web"` plus a portrait viewport before it will
+accept a stream.
+
+Audit: `docs/audits/webrtc-mobile-surface-closed-loop-audit-2026-07-29.md`.
+
+**Mac simulator probes:** `e2e/ios-simulator-loop.mjs` verifies the heavier
+iOS simulator build/launch/frame loop without judging pixels while `run-guest`
+is still building. `e2e/apple-surface-frame-loop.mjs` probes tvOS/watchOS/
+visionOS simulator session create + frame capture and records named capture or
+launch refusals instead of manufacturing a silent result.
 
 **Not in scope on Linux (later, on a Mac):** iOS/Swift `native-webrtc`
 (RTP H.264 via `xcrun recordVideo`) and Android AVD RTP. Do **not** run these on
@@ -196,6 +211,11 @@ node e2e/vibe-e2e/run.mjs mobile
 
 # WebRTC RTP video-track (needs a live primary reachable over the tailnet):
 YAVER_WEBRTC_BASE=http://<box>:18080 node e2e/webrtc-e2e/run.mjs both
+
+# RN/Flutter browser-window WebRTC JPEG-DataChannel (§3, needs a live primary):
+YAVER_BROWSER_JPEG_BASE=http://<box>:18080 E2E_BASE_URL=http://127.0.0.1 \
+  E2E_REQUIRE_PIXELS=1 E2E_RECORD_ALL=1 \
+  npx --prefix e2e playwright test remote-runtime-browser-jpeg.spec.ts --project=chromium
 
 # False-positive (needs the caller's own box):
 node e2e/false-positive-scan.mjs

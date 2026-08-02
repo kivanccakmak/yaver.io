@@ -14,7 +14,7 @@ import {
   METERED_FANOUT_LIMIT,
   fanoutModeFromSettings,
   type FanoutCandidate,
-} from "./connectionFanout.ts";
+} from "./connectionFanout";
 
 const devices: FanoutCandidate[] = [
   { deviceId: "ubuntu", isOnline: true },

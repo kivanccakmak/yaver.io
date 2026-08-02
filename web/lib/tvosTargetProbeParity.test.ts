@@ -51,17 +51,35 @@ const webKinds = (webSrc.match(/export type RuntimeTargetProbeFailureKind =([\s\
 
 ok(webKinds.length >= 5, `web declares its kinds (${webKinds.join(", ")})`);
 
+// Scoped to the enum body and compared as WHOLE raw values. Searching the whole
+// file for `"auth"` passed while tvOS actually spelled it `"relay-auth"` — the
+// substring made the guard agree with a drift it existed to catch (2026-08-02).
+const tvKindEnum = (() => {
+  const start = tvSrc.indexOf("enum TargetProbeKind");
+  if (start < 0) return "";
+  const end = tvSrc.indexOf("}", start);
+  return end > start ? tvSrc.slice(start, end) : "";
+})();
+ok(tvKindEnum.length > 0, "tvOS declares a TargetProbeKind enum");
+const tvRawValues = new Set(
+  Array.from(tvKindEnum.matchAll(/case\s+(\w+)(?:\s*=\s*"([^"]+)")?/g))
+    // A Swift case with no explicit rawValue takes its own name (`case other`).
+    .map((m) => m[2] || m[1]),
+);
 for (const kind of webKinds) {
-  // Swift spells them either as a rawValue string ("project-missing") or, for
-  // single-word cases, as a bare case name (`case auth`).
-  const asRaw = tvSrc.includes(`"${kind}"`);
-  const asCase = new RegExp(`case\\s+${kind.replace(/-([a-z])/g, (_, c) => c.toUpperCase())}\\b`).test(tvSrc);
-  ok(asRaw || asCase, `tvOS TargetProbeKind covers "${kind}"`);
+  ok(tvRawValues.has(kind), `tvOS TargetProbeKind covers "${kind}" as a whole value`);
 }
 
 // ── the wire codes must be identical strings, not merely present ──────────
 for (const code of ["project_not_on_this_machine", "relay.device_not_connected"]) {
   ok(webSrc.includes(code) && tvSrc.includes(code), `both surfaces use the exact code "${code}"`);
+}
+
+// ── the relay-credential matcher must not have drifted ────────────────────
+// Mobile already shipped THREE different relay-auth matchers, none a superset
+// of the others. Pin the shared phrases so a fourth cannot appear quietly.
+for (const phrase of ["relay_password_missing", "relay_password_invalid", "relay_password_rate_limited"]) {
+  ok(webSrc.includes(phrase) && tvSrc.includes(phrase), `relay-credential matcher shares "${phrase}"`);
 }
 
 // ── the routing decision itself must match, not just the label ────────────
@@ -71,7 +89,11 @@ ok(
   /kind:\s*\.projectMissing,\s*retry:\s*false,\s*useRunnerFallback:\s*true,\s*showFixWithRunner:\s*false/.test(tvSrc),
   "tvOS routes project-missing identically to web (no retry, runner fallback, never Fix-with-runner)",
 );
-
+ok(
+  // Swift case name is `relayAuth`; its rawValue "auth" is what must match web.
+  /kind:\s*\.relayAuth,\s*retry:\s*true,\s*useRunnerFallback:\s*false,\s*showFixWithRunner:\s*false/.test(tvSrc),
+  "tvOS routes a relay-credential refusal identically to web",
+);
 
 // ── the fail-open default must survive on both ────────────────────────────
 // An unrecognised failure SHOULD still offer a coding agent: that is the one

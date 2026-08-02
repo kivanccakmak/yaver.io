@@ -38,11 +38,10 @@ import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow
 import { CONVEX_URL } from "@/lib/constants";
 import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
-import { machineRolesSaveErrorMessage, machineRolesSplitActive, type MachineRolesRow } from "@/lib/useMachineRoles";
-import { classifyRuntimeTargetProbeFailure } from "@/lib/runtimeTargetProbeFailure";
-import { RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
+import { machineRolesSplitActive, type MachineRolesRow } from "@/lib/useMachineRoles";
 import { probeFailureAllowsBoxAlive } from "@/lib/connection-error";
 import { resolveSeededRole } from "@/lib/connectionFanout";
+import { classifyRuntimeTargetProbeFailure } from "@/lib/runtimeTargetProbeFailure";
 import { detectProjectMachineMismatch } from "@/lib/projectMachineMismatch";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
 import { ScreenContextChip } from "./ScreenContextChip";
@@ -85,7 +84,6 @@ type MachineRolesDoctorInitial = {
 };
 
 type MobilePreviewMode = "phone" | "tablet";
-type RuntimeSurfaceMode = "single-device" | "physical-device";
 
 type RuntimeProjectPreference = {
   deviceId: string;
@@ -506,16 +504,32 @@ function normalizeRunnerId(runnerId?: string | null): string {
   return normalized;
 }
 
+// Used ONLY when the device inventory gave us nothing. Two defects fixed here
+// on 2026-08-02:
+//
+//  1. `source: "device-inventory"` was a LIE — these are hardcoded web
+//     constants that never touched the device. A provenance label that claims
+//     a stronger source than it has is the same class of bug as a green status
+//     over an unreachable box. They are labelled "fallback" now, so a reader
+//     can tell which of these the machine actually reported.
+//  2. `gpt-5.4` was `isDefault: true`, and a ChatGPT-account Codex login
+//     cannot run it at all — it 400s with "not supported when using Codex with
+//     a ChatGPT account". The agent's own fallbackRunnerModels (httpserver.go)
+//     already marks `gpt-5.3-codex` as the default; this list disagreed with
+//     it and won, because it renders closer to the user.
+//
+// See web/lib/runnerModelCompat.ts for the compatibility model.
 const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string; isDefault?: boolean; source?: string }>> = {
   claude: [
-    { id: "claude-opus-4-1", name: "Claude Opus 4.1", source: "device-inventory" },
-    { id: "claude-sonnet-4", name: "Claude Sonnet 4", isDefault: true, source: "device-inventory" },
+    { id: "claude-opus-4-1", name: "Claude Opus 4.1", source: "fallback" },
+    { id: "claude-sonnet-4", name: "Claude Sonnet 4", isDefault: true, source: "fallback" },
   ],
   codex: [
-    { id: "gpt-5.4", name: "GPT-5.4", isDefault: true, source: "device-inventory" },
-    { id: "gpt-5-codex", name: "GPT-5 Codex", source: "device-inventory" },
-    { id: "gpt-5", name: "GPT-5", source: "device-inventory" },
-    { id: "gpt-5-mini", name: "GPT-5 Mini", source: "device-inventory" },
+    { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", isDefault: true, source: "fallback" },
+    { id: "gpt-5-codex", name: "GPT-5 Codex", source: "fallback" },
+    { id: "gpt-5.4", name: "GPT-5.4", source: "fallback" },
+    { id: "gpt-5", name: "GPT-5", source: "fallback" },
+    { id: "gpt-5-mini", name: "GPT-5 Mini", source: "fallback" },
   ],
 };
 
@@ -928,11 +942,6 @@ function runtimeTargetGroup(target: RemoteRuntimeTarget): "browser" | "simulator
   return "advanced";
 }
 
-function isPhysicalDeviceTarget(target: RemoteRuntimeTarget): boolean {
-  const id = String(target.id || "").toLowerCase();
-  return id === "android-device" || id === "ios-device" || id.endsWith("-device");
-}
-
 // isAgentAuthErrorMessage was file-local here until 2026-07 (audit §6 item 4);
 // it now lives in @/lib/agentAuthError so every dashboard view shares it.
 
@@ -1076,16 +1085,9 @@ export default function RuntimeLabView({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recoveringAgentAuth, setRecoveringAgentAuth] = useState(false);
-  const [relayRepairBusy, setRelayRepairBusy] = useState(false);
-  const [relayRepairFailure, setRelayRepairFailure] = useState<{
-    probeError: string;
-    repairError: string;
-    at: number;
-  } | null>(null);
   const [showAdvancedTargets, setShowAdvancedTargets] = useState(false);
   const [webPreviewUrl, setWebPreviewUrl] = useState<string | null>(null);
   const [webPreviewPanelOpen, setWebPreviewPanelOpen] = useState(false);
-  const [runtimeSurfaceMode, setRuntimeSurfaceMode] = useState<RuntimeSurfaceMode>("single-device");
   const [runtimeControlsOpen, setRuntimeControlsOpen] = useState(false);
   const [vibingSettingsOpen, setVibingSettingsOpen] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -1177,10 +1179,6 @@ export default function RuntimeLabView({
     return connectedDevice;
   }, [connectedDevice, devices, machineRoles?.runnerDeviceId]);
   const deviceRunnerFallback = useMemo(() => runnersFromDeviceInventory(runnerFallbackDevice), [runnerFallbackDevice?.id, runnerFallbackDevice?.runners]);
-  const ownedDeviceIds = useMemo(
-    () => new Set((devices || []).filter((d) => !d.isGuest).map((d) => d.id)),
-    [devices],
-  );
 
   const appendLog = useCallback((line: string) => {
     const stamp = new Date().toLocaleTimeString();
@@ -1746,20 +1744,20 @@ export default function RuntimeLabView({
     return () => { cancelled = true; };
   }, [connectedDevice?.id, selectedRunner, setOpenCodeConfigSnapshot]);
 
-  // SEED the model selection; never FIGHT the user for it.
+  // SEED the model, never FIGHT the user for it.
   //
   // This effect used to call setSelectedModel(explicitModel) unconditionally
-  // whenever a machine default existed — with `selectedModel` in its own
-  // dependency array. So picking anything else in the dropdown re-ran the
-  // effect, saw the machine default still saved, and snapped the value back
-  // within a frame. The model was UNCHANGEABLE on any machine that had one
-  // saved, and the only way to change the saved value was… to select a
-  // different one first. A closed loop with no exit (2026-08-02: the owner
-  // could not move off a gpt-5.4 that his account cannot even run).
+  // whenever the machine had a saved model — with `selectedModel` in its own
+  // dependency array. Picking anything else re-ran the effect, saw the saved
+  // default still present, and snapped the value back within a frame. The model
+  // was UNCHANGEABLE on any machine that had one saved, and the only way to
+  // change the saved value was… to select a different one first. A closed loop
+  // with no exit (2026-08-02: the owner could not move off a gpt-5.4 that his
+  // ChatGPT-account Codex login cannot even run).
   //
   // The fix is to seed per (device, runner) and then leave the user alone. A
   // selection that is still valid for the current runner is the user's, and an
-  // effect must not overwrite it.
+  // effect must not overwrite it. Guard: web/lib/modelSelectSeeding.test.ts.
   const modelSeedKeyRef = useRef<string>("");
   useEffect(() => {
     const seedKey = `${connectedDevice?.id || ""}|${normalizeRunnerId(selectedRunner)}`;
@@ -2333,10 +2331,7 @@ export default function RuntimeLabView({
   // runner/model resolution) — no new endpoint. attachTaskSession is what the
   // chat send already does, so the fix streams into the same chat pane.
   const fixTaskRunning = !!(fixTaskId && activeTaskStream?.id === fixTaskId && taskStatusMeansRunnerIsCoding(activeTaskStream?.status));
-  const dispatchBuildFix = useCallback(async (
-    errorText: string,
-    opts?: { titlePrefix?: string; promptIntro?: string; context?: string; label?: string },
-  ) => {
+  const dispatchBuildFix = useCallback(async (errorText: string) => {
     if (fixTaskBusy || !selectedProject) return;
     if (selectedRunnerRow && selectedRunnerRow.ready === false) {
       // Say so instead of failing silently — route into the sign-in flow.
@@ -2349,14 +2344,10 @@ export default function RuntimeLabView({
       // Bounded: keep the END of the captured output — that is where the
       // compiler states the failure.
       const bounded = errorText.trim().slice(-4000);
-      const prompt = [
-        opts?.promptIntro || "The dev preview build failed. Fix the underlying cause, then verify the build compiles.",
-        opts?.context ? `\nContext:\n${opts.context}` : "",
-        `\nFailure follows:\n\n${bounded}`,
-      ].filter(Boolean).join("\n");
+      const prompt = `The dev preview build failed. Fix the underlying cause, then verify the build compiles. Build error follows:\n\n${bounded}`;
       const effectiveModel = safeModelForRunner(selectedRunner, selectedModel, availableModels);
       const task = await agentClient.createTask({
-        title: `${opts?.titlePrefix || "Fix runtime failure"}: ${bounded.replace(/\s+/g, " ").slice(0, 56)}`.slice(0, 80),
+        title: prompt.replace(/\s+/g, " ").slice(0, 80),
         description: prompt,
         runner: selectedRunner || undefined,
         model: effectiveModel,
@@ -2366,7 +2357,7 @@ export default function RuntimeLabView({
       });
       setFixTaskId(task.id);
       attachTaskSession(task);
-      appendLog(`${opts?.label || "fix"} task ${task.id} started with ${selectedRunner || "default runner"}`);
+      appendLog(`fix task ${task.id} started with ${selectedRunner || "default runner"}`);
     } catch (err) {
       appendLog(`fix task failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -2385,18 +2376,15 @@ export default function RuntimeLabView({
   // Rendered INSIDE the failure boxes, directly under the title and ABOVE any
   // log dump — the route to the fix must never be crowded out by advisory
   // content, in pixels or in order.
-  const renderFixWithRunnerRow = (
-    errorText: string,
-    opts?: { titlePrefix?: string; promptIntro?: string; context?: string; label?: string; buttonLabel?: string },
-  ) => (
+  const renderFixWithRunnerRow = (errorText: string) => (
     <div className="mt-2 flex flex-wrap items-center gap-2">
       <button
         type="button"
         disabled={fixTaskBusy || fixTaskRunning || !selectedProject || !selectedRunner}
-        onClick={() => void dispatchBuildFix(errorText, opts)}
+        onClick={() => void dispatchBuildFix(errorText)}
         className="rounded-md bg-[#7c5cff] px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {opts?.buttonLabel || fixWithRunnerLabel}
+        {fixWithRunnerLabel}
       </button>
       {fixTaskRunning ? (
         <span className="text-[11px] text-[#667085] dark:text-[#9aa3af]">Streaming in the chat pane.</span>
@@ -2448,7 +2436,6 @@ export default function RuntimeLabView({
     if (!project) return;
     setBusy(true);
     setError(null);
-    setRelayRepairFailure(null);
     setCaps(null);
     setSession(null);
     const runtimeFramework = runtimeFrameworkForProject(project);
@@ -2531,14 +2518,7 @@ export default function RuntimeLabView({
   // and hit the old box.
   const setRenderDeviceAndReprobe = useCallback(async (renderId: string) => {
     if (!onSaveMachineRoles || !renderId) return;
-    const currentRunner = machineRoles?.runnerDeviceId || "";
-    const runnerId = currentRunner && ownedDeviceIds.has(currentRunner)
-      ? currentRunner
-      : connectedDevice?.id && ownedDeviceIds.has(connectedDevice.id)
-        ? connectedDevice.id
-        : ownedDeviceIds.has(renderId)
-          ? renderId
-          : currentRunner || renderId;
+    const runnerId = machineRoles?.runnerDeviceId || connectedDevice?.id || renderId;
     setMachinesBusy(true);
     setRenderPickNote(null);
     try {
@@ -2552,16 +2532,13 @@ export default function RuntimeLabView({
       });
       agentClient.setMachineRoleRoutes({ runnerDeviceId: runnerId, renderDeviceId: renderId });
       appendLog(`render machine → ${deviceNameById.get(renderId) || renderId.slice(0, 8)}`);
-      if (currentRunner && currentRunner !== runnerId) {
-        appendLog(`machine roles: replaced stale runner ${currentRunner.slice(0, 8)} with ${deviceNameById.get(runnerId) || runnerId.slice(0, 8)}`);
-      }
       void loadCapabilities();
     } catch (err) {
-      setRenderPickNote(`Could not set render machine: ${machineRolesSaveErrorMessage(err instanceof Error ? err.message : String(err))}`);
+      setRenderPickNote(`Could not set render machine: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setMachinesBusy(false);
     }
-  }, [appendLog, connectedDevice?.id, deviceNameById, loadCapabilities, machineRoles?.autoPush, machineRoles?.runnerDeviceId, machineRoles?.secondaryRenderDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.workspace, onSaveMachineRoles, ownedDeviceIds]);
+  }, [appendLog, connectedDevice?.id, deviceNameById, loadCapabilities, machineRoles?.autoPush, machineRoles?.runnerDeviceId, machineRoles?.secondaryRenderDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.workspace, onSaveMachineRoles]);
 
   const recoverAgentAuthAndReloadTargets = useCallback(async () => {
     if (!selectedProject || recoveringAgentAuth) return;
@@ -2584,30 +2561,6 @@ export default function RuntimeLabView({
       setRecoveringAgentAuth(false);
     }
   }, [appendLog, loadCapabilities, onReconnect, recoveringAgentAuth, selectedProject]);
-
-  const repairRelayAndReloadTargets = useCallback(async () => {
-    if (!selectedProject || relayRepairBusy) return;
-    const probeError = error || "Relay authentication failed while probing runtime targets.";
-    setRelayRepairBusy(true);
-    setRelayRepairFailure(null);
-    setError(null);
-    appendLog("repairing relay credentials before loading targets");
-    try {
-      const result = await agentClient.repairRelayPassword();
-      if (!result.ok) {
-        throw new Error(result.error || "relay credential refresh failed");
-      }
-      appendLog(`${result.repaired ? "relay credentials refreshed" : `relay credentials unchanged${result.reason ? ` (${result.reason})` : ""}`}; retrying target probe`);
-      await loadCapabilities(selectedProject);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      appendLog(`relay credential repair failed: ${message}`);
-      setRelayRepairFailure({ probeError, repairError: message, at: Date.now() });
-      setError(probeError);
-    } finally {
-      setRelayRepairBusy(false);
-    }
-  }, [appendLog, error, loadCapabilities, relayRepairBusy, selectedProject]);
 
   const createSession = useCallback(async (targetId: string) => {
     if (!selectedProject) return;
@@ -2986,19 +2939,6 @@ export default function RuntimeLabView({
   }, [appendLog, busy, caps, connectedDevice?.id, createSession, intent, savedRuntimeTargetFor, selectedProject, selectedProjectIsSavedDefault, session, webPreviewPanelOpen]);
 
   const targetProbeFailurePlan = error ? classifyRuntimeTargetProbeFailure(error) : null;
-  const relayAuthFallbackContext = relayRepairFailure ? [
-    "Incident: Runtime Lab target probing hit a relay-auth failure. The deterministic relay credential repair button was tried and failed.",
-    `Project: ${selectedProject?.name || "(none)"}`,
-    `Framework: ${runtimeFrameworkForProject(selectedProject) || "unknown"}`,
-    `Runner: ${runnerBoxName || "(unknown)"} (${machineRoles?.runnerDeviceId || connectedDevice?.id || "none"})`,
-    `Renderer: ${effectiveRenderBoxName || "(unknown)"} (${effectiveRenderDeviceId || "none"})`,
-    `Machine split active: ${machineSplitActive ? "yes" : "no"}`,
-    `Workspace slicing: ${machineRoles?.workspace || "default"}`,
-    `Selected coding runner: ${selectedRunner || "default"} ${selectedModel ? `model=${selectedModel}` : ""}`.trim(),
-    `Repair endpoint: POST /settings/repair-relay through agentClient.repairRelayPassword()`,
-    `Repair error: ${relayRepairFailure.repairError.slice(0, 1000)}`,
-    "Do not ask the user for keychain, relay password, or private credentials. Inspect and fix product plumbing across web RuntimeLab, relay auth refresh, agent/client credential refresh, and mobile parity. Preserve stable browser and Hermes/native lanes.",
-  ].join("\n") : "";
 
   // Whenever the probe-failure card is visible, answer the user's first
   // question unprompted: does a connection to the render box exist at all?
@@ -3006,7 +2946,6 @@ export default function RuntimeLabView({
   // the periodic devices refresh from turning this into a probe storm.
   useEffect(() => {
     if (!error || !effectiveRenderDeviceId || isAgentAuthErrorMessage(error)) return;
-    if (targetProbeFailurePlan?.kind === "relay-auth") return;
     if (
       renderConnCheck &&
       renderConnCheck.deviceId === effectiveRenderDeviceId &&
@@ -3015,14 +2954,14 @@ export default function RuntimeLabView({
       return;
     }
     void probeRenderConnectivity(effectiveRenderDeviceId);
-  }, [error, effectiveRenderDeviceId, probeRenderConnectivity, renderConnCheck, targetProbeFailurePlan?.kind]);
+  }, [error, effectiveRenderDeviceId, probeRenderConnectivity, renderConnCheck]);
 
   return (
     <div
       className="grid h-full min-h-0 gap-3 bg-[#f2f4f7] p-3 text-[#1f2933] dark:bg-[#101318] dark:text-[#e6e8ec] sm:p-4 xl:[grid-template-columns:minmax(0,1fr)_10px_var(--runtime-chat-width)]"
       style={runtimeGridStyle}
     >
-      <div className="min-h-0 min-w-0 space-y-3 overflow-y-auto px-0.5">
+      <div className="min-h-0 min-w-0 space-y-3 overflow-y-auto">
         {!webPreviewPanelOpen ? (
         <div className="flex flex-wrap items-end gap-2">
           <label className="min-w-[260px] flex-1">
@@ -3030,7 +2969,7 @@ export default function RuntimeLabView({
             <select
               value={selectedPath}
               onChange={(e) => { setSelectedPath(e.target.value); setRuntimeProjectNote(null); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
-              className="h-10 w-full rounded-md border border-[#d7dce3] bg-white px-3 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-[#7c5cff]/70"
+              className="h-10 w-full rounded-md border border-[#d7dce3] bg-white px-3 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec]"
             >
               {projects.map((p) => (
                 <option key={p.path} value={p.path}>{p.name} · {p.framework || "unknown"}</option>
@@ -3162,17 +3101,6 @@ export default function RuntimeLabView({
               // machine, so this branch names the box and offers deterministic
               // routes instead of "Fix with <runner>".
               <div className="mt-2 space-y-2">
-                {targetProbeFailurePlan.kind === "relay-auth" ? (
-                  <div className="text-xs">
-                    {RELAY_CREDENTIAL_REMEDY} Refresh the relay password here, then retry the same target probe.
-                  </div>
-                ) : null}
-                {targetProbeFailurePlan.kind === "relay-auth" && relayRepairFailure ? (
-                  <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-900 dark:text-amber-100">
-                    Relay repair was attempted and failed: <span className="font-semibold">{relayRepairFailure.repairError}</span>. The
-                    next route is an AI investigation with the relay-auth stack attached, because the deterministic fixer did not complete.
-                  </div>
-                ) : null}
                 {targetProbeFailurePlan.kind === "relay-presence" ? (
                   // The routing-config throw ("only reachable over a relay…")
                   // already names its own cause + remedy; this sentence is for
@@ -3221,37 +3149,11 @@ export default function RuntimeLabView({
                   </div>
                 ) : null}
                 <div className="flex flex-wrap items-center gap-2">
-                  {targetProbeFailurePlan.kind === "relay-auth" ? (
-                    <button
-                      type="button"
-                      onClick={() => void repairRelayAndReloadTargets()}
-                      disabled={busy || relayRepairBusy}
-                      className="rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-800 disabled:opacity-40 dark:text-amber-100"
-                    >
-                      {relayRepairBusy ? "Refreshing relay..." : "Refresh relay password & retry"}
-                    </button>
-                  ) : null}
-                  {targetProbeFailurePlan.kind === "relay-auth" && relayRepairFailure ? (
-                    renderFixWithRunnerRow(
-                      `${relayRepairFailure.probeError}\n\nDeterministic relay repair failed:\n${relayRepairFailure.repairError}`,
-                      {
-                        titlePrefix: "Fix relay auth repair",
-                        buttonLabel: fixTaskBusy
-                          ? "Dispatching relay fix..."
-                          : fixTaskRunning
-                            ? `${selectedRunnerName} is fixing relay auth...`
-                            : "Fix relay repair with AI",
-                        label: "relay-auth fix",
-                        promptIntro: "Runtime target probing failed because the relay refused this browser's account relay password. The deterministic relay repair route was tried and failed. Fix the product plumbing, then verify Runtime Lab Load Targets no longer dead-ends.",
-                        context: relayAuthFallbackContext,
-                      },
-                    )
-                  ) : null}
                   {targetProbeFailurePlan.retry ? (
                     <button
                       type="button"
                       onClick={() => void loadCapabilities()}
-                      disabled={busy || machinesBusy || machineRecoverBusy || relayRepairBusy}
+                      disabled={busy || machinesBusy || machineRecoverBusy}
                       className="rounded-md border border-[#d7dce3] bg-white px-3 py-1.5 text-xs font-semibold text-[#475467] disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
                     >
                       Retry probe
@@ -3298,9 +3200,6 @@ export default function RuntimeLabView({
                 return acc;
               }, {});
               const unavailableTargets = caps.targets.filter((target) => !target.enabled);
-              const physicalTargets = caps.targets.filter(isPhysicalDeviceTarget);
-              const physicalUnavailableTargets = physicalTargets.filter((target) => !target.enabled);
-              const nonPhysicalUnavailableTargets = unavailableTargets.filter((target) => !isPhysicalDeviceTarget(target));
               const primaryTargets = caps.targets.filter(isPrimaryRuntimeTarget);
               const groupOrder: ReturnType<typeof runtimeTargetGroup>[] = ["browser", "simulator", "container", "device", "advanced"];
               // Whole card is clickable (same handler as Open); the visible
@@ -3360,18 +3259,6 @@ export default function RuntimeLabView({
                   {target.reason ? (
                     <div className={`mt-2 text-xs ${compact ? "text-surface-500" : "text-rose-700 dark:text-rose-300"}`}>{target.reason}</div>
                   ) : null}
-                  {target.checks?.length ? (
-                    <div className="mt-2 grid gap-1">
-                      {target.checks.map((check) => (
-                        <div key={`${target.id}-${check.id}`} className="flex min-w-0 items-start gap-2 text-[11px] text-[#667085] dark:text-[#9aa3af]">
-                          <span className={`mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full ${check.ok ? "bg-emerald-500" : "bg-rose-500"}`} />
-                          <span className="min-w-0 truncate">
-                            {check.label}{check.reason ? ` · ${check.reason}` : ""}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
                 </div>
               );
               const renderGroup = (group: ReturnType<typeof runtimeTargetGroup>, targets: RemoteRuntimeTarget[]) => {
@@ -3390,34 +3277,6 @@ export default function RuntimeLabView({
               return (
                 <>
                   {!webPreviewPanelOpen ? (
-                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#d7dce3] bg-white p-1.5 dark:border-[#2a3039] dark:bg-[#161b22]">
-                      <div className="inline-flex rounded-md bg-[#f2f4f7] p-0.5 dark:bg-[#101318]">
-                        {([
-                          ["single-device", "Single device"],
-                          ["physical-device", "Physical device"],
-                        ] as const).map(([mode, label]) => (
-                          <button
-                            key={mode}
-                            type="button"
-                            onClick={() => setRuntimeSurfaceMode(mode)}
-                            className={`h-8 rounded px-3 text-xs font-semibold ${
-                              runtimeSurfaceMode === mode
-                                ? "bg-[#1f2933] text-white dark:bg-[#e6e8ec] dark:text-[#101318]"
-                                : "text-[#667085] hover:text-[#1f2933] dark:text-[#9aa3af] dark:hover:text-[#e6e8ec]"
-                            }`}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="min-w-0 truncate px-2 text-xs text-[#667085] dark:text-[#9aa3af]">
-                        {runtimeSurfaceMode === "single-device"
-                          ? `${effectiveRenderBoxName || "This box"} runs runner, dev server, browser/stream publisher`
-                          : `${effectiveRenderBoxName || "This box"} builds and publishes; the phone/tablet runs the app`}
-                      </div>
-                    </div>
-                  ) : null}
-                  {!webPreviewPanelOpen && runtimeSurfaceMode === "single-device" ? (
                   <section className="space-y-2">
                     <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">
                       Browser
@@ -3736,42 +3595,12 @@ export default function RuntimeLabView({
                     <div className="grid gap-2 md:grid-cols-2">
                       {enabledTargets.map((target) => renderTarget(target))}
                     </div>
-                  ) : runtimeSurfaceMode === "physical-device" ? (
-                    <div className="space-y-3">
-                      <section className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-                        {[
-                          ["AI runner", runnerBoxName || effectiveRenderBoxName || "Selected box"],
-                          ["Build/dev server", effectiveRenderBoxName || "Selected box"],
-                          ["Stream publisher", effectiveRenderBoxName || "Selected box"],
-                          ["Runtime device", physicalTargets.length ? "Attached phone/tablet" : "Waiting for device"],
-                        ].map(([label, value]) => (
-                          <div key={label} className="rounded-md border border-[#d7dce3] bg-white p-3 dark:border-[#2a3039] dark:bg-[#161b22]">
-                            <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">{label}</div>
-                            <div className="mt-1 truncate text-sm font-medium text-[#1f2933] dark:text-[#e6e8ec]">{value}</div>
-                          </div>
-                        ))}
-                      </section>
-                      {physicalTargets.some((target) => target.enabled) ? (
-                        <section className="space-y-2">
-                          <div className="text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">
-                            Physical devices
-                          </div>
-                          <div className="grid gap-2 md:grid-cols-2">
-                            {physicalTargets.filter((target) => target.enabled).map((target) => renderTarget(target))}
-                          </div>
-                        </section>
-                      ) : (
-                        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-100">
-                          No attached physical runtime is ready on {effectiveRenderBoxName || "this box"}. Android needs adb authorization; iOS needs a Mac with WDA/device signing.
-                        </div>
-                      )}
-                    </div>
                   ) : (
                     <div className="space-y-4">
-                      {groupOrder.filter((group) => group !== "browser" && group !== "device").map((group) => renderGroup(group, groupedTargets[group] ?? []))}
+                      {groupOrder.filter((group) => group !== "browser").map((group) => renderGroup(group, groupedTargets[group] ?? []))}
                     </div>
                   )}
-                  {(runtimeSurfaceMode === "physical-device" ? physicalUnavailableTargets : nonPhysicalUnavailableTargets).length ? (
+                  {unavailableTargets.length ? (
                     <div className="rounded-md border border-[#d7dce3] bg-[#f8fafc] dark:border-[#2a3039] dark:bg-[#121720]">
                       <button
                         type="button"
@@ -3782,12 +3611,12 @@ export default function RuntimeLabView({
                           Unavailable targets
                         </span>
                         <span className="text-xs text-[#667085] dark:text-[#9aa3af]">
-                          {(runtimeSurfaceMode === "physical-device" ? physicalUnavailableTargets : nonPhysicalUnavailableTargets).length} {showAdvancedTargets ? "hide" : "show"}
+                          {unavailableTargets.length} {showAdvancedTargets ? "hide" : "show"}
                         </span>
                       </button>
                       {showAdvancedTargets ? (
                         <div className="grid gap-2 border-t border-[#d7dce3] p-3 dark:border-[#2a3039] md:grid-cols-2">
-                          {(runtimeSurfaceMode === "physical-device" ? physicalUnavailableTargets : nonPhysicalUnavailableTargets).map((target) => renderTarget(target, true))}
+                          {unavailableTargets.map((target) => renderTarget(target, true))}
                         </div>
                       ) : null}
                     </div>
@@ -3809,17 +3638,7 @@ export default function RuntimeLabView({
             <div className="text-xs text-[#667085] dark:text-[#9aa3af]">
               session <span className="font-mono text-[#344054] dark:text-[#d7dce3]">{session.id}</span> · {session.targetLabel} · {session.status}
             </div>
-            <RemoteRuntimeViewer
-              session={session}
-              onSessionChange={setSession}
-              onClose={() => setSession(null)}
-              onRuntimeEvent={(event) => {
-                if (event.type !== "browser-log") return;
-                const level = typeof event.level === "string" && event.level ? event.level : "log";
-                const message = typeof event.message === "string" ? event.message : JSON.stringify(event);
-                appendLog(`browser ${level}: ${message}`);
-              }}
-            />
+            <RemoteRuntimeViewer session={session} onSessionChange={setSession} onClose={() => setSession(null)} />
           </div>
         ) : null}
       </div>

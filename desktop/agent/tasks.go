@@ -1179,6 +1179,13 @@ type Task struct {
 	VideoSource  string `json:"videoSource,omitempty"`
 	VideoClipID  string `json:"videoClipId,omitempty"`
 	VideoStatus  string `json:"videoStatus,omitempty"` // queued|recording|ready|failed
+	ProofStatus  string `json:"proofStatus,omitempty"` // capturing|ready|failed
+
+	CommitSHA     string `json:"commitSha,omitempty"`
+	CommitSubject string `json:"commitSubject,omitempty"`
+	CommitBranch  string `json:"commitBranch,omitempty"`
+	DiffShortstat string `json:"diffShortstat,omitempty"`
+	FeedbackID    string `json:"feedbackId,omitempty"`
 
 	// AskFreely opts out of the no-questions preamble (and the
 	// soft-question fallback detector). See TaskCreateOptions.AskFreely
@@ -1393,6 +1400,13 @@ type TaskInfo struct {
 	VideoStatus         string                 `json:"videoStatus,omitempty"`
 	VideoClipURL        string                 `json:"videoClipUrl,omitempty"`
 	VideoPosterURL      string                 `json:"videoPosterUrl,omitempty"`
+	ProofStatus         string                 `json:"proofStatus,omitempty"`
+	ProofURL            string                 `json:"proofUrl,omitempty"`
+	CommitSHA           string                 `json:"commitSha,omitempty"`
+	CommitSubject       string                 `json:"commitSubject,omitempty"`
+	CommitBranch        string                 `json:"commitBranch,omitempty"`
+	DiffShortstat       string                 `json:"diffShortstat,omitempty"`
+	FeedbackID          string                 `json:"feedbackId,omitempty"`
 	AskFreely           bool                   `json:"askFreely,omitempty"`
 	Placement           *TaskPlacementMetadata `json:"placement,omitempty"`
 }
@@ -2630,6 +2644,27 @@ func (tm *TaskManager) waitForSessionSlot(task *Task) {
 
 // startProcess spawns the configured runner with the task's prompt.
 func (tm *TaskManager) startProcess(task *Task) error {
+	// Keep the runner's credential alive before we spend anything on this spawn.
+	//
+	// startProcess is the ONE seam every dispatch passes through — new tasks,
+	// follow-ups, MCP calls, webhooks, the scheduler, voice. Putting the
+	// keep-alive here rather than at each call site is the difference between
+	// fixing the path the 2026-08-02 report happened to describe (a follow-up
+	// from the phone) and fixing the class.
+	//
+	// Free when there is nothing to do: one file read and a base64 decode, no
+	// fork, no network, no tokens (see refreshCodexCredentialIfNeeded). It only
+	// reaches the network inside the renewal window — precisely when a spawn
+	// would otherwise be about to 401.
+	//
+	// Deliberately NON-FATAL. A renewal that cannot happen must not stop a task
+	// whose credential is still valid; the callers that need to REFUSE a
+	// dispatch (continueTask parks the prompt) decide that themselves with the
+	// same verdict. Blocking here on a network blip would invent an outage.
+	if res := ensureRunnerCredentialFreshForTurn(context.Background(), task.RunnerID); !res.Healthy() {
+		log.Printf("[task %s] runner credential not renewable before spawn (%s): %s", task.ID, res.Outcome, res.Reason)
+	}
+
 	// Wait for other Claude Code sessions to finish (if --wait-for-session is set)
 	tm.waitForSessionSlot(task)
 
@@ -3259,11 +3294,14 @@ func (tm *TaskManager) startProcess(task *Task) error {
 					// model_support_ledger.go.
 					noteRunnerOutputForModelSupport(task.RunnerID, task.Output+"\n"+task.ResultText)
 
-					if ok, reason := ClassifyRunnerAuthFailureFor(task.RunnerID, task.Output+"\n"+task.ResultText); ok {
+					// Tail only — see runnerAuthClassifyTail. Scanning the whole
+					// output let a task that merely PRINTED an auth string (this
+					// repo's own source is full of them) sign a healthy runner out.
+					if ok, reason := ClassifyRunnerAuthFailureFor(task.RunnerID, runnerAuthClassifyTail(task.Output)); ok {
 						hitRunner := normalizeRunnerID(task.RunnerID)
 						MarkRunnerAuthInvalidReason(hitRunner, reason)
 						log.Printf("[task %s] auth-failure pattern detected for runner %q — invalidated runner auth status: %s", task.ID, hitRunner, reason)
-					} else if hitRunner, reason := ClassifyRunnerAuthFailure(task.Output); hitRunner != "" {
+					} else if hitRunner, reason := ClassifyRunnerAuthFailure(runnerAuthClassifyTail(task.Output)); hitRunner != "" {
 						MarkRunnerAuthInvalidReason(hitRunner, reason)
 						log.Printf("[task %s] auth-failure pattern detected for runner %q — invalidated runner auth status: %s", task.ID, hitRunner, reason)
 						// Next periodic heartbeat (~30s) propagates the
@@ -4493,6 +4531,12 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			VideoSource:     t.VideoSource,
 			VideoClipID:     t.VideoClipID,
 			VideoStatus:     t.VideoStatus,
+			ProofStatus:     t.ProofStatus,
+			CommitSHA:       t.CommitSHA,
+			CommitSubject:   t.CommitSubject,
+			CommitBranch:    t.CommitBranch,
+			DiffShortstat:   t.DiffShortstat,
+			FeedbackID:      t.FeedbackID,
 			AskFreely:       t.AskFreely,
 			Placement:       t.Placement,
 		})
@@ -4502,6 +4546,9 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 
 // GetTask returns a single task by ID.
 func (tm *TaskManager) GetTask(id string) (*Task, bool) {
+	if tm == nil {
+		return nil, false
+	}
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
 	t, ok := tm.tasks[id]
@@ -4522,6 +4569,48 @@ func (tm *TaskManager) SetTaskVideoState(id, clipID, status string) {
 		task.VideoStatus = strings.TrimSpace(status)
 	}
 	tm.persist()
+}
+
+func (tm *TaskManager) SetTaskProofState(id, status string) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	task, ok := tm.tasks[id]
+	if !ok || task == nil {
+		return
+	}
+	if strings.TrimSpace(status) != "" {
+		task.ProofStatus = strings.TrimSpace(status)
+	}
+	tm.persist()
+}
+
+func (tm *TaskManager) SetTaskCommitEvidence(id, sha, subject, branch, shortstat string) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	task, ok := tm.tasks[id]
+	if !ok || task == nil {
+		return
+	}
+	task.CommitSHA = strings.TrimSpace(sha)
+	task.CommitSubject = strings.TrimSpace(subject)
+	task.CommitBranch = strings.TrimSpace(branch)
+	task.DiffShortstat = strings.TrimSpace(shortstat)
+	tm.persist()
+}
+
+func (tm *TaskManager) FindTaskByFeedbackID(feedbackID string) (*Task, bool) {
+	feedbackID = strings.TrimSpace(feedbackID)
+	if feedbackID == "" {
+		return nil, false
+	}
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	for _, task := range tm.tasks {
+		if task != nil && strings.TrimSpace(task.FeedbackID) == feedbackID {
+			return task, true
+		}
+	}
+	return nil, false
 }
 
 func (tm *TaskManager) CompleteTask(id string) error {

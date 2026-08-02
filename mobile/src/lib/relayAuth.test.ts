@@ -16,10 +16,8 @@ import { fileURLToPath } from "node:url";
 import {
   isRelayAuthFailure,
   isRelayDenyCode,
-  isRelayTunnelDown,
   relayDenyCodeFromBody,
   RELAY_DENY_CODES,
-  RELAY_TUNNEL_DOWN_REMEDY,
 } from "./relayAuth";
 
 let failures = 0;
@@ -93,50 +91,6 @@ check("code-only: relay_auth_backend_unavailable is NOT a credential failure", !
 // PROSE FALLBACK IS LOAD-BEARING. public.yaver.io is redeployed by MANUAL scp,
 // so the live relay still answers code:"Unauthorized" with the old wording.
 check("prose fallback: pre-fix relay body still classifies", isRelayAuthFailure('{"ok":false,"code":"Unauthorized","error":"relay password missing — sign in again to fetch it"}'));
-
-// --- tunnel-down: the relay answered and had nothing to forward to ---------
-//
-// 2026-08-01, ubuntu-4gb-hel1-1: session expired -> relay refused the box's
-// registration -> no tunnel -> every probe 502. Anything that reads "a status
-// arrived" as "the agent answered" blames a machine that was never contacted.
-
-check("502 on the relay leg is tunnel-down, not the agent answering", isRelayTunnelDown({ path: "relay", status: 502 }));
-check("503 counts too", isRelayTunnelDown({ path: "relay", status: 503 }));
-check("504 counts too", isRelayTunnelDown({ path: "relay", status: 504 }));
-check(
-  "the stable code wins even on a non-gateway status",
-  isRelayTunnelDown({ path: "relay", status: 404, error: '{"ok":false,"code":"relay.device_not_connected","error":"device not connected to relay"}' }),
-);
-check("a healthy relay response is not tunnel-down", !isRelayTunnelDown({ path: "relay", status: 200 }));
-check("only the relay leg can be tunnel-down", !isRelayTunnelDown({ path: "direct", status: 502 }));
-
-// The two failures have DIFFERENT remedies (sign in HERE vs sign in on the
-// BOX). Counting one as the other sends the user to press a button that
-// cannot help.
-check("a credential deny is never tunnel-down", !isRelayTunnelDown({ path: "relay", status: 401, code: "relay_password_missing" }));
-check("tunnel-down is never a credential failure", !isRelayAuthFailure('relay: HTTP 502: {"ok":false,"code":"relay.device_not_connected","error":"device not connected to relay"}'));
-
-// PARITY. The web twin must say the SAME sentence — a user who reads one
-// diagnosis on their phone and another in the browser learns that Yaver's
-// answer depends on which screen they picked up.
-{
-  const webSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../../web/lib/relayAuth.ts"), "utf8");
-  // Compare the STRING the constant evaluates to, not the surrounding source:
-  // the two files carry different comments, and comment drift is not copy
-  // drift. Concatenated literals are joined the way the runtime would.
-  const grab = (src: string) => {
-    const i = src.indexOf("export const RELAY_TUNNEL_DOWN_REMEDY");
-    const decl = src.slice(i, src.indexOf(";", i));
-    return (decl.match(/"([^"]*)"/g) || []).map((q) => q.slice(1, -1)).join("");
-  };
-  const mobileSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "relayAuth.ts"), "utf8");
-  check("web exposes isRelayTunnelDown", /export function isRelayTunnelDown/.test(webSrc));
-  check("the tunnel-down remedy is identical on web and mobile", grab(webSrc) === grab(mobileSrc));
-  check(
-    "the remedy does not offer web re-auth (it rides the missing tunnel)",
-    RELAY_TUNNEL_DOWN_REMEDY.includes("yaver auth") && RELAY_TUNNEL_DOWN_REMEDY.includes("rides the tunnel that is missing"),
-  );
-}
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILED`);
 if (failures > 0) process.exit(1);

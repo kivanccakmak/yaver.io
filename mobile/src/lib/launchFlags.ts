@@ -12,3 +12,8 @@
 //
 // Mirrors the identical `HIDE_PAID_UI` flag in web/app/page.tsx.
 export const HIDE_PAID_UI = true;
+
+// Guest/share UI is closed for v1. Backend and agent enforcement are already
+// fail-closed; this flag keeps mobile from advertising flows that Convex and
+// the agent refuse.
+export const ENABLE_GUEST_FEATURES = false;

@@ -38,6 +38,10 @@ import (
 	"time"
 )
 
+func yaverSystemdUnitCandidates() []string {
+	return []string{"yaver.service", "yaver-agent.service", "yaver", "yaver-agent"}
+}
+
 // rescueClaim is what /agent-rescue/claim returns. Mirrors the Convex
 // row shape — command + params are the bits the agent acts on; the
 // rest is stored on the backend.

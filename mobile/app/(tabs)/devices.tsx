@@ -17,6 +17,7 @@ import { getConvexSiteUrlSync } from "../../src/lib/backendConfig";
 import { useLocalSearchParams, router } from "expo-router";
 import { Device, useDevice } from "../../src/context/DeviceContext";
 import { appTag } from "../../src/lib/appVersion";
+import { ENABLE_GUEST_FEATURES } from "../../src/lib/launchFlags";
 import { useAuth } from "../../src/context/AuthContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { chipPalette } from "../../src/lib/chipPalette";
@@ -1238,25 +1239,26 @@ export default function DevicesScreen() {
           </View>
         )}
 
-        {/* Guest code input */}
-        <View style={[styles.guestCodeRow, { borderBottomColor: c.border }]}>
-          <TextInput
-            style={[styles.guestCodeInput, { backgroundColor: c.bgCard, borderColor: c.borderSubtle, color: c.textPrimary }]}
-            placeholder="Invite code"
-            placeholderTextColor={c.textMuted}
-            value={guestCode}
-            onChangeText={setGuestCode}
-            autoCapitalize="characters"
-            maxLength={6}
-          />
-          <Pressable
-            style={[styles.guestCodeBtn, { backgroundColor: guestCode.trim().length >= 6 ? c.accent : c.accent + "33" }]}
-            onPress={handleAcceptGuestCode}
-            disabled={guestCode.trim().length < 6 || guestLoading}
-          >
-            <Text style={styles.guestCodeBtnText}>{guestLoading ? "..." : "Join"}</Text>
-          </Pressable>
-        </View>
+        {ENABLE_GUEST_FEATURES ? (
+          <View style={[styles.guestCodeRow, { borderBottomColor: c.border }]}>
+            <TextInput
+              style={[styles.guestCodeInput, { backgroundColor: c.bgCard, borderColor: c.borderSubtle, color: c.textPrimary }]}
+              placeholder="Invite code"
+              placeholderTextColor={c.textMuted}
+              value={guestCode}
+              onChangeText={setGuestCode}
+              autoCapitalize="characters"
+              maxLength={6}
+            />
+            <Pressable
+              style={[styles.guestCodeBtn, { backgroundColor: guestCode.trim().length >= 6 ? c.accent : c.accent + "33" }]}
+              onPress={handleAcceptGuestCode}
+              disabled={guestCode.trim().length < 6 || guestLoading}
+            >
+              <Text style={styles.guestCodeBtnText}>{guestLoading ? "..." : "Join"}</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {/* Zero-touch: claim a Yaver-powered device by scanning its label QR
             (DPP-style). Opens the camera scanner; the box self-credentials

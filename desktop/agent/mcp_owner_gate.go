@@ -23,11 +23,22 @@ import (
 	"time"
 )
 
-// ownerOnlyToolPrefixes are the tool-name prefixes for the experimental
-// hardware cells. A tool whose name starts with any of these is owner-only.
-// IoT/home (hue_/govee_/shelly_/sonos_/ha_/mqtt_), EV (ev_*), and every
-// dev/deploy/mobile tool are intentionally NOT here — they stay public.
+// ownerOnlyToolPrefixes are the tool-name prefixes for capabilities that can
+// move money, publish artifacts, mutate live infrastructure, or control
+// experimental hardware. A tool whose name starts with any of these is
+// owner-only.
+//
+// IoT/home read helpers (hue_/govee_/shelly_/sonos_/ha_/mqtt_) and EV lookup
+// tools stay public. Deploy/publish tools do not: a non-owner must never be
+// able to ship Yaver, publish MCP metadata, upload mobile builds, or mutate
+// Cloudflare/Convex by guessing an MCP tool name.
 var ownerOnlyToolPrefixes = []string{
+	"deploy_", // deploy_all, deploy_run/list/rollback
+	"cf_deploy",
+	"fly_deploy",
+	"railway_deploy",
+	"pscale_deploy",
+	"mobile_platform_deploy",
 	"robot_",   // robot arm / robotics ops (incl. robot_camera image tool)
 	"arm_",     // generic multi-DOF arm layer
 	"jig_",     // wiring-harness / fixture jig ops

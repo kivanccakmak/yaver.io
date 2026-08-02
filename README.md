@@ -91,8 +91,8 @@ Full tool list and HTTP/remote setup: **[MCP guide](https://yaver.io/docs/mcp)**
 The CLI, agent, relay, and backend are all self-hostable. Client apps currently reach you through a thin hosted coordination plane for identity and device discovery; full client self-host is on the way.
 
 For remote access, Yaver Relay is the default path. The free shared relay is for
-light personal use and has fair limits; paid Relay Pro gives daily users a
-private managed relay with higher limits.
+light personal use and has fair limits; the relay implementation is open source
+if you want to run your own.
 
 ## What works today
 
@@ -121,9 +121,8 @@ and relay implementation. Yaver's shared relay is available with fair limits for
 getting started. Your coding agent brings its own login or subscription — Yaver
 never resells tokens.
 
-Optional paid products are for convenience and reliability: Relay Pro for a
-private managed relay, and Cloud Workspace for people who do not want to run
-their own always-reachable box.
+V1 is focused on your own devices and self-hosted machines. Managed paid
+products and machine-sharing surfaces are not part of the launch surface.
 
 ## Repository map
 
@@ -139,6 +138,23 @@ their own always-reachable box.
 | `demo/` | Small fixture apps used to test SDK and push flows |
 | `demo-videos/` | Source notes for the landing/demo clips |
 | `docs/` | Architecture notes, setup guides, audits, handoffs, and planning material |
+
+## Deploying Yaver
+
+Use exactly one local entrypoint:
+
+```bash
+./deploy/deploy.sh <target> [options]
+```
+
+Targets are `all`, `backend`, `cloudflare`, `ios`, `android`, `npm`, and `mcp`
+with aliases listed by `./deploy/deploy.sh --help`. The entrypoint delegates to
+the maintained vault-aware scripts and `yaver deploy` commands, but gives
+humans, agents, and MCP one path so deploys do not drift.
+
+Deploys are owner-only. The script refuses group/other-writable repo or script
+paths before touching Convex, Cloudflare, App Store Connect, Play Console, npm,
+or MCP registry credentials.
 
 ## This repo is the monorepo
 

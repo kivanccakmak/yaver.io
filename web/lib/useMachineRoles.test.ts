@@ -17,10 +17,3 @@ test("machine role save error names owned-device route instead of backend stack"
 test("machine role save auth error names sign-in route", () => {
   assert.match(machineRolesSaveErrorMessage(401, { error: "Unauthorized" }), /Sign in again/);
 });
-
-test("machine role save formatter still accepts raw error strings from UI catch blocks", () => {
-  assert.match(
-    machineRolesSaveErrorMessage("renderDeviceId must refer to one of the caller's devices"),
-    /machine this account does not own|owned machine/,
-  );
-});

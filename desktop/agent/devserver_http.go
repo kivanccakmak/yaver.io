@@ -1571,14 +1571,17 @@ func (s *HTTPServer) stopServingPreviewResult() map[string]interface{} {
 		// resolve any open build incidents so the UI returns to a
 		// clean idle state.
 		s.resolveOpenDevIncidents("", "")
-		return map[string]interface{}{
+		result := map[string]interface{}{
 			"ok":                true,
 			"stoppedServing":    false,
 			"previouslyServing": false,
 			"buildsCancelled":   cancelledBuilds,
 			"message":           "Nothing is being served right now.",
 			"verified":          true,
+			"topic":             "dev/stop",
 		}
+		s.devServerMgr.EmitStopResult(result)
+		return result
 	}
 
 	result := map[string]interface{}{
@@ -1590,6 +1593,7 @@ func (s *HTTPServer) stopServingPreviewResult() map[string]interface{} {
 		"workDir":           status.WorkDir,
 		"buildsCancelled":   cancelledBuilds,
 		"message":           "Stopped serving the active preview.",
+		"topic":             "dev/stop",
 	}
 	stoppedWorkDir := status.WorkDir
 	if err := s.devServerMgr.Stop(); err != nil {
@@ -1619,6 +1623,7 @@ func (s *HTTPServer) stopServingPreviewResult() map[string]interface{} {
 		result["ok"] = false
 		result["message"] = "Dev server failed to stop within 7s — subprocess may still be running. The agent issued SIGINT and SIGKILL."
 	}
+	s.devServerMgr.EmitStopResult(result)
 
 	// Clear any "Bundle validation failed" / "Bundle rebuild failed"
 	// incidents so the mobile + web UIs don't keep showing a stale red
@@ -3198,7 +3203,8 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 			// The inventory was already scanned and in memory; it just never
 			// made it into the reply, so the browser escalated to a coding
 			// agent to answer a question a map lookup answers for free.
-			// See project_missing_reply.go.
+			// Now: a stable code + what this machine actually has, so any
+			// surface can render a picker. See project_missing_reply.go.
 			jsonReply(w, http.StatusBadRequest,
 				buildProjectMissingReply(req.ProjectName, snapshotMobileProjects()))
 			return

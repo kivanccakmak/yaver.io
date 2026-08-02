@@ -1663,6 +1663,22 @@ func (m *DevServerManager) EmitReloadDone(projectPath, deviceID, bundleURL strin
 	})
 }
 
+func (m *DevServerManager) EmitStopResult(result map[string]interface{}) {
+	if m == nil {
+		return
+	}
+	message, _ := result["message"].(string)
+	workDir, _ := result["workDir"].(string)
+	m.emit(DevServerEvent{
+		Type:      "stopped",
+		Topic:     "dev/stop",
+		Phase:     "done",
+		Message:   message,
+		WorkDir:   workDir,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
 func (m *DevServerManager) emit(event DevServerEvent) {
 	m.subsMu.Lock()
 	defer m.subsMu.Unlock()

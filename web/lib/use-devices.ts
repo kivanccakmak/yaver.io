@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { CONVEX_URL } from "@/lib/constants";
+import { ENABLE_GUEST_FEATURES } from "@/lib/launchFlags";
 import type { RuntimeProjectSeed } from "@/lib/runtimeProjectSettings";
 import {
   resolveIdentityMerge,
@@ -642,7 +643,10 @@ export function useDevices(token: string | null): DevicesState & { hiddenIds: Se
         return;
       }
       const raw = await res.json();
-      const arr = Array.isArray(raw) ? raw : (raw.devices ?? []);
+      const rawDevices = Array.isArray(raw) ? raw : (raw.devices ?? []);
+      const arr = ENABLE_GUEST_FEATURES
+        ? rawDevices
+        : rawDevices.filter((d: any) => !Boolean(d?.isGuest));
 
       // Map API fields to Device interface
       const mapped: Device[] = arr.map((d: any) => {
@@ -707,12 +711,12 @@ export function useDevices(token: string | null): DevicesState & { hiddenIds: Se
         priorityMode: d.priorityMode,
         useHostApiKeys: d.useHostApiKeys,
         allowGuestProvidedApiKeys: d.allowGuestProvidedApiKeys,
-        sharedWithGuests: d.sharedWithGuests,
-        sharedGuests: Array.isArray(d.sharedGuests) ? d.sharedGuests : undefined,
+        sharedWithGuests: ENABLE_GUEST_FEATURES ? d.sharedWithGuests : undefined,
+        sharedGuests: ENABLE_GUEST_FEATURES && Array.isArray(d.sharedGuests) ? d.sharedGuests : undefined,
         sharesAllProjects: d.sharesAllProjects,
-        sharedProjects: Array.isArray(d.sharedProjects) ? d.sharedProjects : undefined,
+        sharedProjects: ENABLE_GUEST_FEATURES && Array.isArray(d.sharedProjects) ? d.sharedProjects : undefined,
         sharesAllRunners: d.sharesAllRunners,
-        sharedRunners: Array.isArray(d.sharedRunners) ? d.sharedRunners : undefined,
+        sharedRunners: ENABLE_GUEST_FEATURES && Array.isArray(d.sharedRunners) ? d.sharedRunners : undefined,
         runners: Array.isArray(d.runners) ? d.runners : undefined,
         installedRunnerIds: Array.isArray(d.installedRunnerIds) ? d.installedRunnerIds : undefined,
         // Server-side collapse already found these (backend/convex/devices.ts).

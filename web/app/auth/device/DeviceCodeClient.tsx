@@ -349,13 +349,15 @@ export default function DeviceCodeClient({
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({ error: "Unknown error" }));
-        // Key off the stable `code` the backend now sends, and fall back to the
-        // status. Both used to be unreachable: the sentinels these branches
-        // classify were compared with === against a message that had crossed a
-        // Convex boundary and been decorated, so every wrong code arrived here
-        // as a 500 and rendered the catch-all "Failed to authorize" — a server
-        // error for a typo. See thrownSentinel() in backend/convex/http.ts.
-        const code = typeof data?.code === "string" ? data.code : "";
+        // CODE FIRST, status second — the same order mobile's
+        // approveFailureMessage.ts uses. A stable code survives a reworded
+        // body; a status alone cannot distinguish two 4xx that mean different
+        // things. These two surfaces are twins and a user who tries the phone
+        // and then the browser must not be told two different stories about one
+        // code (mobile/src/lib/deviceCodeApprove.test.ts asserts the parity).
+        const code = typeof (data as { code?: unknown })?.code === "string"
+          ? (data as { code: string }).code
+          : "";
         if (code === "invalid_code" || res.status === 404) {
           setErrorMsg("Invalid code. Check the code in your terminal and try again.");
         } else if (code === "code_expired" || res.status === 410) {
@@ -363,6 +365,12 @@ export default function DeviceCodeClient({
         } else if (code === "code_already_used" || res.status === 409) {
           setErrorMsg("This code has already been used.");
         } else if (code === "too_many_attempts" || res.status === 429) {
+          // Was MISSING entirely (fixed 2026-08-02): a rate-limited approval
+          // fell into the generic `data.error` branch, so the phone said "Too
+          // many attempts on that code. Get a fresh one" while the browser said
+          // whatever prose the backend happened to send — or "Something went
+          // wrong." Same fault, two stories, and only one of them told the user
+          // that a NEW code is what fixes it.
           setErrorMsg("Too many attempts on that code. Get a fresh one and try again.");
         } else {
           setErrorMsg(data.error || "Something went wrong.");
@@ -385,13 +393,17 @@ export default function DeviceCodeClient({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    // A DEAD CLICK IS A BUG. This used to bail out silently on a missing
+    // token, so Authorize did literally nothing when the browser session had
+    // expired — indistinguishable from a slow network, on the one screen whose
+    // entire job is to say whether the approval went through. Name the cause
+    // and point at the fix instead.
     if (!token) {
-      // A bare `return` here meant the button did LITERALLY NOTHING whenever the
-      // session check had not finished or the stored token was rejected: no
-      // error, no spinner, no cause — the user cannot tell a dead click from a
-      // slow network, on the screen they came to rescue a machine from.
-      setErrorMsg("You are not signed in on this browser yet. Reload the page, sign in, then enter the code again.");
       setStatus("error");
+      setErrorMsg(
+        "You are signed out in this browser, so this code cannot be approved. " +
+          "Sign in here, then enter the code again — it stays valid.",
+      );
       return;
     }
     handleAuthorize(code, token);

@@ -10,10 +10,13 @@ import { getYaverCloudBaseUrl } from "@/lib/yaver-cloud";
 import { CONVEX_URL } from "@/lib/constants";
 import { decodeCloudWorkspaceRequiredError } from "@/lib/cloud-workspace-required";
 import { classifyRelayLimit, explainRelayDeny } from "./relayDeny";
+import { resolveUsableModel } from "./runnerModelCompat";
+import { ParkedTurnError, type ParkedTurnRejection } from "./parkedTurn";
 import { isUsablePublicEndpoint } from "./endpoints";
 import { planReconnect } from "./reconnectLadder";
 import webPkg from "../package.json";
 import type { MachineResourceReport, VibeParticipant, VibeSession } from "./machine-resources";
+import type { TaskFailureWire } from "./runnerFailure";
 
 // X-Yaver-Caller surface identifier sent on every agent request.
 // Format: "<surface>/<version>" — agent v1.99.71+ logs + threads it
@@ -102,6 +105,19 @@ export interface Task {
   videoSource?: "browser" | "sim-ios" | "sim-android" | "phone";
   videoClipId?: string;
   videoStatus?: "queued" | "recording" | "ready" | "failed" | "stale";
+  /** Task-proof package (docs/audits/task-proof-showcase-audit-2026-07.md §9):
+   *  when proof capture ran for this task the agent stamps proofStatus onto
+   *  the task JSON and `GET /tasks/{id}/proof` (getTaskProof below) returns
+   *  the full TaskProof. commitSha/commitSubject/commitBranch/diffShortstat
+   *  are the evidence footer collected at completion; feedbackId links a
+   *  feedback-fix task back to the report that spawned it. */
+  proofStatus?: "capturing" | "ready" | "failed";
+  proofUrl?: string;
+  commitSha?: string;
+  commitSubject?: string;
+  commitBranch?: string;
+  diffShortstat?: string;
+  feedbackId?: string;
   placementId?: string;
   placementLane?: string;
   placementReason?: string;
@@ -116,9 +132,30 @@ export interface Task {
    *  preflight failures carry the same routed object as preview gaps, so the
    *  Vibing surface can render Install + streamed retry instead of prose. */
   capabilityGap?: unknown;
-  /** Structured terminal task failure from the agent. Surfaces should prefer
-   *  this over parsing output text, and keep text parsing only for older agents. */
-  failure?: unknown;
+  failure?: TaskFailureWire | null;
+}
+
+/** Wire shape of `GET /tasks/{id}/proof` → `{ok:true, proof:{…}}`. Media URLs
+ *  are absolute agent routes behind the same bearer/relay auth as every other
+ *  agent call — never fetch them bare (audit B8); use clipId with
+ *  vibeClipRequest/vibeClipPosterRequest or the /d/<deviceId>/ proxy. */
+export interface TaskProof {
+  taskId: string;
+  status: "capturing" | "ready" | "failed";
+  failedReason?: string;
+  failedRoute?: string;
+  lane?: string;
+  clipId?: string;
+  videoUrl?: string;
+  posterUrl?: string;
+  commitSha?: string;
+  commitSubject?: string;
+  commitBranch?: string;
+  diffShortstat?: string;
+  summaryMarkdown?: string;
+  durationSec?: number;
+  costUsd?: number;
+  createdAt?: string;
 }
 
 export interface FeedbackWorkAgentConfig {
@@ -667,21 +704,18 @@ export interface RemoteRuntimeTarget {
   surface?: string;
   displaySurface?: string;
   viewport?: RemoteRuntimeViewport;
-  checks?: RemoteRuntimeCheck[];
-  roleHint?: string;
+  checks?: Array<{
+    id: string;
+    label: string;
+    ok: boolean;
+    reason?: string;
+  }>;
 }
 
 export interface RemoteRuntimeViewport {
   label?: string;
   width: number;
   height: number;
-}
-
-export interface RemoteRuntimeCheck {
-  id: string;
-  label: string;
-  ok: boolean;
-  reason?: string;
 }
 
 export interface RemoteRuntimeCapabilities {
@@ -733,6 +767,18 @@ export interface RemoteRuntimeSession {
     scale?: number;
     rotation?: "portrait" | "landscape";
   };
+}
+
+export interface RemoteRuntimeStopResult {
+  ok: boolean;
+  type?: "stopped" | string;
+  topic?: "remote-runtime/stop" | string;
+  sessionId: string;
+  status?: "stopped" | string;
+  stopped?: boolean;
+  previouslyRunning?: boolean;
+  verified?: boolean;
+  message?: string;
 }
 
 export interface TmuxPaneSummary {
@@ -1794,12 +1840,28 @@ export type CreateTaskParams = {
 };
 
 export function buildCreateTaskBody(params: CreateTaskParams): Record<string, unknown> {
+  // LAST LINE OF DEFENCE FOR THE MODEL (2026-08-02).
+  //
+  // Re-ordering the picker catalogues fixed the DEFAULT, but the model is also
+  // a stored per-device setting — so a `gpt-5.4` saved before that fix kept
+  // being dispatched at a ChatGPT-account Codex login that can never run it,
+  // and the live dashboard still showed `MODEL / gpt-5.4` afterwards. Caught by
+  // e2e/vibing-truth-loop.mjs against the real account, not by reading code.
+  //
+  // This is the single funnel every web task dispatch goes through, so the
+  // coercion belongs here: whatever any surface believes, the request that
+  // leaves the browser cannot carry a model we have WATCHED this runner refuse.
+  //
+  // Only observed refusals are rewritten (see runnerModelCompat) — an unknown
+  // model is passed through untouched, so this can never silently override a
+  // deliberate choice we have no evidence against.
+  const resolvedModel = resolveUsableModel(params.runner ?? "", params.model ?? "").model ?? params.model ?? "";
   return {
     title: params.title,
     description: params.description,
     userPrompt: params.userPrompt ?? "",
     runner: params.runner ?? "",
-    model: params.model ?? "",
+    model: resolvedModel,
     mode: params.mode ?? "",
     customCommand: params.customCommand ?? "",
     projectName: params.projectName ?? "",
@@ -2233,6 +2295,20 @@ export class AgentClient {
         tmuxSessionId: t.tmuxSessionId || undefined,
         tmuxSession: t.tmuxSession || undefined,
         capabilityGap: t.capabilityGap || undefined,
+        // Video + proof fields ride the same task JSON. These were silently
+        // dropped by this mapper before, which made videoStatus undefined on
+        // web forever — the "▶ Watch demo" chip could never appear.
+        videoEnabled: t.videoEnabled || undefined,
+        videoSource: t.videoSource || undefined,
+        videoClipId: t.videoClipId || undefined,
+        videoStatus: t.videoStatus || undefined,
+        proofStatus: t.proofStatus || undefined,
+        proofUrl: t.proofUrl || undefined,
+        commitSha: t.commitSha || undefined,
+        commitSubject: t.commitSubject || undefined,
+        commitBranch: t.commitBranch || undefined,
+        diffShortstat: t.diffShortstat || undefined,
+        feedbackId: t.feedbackId || undefined,
       }));
       this.cacheTasks(tasks);
       return tasks;
@@ -2272,6 +2348,18 @@ export class AgentClient {
       tmuxSessionId: t.tmuxSessionId || undefined,
       tmuxSession: t.tmuxSession || undefined,
       capabilityGap: t.capabilityGap || undefined,
+      // Same video/proof passthrough as listTasks — keep both mappers in sync.
+      videoEnabled: t.videoEnabled || undefined,
+      videoSource: t.videoSource || undefined,
+      videoClipId: t.videoClipId || undefined,
+      videoStatus: t.videoStatus || undefined,
+      proofStatus: t.proofStatus || undefined,
+      proofUrl: t.proofUrl || undefined,
+      commitSha: t.commitSha || undefined,
+      commitSubject: t.commitSubject || undefined,
+      commitBranch: t.commitBranch || undefined,
+      diffShortstat: t.diffShortstat || undefined,
+      feedbackId: t.feedbackId || undefined,
     };
   }
 
@@ -2291,6 +2379,19 @@ export class AgentClient {
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ input }),
     });
+    // 409 = the agent kept the prompt instead of spending it on a runner it
+    // already knows cannot serve it. Not a failure — a promise. Keyed off the
+    // structured `code`, never a regex on the sentence.
+    if (res.status === 409) {
+      let parked: ParkedTurnRejection | null = null;
+      try {
+        parked = (await res.json()) as ParkedTurnRejection;
+      } catch {
+        // fall through to the generic error below
+      }
+      if (parked?.parked) throw new ParkedTurnError(parked);
+      if (parked?.error) throw new Error(parked.error);
+    }
     if (!res.ok) throw new Error(`Failed to continue task: ${res.status}`);
   }
 
@@ -2301,6 +2402,23 @@ export class AgentClient {
       headers: this.authHeaders,
     });
     if (!res.ok) throw new Error(`Failed to complete task: ${res.status}`);
+  }
+
+  /** Task-proof package for a completed task (`GET /tasks/{id}/proof`).
+   *  Returns null when no proof exists for the task (agent answers 404
+   *  `{ok:false}`) — the caller falls back to the task-level video fields.
+   *  Rides taskBaseUrl like every other task method so a machine-role split
+   *  asks the runner box that actually produced the proof. */
+  async getTaskProof(taskId: string): Promise<TaskProof | null> {
+    this.assertConnected();
+    const res = await fetch(`${this.taskBaseUrl}/tasks/${taskId}/proof`, {
+      headers: this.authHeaders,
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`Failed to get task proof: ${res.status}`);
+    const data = await res.json().catch(() => null);
+    if (!data?.ok || !data?.proof) return null;
+    return data.proof as TaskProof;
   }
 
   /**
@@ -3627,41 +3745,7 @@ export class AgentClient {
     // allow-list includes X-Relay-Password (httpserver.go), and a box that
     // receives it directly simply ignores it.
     const rolesActive = !!(this.taskRouteDeviceId || this.renderRouteDeviceId);
-    // Last resort: the URL we are ABOUT TO DIAL is a relay we configured.
-    //
-    // The two conditions above ask whether a relay FLAG is set, not whether the
-    // request is going to a relay. Any client whose baseUrl points at a relay
-    // while _activeRelayUrl is unset — a card probing a device it never
-    // "connected" to, a view built before the transport resolved — sends the
-    // request with a bearer and no password, and the relay refuses it.
-    //
-    // Captured from the live dashboard 2026-08-01 with a request interceptor:
-    //
-    //   401  pw=ABSENT  https://public.yaver.io/d/9b6f9ec8…/projects
-    //   200  pw=len48   https://public.yaver.io/d/2ed7da41…/tasks?limit=5
-    //
-    // Same page, same session, same valid 48-char password — attached to one
-    // request and not the other. The bare one answers 401 relay_password_missing,
-    // and connection-error.ts renders that as "Relay refused: account relay
-    // password missing or stale", which blames the account for a header this
-    // client simply did not send. Machines with a direct path (Private network)
-    // were unaffected, which is what made it look per-machine for days.
-    //
-    // Probe the operation, not the proxy: match the actual target against the
-    // configured relay list. This only ever ADDS a password when the destination
-    // is provably one of our own relays, and a box that receives it directly
-    // ignores it.
-    const base = this.baseUrl;
-    const relayForBase = base
-      ? this.relayServers.find(
-          (r) => typeof r.httpUrl === "string" && r.httpUrl && base.startsWith(r.httpUrl),
-        )
-      : undefined;
-    const pw = this._activeRelayUrl
-      ? this.activeRelayPassword
-      : rolesActive
-        ? this.routingRelayPassword
-        : (relayForBase?.password ?? null);
+    const pw = this._activeRelayUrl ? this.activeRelayPassword : rolesActive ? this.routingRelayPassword : null;
     if (pw) {
       h["X-Relay-Password"] = pw;
     }
@@ -4950,7 +5034,7 @@ export class AgentClient {
     return data as RemoteRuntimeSession;
   }
 
-  async closeRemoteRuntimeSession(sessionId: string): Promise<void> {
+  async closeRemoteRuntimeSession(sessionId: string): Promise<RemoteRuntimeStopResult> {
     this.assertConnected();
     const res = await fetch(`${this.devBaseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",
@@ -4958,6 +5042,7 @@ export class AgentClient {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Failed to close remote runtime session: HTTP ${res.status}`);
+    return data as RemoteRuntimeStopResult;
   }
 
   async fetchRemoteRuntimeTurnCredentials(): Promise<{ iceServers: RTCIceServer[]; ttlSeconds: number }> {
@@ -5263,6 +5348,30 @@ export class AgentClient {
     };
   }
 
+  /** Authed request tuple for a clip's poster JPEG. Same fetch→blob shim as
+   *  vibeClipRequest — the poster route is authSDKOrGuest, so a bare
+   *  `<img src>` 401s over the relay (audit B8). */
+  vibeClipPosterRequest(clipId: string): { url: string; headers: Record<string, string> } | null {
+    if (!this.baseUrl) return null;
+    return {
+      url: `${this.devBaseUrl}/vibing/preview/clip/${encodeURIComponent(clipId)}/poster`,
+      headers: this.authHeaders,
+    };
+  }
+
+  /** Same-origin `/d/<deviceId>/…` proxy URL for a proof clip, suitable for a
+   *  plain `<video src>`: the Next.js route (`app/d/[deviceId]/[[...path]]`)
+   *  is cookie-authed and streams the body through untouched, so the browser
+   *  gets real Range/seek instead of a fully-buffered blob. Uses the runner
+   *  box when a machine-role split is active (the proof was produced there),
+   *  else the connected device. Returns null when no deviceId is known —
+   *  callers fall back to the vibeClipRequest fetch→blob shim. */
+  taskProofClipProxyUrl(clipId: string): string | null {
+    const id = this.taskRouteDeviceId ?? this.deviceId;
+    if (!id) return null;
+    return `/d/${encodeURIComponent(id)}/vibing/preview/clip/${encodeURIComponent(clipId)}`;
+  }
+
   /** Open an SSE subscription. The browser EventSource API can't carry
    *  custom auth headers, so we use fetch+ReadableStream and parse SSE
    *  framing manually (same pattern the mobile client uses). */
@@ -5410,6 +5519,7 @@ export class AgentClient {
     framework?: string;
     kind?: string;
     workDir?: string;
+    topic?: string;
     message?: string;
     error?: string;
   }> {
@@ -5828,7 +5938,7 @@ export class AgentClient {
    * relayServers cache. After this returns, this.activeRelayPassword
    * is fresh and EventSource / fetch can be retried.
    */
-  async repairRelayPassword(): Promise<{ ok: boolean; repaired?: boolean; reason?: string; error?: string }> {
+  async repairRelayPassword(): Promise<{ ok: boolean; error?: string }> {
     if (!this.token) return { ok: false, error: "not signed in" };
     try {
       const repairRes = await fetch(`${CONVEX_URL}/settings/repair-relay`, {
@@ -5840,10 +5950,8 @@ export class AgentClient {
         body: "{}",
       });
       if (!repairRes.ok) {
-        const data = await repairRes.json().catch(() => ({}));
-        return { ok: false, error: data?.error || data?.reason || `repair-relay ${repairRes.status}` };
+        return { ok: false, error: `repair-relay ${repairRes.status}` };
       }
-      const repairData = await repairRes.json().catch(() => ({}));
       // Pull the freshly-rotated password back from /config so
       // activeRelayPassword reflects it on the next stream attempt.
       const cfgRes = await fetch(`${CONVEX_URL}/config`, {
@@ -5871,7 +5979,7 @@ export class AgentClient {
           if (fresh?.password) cached.password = fresh.password;
         }
       }
-      return { ok: true, repaired: !!repairData?.repaired, reason: repairData?.reason };
+      return { ok: true };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
@@ -9122,13 +9230,21 @@ export const agentClient = new AgentClient();
  */
 export class AgentClientPool {
   private clients = new Map<string, AgentClient>();
+  private relayServers: RelayServer[] = [];
+  private topologyRefreshHook: (() => Promise<void>) | null = null;
+  private listeners = new Set<() => void>();
+  private clientUnsubs = new Map<string, Array<() => void>>();
 
   /** Get-or-create the per-device client. */
   get(deviceId: string): AgentClient {
     let c = this.clients.get(deviceId);
     if (!c) {
       c = new AgentClient();
+      if (this.relayServers.length > 0) c.setRelayServers(this.relayServers.map((r) => ({ ...r })));
+      if (this.topologyRefreshHook) c.setTopologyRefreshHook(this.topologyRefreshHook);
       this.clients.set(deviceId, c);
+      this.clientUnsubs.set(deviceId, [c.on("connectionState", () => this.notify())]);
+      this.notify();
     }
     return c;
   }
@@ -9143,12 +9259,45 @@ export class AgentClientPool {
     return [...this.clients.keys()];
   }
 
+  /** IDs of every device whose pooled client is currently connected. */
+  connectedDeviceIds(): string[] {
+    const out: string[] = [];
+    for (const [deviceId, client] of this.clients) {
+      if (client.isConnected) out.push(deviceId);
+    }
+    return out;
+  }
+
+  /** Keep all existing and future pooled clients on the same relay topology as
+   *  the focused singleton. Without this, background clients are born with an
+   *  empty relay list and the web dashboard falls back to one-at-a-time
+   *  connectivity even though the relay supports `/d/<deviceId>` multiplexing. */
+  setRelayServersOnAll(servers: RelayServer[]): void {
+    this.relayServers = servers.map((r) => ({ ...r }));
+    for (const client of this.clients.values()) {
+      client.setRelayServers(this.relayServers.map((r) => ({ ...r })));
+    }
+  }
+
+  setTopologyRefreshHook(hook: (() => Promise<void>) | null): void {
+    this.topologyRefreshHook = hook;
+    for (const client of this.clients.values()) {
+      client.setTopologyRefreshHook(hook);
+    }
+  }
+
   /** Drop one device from the pool, disconnecting it cleanly. */
   forget(deviceId: string): void {
     const c = this.clients.get(deviceId);
     if (!c) return;
     try { c.disconnect(); } catch { /* tearing down anyway */ }
     this.clients.delete(deviceId);
+    const unsubs = this.clientUnsubs.get(deviceId) || [];
+    for (const unsub of unsubs) {
+      try { unsub(); } catch { /* ignore */ }
+    }
+    this.clientUnsubs.delete(deviceId);
+    this.notify();
   }
 
   /** Disconnect every pool entry. Use on sign-out or before pool reset. */
@@ -9157,6 +9306,28 @@ export class AgentClientPool {
       try { c.disconnect(); } catch { /* ignore */ }
     }
     this.clients.clear();
+    for (const unsubs of this.clientUnsubs.values()) {
+      for (const unsub of unsubs) {
+        try { unsub(); } catch { /* ignore */ }
+      }
+    }
+    this.clientUnsubs.clear();
+    this.notify();
+  }
+
+  /** Subscribe to membership/state changes without coupling callers to
+   *  individual AgentClient instances. */
+  subscribe(callback: () => void): () => void {
+    this.listeners.add(callback);
+    return () => {
+      this.listeners.delete(callback);
+    };
+  }
+
+  private notify(): void {
+    for (const callback of this.listeners) {
+      try { callback(); } catch { /* ignore */ }
+    }
   }
 }
 

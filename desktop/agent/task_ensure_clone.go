@@ -379,6 +379,17 @@ func (tm *TaskManager) autoPushAfterTask(task *Task) {
 			return
 		}
 		committed = true
+		// Stamp the commit EVIDENCE onto the task (sha + shortstat +
+		// branch) — the proof package (task_proof.go) renders these as
+		// facts, separate from whatever the runner claimed. Free here:
+		// the commit just happened in this tree.
+		sha, _ := git(taskGitProbeTimeout, "rev-parse", "HEAD")
+		subject, _ := git(taskGitProbeTimeout, "log", "-1", "--pretty=%s")
+		branch, _ := git(taskGitProbeTimeout, "rev-parse", "--abbrev-ref", "HEAD")
+		shortstat, _ := git(taskGitProbeTimeout, "diff", "--shortstat", "HEAD~1..HEAD")
+		if sha != "" {
+			tm.SetTaskCommitEvidence(task.ID, sha, subject, branch, shortstat)
+		}
 	}
 
 	ahead := "0"

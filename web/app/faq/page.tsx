@@ -10,7 +10,7 @@ const faqs = [
     items: [
       {
         q: "Who is Yaver for?",
-        a: "An individual developer running Yaver on their own machine. Your laptop, your Mac mini, your Linux box, your VPS — paired with your own phone as a remote control. Sharing the machine with a trusted teammate (for example, to let them hit your local Ollama + Qwen cluster) is supported as a secondary capability, but Yaver is not a hosted multi-tenant service and should not be treated as one.",
+        a: "An individual developer running Yaver on their own machines. Your laptop, your Mac mini, your Linux box, your VPS — paired with your own phone or browser as a remote control. V1 is not a hosted multi-tenant service and does not expose machine-sharing or guest-access flows.",
       },
       {
         q: "What AI agents does Yaver work with?",
@@ -234,19 +234,6 @@ const faqs = [
       {
         q: "Can I use the SDK for web development too?",
         a: "Yes. @yaver/feedback-web works with any web framework (React, Vue, Svelte, vanilla JS). Screen recording uses the browser's getDisplayMedia API. Hot reload works natively through your dev server (webpack, Vite, etc.) — Yaver tunnels the dev server port to your phone's browser. Say 'fix this' while looking at your web app and the AI pushes a fix via HMR.",
-      },
-    ],
-  },
-  {
-    category: "Sharing",
-    items: [
-      {
-        q: "Can I share my own machine with teammates?",
-        a: "Yes. `yaver guests invite <email>` grants scoped P2P access to a teammate (max 5, invitations expire in 2 days, no shell / vault / session access). `yaver serve --multi-user --team <id>` gives each team member an isolated workspace on the same box. Useful for pointing a teammate's laptop or phone at your home workstation — for example, at a local model runner you host, or a dev build you're iterating on.",
-      },
-      {
-        q: "Anything I should know before sharing?",
-        a: "If the way you use shared access could touch a third party's rules — App Store / Play Store policies, SSO provider TOS, model or dataset licenses, an employer or client agreement, export controls, anything like that — checking compliance is your responsibility. Yaver publishes source code and SDKs; it does not audit how you use them or guarantee that any particular pattern is approved by any particular provider.",
       },
     ],
   },

@@ -266,9 +266,12 @@ func (fm *FeedbackManager) ReceiveFeedback(metadata json.RawMessage, files map[s
 
 		// Update report paths
 		switch {
-		case strings.HasSuffix(safe, ".mp4") || strings.HasSuffix(safe, ".mov"):
+		case strings.HasSuffix(safe, ".mp4") || strings.HasSuffix(safe, ".mov") ||
+			(strings.HasSuffix(safe, ".webm") && !feedbackUploadIsVoice(safe)):
 			report.VideoPath = filePath
-		case strings.HasSuffix(safe, ".m4a") || strings.HasSuffix(safe, ".aac") || strings.HasSuffix(safe, ".wav"):
+		case strings.HasSuffix(safe, ".m4a") || strings.HasSuffix(safe, ".aac") ||
+			strings.HasSuffix(safe, ".wav") || strings.HasSuffix(safe, ".ogg") ||
+			(strings.HasSuffix(safe, ".webm") && feedbackUploadIsVoice(safe)):
 			report.AudioPath = filePath
 		case strings.HasSuffix(safe, ".jpg") || strings.HasSuffix(safe, ".png"):
 			report.Screenshots = append(report.Screenshots, filePath)
@@ -282,6 +285,21 @@ func (fm *FeedbackManager) ReceiveFeedback(metadata json.RawMessage, files map[s
 
 	log.Printf("[feedback] Received report %s: video=%v screenshots=%d", report.ID, report.VideoPath != "", len(report.Screenshots))
 	return &report, nil
+}
+
+// feedbackUploadIsVoice disambiguates the two .webm uploads a browser sends.
+// MediaRecorder has no other universally supported container, so the web SDK
+// ships BOTH the screen recording and the mic as .webm — the extension alone
+// cannot tell them apart, only the name can. `sdk/feedback/web` names them
+// recording.webm and voice.webm (YaverFeedback.ts, P2PClient.ts); before this
+// existed the switch below matched neither, so every browser report stored the
+// bytes on disk and then reported video=false — a recording that silently
+// never reached the report it was recorded for.
+func feedbackUploadIsVoice(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasPrefix(lower, "voice") ||
+		strings.HasPrefix(lower, "audio") ||
+		strings.HasPrefix(lower, "mic")
 }
 
 func buildFeedbackChangeSet(

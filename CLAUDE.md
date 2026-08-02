@@ -265,6 +265,28 @@ changing those.
   4. Cost-awareness is a product requirement, not just a house rule — it is the
      whole "lower dev opex" wedge. Cloud tool usage and deploys should report
      what they cost (`remote_cost`, `switch_cost` are the existing seams).
+- **CLOSED-LOOP TESTS: THE MOBILE SURFACE IS A DEVICE CONTEXT, NEVER A RESIZED
+  DESKTOP ONE.** Any browser-driven test of the mobile app MUST create a NEW
+  Playwright context with the full device descriptor
+  (`browser.newContext({ ...devices["iPhone 15 Pro"] })`) and assert the
+  viewport it actually got. This is not a nicety — `isMobile`, `hasTouch`,
+  `deviceScaleFactor` and the user agent are **context** properties that
+  `page.setViewportSize()` cannot change, so shrinking a desktop context to
+  393px yields a *narrow desktop browser*, and RN-web renders a **different
+  component tree** for it than for a phone. A green result there says nothing
+  about the app the user holds — it is the exact class of false confidence the
+  suite exists to prevent, reproduced inside the suite.
+  1. Use `web/lib/surfaceViewports.ts` (`profileFor(surface)` +
+     `viewportMatchesSurface`) — one table, not a literal per spec.
+  2. **Assert the viewport inside the arc**, so a context that silently came
+     back desktop-shaped fails loudly instead of passing quietly.
+  3. The mobile arc drives **RN-web at `MOBILE_WEB_URL`**, and SKIPS without
+     one. Never substitute the web dashboard at a small size: the two share
+     neither transport ladder, auth storage key
+     (`yaver.secure.yaver_auth_token` vs `yaver_auth_token`), nor render path.
+  4. Same law for every future surface (tablet, glass, TV): the profile comes
+     from the table, and the test proves it got it.
+  `e2e/tests/vibe-color-loop.spec.ts` is the reference implementation.
 - **A web/dev fix must NEVER regress the shipped native app.** The mobile app
   also runs as RN-web (`expo start`, driven by Playwright at iPhone viewport) —
   that is the only way to automate the REAL app instead of the web dashboard.
@@ -566,13 +588,32 @@ changing those.
   toolchain that isn't on macOS, a runner that needs a secret you don't
   have on this machine, etc.) — and when you do, say so explicitly.
 
+  **One deploy path:** from this repo, humans, agents, and MCP should start with
+  `./deploy/deploy.sh <target> [options]`. That is the canonical front door.
+  It delegates to the maintained vault-aware scripts and `yaver deploy`
+  internals, but centralizes target names, owner/permission checks, and dry-run
+  discovery so future sessions do not choose a different path.
+
+  Do not call `scripts/deploy-web.sh`, `scripts/deploy-testflight.sh`,
+  `scripts/deploy-playstore.sh`, `scripts/deploy-convex.sh`, or `npm publish`
+  directly unless you are editing/testing those scripts. Use:
+  `./deploy/deploy.sh all`, `backend`, `cloudflare`, `ios`, `android`, `npm`,
+  or `mcp`.
+
+  Deploy is owner-only. MCP deploy tools are hidden and denied for non-owner
+  accounts, and `deploy/deploy.sh` refuses group/other-writable repo or script
+  paths before touching deploy credentials. Never weaken that gate to make a
+  test pass.
+
   | Target | Local command (preferred) | CI fallback |
   |---|---|---|
-  | npm (`yaver-cli`) | `cd cli && npm publish` | `release-cli.yml` |
-  | TestFlight (iOS) | `./scripts/deploy-testflight.sh` | local-only by design |
-  | Google Play internal | `JAVA_HOME=$(/usr/libexec/java_home -v 17) ./scripts/deploy-playstore.sh && PLAY_STORE_KEY_FILE=keys/google-play-service-account.json python3 scripts/upload-playstore.py` | `release-mobile.yml` (android job) |
-  | Convex backend | `cd backend && npx convex deploy --yes` | not wired to CI |
-  | Cloudflare web | `./scripts/deploy-web.sh` | `release-web.yml` |
+  | Full Yaver stack | `./deploy/deploy.sh all` | none; run locally unless explicitly told otherwise |
+  | npm (`yaver-cli`) | `./deploy/deploy.sh npm` | `release-cli.yml` after the local command tags/pushes |
+  | TestFlight (iOS) | `./deploy/deploy.sh ios` | local-only by design |
+  | Google Play internal | `./deploy/deploy.sh android` | `release-mobile.yml` (android job) |
+  | Convex backend | `./deploy/deploy.sh backend` | not wired to CI |
+  | Cloudflare web | `./deploy/deploy.sh cloudflare` | `release-web.yml` |
+  | MCP registry metadata | `./deploy/deploy.sh mcp` | release CLI workflow when publishing npm |
 
   When the user asks to ship, run the local command — don't push a tag and
   let CI do it unless the user explicitly says "use CI". If a local deploy
@@ -622,10 +663,11 @@ yaver auth --headless
   release-mobile.yml, `web/v*` → release-web.yml. Tag protection is a repo
   ruleset (`release tag protection`); it survived the org transfer, as did all
   61 Actions secrets — verified by diffing before/after.
-- **Cloudflare web deploy**: `./scripts/deploy-web.sh` (size-guarded at 15 MB,
-  uses `@opennextjs/cloudflare` + `wrangler deploy`).
-- **Convex backend deploy**: `cd backend && npx convex deploy --yes`. Not
-  triggered by CI — deploy explicitly when schema or HTTP routes change.
+- **Cloudflare web deploy**: `./deploy/deploy.sh cloudflare` (delegates to the
+  size-guarded Cloudflare script using `@opennextjs/cloudflare` + `wrangler
+  deploy`).
+- **Convex backend deploy**: `./deploy/deploy.sh backend`. Not triggered by CI
+  — deploy explicitly when schema or HTTP routes change.
 
 ## Secrets
 
@@ -836,10 +878,10 @@ source ~/.appstoreconnect/yaver.env
 ./scripts/deploy-testflight.sh
 
 # explicit env path (no vault, no env file — type the values yourself)
-export APP_STORE_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_77Z6B543D5.p8"
-export APP_STORE_KEY_ID="77Z6B543D5"
+export APP_STORE_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_<key-id>.p8"
+export APP_STORE_KEY_ID="<key-id>"
 export APP_STORE_KEY_ISSUER="<uuid>"
-export APPLE_TEAM_ID="5SJZ4KA39A"
+export APPLE_TEAM_ID="<team-id>"
 ./scripts/deploy-testflight.sh
 ```
 

@@ -44,20 +44,55 @@ func ObserveRunnerAuthFromOutput(runnerID, output, status string) {
 	if id == "" {
 		return
 	}
-	if rejected, reason := ClassifyRunnerAuthFailureFor(id, output); rejected {
+	// Classify the TAIL, not the transcript.
+	//
+	// 2026-08-02 audit: this scanned the ENTIRE task output for phrases like
+	// "please run `codex login`" and "api error: 401". Those strings appear in
+	// ordinary work — in source files, docs, greps, diffs and error handling — and
+	// THIS REPOSITORY'S OWN SOURCE contains every one of them. So a perfectly
+	// successful task that merely read the wrong file marked its runner signed-out
+	// for 30 minutes: AuthConfigured=false, Ready=false, dropped from every picker,
+	// with a valid credential on disk and no file changed. Yaver manufactured the
+	// incident it was built to detect.
+	//
+	// A runner announcing its own auth death does so at the END, as it gives up.
+	// The PTY path already understood this (terminal_session.go reads authTail); the
+	// task path did not. Scanning the tail keeps the true positive — the 2026-07-27
+	// "Please run /login · API Error: 401 …" that exits ZERO — and drops the class of
+	// false positives wholesale.
+	tail := runnerAuthClassifyTail(output)
+	if rejected, reason := ClassifyRunnerAuthFailureFor(id, tail); rejected {
 		MarkRunnerAuthInvalidReason(id, reason)
 		return
 	}
 	// A rejection attributed to a DIFFERENT runner in this stream is still
 	// worth recording (a claude task can shell out to codex), but it must not
 	// be read as proof for the runner that owned the task.
-	if other, reason := ClassifyRunnerAuthFailure(output); other != "" && other != id {
+	if other, reason := ClassifyRunnerAuthFailure(tail); other != "" && other != id {
 		MarkRunnerAuthInvalidReason(other, reason)
 		return
 	}
 	if runnerTurnProvesAuth(output, status) {
 		MarkRunnerAuthProven(id)
 	}
+}
+
+// runnerAuthClassifyTailBytes is how much of a runner's output may assert an auth
+// rejection.
+//
+// Sized to the shape of the evidence, not to a round number: a runner that dies on
+// auth prints a short banner and stops, so the real signal is always within the last
+// couple of kilobytes. Anything earlier is the runner talking about someone else's
+// auth — a file it read, a log it printed, a test it ran — which is exactly the
+// content that must NOT be able to sign a working runner out.
+const runnerAuthClassifyTailBytes = 4096
+
+// runnerAuthClassifyTail returns the trailing window of a runner's output.
+func runnerAuthClassifyTail(output string) string {
+	if len(output) <= runnerAuthClassifyTailBytes {
+		return output
+	}
+	return output[len(output)-runnerAuthClassifyTailBytes:]
 }
 
 // runnerTurnProvesAuth reports whether this output is evidence that the
