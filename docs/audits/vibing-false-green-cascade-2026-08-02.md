@@ -116,9 +116,19 @@ the headline is the *project routing* fault. Signing into Codex will not create
 a project on `render-box`. A user who follows the button re-authenticates, taps
 again, and lands on the identical error.
 
-**Fix:** one panel, one fault. If two faults are live, show two rows, each with
-its own route. The CTA must be derived from the same reason code as the
-headline, not from the highest-priority unrelated incident.
+**Fix (landed).** The CTA is not independent after all — `renderFixWithRunnerRow`
+sits in the `else` branch of `!targetProbeFailurePlan.showFixWithRunner`
+(`RuntimeLabView.tsx:3127-3131`). So classifying `project-missing` as
+`showFixWithRunner: false` structurally prevents the mismatched button: that
+failure now takes the deterministic-route branch and the runner CTA cannot
+render beside it at all.
+
+Pinned by `runtimeTargetProbeFailure.test.ts` from both sides — a
+project-missing failure asserts `showFixWithRunner === false`, and an ordinary
+build failure asserts it stays `true` so a real compile error still reaches a
+coding agent. The default for an unrecognised failure remains `other` →
+`showFixWithRunner: true`, which is the right way to fail: toward a fix path,
+not away from one.
 
 ## 5. A deterministic fault bought an LLM run
 
@@ -418,16 +428,19 @@ Landed on `vibing-false-green-fixes`, all guards green (154/154), `tsc` clean:
 
 NOT done, and not claimed:
 
-1. Project identity is still the display NAME, not `(deviceId, path)` (§1).
-   Single-boxing the runner and renderer hides it; a split brings it back.
-2. The remedy is still a CLI string rather than structured `availableProjects`
-   the surface can render as a picker (§3).
-3. Headline and CTA can still describe different faults in one panel (§4).
-4. `RunnerPreflightByID` is still voice-only (`voice_dispatch.go:70`). Demoted
+1. The agent's remedy is still a CLI string (`check \`yaver projects mobile\``)
+   rather than structured `availableProjects` the surface can render as a
+   picker (§3). The web now names the machine mismatch from data it already
+   holds, so this is no longer blocking — but the render box still cannot say
+   WHAT it does have.
+2. The render-target probe is still a name lookup calling itself a probe (§2,
+   `probed in 0s`). It cannot distinguish "no such project" from "the project
+   is here but the dev server will not start".
+3. `RunnerPreflightByID` is still voice-only (`voice_dispatch.go:70`). Demoted
    to P2: the Vibing dispatch path reaches an equivalent refusal by another
    route, verified live — it named the expired token and spent no tokens.
-5. **Nothing is deployed.** Branch not merged. Every live screenshot in §15 was
-   taken against the OLD code, which is why the fixes are not visible there.
+4. **Nothing is deployed.** Branch not merged. Every live screenshot in §15 was
+   taken against the OLD code, which is why none of these fixes appear there.
 
 ### Landed after §15 was written
 
