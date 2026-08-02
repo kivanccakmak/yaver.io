@@ -1,10 +1,11 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { devices, expect, test, type Locator, type Page } from "@playwright/test";
 import {
   classifyVibeColor,
   looksRendered,
   modalColor,
   samplePoints,
 } from "../../web/lib/vibeVerdict";
+import { profileFor, viewportMatchesSurface, type YaverSurface } from "../../web/lib/surfaceViewports";
 
 /**
  * Vibe colour closed loop — black → RED → black — on BOTH driveable surfaces.
@@ -131,7 +132,20 @@ async function waitForColor(page: Page, want: string, budgetMs: number) {
 }
 
 /** Drive one full black → target → black arc on whichever surface is loaded. */
-async function runVibeArc(page: Page, target: string) {
+async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
+  // VIEWPORT FIRST. A loop that drives the right app at the wrong size tests a
+  // layout no user ever sees — and reports green about it. Assert the surface
+  // profile before anything else, so a mis-sized run fails HERE with a clear
+  // reason instead of producing a confident result about the wrong UI.
+  const vp = await page.evaluate(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+    hasTouch: "ontouchstart" in window || navigator.maxTouchPoints > 0,
+    isMobile: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent),
+  }));
+  const vpCheck = viewportMatchesSurface(surface, vp);
+  expect(vpCheck.ok, `${surface} viewport: ${vpCheck.reason} (saw ${vp.width}x${vp.height}, touch=${vp.hasTouch}, mobileUA=${vp.isMobile})`).toBe(true);
+
   // Vibing
   await page.getByText(/^Vibing$/).first().click().catch(() => {});
   await page.waitForTimeout(8000);
@@ -221,9 +235,10 @@ test.describe("vibe colour closed loop", () => {
   test.describe.configure({ mode: "serial", timeout: 40 * 60_000 });
 
   test("web dashboard: black → red → black on the browser lane", async ({ page }) => {
-    await page.setViewportSize({ width: 1600, height: 1100 });
+    const web = profileFor("web");
+    await page.setViewportSize({ width: web.width, height: web.height });
     await signInWithPassword(page);
-    await runVibeArc(page, "red");
+    await runVibeArc(page, "red", "web");
   });
 
   // ── the MOBILE CLIENT arc ────────────────────────────────────────────────
@@ -245,23 +260,40 @@ test.describe("vibe colour closed loop", () => {
   // their render path. A green result there would have said nothing about the
   // app the user actually holds — the exact class of false confidence this
   // suite exists to prevent, reproduced inside the suite.
-  test("mobile app (RN-web client): black → red → black on the browser lane", async ({ page }) => {
+  test("mobile app (RN-web client): black → red → black on the browser lane", async ({ browser }) => {
     const mobileUrl = process.env.MOBILE_WEB_URL || "";
     test.skip(!mobileUrl,
       "set MOBILE_WEB_URL to the Yaver RN-web build (cd mobile && npm run web). " +
       "Refusing to shrink the dashboard viewport and call it the mobile app.");
 
-    await page.setViewportSize({ width: 390, height: 844 });
-    // RN-web stores the session under a DIFFERENT key than the dashboard —
-    // seeding the wrong one leaves the app on its login screen forever.
+    // A NEW CONTEXT with the full device descriptor — not setViewportSize.
+    //
+    // isMobile, hasTouch, deviceScaleFactor and the user agent are CONTEXT
+    // properties; they cannot be changed on an existing page. So resizing a
+    // desktop context to 393px gives a narrow desktop browser, and RN-web
+    // renders a different component tree for it than for a phone. The viewport
+    // assertion inside runVibeArc catches exactly that, which is how this was
+    // found — the guard failed its own first draft.
+    const profile = profileFor("mobile");
+    const mobileCtx = await browser.newContext({
+      ...devices[profile.playwrightDevice!],
+      // RN-web stores the session under a DIFFERENT key than the dashboard —
+      // seeding the wrong one leaves the app on its login screen forever.
+      storageState: undefined,
+    });
     const token = process.env.YAVER_TEST_TOKEN || "";
     if (token) {
-      await page.addInitScript((t) => {
+      await mobileCtx.addInitScript((t) => {
         localStorage.setItem("yaver.secure.yaver_auth_token", t as string);
       }, token);
     }
-    await page.goto(mobileUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
-    await page.waitForTimeout(8000);
-    await runVibeArc(page, "red");
+    const page = await mobileCtx.newPage();
+    try {
+      await page.goto(mobileUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      await page.waitForTimeout(8000);
+      await runVibeArc(page, "red", "mobile");
+    } finally {
+      await mobileCtx.close().catch(() => {});
+    }
   });
 });
