@@ -182,9 +182,34 @@ async function waitForColor(page: Page, want: string, budgetMs: number) {
  * exists to remove from the product. A test may not do what it forbids.
  */
 async function assertSignedIn(page: Page, surface: YaverSurface) {
-  const body = await page.evaluate(() => document.body?.innerText || "");
-  const onLogin = /Continue with (Apple|Google|GitHub|GitLab|Microsoft|Email)/i.test(body)
-    && !/Vibing|Devices/i.test(body);
+  // NEVER DECIDE THIS FROM PAGE TEXT (2026-08-03).
+  //
+  // This used to grep document.body.innerText for "Continue with Apple|Google|…"
+  // and only excused it when the words "Vibing" or "Devices" also appeared. On
+  // the mobile Tasks screen neither word exists (the tabs are Tasks/Projects/
+  // More) — and the task card renders the RUNNER'S OWN tool output, which for
+  // this very loop reads:
+  //
+  //     ✳ Grep "Continue with Apple|/login" 16 matches
+  //
+  // because the task is about the login page. So the harness read the agent
+  // grepping for a string as proof the user was logged out, and failed a run in
+  // which the screenshot plainly shows "Connected · Primary · ubuntu-4gb-hel1-1",
+  // "opencode ready · 258ms", and the dispatched task. A false red with a
+  // confident, wrong explanation is worse than no check.
+  //
+  // Decide it STRUCTURALLY instead: signed-in surfaces render their own chrome,
+  // and a sign-in BUTTON is a control, not a substring.
+  const signedInChrome = surface === "mobile"
+    // RN-web bottom tab bar. Roles, not prose — task output cannot forge these.
+    ? page.getByText(/^Projects$/).first()
+    : page.getByText(/^(Vibing|Devices)$/).first();
+  if (await signedInChrome.count()) return;
+
+  const signInButton = page
+    .getByRole("button", { name: /Continue with (Apple|Google|GitHub|GitLab|Microsoft|Email)/i })
+    .first();
+  const onLogin = (await signInButton.count()) > 0;
   expect(onLogin,
     `${surface} is on the SIGN-IN screen — the seeded session was not accepted. ` +
     `RN-web reads yaver.secure.yaver_auth_token AND yaver.secure.yaver_user; ` +
