@@ -13,7 +13,7 @@ import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskS
 import { StreamHealthNotice } from "@/components/dashboard/StreamHealthNotice";
 import WebShellModal from "@/components/dashboard/WebShellModal";
 import RemoteDesktopModal from "@/components/dashboard/RemoteDesktopModal";
-import { agentClient, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary } from "@/lib/agent-client";
+import { agentClient, agentClientPool, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary } from "@/lib/agent-client";
 import { CONVEX_URL } from "@/lib/constants";
 import { useMachineRoles } from "@/lib/useMachineRoles";
 import { fetchGuestHosts, acceptGuestInvitation, type GuestInvitation } from "@/lib/guests";
@@ -61,6 +61,7 @@ import DomainsView from "@/components/dashboard/DomainsView";
 import CompanyAIOptionsView from "@/components/dashboard/CompanyAIOptionsView";
 import CompanionView from "@/components/dashboard/CompanionView";
 import VibeCodingView, { AssistantMarkdown } from "@/components/dashboard/VibeCodingView";
+import TaskProofCard, { taskProofVisible } from "@/components/dashboard/TaskProofCard";
 import { capStreamText } from "@/lib/streamBuffer";
 import PendingClaimsSection from "@/components/dashboard/PendingClaimsSection";
 import WebviewView from "@/components/dashboard/WebviewView";
@@ -76,6 +77,7 @@ import { clearLastFailure, recordLastFailure } from "@/lib/probe-backoff";
 import { HIDE_PAID_UI, ENABLE_GUEST_FEATURES } from "@/lib/launchFlags";
 import { parseDashboardChatIntent } from "@/lib/dashboard-chat-intent";
 import { decideComposerKey, insertNewline, newlineIsNative } from "@/lib/composerKeys";
+import { runnerChipState } from "@/lib/runnerChipState";
 import {
   activationBlockReason,
   activateTaskPlacement,
@@ -384,6 +386,31 @@ function runnerAuthIssue(
   // message that may not exist.
   if (runner.authConfigured === false || runner.needsAuth === true) {
     return `${runnerLabel(runner.id)} is installed but NOT signed in on this machine — sign it in, or pick a runner that is. Tasks sent to it will wait forever.`;
+  }
+
+  // AN OBSERVED REFUSAL OUTRANKS A LOCAL VOUCH (2026-08-02).
+  //
+  // The branch below only fired when `ready === false`. On the owner's screen
+  // the row said authConfigured:true / ready:true — because `codex login
+  // status` had vouched for a credential file that the PROVIDER had already
+  // stopped accepting — while the chat, in the same viewport, printed
+  // "Codex's token has expired and could not be refreshed."
+  //
+  // runnerChipState centralises the rule (proof beats vouch, and an observed
+  // refusal beats both) and its matcher is pinned by tests so a SyntaxError, an
+  // ECONNRESET, or a model-entitlement 400 is NEVER mistaken for a dead
+  // credential — routing any of those to re-auth would be a false red that
+  // cannot fix the user's actual problem.
+  const observed = runnerChipState({
+    runnerLabel: runnerLabel(runner.id),
+    installed: runner.installed,
+    ready: runner.ready,
+    authConfigured: runner.authConfigured,
+    needsAuth: runner.needsAuth,
+    lastError: String(runner.error || runner.warning || "") || null,
+  });
+  if (observed.tone === "expired") {
+    return `${observed.detail} ${observed.action}`.trim();
   }
 
   if (runner.ready !== false) return null;
@@ -972,8 +999,10 @@ export default function DashboardPage() {
   const [todoCount, setTodoCount] = useState(0);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connectDiagnostics, setConnectDiagnostics] = useState<ConnectAttemptDiagnostic[]>([]);
+  const [connectedDeviceIds, setConnectedDeviceIds] = useState<string[]>([]);
   const [copiedReauth, setCopiedReauth] = useState(false);
   const [reauthing, setReauthing] = useState(false);
+  const [rescueQueuing, setRescueQueuing] = useState(false);
   const [reauthMessage, setReauthMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [relayReady, setRelayReady] = useState(false);
   const [previewTargetId, setPreviewTargetId] = useState<string | null>(null);
@@ -1071,7 +1100,10 @@ export default function DashboardPage() {
         const pw = sd.settings?.relayPassword || sd.relayPassword;
         if (pw) relays = relays.map((x: any) => ({ ...x, password: pw }));
       }
-      if (relays.length > 0) agentClient.setRelayServers(relays);
+      if (relays.length > 0) {
+        agentClient.setRelayServers(relays);
+        agentClientPool.setRelayServersOnAll(relays);
+      }
     } catch {
       // non-fatal — next connect will re-read
     }
@@ -1183,6 +1215,12 @@ export default function DashboardPage() {
 
   const isConnected = connState === "connected";
 
+  useEffect(() => {
+    const sync = () => setConnectedDeviceIds(agentClientPool.connectedDeviceIds());
+    sync();
+    return agentClientPool.subscribe(sync);
+  }, []);
+
   // Initial landing (user directive 2026-07-27): a box already connected means
   // the user came to work — open Vibing. No box connected → stay on Devices,
   // which is where connecting happens. Runs once, never over an explicit
@@ -1283,7 +1321,10 @@ export default function DashboardPage() {
         } catch {}
       }
 
-      if (!cancelled && relays.length > 0) agentClient.setRelayServers(relays);
+      if (!cancelled && relays.length > 0) {
+        agentClient.setRelayServers(relays);
+        agentClientPool.setRelayServersOnAll(relays);
+      }
     };
 
     (async () => {
@@ -1297,10 +1338,13 @@ export default function DashboardPage() {
     // parity): every 3rd failed attempt the AgentClient asks us to re-pull
     // the relay list + passwords so a relay restart / password rotation
     // doesn't strand the ladder on the coordinates it was born with.
-    agentClient.setTopologyRefreshHook(() => refreshRelayTopology());
+    const refreshTopologyHook = () => refreshRelayTopology();
+    agentClient.setTopologyRefreshHook(refreshTopologyHook);
+    agentClientPool.setTopologyRefreshHook(refreshTopologyHook);
     return () => {
       cancelled = true;
       agentClient.setTopologyRefreshHook(null);
+      agentClientPool.setTopologyRefreshHook(null);
     };
   }, [token]);
 
@@ -1547,7 +1591,14 @@ export default function DashboardPage() {
       fresh.resultText !== activeTask.resultText ||
       fresh.costUsd !== activeTask.costUsd ||
       fresh.turns?.length !== activeTask.turns?.length ||
-      fresh.placementId !== activeTask.placementId
+      fresh.placementId !== activeTask.placementId ||
+      // Proof/video lifecycle transitions (capturing→ready/failed, clip id
+      // arriving, stale flip) must re-render the TaskProofCard even when
+      // status/resultText are already settled.
+      fresh.proofStatus !== activeTask.proofStatus ||
+      fresh.videoStatus !== activeTask.videoStatus ||
+      fresh.videoClipId !== activeTask.videoClipId ||
+      fresh.commitSha !== activeTask.commitSha
     ) {
       setActiveTask({
         ...fresh,
@@ -1915,6 +1966,13 @@ export default function DashboardPage() {
     // before the first packet (<uuid>.yaver.io — no DNS; *.dev.yaver.io — no
     // cert) instead of probing them into console-error spam.
     const tunnelUrls = usableTunnelUrls(device.publicEndpoints, device.tunnelUrl);
+    const rememberPooledConnection = async () => {
+      const pooled = agentClientPool.get(device.id);
+      pooled.setRelayServers(agentClient.configuredRelayServers.map((r) => ({ ...r })));
+      if (!pooled.isConnected) {
+        await pooled.connect(device.host, device.port, token, device.id, { tunnelUrls });
+      }
+    };
 
     // Proactive re-auth: if Convex still says the device needs auth,
     // recover the session BEFORE we try to connect. Two important
@@ -1961,6 +2019,7 @@ export default function DashboardPage() {
 
     try {
       await agentClient.connect(device.host, device.port, token, device.id, { tunnelUrls });
+      void rememberPooledConnection().catch(() => {});
       setConnectDiagnostics(agentClient.lastConnectDiagnostics);
       clearLastFailure(device.id);
       try {
@@ -2024,6 +2083,7 @@ export default function DashboardPage() {
               });
           if (recovered.ok) {
             await agentClient.connect(device.host, device.port, token, device.id, { tunnelUrls });
+            void rememberPooledConnection().catch(() => {});
             setConnectError(null);
             setConnectDiagnostics(agentClient.lastConnectDiagnostics);
             clearLastFailure(device.id);
@@ -3342,7 +3402,7 @@ export default function DashboardPage() {
                 ) : connState === "error" ? (
                   (() => {
                     const authExpired = connectDiagnostics.some((d) => d.authExpired);
-                    const anyReached = connectDiagnostics.some((d) => d.status && d.status > 0);
+                    const anyHttpAnswered = connectDiagnostics.some((d) => d.status && d.status > 0);
                     const relayTunnelDown = connectDiagnostics.some(
                       (d) => d.path === "relay" && (d.status === 502 || d.status === 503 || d.status === 504),
                     );
@@ -3354,8 +3414,11 @@ export default function DashboardPage() {
                     // A genuine agent 401 (body e.g. "invalid token") transits
                     // a working relay lane and keeps the agent-rejection copy.
                     const relayCredentialDenied = connectDiagnostics.some((d) => isRelayCredentialDeny(d));
+                    const agentRejected = connectDiagnostics.some(
+                      (d) => (d.status === 401 || d.status === 403) && !isRelayCredentialDeny(d),
+                    );
                     const anyRelayProbeTried = connectDiagnostics.some((d) => d.path === "relay");
-                    const anyLoadFailed = connectDiagnostics.some((d) => d.path === "direct" && !anyReached);
+                    const anyLoadFailed = connectDiagnostics.some((d) => d.path === "direct" && !anyHttpAnswered);
                     const relayCount = agentClient.configuredRelayServers.length;
                     // Direct from an HTTPS web origin to http://LAN-IP:18080 is always
                     // blocked as mixed content. Surface that explicitly.
@@ -3367,7 +3430,7 @@ export default function DashboardPage() {
                         ? "Relay refused the request — your account's relay password is missing or stale"
                         : relayTunnelDown
                           ? "Relay tunnel down — web cannot reach this machine"
-                        : anyReached
+                        : agentRejected
                           ? "Agent responded, but the connection was rejected"
                           : relayCount === 0
                             ? "No relay configured — can't reach this agent from the web"
@@ -3431,12 +3494,38 @@ export default function DashboardPage() {
                           <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/5 p-2 text-left">
                             <p className="text-[11px] text-amber-700 dark:text-amber-300">
                               {relayTunnelDown
-                                ? "This cannot repair a dead tunnel by itself. First refresh the relay password, then retry; if the tunnel is still down, run `yaver auth` or restart Yaver on the box."
+                                ? "Web re-auth cannot run until a relay can reach the box. Try one relay repair, then retry; if the tunnel is still down, run `yaver auth` or restart Yaver on the box."
                                 : authExpired
                                 ? "Agent accepted the probe but its Convex session is stale. Hand your current session down to the box:"
                                 : "Try handing your current session down to the box — works even if the agent's own token is dead, as long as one relay can reach it:"}
                             </p>
                             <div className="mt-2 flex items-center gap-2">
+                              {relayTunnelDown ? (
+                                <button
+                                  disabled={rescueQueuing || !connectedDevice || !token}
+                                  onClick={async () => {
+                                    if (!connectedDevice || !token) return;
+                                    setRescueQueuing(true);
+                                    setReauthMessage(null);
+                                    try {
+                                      const res = await agentClient.queueRescueCommand(connectedDevice.id, "tunnel-reset");
+                                      const tail = res.deduped ? "already pending" : `queued ${res.commandId.slice(0, 8)}`;
+                                      setReauthMessage({
+                                        kind: "ok",
+                                        text: `Tunnel reset ${tail}. The agent picks it up on heartbeat, restarts itself, then rebuilds the relay tunnel.`,
+                                      });
+                                      setTimeout(() => connectToDevice(connectedDevice), 35_000);
+                                    } catch (e: any) {
+                                      setReauthMessage({ kind: "err", text: e?.message || "Tunnel reset queue failed" });
+                                    } finally {
+                                      setRescueQueuing(false);
+                                    }
+                                  }}
+                                  className="flex-1 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-200 hover:bg-amber-500/20 disabled:opacity-40"
+                                >
+                                  {rescueQueuing ? "Queueing tunnel reset..." : "Queue tunnel reset"}
+                                </button>
+                              ) : null}
                               {relayTunnelDown ? (
                                 <button
                                   disabled={reauthing || !token}
@@ -3502,7 +3591,13 @@ export default function DashboardPage() {
                                 }}
                                 className="flex-1 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-200 hover:bg-amber-500/20 disabled:opacity-40"
                               >
-                                {reauthing && !relayTunnelDown ? "Re-authing…" : relayCount === 0 ? "Re-auth (needs a relay)" : "Re-auth this device from web"}
+                                {relayTunnelDown
+                                  ? "Web re-auth unavailable (relay tunnel down)"
+                                  : reauthing
+                                    ? "Re-authing…"
+                                    : relayCount === 0
+                                      ? "Re-auth (needs a relay)"
+                                      : "Re-auth this device from web"}
                               </button>
                             </div>
                             {reauthMessage ? (
@@ -3528,7 +3623,7 @@ export default function DashboardPage() {
                             </div>
                           </div>
 
-                          {!anyReached && !mixedContentLikely && relayCount > 0 ? (
+                          {!anyHttpAnswered && !mixedContentLikely && relayCount > 0 ? (
                             <p className="mt-3 text-xs text-surface-600">
                               Relays are configured but none could reach the agent. Check <code className="rounded bg-surface-800 px-1 py-0.5 text-surface-400">yaver serve</code> is running on this machine and it's registered with the relay.
                             </p>
@@ -3642,6 +3737,12 @@ export default function DashboardPage() {
                 mobileWorkers={mobileWorkers}
                 selectedPreviewTarget={selectedPreviewTarget}
                 onSelectPreviewTarget={handleSelectPreviewTarget}
+                onReconnect={connectedDevice ? async () => { await connectToDevice(connectedDevice); } : undefined}
+                onRepairRelay={token ? repairRelay : undefined}
+                onQueueTunnelReset={connectedDevice && token ? async () => {
+                  const queued = await agentClient.queueRescueCommand(connectedDevice.id, "tunnel-reset");
+                  return { ...queued, deviceId: connectedDevice.id };
+                } : undefined}
               />
             </div>
           ) : activeTab === "todos" ? (
@@ -3866,6 +3967,7 @@ export default function DashboardPage() {
                 onOpen={connectToDevice}
                 onCloseWorkspace={disconnect}
                 activeWorkspaceDeviceId={connectedDevice?.id ?? null}
+                connectedDeviceIds={connectedDeviceIds}
                 workspaceConnectionState={connState}
                 connectError={connectError}
                 connectDiagnostics={connectDiagnostics}
@@ -3989,6 +4091,16 @@ export default function DashboardPage() {
                             ))}
                           </div>
                         )}
+                        {/* Task-proof card (audit §9.4, B14): the SAME shared
+                            component VibeCodingView mounts, so the two web
+                            chat surfaces can't drift. Renders under the
+                            transcript once the task lands in completed/review
+                            with a proof or demo clip attached. */}
+                        {taskProofVisible(activeTask) ? (
+                          <div className="mx-auto mt-3 max-w-3xl">
+                            <TaskProofCard task={activeTask} agentClient={agentClient} />
+                          </div>
+                        ) : null}
                       </div>
                     </>
                   ) : (
