@@ -99,34 +99,30 @@ final class TVWebPreviewLoopTests: XCTestCase {
         // bare timeout.
         snap(app, "0000-launch")
 
-        // NAVIGATION IS DERIVED FROM EVIDENCE, NOT GUESSED.
+        // NAVIGATION, NOW DERIVED FROM EVIDENCE.
         //
-        // tvOS has neither `tap()` nor `XCUIElement.select()` — both are
-        // compiled out. The TV is driven entirely by the Siri Remote: move
-        // focus with directional presses, activate with .select. The first two
-        // versions of this test discovered that as build errors rather than as
-        // a wrong click, which is the cheap way to find it.
+        // The first run of this test recorded what the TV actually renders
+        // rather than guessing a focus path — and the answer was not the
+        // dashboard at all. The oracle read:
         //
-        // Rather than guess a focus path through a screen nobody has looked at,
-        // this records the UI it actually finds and lets the orchestrator's
-        // oracle read it back. Guessed selectors are what cost the mobile arc
-        // three runs; the same mistake is available here and is not being made.
-        // Once a run shows what the TV renders, the presses below become
-        // specific instead of exploratory.
-        let labels = app.descendants(matching: .any)
-            .allElementsBoundByIndex.prefix(40)
-            .compactMap { $0.label.isEmpty ? nil : $0.label }
-        XCTContext.runActivity(named: "on screen: \(labels.joined(separator: " | "))") { _ in }
+        //   "Box asleep — 100.75.123.78 isn't answering, and it can't be woken
+        //    from the TV, start it from your computer or phone."
+        //
+        // …for a box answering GET /info with 200 throughout. ATS was refusing
+        // cleartext to 100.64/10 before a packet left the device. Guessed
+        // selectors would have reported "element not found" and taught nobody
+        // anything; the screenshot named a real product bug (fixed in
+        // tvos/YaverTV/Info.plist).
+        //
+        // With that fixed the dashboard renders, and these are its real labels:
+        //   Session · Tasks · Capture · Feedback · Projects · Android · Runtime
+        focusAndSelect(app, label: "Projects")
+        snap(app, "0001-projects")
 
-        // A tvOS screen auto-focuses its first focusable element, so pressing
-        // .select activates whatever the app considers primary. That is the
-        // honest first move for an unexplored screen — and every frame is
-        // captured either way, so a wrong move is diagnosable rather than fatal.
-        if app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", projectName)).count > 0 {
-            XCUIRemote.shared.press(.select)
-        } else {
-            snap(app, "0001-no-project-card")
-        }
+        // Then the project card itself. Tolerant on purpose: the card's label
+        // carries the project name plus framework chrome that changes.
+        focusAndSelect(app, label: projectName)
+        snap(app, "0002-opened")
 
         // Sit on the preview and photograph the app's own screen. The
         // orchestrator triggers the vibe; this just records what the TV shows.
@@ -137,6 +133,47 @@ final class TVWebPreviewLoopTests: XCTestCase {
             i += 1
             Thread.sleep(forTimeInterval: 15)
         }
+    }
+
+
+    /// Move focus to the element whose label contains `label`, then press
+    /// Select on the Siri Remote.
+    ///
+    /// tvOS has no tap() and no XCUIElement.select() — both are compiled out.
+    /// The ONLY way to activate something is to give it focus and press the
+    /// remote, so focus has to be walked to. This presses .down then .right in
+    /// a bounded sweep, checking `hasFocus` after each step.
+    ///
+    /// Bounded, and it does NOT fail the test when the element never focuses.
+    /// A missing control is far better diagnosed from the screenshot the caller
+    /// takes next — "no such element" says less than a picture of the screen
+    /// that does not contain it.
+    @discardableResult
+    private func focusAndSelect(_ app: XCUIApplication, label: String, steps: Int = 12) -> Bool {
+        let match = NSPredicate(format: "label CONTAINS[c] %@", label)
+        // app.buttons, NOT app.descendants(matching: .any).
+        //
+        // `descendants(matching: .any)` takes a FULL accessibility snapshot of
+        // the entire tree on every evaluation. Doing that inside a focus sweep
+        // timed the runner out — "Restarting after unexpected exit, crash, or
+        // test timeout", 0 tests executed, one frame on disk, alongside
+        // FBSSceneSnapshotErrorDomain code 4 in the log. The query was the
+        // defect, not the app.
+        //
+        // buttons is a narrow, cheap query, and on this screen every focusable
+        // control is one.
+        let candidates = app.buttons.matching(match)
+        for i in 0..<steps {
+            if candidates.count > 0, candidates.element(boundBy: 0).hasFocus {
+                XCUIRemote.shared.press(.select)
+                Thread.sleep(forTimeInterval: 2)
+                return true
+            }
+            XCUIRemote.shared.press(i % 3 == 2 ? .right : .down)
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        XCTContext.runActivity(named: "never focused a control matching \(label)") { _ in }
+        return false
     }
 
     /// Screenshot the SIMULATOR SCREEN (not a view hierarchy render) and write
