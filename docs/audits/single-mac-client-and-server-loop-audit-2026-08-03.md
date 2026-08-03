@@ -194,3 +194,43 @@ the release path all finish without telling the boxes a new version exists.
    and can self-heal. A systemd timer would duplicate that and lose the
    running-task check — a restart mid-vibe is exactly what the current code
    avoids. Keep the policy in the agent; systemd only supervises the process.
+
+### 6b. Check npm, fetch from GitHub
+
+Follow-up question, and it improves the design: *GitHub is free for a public
+repo — is the rate limit even relevant?*
+
+Two different things, worth separating:
+
+- **Cost is zero.** Public repo, unmetered release downloads. Nothing here is a
+  billing concern.
+- **Throttling is still real.** GitHub's REST API allows **60 requests/hour per
+  source IP unauthenticated**, regardless of the repo being public. It only bites
+  when many agents share one egress — a datacenter — which is precisely the case
+  the original 6-hour interval was defending against.
+
+But the version question does not have to go to GitHub at all:
+
+| | GitHub API | **npm registry** |
+|---|---|---|
+| Rate limit | 60/h per IP unauthenticated | none comparable — CDN-fronted, built for mass reads |
+| Endpoint | `releases/latest` | `registry.npmjs.org/yaver-cli/latest` |
+| Conditional requests | ETag → 304 | ETag → 304 |
+| Canonical for…| the signed BINARIES | the VERSION — npm is the only supported install path (CLAUDE.md) |
+
+**So: check npm, fetch from GitHub.** The "is there something new" poll goes to a
+CDN with no per-IP ceiling; the signed, notarised asset still comes from the
+GitHub release. That removes the shared-egress worry entirely — which was the
+only justification for a 6-hour cadence — and it is how npm's own
+`update-notifier` works: it polls the registry, not a git host.
+
+Precedent already in-tree: `mcp_registries.go` fetches
+`https://registry.npmjs.org/<pkg>`, and `deploy_tokens.go` calls
+`registry.npmjs.org/-/whoami`. The client code to reuse exists.
+
+**Not landed here.** The interval is tightened to 1–2h (`a1f94a25e`), which is
+safe under the current GitHub check. Repointing the version probe at npm touches
+the update path itself, and that path restarts the agent — it deserves its own
+change with a guard that proves a stale box updates and a current one does not
+restart. Doing it half-verified at the end of a long session is how the "silent
+serve" class of bug gets introduced.
