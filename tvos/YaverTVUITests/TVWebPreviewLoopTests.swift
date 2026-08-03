@@ -127,9 +127,14 @@ final class TVWebPreviewLoopTests: XCTestCase {
         // These are CHEAP per-type counts, not a tree snapshot: exactly the
         // mistake that timed the runner out a run earlier. Measure the type,
         // then query it — do not guess a second time.
-        XCTContext.runActivity(named: "types → buttons=\(app.buttons.count) cells=\(app.cells.count) "
-            + "links=\(app.links.count) staticTexts=\(app.staticTexts.count) "
-            + "others=\(app.otherElements.count) images=\(app.images.count)") { _ in }
+        // The 13 button labels, and which one currently holds focus. `app.buttons`
+        // is a narrow collection so enumerating it is cheap — unlike
+        // descendants(matching: .any), which timed the runner out earlier.
+        // Knowing the exact labels and the focus start point is what turns the
+        // sweep below from a guess into a route.
+        let btns = app.buttons.allElementsBoundByIndex
+        let described = btns.prefix(20).map { "\($0.label)\($0.hasFocus ? "[FOCUSED]" : "")" }
+        XCTContext.runActivity(named: "buttons(\(btns.count)) → \(described.joined(separator: " | "))") { _ in }
 
         focusAndSelect(app, label: "Projects")
         snap(app, "0001-projects")
@@ -164,38 +169,52 @@ final class TVWebPreviewLoopTests: XCTestCase {
     /// takes next — "no such element" says less than a picture of the screen
     /// that does not contain it.
     @discardableResult
-    private func focusAndSelect(_ app: XCUIApplication, label: String, steps: Int = 12) -> Bool {
-        let match = NSPredicate(format: "label CONTAINS[c] %@", label)
-        // app.buttons, NOT app.descendants(matching: .any).
+    private func focusAndSelect(_ app: XCUIApplication, label: String, steps: Int = 15) -> Bool {
+        // COUNT THE STEPS, DO NOT POLL FOCUS.
         //
-        // `descendants(matching: .any)` takes a FULL accessibility snapshot of
-        // the entire tree on every evaluation. Doing that inside a focus sweep
-        // timed the runner out — "Restarting after unexpected exit, crash, or
-        // test timeout", 0 tests executed, one frame on disk, alongside
-        // FBSSceneSnapshotErrorDomain code 4 in the log. The query was the
-        // defect, not the app.
+        // Measured across three runs, 2026-08-03. The list and its focus start:
         //
-        // buttons is a narrow, cheap query, and on this screen every focusable
-        // control is one.
-        // Try the cheap collections in turn. Each is a narrow query; the
-        // expensive one (descendants(matching: .any)) is deliberately never
-        // used here — it timed the runner out.
-        let pools = [app.buttons, app.cells, app.links, app.otherElements]
-        for i in 0..<steps {
-            let focused = pools.contains { pool in
-                let hits = pool.matching(match)
-                return hits.count > 0 && hits.element(boundBy: 0).hasFocus
-            }
-            if focused {
-                XCUIRemote.shared.press(.select)
-                Thread.sleep(forTimeInterval: 2)
-                return true
-            }
-            XCUIRemote.shared.press(i % 3 == 2 ? .right : .down)
+        //   buttons(13) → Switch | Session, Drive a live coding session[FOCUSED]
+        //     | Tasks … | Projects, Browse & preview on the TV | Runtime …
+        //     | Apple TV … | Capture … | Feedback … | Android …
+        //     | <host>, Switch machine | Update agent … | Shared with … | Sign out
+        //
+        // First attempt swept `.down,.down,.right` and never matched — the
+        // `.right` presses walked focus sideways out of the list. Second
+        // attempt pressed `.down` only and polled `hasFocus` each step; it
+        // reported "never focused Projects" and ended on
+        // "Shared with …[FOCUSED]" — eleven rows down. So `.down` MOVES focus
+        // correctly and `hasFocus` simply never read true for the target while
+        // passing it. Polling was the unreliable part, not the navigation.
+        //
+        // Given a measured order, the number of presses is knowable: read the
+        // index of the focused row and the index of the target ONCE, then press
+        // that many times. One cheap enumeration instead of fifteen queries,
+        // and no dependence on a focus flag that lies in transit.
+        //
+        // Verification moves to where it belongs — the caller screenshots, and
+        // the oracle reads what is actually on screen. Pixels over predicates.
+        let all = app.buttons.allElementsBoundByIndex
+        guard let target = all.firstIndex(where: {
+            $0.label.range(of: label, options: .caseInsensitive) != nil
+        }) else {
+            let seen = all.prefix(15).map { $0.label }
+            XCTContext.runActivity(named: "no button matching \(label); present: \(seen.joined(separator: " | "))") { _ in }
+            return false
+        }
+        let from = all.firstIndex(where: { $0.hasFocus }) ?? 0
+        let delta = target - from
+        guard abs(delta) <= steps else {
+            XCTContext.runActivity(named: "\(label) is \(delta) rows away, beyond the \(steps)-step budget") { _ in }
+            return false
+        }
+        for _ in 0..<abs(delta) {
+            XCUIRemote.shared.press(delta > 0 ? .down : .up)
             Thread.sleep(forTimeInterval: 0.5)
         }
-        XCTContext.runActivity(named: "never focused a control matching \(label)") { _ in }
-        return false
+        XCUIRemote.shared.press(.select)
+        Thread.sleep(forTimeInterval: 3)
+        return true
     }
 
     /// Screenshot the SIMULATOR SCREEN (not a view hierarchy render) and write
