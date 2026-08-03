@@ -29,6 +29,29 @@ struct ProjectsView: View {
     @State private var error: String?
     @State private var form: PreviewForm = .phone
 
+    /// Continue a `yaver.tv.startAt` route one level deeper: "preview:<name>"
+    /// opens that project's preview as soon as the list has loaded.
+    ///
+    /// The dashboard's half of this is documented in DashboardView.startAt —
+    /// short version: the tile grid is width-adaptive and cannot be driven by
+    /// remote presses. THIS screen has the same problem for a different reason.
+    /// Focus lands on the "Render as" segmented control at the top, not on a
+    /// project row, so the number of presses to reach a given project depends
+    /// on how many projects the box happens to have (eight on the test box
+    /// today, and that is data, not layout).
+    ///
+    /// Routing by NAME is stable against both. And it is the same thing a user
+    /// wants: "put my project on the TV" without walking a remote through two
+    /// screens to get there.
+    @AppStorage("yaver.tv.startAt") private var startAt: String = ""
+    /// Routed by NAME, not by model: `navigationDestination(item:)` needs
+    /// Hashable, and adding that conformance to the SHARED ProjectSummary
+    /// (tvos/YaverTV/Models.swift, also compiled into visionOS) to satisfy one
+    /// view would be changing a model for a caller's convenience. The name is
+    /// already the identity this route is expressed in.
+    @State private var routedProjectName: String?
+    @State private var didRoute = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -57,6 +80,23 @@ struct ProjectsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
         .task { await load() }
+        // Continue the startAt route once the list exists. Guarded by didRoute
+        // so a refresh cannot re-push the same screen, and by a name match so a
+        // route naming a project this box does not have simply stays on the
+        // list — where the user can see what IS here — instead of dead-ending.
+        .navigationDestination(item: $routedProjectName) { name in
+            if let p = projects.first(where: { $0.name == name }) {
+                destination(for: p)
+            }
+        }
+        .onChange(of: projects.count) { _, count in
+            guard count > 0, !didRoute, startAt.hasPrefix("preview:") else { return }
+            let wanted = String(startAt.dropFirst("preview:".count))
+            guard let hit = projects.first(where: { $0.name.caseInsensitiveCompare(wanted) == .orderedSame })
+                ?? projects.first(where: { $0.name.localizedCaseInsensitiveContains(wanted) }) else { return }
+            didRoute = true
+            routedProjectName = hit.name
+        }
     }
 
     private var header: some View {

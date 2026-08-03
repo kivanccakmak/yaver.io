@@ -94,7 +94,7 @@ final class TVWebPreviewLoopTests: XCTestCase {
             // whose column count depends on width. Six runs proved that grid
             // cannot be driven reliably by remote presses; see
             // DashboardView.startAt for the full evidence.
-            "-yaver.tv.startAt", "projects",
+            "-yaver.tv.startAt", "preview:\(projectName)",
         ]
         app.launch()
 
@@ -141,16 +141,13 @@ final class TVWebPreviewLoopTests: XCTestCase {
         let described = btns.prefix(20).map { "\($0.label)\($0.hasFocus ? "[FOCUSED]" : "")" }
         XCTContext.runActivity(named: "buttons(\(btns.count)) → \(described.joined(separator: " | "))") { _ in }
 
-        // The app opens ON Projects (yaver.tv.startAt), so no grid walk at all.
-        Thread.sleep(forTimeInterval: 5)
-        snap(app, "0001-projects")
-
-        // Projects → first project card. This IS a plain vertical list, and the
-        // first card holds focus on entry, so Select opens it. If the list is
-        // empty the screenshot shows that — a better report than a failed query.
-        XCUIRemote.shared.press(.select)
-        Thread.sleep(forTimeInterval: 5)
-        snap(app, "0002-opened")
+        // The app opens straight on the project's PREVIEW (yaver.tv.startAt
+        // = "preview:<name>"), so there is no navigation in this test at all.
+        // Both screens it used to walk are width- or data-dependent; routing by
+        // name is stable against both. See DashboardView.startAt for the six
+        // runs that established this.
+        Thread.sleep(forTimeInterval: 8)
+        snap(app, "0001-routed")
 
         // Sit on the preview and photograph the app's own screen. The
         // orchestrator triggers the vibe; this just records what the TV shows.
