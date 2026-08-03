@@ -84,8 +84,40 @@ const BUDGET_MS = Number(process.env.VIBE_BUDGET_MS || 12 * 60_000);
  */
 const MIN_AGENT_VERSION = process.env.VIBE_MIN_AGENT_VERSION || "1.99.400";
 
-if (!["tv", "vision"].includes(SURFACE)) {
-  console.log(`SKIP: unknown surface ${SURFACE} — use "tv" or "vision"`);
+/**
+ * Surfaces this arc can drive, and what a frame-capture verdict DOES and DOES
+ * NOT prove for each.
+ *
+ * Being explicit here matters more than it looks. A frame captured from the
+ * box's headless browser at a surface's geometry proves the SERVER half — the
+ * runner edited the code, the dev server rebuilt, and the render pipeline
+ * produced those pixels at that size. It proves nothing about the native app:
+ * not its layout, not its focus engine, not whether the control you need even
+ * exists. Letting this arc quietly accept a surface it cannot honestly speak
+ * for is how a suite starts reporting green about something it never tested.
+ *
+ * web / mobile / tablet are deliberately ABSENT: they have a real DOM and a
+ * real driveable app, so they belong to e2e/tests/vibe-color-loop.spec.ts,
+ * which drives them in a true device context. Substituting a frame capture
+ * there would be strictly worse evidence.
+ */
+const FRAME_CAPTURE_SURFACES = {
+  tv: "tvOS has no browser at all, so a streamed frame is its ONLY pixel evidence.",
+  vision: "visionOS could use a WKWebView, but sharing the TV verdict keeps the two comparable.",
+  watch: "watchOS/Wear render a companion view; this proves the render half at watch geometry, NOT the native watch UI.",
+};
+
+if (!FRAME_CAPTURE_SURFACES[SURFACE]) {
+  const domSurfaces = ["web", "mobile", "tablet"];
+  if (domSurfaces.includes(SURFACE)) {
+    console.log(
+      `SKIP: "${SURFACE}" has a real DOM and a driveable app — it belongs to\n` +
+      `      e2e/tests/vibe-color-loop.spec.ts, which drives it in a true device\n` +
+      `      context. A frame capture would be weaker evidence for the same claim.`,
+    );
+    process.exit(0);
+  }
+  console.log(`SKIP: unknown surface "${SURFACE}" — use one of: ${Object.keys(FRAME_CAPTURE_SURFACES).join(", ")}`);
   process.exit(0);
 }
 if (!TOKEN) {
@@ -340,6 +372,9 @@ try {
   const info = await api("/info");
   const agentVersion = info.version || "";
   log(`box ok — agent ${agentVersion || "?"} on ${info.hostname || "?"} · capturing at ${PROFILE.width}x${PROFILE.height}`);
+  // State the SCOPE every run, not just in a comment nobody opens. A reader
+  // skimming a green result should see what it did and did not cover.
+  log(`scope: ${FRAME_CAPTURE_SURFACES[SURFACE]}`);
   if (agentVersion && !versionAtLeast(agentVersion, MIN_AGENT_VERSION)) {
     skip(
       `the box runs agent ${agentVersion}, and this arc needs ${MIN_AGENT_VERSION} or newer ` +
