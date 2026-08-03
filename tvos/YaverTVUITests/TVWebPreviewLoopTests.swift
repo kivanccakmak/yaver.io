@@ -116,6 +116,21 @@ final class TVWebPreviewLoopTests: XCTestCase {
         //
         // With that fixed the dashboard renders, and these are its real labels:
         //   Session · Tasks · Capture · Feedback · Projects · Android · Runtime
+        // WHAT ELEMENT TYPE ARE THE MENU ITEMS?
+        //
+        // The sweep reported "never focused a control matching Projects" while
+        // the oracle could plainly read "Projects | Browse & preview on the TV"
+        // off the screenshot. So the labels are there and `app.buttons` is the
+        // wrong collection — SwiftUI on tvOS does not necessarily expose a
+        // NavigationLink card as a button.
+        //
+        // These are CHEAP per-type counts, not a tree snapshot: exactly the
+        // mistake that timed the runner out a run earlier. Measure the type,
+        // then query it — do not guess a second time.
+        XCTContext.runActivity(named: "types → buttons=\(app.buttons.count) cells=\(app.cells.count) "
+            + "links=\(app.links.count) staticTexts=\(app.staticTexts.count) "
+            + "others=\(app.otherElements.count) images=\(app.images.count)") { _ in }
+
         focusAndSelect(app, label: "Projects")
         snap(app, "0001-projects")
 
@@ -162,9 +177,16 @@ final class TVWebPreviewLoopTests: XCTestCase {
         //
         // buttons is a narrow, cheap query, and on this screen every focusable
         // control is one.
-        let candidates = app.buttons.matching(match)
+        // Try the cheap collections in turn. Each is a narrow query; the
+        // expensive one (descendants(matching: .any)) is deliberately never
+        // used here — it timed the runner out.
+        let pools = [app.buttons, app.cells, app.links, app.otherElements]
         for i in 0..<steps {
-            if candidates.count > 0, candidates.element(boundBy: 0).hasFocus {
+            let focused = pools.contains { pool in
+                let hits = pool.matching(match)
+                return hits.count > 0 && hits.element(boundBy: 0).hasFocus
+            }
+            if focused {
                 XCUIRemote.shared.press(.select)
                 Thread.sleep(forTimeInterval: 2)
                 return true
