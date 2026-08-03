@@ -42,6 +42,18 @@ func (s *HTTPServer) handleProjectPreviewCapabilities(w http.ResponseWriter, r *
 	hasPaired := r.URL.Query().Get("hasPairedDevice") == "true"
 	caps := DetectProjectPreviewCapabilities(workDir, framework, hasPaired)
 
+	// ?surface= removes options this CLIENT cannot host, whatever the project
+	// supports. An Expo project genuinely offers Hermes; visionOS, tvOS,
+	// watchOS and the web dashboard have no React Native container to load a
+	// bundle into, and none of them has a USB cable. Filtering here rather than
+	// in each app is the same reason the framework rules moved into the agent:
+	// a UI-only rule is not a rule — the endpoint would still serve the option
+	// to a caller that did not filter, and every new surface would reimplement
+	// it. Unknown/omitted surface filters nothing.
+	if sfc := ParsePreviewSurface(r.URL.Query().Get("surface")); sfc != "" {
+		caps = FilterPreviewCapabilitiesForSurface(caps, sfc)
+	}
+
 	// ?probe=true asks what this box can ACTUALLY run, not just what the stack
 	// supports. Opt-in because it is slow: the fast answer stays the default so
 	// a caller that only wants `selfDevelopment` (Attach Mode's verification)
