@@ -108,6 +108,20 @@ for arg in "$@"; do
   esac
 done
 
+# Expand pass_args SAFELY under `set -u`.
+#
+# macOS ships bash 3.2, where "${empty_array[@]}" is an UNBOUND VARIABLE error
+# rather than the empty list bash 4.4+ gives you. So the documented front door
+# — `./deploy/deploy.sh npm`, which CLAUDE.md tells every human and agent to
+# use — died with "pass_args[@]: unbound variable" whenever no extra flag was
+# passed, i.e. the common case. It only worked if you happened to type one.
+# Found 2026-08-03 while cutting 1.99.400.
+#
+# `${name[@]+"${name[@]}"}` is the portable idiom used at the call sites below:
+# it expands to nothing when unset, and to the properly-quoted elements
+# otherwise. Do not "simplify" it back to a bare expansion — CI runs bash 5,
+# this laptop does not, and the laptop is where CLAUDE.md says to deploy from.
+
 run() {
   if [ "$dry_run" -eq 1 ]; then
     printf '[dry-run] cd %q &&' "$ROOT"
@@ -135,7 +149,7 @@ case "$target" in
     fi
     # Let the CLI own version bumps, clean-tree checks, logging, and release
     # commits. It already knows how to coalesce the full stack safely.
-    run yaver deploy all "${pass_args[@]}"
+    run yaver deploy all ${pass_args[@]+"${pass_args[@]}"}
     ;;
   backend|convex)
     require_deploy_boundary
@@ -159,7 +173,7 @@ case "$target" in
       echo "ERROR: yaver CLI is required for deploy target '$target'." >&2
       exit 2
     fi
-    run yaver deploy npm "${pass_args[@]}"
+    run yaver deploy npm ${pass_args[@]+"${pass_args[@]}"}
     ;;
   mcp)
     require_deploy_boundary
