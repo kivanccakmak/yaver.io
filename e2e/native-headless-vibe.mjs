@@ -177,7 +177,39 @@ async function preflightCapture() {
  */
 async function startCapture(project) {
   const boot = await api("/dev/web-preview/start", { method: "POST", body: "{}" }).catch(() => ({}));
-  const targetUrl = boot.webUrl || (boot.port ? `http://127.0.0.1:${boot.port}` : "");
+
+  // RESOLVE AN ABSOLUTE URL, and do not trust either field blindly.
+  //
+  // Measured 2026-08-03. POST /dev/web-preview/start answers:
+  //     {"ok":true,"port":19006,"webUrl":"/dev-web/"}
+  // while GET /info says the dev server is actually on :8088. Two problems in
+  // one small object:
+  //
+  //   • webUrl is AGENT-RELATIVE (a proxy path), and chromedp is being asked to
+  //     navigate to it verbatim → "Cannot navigate to invalid URL (-32000)".
+  //     Passing it straight through is what the first version of this function
+  //     did.
+  //   • port is Expo Web's CANONICAL 19006, not the port this server actually
+  //     bound. The real one is substituted (8081 has been held for 6.4 days by
+  //     another project's orphaned Metro), so a caller trusting `port` aims at
+  //     nothing.
+  //
+  // /info's devServer.port is the field that reflects what was really bound, so
+  // that wins. Capture runs ON the box, hence 127.0.0.1.
+  const info = await api("/info").catch(() => ({}));
+  const livePort = info?.devServer?.port;
+  let targetUrl = "";
+  if (livePort) targetUrl = `http://127.0.0.1:${livePort}`;
+  else if (boot.webUrl && /^https?:\/\//i.test(boot.webUrl)) targetUrl = boot.webUrl;
+  else if (boot.port) targetUrl = `http://127.0.0.1:${boot.port}`;
+
+  if (!targetUrl) {
+    skip(
+      "no dev server port could be resolved — /info reported no devServer.port and " +
+      `/dev/web-preview/start returned ${JSON.stringify(boot)}`,
+      "start one first: POST /dev/start {\"framework\":\"expo\",\"workDir\":\"…\",\"devMode\":\"web\"}",
+    );
+  }
 
   // Idempotence: the manager refuses a second session for the same project, and
   // a previous aborted run leaves one behind. Stopping first makes the arc
@@ -221,7 +253,12 @@ async function frameState(project) {
   const hash = snap?.hash;
   if (!hash) return null;
 
-  const buf = await api(`/vibing/preview/frames/${hash}`);
+  // ?project= is REQUIRED — frames are project-scoped on disk. Without it the
+  // endpoint returns {"error":"project query param required"} with HTTP 200-
+  // shaped JSON, which the old byte-walking sampler would have happily
+  // classified as a colour. The decoder refuses it by name instead; this is
+  // that guard paying for itself on its first real capture.
+  const buf = await api(`/vibing/preview/frames/${hash}?project=${encodeURIComponent(project)}`);
   try {
     const { writeFileSync, mkdtempSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
@@ -242,6 +279,8 @@ async function frameState(project) {
   return {
     color: classifyVibeColor(modalColor(samples)),
     rendered: looksRendered(samples),
+    width: img.width,
+    height: img.height,
     size: `${img.width}x${img.height}`,
     samples: samples.length,
   };
@@ -336,6 +375,34 @@ try {
   if (!baseline.rendered) {
     reason = `the preview never rendered the app. ${explainFailure(baseline)}`;
     throw new Error(reason);
+  }
+
+  // ── ASSERT THE VIEWPORT WE ACTUALLY GOT ──────────────────────────────────
+  //
+  // CLAUDE.md's closed-loop rule says to assert the viewport INSIDE the arc,
+  // "so a context that silently came back desktop-shaped fails loudly instead
+  // of passing quietly". That was written for Playwright contexts; it applies
+  // just as hard to a captured frame, and nothing was checking it.
+  //
+  // What it caught immediately, 2026-08-03: this arc requested 1920x1080,
+  // /vibing/preview/status reported 1920x1080, and the frame arrived 1280x757
+  // — the agent stored the size, echoed it back, and opened Chrome at a
+  // hardcoded 1280x900. Every TV/visionOS verdict was being reached against a
+  // desktop-shaped layout while the log said otherwise.
+  //
+  // Height gets a wider tolerance than width because a real browser viewport
+  // is shorter than the window by whatever chrome it draws; width has no such
+  // excuse.
+  if (baseline.width && baseline.height) {
+    const dw = Math.abs(baseline.width - PROFILE.width);
+    const dh = Math.abs(baseline.height - PROFILE.height);
+    if (dw > 40 || dh > 160) {
+      reason =
+        `the frame came back ${baseline.width}x${baseline.height}, but this arc drives the ` +
+        `${SURFACE} surface at ${PROFILE.width}x${PROFILE.height}. A verdict reached at the ` +
+        `wrong size is about a layout no ${SURFACE} user ever sees.`;
+      throw new Error(reason);
+    }
   }
 
   // ── Step 4: the colour turn ──────────────────────────────────────────────
