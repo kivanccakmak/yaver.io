@@ -41,7 +41,8 @@ import LaneStartupStatus from "../../src/components/LaneStartupStatus";
 import { PREVIEW_READY_SCRIPT, PREVIEW_LANE_SCRIPT } from "../../src/lib/previewReadyScript";
 import { downloadArtifact } from "../../src/lib/builds";
 import { describeConnectionStatus } from "../../src/lib/connection";
-import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../../src/lib/nativeBuild";
+import { buildFailureHint, buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../../src/lib/nativeBuild";
+import { previewWaitLine } from "../../src/lib/previewWait";
 import { isActiveDevServerStatus } from "../../src/lib/devServerState";
 import { connectionManager } from "../../src/lib/connectionManager";
 import { shouldPollDevStatus } from "../../src/lib/devStatusPolling";
@@ -705,6 +706,15 @@ export default function AppsScreen() {
   const [showWebView, setShowWebView] = useState(false);
   const [webViewKey, setWebViewKey] = useState(0);
   const [webViewLoading, setWebViewLoading] = useState(false);
+
+  // ── NARRATING THE WAIT ────────────────────────────────────────────────────
+  // sfmg sat black for two minutes on build 500 while the box was healthy and
+  // talkative. These three are what turn that rectangle into a sentence; the
+  // wording itself lives in src/lib/previewWait.ts so it is testable and so
+  // other surfaces render the same words instead of inventing their own.
+  const [previewStartedAt, setPreviewStartedAt] = useState<number | null>(null);
+  const [previewLastOutputAt, setPreviewLastOutputAt] = useState<number | null>(null);
+  const [previewNow, setPreviewNow] = useState(() => Date.now());
   const [search, setSearch] = useState("");
   // Default to the mobile view: Yaver is overwhelmingly used for mobile app
   // development, and a repo tree usually holds far more non-mobile projects
@@ -720,6 +730,12 @@ export default function AppsScreen() {
   const [loadingActions, setLoadingActions] = useState(false);
 
   // Vibing
+  /// True when Vibing was opened from a RUNNING preview, so it renders as an
+  /// overlay on top of that preview instead of as its own full-screen page.
+  /// The distinction is the whole fix: from the project list there is nothing
+  /// to preserve, from a preview there is, and destroying it was the bug.
+  const [vibingOverPreview, setVibingOverPreview] = useState(false);
+
   const [vibingState, setVibingState] = useState<{
     project: string; path: string;
     suggestions: { id: string; icon: string; label: string; desc: string; category: string; prompt: string; reasoning?: string }[];
@@ -2002,16 +2018,10 @@ export default function AppsScreen() {
       const raw = err?.message || "Could not build Hermes bundle in Yaver";
       const lower = raw.toLowerCase();
       const buildResult = err?.buildResult;
-      let hint = "";
-      if (lower.includes("did not become ready") || lower.includes("dev server")) {
-        hint = "\n\nMetro didn't start on the dev machine. Check Node.js is installed and the project has a valid package.json.";
-      } else if (buildResult?.code === "RUNTIME_FAMILY_MISMATCH" || buildResult?.code === "FRAMEWORK_VERSION_MISMATCH") {
-        hint = "\n\nYaver picked the nearest supported runtime family, but the guest app still does not match it exactly. Align the guest app to one of Yaver's supported families or switch to a native build fallback.";
-      } else if (lower.includes("hbc") || lower.includes("bytecode") || lower.includes("hermes")) {
-        hint = "\n\nHermes bytecode version mismatch between the guest app and the selected Yaver host family. Align the guest runtime to a supported family and retry.";
-      } else if (lower.includes("yaverbundleloader") || lower.includes("native module")) {
-        hint = "\n\nYaver's native bundle loader is missing from this build — update Yaver to the latest version, or run the app directly on the dev machine.";
-      } else if (lower.includes("network") || lower.includes("fetch") || lower.includes("timeout")) {
+      // One classifier, in a file a test can import. See buildFailureHint for
+      // the substring trap this replaced and the phone screenshot that proved it.
+      let hint = buildFailureHint(buildResult, raw);
+      if (!hint && (lower.includes("network") || lower.includes("fetch") || lower.includes("timeout"))) {
         hint = `\n\nYaver ${describeConnectionStatus(connectionStatus)}.`;
       }
       const title = buildResult
@@ -2048,6 +2058,44 @@ export default function AppsScreen() {
           // the rest.
           compat: buildResult,
         }, "Try to Fix");
+        return;
+      }
+      // ROUTE-TO-FIX, not a sentence describing one.
+      //
+      // The agent sends `remedy` on this 409 — a machine-readable name for the
+      // lane that DOES work. Until now the phone rendered the prose (which even
+      // says "use the browser/WebRTC preview") next to a single OK button,
+      // while both of those lanes exist as real, working buttons one screen
+      // back. That is the failure CLAUDE.md's worked example is about: a remedy
+      // string naming a control the user cannot reach from where they are.
+      //
+      // Measured on TestFlight build 500, 2026-08-03 — tapping `mobile` gave
+      // "Load Failed" + "Tamam", and the way forward was two taps away behind
+      // a dismissal.
+      const remedyLane =
+        buildResult?.remedy === "stream-over-webrtc" ? "remote-runtime" :
+        buildResult?.remedy === "browser-preview" ? "dev-server" : "";
+      if (remedyLane) {
+        Alert.alert(title, `${raw}${hint}`, [
+          { text: "Not now", style: "cancel" },
+          {
+            text: remedyLane === "remote-runtime" ? "Stream over WebRTC" : "Open browser preview",
+            // Dispatched through handleExecuteAction — the SAME function the
+            // real "WebRTC Reload" / "Browser Reload" buttons call. A second
+            // implementation here would be one more copy to drift, which is
+            // how this repo shipped three different relay-auth matchers.
+            onPress: () => {
+              void handleExecuteAction({
+                label: remedyLane === "remote-runtime" ? "WebRTC Reload" : "Browser Reload",
+                target: ".",
+                type: remedyLane,
+                framework: devStatus?.framework || "",
+                platform: Platform.OS,
+                supported: true,
+              });
+            },
+          },
+        ]);
         return;
       }
       Alert.alert(title, `${raw}${hint}`);
@@ -2141,13 +2189,28 @@ export default function AppsScreen() {
     const path = devStatus?.workDir || "";
     setWebRuntimeLogOpen(false);
     setPreviewFullScreen(false);
-    // Dismiss the preview modal FIRST. The Vibing <Modal> is a sibling
-    // declared before the presentationStyle="fullScreen" WebView <Modal>, and
-    // iOS cannot present a second modal over an already-presented full-screen
-    // one — so setting vibingState while showWebView is true flipped state but
-    // rendered nothing (the mic "did nothing"). This is why the same
-    // setVibingState works from the project list, where showWebView is false.
-    setShowWebView(false);
+
+    // DO NOT TEAR THE PREVIEW DOWN.
+    //
+    // This used to call setShowWebView(false) — for a real reason: the Vibing
+    // <Modal> is a sibling declared before the presentationStyle="fullScreen"
+    // WebView <Modal>, and iOS cannot present a second modal over an
+    // already-presented full-screen one, so setting vibingState while the
+    // preview was up flipped state and rendered nothing (the mic "did
+    // nothing"). Dismissing the preview made the mic work.
+    //
+    // But it made it work by DESTROYING what the user was looking at. You tap
+    // a microphone on your running app and your app disappears, replaced by a
+    // full-screen page of nine dev-action tiles. That is the surprise
+    // re-render CLAUDE.md forbids ("keep the last good iframe/native surface
+    // visible"), and it is a wall of inventory in answer to a one-word intent:
+    // a mic tap means "I want to say something", not "show me every action".
+    //
+    // The right shape is an OVERLAY INSIDE the preview modal — the same place
+    // the Preview logs sheet already lives, which is the proof it works. The
+    // app stays on screen behind it, so you can watch it change while you talk
+    // to it, which is the entire point of vibing on a preview.
+    setVibingOverPreview(true);
     try {
       const state = await quicClient.getVibingState(project);
       setVibingState(state || { project, path, suggestions: [], quickActions: [], history: [] });
@@ -2167,6 +2230,34 @@ export default function AppsScreen() {
   const webPreviewServerLooksReady =
     (devStatus ? isWebServedStatus(devStatus) : false) ||
     webPreviewLogs.some((line) => /\b(listening|serving on|compiled|ready|running)\b/i.test(line));
+
+  // Stamp when this preview started, and clear it when the preview closes so a
+  // second open cannot inherit the first one's elapsed time (a counter that
+  // reads "4:12 elapsed" on a preview opened four seconds ago is worse than no
+  // counter — it is a confident lie).
+  useEffect(() => {
+    if (showWebView && bundleUrl) {
+      setPreviewStartedAt((prev) => prev ?? Date.now());
+    } else {
+      setPreviewStartedAt(null);
+      setPreviewLastOutputAt(null);
+    }
+  }, [showWebView, bundleUrl]);
+
+  // Every new log line is progress. Stamping the COUNT rather than the content
+  // means a bundler that reprints the same percentage still reads as alive.
+  useEffect(() => {
+    if (webPreviewLogs.length > 0) setPreviewLastOutputAt(Date.now());
+  }, [webPreviewLogs.length]);
+
+  // Tick ONLY while something is actually being waited on. A timer that keeps
+  // running behind a loaded app is a battery cost for a number nobody reads.
+  useEffect(() => {
+    if (!showWebView || webPreviewContentLoaded || !previewStartedAt) return;
+    setPreviewNow(Date.now());
+    const id = setInterval(() => setPreviewNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [showWebView, webPreviewContentLoaded, previewStartedAt]);
 
   const runBrowserLaneDoctor = useCallback((reason: string) => {
     if (!showWebView || !bundleUrl || webPreviewContentLoaded) return;
@@ -2971,11 +3062,11 @@ export default function AppsScreen() {
       </Modal>
 
       {/* Vibing modal — AI pair programming widget */}
-      <Modal visible={!!vibingState} animationType="slide">
+      <Modal visible={!!vibingState && !vibingOverPreview} animationType="slide">
         <View style={[s.safe, { backgroundColor: c.bg }]}>
           <AppScreenHeader
             title="Vibing"
-            onBack={() => { setVibingState(null); setCustomTask(""); setVibingTaskStatus(""); setVibingTaskId(null); }}
+            onBack={() => { setVibingState(null); setVibingOverPreview(false); setCustomTask(""); setVibingTaskStatus(""); setVibingTaskId(null); }}
             style={{ paddingTop: insets.top + 8 }}
           />
           {vibingState?.project ? (
@@ -3306,6 +3397,53 @@ export default function AppsScreen() {
           {webViewLoading && !webPreviewContentLoaded && (
             <View style={[s.loadingBar, { backgroundColor: c.accent }]} />
           )}
+
+          {/* ── THE WAIT, NARRATED ────────────────────────────────────────────
+              A 3px progress bar was the ENTIRE affordance here. On build 500
+              that meant sfmg showed a solid black rectangle for two minutes
+              while the box was healthy and printing progress the whole time —
+              "the user wont feel that its going well at some stages".
+
+              Everything below is already known to the app; none of it required
+              a new request. It was simply never rendered on the surface the
+              user was looking at, only into a panel behind a tap.
+
+              previewWaitLine returns null the moment content paints, so this
+              can never cover a working app. */}
+          {(() => {
+            const wait = previewWaitLine({
+              contentLoaded: webPreviewContentLoaded,
+              startedAt: previewStartedAt,
+              lastOutputAt: previewLastOutputAt,
+              now: previewNow,
+              logs: webPreviewLogs,
+              workDir: devStatus?.workDir,
+            });
+            if (!wait || !showWebView) return null;
+            return (
+              <View pointerEvents="box-none" style={s.previewWaitWrap}>
+                <View style={s.previewWaitCard}>
+                  <ActivityIndicator size="small" color={c.accent} />
+                  <Text style={s.previewWaitTitle} numberOfLines={2}>{wait.title}</Text>
+                  <Text style={s.previewWaitDetail}>{wait.detail}</Text>
+                  {wait.stalled ? (
+                    <Text style={s.previewWaitStalled}>
+                      Quiet for a while — open Logs to see what the box is doing.
+                    </Text>
+                  ) : null}
+                  <Pressable
+                    onPress={() => setWebRuntimeLogOpen(true)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Show preview logs"
+                    style={s.previewWaitBtn}
+                  >
+                    <Ionicons name="terminal-outline" size={15} color={c.accent} />
+                    <Text style={[s.previewWaitBtnText, { color: c.accent }]}>Show logs</Text>
+                  </Pressable>
+                </View>
+              </View>
+            );
+          })()}
           {(previewFullScreen || (bundleUrl && !webPreviewContentLoaded)) && (
             <View style={[s.previewEscapeBar, { top: insets.top + 8 }]}>
               <Pressable
@@ -3536,6 +3674,91 @@ export default function AppsScreen() {
               allowsInlineMediaPlayback
             />
             )}
+            {/* ── VIBING, AS AN OVERLAY ON THE LIVE PREVIEW ──────────────────
+                Opened by the mic in the preview toolbar. It deliberately does
+                NOT show the nine dev-action tiles the full Vibing page shows:
+                the user tapped a MICROPHONE, and the honest answer to "I want
+                to say something" is a place to say it, not an inventory of
+                everything else that is possible. Ship to TestFlight, Run
+                Tests, Update Deps and the rest all still live one screen back,
+                where the user came looking for them.
+
+                The app stays rendered behind this. That is the point — you
+                watch it change while you talk to it. */}
+            {showWebView && vibingOverPreview && vibingState ? (
+              <View style={s.vibeOverlayBackdrop}>
+                <Pressable
+                  style={StyleSheet.absoluteFill}
+                  accessibilityRole="button"
+                  accessibilityLabel="Dismiss"
+                  onPress={() => { setVibingOverPreview(false); setVibingState(null); setCustomTask(""); }}
+                />
+                <View style={[s.vibeOverlaySheet, { paddingBottom: Math.max(16, insets.bottom + 12) }]}>
+                  <View style={s.previewRuntimeLogHeader}>
+                    <View style={s.previewRuntimeLogTitleRow}>
+                      <Ionicons name="mic-outline" size={18} color={c.accent} />
+                      <Text style={s.previewRuntimeLogTitle}>
+                        {vibingState.project ? `Vibe · ${vibingState.project}` : "Vibe"}
+                      </Text>
+                    </View>
+                    <Pressable
+                      onPress={() => { setVibingOverPreview(false); setVibingState(null); setCustomTask(""); }}
+                      hitSlop={10}
+                      accessibilityRole="button"
+                      accessibilityLabel="Close vibing"
+                      style={s.previewRuntimeLogClose}
+                    >
+                      <Ionicons name="close" size={18} color="#fff" />
+                    </Pressable>
+                  </View>
+
+                  {/* The turn narrates itself here, over the app it is changing,
+                      instead of on a page that replaced it. */}
+                  {vibingTaskStatus ? (
+                    <View style={[s.vibingStatus, { backgroundColor: c.accent + "11", borderColor: c.accent + "33", marginHorizontal: 12, marginTop: 10 }]}>
+                      <ActivityIndicator size="small" color={c.accent} style={{ marginTop: 2 }} />
+                      <Text style={{ color: c.textSecondary, fontSize: 13, flex: 1, lineHeight: 18 }} numberOfLines={3}>
+                        {vibingTaskStatus}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  <View style={s.vibeOverlayInputRow}>
+                    <TextInput
+                      style={s.vibeOverlayInput}
+                      value={customTask}
+                      onChangeText={setCustomTask}
+                      placeholder="What should we change?"
+                      placeholderTextColor={c.textMuted}
+                      multiline
+                      autoFocus
+                    />
+                    <Pressable
+                      onPress={async () => {
+                        if (!customTask.trim() || !vibingState) return;
+                        const prompt = customTask;
+                        setCustomTask("");
+                        try {
+                          const result = await quicClient.executeVibingSuggestion(prompt, vibingState.path);
+                          setVibingTaskId((result as any)?.taskId || null);
+                          setVibingTaskStatus("Working…");
+                        } catch (e: any) {
+                          // Never a silent no-op: a send that did not send has
+                          // to say so on the surface that accepted it.
+                          setVibingTaskStatus(`Could not start: ${e?.message || "unknown error"}`);
+                        }
+                      }}
+                      disabled={!customTask.trim()}
+                      accessibilityRole="button"
+                      accessibilityLabel="Send"
+                      style={[s.vibeOverlayGo, { opacity: customTask.trim() ? 1 : 0.4 }]}
+                    >
+                      <Text style={s.vibeOverlayGoText}>Go</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+            ) : null}
             {showWebView && !previewFullScreen && webPreviewLogs.length > 0 ? (
               <>
                 <Pressable
@@ -3890,6 +4113,25 @@ const s = StyleSheet.create({
   },
   previewRuntimeLogTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   previewRuntimeLogTitle: { color: "#fff", fontSize: 14, fontWeight: "800" },
+  // Centred, compact, and pointerEvents="box-none" on the wrapper so it never
+  // eats a tap meant for the app rendering behind it.
+  previewWaitWrap: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
+  previewWaitCard: { alignItems: "center", gap: 8, maxWidth: 340, paddingVertical: 20, paddingHorizontal: 22, borderRadius: 16, backgroundColor: "rgba(14,14,18,0.92)", borderWidth: 1, borderColor: "#26262f" },
+  previewWaitTitle: { color: "#fff", fontSize: 14, fontWeight: "700", textAlign: "center" },
+  previewWaitDetail: { color: "#9a9aa8", fontSize: 12, textAlign: "center" },
+  previewWaitStalled: { color: "#eab308", fontSize: 12, textAlign: "center", marginTop: 2 },
+  previewWaitBtn: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10, borderWidth: 1, borderColor: "#2e2e3a" },
+  previewWaitBtnText: { fontSize: 13, fontWeight: "700" },
+  // The vibing overlay sits ON the live preview — see the JSX for why it is an
+  // overlay and not a page. Backdrop is deliberately light: the app behind it
+  // is the thing the user is looking at, and dimming it to unreadable would
+  // recreate the problem of not being able to see your own app.
+  vibeOverlayBackdrop: { ...StyleSheet.absoluteFillObject, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.35)" },
+  vibeOverlaySheet: { backgroundColor: "#0d0d12", borderTopLeftRadius: 18, borderTopRightRadius: 18, borderWidth: 1, borderColor: "#23232c", borderBottomWidth: 0 },
+  vibeOverlayInputRow: { flexDirection: "row", alignItems: "flex-end", gap: 8, paddingHorizontal: 12, paddingTop: 10 },
+  vibeOverlayInput: { flex: 1, minHeight: 44, maxHeight: 120, color: "#fff", fontSize: 15, backgroundColor: "#16161c", borderRadius: 12, borderWidth: 1, borderColor: "#26262f", paddingHorizontal: 12, paddingVertical: 10 },
+  vibeOverlayGo: { paddingHorizontal: 18, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "#312e81" },
+  vibeOverlayGoText: { color: "#fff", fontSize: 15, fontWeight: "800" },
   previewRuntimeLogClose: { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
   previewRuntimeLogScroll: { maxHeight: 142 },
   previewRuntimeLogActions: {

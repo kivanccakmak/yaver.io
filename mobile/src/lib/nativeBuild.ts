@@ -77,7 +77,63 @@ export function nativeBuildFailureMessage(buildResult: any): string {
   return lines.join("\n");
 }
 
+/**
+ * The extra sentence to append under the agent's own error, or "" for none.
+ *
+ * ── Why this is a pure function in a testable file ─────────────────────────
+ *
+ * It used to be an if/else chain inline in apps.tsx, keyed off SUBSTRINGS of
+ * the agent's prose. One of its tests was `lower.includes("hermes")` — in a
+ * product whose bundle format IS Hermes, so every message in the subsystem
+ * matches it and the branch could not fail to fire.
+ *
+ * Measured on a real phone, TestFlight build 500, 2026-08-03: the agent
+ * refused a Yaver-in-Yaver build with "refusing to build a Hermes bundle of
+ * Yaver for the Yaver container… Use the browser/WebRTC preview instead" — a
+ * deliberate, correct guard. The substring matched, and the phone appended
+ * "Hermes bytecode version mismatch between the guest app and the selected
+ * Yaver host family." The user was shown two causes that cannot both be true:
+ * the build was REFUSED, so there is no bundle whose bytecode could mismatch.
+ *
+ * The agent had already sent `code` on that response and it was ignored in
+ * favour of a regex over the sentence — the "signal with no consumer" failure,
+ * and exactly why CLAUDE.md says a bare error string "forces every surface to
+ * invent a regex, and the regexes drift".
+ *
+ * So: CODES FIRST, always. The remaining substring tests are last-resort and
+ * only for shapes the agent has no code for; each is narrow enough that it
+ * cannot match a message about something else.
+ */
+export function buildFailureHint(buildResult: any, rawMessage: string): string {
+  const code = buildResult?.code;
+  const lower = (rawMessage || "").toLowerCase();
+
+  // A refusal is complete on its own. Anything appended contradicts it.
+  if (code === "YAVER_SELF_DEVELOPMENT_RECURSION") return "";
+
+  if (code === "RUNTIME_FAMILY_MISMATCH" || code === "FRAMEWORK_VERSION_MISMATCH") {
+    return "\n\nYaver picked the nearest supported runtime family, but the guest app still does not match it exactly. "
+      + "Align the guest app to one of Yaver's supported families or switch to a native build fallback.";
+  }
+  if (code === "BC_VERSION_MISMATCH") {
+    return "\n\nHermes bytecode version mismatch between the guest app and the selected Yaver host family. "
+      + "Align the guest runtime to a supported family and retry.";
+  }
+  if (lower.includes("did not become ready") || lower.includes("dev server")) {
+    return "\n\nMetro didn't start on the dev machine. Check Node.js is installed and the project has a valid package.json.";
+  }
+  if (lower.includes("yaverbundleloader")) {
+    return "\n\nYaver's native bundle loader is missing from this build — update Yaver to the latest version, "
+      + "or run the app directly on the dev machine.";
+  }
+  return "";
+}
+
 export function nativeBuildFailureTitle(buildResult: any): string {
+  // NOT a failure. Yaver declining to load Yaver into Yaver is the guard
+  // working exactly as designed, and titling it "Load Failed" tells the user
+  // something broke when nothing did.
+  if (buildResult?.code === "YAVER_SELF_DEVELOPMENT_RECURSION") return "Preview Yaver a Different Way";
   if (buildResult?.code === "NATIVE_MODULE_INCOMPATIBLE") return "Some Features Unavailable";
   if (buildResult?.code === "NATIVE_MODULE_VERSION_MISMATCH") return "Compatibility Blocked";
   if (buildResult?.code === "REACT_VERSION_MISMATCH") return "Compatibility Blocked";
