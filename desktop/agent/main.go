@@ -5176,7 +5176,11 @@ func checkAutoUpdateGated(cfg *Config, gate func(latestVersion string) updateWin
 	// returned ~1-2s later — which on a slow link looked stuck. See
 	// the "make update logs streaming better user feels stuck" bug.
 	emitAgentUpdate("queued", "Update requested — preparing")
-	emitAgentUpdate("fetch_release", "Asking GitHub for the latest release")
+	// Not "Asking GitHub" — the version now comes from npm with GitHub as the
+	// fallback (agent_version_source.go), and this string is rendered on the
+	// dashboard's update panel. A progress line that names the wrong service is
+	// a small lie that costs someone a real debugging detour later.
+	emitAgentUpdate("fetch_release", "Checking npm for the latest release")
 
 	log.Println("[auto-update] Checking for updates...")
 
