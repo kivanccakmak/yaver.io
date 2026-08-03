@@ -585,6 +585,14 @@ test.describe("vibe colour closed loop", () => {
     const profile = profileFor("mobile");
     const mobileCtx = await browser.newContext({
       ...devices[profile.playwrightDevice!],
+      // RECORD EXPLICITLY. `video: "on"` in playwright.loops.config.ts applies
+      // only to Playwright's OWN managed context (the `page` fixture) — a
+      // context created by hand, as this arc must (device descriptors are
+      // context properties), inherits none of it. So the mobile arc recorded
+      // NOTHING for its entire history while the config plainly said video was
+      // on: a false green about evidence, on the surface whose failures have
+      // been hardest to read.
+      recordVideo: { dir: "test-results/loops/" + (process.env.LOOP_RUN_ID || "mobile") + "/video" },
       // RN-web stores the session under a DIFFERENT key than the dashboard —
       // seeding the wrong one leaves the app on its login screen forever.
       storageState: undefined,
