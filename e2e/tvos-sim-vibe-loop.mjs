@@ -57,6 +57,12 @@ const RUN_DIR = new URL(`./test-results/loops/${RUN_ID}/tvos-sim/`, import.meta.
 const REPO = new URL("..", import.meta.url).pathname;
 const PROFILE = profileFor("tv");
 
+/// How much of the TV screen must be red for the PREVIEW to count as red.
+///
+/// The preview is a sub-region, not the whole screen — see the sampling block
+/// below for the measurement (0.0% at launch, 22.3% with a red preview).
+const RED_PANEL_FRACTION = Number(process.env.TV_RED_FRACTION || 0.08);
+
 const log = (m) => console.log(`[tvos-sim] ${m}`);
 const h = { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" };
 
@@ -196,14 +202,40 @@ for (const f of frames) {
   let entry = { file: f };
   try {
     const img = decodePng(readFileSync(path));
-    const samples = samplePixels(img, samplePoints, 8);
+    const samples = samplePixels(img, samplePoints, 6);
+
+    // FRACTION, NOT MODAL COLOUR — and this is not a tuning choice.
+    //
+    // The preview is a PHONE-shaped panel inside a 1920x1080 TV screen. The
+    // modal colour of the whole screen is therefore the TV's own black chrome,
+    // so a preview that is ENTIRELY RED still classifies as "black". The first
+    // full run reported exactly that: thirty frames, "colours: black", while
+    // the box's login.tsx carried three red containers and the task sat in
+    // `review`. The product had done the work; the verdict function was
+    // measuring the wrong thing.
+    //
+    // That is the failure mode vibeVerdict.ts's own header names — a test wrong
+    // in the DIRECTION OF FAILURE sends real investigations after systems that
+    // work — reproduced by using its modal-colour helper on a surface it was
+    // not written for. The helper is right for a browser arc, where the preview
+    // fills the viewport. It is wrong here.
+    //
+    // Measured on those same frames: launch screen 0.0% red, preview-showing-red
+    // 22.3%. The threshold sits well clear of both, so it cannot be tripped by
+    // Yaver's own red error chrome (a banner is a rounding error at this scale)
+    // and cannot miss a preview that genuinely turned.
+    let redCount = 0;
+    for (const px of samples) if (classifyVibeColor(px) === "red") redCount++;
+    const redFraction = samples.length ? redCount / samples.length : 0;
+
     entry = {
       ...entry,
       size: `${img.width}x${img.height}`,
       color: classifyVibeColor(modalColor(samples)),
+      redFraction: Number((redFraction * 100).toFixed(1)),
       rendered: looksRendered(samples),
     };
-    if (entry.color === "red" && entry.rendered) sawRed = true;
+    if (redFraction >= RED_PANEL_FRACTION && entry.rendered) sawRed = true;
     if (entry.rendered) lastRendered = entry;
   } catch (err) {
     entry.decodeError = err.message;
@@ -211,7 +243,7 @@ for (const f of frames) {
   timeline.push(entry);
 }
 
-log(`${frames.length} frames · colours: ${[...new Set(timeline.map((t) => t.color))].join(", ")}`);
+log(`${frames.length} frames · peak red ${Math.max(0, ...timeline.map((t) => t.redFraction || 0)).toFixed(1)}% · colours: ${[...new Set(timeline.map((t) => t.color))].join(", ")}`);
 
 let reason = "";
 if (!sawRed) {
@@ -220,7 +252,7 @@ if (!sawRed) {
   // wrong colour, and that sentence is the actual finding.
   const last = join(RUN_DIR, frames[frames.length - 1]);
   const seen = oracle.explainFrame(last, { expected: ["signed-out"] });
-  reason = `the TV never rendered a red preview (last ${lastRendered?.color ?? "nothing rendered"}). `
+  reason = `the TV never rendered a red preview (peak red ${Math.max(0, ...timeline.map((t) => t.redFraction || 0)).toFixed(1)}%, need ${(RED_PANEL_FRACTION * 100).toFixed(0)}%). `
     + (seen ? seen.reason : "the oracle read no text off the final frame");
 }
 
