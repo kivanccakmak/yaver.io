@@ -35,26 +35,53 @@ import (
 // Returns "" when nothing better than chromedp's default is found, in which
 // case the caller should NOT set an explicit ExecPath.
 func findChromePath() string {
-	// (a) Let chromedp auto-find first if a well-known binary is on PATH or in
-	// its default search locations. We only override when we can locate a
-	// Playwright Chromium, which chromedp does not know about.
-	home, _ := os.UserHomeDir()
+	// (a) A Playwright-managed Chromium, which chromedp does not know about.
+	if p := playwrightChromePath(); p != "" {
+		return p
+	}
 
-	// (b) Playwright cache globs.
+	// (b) Common binary names on PATH.
+	//
+	// EXISTENCE ONLY — this function answers "is there a browser at all", which
+	// is why doctor_browser_lane.go can use it as a cheap gate. It is NOT the
+	// right answer to "which browser should we launch": on Ubuntu both
+	// `chromium` and `chromium-browser` resolve to a confined snap that exits 1
+	// on every invocation. That question is resolveLaunchableChrome's
+	// (browser_resolve.go), which RUNS each candidate.
+	for _, name := range []string{
+		"google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+	} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+	}
+
+	// Fall back to chromedp's default discovery.
+	return ""
+}
+
+// playwrightChromePath returns a Chromium from the Playwright browser cache,
+// or "" when none is installed.
+//
+// Split out of findChromePath so the launch-probing resolver in
+// browser_resolve.go can consider it as one more CANDIDATE — subject to the
+// same `--version` test as everything else — rather than as a trusted answer.
+// An unlaunchable Playwright build must lose to a working system Chrome.
+func playwrightChromePath() string {
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return ""
+	}
 	var globs []string
 	switch runtime.GOOS {
 	case "darwin":
-		if home != "" {
-			globs = append(globs,
-				filepath.Join(home, "Library/Caches/ms-playwright/chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium"),
-				filepath.Join(home, "Library/Caches/ms-playwright/chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
-			)
+		globs = []string{
+			filepath.Join(home, "Library/Caches/ms-playwright/chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium"),
+			filepath.Join(home, "Library/Caches/ms-playwright/chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
 		}
 	default: // linux and others
-		if home != "" {
-			globs = append(globs,
-				filepath.Join(home, ".cache/ms-playwright/chromium-*/chrome-linux/chrome"),
-			)
+		globs = []string{
+			filepath.Join(home, ".cache/ms-playwright/chromium-*/chrome-linux/chrome"),
 		}
 	}
 	for _, g := range globs {
@@ -65,17 +92,6 @@ func findChromePath() string {
 			}
 		}
 	}
-
-	// (c) Common binary names on PATH.
-	for _, name := range []string{
-		"google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
-	} {
-		if p, err := exec.LookPath(name); err == nil {
-			return p
-		}
-	}
-
-	// Fall back to chromedp's default discovery.
 	return ""
 }
 

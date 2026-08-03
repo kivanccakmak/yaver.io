@@ -13,7 +13,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -800,65 +799,64 @@ func (bm *BrowserManager) GetDOM(id string) (string, error) {
 //
 // The binary check is deliberate — we look before we tell someone to install.
 func chromeLaunchRemedy(err error) string {
-	msg := strings.ToLower(err.Error())
-	installed := ""
-	for _, c := range []string{"google-chrome", "chromium", "chromium-browser"} {
-		if p, e := exec.LookPath(c); e == nil {
-			installed = p
+	// A launch just failed, so whatever is cached is suspect — re-probe, and
+	// report what each candidate actually DID rather than what its path looks
+	// like. The previous version guessed "SNAP build" from `strings.Contains(p,
+	// "/snap/")`, which is false for /usr/bin/chromium-browser: the very binary
+	// that produced this error on the owner's box.
+	invalidateChromeResolution()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	chosen, attempts := resolveLaunchableChrome(ctx)
+
+	working := ""
+	for _, a := range attempts {
+		if a.OK {
+			working = a.Path
 			break
 		}
 	}
-	switch {
-	case strings.Contains(msg, "temporary directory") || strings.Contains(msg, "no such file or directory"):
-		if strings.Contains(installed, "/snap/") {
-			return " — Chrome IS installed (" + installed + ") but it is the SNAP build, which is confined and " +
-				"cannot create its temp dir when launched by a daemon. Install the deb/rpm build " +
-				"(apt install chromium-browser from a non-snap source, or Google Chrome) and it will work."
-		}
-		if installed != "" {
-			return " — Chrome IS installed (" + installed + "); this is a TEMP-DIRECTORY failure, not a missing " +
-				"browser. Check TMPDIR exists and is writable by the agent's user, then retry. Do NOT reinstall Chrome."
-		}
-		return " (install Chrome/Chromium)"
-	case installed != "":
-		return " — Chrome IS installed (" + installed + "), so this is not a missing browser. " +
-			"Read the error above for the real cause before reinstalling anything."
-	default:
-		return " (install Chrome/Chromium — none found on PATH)"
+
+	if len(attempts) == 0 {
+		return " (install Chrome/Chromium — no candidate binary found on PATH)"
 	}
+
+	if working != "" {
+		// Something on this box launches. So the failure is NOT "no browser",
+		// and telling the user to install one would send them after the wrong
+		// thing — the mistake that cost a whole session on 2026-07-19.
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "temporary directory") || strings.Contains(msg, "no such file or directory") {
+			return fmt.Sprintf(" — %s LAUNCHES fine on this box, so this is a TEMP-DIRECTORY failure, not a missing "+
+				"browser. Check TMPDIR exists and is writable by the agent's user. Do NOT reinstall Chrome. Tried: %s",
+				working, chromeAttemptsSummary(attempts))
+		}
+		return fmt.Sprintf(" — %s LAUNCHES fine on this box, so this is not a missing browser. "+
+			"Read the error above for the real cause before reinstalling anything. Tried: %s",
+			working, chromeAttemptsSummary(attempts))
+	}
+
+	// Nothing launched. The attempts already carry the specific remedy per
+	// candidate (confined snap → install an unconfined build; not executable →
+	// permissions), which is strictly better than one guessed sentence.
+	if chosen != "" {
+		return fmt.Sprintf(" — no Chrome on this box could be launched. %s", chromeAttemptsSummary(attempts))
+	}
+	return fmt.Sprintf(" (install Chrome/Chromium) — %s", chromeAttemptsSummary(attempts))
 }
 
-// preferredChromePath resolves a launchable Chrome, DEPRIORITISING snap.
+// preferredChromePath resolves the Chrome that ACTUALLY LAUNCHES on this box.
 //
-// A snap-packaged Chromium is confined: launched from a daemon it fails with
-// "cannot create temporary directory for the root file system", and no amount
-// of retrying or reinstalling fixes it. It is still returned as a last resort —
-// a confined browser that might work in a user session beats no browser — but
-// never ahead of a deb/rpm/Playwright build that certainly does.
+// It used to deprioritise any path containing "/snap/", which was a proxy for
+// "confined" and, like every proxy in this repo's incident list, drifted:
+// `/usr/bin/chromium-browser` on Ubuntu is a 2020 shell script that redirects
+// into the snap. No "/snap/" in the path, same "cannot create temporary
+// directory" failure — measured on the owner's box 2026-08-03, where it exited
+// 1 exactly like /snap/bin/chromium while /usr/bin/google-chrome ran fine.
 //
-// Falls back to findChromePath() (which knows the Playwright cache layout) so
-// this never regresses a machine that only has that.
+// So the decision now runs `--version` on each candidate and believes the exit
+// code. See browser_resolve.go for the full incident and the ordering.
 func preferredChromePath() string {
-	candidates := []string{
-		"google-chrome", "google-chrome-stable",
-		"chromium-browser", "chromium",
-	}
-	var snapFallback string
-	for _, c := range candidates {
-		p, err := exec.LookPath(c)
-		if err != nil || p == "" {
-			continue
-		}
-		if strings.Contains(p, "/snap/") {
-			if snapFallback == "" {
-				snapFallback = p
-			}
-			continue // keep looking for an unconfined one
-		}
-		return p
-	}
-	if p := findChromePath(); p != "" {
-		return p
-	}
-	return snapFallback
+	path, _ := resolveLaunchableChrome(context.Background())
+	return path
 }

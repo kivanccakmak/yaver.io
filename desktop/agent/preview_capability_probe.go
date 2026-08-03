@@ -111,37 +111,57 @@ func ProbePreviewCapability(ctx context.Context, strategy PreviewStrategy, workD
 
 // probeBrowserLaunches actually STARTS the browser.
 //
-// `--version` is the cheapest execution that proves the binary runs. Checking
-// PATH would have passed for the jammy `chromium-browser` snap stub, which is
-// on PATH and cannot launch — exactly the false green this probe exists to
-// catch.
+// ─── The false RED this used to produce ────────────────────────────────────
+//
+// The previous version searched `chromium` first and RETURNED on the first
+// candidate that failed. Measured on the owner's ubuntu-4gb box, 2026-08-03:
+//
+//	chromium              /snap/bin/chromium         exit=1  (confined snap)
+//	chromium-browser      /usr/bin/chromium-browser  exit=1  (snap redirector)
+//	google-chrome         /usr/bin/google-chrome     exit=0  Chrome 150
+//
+// It stopped at line 1 and reported "Stream over WebRTC — not supported",
+// with a remedy telling the user to install a chromium deb. A perfectly good
+// Google Chrome was sitting on the same box, already installed, already
+// working. The product told the user their machine could not do something it
+// could do, and pointed them at an install they did not need.
+//
+// That is the mirror image of the bug this file's header is about: not "the
+// inventory says yes while the operation says no", but "one operation said no,
+// so we never asked the others". A search that abandons after the first
+// failure is not a probe, it is a guess with extra steps.
+//
+// It now shares resolveLaunchableChrome with the capture path (browser.go), so
+// the capability report and the thing it reports ON can never disagree about
+// which browser this box has — and the detail names every candidate tried.
 func probeBrowserLaunches(ctx context.Context) ProbeResult {
 	start := time.Now()
 	r := ProbeResult{Name: "browser", Blocking: true}
-	for _, bin := range []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable"} {
-		path, err := exec.LookPath(bin)
-		if err != nil {
-			continue
-		}
-		cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-		out, err := exec.CommandContext(cctx, path, "--version").CombinedOutput()
-		cancel()
-		if err != nil {
-			// On PATH but cannot execute — the snap-stub signature.
-			r.Detail = fmt.Sprintf("%s is on PATH but failed to launch (%v). On Ubuntu jammy "+
-				"`chromium-browser` is a transitional SNAP package that cannot run in a container — "+
-				"install the real `chromium` deb instead", bin, err)
+
+	path, attempts := resolveLaunchableChrome(ctx)
+	for _, a := range attempts {
+		if a.OK {
+			r.OK = true
+			r.Detail = fmt.Sprintf("%s — %s", a.Path, a.Detail)
 			r.Took = time.Since(start)
 			r.TookMs = r.Took.Milliseconds()
 			return r
 		}
-		r.OK = true
-		r.Detail = strings.TrimSpace(string(out))
-		r.Took = time.Since(start)
-		r.TookMs = r.Took.Milliseconds()
-		return r
 	}
-	r.Detail = "no browser found — chrome-webrtc previews need chromium installed in the workspace image"
+
+	if len(attempts) == 0 {
+		r.Detail = "no browser found — chrome-webrtc previews need Chrome or Chromium installed in the workspace image. " +
+			"Install one with `apt-get install -y google-chrome-stable`."
+	} else {
+		// Every candidate was RUN and every one failed. Report all of them:
+		// "chromium is broken" sends a user to reinstall chromium, while the
+		// full list shows the shape of the problem (all confined snaps → the
+		// box needs an unconfined build).
+		r.Detail = fmt.Sprintf("no Chrome on this box could be launched. %s", chromeAttemptsSummary(attempts))
+		if path != "" {
+			r.Detail += fmt.Sprintf(" (best candidate was %s)", path)
+		}
+	}
 	r.Took = time.Since(start)
 	r.TookMs = r.Took.Milliseconds()
 	return r
