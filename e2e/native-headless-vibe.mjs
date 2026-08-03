@@ -264,6 +264,30 @@ async function startCapture(project) {
   return targetUrl;
 }
 
+/**
+ * ARTIFACTS — a 25-minute run that leaves nothing behind is not reviewable.
+ *
+ * The browser arcs already keep video + trace ON PASS, into
+ * `e2e/test-results/loops/<runId>/`, grouped by LOOP_RUN_ID — and they keep it
+ * for passes precisely because on a pixel verdict the footage IS the evidence
+ * (playwright.loops.config.ts; artifacts were being deleted by the next run
+ * until aa93ff76b).
+ *
+ * This arc kept ONE frame, in a temp dir, and only so the oracle could read it
+ * on failure. A passing tvOS run — the thing everyone wants to see — left
+ * nothing at all. Same convention now applies here: every sampled frame, a
+ * manifest of the timeline, and a timelapse when ffmpeg is around.
+ *
+ * The frames are the evidence; the video is a convenience. If ffmpeg is
+ * missing, the run says so and the frames still stand on their own — an
+ * optional encoder must never be the reason a result is unreviewable.
+ */
+const RUN_ID = process.env.LOOP_RUN_ID || new Date().toISOString().replace(/[:.]/g, "-");
+const RUN_DIR = new URL(`./test-results/loops/${RUN_ID}/${SURFACE}/`, import.meta.url).pathname;
+
+let frameSeq = 0;
+const frameTimeline = [];
+
 // The newest frame, kept on disk so the text oracle can read the SAME pixels the
 // colour verdict judged. Reading a different capture would let the two disagree
 // about what was on screen, which is worse than having no text at all.
@@ -291,13 +315,23 @@ async function frameState(project) {
   // classified as a colour. The decoder refuses it by name instead; this is
   // that guard paying for itself on its first real capture.
   const buf = await api(`/vibing/preview/frames/${hash}?project=${encodeURIComponent(project)}`);
+  // savedFile is per-iteration, NOT derived from lastFramePath at manifest time.
+  // If a write fails, lastFramePath still points at the PREVIOUS frame, and a
+  // manifest row that names a file holding different pixels is worse than a row
+  // with no file at all — it is a record that quietly lies about the evidence.
+  let savedFile = null;
   try {
-    const { writeFileSync, mkdtempSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
+    const { writeFileSync, mkdirSync } = await import("node:fs");
     const { join } = await import("node:path");
-    if (!lastFramePath) lastFramePath = join(mkdtempSync(join(tmpdir(), "yaver-frame-")), "frame.png");
-    writeFileSync(lastFramePath, Buffer.from(buf));
-  } catch { /* persisting is a convenience for the oracle, never the verdict */ }
+    mkdirSync(RUN_DIR, { recursive: true });
+    // Every sampled frame, numbered so the sequence is the story. lastFramePath
+    // points at the newest so the oracle reads exactly what the verdict judged.
+    const name = `${String(++frameSeq).padStart(4, "0")}.png`;
+    const path = join(RUN_DIR, name);
+    writeFileSync(path, Buffer.from(buf));
+    lastFramePath = path;
+    savedFile = name;
+  } catch { /* persisting is a convenience, never the verdict */ }
 
   let img;
   try {
@@ -308,7 +342,7 @@ async function frameState(project) {
     return { color: "unknown", rendered: false, decodeError: err.message };
   }
   const samples = samplePixels(img, samplePoints, 8);
-  return {
+  const state = {
     color: classifyVibeColor(modalColor(samples)),
     rendered: looksRendered(samples),
     width: img.width,
@@ -316,6 +350,15 @@ async function frameState(project) {
     size: `${img.width}x${img.height}`,
     samples: samples.length,
   };
+  frameTimeline.push({
+    seq: frameSeq,
+    at: new Date().toISOString(),
+    file: savedFile,
+    color: state.color,
+    rendered: state.rendered,
+    size: state.size,
+  });
+  return state;
 }
 
 async function waitForColor(want, project) {
@@ -469,6 +512,71 @@ try {
 // PIXELS is the only pass; SILENT — a failure with no stated cause — is the only
 // verdict that means the harness itself let us down.
 const { verdict, reason: verdictReason } = verdictFor({ reachedTarget, reverted, reason });
+
+await writeRunArtifacts(verdict, verdictReason);
+
 console.log(`\n${SURFACE}: ${verdict} — ${verdictReason}`);
-if (lastFramePath) console.log(`[${SURFACE}] last frame: ${lastFramePath}`);
 process.exit(verdict === "PIXELS" ? 0 : 1);
+
+/**
+ * Write the manifest and, when ffmpeg is available, a timelapse.
+ *
+ * Runs on PASS as well as failure. On a pixel verdict the footage is the
+ * evidence — "it went red then black" is a claim until someone can watch it.
+ */
+async function writeRunArtifacts(verdict, verdictReason) {
+  if (!frameTimeline.length) return;
+  try {
+    const { writeFileSync, mkdirSync, existsSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    mkdirSync(RUN_DIR, { recursive: true });
+
+    writeFileSync(
+      join(RUN_DIR, "manifest.json"),
+      JSON.stringify(
+        {
+          surface: SURFACE,
+          runId: RUN_ID,
+          box: BOX,
+          project: PROJECT,
+          profile: { width: PROFILE.width, height: PROFILE.height, why: PROFILE.why },
+          verdict,
+          reason: verdictReason,
+          frames: frameTimeline,
+        },
+        null,
+        2,
+      ),
+    );
+
+    // A timelapse, not a real-time video: frames arrive every ~20s over up to
+    // 24 minutes, so 4 fps turns the whole arc into a few seconds you can
+    // actually watch. -pix_fmt yuv420p because without it the MP4 will not play
+    // in QuickTime or a browser <video>, which would make the artifact useless
+    // on exactly the surfaces people review from.
+    const { execFileSync } = await import("node:child_process");
+    let ffmpeg = "";
+    for (const c of ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]) {
+      if (existsSync(c)) { ffmpeg = c; break; }
+    }
+    if (!ffmpeg) {
+      console.log(`[${SURFACE}] artifacts: ${RUN_DIR} (${frameTimeline.length} frames + manifest.json)`);
+      console.log(`[${SURFACE}] no ffmpeg — install it for a timelapse; the frames are the evidence either way`);
+      return;
+    }
+    const mp4 = join(RUN_DIR, "timelapse.mp4");
+    execFileSync(ffmpeg, [
+      "-y", "-loglevel", "error",
+      "-framerate", "4",
+      "-pattern_type", "glob", "-i", join(RUN_DIR, "*.png"),
+      "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", // h264 needs even dimensions
+      "-c:v", "libx264", "-pix_fmt", "yuv420p",
+      mp4,
+    ], { timeout: 120_000 });
+    console.log(`[${SURFACE}] artifacts: ${RUN_DIR}`);
+    console.log(`[${SURFACE}]   ${frameTimeline.length} frames · manifest.json · timelapse.mp4`);
+  } catch (err) {
+    // An artifact failure must never change a verdict.
+    console.log(`[${SURFACE}] (artifacts partially written: ${err.message.slice(0, 120)})`);
+  }
+}
