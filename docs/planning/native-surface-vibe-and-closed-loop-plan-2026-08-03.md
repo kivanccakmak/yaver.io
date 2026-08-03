@@ -102,3 +102,46 @@ not prose (`reason_codes.go`). Tonight's additions are the immediate backlog:
    visionOS's archive failed on two `FailureSignals.swift` (2026-08-03).
 4. Simulators left booted cost real CPU; this Mac hit load 270 with five of them
    plus a build. Shut them down in teardown.
+
+---
+
+## Addendum — "can tvOS/visionOS only use WebRTC?" (measured 2026-08-03)
+
+**No. And they cannot use WebRTC today at all.**
+
+| Check | Result |
+|---|---|
+| Agent has a WebRTC lane | **yes** — `ExecutionModeNativeWebRTC` ("native-webrtc"), `remote_runtime.go` |
+| tvOS has a WebRTC client | **no** — zero `RTCPeer`/`WebRTC` references under `tvos/` |
+| visionOS has one | **no** — same, and it shares the tvOS client |
+| tvOS can render a remote stream today | **yes** — `DroidStreamView` polls `/droid/frame`; `AgentClient` also implements the headless capture flow (`/vibing/preview/snapshot` → `/frames/{hash}`) |
+
+So the shape the goal describes — *"ubuntu-4gb streams the browser lane to the
+TV/headset"* — **already exists**, as FRAMES over HTTP rather than WebRTC. The
+box runs the browser (headless Chrome), captures it, and the native surface
+renders the frames. WebRTC would be a latency/bandwidth upgrade to that same
+lane, not a prerequisite for the closed loop, and adding an RTC stack to two
+surfaces is strictly more work than using the transport they already speak.
+
+**What actually blocked it was not the transport.** `/vibing/preview/start`
+returned 400 because chromedp picked `/snap/bin/chromium`, which is confined and
+cannot create its temp dir under a daemon — on a box that also had
+`/usr/bin/google-chrome`. Fixed in `bcb49b8d3` (prefer an unconfined binary,
+always set ExecPath) and `6da522a11` (stop advising "install Chrome" to someone
+who has three).
+
+### The capability gap this exposes
+
+`/project/preview-capabilities` reports what the BOX can do. Nothing reports what
+the CLIENT can do — so no surface can ask "can I actually render this lane?"
+before choosing one. A TV that cannot decode WebRTC and a headset that can look
+identical to the agent today.
+
+**Next (phase 2b):** extend that endpoint into a negotiation — the client sends
+its surface + supported render modes (`frames`, `webrtc`, `hermes`, `iframe`),
+the agent answers with the lanes BOTH sides support, and the picker offers only
+those. That is the "inventory says yes / operation says no" rule applied to
+transports, and it is what would have made this session's dead end
+self-evident: the TV would have said "frames only", the box would have said
+"frames unavailable — Chrome cannot launch", and the loop would have named its
+blocker in one call instead of a 400.
