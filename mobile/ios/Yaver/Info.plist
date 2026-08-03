@@ -107,8 +107,27 @@
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
+		<!-- NSAllowsLocalNetworking is DELIBERATELY ABSENT.
+		     PROVEN BY EXPERIMENT on visionOS, 2026-08-03: Apple IGNORES
+		     NSAllowsArbitraryLoads when NSAllowsLocalNetworking (or
+		     ...InWebContent / ...ForMedia) is also present. Setting both does NOT
+		     mean "local networking PLUS everything else" — it means the
+		     arbitrary-loads flag is INERT and only the RFC1918 exemption applies,
+		     which is exactly what blocks 100.64.0.0/10 (RFC 6598 CGNAT, where
+		     Tailscale and Yaver Mesh live).
+
+		     This explains the 2026-07-18 refutation directly: NSAllowsArbitraryLoads
+		     WAS verified inside the shipped archive and the phone still could not
+		     connect. It was present and inert at the same time, so the verification
+		     was true and meaningless together.
+
+		     The experiment: the visionOS app displayed "App Transport Security
+		     policy requires the use of a secure connection" with BOTH keys set, and
+		     read the box's real host / platform / agent version with ONLY
+		     NSAllowsArbitraryLoads. Nothing else changed between the two runs.
+
+		     ArbitraryLoads alone already permits local networking, so removing the
+		     narrower key loses nothing. -->
 	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Yaver provides Bluetooth access to apps you run for testing.</string>

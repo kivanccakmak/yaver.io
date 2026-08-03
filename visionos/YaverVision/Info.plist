@@ -60,8 +60,7 @@
 	     blanket arbitrary-loads exception. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
+		<!-- NSAllowsLocalNetworking is DELIBERATELY ABSENT — see below. -->
 		<!-- MEASURED 2026-08-03, off the headset's own screen in the visionOS
 		     simulator (e2e/visionos-sim-loop.mjs, first run):
 
@@ -90,6 +89,15 @@
 		     (pass-through, device-key auth) is untouched. -->
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
+		<!-- AND WHY NSAllowsLocalNetworking IS NOT HERE.
+		     Apple ignores NSAllowsArbitraryLoads when NSAllowsArbitraryLoadsInWebContent,
+		     NSAllowsArbitraryLoadsForMedia, or NSAllowsLocalNetworking is also
+		     present. Setting both therefore does NOT mean "local networking plus
+		     everything else" — it means the arbitrary-loads flag is INERT and
+		     only the local-networking exemption applies, which is exactly the
+		     RFC1918-only behaviour that blocks 100.64/10.
+		     ArbitraryLoads alone already permits local networking, so nothing is
+		     lost by dropping the narrower key. -->
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Yaver connects to your development machine on your local network.</string>

@@ -41,9 +41,9 @@
         ],
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true,
-          "NSAllowsLocalNetworking": true
+          "_comment_NSAllowsLocalNetworking": "REMOVED DELIBERATELY 2026-08-03: Apple IGNORES NSAllowsArbitraryLoads when NSAllowsLocalNetworking is present, so setting both left the arbitrary-loads flag INERT and kept 100.64/10 (Tailscale/Mesh CGNAT) blocked. Proven by experiment on visionOS. expo prebuild regenerates Info.plist from this file, so the two MUST agree or the next prebuild silently undoes the fix."
         },
-        "NSMicrophoneUsageDescription": "Yaver uses your microphone for voice input \u2014 send tasks by speaking instead of typing.",
+        "NSMicrophoneUsageDescription": "Yaver uses your microphone for voice input — send tasks by speaking instead of typing.",
         "NSSpeechRecognitionUsageDescription": "Yaver uses speech recognition to transcribe your voice into task descriptions.",
         "NSCameraUsageDescription": "Yaver uses your camera for photos and running apps that need camera access.",
         "NSPhotoLibraryUsageDescription": "Yaver uses your photo library to attach screenshots and images to coding tasks.",
