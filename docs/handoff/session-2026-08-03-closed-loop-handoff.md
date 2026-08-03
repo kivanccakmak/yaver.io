@@ -207,9 +207,32 @@ you to hear about it.
    ceiling, not a 304.
 3. **`yaver announce-release [version] [--device <id>]`.** The
    `desiredAgentVersion` path had implemented the receiving half for months with
-   **no Go caller anywhere**. Verified against the live fleet: 6/6 devices, and
-   ubuntu-4gb claimed it ~40 s later. `build-cli-native.sh` now prints the
-   ordered sequence — **release → npm → announce** — and why the order matters.
+   **no Go caller anywhere**. `build-cli-native.sh` now prints the ordered
+   sequence — **release → npm → announce** — and why the order matters.
+
+### The proof, end to end
+
+1.99.403 was rolled out by its own mechanism. No ssh:
+
+```
+$ yaver announce-release latest
+  ✓ Ofis2 · linux · linux-2 · mac-2 · mac-mini · simkab-Vostro-3888
+  Announced latest to 6/6 device(s).
+
+# ubuntu-4gb, <25s later, unattended:
+[auto-update:replace]  Replacing running binary at .../1.99.402/linux-arm64/yaver
+[auto-update:restart]  Updated to v1.99.403 — restarting
+[auto-update]          latest is v1.99.403 (via npm)      ← the new version source
+[auto-update]          Already up-to-date (v1.99.403)
+```
+
+Compare with the morning of the same day: **three manual `npm i -g` over ssh.**
+That is what "the product now has an update path" means concretely.
+
+Caught while reading that output: the progress line still said *"Asking GitHub
+for the latest release"* one line above *"latest is v1.99.403 (via npm)"* — two
+adjacent lines naming two services for one lookup, and that string renders on
+the dashboard's update panel. Fixed (223b192c8); it ships in the next release.
 
 **Still open:**
 
