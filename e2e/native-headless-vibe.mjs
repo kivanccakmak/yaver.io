@@ -95,6 +95,11 @@ async function startCapture(project) {
   return targetUrl;
 }
 
+// The newest frame, kept on disk so the text oracle can read the SAME pixels the
+// colour verdict judged. Reading a different capture would let the two disagree
+// about what was on screen, which is worse than having no text at all.
+let lastFramePath = "";
+
 /** Step 4 — the frame a TV would be rendering, as pixels. */
 async function frameColor(project) {
   const snap = await api("/vibing/preview/snapshot", {
@@ -104,6 +109,13 @@ async function frameColor(project) {
   const hash = snap?.hash;
   if (!hash) return null;
   const buf = await api(`/vibing/preview/frames/${hash}`);
+  try {
+    const { writeFileSync, mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    if (!lastFramePath) lastFramePath = join(mkdtempSync(join(tmpdir(), "yaver-frame-")), "frame.png");
+    writeFileSync(lastFramePath, Buffer.from(buf));
+  } catch { /* persisting is a convenience for the oracle, never the verdict */ }
   const px = Array.from(new Uint8Array(buf));
   const triples = [];
   for (let i = 0; i + 2 < px.length; i += 3) triples.push([px[i], px[i + 1], px[i + 2]]);
@@ -119,6 +131,37 @@ async function waitForColor(want, project) {
     await sleep(20_000);
   }
   return { ok: false, color: last };
+}
+
+/**
+ * THE TEXT ORACLE — why this arc can reach NAMED, not only PIXELS/SILENT.
+ *
+ * A colour verdict says the screen changed. It cannot say WHY a screen that did
+ * not change is stuck: "expo server ready — loading page…", a runner refusal, a
+ * sign-in wall and a blank preview are all just "black". On surfaces with a DOM
+ * the harness reads the text; tvOS and visionOS have none, so until now their
+ * only failing verdict was SILENT.
+ *
+ * Apple's Vision framework turns any FRAME into text on-device in ~500ms, free
+ * and offline, which makes the ladder surface-agnostic instead of DOM-agnostic.
+ * See docs/architecture/APPLE_VISION_TEXT_ORACLE.md.
+ *
+ * OPPORTUNISTIC, NEVER LOAD-BEARING (§4, the Linux non-regression contract):
+ * macOS-only, and its absence must never fail an arc — it only ever ADDS a
+ * reason to a failure the colour verdict already reached.
+ */
+async function readFrameText(pngPath) {
+  if (process.platform !== "darwin") return null;
+  const helper = new URL("../desktop/agent/screenread/screenread", import.meta.url).pathname;
+  const { existsSync } = await import("node:fs");
+  if (!existsSync(helper)) return null;
+  try {
+    const { execFileSync } = await import("node:child_process");
+    const out = JSON.parse(execFileSync(helper, [pngPath], { encoding: "utf8", timeout: 30_000 }));
+    return out.ok ? out.blocks.map((b) => b.text).join(" | ") : null;
+  } catch {
+    return null; // the oracle failing is not the product failing
+  }
 }
 
 const log = (m) => console.log(`[${SURFACE}] ${m}`);
@@ -139,6 +182,11 @@ try {
   );
   const red = await waitForColor("red", PROJECT);
   log(`red: ${red.ok ? "PASS" : `FAIL (last ${red.color})`}`);
+  if (!red.ok && lastFramePath) {
+    // SILENT → NAMED: say what the screen was actually showing.
+    const seen = await readFrameText(lastFramePath);
+    if (seen) log(`the frame said: ${seen.slice(0, 300)}`);
+  }
   failed ||= !red.ok;
 
   log("reverting as a SEPARATE task (the new-task render path, same as web)…");

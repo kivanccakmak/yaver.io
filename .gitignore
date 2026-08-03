@@ -119,3 +119,6 @@ skills-lock.json
 /webrtc-proof/
 /e2e/.yaver/
 sdk/feedback/swift/.build/
+
+# Vision text-oracle helper: built + ad-hoc signed locally, never committed
+desktop/agent/screenread/screenread
