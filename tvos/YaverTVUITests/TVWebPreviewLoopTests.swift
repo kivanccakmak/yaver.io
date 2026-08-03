@@ -44,7 +44,7 @@ final class TVWebPreviewLoopTests: XCTestCase {
 
     /// Where to leave screenshots for the orchestrator to classify.
     private var shotDir: String {
-        ProcessInfo.processInfo.environment["YAVER_SHOT_DIR"] ?? NSTemporaryDirectory()
+        env("YAVER_SHOT_DIR", NSTemporaryDirectory())
     }
     private var boxHost: String { env("YAVER_BOX_HOST", "100.75.123.78") }
     private var boxPort: Int { Int(env("YAVER_BOX_PORT", "18080")) ?? 18080 }
@@ -54,8 +54,26 @@ final class TVWebPreviewLoopTests: XCTestCase {
     /// the vibe, so this must outlast a runner turn plus a rebuild.
     private var captureSeconds: Int { Int(env("YAVER_CAPTURE_SECONDS", "420")) ?? 420 }
 
+    /// Read configuration from the environment.
+    ///
+    /// xcodebuild does NOT forward its own environment to the test process. It
+    /// forwards ONLY variables prefixed `TEST_RUNNER_`, with the prefix
+    /// stripped. Setting `YAVER_BOX_TOKEN=…` on the xcodebuild command line
+    /// therefore reaches nothing, the token reads empty, and setUpWithError
+    /// skips — while the suite reports "Executed 1 test, with 1 test skipped
+    /// and 0 failures" and xcodebuild EXITS 0.
+    ///
+    /// Measured on the first run of this test, 2026-08-03. A skipped arc that
+    /// exits 0 is a false green with a receipt, so both halves are handled:
+    /// callers pass TEST_RUNNER_YAVER_*, and the orchestrator treats "skipped"
+    /// as not-a-pass rather than trusting the exit code.
+    ///
+    /// Both spellings are accepted so a human running this by hand from Xcode
+    /// (where the scheme's environment IS forwarded verbatim) does not have to
+    /// know the rule.
     private func env(_ k: String, _ fallback: String) -> String {
-        let v = ProcessInfo.processInfo.environment[k] ?? ""
+        let e = ProcessInfo.processInfo.environment
+        let v = e[k] ?? e["TEST_RUNNER_" + k] ?? ""
         return v.isEmpty ? fallback : v
     }
 
