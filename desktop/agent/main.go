@@ -728,6 +728,14 @@ func main() {
 	// swift_cmd.go + remote_builder_cmd.go land.
 	case "update", "self-update", "upgrade":
 		runManualUpdate(os.Args[2:])
+	// `yaver announce-release [version]` tells owned boxes a release exists so
+	// they take it on their next heartbeat instead of waiting out the 1-2h
+	// auto-update cycle. WIRED HERE ON PURPOSE, and verified by running it: this
+	// repo shipped `yaver diagnose` as a function nobody could invoke (1.99.33),
+	// and the update-request path this calls has been a producer with no
+	// consumer since it landed.
+	case "announce-release", "announce":
+		runAnnounceRelease(os.Args[2:])
 	case "self":
 		// `yaver self heal [--apply ...]` reconciles every yaver
 		// binary on the box (apt, brew, npm, ~/.yaver/bin/<v>/, manual)

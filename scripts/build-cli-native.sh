@@ -192,5 +192,23 @@ ls -la
 
 echo
 echo "== Artifacts ready in $OUT =="
-echo "Create the release with:"
-echo "  gh release create v$VERSION --title \"Yaver CLI v$VERSION\" --generate-notes $OUT/*"
+echo "Finish the release with, IN THIS ORDER:"
+echo
+echo "  1. gh release create v$VERSION --title \"Yaver CLI v$VERSION\" --generate-notes $OUT/*"
+echo "  2. (cd cli && npm publish)"
+echo "  3. yaver announce-release latest"
+echo
+# ORDER IS LOAD-BEARING, and step 3 is not optional.
+#
+# 1 before 2: cli/src/postinstall.js downloads the platform tarballs from the
+# GitHub release with NO RETRY, so a package live on npm before its release
+# exists is a hard-failing install for every user in that window.
+#
+# 3 at all: without it, owned boxes wait out the 1-2h auto-update cycle and the
+# real update mechanism is the maintainer ssh-ing in. That happened three times
+# on 2026-08-03 alone — the box sat on 1.99.397 while the fix was in 1.99.399,
+# then on 1.99.398 while 1.99.400 shipped. `announce-release` sets desired state
+# on every owned device; each box claims it on its next heartbeat (~30s) and
+# decides for itself WHEN to apply, so a running coding turn is not killed.
+echo "  Step 3 is not optional: without it, boxes wait out the 1-2h auto-update"
+echo "  cycle and the real update mechanism is you, over ssh."
