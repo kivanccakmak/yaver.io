@@ -219,11 +219,41 @@ func (bm *BrowserManager) OpenSessionWithProxy(id string, headful bool, proxyURL
 // saved clearance until it expires. Always sets anti-automation flags + a real desktop UA so a
 // headless session looks less like a bot. See YAVER_ACCESS_LAYER.md (F2/F3 compose).
 func (bm *BrowserManager) OpenSessionWithProfile(id string, headful bool, proxyURL, profileDir string) error {
+	return bm.OpenSessionWithViewport(id, headful, proxyURL, profileDir, 0, 0)
+}
+
+// OpenSessionWithViewport is OpenSessionWithProfile with an explicit window
+// size. Zero width/height keeps the historical 1280x900 default.
+//
+// ─── Why this exists: a reported size that was never applied ───────────────
+//
+// Measured 2026-08-03. The tvOS arc asked to capture at 1920x1080,
+// /vibing/preview/status cheerfully reported `profile: {width: 1920, height:
+// 1080}` — and the actual PNG came back 1280x757, because the size was stored
+// on the session, echoed to the caller, and then thrown away here.
+//
+// That is the house failure mode wearing a new hat: the inventory says yes,
+// the operation says no. And it is worse than a cosmetic mismatch. The whole
+// point of web/lib/surfaceViewports.ts is that a closed loop driving the RIGHT
+// app at the WRONG size tests a layout no user ever sees and reports green
+// about it. Every TV, visionOS and watch verdict this pipeline has ever
+// produced was reached against a desktop-shaped window while claiming
+// otherwise — a loop that cannot be trusted about the one thing it exists to
+// check.
+func (bm *BrowserManager) OpenSessionWithViewport(id string, headful bool, proxyURL, profileDir string, width, height int) error {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
 
 	if _, exists := bm.sessions[id]; exists {
 		return fmt.Errorf("browser session %q already exists", id)
+	}
+
+	// Bounded for the same reason VibePreviewManager.Start bounds them: a bad
+	// value must not ask Chrome for a 100k-wide canvas. Out-of-range falls back
+	// to the default rather than clamping silently to something the caller did
+	// not ask for.
+	if width < 200 || width > 3840 || height < 200 || height > 2160 {
+		width, height = 1280, 900
 	}
 
 	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -234,7 +264,7 @@ func (bm *BrowserManager) OpenSessionWithProfile(id string, headful bool, proxyU
 		chromedp.Flag("hide-scrollbars", !headful),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"), // F2 anti-detect
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
-		chromedp.WindowSize(1280, 900),
+		chromedp.WindowSize(width, height),
 	)
 	// PICK THE BINARY DELIBERATELY, ALWAYS — not only when a profile dir is set.
 	//

@@ -152,6 +152,14 @@ type VibeClipRecord struct {
 // VibePreviewManager actually depends on. Lets tests inject a fake.
 type vibePreviewBrowserGetter interface {
 	OpenSession(id string, headful bool) error
+	// OpenSessionWithViewport opens at a SPECIFIC window size.
+	//
+	// Added 2026-08-03 because Start's Width/Height were stored on the session
+	// and echoed back to callers while the browser was opened at a hardcoded
+	// 1280x900 — /vibing/preview/status said 1920x1080 and the PNG was
+	// 1280x757. A capture at the wrong size makes every TV/visionOS/watch
+	// verdict a statement about a layout no user of that surface ever sees.
+	OpenSessionWithViewport(id string, headful bool, proxyURL, profileDir string, width, height int) error
 	Navigate(id, url string) (*BrowserActionResult, error)
 	Screenshot(id string) (*BrowserActionResult, error)
 	CloseSession(id string) error
@@ -345,7 +353,11 @@ func (m *VibePreviewManager) Start(opts VibePreviewStartOpts) (*VibePreviewSessi
 	now := m.nowFn()
 	browserID := fmt.Sprintf("vibe-preview-%s-%d", sanitizeBranchName(opts.Project), now.UnixNano()%1_000_000)
 
-	if err := m.browser.OpenSession(browserID, false); err != nil {
+	// Open at the profile's size, not at whatever the browser layer defaults to
+	// — the caller's requested viewport is the whole point of the profile, and
+	// reporting it without applying it is a false green (see the interface note
+	// on OpenSessionWithViewport).
+	if err := m.browser.OpenSessionWithViewport(browserID, false, "", "", profile.Width, profile.Height); err != nil {
 		return nil, fmt.Errorf("open browser: %w", err)
 	}
 	if _, err := m.browser.Navigate(browserID, opts.TargetURL); err != nil {

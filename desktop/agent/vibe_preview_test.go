@@ -36,6 +36,11 @@ type fakeBrowser struct {
 	navErr   error
 	shotErr  error
 	openedID string
+	// The viewport the session was actually opened with. Recorded so a test can
+	// prove the requested size REACHED the browser, rather than only that it
+	// came back in the API response.
+	openedWidth  int
+	openedHeight int
 }
 
 func newFakeBrowser(blobs ...[]byte) *fakeBrowser {
@@ -51,6 +56,19 @@ func (f *fakeBrowser) OpenSession(id string, headful bool) error {
 	f.opens++
 	f.openedID = id
 	return nil
+}
+
+func (f *fakeBrowser) OpenSessionWithViewport(id string, headful bool, proxyURL, profileDir string, width, height int) error {
+	f.mu.Lock()
+	f.openedWidth, f.openedHeight = width, height
+	f.mu.Unlock()
+	return f.OpenSession(id, headful)
+}
+
+func (f *fakeBrowser) viewport() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.openedWidth, f.openedHeight
 }
 
 func (f *fakeBrowser) Navigate(id, url string) (*BrowserActionResult, error) {
@@ -400,4 +418,44 @@ func pollUntil(t *testing.T, maxMs int, cond func() bool, msg string) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("%s (waited %d ms)", msg, maxMs)
+}
+
+// TestVibePreviewAppliesRequestedViewport — the size a caller asks for must
+// reach the BROWSER, not merely the API response.
+//
+// Measured on ubuntu-4gb, 2026-08-03: the tvOS arc requested 1920x1080,
+// /vibing/preview/status reported profile {1920, 1080}, and the captured PNG
+// was 1280x757. The value was stored on the session, echoed back, and dropped
+// — chromedp was opened at a hardcoded 1280x900.
+//
+// Asserting the response alone would have passed throughout that entire bug,
+// which is why this asserts what the browser was OPENED with. Revert
+// vibe_preview.go to m.browser.OpenSession(browserID, false) and this fails.
+func TestVibePreviewAppliesRequestedViewport(t *testing.T) {
+	fb := newFakeBrowser([]byte("frame-1"))
+	m := NewVibePreviewManager(fb)
+	m.SetDiskRoot(t.TempDir())
+	defer m.StopAll()
+
+	sess, err := m.Start(VibePreviewStartOpts{
+		Project:   "tv",
+		TargetURL: "http://127.0.0.1:8088",
+		Mode:      VibePreviewModeSummaryOnly,
+		Width:     1920,
+		Height:    1080,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	w, h := fb.viewport()
+	if w != 1920 || h != 1080 {
+		t.Fatalf("browser opened at %dx%d, but 1920x1080 was requested — a reported viewport that was never applied is a false green", w, h)
+	}
+	// And the response must agree with what was applied, so the two can never
+	// drift apart again in the other direction.
+	if sess.Profile.Width != w || sess.Profile.Height != h {
+		t.Fatalf("session reports %dx%d but the browser was opened at %dx%d",
+			sess.Profile.Width, sess.Profile.Height, w, h)
+	}
 }
