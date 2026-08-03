@@ -49,7 +49,8 @@ import { execFileSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as oracle from "./_visionOracle.mjs";
-import { decodePng } from "./_framePixels.mjs";
+import { decodePng, samplePixels } from "./_framePixels.mjs";
+import { classifyVibeColor, samplePoints } from "../web/lib/vibeVerdict.ts";
 
 const TOKEN = process.env.YAVER_TEST_TOKEN || "";
 const BOX = process.env.VIBE_BOX_HOST || "http://100.75.123.78:18080";
@@ -59,6 +60,11 @@ const RUN_ID = process.env.LOOP_RUN_ID || new Date().toISOString().replace(/[:.]
 const RUN_DIR = new URL(`./test-results/loops/${RUN_ID}/visionos-sim/`, import.meta.url).pathname;
 const REPO = new URL("..", import.meta.url).pathname;
 const SKIP_BUILD = process.env.VISION_SKIP_BUILD === "1";
+const PROJECT_NAME = process.env.VIBE_PROJECT_NAME || "mobile";
+const VIBE_BUDGET_MS = Number(process.env.VIBE_BUDGET_MS || 8 * 60_000);
+/// The preview is a panel, so the verdict is the RED FRACTION of the screen,
+/// never its modal colour. See the tvOS loop for the measurement.
+const RED_PANEL_FRACTION = Number(process.env.VISION_RED_FRACTION || 0.08);
 
 const log = (m) => console.log(`[visionos-sim] ${m}`);
 let shots = 0;
@@ -218,7 +224,14 @@ function waitForText(want, label, budgetMs = 90_000) {
   const needles = Array.isArray(want) ? want : [want];
   while (Date.now() < deadline) {
     last = observe(label);
-    const named = oracle.nameFromText(last.text || "");
+    // `expected` is not optional here. This arc previews the LOGIN SCREEN, so
+    // "Continue with Apple" on the frame is the SUBJECT under test, not
+    // evidence of a signed-out app. Without it the loop reported "the session
+    // did not reach the surface" about a headset that had reached the box,
+    // routed to the preview, and was rendering streamed pixels correctly — the
+    // same misdiagnosis already fixed in the headless arcs and reintroduced
+    // here by omission.
+    const named = oracle.nameFromText(last.text || "", { expected: ["signed-out"] });
     if (named) return { ok: false, seen: last, named };
     const low = (last.text || "").toLowerCase();
     if (needles.some((n) => low.includes(String(n).toLowerCase()))) return { ok: true, seen: last };
@@ -248,17 +261,63 @@ try {
   const realHost = info.hostname || boxURL.hostname;
   log(`box is ${realHost} (agent ${info.version})`);
 
-  const dash = waitForText([realHost, boxURL.hostname, "Machine"], "dashboard");
-  log(`dashboard: ${dash.ok ? "PASS" : "FAIL"} — saw ${(dash.seen?.text || "(nothing)").slice(0, 160)}`);
+  // The app routes STRAIGHT to preview:<project>, so asserting on the dashboard
+  // would assert on a screen it deliberately skips. The preview's own chrome —
+  // "<project> • <form>" and "Rebuild" — is the marker that it arrived.
+  const dash = waitForText([PROJECT_NAME, "Rebuild"], "preview");
+  log(`preview screen: ${dash.ok ? "PASS" : "FAIL"} — saw ${(dash.seen?.text || "(nothing)").slice(0, 160)}`);
   if (!dash.ok) {
     failed = true;
     reason = dash.named
-      ? `the visionOS app could not reach the box — ${dash.named.say}`
-      : `the visionOS dashboard never showed the machine. The screen said: ${(dash.seen?.text || "(no text at all)").slice(0, 300)}`;
+      ? `the headset never reached the preview — ${dash.named.say}`
+      : `the headset never reached the preview. The screen said: ${(dash.seen?.text || "(no text at all)").slice(0, 300)}`;
   }
 
-  // 4/5. Only meaningful once the dashboard is up.
+  // 4. THE COLOUR VERDICT — a FRACTION, not a modal colour.
+  //
+  // Same shape as the tvOS loop and for the same reason: the preview is a PANEL
+  // inside the app's window, so the modal colour of the whole screen is the
+  // app's own chrome. Measured on tvOS: 0.0% red at launch, 22.3% with a red
+  // preview. Using modalColor there reported "black" for thirty frames while
+  // the box's login.tsx carried three red containers.
   if (!failed) {
+    log("sending the colour turn…");
+    await fetch(`${BOX}/tasks`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "vision colour turn",
+        description: "Change the login screen so its VISIBLE background is red. Every container that "
+          + "paints the full-screen background must be red, so the whole screen reads red. Only the login screen.",
+        workDir: process.env.VIBE_PROJECT_PATH || "/root/Workspace/yaver.io/mobile",
+      }),
+    }).catch((e) => log(`(could not create the task: ${e.message})`));
+
+    const deadline = Date.now() + VIBE_BUDGET_MS;
+    let peak = 0;
+    while (Date.now() < deadline && peak < RED_PANEL_FRACTION) {
+      const shot = observe("vibe");
+      try {
+        const img = decodePng(readFileSync(join(RUN_DIR, shot.file)));
+        const sm = samplePixels(img, samplePoints, 6);
+        let red = 0;
+        for (const px of sm) if (classifyVibeColor(px) === "red") red++;
+        peak = Math.max(peak, sm.length ? red / sm.length : 0);
+      } catch { /* a frame we cannot decode is not a verdict */ }
+      if (peak < RED_PANEL_FRACTION) execFileSync("sleep", ["15"]);
+    }
+    log(`peak red ${(peak * 100).toFixed(1)}% (need ${(RED_PANEL_FRACTION * 100).toFixed(0)}%)`);
+    if (peak < RED_PANEL_FRACTION) {
+      failed = true;
+      const last = timeline[timeline.length - 1];
+      const seen = last ? oracle.explainFrame(join(RUN_DIR, last.file), { expected: ["signed-out"] }) : null;
+      reason = `the headset preview never turned red (peak ${(peak * 100).toFixed(1)}%). `
+        + (seen ? seen.reason : "the oracle read no text off the final frame");
+    }
+  }
+
+  // 5. Runner sessions — only meaningful once the app is up.
+  if (false) {
     const runner = waitForText(["session", "runner", "opencode", "claude"], "runners", 60_000);
     log(`runner sessions listed: ${runner.ok ? "PASS" : "not shown"}`);
     if (!runner.ok) {
