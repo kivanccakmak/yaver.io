@@ -62,6 +62,34 @@
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<!-- MEASURED 2026-08-03, off the headset's own screen in the visionOS
+		     simulator (e2e/visionos-sim-loop.mjs, first run):
+
+		       "Couldn't reach 100.75.123.78: The resource could not be loaded
+		        because the App Transport Security policy requires the use of a
+		        secure connection."
+
+		     NSAllowsLocalNetworking above exempts RFC1918 + link-local +
+		     .local. It does NOT exempt 100.64.0.0/10 — that is RFC 6598 shared
+		     address space (CGNAT), and BOTH overlays live there: Tailscale on
+		     100.64/10 and Yaver Mesh on 100.96/12. So every plaintext request
+		     to a box reached over either overlay failed -1022 BEFORE A PACKET
+		     LEFT THE DEVICE, and no amount of box-side debugging could have
+		     found it.
+
+		     ATS has no CIDR-range exception — NSExceptionDomains takes
+		     hostnames, not networks — so an overlay address cannot be allowed
+		     narrowly. mobile/ios/Yaver/Info.plist already carries the same flag
+		     for the same reason; this brings visionOS in line rather than
+		     inventing a policy.
+
+		     This does NOT weaken the security boundary. Authentication is
+		     unchanged: the same bearer token, validated by the agent, over the
+		     same lane. ATS governs whether the OS permits cleartext to a host,
+		     not who may talk to the agent — and the relay/agent contract
+		     (pass-through, device-key auth) is untouched. -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Yaver connects to your development machine on your local network.</string>
