@@ -17,6 +17,29 @@ struct VisionDashboardView: View {
     @State private var loading = false
     @State private var reloadingMode: String?
     @State private var showAddBox = false
+
+    /// Open the headset directly on a screen instead of the dashboard.
+    ///
+    /// Same key and same values as tvOS (`yaver.tv.startAt`) ON PURPOSE: both
+    /// surfaces read it from UserDefaults, both are driven by the same closed
+    /// loop, and one vocabulary is one thing to learn. Values: "" (normal),
+    /// "projects", "preview:<projectName>".
+    ///
+    /// The tvOS half documents why this exists rather than walking the UI —
+    /// short version, its tile grid is width-adaptive so no press count is
+    /// stable. A headset has the same problem for a stronger reason: there is
+    /// no remote at all, and driving gaze-and-pinch from a test is not a thing
+    /// XCUITest can do reliably. Routing by name is the honest mechanism, and
+    /// it is also what a user wants — "put my project in front of me".
+    @AppStorage("yaver.tv.startAt") private var startAt: String = ""
+    @State private var routedFromStartAt = false
+
+    /// Both "projects" and "preview:<name>" enter through Projects. Matching by
+    /// EQUALITY here was a real regression on tvOS: adding the deeper value
+    /// silently stopped the first hop and the app just sat on its dashboard.
+    private var routesToProjects: Bool {
+        startAt == "projects" || startAt.hasPrefix("preview:")
+    }
     @State private var showSession = false
     @State private var logTask: Task<Void, Never>?
     @State private var devLog: [String] = []
@@ -36,6 +59,19 @@ struct VisionDashboardView: View {
             }
             .navigationTitle("Yaver")
             .toolbar { toolbar }
+            // Programmatic route from `yaver.tv.startAt` — see the property.
+            // Guarded so it fires once and only with a box selected: routing
+            // into Projects with no machine renders an empty screen, which
+            // reads as a broken deep link rather than "pick a box first".
+            .navigationDestination(isPresented: $routedFromStartAt) { ProjectsView() }
+            .onChange(of: store.selectedBox?.id) { _, id in
+                guard id != nil, routesToProjects, !routedFromStartAt else { return }
+                routedFromStartAt = true
+            }
+            .onAppear {
+                guard store.selectedBox != nil, routesToProjects, !routedFromStartAt else { return }
+                routedFromStartAt = true
+            }
             .sheet(isPresented: $showAddBox) { AddBoxView() }
             .sheet(isPresented: $showSession) { VisionSessionView() }
         }

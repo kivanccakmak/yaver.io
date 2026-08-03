@@ -167,6 +167,10 @@ sh(`xcrun simctl terminate ${simUDID} ${BUNDLE_ID} 2>/dev/null || true`);
 execFileSync("xcrun", [
   "simctl", "launch", simUDID, BUNDLE_ID,
   "-yaver.tv.token", TOKEN,
+  // Route straight to the project's preview, same key and values as tvOS.
+  // Neither surface can be driven to it reliably by input: tvOS has a
+  // width-adaptive grid, and a headset has no remote at all.
+  "-yaver.tv.startAt", `preview:${process.env.VIBE_PROJECT_NAME || "mobile"}`,
   "-yaver.tv.boxes", `"${boxJSON.replace(/"/g, '\\"')}"`,
   "-yaver.tv.selectedBox", "closed-loop-box",
 ], { stdio: "pipe" });
