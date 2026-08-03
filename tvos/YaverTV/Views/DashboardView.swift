@@ -14,7 +14,15 @@ struct DashboardView: View {
     ///
     /// Same class of configuration as `yaver.tv.selectedBox` and
     /// `yaver.tv.boxes` above it — read from UserDefaults, so the argument
-    /// domain sets it too. Values: "" (normal), "projects".
+    /// domain sets it too. Values: "" (normal), "projects",
+    /// "preview:<projectName>".
+    ///
+    /// "preview:<name>" routes THROUGH here to Projects, which then continues
+    /// the route to that project (ProjectsView.startAt). Matching this key by
+    /// EQUALITY against "projects" was a real regression: adding the deeper
+    /// value silently stopped the first hop, the app stayed on the dashboard,
+    /// and the screenshots showed a tile grid where a preview was expected.
+    /// A route with two segments has to match on its prefix, not its whole.
     ///
     /// This is a ROUTE, not a test hook, and it earns its place twice:
     ///
@@ -36,6 +44,11 @@ struct DashboardView: View {
     ///     coordinates is not a test that can be trusted.
     @AppStorage("yaver.tv.startAt") private var startAt: String = ""
     @State private var routedFromStartAt = false
+
+    /// Both "projects" and "preview:<name>" enter through Projects.
+    private var routesToProjects: Bool {
+        startAt == "projects" || startAt.hasPrefix("preview:")
+    }
 
     var body: some View {
         NavigationStack {
@@ -114,11 +127,11 @@ struct DashboardView: View {
             // read as a broken deep link rather than as "pick a box first".
             .navigationDestination(isPresented: $routedFromStartAt) { ProjectsView() }
             .onChange(of: store.selectedBox?.id) { _, id in
-                guard id != nil, startAt == "projects", !routedFromStartAt else { return }
+                guard id != nil, routesToProjects, !routedFromStartAt else { return }
                 routedFromStartAt = true
             }
             .onAppear {
-                guard store.selectedBox != nil, startAt == "projects", !routedFromStartAt else { return }
+                guard store.selectedBox != nil, routesToProjects, !routedFromStartAt else { return }
                 routedFromStartAt = true
             }
             .sheet(isPresented: $showPicker) { MachinePickerView() }
