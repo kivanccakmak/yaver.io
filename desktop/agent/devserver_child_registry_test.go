@@ -274,3 +274,71 @@ func TestDevChildIdentity_DifferentStartTokenIsSpared(t *testing.T) {
 		t.Fatal("a record whose start time does not match the live process was accepted — that is the PID-reuse kill")
 	}
 }
+
+// TestReaper_DoesNotKillThisAgentsOwnChildren — the custodian re-runs this
+// sweep on a TIMER, so by then the registry holds children this agent started
+// and is still using.
+//
+// Measured on ubuntu-4gb, 2026-08-03, minutes after the identity fix shipped:
+//
+//   [custodian:dev-children] pid 51855 · :19006 — a expo-web left by a previous
+//   agent was still holding port 19006, so this machine looked busier than it was
+//
+// It was not left by a previous agent. It was that agent's own expo-web,
+// alive, serving the preview a tvOS closed loop was watching — and the sweep
+// killed it, repeatedly, which is why the TV kept showing "expo web
+// unavailable" seconds after the port had answered 200.
+//
+// The identity fix did not cause this so much as UNMASK it: while the "npx"
+// needle never matched, nothing was ever reaped, so the missing generation
+// check cost nothing. A guard that starts working after a long time asleep can
+// turn a dormant bug into an active one.
+//
+// Remove the AgentBoot check in reapOrphanedDevChildren and this fails.
+func TestReaper_DoesNotKillThisAgentsOwnChildren(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// A live process this "agent" owns, recorded the way a real spawn records it.
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+
+	RecordDevChild(devChildRecord{
+		PID: cmd.Process.Pid, Port: 19006, Kind: "expo-web",
+		Match: "sleep,30", WorkDir: t.TempDir(),
+	})
+
+	// THE INVARIANT IS "NOT CONSIDERED", NOT "SURVIVED".
+	//
+	// The first version of this test asserted OutcomeFixed plus a live pid, and
+	// PASSED against the regression — because a `sleep` started by a test is
+	// not a process-group leader (real dev children are, via setProcGroup), so
+	// the group-kill missed and the outcome came back `needs-human`:
+	//
+	//   could not stop orphaned expo-web pid 70745 on :19006 — no such process
+	//
+	// The sweep had still DECIDED our own child was an orphan and tried to kill
+	// it; only the test's stand-in failed to die. Asserting on the outcome let a
+	// working regression through. Assert on the decision instead: a child of
+	// this agent must never appear in the findings at all.
+	findings := reapOrphanedDevChildren(time.Now())
+	for _, f := range findings {
+		if strings.Contains(f.Subject, fmt.Sprint(cmd.Process.Pid)) {
+			t.Fatalf("the sweep treated a child THIS agent started as an orphan (%v): %s", f.Outcome, f.Action)
+		}
+	}
+	// And it must stay in the registry — a spared record that gets dropped can
+	// never be reaped later, when it really is an orphan.
+	kept := loadDevChildren()
+	found := false
+	for _, r := range kept {
+		if r.PID == cmd.Process.Pid {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("our own child was dropped from the registry, so a future agent could never reap it")
+	}
+}

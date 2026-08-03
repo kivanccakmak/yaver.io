@@ -98,7 +98,34 @@ type devChildRecord struct {
 
 	WorkDir string `json:"workDir"` // for the log line, so the operator knows whose it was
 	Started string `json:"startedAt"`
+
+	// AgentBoot identifies the agent PROCESS that spawned this child, and it is
+	// what makes "orphan" mean anything at all.
+	//
+	// Without it the registry cannot tell a child of a PREVIOUS agent from one
+	// this agent started thirty seconds ago — and that distinction is the whole
+	// premise of reaping. It did not matter while identity was broken (the
+	// "npx" needle never matched, so nothing was ever reaped). The moment
+	// identity started working, the CUSTODIAN — which re-runs this sweep
+	// periodically, not only at startup — began killing the running dev server:
+	//
+	//   [custodian:dev-children] pid 51855 · :19006 — a expo-web left by a
+	//   previous agent was still holding port 19006
+	//
+	// It was not left by a previous agent. It was this agent's, alive, serving
+	// the preview a TV was watching. Fixing the identity check turned a dormant
+	// bug into an active one — the risk every time a guard starts working after
+	// a long time asleep.
+	//
+	// Empty on records written before this field existed; those are treated as
+	// previous-generation, which is what they almost certainly are.
+	AgentBoot string `json:"agentBoot,omitempty"`
 }
+
+// agentBootID is unique per agent process. It only has to differ from what the
+// previous generation wrote, so pid + start-nanos is ample and needs no
+// persistence of its own.
+var agentBootID = fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
 
 var devChildRegistryMu sync.Mutex
 
@@ -156,6 +183,7 @@ func RecordDevChild(rec devChildRecord) {
 	if rec.Started == "" {
 		rec.Started = time.Now().UTC().Format(time.RFC3339)
 	}
+	rec.AgentBoot = agentBootID
 
 	// ── PROVE THE NEEDLE MATCHES NOW, OR IT NEVER WILL ────────────────────────
 	//
@@ -369,6 +397,13 @@ func reapOrphanedDevChildren(now time.Time) []CustodianFinding {
 	var findings []CustodianFinding
 	var keep []devChildRecord
 	for _, r := range recs {
+		// OURS IS NOT AN ORPHAN. The custodian re-runs this sweep on a timer, so
+		// by then the registry holds children THIS agent started and is still
+		// using. Killing those is not reaping, it is sabotage — see AgentBoot.
+		if r.AgentBoot != "" && r.AgentBoot == agentBootID {
+			keep = append(keep, r)
+			continue
+		}
 		subject := fmt.Sprintf("pid %d · :%d", r.PID, r.Port)
 		argv := processArgv(r.PID)
 		if argv == "" {
