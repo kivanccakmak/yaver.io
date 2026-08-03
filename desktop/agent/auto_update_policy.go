@@ -95,8 +95,16 @@ func forcedAutoUpdateConfig(cfg *Config) *Config {
 // conditional request answering 304 does not count against it. So an hourly
 // check with an ETag is cheaper than a 6-hourly one without: the poll that
 // matters is the one that finds nothing, and that one should be free.
+// The bounds are named constants, not literals inside the function, because
+// the last retune (6-12h → 1-2h, a1f94a25e) changed the function and left its
+// own guard asserting the old range — so TestAutoUpdateCheckIntervalIsJittered
+// was failing from the moment that commit landed. A test that restates a
+// number instead of importing it will drift away from the code every time.
+const (
+	autoUpdateCheckMin    = 1 * time.Hour
+	autoUpdateCheckSpread = 1 * time.Hour
+)
+
 func autoUpdateCheckInterval() time.Duration {
-	const min = 1 * time.Hour
-	const spread = 1 * time.Hour
-	return min + time.Duration(rand.Int63n(int64(spread)))
+	return autoUpdateCheckMin + time.Duration(rand.Int63n(int64(autoUpdateCheckSpread)))
 }

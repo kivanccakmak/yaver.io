@@ -3241,6 +3241,7 @@ func runServe(args []string) {
 	// call (2026-07-17) is that convergence wins. The cost is real and
 	// worth naming: applying an update restarts the agent, so a task
 	// running at that moment dies with it.
+	registerDefaultUpdateBusyProbes(taskMgr)
 	go func() {
 		timer := time.NewTimer(autoUpdateCheckInterval())
 		defer timer.Stop()
@@ -3249,15 +3250,24 @@ func runServe(args []string) {
 			case <-ctx.Done():
 				return
 			case <-timer.C:
+				next := autoUpdateCheckInterval()
 				if shouldAutoUpdate(cfg) {
-					if n := taskMgr.GetRunningTaskCount(); n > 0 {
-						log.Printf("[auto-update] Periodic check — %d task(s) running; a new version will restart the agent and end them", n)
-					} else {
-						log.Println("[auto-update] Periodic check (agent idle)...")
+					log.Println("[auto-update] Periodic check...")
+					var deferred bool
+					checkAutoUpdateGated(cfg, func(latest string) updateWindowDecision {
+						d := globalDeferredUpdates.Decide(time.Now(), latest, collectUpdateBusyReasons(), updateDeferralCeiling)
+						deferred = !d.Apply
+						return d
+					})
+					// Held back: look again in MINUTES, not on the 1-2h
+					// cadence. The update is only waiting for a quiet moment,
+					// and a box that goes idle at 12:01 should not sit stale
+					// until 13:00 for no reason.
+					if deferred {
+						next = updateBusyRetryInterval()
 					}
-					checkAutoUpdate(cfg)
 				}
-				timer.Reset(autoUpdateCheckInterval())
+				timer.Reset(next)
 			}
 		}
 	}()
@@ -5135,7 +5145,20 @@ func updateRepoForLog() string { return updateRepo() }
 
 // checkAutoUpdate checks for a newer release on GitHub and self-updates the binary.
 // Returns silently if auto-update is disabled or if already up-to-date.
-func checkAutoUpdate(cfg *Config) {
+func checkAutoUpdate(cfg *Config) { checkAutoUpdateGated(cfg, nil) }
+
+// checkAutoUpdateGated is checkAutoUpdate with an optional window gate.
+//
+// The gate is consulted AFTER a newer version has been resolved and BEFORE
+// anything disruptive runs. Order matters both ways: resolving a version is a
+// cheap HTTP GET that interrupts nobody, and doing it first is what lets a
+// surface say "v1.99.403 is ready, it will install when your task finishes"
+// instead of "an update may or may not exist and we didn't look".
+//
+// gate == nil means "apply immediately" — the attended paths (`yaver update`,
+// POST /agent/update, a remote update request). Making those wait for idle
+// would be the product overruling an explicit instruction from the owner.
+func checkAutoUpdateGated(cfg *Config, gate func(latestVersion string) updateWindowDecision) {
 	if !shouldAutoUpdate(cfg) {
 		return
 	}
@@ -5205,6 +5228,31 @@ func checkAutoUpdate(cfg *Config) {
 	}
 
 	emitAgentUpdate("check", "New version available: v%s (current: v%s)", latestVersion, version)
+
+	// ── MAY WE RESTART RIGHT NOW? ────────────────────────────────────────────
+	//
+	// Everything past this point downloads, replaces the binary and re-execs,
+	// which ENDS whatever the box is doing. Until 2026-08-03 the periodic path
+	// logged that it was about to do exactly that and did it anyway:
+	//
+	//   "[auto-update] Periodic check — %d task(s) running; a new version will
+	//    restart the agent and end them"
+	//
+	// See agent_update_idle.go for why "only when idle" (the pre-2026-07-17
+	// behaviour) is equally wrong, and why defer-with-a-ceiling is the rule
+	// that serves both.
+	if gate != nil {
+		d := gate(latestVersion)
+		if !d.Apply {
+			log.Printf("[auto-update] %s", d.Reason)
+			emitAgentUpdate("deferred", "%s", d.Reason)
+			return
+		}
+		if d.Code == updateWindowForced {
+			log.Printf("[auto-update] %s", d.Reason)
+			emitAgentUpdate("check", "%s", d.Reason)
+		}
+	}
 
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH

@@ -83,8 +83,12 @@ func TestForcedAutoUpdateConfigHandlesNil(t *testing.T) {
 // differ. A constant would phase-lock the fleet onto one GitHub API
 // burst per release — the thing the jitter exists to prevent.
 func TestAutoUpdateCheckIntervalIsJittered(t *testing.T) {
-	const min = 6 * time.Hour
-	const max = 12 * time.Hour
+	// Derived from the code's own constants, never restated. The previous
+	// version hard-coded 6h/12h and went red the moment the interval was
+	// retuned to 1-2h — a guard that has to be edited alongside the thing it
+	// guards is a guard that will be stale.
+	const min = autoUpdateCheckMin
+	const max = autoUpdateCheckMin + autoUpdateCheckSpread
 
 	seen := make(map[time.Duration]bool)
 	for i := 0; i < 200; i++ {

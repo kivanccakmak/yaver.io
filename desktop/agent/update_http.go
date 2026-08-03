@@ -17,9 +17,30 @@ type agentUpdateStatus struct {
 	AutoUpdateEnabled bool   `json:"autoUpdateEnabled"`
 	Repo              string `json:"repo"`
 	Updating          bool   `json:"updating"`
+
+	// Why an available update has not installed itself.
+	//
+	// A producer with no consumer is not shipped (CLAUDE.md), and "an update
+	// exists, auto-update is on, and nothing is happening" is exactly the kind
+	// of silence a user reads as broken. These are that signal's consumer half:
+	// a surface can render "v1.99.403 will install when your 2 running tasks
+	// finish" instead of a version number with no explanation.
+	//
+	// Empty when nothing is being held back.
+	Deferred       bool               `json:"deferred,omitempty"`
+	DeferredReason string             `json:"deferredReason,omitempty"`
+	DeferredCode   string             `json:"deferredCode,omitempty"`
+	DeferredBusy   []updateBusyReason `json:"deferredBusy,omitempty"`
+	// WillInstallBy is when the deferral ceiling expires and the update applies
+	// regardless. Lets a surface promise an outer bound rather than "eventually".
+	WillInstallBy string `json:"willInstallBy,omitempty"`
 }
 
 var runForcedAgentUpdate = func() {
+	// An ATTENDED update: the owner asked for it now, by hand. It is not gated
+	// on idle — see checkAutoUpdateGated. Clearing the tracker stops the
+	// automatic path from continuing to report a hold that no longer exists.
+	globalDeferredUpdates.Clear()
 	cfg, _ := LoadConfig()
 	checkAutoUpdate(forcedAutoUpdateConfig(cfg))
 }
@@ -61,6 +82,21 @@ func buildAgentUpdateStatus(cfg *Config, updating bool) (*agentUpdateStatus, err
 	latestSv := "v" + latest
 	if semver.IsValid(currentSv) && semver.IsValid(latestSv) {
 		status.UpdateAvailable = semver.Compare(latestSv, currentSv) > 0
+	}
+
+	// Report a hold ONLY while it is still true. The tracker keeps the last
+	// decision so a surface polling between ticks still gets an answer, but a
+	// stale "waiting for your tasks" on an idle box would be its own small lie.
+	if d, ok := globalDeferredUpdates.Snapshot(); ok && !d.Apply && status.UpdateAvailable {
+		if len(collectUpdateBusyReasons()) > 0 {
+			status.Deferred = true
+			status.DeferredReason = d.Reason
+			status.DeferredCode = d.Code
+			status.DeferredBusy = d.Busy
+			if !d.ForceAt.IsZero() {
+				status.WillInstallBy = d.ForceAt.UTC().Format(time.RFC3339)
+			}
+		}
 	}
 	return status, nil
 }
