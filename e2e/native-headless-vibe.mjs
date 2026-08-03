@@ -210,30 +210,40 @@ async function preflightCapture() {
 async function startCapture(project) {
   const boot = await api("/dev/web-preview/start", { method: "POST", body: "{}" }).catch(() => ({}));
 
-  // RESOLVE AN ABSOLUTE URL, and do not trust either field blindly.
+  // RESOLVE THE **WEB** PORT. It is not devServer.port.
   //
-  // Measured 2026-08-03. POST /dev/web-preview/start answers:
-  //     {"ok":true,"port":19006,"webUrl":"/dev-web/"}
-  // while GET /info says the dev server is actually on :8088. Two problems in
-  // one small object:
+  // `POST /dev/start {devMode:"web"}` builds a HYBRID: metro (dev-client) on
+  // one port and `expo start --web` on ANOTHER. Measured on ubuntu-4gb,
+  // 2026-08-03:
   //
-  //   • webUrl is AGENT-RELATIVE (a proxy path), and chromedp is being asked to
-  //     navigate to it verbatim → "Cannot navigate to invalid URL (-32000)".
-  //     Passing it straight through is what the first version of this function
-  //     did.
-  //   • port is Expo Web's CANONICAL 19006, not the port this server actually
-  //     bound. The real one is substituted (8081 has been held for 6.4 days by
-  //     another project's orphaned Metro), so a caller trusting `port` aims at
-  //     nothing.
+  //     /info.devServer  kind=hybrid  devMode=dev-client
+  //                      port=8081     ← metro; NOTHING was listening on it
+  //                      webPort=19006 ← the web server, HTTP 200
+  //     /dev/web-preview/start → {"port":19006,"webUrl":"/dev-web/"}
   //
-  // /info's devServer.port is the field that reflects what was really bound, so
-  // that wins. Capture runs ON the box, hence 127.0.0.1.
+  // An earlier version of this function preferred `devServer.port` and wrote a
+  // confident comment explaining that `boot.port` was "Expo Web's canonical
+  // 19006, not the port this server actually bound". That was backwards.
+  // 19006 IS what expo-web bound; 8081 is metro. It passed once only because
+  // that run happened to serve web from the metro port, and it then failed
+  // twice with net::ERR_CONNECTION_REFUSED — the arc aiming a browser at a
+  // port with nothing behind it. Inferred, not measured; this comment is the
+  // measurement.
+  //
+  // Order: the web-preview boot response (it just started that server and
+  // knows its port) → devServer.webPort → devServer.port for non-hybrid
+  // frameworks that serve web directly. `webUrl` is AGENT-RELATIVE (a proxy
+  // path) and chromedp cannot navigate it — "Cannot navigate to invalid URL
+  // (-32000)" — so it is only used when it is absolute.
+  //
+  // Capture runs ON the box, hence 127.0.0.1.
   const info = await api("/info").catch(() => ({}));
-  const livePort = info?.devServer?.port;
+  const ds = info?.devServer || {};
   let targetUrl = "";
-  if (livePort) targetUrl = `http://127.0.0.1:${livePort}`;
+  if (boot.port) targetUrl = `http://127.0.0.1:${boot.port}`;
+  else if (ds.webPort) targetUrl = `http://127.0.0.1:${ds.webPort}`;
   else if (boot.webUrl && /^https?:\/\//i.test(boot.webUrl)) targetUrl = boot.webUrl;
-  else if (boot.port) targetUrl = `http://127.0.0.1:${boot.port}`;
+  else if (ds.port) targetUrl = `http://127.0.0.1:${ds.port}`;
 
   if (!targetUrl) {
     skip(
