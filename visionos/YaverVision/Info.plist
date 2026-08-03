@@ -65,6 +65,18 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Yaver connects to your development machine on your local network.</string>
+	<!-- Dictation. BOTH keys are mandatory: requesting either permission without
+	     its usage string is a HARD CRASH at the request, not a denial — so a
+	     missing key here would take the app down the first time anyone tapped
+	     the mic. The strings say where the audio goes because that is the
+	     question a user actually has, and the answer is "nowhere": recognition
+	     is on-device only (visionos/YaverVision/Dictation.swift enforces
+	     requiresOnDeviceRecognition and refuses rather than falling back to
+	     Apple's servers). -->
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Yaver turns what you say into a prompt for your coding agent. Recognition happens entirely on this device — your speech is never sent to Apple or to Yaver.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Yaver uses the microphone only while you are dictating a prompt. The audio stays on this device and is never uploaded.</string>
 	<!-- Export compliance: no proprietary crypto; HTTPS/TLS only. Declaring it
 	     here is what stops every upload from asking again. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
