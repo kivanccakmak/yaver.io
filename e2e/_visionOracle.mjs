@@ -129,6 +129,35 @@ const KNOWN_SCREENS = [
     say: "the capture browser is showing a CONNECTION ERROR page — the dev server died mid-run, so no colour could ever appear. Restart it and re-run; check the box for OOM kills",
   },
   {
+    // Apple's App Transport Security refusing cleartext. Read straight off the
+    // headset/phone screen, 2026-08-03, when the visionOS app could not reach a
+    // box on a Tailscale address:
+    //
+    //   "Couldn't reach 100.75.123.78: The resource could not be loaded because
+    //    the App Transport Security policy requires the use of a secure
+    //    connection."
+    //
+    // NSAllowsLocalNetworking exempts RFC1918 + link-local + .local. It does
+    // NOT exempt 100.64.0.0/10 — that is RFC 6598 shared address space (CGNAT),
+    // where both Tailscale and Yaver Mesh live. The request fails -1022 before
+    // a packet leaves the device.
+    match: [
+      "app transport security", "requires the use of a secure connection",
+      "cleartext", "-1022",
+    ],
+    cause: "ats-blocked",
+    say: "the app was blocked by Apple's App Transport Security before a packet left the device — "
+      + "NSAllowsLocalNetworking does not cover 100.64.0.0/10 (CGNAT, where Tailscale and Yaver Mesh live). "
+      + "The surface's Info.plist needs an ATS exception; no amount of box-side debugging will help",
+  },
+  {
+    // Generic "the app says it cannot reach the box". Broader than the ATS row
+    // above and checked after it, so the specific cause wins when present.
+    match: ["couldn't reach", "could not reach", "unable to reach", "no machine selected"],
+    cause: "box-unreachable",
+    say: "the app says it cannot reach the box — the surface never got an answer, so nothing downstream of this can be trusted",
+  },
+  {
     match: ["failed to compile", "unable to resolve", "syntaxerror", "module not found"],
     cause: "build-error",
     say: "the app FAILED TO COMPILE — the runner's edit broke the build, which is a product failure the colour verdict alone would have called 'black'",

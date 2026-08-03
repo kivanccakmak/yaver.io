@@ -188,13 +188,34 @@ function observe(label) {
   return entry;
 }
 
-/** Poll the app's screen until `want` appears in its text, or give up NAMED. */
+/**
+ * Poll the app's screen until `want` appears — unless the screen is showing a
+ * RECOGNISED FAILURE, in which case stop immediately and report that instead.
+ *
+ * The failure check comes FIRST, and it is not defensive tidiness. On this
+ * arc's very first run the app rendered:
+ *
+ *   "Couldn't reach 100.75.123.78: The resource could not be loaded because the
+ *    App Transport Security policy requires the use of a secure connection."
+ *
+ * and the assertion `waitForText("100.75.123.78")` PASSED — because the host
+ * appears inside the error message. A positive needle matched an error that
+ * says the exact opposite of what the assertion claims to prove. That is a
+ * false green produced by the harness, on the same run that found a real
+ * product bug, and it would have hidden it.
+ *
+ * So: a screen the oracle can NAME as a failure ends the wait, whatever else is
+ * written on it. Text on a screen is not evidence that the thing named by that
+ * text is working.
+ */
 function waitForText(want, label, budgetMs = 90_000) {
   const deadline = Date.now() + budgetMs;
   let last = null;
   const needles = Array.isArray(want) ? want : [want];
   while (Date.now() < deadline) {
     last = observe(label);
+    const named = oracle.nameFromText(last.text || "");
+    if (named) return { ok: false, seen: last, named };
     const low = (last.text || "").toLowerCase();
     if (needles.some((n) => low.includes(String(n).toLowerCase()))) return { ok: true, seen: last };
     execFileSync("sleep", ["5"]);
@@ -227,7 +248,9 @@ try {
   log(`dashboard: ${dash.ok ? "PASS" : "FAIL"} — saw ${(dash.seen?.text || "(nothing)").slice(0, 160)}`);
   if (!dash.ok) {
     failed = true;
-    reason = `the visionOS dashboard never showed the machine. The screen said: ${(dash.seen?.text || "(no text at all)").slice(0, 300)}`;
+    reason = dash.named
+      ? `the visionOS app could not reach the box — ${dash.named.say}`
+      : `the visionOS dashboard never showed the machine. The screen said: ${(dash.seen?.text || "(no text at all)").slice(0, 300)}`;
   }
 
   // 4/5. Only meaningful once the dashboard is up.
@@ -236,7 +259,9 @@ try {
     log(`runner sessions listed: ${runner.ok ? "PASS" : "not shown"}`);
     if (!runner.ok) {
       failed = true;
-      reason = `the dashboard rendered but listed no runner session. The screen said: ${(runner.seen?.text || "").slice(0, 300)}`;
+      reason = runner.named
+        ? `the dashboard rendered but the app reported a failure — ${runner.named.say}`
+        : `the dashboard rendered but listed no runner session. The screen said: ${(runner.seen?.text || "").slice(0, 300)}`;
     }
   }
 } catch (err) {
