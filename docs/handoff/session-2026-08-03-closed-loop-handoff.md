@@ -105,8 +105,22 @@ Three things worth not rediscovering:
   server holding remote coding sessions. systemd will therefore *never* reap dev
   children. **The registry is the only cleanup path there is.**
 
-Box resolved 2026-08-03: 8 trees killed, RSS 1,653 → 265 MB, and `/dev/start`
-now returns **8081, portSubstituted: none** for the first time in 6.4 days.
+**Verified live on 1.99.402** — spawn a dev child, restart the agent, and the
+reaper claims it instead of sparing it:
+
+```
+[dev-children] stopped orphaned expo (pid 4193932, port 8082, mobile)
+               left by a previous agent — its port is free again
+pid 4193932: GONE
+```
+
+The record it acted on carried `"startToken": "55898586"`. Note that records
+written by an OLDER agent still spare (they have no token and their argv was
+rewritten) — the fix takes effect for children spawned by 1.99.402+.
+
+Box resolved 2026-08-03: all orphan trees killed, expo RSS 1,653 → **0 MB**, and
+`/dev/start` returns **8081, portSubstituted: none** for the first time in 6.4
+days.
 
 ---
 
