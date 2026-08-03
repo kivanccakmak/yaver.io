@@ -1,8 +1,7 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -45,24 +44,17 @@ var runForcedAgentUpdate = func() {
 	checkAutoUpdate(forcedAutoUpdateConfig(cfg))
 }
 
+// latestAgentReleaseVersionFunc is a var so tests can stub it.
+//
+// Now npm-first with a GitHub fallback — see agent_version_source.go. This used
+// to be one of THREE hand-rolled copies of the same GitHub call, which is how a
+// fleet on a shared egress could 403 itself out of ever learning about a
+// release.
 var latestAgentReleaseVersionFunc = func() (string, error) {
-	type ghRelease struct {
-		TagName string `json:"tag_name"`
-	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", updateRepo()))
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub API returned %d", resp.StatusCode)
-	}
-	var release ghRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", err
-	}
-	return strings.TrimPrefix(strings.TrimSpace(release.TagName), "v"), nil
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	v, _, err := latestAgentVersion(ctx)
+	return v, err
 }
 
 func buildAgentUpdateStatus(cfg *Config, updating bool) (*agentUpdateStatus, error) {

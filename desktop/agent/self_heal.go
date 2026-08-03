@@ -282,30 +282,18 @@ func parseYaverVersionLine(out string) string {
 	return ""
 }
 
-// fetchLatestYaverRelease asks GitHub for the latest tag on the
-// configured release repo. Returns the bare semver. Honors
-// YAVER_UPDATE_REPO so dev/staging operators can point elsewhere.
+// fetchLatestYaverRelease returns the newest published agent version.
+//
+// Was a third hand-rolled copy of the GitHub `releases/latest` call; now
+// delegates to the one npm-first resolver (agent_version_source.go). Self-heal
+// runs on a schedule across a fleet, so it was one of the callers most likely
+// to spend the 60 req/h per-IP GitHub budget on a shared egress.
+//
+// YAVER_UPDATE_REPO is still honoured — it selects the GitHub fallback repo and
+// the release the binary is fetched from.
 func fetchLatestYaverRelease(ctx context.Context) (string, error) {
-	type ghRelease struct {
-		TagName string `json:"tag_name"`
-	}
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", updateRepo())
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return "", fmt.Errorf("github status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var rel ghRelease
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return "", err
-	}
-	return strings.TrimPrefix(strings.TrimSpace(rel.TagName), "v"), nil
+	v, _, err := latestAgentVersion(ctx)
+	return v, err
 }
 
 // chooseCanonical picks the source-of-truth binary. The running

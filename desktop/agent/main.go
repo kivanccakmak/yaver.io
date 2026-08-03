@@ -5172,36 +5172,25 @@ func checkAutoUpdateGated(cfg *Config, gate func(latestVersion string) updateWin
 
 	log.Println("[auto-update] Checking for updates...")
 
-	type ghRelease struct {
-		TagName string `json:"tag_name"`
+	// CHECK NPM, FETCH FROM GITHUB. The version poll goes to a CDN with no
+	// per-IP ceiling; the signed asset below still comes from the GitHub
+	// release, which is the only place it exists. See agent_version_source.go
+	// for why the 60 req/h per-IP GitHub limit bites a datacenter fleet.
+	verCtx, verCancel := context.WithTimeout(context.Background(), 25*time.Second)
+	latestVersion, verSource, err := latestAgentVersion(verCtx)
+	verCancel()
+	if err != nil {
+		emitAgentUpdate("error", "Release lookup failed: %v", err)
+		log.Printf("[auto-update] %v", err)
+		return
 	}
+	if latestVersion == "" {
+		log.Printf("[auto-update] Empty version from %s — skipping", verSource)
+		return
+	}
+	log.Printf("[auto-update] latest is v%s (via %s)", latestVersion, verSource)
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", updateRepo()))
-	if err != nil {
-		emitAgentUpdate("error", "GitHub release lookup failed: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	// STREAMING DEBUG
-
-	if resp.StatusCode != 200 {
-		log.Printf("[auto-update] GitHub API returned %d", resp.StatusCode)
-		return
-	}
-
-	var release ghRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		log.Printf("[auto-update] Failed to parse release: %v", err)
-		return
-	}
-
-	latestVersion := strings.TrimPrefix(release.TagName, "v")
-	if latestVersion == "" {
-		log.Printf("[auto-update] Empty release tag from GitHub — skipping")
-		return
-	}
 
 	// Proper semver comparison so a stale "latest release" pointer on
 	// the upstream repo can never DOWNGRADE the running agent. Without
