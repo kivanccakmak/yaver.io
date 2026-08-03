@@ -29,6 +29,7 @@ export type YaverSurface =
   | "mobile"
   | "tablet"
   | "tv"
+  | "vision"
   | "watch";
 
 export interface SurfaceProfile {
@@ -80,6 +81,21 @@ export const SURFACE_PROFILES: Record<YaverSurface, SurfaceProfile> = {
     width: 1920, height: 1080, deviceScaleFactor: 1,
     isMobile: false, hasTouch: false,
     why: "tvOS is a separate native app; 1080p is the surface it is designed against and it is focus-driven, never touch.",
+  },
+  vision: {
+    playwrightDevice: null,
+    // visionOS opens an app window at 1280x720 points by default (Safari and
+    // SwiftUI windows alike). The headset renders it at a much higher physical
+    // resolution, but layout happens in points, so 1280x720 is the geometry the
+    // app is laid out against and therefore the one to capture at.
+    width: 1280, height: 720, deviceScaleFactor: 2,
+    // Deliberately false, and it is not an oversight: visionOS input is gaze +
+    // indirect pinch, delivered as POINTER events, not touch. A profile that
+    // claims touch would push RN-web down the phone branch — the same
+    // "narrowed desktop = mobile" mistake this module exists to prevent, just
+    // pointed the other way.
+    isMobile: false, hasTouch: false,
+    why: "AR/VR (visionOS) windows lay out at 1280x720 points and are pointer-driven, not touch. Its verdict comes from a captured FRAME, not a DOM — see e2e/native-headless-vibe.mjs.",
   },
   watch: {
     playwrightDevice: null,
