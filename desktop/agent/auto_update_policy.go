@@ -74,8 +74,29 @@ func forcedAutoUpdateConfig(cfg *Config) *Config {
 // entirely. Spreading each agent's next look across a 6h window keeps
 // the aggregate request rate flat and is what every well-behaved
 // updater (apt, Chrome, Sparkle) does for the same reason.
+// TIGHTENED 6-12h → 1-2h (2026-08-03), because 6 hours is a DESKTOP-APP cadence
+// and this is a daemon that must be current.
+//
+// Industry practice splits exactly along that line: Chrome ~5h, Sparkle 24h
+// (1h documented minimum), unattended-upgrades daily — all user-facing apps
+// where a late update costs nothing. Long-running agents that must carry fixes
+// (Tailscale and similar) sit at 1-4h jittered. Yaver is the second kind: a box
+// running a user's coding turns needs an agent fix the day it ships, not
+// sometime tomorrow.
+//
+// Measured cost of the old value, this session: a one-line Chrome-selection fix
+// was cut as 1.99.399 while the box sat on 1.99.397, and the closed loop it
+// unblocked could not run. The box would not have looked for hours. Two manual
+// `npm i -g` over ssh were the actual update mechanism, which means the product
+// did not have one.
+//
+// The rate-limit worry in the paragraph above is still real and still handled —
+// but note that GitHub's REST limit is 60/h per source IP UNAUTHENTICATED and a
+// conditional request answering 304 does not count against it. So an hourly
+// check with an ETag is cheaper than a 6-hourly one without: the poll that
+// matters is the one that finds nothing, and that one should be free.
 func autoUpdateCheckInterval() time.Duration {
-	const min = 6 * time.Hour
-	const spread = 6 * time.Hour
+	const min = 1 * time.Hour
+	const spread = 1 * time.Hour
 	return min + time.Duration(rand.Int63n(int64(spread)))
 }
