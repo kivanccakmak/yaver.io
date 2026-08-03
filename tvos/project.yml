@@ -31,3 +31,27 @@ targets:
         INFOPLIST_FILE: YaverTV/Info.plist
         CODE_SIGN_ENTITLEMENTS: YaverTV/YaverTV.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
+
+  # UI tests drive the REAL tvOS app in the simulator against the REAL box, so
+  # the native app is finally inside the closed loop rather than represented by
+  # a frame the box captured on its behalf.
+  #
+  # Mirrors visionos/project.yml's test target, with one deliberate difference:
+  # no stub agent. visionOS's UI tests use one to walk the app through awkward
+  # backend states, which is the right tool for that job. This target exists for
+  # the opposite reason — to prove the app renders pixels that came from a real
+  # machine over the real transport.
+  YaverTVUITests:
+    type: bundle.ui-testing
+    platform: tvOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: YaverTVUITests
+        excludes:
+          - "README.md"
+    dependencies:
+      - target: YaverTV
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.yaver.tv.uitests
+        TEST_TARGET_NAME: YaverTV
