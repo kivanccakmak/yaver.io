@@ -656,6 +656,54 @@ enum FailureSignals {
         return "\(s / 60)m \(s % 60)s"
     }
 
+    // MARK: - Client-side refusals
+    //
+    // A request THIS DEVICE refused before a packet left is not the box being
+    // unreachable, and calling it that has a measured cost.
+    //
+    // 2026-08-03: the TV rendered "Box asleep — start it from your computer or
+    // phone" about a machine that answered GET /info with 200 throughout the
+    // run. App Transport Security had refused cleartext to 100.64/10 (CGNAT —
+    // where both Tailscale and Yaver Mesh live) because Info.plist carried only
+    // NSAllowsLocalNetworking. The transport bug is fixed; this exists so the
+    // DIAGNOSIS is right the next time a client policy refuses something, since
+    // BoxLifecycle's `catch { continue }` had thrown the reason away and left
+    // "did not answer" as the only reachable verdict.
+    //
+    // Lives here, not in BoxLifecycle, for two reasons: this file is
+    // Foundation-only so tvos/Checks can execute it without Xcode, and both
+    // tvOS and visionOS compile it — one classifier, no copy to drift.
+
+    /// Why this device refused the request itself, or nil if the failure was
+    /// (or may have been) on the wire.
+    ///
+    /// Deliberately conservative: anything not positively identified as a local
+    /// policy refusal returns nil and keeps the existing "did not answer"
+    /// handling. Naming the wrong cause is worse than naming none.
+    static func clientPolicyReason(domain: String, code: Int) -> String? {
+        guard domain == "NSURLErrorDomain" else { return nil }
+        switch code {
+        case -1022: // NSURLErrorAppTransportSecurityRequiresSecureConnection
+            return "This device's App Transport Security policy refused the connection before it left the "
+                + "device — the box was never contacted. Overlay addresses (Tailscale 100.64/10, Yaver Mesh "
+                + "100.96/12) need NSAllowsArbitraryLoads; NSAllowsLocalNetworking does not cover them."
+        case -1200, -1202, -1201, -1203: // secure connection failed / cert untrusted / bad date / not yet valid
+            return "This device rejected the box's TLS certificate, so the request never completed. "
+                + "The box itself may be perfectly healthy."
+        default:
+            return nil
+        }
+    }
+
+    /// Does this reason mean waking the box cannot help?
+    ///
+    /// The point of the whole classification: a Wake button in front of a
+    /// client-side refusal is a button that cannot work, which is the defect
+    /// this file family keeps paying for.
+    static func isClientBlocked(_ reason: String?) -> Bool {
+        !(reason ?? "").isEmpty
+    }
+
     private static func firstNonEmpty(_ values: String?...) -> String {
         for v in values {
             let t = (v ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

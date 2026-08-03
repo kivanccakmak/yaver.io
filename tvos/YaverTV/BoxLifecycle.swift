@@ -98,6 +98,11 @@ final class BoxLifecycle: ObservableObject {
     @Published private(set) var isRunning = false
     /// Last observed reachability of the tracked box (nil = not probed yet).
     @Published private(set) var reachable: Bool?
+
+    /// Why THIS DEVICE refused the request, when it did — an ATS block or a TLS
+    /// rejection. Non-nil means the box was never contacted, so "asleep" and
+    /// "wake it" are both wrong answers and must not be shown.
+    @Published private(set) var clientBlocked: String?
     @Published var error: String?
 
     /// The box this lifecycle is tracking (set on probe/wake).
@@ -134,7 +139,10 @@ final class BoxLifecycle: ObservableObject {
             let probe = await healthProbe(box: box)
             // A box that answers but is signed out cannot serve a turn, so it
             // is not reachable for any purpose the TV has.
-            if !isRunning { reachable = probe.answered && !probe.authExpired }
+            if !isRunning {
+                reachable = probe.answered && !probe.authExpired
+                clientBlocked = probe.clientBlocked
+            }
         }
     }
 
@@ -267,6 +275,23 @@ final class BoxLifecycle: ObservableObject {
     struct HealthProbe {
         var answered: Bool
         var authExpired: Bool
+        /// Set when the request was refused by THIS DEVICE before it reached the
+        /// network — an App Transport Security block, chiefly. Distinct from
+        /// "the box did not answer", and the distinction is the whole point:
+        /// one is a machine to wake, the other is a client-side policy no
+        /// amount of waking will change.
+        var clientBlocked: String?
+    }
+
+    /// Was this URLError raised by the device's own policy, before a packet left?
+    ///
+    /// The classification itself lives in FailureSignals.clientPolicyReason so
+    /// tvos/Checks can execute it with the Swift toolchain alone (no Xcode, no
+    /// simulator) and so visionOS shares it rather than growing a copy. This is
+    /// only the NSError unwrap.
+    private static func clientPolicyReason(_ error: Error) -> String? {
+        let ns = error as NSError
+        return FailureSignals.clientPolicyReason(domain: ns.domain, code: ns.code)
     }
 
     private func healthProbe(box: BoxTarget) async -> HealthProbe {
@@ -296,6 +321,13 @@ final class BoxLifecycle: ObservableObject {
                 if let state = obj["lifecycleState"] as? String, state == "yaver-auth-expired" { expired = true }
                 return HealthProbe(answered: ok, authExpired: expired)
             } catch {
+                // KEEP THE REASON. `catch { continue }` discarded it, which is
+                // why a client-side refusal could only ever surface as "the box
+                // did not answer" — and then as "Box asleep", pointing the user
+                // at a machine that was already running.
+                if let why = Self.clientPolicyReason(error) {
+                    return HealthProbe(answered: false, authExpired: false, clientBlocked: why)
+                }
                 continue
             }
         }

@@ -226,6 +226,39 @@ eq(FailureSignals.runnerAuthLivenessLine(now: t0, startedAt: t0, lastOutputAt: t
 eq(FailureSignals.shortDuration(59_400), "59s", "31e")
 eq(FailureSignals.shortDuration(60_000), "1m 0s", "31f")
 
+// ── a client-side refusal is NOT a sleeping box ───────────────────────────
+//
+// 2026-08-03: the TV showed "Box asleep — 100.x isn't answering… start it from
+// your computer or phone" about a machine answering GET /info with 200 for the
+// whole run. ATS refused cleartext to 100.64/10 before a packet left the
+// device, and BoxLifecycle's `catch { continue }` discarded the reason, so the
+// only verdict reachable was "did not answer". Sending someone to go start a
+// machine that is already running costs a trip AND teaches them the product
+// cannot be trusted.
+//
+// PROVED BY BREAKING: make clientPolicyReason return nil for -1022 → 33a fails
+// (that is exactly the shipped bug). Make it return a string for every code →
+// 33e fails, which is the failure mode of over-claiming: a real network outage
+// would be reported as this device's fault.
+let ats = FailureSignals.clientPolicyReason(domain: "NSURLErrorDomain", code: -1022)
+check(ats != nil, "33a: ATS -1022 is named, not swallowed as 'no answer'")
+check(ats?.contains("before it left the device") == true, "33b: says the box was never contacted")
+check(ats?.contains("NSAllowsArbitraryLoads") == true, "33c: names the specific fix, not 'check your configuration'")
+check(FailureSignals.clientPolicyReason(domain: "NSURLErrorDomain", code: -1200) != nil,
+      "33d: a TLS rejection is also this device's doing")
+// The conservative half. Everything below must stay nil, or a box that is
+// genuinely unreachable gets blamed on the client and the Wake button — the one
+// thing that WOULD help — disappears.
+eq(FailureSignals.clientPolicyReason(domain: "NSURLErrorDomain", code: -1004), nil,
+   "33e: connection refused is the BOX, keep 'asleep' + the Wake button")
+eq(FailureSignals.clientPolicyReason(domain: "NSURLErrorDomain", code: -1001), nil,
+   "33f: a timeout may be either — do not guess")
+eq(FailureSignals.clientPolicyReason(domain: "NSPOSIXErrorDomain", code: -1022), nil,
+   "33g: the code only means this in NSURLErrorDomain")
+check(FailureSignals.isClientBlocked(ats), "33h: an ATS block suppresses Wake")
+check(!FailureSignals.isClientBlocked(nil), "33i: an unknown failure does not")
+check(!FailureSignals.isClientBlocked(""), "33j: neither does an empty reason")
+
 // ── relay tunnel down: the TV must say the same sentence as the phone ──────
 //
 // classifyTargetProbeFailure already recognised this case; a plan with no

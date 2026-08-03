@@ -166,6 +166,29 @@ struct DashboardView: View {
     @ViewBuilder private var wakePanel: some View {
         if lifecycle.isRunning {
             WakeProgressView(lifecycle: lifecycle, boxName: store.selectedBox?.name)
+        } else if let blocked = lifecycle.clientBlocked {
+            // NOT ASLEEP — THIS DEVICE REFUSED THE REQUEST.
+            //
+            // Measured 2026-08-03: the TV showed "Box asleep — start it from
+            // your computer or phone" while that box answered GET /info with
+            // 200 throughout. ATS had refused the connection before a packet
+            // left the headset. Sending someone to go start a machine that is
+            // already running is worse than saying nothing: it costs a trip and
+            // teaches them the product cannot be trusted.
+            //
+            // Deliberately offers NO Wake button. Waking cannot fix a
+            // client-side policy, and a button that cannot work is the defect
+            // this file family keeps paying for.
+            VStack(alignment: .leading, spacing: 16) {
+                Label("This device blocked the connection", systemImage: "hand.raised.fill")
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundStyle(.orange)
+                Text(blocked)
+                    .font(.system(size: 19)).foregroundStyle(.secondary)
+                    .frame(maxWidth: 820, alignment: .leading)
+            }
+            .padding(28)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
         } else if (lifecycle.needsWake || lifecycle.error != nil), let box = store.selectedBox {
             VStack(alignment: .leading, spacing: 16) {
                 Label("Box asleep", systemImage: "moon.zzz.fill")
