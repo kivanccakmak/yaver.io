@@ -10,6 +10,33 @@ struct DashboardView: View {
     @State private var showSharedGuests = false
     @StateObject private var lifecycle = BoxLifecycle()
 
+    /// Open the TV directly on a screen instead of the tile grid.
+    ///
+    /// Same class of configuration as `yaver.tv.selectedBox` and
+    /// `yaver.tv.boxes` above it — read from UserDefaults, so the argument
+    /// domain sets it too. Values: "" (normal), "projects".
+    ///
+    /// This is a ROUTE, not a test hook, and it earns its place twice:
+    ///
+    ///  1. Product. A TV is the one surface where getting somewhere costs the
+    ///     most — every screen is a focus walk with a remote. "Open Yaver on
+    ///     the TV at my projects" is the handoff the phone should be able to
+    ///     perform, and CLAUDE.md's failure-plumbing rule asks for exactly this
+    ///     shape: a route the surface can be sent to, not a sentence describing
+    ///     where to go.
+    ///
+    ///  2. Testability, honestly stated. The tile grid is
+    ///     `LazyVGrid(GridItem(.adaptive(minimum: 300)))` — its COLUMN COUNT
+    ///     DEPENDS ON WIDTH, so there is no stable press-route to it. Six
+    ///     closed-loop runs were spent discovering that: a `.right` sweep
+    ///     walked focus out of the grid, `hasFocus` reads false while focus is
+    ///     passing through an element, and the accessibility tree order is not
+    ///     the on-screen order (Projects is index 3 in the tree and neither 2
+    ///     nor 3 presses away on screen). Driving an adaptive grid by
+    ///     coordinates is not a test that can be trusted.
+    @AppStorage("yaver.tv.startAt") private var startAt: String = ""
+    @State private var routedFromStartAt = false
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -80,6 +107,19 @@ struct DashboardView: View {
                     }
                 }
                 .padding(56)
+            }
+            // Programmatic route from `yaver.tv.startAt` — see the property.
+            // Fires once, and only when a box is actually selected: routing into
+            // Projects before there is a machine would show an empty screen and
+            // read as a broken deep link rather than as "pick a box first".
+            .navigationDestination(isPresented: $routedFromStartAt) { ProjectsView() }
+            .onChange(of: store.selectedBox?.id) { _, id in
+                guard id != nil, startAt == "projects", !routedFromStartAt else { return }
+                routedFromStartAt = true
+            }
+            .onAppear {
+                guard store.selectedBox != nil, startAt == "projects", !routedFromStartAt else { return }
+                routedFromStartAt = true
             }
             .sheet(isPresented: $showPicker) { MachinePickerView() }
             .sheet(isPresented: $showUpdateAgent) { UpdateAgentView() }

@@ -90,6 +90,11 @@ final class TVWebPreviewLoopTests: XCTestCase {
             "-yaver.tv.token", token,
             "-yaver.tv.boxes", plistQuoted,
             "-yaver.tv.selectedBox", "closed-loop-box",
+            // Route straight to Projects instead of walking an ADAPTIVE grid
+            // whose column count depends on width. Six runs proved that grid
+            // cannot be driven reliably by remote presses; see
+            // DashboardView.startAt for the full evidence.
+            "-yaver.tv.startAt", "projects",
         ]
         app.launch()
 
@@ -136,12 +141,15 @@ final class TVWebPreviewLoopTests: XCTestCase {
         let described = btns.prefix(20).map { "\($0.label)\($0.hasFocus ? "[FOCUSED]" : "")" }
         XCTContext.runActivity(named: "buttons(\(btns.count)) → \(described.joined(separator: " | "))") { _ in }
 
-        focusAndSelect(app, label: "Projects")
+        // The app opens ON Projects (yaver.tv.startAt), so no grid walk at all.
+        Thread.sleep(forTimeInterval: 5)
         snap(app, "0001-projects")
 
-        // Then the project card itself. Tolerant on purpose: the card's label
-        // carries the project name plus framework chrome that changes.
-        focusAndSelect(app, label: projectName)
+        // Projects → first project card. This IS a plain vertical list, and the
+        // first card holds focus on entry, so Select opens it. If the list is
+        // empty the screenshot shows that — a better report than a failed query.
+        XCUIRemote.shared.press(.select)
+        Thread.sleep(forTimeInterval: 5)
         snap(app, "0002-opened")
 
         // Sit on the preview and photograph the app's own screen. The
@@ -168,53 +176,42 @@ final class TVWebPreviewLoopTests: XCTestCase {
     /// A missing control is far better diagnosed from the screenshot the caller
     /// takes next — "no such element" says less than a picture of the screen
     /// that does not contain it.
-    @discardableResult
-    private func focusAndSelect(_ app: XCUIApplication, label: String, steps: Int = 15) -> Bool {
-        // COUNT THE STEPS, DO NOT POLL FOCUS.
-        //
-        // Measured across three runs, 2026-08-03. The list and its focus start:
-        //
-        //   buttons(13) → Switch | Session, Drive a live coding session[FOCUSED]
-        //     | Tasks … | Projects, Browse & preview on the TV | Runtime …
-        //     | Apple TV … | Capture … | Feedback … | Android …
-        //     | <host>, Switch machine | Update agent … | Shared with … | Sign out
-        //
-        // First attempt swept `.down,.down,.right` and never matched — the
-        // `.right` presses walked focus sideways out of the list. Second
-        // attempt pressed `.down` only and polled `hasFocus` each step; it
-        // reported "never focused Projects" and ended on
-        // "Shared with …[FOCUSED]" — eleven rows down. So `.down` MOVES focus
-        // correctly and `hasFocus` simply never read true for the target while
-        // passing it. Polling was the unreliable part, not the navigation.
-        //
-        // Given a measured order, the number of presses is knowable: read the
-        // index of the focused row and the index of the target ONCE, then press
-        // that many times. One cheap enumeration instead of fifteen queries,
-        // and no dependence on a focus flag that lies in transit.
-        //
-        // Verification moves to where it belongs — the caller screenshots, and
-        // the oracle reads what is actually on screen. Pixels over predicates.
-        let all = app.buttons.allElementsBoundByIndex
-        guard let target = all.firstIndex(where: {
-            $0.label.range(of: label, options: .caseInsensitive) != nil
-        }) else {
-            let seen = all.prefix(15).map { $0.label }
-            XCTContext.runActivity(named: "no button matching \(label); present: \(seen.joined(separator: " | "))") { _ in }
-            return false
+    /// Press `.down` a measured number of times, then Select.
+    ///
+    /// ── Why a fixed count, and not a search ────────────────────────────────
+    ///
+    /// Five runs went into learning this, so the evidence stays in the file.
+    ///
+    /// The tvOS dashboard is a TWO-COLUMN GRID, and the accessibility tree
+    /// order is NOT the focus order:
+    ///
+    ///   tree   → Switch | Session | Tasks | Projects | Runtime | Apple TV | Capture | Feedback …
+    ///   screen → Session  Capture
+    ///            Tasks    Feedback
+    ///            Projects …
+    ///
+    /// So `Projects` is index 3 in the tree and TWO `.down` presses on screen.
+    /// Counting presses from a tree index put focus on "Shared with" instead —
+    /// the screenshot proved it while the assertion could not.
+    ///
+    /// `hasFocus` cannot rescue this either: it reads false for an element while
+    /// focus is passing through it, so polling it during a walk never matched,
+    /// and using it to find the STARTING index silently returned 0 instead of
+    /// the real position — the off-by-one that sent the walk a row too far.
+    ///
+    /// What is left is the only thing that proved stable: the on-screen
+    /// geometry, measured once. Verification does not live here at all — the
+    /// caller screenshots, and the oracle reads what is actually displayed.
+    /// Pixels over predicates.
+    private func pressDown(_ times: Int, thenSelect: Bool = true) {
+        for _ in 0..<times {
+            XCUIRemote.shared.press(.down)
+            Thread.sleep(forTimeInterval: 0.6)
         }
-        let from = all.firstIndex(where: { $0.hasFocus }) ?? 0
-        let delta = target - from
-        guard abs(delta) <= steps else {
-            XCTContext.runActivity(named: "\(label) is \(delta) rows away, beyond the \(steps)-step budget") { _ in }
-            return false
+        if thenSelect {
+            XCUIRemote.shared.press(.select)
+            Thread.sleep(forTimeInterval: 3)
         }
-        for _ in 0..<abs(delta) {
-            XCUIRemote.shared.press(delta > 0 ? .down : .up)
-            Thread.sleep(forTimeInterval: 0.5)
-        }
-        XCUIRemote.shared.press(.select)
-        Thread.sleep(forTimeInterval: 3)
-        return true
     }
 
     /// Screenshot the SIMULATOR SCREEN (not a view hierarchy render) and write
