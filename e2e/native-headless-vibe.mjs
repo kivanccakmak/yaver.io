@@ -352,6 +352,10 @@ async function frameState(project) {
     return { color: "unknown", rendered: false, decodeError: err.message };
   }
   const samples = samplePixels(img, samplePoints, 8);
+  // A digest of the actual bytes, so "has the picture changed at all?" is a
+  // question the arc can answer. See waitForColor: a frozen frame is a signal,
+  // not something to sit through for twelve minutes.
+  const { createHash } = await import("node:crypto");
   const state = {
     color: classifyVibeColor(modalColor(samples)),
     rendered: looksRendered(samples),
@@ -359,6 +363,7 @@ async function frameState(project) {
     height: img.height,
     size: `${img.width}x${img.height}`,
     samples: samples.length,
+    digest: createHash("sha1").update(Buffer.from(buf)).digest("hex").slice(0, 12),
   };
   frameTimeline.push({
     seq: frameSeq,
@@ -371,9 +376,27 @@ async function frameState(project) {
   return state;
 }
 
+/**
+ * How many consecutive identical frames mean "this preview is not re-rendering".
+ *
+ * Polls are 20s apart, so 9 is three minutes of a genuinely frozen picture.
+ * Generous on purpose: a slow runner turn legitimately leaves the screen
+ * unchanged for a while, and calling that a failure would be the false-red this
+ * suite exists to remove. What it catches is the OTHER thing — a dead target.
+ *
+ * Measured 2026-08-03: a visionOS run captured 37 frames across twelve minutes
+ * with only TWO distinct images, because the expo web server had exited
+ * mid-run. The browser kept screenshotting a stale render, the arc kept
+ * sampling it, and the verdict blamed the colour. Twelve minutes to learn
+ * nothing. Three minutes to learn the truth is a better trade.
+ */
+const FROZEN_FRAME_POLLS = 9;
+
 async function waitForColor(want, project) {
   const deadline = Date.now() + BUDGET_MS;
   let last = null;
+  let lastDigest = "";
+  let frozenFor = 0;
   while (Date.now() < deadline) {
     const s = await frameState(project).catch((err) => ({ color: "unknown", rendered: false, decodeError: err.message }));
     if (s) last = s;
@@ -383,6 +406,27 @@ async function waitForColor(want, project) {
     // rectangle agreeing with "black" is how this suite once passed on nothing.
     if (s?.color === want && !s.rendered) {
       log(`frame is ${want} but shows only one colour — that is an empty panel, not a rendered app`);
+    }
+
+    // FROZEN-FRAME DETECTION. Bail out with a NAMED cause instead of spending
+    // the rest of the budget photographing the same stale pixels.
+    if (s?.digest) {
+      if (s.digest === lastDigest) {
+        frozenFor++;
+        if (frozenFor >= FROZEN_FRAME_POLLS) {
+          const mins = Math.round((frozenFor * 20) / 60);
+          return {
+            ok: false,
+            state: s,
+            frozen: `the captured frame has not changed at all for ~${mins} minutes ` +
+              `(${frozenFor} identical samples, digest ${s.digest}) — the preview is not re-rendering. ` +
+              `The usual cause is the dev server having exited mid-run; restart it and check the box for OOM kills.`,
+          };
+        }
+      } else {
+        frozenFor = 0;
+        lastDigest = s.digest;
+      }
     }
     await sleep(20_000);
   }
@@ -407,8 +451,12 @@ async function startVibe(description) {
  * step that exercises the new-task render path, and therefore the one most
  * likely to break — reported a bare colour with no cause.
  */
-function explainFailure(state) {
+function explainFailure(state, frozen) {
   const bits = [];
+  // The frozen-frame fact comes FIRST when present: it is a stronger and more
+  // actionable statement than anything read off a stale picture, and it names
+  // the thing to go fix.
+  if (frozen) bits.push(frozen);
   if (state?.decodeError) bits.push(`the frame could not be decoded: ${state.decodeError}`);
   else if (state && !state.rendered) bits.push("the preview showed a single flat colour — an empty panel, not a rendered app");
   // "signed-out" is EXPECTED here: this arc vibes the LOGIN SCREEN's background,
@@ -506,7 +554,7 @@ try {
   const red = await waitForColor("red", PROJECT);
   reachedTarget = red.ok;
   log(`red: ${red.ok ? "PASS" : `FAIL (last ${red.state?.color ?? "no frame"})`}`);
-  if (!red.ok) reason = `the preview never turned red (last ${red.state?.color ?? "no frame"}). ${explainFailure(red.state)}`;
+  if (!red.ok) reason = `the preview never turned red (last ${red.state?.color ?? "no frame"}). ${explainFailure(red.state, red.frozen)}`;
 
   // ── Step 5: revert, as a SEPARATE task (the new-task render path) ────────
   if (red.ok) {
@@ -515,7 +563,7 @@ try {
     const black = await waitForColor("black", PROJECT);
     reverted = black.ok;
     log(`black: ${black.ok ? "PASS" : `FAIL (last ${black.state?.color ?? "no frame"})`}`);
-    if (!black.ok) reason = `the revert never landed (last ${black.state?.color ?? "no frame"}). ${explainFailure(black.state)}`;
+    if (!black.ok) reason = `the revert never landed (last ${black.state?.color ?? "no frame"}). ${explainFailure(black.state, black.frozen)}`;
   }
 } catch (err) {
   // Never report a green on an arc that did not run.
