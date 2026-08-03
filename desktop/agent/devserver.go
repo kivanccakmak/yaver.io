@@ -2081,16 +2081,51 @@ func (b *baseDevServer) PreStart(name string, port int, workDir string) {
 func (b *baseDevServer) Status() DevServerStatus {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	// PROBE THE PROCESS, do not trust the flag.
+	//
+	// `b.running` is an in-memory boolean set at spawn and cleared by the
+	// bookkeeping goroutine on a clean exit. When the process dies in a way
+	// that goroutine does not survive — an OOM kill, a SIGKILL — the flag stays
+	// true forever and /info reports a dev server that is not there.
+	//
+	// Measured on ubuntu-4gb, 2026-08-03. /info said:
+	//     running=true serving=true port=8081 pid=11999
+	// while `ss -lntp` showed NOTHING listening on 8081 and pid 11999 did not
+	// exist. The kernel had been OOM-killing 5-6 GB `git` processes on that box.
+	// The visionOS arc trusted it, aimed the capture browser at :8081 and got
+	// `net::ERR_CONNECTION_REFUSED` — a confusing error instead of "the dev
+	// server is not running".
+	//
+	// The liveness check already existed (`PidAlive`, signal-0, devserver.go's
+	// heartbeat snapshot) and the field that everyone actually reads never
+	// consulted it: a producer with no consumer, again.
+	//
+	// signal(0) asks the kernel "does this pid exist and may I signal it"
+	// without delivering anything, so this is cheap enough for a status call.
+	running := b.running
+	if running && b.cmd != nil && b.cmd.Process != nil {
+		if err := b.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+			running = false
+		}
+	}
+
 	s := DevServerStatus{
 		Framework: b.name,
-		Running:   b.running,
-		Serving:   b.running,
+		Running:   running,
+		Serving:   running,
 		Port:      b.port,
 		HotReload: true,
 		WorkDir:   b.workDir,
 		Error:     b.err,
 	}
-	if b.running {
+	// Say WHY it is not serving, rather than letting a surface render an empty
+	// panel next to a silent `serving:false`.
+	if b.running && !running && s.Error == "" {
+		s.Error = fmt.Sprintf("the %s dev server process (pid %d) is gone — it exited or was killed (check for an OOM kill). Start it again.",
+			b.name, b.cmd.Process.Pid)
+	}
+	if running {
 		s.StartedAt = b.startedAt.UTC().Format(time.RFC3339)
 		s.ServingLabel = fmt.Sprintf("Serving %s preview", b.name)
 		s.StopActionLabel = "Stop Serving"
