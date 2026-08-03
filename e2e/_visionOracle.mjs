@@ -110,6 +110,25 @@ const KNOWN_SCREENS = [
     say: "the capture browser could not start — this is the confined-snap Chrome failure; the box needs an unconfined build",
   },
   {
+    // Chrome's own error page, read straight off the frame. Added after a
+    // visionOS run polled a dead target for twelve minutes: the expo web server
+    // had exited mid-run (the box was OOM-killing 5-6 GB git processes), so the
+    // capture kept screenshotting an error page and the arc reported "the
+    // preview never turned red" — blaming the colour for a dead server.
+    //
+    // The oracle is the right place for this precisely because it needs no
+    // agent-side support: it reads what is on the screen, so it works against
+    // any agent version, including ones whose /info still claims serving=true
+    // for a process that is gone.
+    match: [
+      "this site can’t be reached", "this site can't be reached",
+      "err_connection_refused", "err_empty_response", "refused to connect",
+      "site cannot be reached", "err_connection_reset",
+    ],
+    cause: "dev-server-died",
+    say: "the capture browser is showing a CONNECTION ERROR page — the dev server died mid-run, so no colour could ever appear. Restart it and re-run; check the box for OOM kills",
+  },
+  {
     match: ["failed to compile", "unable to resolve", "syntaxerror", "module not found"],
     cause: "build-error",
     say: "the app FAILED TO COMPILE — the runner's edit broke the build, which is a product failure the colour verdict alone would have called 'black'",
@@ -128,13 +147,26 @@ const KNOWN_SCREENS = [
 
 /**
  * Turn frame text into a named cause.
+ *
+ * `expected` lists causes that are NORMAL for the caller, and it is not a
+ * convenience — without it the oracle confidently misdiagnoses. The tvOS and
+ * visionOS arcs vibe the LOGIN SCREEN's background colour, so the sign-in
+ * screen is their subject, not their failure. Measured 2026-08-03: a visionOS
+ * run whose dev server had died was told "the app is showing the SIGN-IN
+ * screen — the session did not reach the surface", which is true of the pixels
+ * and false about the problem. A wrong name is worse than no name: it sends
+ * the reader after the session instead of the dead server.
+ *
  * @param {string|null} text
+ * @param {{expected?: string[]}} [opts]
  * @returns {{cause: string, say: string}|null}
  */
-export function nameFromText(text) {
+export function nameFromText(text, opts = {}) {
   if (!text) return null;
+  const expected = new Set(opts.expected || []);
   const low = text.toLowerCase();
   for (const row of KNOWN_SCREENS) {
+    if (expected.has(row.cause)) continue;
     if (row.match.some((m) => low.includes(m))) return { cause: row.cause, say: row.say };
   }
   return null;
@@ -148,12 +180,13 @@ export function nameFromText(text) {
  * treat as "no extra information", never as a failure.
  *
  * @param {string} pngPath
+ * @param {{expected?: string[]}} [opts] causes that are NORMAL for this caller
  * @returns {{cause: string, reason: string, text: string}|null}
  */
-export function explainFrame(pngPath) {
+export function explainFrame(pngPath, opts = {}) {
   const read = readFrame(pngPath);
   if (!read || !read.text.trim()) return null;
-  const named = nameFromText(read.text);
+  const named = nameFromText(read.text, opts);
   if (named) return { cause: named.cause, reason: named.say, text: read.text };
   return {
     cause: "unrecognised-screen",

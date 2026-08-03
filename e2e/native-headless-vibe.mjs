@@ -411,7 +411,11 @@ function explainFailure(state) {
   const bits = [];
   if (state?.decodeError) bits.push(`the frame could not be decoded: ${state.decodeError}`);
   else if (state && !state.rendered) bits.push("the preview showed a single flat colour — an empty panel, not a rendered app");
-  const seen = lastFramePath ? oracle.explainFrame(lastFramePath) : null;
+  // "signed-out" is EXPECTED here: this arc vibes the LOGIN SCREEN's background,
+  // so the sign-in screen is the subject under test, not a fault. Without this
+  // the oracle names a failing run "the session did not reach the surface",
+  // which is true of the pixels and false about the problem.
+  const seen = lastFramePath ? oracle.explainFrame(lastFramePath, { expected: ["signed-out"] }) : null;
   if (seen) bits.push(seen.reason);
   return bits.join("; ");
 }
