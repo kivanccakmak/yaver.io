@@ -67,7 +67,7 @@ go test -count=1 -timeout 90s -run 'TestAttachBrowserWindowNavigatesAlreadyAttac
 The harness currently reads `~/.yaver/config.json`. For cross-box dogfood it must also accept a token via environment so Mac can test Ubuntu after token rotation without editing local config.
 
 ```sh
-YAVER_WEBRTC_BASE=http://100.75.123.78:18080 \
+YAVER_WEBRTC_BASE=http://<box>:18080 \
 YAVER_WEBRTC_TOKEN="$UBUNTU_AGENT_TOKEN" \
 node e2e/webrtc-e2e/run.mjs both
 ```
@@ -86,7 +86,7 @@ Pass requires the session note to name the navigated URL and the sampled frame t
 ### Remote-Runtime WebRTC Harness
 
 ```sh
-YAVER_WEBRTC_BASE=http://100.89.8.111:19080 \
+YAVER_WEBRTC_BASE=http://<macbook>:19080 \
 YAVER_WEBRTC_TOKEN="$MAC_AGENT_TOKEN" \
 YAVER_CHROMIUM_PATH=/snap/bin/chromium \
 YAVER_RUNTIME_WORKDIR=/Users/kivanccakmak/Workspace/yaver.io/mobile \

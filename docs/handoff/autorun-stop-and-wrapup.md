@@ -9,7 +9,7 @@
 
 ## The incident this came from
 
-Two autoruns were running on the Mac mini (`pokayoke@100.89.155.25`):
+Two autoruns were running on the Mac mini (`<user>@<mac-mini>`):
 `wake-autorun` and `yaver-autorun-merged-remaining-codex`.
 
 `yaver ops autorun_stop_all` returned **`{"count": 0, "stopped": []}`** — it
@@ -163,7 +163,7 @@ loops in one directory currently both read as registered.
    untracked files CI can't see. That produced a false green and a wasted release
    run today.
 5. **Don't leave a Hetzner box running.** Not relevant to this task, but the
-   mini is Tailscale-reachable at `pokayoke@100.89.155.25` and is always-on by
+   mini is Tailscale-reachable at `<user>@<mac-mini>` and is always-on by
    design — that one is fine.
 
 ## Unrelated but open, same session

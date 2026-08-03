@@ -8,7 +8,7 @@ fastest way to waste a thread is to re-do it or collide with it.
 
 ## 1. IN FLIGHT — do not touch these
 
-An autorun is running on the Mac mini (`pokayoke@100.89.155.25`):
+An autorun is running on the Mac mini (`<user>@<mac-mini>`):
 
 | | |
 |---|---|

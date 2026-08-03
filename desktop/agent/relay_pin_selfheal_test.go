@@ -8,7 +8,7 @@ import (
 
 // Verbatim from ubuntu-4gb-hel1-1, 2026-08-01, after public.yaver.io restarted
 // onto an ephemeral key.
-const realPinMismatchErr = "dial relay: CRYPTO_ERROR 0x12a (local): relay 46.224.110.38:4433 " +
+const realPinMismatchErr = "dial relay: CRYPTO_ERROR 0x12a (local): relay 46.224.110.38:4433 " + // infra-addr-ok: public.yaver.io resolves here — public by design, not a leak
 	"SPKI pin mismatch: expected inNVAkIr2T7gJ/pLlP5QNjnicyDAwqwnKVT2PSnQjpI=, " +
 	"got 8zLwlbw+Nh5aTWr4lil/kBZVFS78XPPkDVEU6oXJRGA= — refusing (possible MITM)"
 
@@ -51,9 +51,9 @@ func TestClassifyRelayAuthFailure_CredentialMatcherDoesNotSwallowPinErrors(t *te
 // relay operator the concrete fix, because the default (ephemeral key under a
 // read-only /opt) is what produced this outage in the first place.
 func TestRelayPinMismatchRemedy_NamesBothCausesAndTheFix(t *testing.T) {
-	msg := relayPinMismatchRemedy("46.224.110.38:4433")
+	msg := relayPinMismatchRemedy("46.224.110.38:4433") // infra-addr-ok: public.yaver.io resolves here — public by design, not a leak
 	for _, want := range []string{
-		"46.224.110.38:4433",
+		"46.224.110.38:4433", // infra-addr-ok: public.yaver.io resolves here — public by design, not a leak
 		"rotated",              // cause 1
 		"intercepted",          // cause 2
 		"keep refusing",        // the guarantee is not being relaxed

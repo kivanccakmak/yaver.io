@@ -46,7 +46,7 @@ final class TVWebPreviewLoopTests: XCTestCase {
     private var shotDir: String {
         env("YAVER_SHOT_DIR", NSTemporaryDirectory())
     }
-    private var boxHost: String { env("YAVER_BOX_HOST", "100.75.123.78") }
+    private var boxHost: String { env("YAVER_BOX_HOST", "") }
     private var boxPort: Int { Int(env("YAVER_BOX_PORT", "18080")) ?? 18080 }
     private var token: String { env("YAVER_BOX_TOKEN", "") }
     private var projectName: String { env("YAVER_PROJECT", "mobile") }
@@ -110,7 +110,7 @@ final class TVWebPreviewLoopTests: XCTestCase {
         // rather than guessing a focus path — and the answer was not the
         // dashboard at all. The oracle read:
         //
-        //   "Box asleep — 100.75.123.78 isn't answering, and it can't be woken
+        //   "Box asleep — <box> isn't answering, and it can't be woken
         //    from the TV, start it from your computer or phone."
         //
         // …for a box answering GET /info with 200 throughout. ATS was refusing

@@ -22,7 +22,7 @@
 		     MEASURED 2026-08-03 by running the real tvOS app in the simulator
 		     against a real box (tvos/YaverTVUITests). The TV displayed:
 
-		       "Box asleep — 100.75.123.78 isn't answering, and it can't be
+		       "Box asleep — <box> isn't answering, and it can't be
 		        woken from the TV, start it from your computer or phone."
 
 		     while that box was answering GET /info with HTTP 200 throughout.

@@ -30,14 +30,14 @@ Phone connection log, 09:51–09:54:
   the tailnet** (or iOS ATS blocks cleartext to 100.64/10 — see
   `ios_ats_blocks_tailnet_and_mesh`). So **relay is the only path**.
 - **Relay is a single public relay** (`public-free` / `public.yaver.io` /
-  `46.224.110.38:4433`) with **no redundancy** ("all 1 relay(s) failed").
+  `46.224.110.38:4433`) with **no redundancy** ("all 1 relay(s) failed"). <!-- infra-addr-ok: public.yaver.io resolves here -->
 - Relay password was initially **missing** ("sign in again to fetch it") then
   self-healed one second later.
 - The relay tunnel came up (09:51:16 "agent answered via relay"), held ~2.5 min,
   then **timed out at 09:54:02 and never recovered** in the window.
 
 Mini agent (relay client) log:
-- `[RELAY 46.224.110.38:4433] Connection lost after 0s: registration rejected:
+- `[RELAY 46.224.110.38:4433] Connection lost after 0s: registration rejected: <!-- infra-addr-ok: public.yaver.io resolves here -->
   deviceId already registered` → `Reconnecting in 57.6s…`. **This is the
   deadlock**: when the tunnel drops and the mini redials, the relay still holds
   the *stale* registration for the same deviceId and rejects the new one, so the

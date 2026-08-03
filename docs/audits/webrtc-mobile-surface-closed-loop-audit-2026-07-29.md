@@ -5,7 +5,7 @@
 Dogfood failure: companion/todo apps are mobile apps, but the RN/Flutter browser
 lane streamed desktop-shaped frames. The audit used live agent operations on:
 
-- `ubuntu-4gb-hel1-1` at `http://100.75.123.78:18080`
+- `ubuntu-4gb-hel1-1` at `http://<box>:18080`
 - local Mac agent at `http://127.0.0.1:18080`
 - local Xcode simulators: iOS 26.2, tvOS 26.2, watchOS 26.2, visionOS 26.2
 

@@ -1,6 +1,6 @@
 # Handoff — mobile follow-up chat bug + remote autorun visibility
 
-Written 2026-07-19. Target: run this on the Mac mini (`pokayoke@100.89.155.25`).
+Written 2026-07-19. Target: run this on the Mac mini (`<user>@<mac-mini>`).
 Everything below was verified against the code/box on 2026-07-19 — the "Verified
 facts" section is what makes the rest of the plan the shape it is. Read it first.
 
@@ -66,7 +66,7 @@ No `ANTHROPIC_API_KEY` is set anywhere and `~/.claude.json` has
 loop here bills per token.
 
 ```bash
-ssh -t pokayoke@100.89.155.25 'tmux attach -t authtest'
+ssh -t <user>@<mac-mini> 'tmux attach -t authtest'
 # then inside claude:  /login  → choose "Claude account with subscription"
 # confirm the header no longer says "API Usage Billing"
 ```
@@ -105,7 +105,7 @@ and autorun does `git stash push --include-untracked`, so two loops in one
 checkout stash each other).
 
 ```bash
-ssh pokayoke@100.89.155.25
+ssh <user>@<mac-mini>
 git clone git@github.com:yaver-io/yaver.io.git ~/Workspace/yaver-followup-autorun
 cd ~/Workspace/yaver-followup-autorun
 git checkout main && git merge --no-ff origin/followup-ux

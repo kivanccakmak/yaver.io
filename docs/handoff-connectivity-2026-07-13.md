@@ -178,7 +178,7 @@ re-identifies. Prefer identities that can be **recovered**, not re-minted.
 - **"My relay binary broke registration."** False. I rolled back and it still
   failed; the bug was §1.3 in the *agent*.
 - **`relay.yaver.io` → Vercel** was a red herring for this outage. Clients never
-  use it (they get `public.yaver.io` + QUIC `46.224.110.38:4433` from `/config`).
+  use it (they get `public.yaver.io` + QUIC `46.224.110.38:4433` from `/config`). <!-- infra-addr-ok: public.yaver.io resolves here -->
   It was still wrong and has been removed (§4).
 
 **Lesson:** the relay's error message named the wrong component and sent me
@@ -270,7 +270,7 @@ the tailnet.
 
 | Thing | State |
 |---|---|
-| Relay box `yaver-relay-free` | **running**, `46.224.110.38`, arm64, relay `v0.1.19` **with fixes** |
+| Relay box `yaver-relay-free` | **running**, `46.224.110.38`, arm64, relay `v0.1.19` **with fixes** | <!-- infra-addr-ok: public.yaver.io resolves here -->
 | Hetzner primary `yaver-cpu-mn71me24` | **DELETED** (metered billing). Snapshot **`407990840`** |
 | Agents on fixed build | Mac mini, ubuntu (Primary was, before deletion) |
 | `primaryDeviceId` | re-pointed → Mac mini (`229aeb03-…`) |
@@ -364,7 +364,7 @@ curl -s https://public.yaver.io/d/<deviceId>/info -H "X-Relay-Password: $PW"
 Read the relay's own view (ground truth for "is this device actually connected"):
 
 ```bash
-ssh root@46.224.110.38 'journalctl -u yaver-relay --since "-5min" --no-pager | grep -E "Tunnel:|Agent connected|invalid|abuse"'
+ssh root@46.224.110.38 'journalctl -u yaver-relay --since "-5min" --no-pager | grep -E "Tunnel:|Agent connected|invalid|abuse"' <!-- infra-addr-ok: public.yaver.io resolves here -->
 ```
 Note: the relay **truncates device ids to 8 chars** in logs (`cloud-mn` is
 `cloud-mn71me24`). This cost me an hour — don't read it as a short-id bug.

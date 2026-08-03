@@ -20,8 +20,8 @@ Read `CLAUDE.md` first. The rule that governed all of this is written there:
 
 ```bash
 set -a && . ./.env.test && set +a
-VIBE_BOX_HOST=http://100.75.123.78:18080 npx tsx e2e/native-headless-vibe.mjs tv
-VIBE_BOX_HOST=http://100.75.123.78:18080 npx tsx e2e/native-headless-vibe.mjs vision
+VIBE_BOX_HOST=http://<box>:18080 npx tsx e2e/native-headless-vibe.mjs tv
+VIBE_BOX_HOST=http://<box>:18080 npx tsx e2e/native-headless-vibe.mjs vision
 ```
 
 **Prerequisite:** a dev server must be running on the box. The arc does not start
@@ -30,7 +30,7 @@ one (it only starts the *capture*), and it NAMED-skips if none is found:
 ```bash
 curl -s -X POST -H "Authorization: Bearer $YAVER_TEST_TOKEN" -H 'Content-Type: application/json' \
   -d '{"framework":"expo","workDir":"/root/Workspace/yaver.io/mobile","devMode":"web"}' \
-  http://100.75.123.78:18080/dev/start
+  http://<box>:18080/dev/start
 ```
 
 ---

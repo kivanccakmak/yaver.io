@@ -47,7 +47,7 @@ Run on 2026-07-20 against the live fleet.
 $ ssh mac-mini 'yaver mesh status'
 Yaver Mesh status
   state  : off — default-on tried and could not start
-  reason : interface utun4 (100.89.155.25) shares the address range Yaver Mesh
+  reason : interface utun4 (<mac-mini>) shares the address range Yaver Mesh
            uses (100.64.0.0/10 overlaps 100.96.0.0/12). Yaver Mesh stays off so
            it does not fight an existing VPN for routes; connections use your
            LAN or relay instead.
@@ -56,7 +56,7 @@ $ yaver mesh status            # MacBook Air
   state  : off (default-on has not completed yet — it retries on a backoff)
 ```
 
-Both machines run Tailscale (`utun4` = 100.89.155.25, `utun6` = 100.89.8.111).
+Both machines run Tailscale (`utun4` = <mac-mini>, `utun6` = <macbook>).
 Mesh is therefore off **fleet-wide**, and has been since default-on shipped.
 
 The MacBook's wording is its own defect: *"has not completed yet — it retries on
@@ -77,7 +77,7 @@ the words.
 A 2 s failure is a network timeout. A **same-second** failure is the OS
 refusing the socket before any I/O — the signature of the iOS Local Network
 permission / ATS boundary, not of a missing route. Every tailnet leg in every
-session failed instantly, including `100.89.155.25`, which is reachable from a
+session failed instantly, including `<mac-mini>`, which is reachable from a
 laptop on the same tailnet at that moment.
 
 Other facts the logs establish:
@@ -94,7 +94,7 @@ Other facts the logs establish:
   `12:27:56 [connect-success] Connected via relay`. Three seconds. It is not on
   the storm path.
 - **Five concurrent reconnect loops.** At 19:07–19:09, `10.0.0.40`,
-  `10.0.0.45`, `192.168.111.38`, `100.75.123.78` and `192.168.1.103` each run
+  `10.0.0.45`, `192.168.111.38`, `<box>` and `192.168.1.103` each run
   an independent backoff, each racing candidates, all against one relay host.
 - **Dead candidates never age out.** `172.17.0.1` is a Docker bridge;
   `172.20.10.4/.9` an old iPhone-hotspot range; `192.168.1.105`,
@@ -580,7 +580,7 @@ The probe that would have caught all of it in one line, and which should exist:
 ```
 yaver net explain <device>
   mesh        : OFF — 100.96/12 conflicts with utun4 (Tailscale 100.64/10)
-  tailnet     : phone 100.69.93.34 ↔ box 100.89.155.25 — REACHABLE (12 ms)
+  tailnet     : phone 100.69.93.34 ↔ box <mac-mini> — REACHABLE (12 ms)
   lan         : 5 candidates, 0 answered (Local Network permission: DENIED)
   relay       : public-free — RATE-LIMITED until 09:24 (invalid password ×7)
   verdict     : tailnet is up and usable; the app is not using it

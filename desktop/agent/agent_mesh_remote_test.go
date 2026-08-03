@@ -210,16 +210,16 @@ func TestDirectAgentBaseCandidatesAddsDefaultPortFallback(t *testing.T) {
 	// synthesize an 18080 candidate so the live agent is reachable.
 	target := &DeviceInfo{
 		DeviceID: "dev-1",
-		QuicHost: "100.75.123.78",
+		QuicHost: "192.0.2.10",
 		QuicPort: 18090,
 	}
 	bases := directAgentBaseCandidates(target)
 	var has18090, has18080 bool
 	for _, b := range bases {
 		switch b {
-		case "http://100.75.123.78:18090":
+		case "http://192.0.2.10:18090":
 			has18090 = true
-		case "http://100.75.123.78:18080":
+		case "http://192.0.2.10:18080":
 			has18080 = true
 		}
 	}
@@ -230,7 +230,7 @@ func TestDirectAgentBaseCandidatesAddsDefaultPortFallback(t *testing.T) {
 		t.Errorf("expected the default-port fallback :18080, got %v", bases)
 	}
 	// Registered port must come first so an unchanged row keeps its ordering.
-	if len(bases) < 2 || bases[0] != "http://100.75.123.78:18090" {
+	if len(bases) < 2 || bases[0] != "http://192.0.2.10:18090" {
 		t.Errorf("registered port should be tried first, got %v", bases)
 	}
 }

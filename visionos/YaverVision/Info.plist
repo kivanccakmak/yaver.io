@@ -64,7 +64,7 @@
 		<!-- MEASURED 2026-08-03, off the headset's own screen in the visionOS
 		     simulator (e2e/visionos-sim-loop.mjs, first run):
 
-		       "Couldn't reach 100.75.123.78: The resource could not be loaded
+		       "Couldn't reach <box>: The resource could not be loaded
 		        because the App Transport Security policy requires the use of a
 		        secure connection."
 

@@ -71,8 +71,8 @@ Android-only release.
 ## Hard constraint — Tailscale on the Mac mini
 
 Verified UP:
-- `tailscale status --self=true` returns `100.89.155.25 mobiles-mac-mini`
-- `utun4` is UP with `inet 100.89.155.25 --> 100.89.155.25`
+- `tailscale status --self=true` returns `<mac-mini> mobiles-mac-mini`
+- `utun4` is UP with `inet <mac-mini> --> <mac-mini>`
 - `tailscale netcheck` reports IPv4 + IPv6 + UDP all green
 
 No `ConfigureNetwork()` call was made on this box. The mesh work is

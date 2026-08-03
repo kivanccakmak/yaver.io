@@ -10,7 +10,7 @@ import (
 // Incident 2026-07-31. ubuntu-4gb-hel1-1 spent hours unreachable, repeating
 // this in journald every ~60 seconds:
 //
-//	[RELAY 46.224.110.38:4433] Connection lost after 0s: registration rejected: invalid relay password
+//	[RELAY 46.224.110.38:4433] Connection lost after 0s: registration rejected: invalid relay password // infra-addr-ok: public.yaver.io resolves here — public by design, not a leak
 //	[relay] watchdog: no live tunnel for 2m0s despite 1 configured relay(s) — forcing redial
 //
 // while `grep -iE 'relay|register|tunnel' ~/.yaver/agent.log agent.log.1`
