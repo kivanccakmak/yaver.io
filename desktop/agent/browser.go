@@ -237,13 +237,27 @@ func (bm *BrowserManager) OpenSessionWithProfile(id string, headful bool, proxyU
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
 		chromedp.WindowSize(1280, 900),
 	)
+	// PICK THE BINARY DELIBERATELY, ALWAYS — not only when a profile dir is set.
+	//
+	// Measured 2026-08-03 on the owner's Linux box: chromedp's own search found
+	// /snap/bin/chromium first and every launch died with "cannot create
+	// temporary directory for the root file system". A snap-packaged Chromium is
+	// CONFINED and cannot create its temp dir under a daemon — while the SAME box
+	// also had /usr/bin/google-chrome and /usr/bin/chromium-browser, either of
+	// which works. So the vibing preview could not capture a single frame, the
+	// tvOS/visionOS colour arc had nothing to sample, and nothing in the product
+	// preferred the binary that would have worked.
+	//
+	// This used to be gated on `profileDir != ""`, i.e. the ONE caller that
+	// happened to want a persistent profile got a correct binary and every other
+	// caller — including the preview capture — took whatever chromedp guessed.
+	if cp := preferredChromePath(); cp != "" {
+		allocOpts = append(allocOpts, chromedp.ExecPath(cp))
+	}
 	if profileDir != "" {
 		// F2: persistent clearance/cookies; share this dir with the co-browse session so a
 		// human-solved Cloudflare challenge carries over to headless collection.
 		allocOpts = append(allocOpts, chromedp.UserDataDir(profileDir))
-		if cp := findChromePath(); cp != "" {
-			allocOpts = append(allocOpts, chromedp.ExecPath(cp))
-		}
 	}
 	if proxyURL != "" {
 		allocOpts = append(allocOpts, chromedp.ProxyServer(proxyURL))
@@ -812,4 +826,39 @@ func chromeLaunchRemedy(err error) string {
 	default:
 		return " (install Chrome/Chromium — none found on PATH)"
 	}
+}
+
+// preferredChromePath resolves a launchable Chrome, DEPRIORITISING snap.
+//
+// A snap-packaged Chromium is confined: launched from a daemon it fails with
+// "cannot create temporary directory for the root file system", and no amount
+// of retrying or reinstalling fixes it. It is still returned as a last resort —
+// a confined browser that might work in a user session beats no browser — but
+// never ahead of a deb/rpm/Playwright build that certainly does.
+//
+// Falls back to findChromePath() (which knows the Playwright cache layout) so
+// this never regresses a machine that only has that.
+func preferredChromePath() string {
+	candidates := []string{
+		"google-chrome", "google-chrome-stable",
+		"chromium-browser", "chromium",
+	}
+	var snapFallback string
+	for _, c := range candidates {
+		p, err := exec.LookPath(c)
+		if err != nil || p == "" {
+			continue
+		}
+		if strings.Contains(p, "/snap/") {
+			if snapFallback == "" {
+				snapFallback = p
+			}
+			continue // keep looking for an unconfined one
+		}
+		return p
+	}
+	if p := findChromePath(); p != "" {
+		return p
+	}
+	return snapFallback
 }
