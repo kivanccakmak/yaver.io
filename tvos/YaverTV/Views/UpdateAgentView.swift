@@ -71,7 +71,11 @@ struct UpdateAgentView: View {
                                   requestedVersion: requested[d.deviceId],
                                   rowError: rowErrors[d.deviceId])
                     }
-                    .buttonStyle(.card)
+                    // tvOS-only style; see ProjectsView for why these files are shared
+        // rather than forked, and why visionOS takes the platform default.
+        #if os(tvOS)
+        .buttonStyle(.card)
+        #endif
                     .disabled(requesting != nil)
                 }
             }

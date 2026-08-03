@@ -139,7 +139,16 @@ struct ProjectsView: View {
             }
             .padding(.horizontal, 24).padding(.vertical, 18)
         }
+        // `.card` is a tvOS-only button style — it does not exist on visionOS,
+        // where this file is now also compiled. Guarded rather than forked: one
+        // shared ProjectsView keeps the two surfaces honest about the same
+        // project list, and a copy would drift the way three relay-auth matchers
+        // already have. visionOS gets the platform default, which is the right
+        // affordance there anyway: a headset points and pinches, it does not
+        // move focus card-to-card with a remote.
+        #if os(tvOS)
         .buttonStyle(.card)
+        #endif
     }
 
     @ViewBuilder private func destination(for p: ProjectSummary) -> some View {
