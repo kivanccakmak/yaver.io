@@ -63,8 +63,23 @@ const SKIP_BUILD = process.env.VISION_SKIP_BUILD === "1";
 const PROJECT_NAME = process.env.VIBE_PROJECT_NAME || "mobile";
 const VIBE_BUDGET_MS = Number(process.env.VIBE_BUDGET_MS || 8 * 60_000);
 /// The preview is a panel, so the verdict is the RED FRACTION of the screen,
-/// never its modal colour. See the tvOS loop for the measurement.
-const RED_PANEL_FRACTION = Number(process.env.VISION_RED_FRACTION || 0.08);
+/// never its modal colour (see the tvOS loop for why).
+///
+/// CALIBRATED PER SURFACE, because the same red preview reads differently on
+/// each. Measured 2026-08-03:
+///
+///   tvOS      1920x1080 screenshot, preview fills much of it   → 22.3% red
+///   visionOS  3840x2160 screenshot, app window floats inside it →  6.5% red
+///
+/// Both against 0.0% at launch. Reusing the tvOS threshold here failed a
+/// working loop by 1.5 points — the number was right for the surface it was
+/// measured on and meaningless on this one.
+///
+/// 3% sits well clear of both the 0.0% floor and the 6.5% signal. It is NOT
+/// tuned to make a run pass: the discriminator is a clean 0.0 → 6.5 step held
+/// across fifteen consecutive frames, and any threshold in that gap gives the
+/// same verdict.
+const RED_PANEL_FRACTION = Number(process.env.VISION_RED_FRACTION || 0.03);
 
 const log = (m) => console.log(`[visionos-sim] ${m}`);
 let shots = 0;
