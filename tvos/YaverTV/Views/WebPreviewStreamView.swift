@@ -414,8 +414,29 @@ struct WebPreviewStreamView: View {
             do {
                 let meta = try await client.previewSnapshot(project: project.name)
                 if let hash = meta.hash, !hash.isEmpty, hash != lastHash {
-                    let data = try await client.previewFrame(hash: hash)
-                    if let img = UIImage(data: data) { frame = img; lastHash = hash; error = nil; misses = 0 }
+                    let data = try await client.previewFrame(hash: hash, project: project.name)
+                    if let img = UIImage(data: data) {
+                        frame = img; lastHash = hash; error = nil; misses = 0
+                    } else {
+                        // BYTES THAT ARE NOT AN IMAGE MUST SAY SO.
+                        //
+                        // This used to be a bare `if let` with no else: the poll
+                        // succeeded, the decode failed, and nothing changed on
+                        // screen or in state. That is why the missing
+                        // `?project=` above was invisible — the endpoint was
+                        // answering `{"error":"project query param required"}`,
+                        // UIImage returned nil, and the TV showed "Starting
+                        // preview…" indefinitely with no error anywhere.
+                        //
+                        // A silent decode failure is the same defect class as a
+                        // silent serve: unfalsifiable from the outside. Show the
+                        // first bytes so a reader can tell JSON from a truncated
+                        // PNG at a glance.
+                        let head = String(decoding: data.prefix(120), as: UTF8.self)
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        error = "The box returned \(data.count) bytes that are not an image"
+                            + (head.isEmpty ? "." : ": \(head)")
+                    }
                 }
             } catch {
                 if FailureSignals.isSessionScopeDenied(error) {

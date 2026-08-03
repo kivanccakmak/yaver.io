@@ -335,8 +335,19 @@ actor AgentClient {
     }
 
     /// Fetch a captured frame's bytes by hash.
-    func previewFrame(hash: String) async throws -> Data {
-        try await request("GET", path: "/vibing/preview/frames/\(hash)", failure: "frame unavailable")
+    ///
+    /// `?project=` is REQUIRED and was missing. Frames are stored per project on
+    /// the box, so without it the endpoint answers
+    /// `{"error":"project query param required"}` — a JSON body, HTTP-shaped
+    /// like success — instead of PNG bytes. UIImage(data:) then returns nil and
+    /// WebPreviewStreamView shows nothing, forever, with no error to read.
+    ///
+    /// Measured against ubuntu-4gb, 2026-08-03. The e2e arc hit the identical
+    /// bug on its side the same day; this is the app's half of it, which means
+    /// the TV's web preview could never have rendered a single frame.
+    func previewFrame(hash: String, project: String) async throws -> Data {
+        let escaped = project.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? project
+        return try await request("GET", path: "/vibing/preview/frames/\(hash)?project=\(escaped)", failure: "frame unavailable")
     }
 
     func stopWebPreview(project: String) async {
