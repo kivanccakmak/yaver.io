@@ -129,6 +129,42 @@ function openControls(page: Page): Locator {
 }
 
 /**
+ * Where the most recently sampled preview frame lives, for the text oracle.
+ *
+ * Module-scoped rather than threaded through every helper: the oracle is a
+ * diagnostic that may run at any failure site, and a parameter chain would mean
+ * the sites that forget to pass it silently lose the diagnosis — which is the
+ * SILENT verdict this exists to remove.
+ */
+let lastPreviewFramePath = "";
+
+/**
+ * SILENT → NAMED for a surface that DOES have a DOM.
+ *
+ * The mobile preview is a cross-origin iframe, so `document.body.innerText`
+ * stops at the boundary: the harness can read the dashboard's chrome and not
+ * one word of the app it is judging. That is the same blindness tvOS and
+ * visionOS have, arriving by a different route — and it is why a failing mobile
+ * run could only ever say "the preview never turned red", never why.
+ *
+ * The oracle reads the rendered PIXELS, so the iframe boundary is irrelevant to
+ * it. Same helper the TV and AR/VR arcs use (e2e/_visionOracle.mjs) — one
+ * implementation, or the surfaces drift.
+ *
+ * Opportunistic: macOS-only, and its absence never changes a verdict.
+ */
+async function explainPreviewFrame(): Promise<string> {
+  if (!lastPreviewFramePath) return "";
+  try {
+    const oracle = await import("../_visionOracle.mjs");
+    const seen = oracle.explainFrame(lastPreviewFramePath);
+    return seen ? seen.reason : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Screenshot the preview iframe and return its modal colour.
  *
  * The preview is a cross-origin iframe (a relay URL), so canvas sampling inside
@@ -138,6 +174,18 @@ function openControls(page: Page): Locator {
  */
 async function samplePreview(page: Page): Promise<{ px: number[]; rendered: boolean }> {
   const buf = await page.locator("iframe").first().screenshot({ timeout: 20_000 });
+  // Keep the LAST sampled frame on disk so the text oracle can read the exact
+  // pixels the colour verdict judged. Reading a different capture would let the
+  // two disagree about what was on screen, which is worse than no text at all.
+  try {
+    const { writeFileSync, mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    if (!lastPreviewFramePath) {
+      lastPreviewFramePath = join(mkdtempSync(join(tmpdir(), "yaver-mobile-frame-")), "frame.png");
+    }
+    writeFileSync(lastPreviewFramePath, buf);
+  } catch { /* persisting is a convenience for the oracle, never the verdict */ }
   const dataUrl = `data:image/png;base64,${buf.toString("base64")}`;
   const raw = await page.evaluate(async ({ url, stride }) => {
     const img = new Image();
@@ -195,7 +243,12 @@ async function waitForColor(
     // a render that is already in flight.
     if (refresh && polls % 3 === 0) await refresh().catch(() => {});
   }
-  return { ok: false, color: last };
+  // Out of budget. Ask the frame what it was actually showing before reporting
+  // a bare colour — "black" covers a sign-in wall, a compile error, a runner
+  // quota wall and a preview that never loaded, and those need four different
+  // actions from whoever reads this run.
+  const said = await explainPreviewFrame();
+  return { ok: false, color: last, said };
 }
 
 /** Drive one full black → target → black arc on whichever surface is loaded. */
@@ -497,7 +550,7 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
     await page.waitForTimeout(3000);
   }
   const hit = await waitForColor(page, target, TURN_BUDGET_MS, mobileReloadPreview ?? undefined);
-  expect(hit.ok, `preview never turned ${target} (last ${hit.color})`).toBe(true);
+  expect(hit.ok, `preview never turned ${target} (last ${hit.color})${hit.said ? ` — ${hit.said}` : ""}`).toBe(true);
 
   // Revert as a SEPARATE task — exercises the new-task render path, not just a
   // follow-up on a warm session.
@@ -513,7 +566,7 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
     await page.waitForTimeout(3000);
   }
   const back = await waitForColor(page, "black", TURN_BUDGET_MS, mobileReloadPreview ?? undefined);
-  expect(back.ok, `preview never reverted to black (last ${back.color})`).toBe(true);
+  expect(back.ok, `preview never reverted to black (last ${back.color})${back.said ? ` — ${back.said}` : ""}`).toBe(true);
 }
 
 test.describe("vibe colour closed loop", () => {
