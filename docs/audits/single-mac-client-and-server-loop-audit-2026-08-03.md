@@ -170,8 +170,8 @@ Two different needs are being served by one timer:
 
 | Need | Right cadence | Today |
 |---|---|---|
-| Fleet keeps current | 6–12 h, jittered | ✅ correct |
-| **A box under active development takes a fix NOW** | seconds, on demand | ❌ manual ssh |
+| Fleet keeps current | 6–12 h, jittered | ✅ correct *(now 1–2 h, `a1f94a25e`)* |
+| **A box under active development takes a fix NOW** | seconds, on demand | ✅ `yaver announce-release` (1.99.403) |
 
 `agent_update_request.go` already implements the second one — *a surface can
 request a version and the box applies it*. So the primitive exists and the gap is
@@ -228,9 +228,29 @@ Precedent already in-tree: `mcp_registries.go` fetches
 `https://registry.npmjs.org/<pkg>`, and `deploy_tokens.go` calls
 `registry.npmjs.org/-/whoami`. The client code to reuse exists.
 
-**Not landed here.** The interval is tightened to 1–2h (`a1f94a25e`), which is
-safe under the current GitHub check. Repointing the version probe at npm touches
-the update path itself, and that path restarts the agent — it deserves its own
-change with a guard that proves a stale box updates and a current one does not
-restart. Doing it half-verified at the end of a long session is how the "silent
-serve" class of bug gets introduced.
+**Not landed here** — but LANDED SINCE, in **1.99.403**
+(`desktop/agent/agent_version_source.go`), together with the other two items in
+this section. All three call sites now share one npm-first resolver.
+
+⚠️ **Two claims in the table above were WRONG**, and are corrected here rather
+than left to mislead the next reader (the repo's first rule: markdown drifts,
+code is the source of truth). Both were written from memory and caught by
+curling the live registry before shipping:
+
+- **"conditional: ETag → 304" is FALSE for npm's `/<pkg>/latest`.** That
+  endpoint sends **no ETag at all**, only `cache-control: public, max-age=300`.
+  The saving is npm having no per-IP ceiling; there is no 304 to lean on.
+- The obvious `Accept: application/vnd.npm.install-v1+json` — the abbreviated
+  packument type — returns **HTTP 406** on `/<pkg>/latest`. It applies to the
+  full packument (`/<pkg>`). Sending it would have made every poll fail into the
+  GitHub fallback: working, quiet, and spending the exact budget this change
+  exists to save.
+
+Both are now recorded in the source with their date, and
+`TestLatestAgentVersion_AcceptHeaderIsOneTheRegistryAccepts` fails if the 406
+header comes back.
+
+The rest of §6's snowball list also landed: **`yaver announce-release`** gives
+the update-request path its first caller (verified against the live fleet, 6/6
+devices, box claimed it ~40 s later), and the loop harness now asserts the
+agent version it is testing against, turning a stale box into a NAMED skip.
