@@ -68,6 +68,16 @@ type devChildRecord struct {
 	Kind  string `json:"kind"`  // "expo-web", "metro", "flutter", "next", …
 	Match string `json:"match"` // comma-separated substrings that must ALL still appear in the live argv
 
+	// Argv is the child's ACTUAL command line, read once at record time.
+	//
+	// Added 2026-08-03 after the needle-only identity check failed in the
+	// direction nobody guards against: it spared an orphan forever. See
+	// RecordDevChild for the measurement. An exact argv match is a stronger
+	// identity proof than substrings anyway — a recycled PID would have to be
+	// running the byte-identical command line to be mistaken for this one.
+	// Empty on records written by older agents, which fall back to Match.
+	Argv string `json:"argv,omitempty"`
+
 	WorkDir string `json:"workDir"` // for the log line, so the operator knows whose it was
 	Started string `json:"startedAt"`
 }
@@ -127,6 +137,46 @@ func RecordDevChild(rec devChildRecord) {
 	}
 	if rec.Started == "" {
 		rec.Started = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	// ── PROVE THE NEEDLE MATCHES NOW, OR IT NEVER WILL ────────────────────────
+	//
+	// The identity guard was written to stop the reaper killing a recycled PID.
+	// It failed in the direction nobody thinks to check: it SPARED an orphan
+	// forever, and kept sparing it.
+	//
+	// Measured on ubuntu-4gb, 2026-08-03, from the box's own journal:
+	//
+	//   pid 4170444 · :8088 — a stale record claims this PID is a expo, but the
+	//   live process is something else · pid 4170444 is no longer expo (argv
+	//   does not match "npx,8088") — left alone (spared)
+	//
+	// The needle was "npx,8088" because baseDevServer.startProcess records the
+	// SPAWN NAME. But `npx` re-execs as `npm exec`, so the live argv reads
+	// `npm exec expo start --web --port 8088` and the string "npx" is not in it.
+	// Every child spawned that way was unreapable by construction, on every
+	// box, since the registry shipped. The box had six orphan trees with
+	// ppid=1, ages up to 6.4 days, ~985 MB resident, one of them squatting the
+	// preferred port 8081 and serving a DIFFERENT PROJECT's app — which is
+	// exactly the "user edits their source and sees nothing change" damage this
+	// file's header warns about.
+	//
+	// It went unnoticed because sparing is the SAFE-LOOKING outcome. The log
+	// line reads like the guard doing its job.
+	//
+	// So: read the child's real argv immediately after spawn and store it. That
+	// is a stronger identity than substrings, and it cannot drift away from the
+	// process it describes because it is copied FROM that process. If the
+	// caller's needle also fails against the live argv, say so loudly — a
+	// needle that does not match its own process at birth is a latent
+	// unreapable record, and now it names itself instead of waiting six days.
+	if argv := processArgv(rec.PID); argv != "" {
+		rec.Argv = argv
+		if !argvMatchesAll(argv, rec.Match) {
+			log.Printf("[dev-children] WARNING: pid %d (%s, :%d) was recorded with match %q, which does NOT appear in its own argv %q — "+
+				"falling back to exact-argv identity. Fix the Match at the call site; a needle that fails at birth can never reap.",
+				rec.PID, rec.Kind, rec.Port, rec.Match, argv)
+		}
 	}
 	devChildRegistryMu.Lock()
 	defer devChildRegistryMu.Unlock()
@@ -191,6 +241,23 @@ func argvMatchesAll(argv, match string) bool {
 	return found > 0
 }
 
+// devChildIdentityHolds decides whether the live process at this PID is still
+// the child we recorded.
+//
+// Exact argv first, because it is the strongest proof available and it is
+// copied from the process itself at spawn time — a recycled PID would have to
+// be running a byte-identical command line to be mistaken for this one.
+//
+// The comma-separated needles remain as the fallback for records written by
+// older agents (no Argv field) so an upgrade does not strand the very orphans
+// this change exists to collect.
+func devChildIdentityHolds(argv string, r devChildRecord) bool {
+	if strings.TrimSpace(r.Argv) != "" {
+		return argv == r.Argv
+	}
+	return argvMatchesAll(argv, r.Match)
+}
+
 // ReapOrphanedDevChildren kills dev children left behind by a previous agent and
 // returns one human line per action taken. Called once at serve startup, before
 // any port is allocated, so the allocator sees the machine's real free ports
@@ -224,7 +291,7 @@ func reapOrphanedDevChildren(now time.Time) []CustodianFinding {
 		if argv == "" {
 			continue // already gone; drop the record silently
 		}
-		if !argvMatchesAll(argv, r.Match) {
+		if !devChildIdentityHolds(argv, r) {
 			// PID recycled — this is somebody else's process now. Dropping the
 			// record is the whole point of the guard: never kill on a number.
 			findings = append(findings, CustodianFinding{

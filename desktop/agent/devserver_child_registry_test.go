@@ -162,3 +162,59 @@ func TestArgvMatchesAllRequiresEveryNeedle(t *testing.T) {
 		}
 	}
 }
+
+// TestDevChildIdentity_ExactArgvBeatsAWrongNeedle — the guard must not SPARE
+// forever.
+//
+// Reproduces the ubuntu-4gb failure of 2026-08-03 exactly. baseDevServer
+// .startProcess recorded Match "npx,8088" from the spawn NAME, but `npx`
+// re-execs as `npm exec`, so the live argv never contains "npx":
+//
+//	npm exec expo start --web --port 8088 --host lan
+//
+// Needle-only identity therefore said "this is somebody else's process" and
+// spared it — on every box, for every child spawned that way, since the
+// registry shipped. Six orphan trees, up to 6.4 days old, ~985 MB, one holding
+// the preferred port and serving a different project.
+//
+// Sparing is the safe-LOOKING outcome, which is why nobody caught it: the log
+// line reads like the guard working.
+//
+// Delete the Argv branch in devChildIdentityHolds and this test fails.
+func TestDevChildIdentity_ExactArgvBeatsAWrongNeedle(t *testing.T) {
+	liveArgv := "npm exec expo start --web --port 8088 --host lan"
+	rec := devChildRecord{
+		PID: 4170444, Port: 8088, Kind: "expo",
+		Match: "npx,8088", // what the call site actually wrote — and it never matches
+		Argv:  liveArgv,   // what RecordDevChild now captures from the process itself
+	}
+	if argvMatchesAll(liveArgv, rec.Match) {
+		t.Fatal("precondition broken: the needle was supposed to NOT match — this test no longer reproduces the bug")
+	}
+	if !devChildIdentityHolds(liveArgv, rec) {
+		t.Fatal("the reaper still cannot identify its own child — it would spare this orphan forever, which is the bug")
+	}
+}
+
+// And the safety property the guard exists for must survive: a recycled PID
+// running something else is still spared.
+func TestDevChildIdentity_RecycledPidIsStillSpared(t *testing.T) {
+	rec := devChildRecord{
+		PID: 4170444, Port: 8088, Kind: "expo",
+		Match: "expo,8088",
+		Argv:  "npm exec expo start --web --port 8088 --host lan",
+	}
+	if devChildIdentityHolds("/Applications/Sublime Text.app/Contents/MacOS/sublime_text", rec) {
+		t.Fatal("the reaper would kill an unrelated process that inherited the PID")
+	}
+}
+
+// Records written by an OLDER agent have no Argv, and must still be reapable
+// via the needles — otherwise upgrading strands exactly the orphans this
+// change is meant to collect.
+func TestDevChildIdentity_LegacyRecordFallsBackToNeedles(t *testing.T) {
+	rec := devChildRecord{PID: 1, Port: 19006, Kind: "expo-web", Match: "expo start,--web,19006"}
+	if !devChildIdentityHolds("node /x/node_modules/.bin/expo start --web --port 19006", rec) {
+		t.Fatal("a legacy record lost its identity path on upgrade")
+	}
+}
