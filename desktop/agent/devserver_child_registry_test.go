@@ -218,3 +218,59 @@ func TestDevChildIdentity_LegacyRecordFallsBackToNeedles(t *testing.T) {
 		t.Fatal("a legacy record lost its identity path on upgrade")
 	}
 }
+
+// TestDevChildIdentity_StartTokenSurvivesArgvRewrite — npx rewrites its own
+// command line, so argv is not an identity either.
+//
+// Measured LIVE on ubuntu-4gb, 2026-08-03, on the very restart that was meant
+// to prove the exact-argv fix:
+//
+//	at spawn      node /root/.yaver/runtimes/node/bin/npx expo start --dev-client --port 8089 --host lan
+//	moments later npm exec expo start --dev-client --port 8089 --host lan
+//
+// Both the "npx" needle and the recorded argv stop matching the process they
+// describe, the reaper spares it, and the orphan count went 7 → 8.
+//
+// (PID, start time) cannot be rewritten and is unique for all time on a
+// machine. Remove the StartToken branch from devChildIdentityHolds and this
+// fails.
+func TestDevChildIdentity_StartTokenSurvivesArgvRewrite(t *testing.T) {
+	self := os.Getpid()
+	tok := processStartToken(self)
+	if tok == "" {
+		t.Skip("no readable process start time on this platform")
+	}
+	rec := devChildRecord{
+		PID:  self,
+		Port: 8089, Kind: "expo",
+		Match:      "npx,8089",                                            // never matched after the rewrite
+		Argv:       "node /root/.yaver/.../npx expo start --port 8089",    // matched only at spawn
+		StartToken: tok,
+	}
+	// The live argv is the REWRITTEN form — neither the needle nor the recorded
+	// argv can save us here.
+	rewritten := "npm exec expo start --dev-client --port 8089 --host lan"
+	if argvMatchesAll(rewritten, rec.Match) || rewritten == rec.Argv {
+		t.Fatal("precondition broken: this test no longer reproduces the argv rewrite")
+	}
+	if !devChildIdentityHolds(rewritten, rec) {
+		t.Fatal("the reaper still cannot identify a child whose argv was rewritten — it would spare the orphan again")
+	}
+}
+
+// The safety property, restated against the strongest identity: a DIFFERENT
+// start time means a recycled PID, and must never be killed.
+func TestDevChildIdentity_DifferentStartTokenIsSpared(t *testing.T) {
+	self := os.Getpid()
+	if processStartToken(self) == "" {
+		t.Skip("no readable process start time on this platform")
+	}
+	rec := devChildRecord{
+		PID: self, Port: 8089, Kind: "expo",
+		Match:      "expo,8089",
+		StartToken: "definitely-not-this-processes-start-time",
+	}
+	if devChildIdentityHolds("npm exec expo start --dev-client --port 8089", rec) {
+		t.Fatal("a record whose start time does not match the live process was accepted — that is the PID-reuse kill")
+	}
+}

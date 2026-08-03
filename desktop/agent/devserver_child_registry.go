@@ -52,6 +52,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -68,15 +69,32 @@ type devChildRecord struct {
 	Kind  string `json:"kind"`  // "expo-web", "metro", "flutter", "next", …
 	Match string `json:"match"` // comma-separated substrings that must ALL still appear in the live argv
 
-	// Argv is the child's ACTUAL command line, read once at record time.
-	//
-	// Added 2026-08-03 after the needle-only identity check failed in the
-	// direction nobody guards against: it spared an orphan forever. See
-	// RecordDevChild for the measurement. An exact argv match is a stronger
-	// identity proof than substrings anyway — a recycled PID would have to be
-	// running the byte-identical command line to be mistaken for this one.
-	// Empty on records written by older agents, which fall back to Match.
+	// Argv is the child's command line as read at record time. Kept as a
+	// diagnostic and as a weak fallback — see StartToken for why it is NOT the
+	// identity.
 	Argv string `json:"argv,omitempty"`
+
+	// StartToken is the child's PROCESS START TIME, and it is the real identity.
+	//
+	// argv looked like the obvious answer and is wrong, measured live on
+	// ubuntu-4gb 2026-08-03. `npx` REWRITES ITS OWN COMMAND LINE after startup:
+	//
+	//   at spawn   node /root/.yaver/runtimes/node/bin/npx expo start --dev-client --port 8089 --host lan
+	//   moments later   npm exec expo start --dev-client --port 8089 --host lan
+	//
+	// So an argv captured at record time stops matching the very process it
+	// describes, and the reaper spares it — the same failure as the "npx" needle,
+	// reached by a different route. The orphan count went 7 → 8 on the restart
+	// that was supposed to prove the fix.
+	//
+	// A process's start time cannot be rewritten. (PID, start time) is unique
+	// for all time on a machine: a recycled PID necessarily started later, so it
+	// carries a different token. That is the canonical PID-reuse guard, and
+	// unlike argv it has no way to drift.
+	//
+	// Empty when unreadable, in which case identity falls back to argv and then
+	// to the needles — never to the bare PID.
+	StartToken string `json:"startToken,omitempty"`
 
 	WorkDir string `json:"workDir"` // for the log line, so the operator knows whose it was
 	Started string `json:"startedAt"`
@@ -170,11 +188,15 @@ func RecordDevChild(rec devChildRecord) {
 	// caller's needle also fails against the live argv, say so loudly — a
 	// needle that does not match its own process at birth is a latent
 	// unreapable record, and now it names itself instead of waiting six days.
+	rec.StartToken = processStartToken(rec.PID)
 	if argv := processArgv(rec.PID); argv != "" {
 		rec.Argv = argv
-		if !argvMatchesAll(argv, rec.Match) {
-			log.Printf("[dev-children] WARNING: pid %d (%s, :%d) was recorded with match %q, which does NOT appear in its own argv %q — "+
-				"falling back to exact-argv identity. Fix the Match at the call site; a needle that fails at birth can never reap.",
+		if rec.StartToken == "" && !argvMatchesAll(argv, rec.Match) {
+			// No start token AND a needle that already fails: this record can
+			// never identify its process, so it is a guaranteed future orphan.
+			// Say so now rather than six days from now.
+			log.Printf("[dev-children] WARNING: pid %d (%s, :%d) has no readable start time and its match %q does not appear in its own argv %q — "+
+				"this child will NOT be reapable. Fix the Match at the call site.",
 				rec.PID, rec.Kind, rec.Port, rec.Match, argv)
 		}
 	}
@@ -252,10 +274,71 @@ func argvMatchesAll(argv, match string) bool {
 // older agents (no Argv field) so an upgrade does not strand the very orphans
 // this change exists to collect.
 func devChildIdentityHolds(argv string, r devChildRecord) bool {
+	// 1. Start time — the only field nothing can rewrite. (PID, start time) is
+	//    unique for all time on a machine, so this is both necessary and
+	//    sufficient: equal means same incarnation, different means recycled.
+	if tok := strings.TrimSpace(r.StartToken); tok != "" {
+		if live := processStartToken(r.PID); live != "" {
+			return live == tok
+		}
+		// Recorded a token but cannot read one now — fall through rather than
+		// guess. An unreadable /proc entry is not evidence of anything.
+	}
+	// 2. Exact argv, for records written before StartToken existed.
 	if strings.TrimSpace(r.Argv) != "" {
 		return argv == r.Argv
 	}
+	// 3. The original needles, for the oldest records.
 	return argvMatchesAll(argv, r.Match)
+}
+
+// processStartToken returns a stable, unforgeable marker of WHICH incarnation
+// of this PID is running: its start time.
+//
+// Linux: field 22 of /proc/<pid>/stat, in clock ticks since boot. The comm
+// field (field 2) is parenthesised and may itself contain spaces and
+// parentheses, so the fields are counted from the LAST ')' — splitting the
+// whole line on whitespace is the classic way to misparse this.
+//
+// Darwin: `ps -o lstart=`, which prints a fixed-format absolute start time.
+//
+// Returns "" when unreadable; callers must treat that as "unknown", never as a
+// match.
+func processStartToken(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	switch runtime.GOOS {
+	case "linux":
+		raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err != nil {
+			return ""
+		}
+		s := string(raw)
+		close := strings.LastIndex(s, ")")
+		if close < 0 || close+2 >= len(s) {
+			return ""
+		}
+		// After "pid (comm) " the remaining fields start at index 3 (state).
+		// starttime is field 22 overall → index 19 of this remainder.
+		fields := strings.Fields(s[close+1:])
+		if len(fields) < 20 {
+			return ""
+		}
+		return fields[19]
+	case "darwin":
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "ps", "-o", "lstart=", "-p", fmt.Sprint(pid))
+		cmd.WaitDelay = 2 * time.Second
+		out, err := cmd.Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	default:
+		return ""
+	}
 }
 
 // ReapOrphanedDevChildren kills dev children left behind by a previous agent and
