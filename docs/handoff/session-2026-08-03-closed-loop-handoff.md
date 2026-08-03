@@ -182,24 +182,46 @@ Next step: run it with `MOBILE_WEB_URL` set and read the named cause.
 
 ---
 
-## 8. Still open
+## 8. The update path — all three landed in 1.99.403
 
-1. **Idle-aware auto-update** — the user asked for it: an update must not restart
-   the agent mid-task. `desktop/agent/agent_update_idle.go` is written
-   (busy-probe registry + pure `decideUpdateWindow` + a 12 h starvation ceiling)
-   but **not wired and not tested**. The design point: the old "only when idle"
-   gate was deleted in 2026-07-17 because a permanently-busy box never updated;
-   defer-with-ceiling serves both. Note the coupling to §4 — a restart used to
-   orphan a Metro server every time, and the check interval is now 1-2 h.
-2. **Repoint the version check at npm** (audit §6b) — designed, not built.
-   `registry.npmjs.org/yaver-cli/latest` has no per-IP ceiling; the signed binary
-   still comes from the GitHub release. Three call sites hand-roll the GitHub
-   lookup today (`main.go` `checkAutoUpdate`, `update_http.go`, `self_heal.go`).
-3. **Nothing announces a release to owned boxes.** `agent_update_request.go`
-   implements on-demand update; no caller in the release path uses it. Three
-   manual `npm i -g` over ssh were the real update mechanism again today.
-4. **Mobile arc re-run** (§6).
-5. **watch / Wear / car arcs** — the shared primitives now exist.
+Every open item from the previous handoff's §4 is done. They ship together
+because they are one story: an update should not interrupt your work, should not
+spend a rate-limited budget to discover it exists, and should not wait 1-2 h for
+you to hear about it.
+
+1. **Idle-aware auto-update.** Defer while busy, re-check in minutes, apply
+   anyway past a **12 h ceiling** and say what it costs. Both obvious answers had
+   already shipped and both were wrong — "only when idle" (pre-2026-07-17)
+   starved busy boxes; "always" killed running tasks. Each has a negative
+   control, verified by reintroducing the bug.
+   `GET /agent/update` now carries `deferred` / `deferredReason` /
+   `deferredBusy` / `willInstallBy`, so a hold is visible rather than silent.
+   Attended paths (`yaver update`, `POST /agent/update`, a remote request) are
+   deliberately NOT gated.
+2. **npm is the version source; GitHub still serves the binary.** Three
+   hand-rolled `releases/latest` calls collapsed into one resolver. Two design
+   claims were wrong and were caught by curling the live registry first:
+   `Accept: application/vnd.npm.install-v1+json` **406s** on `/<pkg>/latest`
+   (it applies to the full packument), and that endpoint sends **no ETag** —
+   only `cache-control: max-age=300`. The saving is npm having no per-IP
+   ceiling, not a 304.
+3. **`yaver announce-release [version] [--device <id>]`.** The
+   `desiredAgentVersion` path had implemented the receiving half for months with
+   **no Go caller anywhere**. Verified against the live fleet: 6/6 devices, and
+   ubuntu-4gb claimed it ~40 s later. `build-cli-native.sh` now prints the
+   ordered sequence — **release → npm → announce** — and why the order matters.
+
+**Still open:**
+
+- **Mobile arc re-run** (§6) — needs `MOBILE_WEB_URL`; the oracle is wired so a
+  failure will now name itself.
+- **watch / Wear / car arcs** — the shared primitives (`_framePixels`,
+  `_visionOracle`, the surface table) now exist; each needs its profile row and
+  an arc.
+- **`vibe` capture height** — the profile height is the WINDOW height and the
+  captured viewport is ~143 px shorter (browser chrome). The arc allows ±160 on
+  height and ~0 on width. If a surface ever needs an exact viewport, the browser
+  layer would have to size the viewport rather than the window.
 
 ---
 
