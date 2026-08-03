@@ -1,161 +1,206 @@
-# Handoff — 2026-08-02/03 · closed loops, deploys, failure plumbing
+# Handoff — 2026-08-03 · tvOS + visionOS closed loops PASS
 
-**Next session's focus (user's words):** closed-loop tests for **tvOS + AR/VR**
-using the **Vision text oracle**, against **ubuntu-4gb**, and **npm-based
-auto-update**.
+**Previous focus (delivered):** closed-loop tests for tvOS + AR/VR using the
+Vision text oracle, against ubuntu-4gb.
 
-Read `CLAUDE.md` first — the rule that governs all of this is now written there:
+Read `CLAUDE.md` first. The rule that governed all of this is written there:
 **headless first, then closed loop, and snowball both.**
 
 ---
 
-## 1. START HERE — the exact next four steps
-
-Everything below is blocked on one thing: the box cannot launch a browser, so it
-cannot capture frames, so the TV/headset loops have nothing to sample.
-
-1. **Cut the 1.99.399 release.** Artifacts are already built, signed and
-   notarised in `dist/cli-1.99.399/` (7 assets). It carries the Chrome fix.
-   ```bash
-   gh release create v1.99.399 --title "Yaver CLI v1.99.399" --generate-notes dist/cli-1.99.399/*
-   cd cli && npm publish          # release FIRST, npm LAST — postinstall has no retry
-   ```
-2. **Update the box:** `yaver ssh linux 'npm i -g yaver-cli@latest && sudo systemctl restart yaver'`
-3. **Verify headlessly (seconds, not a 25-min run):**
-   ```bash
-   set -a && . ./.env.test && set +a
-   curl -s -m 30 -X POST -H "Authorization: Bearer $YAVER_TEST_TOKEN" \
-     -H 'Content-Type: application/json' \
-     -d '{"project":"mobile","targetUrl":"http://127.0.0.1:8086","mode":"live","width":1280,"height":800}' \
-     http://100.75.123.78:18080/vibing/preview/start
-   ```
-   Expect `ok:true`. If it still 400s with *"cannot create temporary directory"*,
-   the box did not actually take the new agent — check `/info` version.
-4. **Then run the arcs, sequentially:**
-   ```bash
-   set -a && . ./.env.test && set +a
-   VIBE_BOX_HOST=http://100.75.123.78:18080 npx tsx e2e/native-headless-vibe.mjs tv
-   VIBE_BOX_HOST=http://100.75.123.78:18080 npx tsx e2e/native-headless-vibe.mjs vision
-   ```
-
----
-
-## 2. Closed-loop state — what is actually true
+## 1. State — what is actually true now
 
 | Loop | Verdict | Evidence |
 |---|---|---|
-| **Web** (dashboard → ubuntu-4gb) | ✅ **PASSED** | `1 passed (4.7m)`, black→RED→black in pixels, OpenCode/GLM-5.2. Video was lost to the old shared output dir (fixed since — `aa93ff76b`). |
-| **Mobile** (RN-web, iPhone 15 Pro ctx) | ❌ not green | Reaches the vibe; the runner **does** edit `login.tsx` on the box (`5 +++--`), but the preview never shows red. |
-| **tvOS** | ⏸ never ran | `/vibing/preview/start` → 400, snap Chromium |
-| **visionOS** | ⏸ never ran | same |
+| **Web** (dashboard → ubuntu-4gb) | ✅ PASSED | unchanged this session |
+| **tvOS** | ✅ **PIXELS** | black→RED→black, agent 1.99.400+, opencode/`glm-5.2` |
+| **visionOS (AR/VR)** | ✅ **PIXELS** | same arc, `vision` profile (1280x720) |
+| **Mobile** (RN-web, iPhone 15 Pro ctx) | ⏸ not re-run | box side cleared (below); oracle now wired |
+| watch / Wear / car | ⬜ no arc | inherit `_framePixels` + `_visionOracle` when written |
 
-### The mobile blocker, precisely
-The task lands in `review`, `git diff` on the box shows the correct edit, and the
-sampled frame stays black. Either the box's expo web preview does not rebundle,
-or the arc's refresh is not reaching it. **Diagnose from the box, not the test** —
-that is how the last four false reds were caught.
+```bash
+set -a && . ./.env.test && set +a
+VIBE_BOX_HOST=http://100.75.123.78:18080 npx tsx e2e/native-headless-vibe.mjs tv
+VIBE_BOX_HOST=http://100.75.123.78:18080 npx tsx e2e/native-headless-vibe.mjs vision
+```
+
+**Prerequisite:** a dev server must be running on the box. The arc does not start
+one (it only starts the *capture*), and it NAMED-skips if none is found:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $YAVER_TEST_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"framework":"expo","workDir":"/root/Workspace/yaver.io/mobile","devMode":"web"}' \
+  http://100.75.123.78:18080/dev/start
+```
 
 ---
 
-## 3. The Vision text oracle — READY, and the highest-ROI lever
+## 2. Why the TV/vision arcs had never passed — three stacked defects
 
-`desktop/agent/screenread/main.swift` + `e2e/screenread-oracle.test.mjs`.
+They were blocked on the box being unable to launch a browser. But **the arc
+could not have passed even after that was fixed**:
 
-Measured on the tvOS sign-in fixture: **483 ms, 6 blocks, confidence 1.00**, and
-it read the device code `EXUY-2270` off the screen. That is a new **capability**:
-tvOS headless auth needs no human.
+1. It walked the **compressed PNG** three bytes at a time and called the result
+   RGB. Every colour it produced was sampled from a zlib stream.
+2. It handed an **array of triples** to `classifyVibeColor`, which takes a flat
+   `[r,g,b]` — so the type guard returned `"unknown"` for every frame, forever.
+3. It never asked whether the box **could** capture. The agent already knew and
+   said so; the arc waited 12 minutes for a frame that could not exist.
+
+Fixed by `e2e/_framePixels.mjs` (dependency-free PNG decoder, 13 round-trip
+assertions incl. a negative control that the old byte-walking path *cannot*
+reach a colour) and a capability preflight. The arc now gates in seconds:
+
+```
+agent < 1.99.400      → SKIP (NAMED) + the exact npm command
+browser cannot launch → SKIP (NAMED) + the exact apt command
+```
+
+---
+
+## 3. Product defects found by RUNNING it (all shipped, all with guards)
+
+| Shipped | Defect |
+|---|---|
+| **1.99.400** | `/usr/bin/chromium-browser` is Ubuntu's **snap redirector** — innocent path, identical confinement failure — so 1.99.399's `/snap/` path test was incomplete. Chrome is now chosen by **running `--version`**. Same change fixed `probeBrowserLaunches`, which searched `chromium` first and **returned on the first failure**, reporting "Stream over WebRTC — not supported" on a box with a working Google Chrome. |
+| **1.99.401** | The capture **viewport was reported but never applied**: arc asked 1920x1080, API answered 1920x1080, PNG was 1280x757 (`WindowSize(1280, 900)` hardcoded). Every TV/vision/watch verdict was reached at desktop size. Verified after: **1920x937** — width exact; 143 px is browser chrome. |
+| **1.99.402** | The **orphan reaper spared every child it spawned**. See §4. |
+| — | `./deploy/deploy.sh npm` — the canonical front door — died on macOS bash 3.2 with `pass_args[@]: unbound variable` whenever no extra flag was passed. |
+
+---
+
+## 4. The dev-server orphan leak — read this before touching the reaper
+
+Eight orphan Expo trees on ubuntu-4gb, `ppid=1`, ages to **6.4 days**, **1,653 MB**
+resident, one squatting port 8081 and serving a **different project** (sfmg).
+
+`ReapOrphanedDevChildren` was running the whole time and **sparing** them:
+
+```
+pid 4170444 · :8088 — a stale record claims this PID is a expo, but the live
+process is something else · argv does not match "npx,8088" — left alone
+```
+
+Two identities were tried and **both were derived from something the process
+controls**:
+
+1. **Needles** (`"npx,8088"`) — `npx` re-execs as `npm exec`, so `"npx"` is
+   never in the live argv. Unreapable by construction since the registry shipped.
+2. **Exact argv captured at spawn** (1.99.401) — defeated live on the very
+   restart meant to prove it, because **npx rewrites its own command line**:
+   `node …/npx expo start …` → `npm exec expo start …`. Orphan count went 7 → 8.
+
+**The answer is the process START TIME** (1.99.402). `(PID, start time)` is
+unique for all time on a machine — a recycled PID necessarily started later.
+Linux reads field 22 of `/proc/<pid>/stat`, counted from the **last `)`**.
+
+Three things worth not rediscovering:
+
+- **Sparing is the safe-LOOKING outcome.** The log line reads exactly like the
+  guard doing its job. That is why it survived.
+- **A spared record is DROPPED from the registry**, so a sparing bug is
+  self-erasing — it cannot be retried after a fix. That is why the pre-existing
+  orphans had no records (`dev-children.json` read `null`).
+- **`KillMode=process` is deliberate** (`main.go:2230`) — it protects the tmux
+  server holding remote coding sessions. systemd will therefore *never* reap dev
+  children. **The registry is the only cleanup path there is.**
+
+Box resolved 2026-08-03: 8 trees killed, RSS 1,653 → 265 MB, and `/dev/start`
+now returns **8081, portSubstituted: none** for the first time in 6.4 days.
+
+---
+
+## 5. The Vision text oracle — now shared by every surface
+
+`desktop/agent/screenread/main.swift` + **`e2e/_visionOracle.mjs`** (extracted so
+mobile, web, TV and AR/VR share ONE implementation) + `_visionOracle.d.mts` for
+the typechecked caller.
+
+Verified against a live frame: **13 blocks**, read the whole sign-in screen, and
+classified it `signed-out` with a named cause. It carries a table mapping what a
+screen SAYS to what is wrong: still bundling, signed out, build error, runner
+quota, transport pending, browser cannot launch. **Add a row every time a loop
+fails for a new reason.**
 
 ```bash
 xcrun swiftc -O desktop/agent/screenread/main.swift -o desktop/agent/screenread/screenread \
   && codesign --force -s - desktop/agent/screenread/screenread     # SAME command, always
-node e2e/screenread-oracle.test.mjs                                 # 2 assertions, both pass
+node e2e/screenread-oracle.test.mjs
 ```
 
 🔴 **Never split compile and sign.** macOS kills an unsigned helper under launchd
 with `OS_REASON_CODESIGNING` *while launchd reports "spawn scheduled"* — it looks
-like a hang. That took this repo's agent down on 2026-07-25.
+like a hang.
 
-The binary is gitignored (built locally). It is **opportunistic, never
-load-bearing**: macOS-only, skips elsewhere, and only ever ADDS a reason to a
-failure the colour verdict already reached. Design: `docs/architecture/APPLE_VISION_TEXT_ORACLE.md`.
-
----
-
-## 4. npm auto-update — decided, half-landed
-
-- ✅ **Hourly cadence landed** (`a1f94a25e`): 6–12 h → 1–2 h jittered. 6 h is a
-  desktop-app number (Chrome ~5 h, Sparkle 24 h); daemons that must carry fixes
-  sit at 1–4 h.
-- ⬜ **Repoint the version check at npm** — designed, not built. Rationale in
-  `docs/audits/single-mac-client-and-server-loop-audit-2026-08-03.md` §6b.
-
-**Check npm, fetch from GitHub.** GitHub is free for a public repo but the REST
-API is throttled at **60 req/h per source IP** unauthenticated, which bites a
-datacenter behind one egress. `registry.npmjs.org/yaver-cli/latest` has no
-comparable ceiling, supports ETag/304, and npm is the canonical install path.
-Precedent in-tree: `mcp_registries.go`, `deploy_tokens.go` already call it.
-
-**Why it was not landed:** it touches the path that **restarts the agent**. It
-needs a guard proving a stale box updates *and* a current one does not restart.
-
-**Also missing:** nothing announces a release to owned boxes.
-`agent_update_request.go` already implements on-demand update; no caller in the
-release path uses it. Tonight the box sat on 1.99.397 while the fix was in
-1.99.399, and two manual `npm i -g` over ssh were the real update mechanism.
+Opportunistic, never load-bearing: macOS-only, skips elsewhere, and only ever
+ADDS a reason to a failure the colour verdict already reached.
 
 ---
 
-## 5. Shipped this session
+## 6. The mobile blocker — the handoff's old hypothesis was WRONG
 
-**Deploys:** iOS TestFlight **500** (VALID, carries watchOS + CarPlay) · **tvOS** ·
-**visionOS** · **Play/Android 290** (carries Wear OS) · Convex prod ×2 ·
-Cloudflare web ×2 · npm **1.99.397** then **1.99.398** · ubuntu-4gb agent 1.99.398.
+The previous handoff said *"either the box's expo web preview does not rebundle,
+or the arc's refresh is not reaching it"*. Measured: **the bundle is correct.**
+The 20.5 MB bundle served on the dev-server port contains the red edit (3 hits of
+`backgroundColor: "red"`, matching `login.tsx:484/486/490`).
 
-**Product bugs fixed** (each with a guard):
-1. Browser feedback recordings never linked to their report — `.webm` unhandled
-2. Five landed features un-landed by an abandoned merge — restored
-3. Dead click on device-code approval when the session expired
-4. tvOS/web named one failure differently (`relay-auth` vs `auth`); the parity
-   guard substring-matched past it
-5. **The whole stack pointed at a Codex model the subscription refuses** — Convex
-   normalizer, both defaults, the dispatch funnel. Probed on two machines:
-   `gpt-5.6-terra/sol/luna`, `gpt-5.5`, `gpt-5.4` **work**; `gpt-5.3-codex` is
-   **rejected**
-6. `runner.quota.exhausted` — quota walls were reported as generic subprocess
-   crashes, advising a model change that cannot help
-7. z.ai **1113** classifier, with the Coding-Plan caveat
-8. `testflight_builds` MCP verb — dead since inception (`altool --list-builds`
-   does not exist)
-9. iOS DerivedData in `/tmp` → every archive a cold 2,270-file build (~45 min)
-10. Play deploy killed by a `cp` of a file onto itself, right after
-    "BUILD SUCCESSFUL"
-11. visionOS archive broken by a duplicate `FailureSignals.swift`
-12. **Snap-confined Chromium** chosen over `/usr/bin/google-chrome`
-13. `createTask` on the shared native client — **the single reason tvOS,
-    visionOS, watch and Wear could never start a vibe**
-14. Client↔agent **render-lane negotiation**, incl. joint sessions (TV + watch)
+So the box side is cleared and the fault is downstream. The mobile arc now wires
+the oracle into both assertions, so the next failing run says *why* instead of
+"preview never turned red (last black)". The iframe is cross-origin, so
+`document.body.innerText` could never see the app — the oracle reads pixels and
+does not care.
 
-**Harness bugs fixed** — all four were the *test* lying while the product worked:
-dashboard selectors in the mobile path; a sign-in check that read the runner's own
-`grep "Continue with Apple"` output as proof of logout; a preview polled without
-ever being re-rendered; exact-text matching against paths the UI truncates.
-Plus: loop artifacts were deleted by the next run, and the mobile arc's
-hand-created context never recorded video despite `video: "on"` (config applies
-only to Playwright-managed contexts).
+Next step: run it with `MOBILE_WEB_URL` set and read the named cause.
 
 ---
 
-## 6. Traps that will cost you time
+## 7. Endpoint facts that cost time
+
+- `GET /vibing/preview/frames/{hash}` requires **`?project=`**. Without it the
+  body is `{"error":"project query param required"}` — which the old sampler
+  would have classified as a colour.
+- `POST /dev/web-preview/start` returns `{"port":19006,"webUrl":"/dev-web/"}` —
+  a **relative** URL chromedp cannot navigate, and Expo's *canonical* port, not
+  the bound one. Use `/info` → `devServer.port`.
+- `POST /vibing/preview/snapshot` is **POST**, not GET.
+- Full flow: `/dev/start` → `/vibing/preview/start` → `/vibing/preview/snapshot`
+  → `/vibing/preview/frames/{hash}?project=`.
+
+---
+
+## 8. Still open
+
+1. **Idle-aware auto-update** — the user asked for it: an update must not restart
+   the agent mid-task. `desktop/agent/agent_update_idle.go` is written
+   (busy-probe registry + pure `decideUpdateWindow` + a 12 h starvation ceiling)
+   but **not wired and not tested**. The design point: the old "only when idle"
+   gate was deleted in 2026-07-17 because a permanently-busy box never updated;
+   defer-with-ceiling serves both. Note the coupling to §4 — a restart used to
+   orphan a Metro server every time, and the check interval is now 1-2 h.
+2. **Repoint the version check at npm** (audit §6b) — designed, not built.
+   `registry.npmjs.org/yaver-cli/latest` has no per-IP ceiling; the signed binary
+   still comes from the GitHub release. Three call sites hand-roll the GitHub
+   lookup today (`main.go` `checkAutoUpdate`, `update_http.go`, `self_heal.go`).
+3. **Nothing announces a release to owned boxes.** `agent_update_request.go`
+   implements on-demand update; no caller in the release path uses it. Three
+   manual `npm i -g` over ssh were the real update mechanism again today.
+4. **Mobile arc re-run** (§6).
+5. **watch / Wear / car arcs** — the shared primitives now exist.
+
+---
+
+## 9. Traps
 
 1. **`.env.test` has working credentials** — `YAVER_TEST_TOKEN` (valid for the
-   box) and `YAVER_TEST_EMAIL`/`PASSWORD`. The mobile arc needs the password
-   path; a token alone leaves every device call 401.
-2. **This Mac's `yaver` CLI session expires often.** `yaver auth` → approve on
-   the phone. `.env.test`'s token is independent and kept working all night.
-3. **`yaver ssh linux` flakes.** Retry once before diagnosing.
-4. **Load.** This Mac hit **270** with five simulators + an Xcode archive; a
-   starved Playwright run produces false timeouts. `xcrun simctl shutdown all`.
+   box) and `YAVER_TEST_EMAIL`/`PASSWORD`. The mobile arc needs the password path.
+2. **`yaver ssh linux` flakes.** Retry once before diagnosing.
+3. **`go test` in `desktop/agent` can sign you out** — use a narrow `-run`. The
+   new tests isolate both `PATH` **and `HOME`** (`playwrightChromePath` globs the
+   real `~/.cache/ms-playwright`, so a test without HOME isolation passes on a
+   laptop and fails in CI).
+4. **Never pipe a deploy/build script to `tail`** in a background job — the
+   output is buffered until exit, so you cannot watch progress.
 5. **`tvos/` and `watch/` xcodeproj are gitignored + XcodeGen-generated** — run
    `xcodegen generate` before any native build.
-6. **Never pipe a deploy script to `tail`** — the pipeline's exit code is
-   `tail`'s, and it masked two real failures this session.
+6. Local release path: `./scripts/build-cli-native.sh` → `gh release create` →
+   `cd cli && npm publish`. **Release FIRST, npm LAST** — postinstall has no retry.
