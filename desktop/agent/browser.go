@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -255,7 +256,7 @@ func (bm *BrowserManager) OpenSessionWithProfile(id string, headful bool, proxyU
 	if err := chromedp.Run(browserCtx); err != nil {
 		browserCancel()
 		allocCancel()
-		return fmt.Errorf("launch chrome: %w (install Chrome/Chromium)", err)
+		return fmt.Errorf("launch chrome: %w%s", err, chromeLaunchRemedy(err))
 	}
 
 	now := time.Now()
@@ -765,4 +766,50 @@ func (bm *BrowserManager) GetDOM(id string) (string, error) {
 	}
 
 	return strings.Join(cleaned, "\n"), nil
+}
+
+// chromeLaunchRemedy turns a Chrome start failure into the fix that MATCHES it.
+//
+// WHY (2026-08-03). Every launch failure ended with "(install Chrome/Chromium)".
+// On the owner's box that advice was simply wrong: chromium was installed THREE
+// times — /snap/bin/chromium, /usr/bin/chromium-browser, /usr/bin/google-chrome
+// — and the real error was
+//
+//	cannot create temporary directory for the root file system:
+//	No such file or directory
+//
+// which is snap confinement, not a missing binary. So the vibing preview could
+// not capture a frame, the tvOS/visionOS colour arc had nothing to sample, and
+// the one instruction offered was the one thing already done. Same defect class
+// as telling a rate-limited user to change their model: a remedy that cannot
+// work is worse than none, because the user spends the time.
+//
+// The binary check is deliberate — we look before we tell someone to install.
+func chromeLaunchRemedy(err error) string {
+	msg := strings.ToLower(err.Error())
+	installed := ""
+	for _, c := range []string{"google-chrome", "chromium", "chromium-browser"} {
+		if p, e := exec.LookPath(c); e == nil {
+			installed = p
+			break
+		}
+	}
+	switch {
+	case strings.Contains(msg, "temporary directory") || strings.Contains(msg, "no such file or directory"):
+		if strings.Contains(installed, "/snap/") {
+			return " — Chrome IS installed (" + installed + ") but it is the SNAP build, which is confined and " +
+				"cannot create its temp dir when launched by a daemon. Install the deb/rpm build " +
+				"(apt install chromium-browser from a non-snap source, or Google Chrome) and it will work."
+		}
+		if installed != "" {
+			return " — Chrome IS installed (" + installed + "); this is a TEMP-DIRECTORY failure, not a missing " +
+				"browser. Check TMPDIR exists and is writable by the agent's user, then retry. Do NOT reinstall Chrome."
+		}
+		return " (install Chrome/Chromium)"
+	case installed != "":
+		return " — Chrome IS installed (" + installed + "), so this is not a missing browser. " +
+			"Read the error above for the real cause before reinstalling anything."
+	default:
+		return " (install Chrome/Chromium — none found on PATH)"
+	}
 }

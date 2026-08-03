@@ -44,6 +44,7 @@ const SURFACE = (process.argv[2] || "tv").toLowerCase();
 const TOKEN = process.env.YAVER_TEST_TOKEN || "";
 const BOX = process.env.VIBE_BOX_HOST || "http://100.75.123.78:18080";
 const WORKDIR = process.env.VIBE_PROJECT_PATH || "/root/Workspace/yaver.io/mobile";
+const PROJECT = process.env.VIBE_PROJECT_NAME || "mobile";
 const BUDGET_MS = Number(process.env.VIBE_BUDGET_MS || 12 * 60_000);
 
 if (!TOKEN) {
@@ -73,24 +74,47 @@ async function startVibe(description) {
   return t.task?.id || t.id;
 }
 
+/**
+ * Boot the capture pipeline. PROBED, not guessed (2026-08-03): a first draft
+ * polled GET /vibing/preview/snapshot and got {"error":"method not allowed"},
+ * while /vibing/preview/status reported sessions: [] — nothing was capturing at
+ * all. The authoritative shape is tvOS AgentClient's own flow:
+ *
+ *   POST /dev/web-preview/start   → boot the static server for the project
+ *   POST /vibing/preview/start    → headless Chrome starts capturing it
+ *   POST /vibing/preview/snapshot → newest frame's hash   (POST, not GET)
+ *   GET  /vibing/preview/frames/{hash} → the bytes
+ */
+async function startCapture(project) {
+  const boot = await api("/dev/web-preview/start", { method: "POST", body: "{}" }).catch(() => ({}));
+  const targetUrl = boot.webUrl || (boot.port ? `http://127.0.0.1:${boot.port}` : "");
+  await api("/vibing/preview/start", {
+    method: "POST",
+    body: JSON.stringify({ project, targetUrl, mode: "live", width: 1280, height: 800 }),
+  });
+  return targetUrl;
+}
+
 /** Step 4 — the frame a TV would be rendering, as pixels. */
-async function frameColor() {
-  const snap = await api("/vibing/preview/snapshot").catch(() => null);
-  const hash = snap?.hash || snap?.frame?.hash;
+async function frameColor(project) {
+  const snap = await api("/vibing/preview/snapshot", {
+    method: "POST",
+    body: JSON.stringify({ project }),
+  }).catch(() => null);
+  const hash = snap?.hash;
   if (!hash) return null;
   const buf = await api(`/vibing/preview/frames/${hash}`);
-  // Decode-free sampling: the agent serves raw RGB triples for exactly this.
   const px = Array.from(new Uint8Array(buf));
   const triples = [];
   for (let i = 0; i + 2 < px.length; i += 3) triples.push([px[i], px[i + 1], px[i + 2]]);
   return triples.length ? classifyVibeColor(triples) : null;
 }
 
-async function waitForColor(want) {
+async function waitForColor(want, project) {
   const deadline = Date.now() + BUDGET_MS;
   let last = "unknown";
   while (Date.now() < deadline) {
-    last = (await frameColor().catch(() => null)) || last;
+    last = (await frameColor(project).catch(() => null)) || last;
     if (last === want) return { ok: true, color: last };
     await sleep(20_000);
   }
@@ -104,18 +128,22 @@ try {
   const info = await api("/info");
   log(`box ok — agent ${info.version || "?"}`);
 
+  log("booting the capture pipeline (web-preview → headless capture)…");
+  const target = await startCapture(PROJECT);
+  log(`capturing ${target || "(project default)"}`);
+
   log("starting the colour turn…");
   await startVibe(
     "Change the login screen so its VISIBLE background is red. Every container that paints " +
     "the full-screen background must be red, so the whole screen reads red. Only the login screen.",
   );
-  const red = await waitForColor("red");
+  const red = await waitForColor("red", PROJECT);
   log(`red: ${red.ok ? "PASS" : `FAIL (last ${red.color})`}`);
   failed ||= !red.ok;
 
   log("reverting as a SEPARATE task (the new-task render path, same as web)…");
   await startVibe("Revert the login screen background back to black.");
-  const black = await waitForColor("black");
+  const black = await waitForColor("black", PROJECT);
   log(`black: ${black.ok ? "PASS" : `FAIL (last ${black.color})`}`);
   failed ||= !black.ok;
 } catch (err) {
