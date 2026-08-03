@@ -173,12 +173,54 @@ Next step: run it with `MOBILE_WEB_URL` set and read the named cause.
 - `GET /vibing/preview/frames/{hash}` requires **`?project=`**. Without it the
   body is `{"error":"project query param required"}` — which the old sampler
   would have classified as a colour.
-- `POST /dev/web-preview/start` returns `{"port":19006,"webUrl":"/dev-web/"}` —
-  a **relative** URL chromedp cannot navigate, and Expo's *canonical* port, not
-  the bound one. Use `/info` → `devServer.port`.
+- **`devServer.port` is METRO, not the web server.** `POST /dev/start
+  {devMode:"web"}` builds a HYBRID:
+  ```
+  /info.devServer   kind=hybrid  devMode=dev-client
+                    port=8081     ← metro; often NOTHING listening
+                    webPort=19006 ← expo web, HTTP 200
+  POST /dev/web-preview/start → {"port":19006,"webUrl":"/dev-web/"}
+  ```
+  Aim a web capture at **`boot.port` → `devServer.webPort`**. I got this
+  backwards and wrote a confident comment claiming 19006 was "Expo's canonical
+  port, not the bound one" — the opposite of the truth. It passed once (that
+  run served web from the metro port) and then failed twice with
+  `net::ERR_CONNECTION_REFUSED`. An inference dressed as a measurement is worse
+  than no comment: the next reader inherits it as established.
+- `webUrl` is **agent-relative** (`/dev-web/`); chromedp answers "Cannot
+  navigate to invalid URL (-32000)". Only usable if absolute.
 - `POST /vibing/preview/snapshot` is **POST**, not GET.
 - Full flow: `/dev/start` → `/vibing/preview/start` → `/vibing/preview/snapshot`
   → `/vibing/preview/frames/{hash}?project=`.
+- **Captured height is ~143 px less than the requested window** (browser
+  chrome): 1080 → 937, 720 → 577. The arc allows ±160 on height, ~0 on width.
+
+## 7b. Artifacts — a passing run now leaves evidence
+
+`e2e/test-results/loops/<LOOP_RUN_ID>/<surface>/` — every sampled frame,
+`manifest.json` (per-frame timestamp, colour, rendered, dimensions, verdict) and
+`timelapse.mp4` (4 fps). **On pass as well as failure**, matching what the
+browser arcs already do. ffmpeg is optional — the frames are the evidence.
+
+The box's own clip recorder does NOT cover this: `VibeClipStartOpts` caps
+`DurationMaxSec` at 30 s, for short exercise clips. A vibe turn is 12+ minutes.
+
+## 7c. `/info` can claim a dev server that is dead
+
+Found while chasing the visionOS failure above:
+
+```
+/info      running=true serving=true port=8081 pid=11999
+ss -lntp   NOTHING listening on 8081
+dmesg      Out of memory: Killed process ... (git) anon-rss:4970932kB   ×3
+```
+
+`baseDevServer.Status()` set `Serving: b.running` — an in-memory flag cleared by
+a bookkeeping goroutine that does not survive an OOM kill. The liveness check
+(`PidAlive`, signal-0) existed in the heartbeat snapshot and the field everyone
+reads never consulted it. Fixed: `Status()` probes the pid and names the cause.
+**Note the box is OOM-killing 5-6 GB `git` processes** — that pressure is real
+and will bite other things.
 
 ---
 
