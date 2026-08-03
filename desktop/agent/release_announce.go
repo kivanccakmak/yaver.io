@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -140,6 +141,14 @@ func AnnounceReleaseToOwnedDevices(baseURL, token, version string, onlyDeviceIDs
 		}
 		r := AnnounceReleaseResult{DeviceID: d.DeviceID, Name: name, Version: version}
 		if err := RequestAgentUpdateForDevice(baseURL, token, d.DeviceID, version); err != nil {
+			// An expired session fails IDENTICALLY for every device, and printing
+			// the same auth error once per box buries the one fact that matters
+			// behind N copies of itself. Stop at the first one and return it as
+			// the call's error — the remedy is `yaver auth`, not per-device
+			// triage.
+			if errors.Is(err, ErrAuthExpired) {
+				return out, fmt.Errorf("session expired — run `yaver auth` and try again")
+			}
 			r.Error = err.Error()
 		} else {
 			r.OK = true
