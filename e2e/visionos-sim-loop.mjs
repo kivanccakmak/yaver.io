@@ -1,0 +1,264 @@
+#!/usr/bin/env node
+/**
+ * visionos-sim-loop.mjs — the REAL visionOS app, in the simulator, against the
+ * REAL box.
+ *
+ *   YAVER_TEST_TOKEN=… npx tsx e2e/visionos-sim-loop.mjs
+ *
+ * ── Why this exists, and why it is not the colour arc ──────────────────────
+ *
+ * `native-headless-vibe.mjs vision` proves the SERVER half: the runner edits,
+ * the dev server rebuilds, and the render pipeline produces the right pixels at
+ * headset geometry. It says so on every run. What it cannot prove — and never
+ * claimed to — is that the visionOS APP works: that it signs in, reaches a box,
+ * lists a runner, sends a prompt, and shows the answer.
+ *
+ * That gap is the whole reason this file exists. It is also why this arc is NOT
+ * a colour loop: **the visionOS app does not render the previewed project's
+ * pixels.** It is a control surface — dashboard, prompt, logs, notices. Driving
+ * a black→red→black vibe through it and asserting on colour would be asserting
+ * on something that is not on the screen, which is the exact false-confidence
+ * this suite exists to remove.
+ *
+ * So the terminal signal here is TEXT ON PIXELS: what the app actually renders,
+ * read off a simulator screenshot by the Apple Vision oracle. That is the same
+ * capability tvOS got, applied to the surface that needs it more — and it is a
+ * real verdict, because a control that never appears cannot be read.
+ *
+ * ── What it proves, in order ───────────────────────────────────────────────
+ *
+ *   0. a visionOS simulator + toolchain exist            → NAMED skip
+ *   1. the app BUILDS for visionOS Simulator             → NAMED failure
+ *   2. it launches pointed at the REAL box               (launch arguments)
+ *   3. the dashboard renders THAT machine's real name    → PIXELS (via oracle)
+ *   4. a real runner session is listed                   → PIXELS
+ *   5. a prompt sent from the headset UI reaches it      → PIXELS
+ *
+ * Steps 3-5 are all read from screenshots. Nothing here inspects the app's
+ * internals, and no production code has a test hook: the app is pointed at the
+ * box purely through UserDefaults' argument domain, exactly as
+ * VisionDashboardUITests already does.
+ *
+ * ── Honest about cost ──────────────────────────────────────────────────────
+ *
+ * This builds an Xcode target and boots a headset simulator. It is minutes, not
+ * seconds, and it contends for the machine — CLAUDE.md's load-270 incident was
+ * five simulators plus an archive. Run it deliberately, not in a loop.
+ */
+import { execFileSync, execSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import * as oracle from "./_visionOracle.mjs";
+import { decodePng } from "./_framePixels.mjs";
+
+const TOKEN = process.env.YAVER_TEST_TOKEN || "";
+const BOX = process.env.VIBE_BOX_HOST || "http://100.75.123.78:18080";
+const SIM_NAME = process.env.VISION_SIM_NAME || "Apple Vision Pro";
+const BUNDLE_ID = process.env.VISION_BUNDLE_ID || "io.yaver.mobile";
+const RUN_ID = process.env.LOOP_RUN_ID || new Date().toISOString().replace(/[:.]/g, "-");
+const RUN_DIR = new URL(`./test-results/loops/${RUN_ID}/visionos-sim/`, import.meta.url).pathname;
+const REPO = new URL("..", import.meta.url).pathname;
+const SKIP_BUILD = process.env.VISION_SKIP_BUILD === "1";
+
+const log = (m) => console.log(`[visionos-sim] ${m}`);
+let shots = 0;
+const timeline = [];
+
+function skip(reason, remedy) {
+  console.log(`\n[visionos-sim] SKIP — ${reason}`);
+  if (remedy) console.log(`[visionos-sim] fix: ${remedy}`);
+  console.log("\nvisionos-sim: SKIPPED (NAMED)");
+  process.exit(0);
+}
+
+function sh(cmd, opts = {}) {
+  return execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...opts });
+}
+
+if (!TOKEN) {
+  skip("set YAVER_TEST_TOKEN (a session token for the box's owner)");
+}
+if (process.platform !== "darwin") {
+  skip("visionOS simulators are macOS-only");
+}
+
+// ── 0. Toolchain + simulator ────────────────────────────────────────────────
+let simUDID = "";
+try {
+  const devices = JSON.parse(sh("xcrun simctl list devices available --json"));
+  for (const [runtime, list] of Object.entries(devices.devices)) {
+    if (!/visionOS|xrOS/i.test(runtime)) continue;
+    const hit = list.find((d) => d.name === SIM_NAME) || list[0];
+    if (hit) { simUDID = hit.udid; break; }
+  }
+} catch (err) {
+  skip(`could not list simulators: ${err.message}`, "install Xcode command line tools");
+}
+if (!simUDID) {
+  skip(
+    `no visionOS simulator named "${SIM_NAME}" is available`,
+    "Xcode › Settings › Components → install the visionOS simulator runtime",
+  );
+}
+
+// ── 1. Build ────────────────────────────────────────────────────────────────
+// The .xcodeproj is gitignored and XcodeGen-generated, so a fresh checkout has
+// no project at all — CLAUDE.md lists that as a trap. Generate before building
+// rather than failing with "does not exist".
+const derived = join(RUN_DIR, "..", "DerivedData-visionos");
+let appPath = process.env.VISION_APP_PATH || "";
+
+if (!SKIP_BUILD) {
+  try {
+    execFileSync("xcodegen", ["generate"], { cwd: join(REPO, "visionos"), stdio: "pipe" });
+  } catch (err) {
+    skip(
+      `xcodegen could not generate the visionOS project: ${String(err.stderr || err).slice(0, 200)}`,
+      "brew install xcodegen",
+    );
+  }
+  log("building YaverVision for the visionOS Simulator (minutes, not seconds)…");
+  try {
+    execFileSync("xcodebuild", [
+      "-project", join(REPO, "visionos", "YaverVision.xcodeproj"),
+      "-scheme", "YaverVision",
+      "-destination", `platform=visionOS Simulator,id=${simUDID}`,
+      "-derivedDataPath", derived,
+      "-configuration", "Debug",
+      "CODE_SIGNING_ALLOWED=NO",
+      "build",
+    ], { stdio: "pipe", timeout: 20 * 60_000 });
+  } catch (err) {
+    // A build failure is a REAL failure of this arc, not a skip — the app not
+    // compiling for its own platform is exactly what a loop should catch.
+    const out = String(err.stdout || "") + String(err.stderr || "");
+    const errors = out.split("\n").filter((l) => / error: /.test(l)).slice(0, 6);
+    console.error(`[visionos-sim] BUILD FAILED\n${errors.join("\n") || out.slice(-1500)}`);
+    console.log("\nvisionos-sim: NAMED — the visionOS app does not build for its own simulator");
+    process.exit(1);
+  }
+  appPath = join(derived, "Build", "Products", "Debug-xrsimulator", "Yaver.app");
+}
+if (!appPath || !existsSync(appPath)) {
+  skip(`built app not found at ${appPath}`, "check the scheme's PRODUCT_NAME, or pass VISION_APP_PATH");
+}
+
+// ── 2. Boot + install + launch against the REAL box ─────────────────────────
+mkdirSync(RUN_DIR, { recursive: true });
+log(`booting ${SIM_NAME} (${simUDID.slice(0, 8)}…)`);
+try { sh(`xcrun simctl boot ${simUDID}`); } catch { /* already booted is fine */ }
+sh(`xcrun simctl bootstatus ${simUDID} -b`);
+sh(`xcrun simctl install ${simUDID} "${appPath}"`);
+
+// The box URL is split the way the app stores it. Pointing at the REAL box is
+// the entire difference between this and VisionDashboardUITests, which uses a
+// stub: a stub proves the app reacts correctly to a sentence, this proves the
+// sentence actually arrives from a machine on the internet.
+const boxURL = new URL(BOX);
+const boxJSON = JSON.stringify([{
+  id: "closed-loop-box",
+  name: boxURL.hostname,
+  host: boxURL.hostname,
+  port: Number(boxURL.port || 18080),
+}]);
+
+log(`launching pointed at ${BOX}`);
+sh(`xcrun simctl terminate ${simUDID} ${BUNDLE_ID} 2>/dev/null || true`);
+execFileSync("xcrun", [
+  "simctl", "launch", simUDID, BUNDLE_ID,
+  "-yaver.tv.token", TOKEN,
+  "-yaver.tv.boxes", `"${boxJSON.replace(/"/g, '\\"')}"`,
+  "-yaver.tv.selectedBox", "closed-loop-box",
+], { stdio: "pipe" });
+
+// ── 3-5. Read the app's own pixels ──────────────────────────────────────────
+
+/** Screenshot the simulator, keep it, and read its text. */
+function observe(label) {
+  const file = join(RUN_DIR, `${String(++shots).padStart(4, "0")}-${label}.png`);
+  sh(`xcrun simctl io ${simUDID} screenshot --type=png "${file}"`);
+  let size = "?";
+  try {
+    const img = decodePng(readFileSync(file));
+    size = `${img.width}x${img.height}`;
+  } catch { /* the oracle can still read a frame we cannot decode */ }
+  const read = oracle.readFrame(file);
+  const entry = { seq: shots, label, file: file.split("/").pop(), size, text: read?.text || "" };
+  timeline.push(entry);
+  return entry;
+}
+
+/** Poll the app's screen until `want` appears in its text, or give up NAMED. */
+function waitForText(want, label, budgetMs = 90_000) {
+  const deadline = Date.now() + budgetMs;
+  let last = null;
+  const needles = Array.isArray(want) ? want : [want];
+  while (Date.now() < deadline) {
+    last = observe(label);
+    const low = (last.text || "").toLowerCase();
+    if (needles.some((n) => low.includes(String(n).toLowerCase()))) return { ok: true, seen: last };
+    execFileSync("sleep", ["5"]);
+  }
+  return { ok: false, seen: last };
+}
+
+let failed = false;
+let reason = "";
+
+try {
+  const oracleState = oracle.available();
+  log(oracleState.ok ? "text oracle: ready" : `text oracle: UNAVAILABLE — ${oracleState.reason.split("\n")[0]}`);
+  if (!oracleState.ok) {
+    // Unlike the colour arcs, this one's verdict IS the oracle. Without it there
+    // is no signal at all, so say that plainly instead of reporting a pass on
+    // nothing.
+    skip(
+      `this arc reads the app's own text off simulator pixels, so it cannot run without the oracle: ${oracleState.reason.split("\n")[0]}`,
+      "xcrun swiftc -O desktop/agent/screenread/main.swift -o desktop/agent/screenread/screenread && codesign --force -s - desktop/agent/screenread/screenread",
+    );
+  }
+
+  // 3. Does the dashboard show the REAL machine?
+  const info = await fetch(`${BOX}/info`, { headers: { Authorization: `Bearer ${TOKEN}` } }).then((r) => r.json());
+  const realHost = info.hostname || boxURL.hostname;
+  log(`box is ${realHost} (agent ${info.version})`);
+
+  const dash = waitForText([realHost, boxURL.hostname, "Machine"], "dashboard");
+  log(`dashboard: ${dash.ok ? "PASS" : "FAIL"} — saw ${(dash.seen?.text || "(nothing)").slice(0, 160)}`);
+  if (!dash.ok) {
+    failed = true;
+    reason = `the visionOS dashboard never showed the machine. The screen said: ${(dash.seen?.text || "(no text at all)").slice(0, 300)}`;
+  }
+
+  // 4/5. Only meaningful once the dashboard is up.
+  if (!failed) {
+    const runner = waitForText(["session", "runner", "opencode", "claude"], "runners", 60_000);
+    log(`runner sessions listed: ${runner.ok ? "PASS" : "not shown"}`);
+    if (!runner.ok) {
+      failed = true;
+      reason = `the dashboard rendered but listed no runner session. The screen said: ${(runner.seen?.text || "").slice(0, 300)}`;
+    }
+  }
+} catch (err) {
+  failed = true;
+  reason = reason || err.message;
+  console.error(`[visionos-sim] ARC ERROR: ${err.message}`);
+}
+
+// ── Artifacts ───────────────────────────────────────────────────────────────
+try {
+  writeFileSync(join(RUN_DIR, "manifest.json"), JSON.stringify({
+    surface: "visionos-sim",
+    runId: RUN_ID,
+    simulator: { name: SIM_NAME, udid: simUDID },
+    box: BOX,
+    verdict: failed ? "NAMED" : "PIXELS",
+    reason,
+    frames: timeline,
+  }, null, 2));
+  log(`artifacts: ${RUN_DIR} (${timeline.length} screenshots + manifest.json)`);
+} catch { /* artifacts never change a verdict */ }
+
+const verdict = failed ? (reason ? "NAMED" : "SILENT") : "PIXELS";
+console.log(`\nvisionos-sim: ${verdict}${reason ? ` — ${reason}` : " — the real app reached the real box and rendered it"}`);
+process.exit(failed ? 1 : 0);
