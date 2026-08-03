@@ -18,7 +18,32 @@
 	<false/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsLocalNetworking</key>
+		<!-- NSAllowsArbitraryLoads, and DELIBERATELY NOT NSAllowsLocalNetworking.
+		     MEASURED 2026-08-03 by running the real tvOS app in the simulator
+		     against a real box (tvos/YaverTVUITests). The TV displayed:
+
+		       "Box asleep — 100.75.123.78 isn't answering, and it can't be
+		        woken from the TV, start it from your computer or phone."
+
+		     while that box was answering GET /info with HTTP 200 throughout.
+		     ATS had refused the request before a packet left the device.
+
+		     NSAllowsLocalNetworking (which is all this plist had) exempts
+		     RFC1918 + link-local + .local. It does NOT exempt 100.64.0.0/10 —
+		     RFC 6598 shared address space, where Tailscale (100.64/10) and
+		     Yaver Mesh (100.96/12) both live. So the TV could never reach a box
+		     over either overlay.
+
+		     And DO NOT re-add NSAllowsLocalNetworking alongside: Apple IGNORES
+		     NSAllowsArbitraryLoads when it is present, which is proven — the
+		     visionOS app showed the ATS error with both keys set and read the
+		     box's real host/platform/agent with ArbitraryLoads alone. Setting
+		     both is indistinguishable from setting neither.
+
+		     Authentication is unchanged: same bearer token, same agent
+		     validation, same lane. ATS governs whether the OS permits cleartext
+		     to a host, not who may talk to the agent. -->
+		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
