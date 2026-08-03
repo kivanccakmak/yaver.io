@@ -18,6 +18,10 @@ struct VisionSessionView: View {
     @State private var options: [String] = []
     @State private var loading = false
     @State private var error: String?
+    @StateObject private var dictation = DictationSession()
+    /// What the user had typed before the mic opened, so a transcript APPENDS
+    /// rather than overwriting work they already did by hand.
+    @State private var typedBeforeDictation = ""
 
     private var sessionClient: SessionClient? {
         guard let box = store.selectedBox else { return nil }
@@ -86,20 +90,81 @@ struct VisionSessionView: View {
     }
 
     private var composer: some View {
-        HStack(spacing: 12) {
-            TextField("Ask the active coding session...", text: $prompt, axis: .vertical)
-                .lineLimit(1...4)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit { Task { await sendPrompt() } }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                TextField("Ask the active coding session...", text: $prompt, axis: .vertical)
+                    .lineLimit(1...4)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { Task { await sendPrompt() } }
 
-            Button {
-                Task { await sendPrompt() }
-            } label: {
-                Label("Send", systemImage: "paperplane.fill")
+                // DICTATION. In a headset the alternative is the floating
+                // virtual keyboard, for the longest strings Yaver asks anyone
+                // to type — so this is the primary input here, not a nicety.
+                //
+                // Shown ONLY when this headset can transcribe without sending
+                // audio anywhere (canDictatePrivately). An offered control that
+                // will refuse is worse than no control: it teaches the user the
+                // product is unreliable rather than that their language pack is
+                // missing. When it is hidden, typing still works exactly as before.
+                if dictation.canDictatePrivately {
+                    Button {
+                        Task { await toggleDictation() }
+                    } label: {
+                        Label(dictation.listening ? "Stop" : "Speak",
+                              systemImage: dictation.listening ? "stop.circle.fill" : "mic.fill")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(dictation.listening ? .red : nil)
+                    .accessibilityLabel(dictation.listening ? "Stop dictation" : "Dictate a prompt")
+                    .disabled(loading || selectedSession.isEmpty)
+                }
+
+                Button {
+                    Task { await sendPrompt() }
+                } label: {
+                    Label("Send", systemImage: "paperplane.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading || selectedSession.isEmpty)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading || selectedSession.isEmpty)
+
+            // Narrate the wait. A mic that is listening with no visible state is
+            // the same defect as a spinner with no elapsed time.
+            if dictation.listening {
+                Label("Listening — on-device only, audio never leaves this headset",
+                      systemImage: "waveform")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let speechError = dictation.error {
+                Text(speechError)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
         }
+        // The transcript APPENDS to whatever was typed by hand. Assigning it
+        // straight to `prompt` would delete a half-written prompt the moment the
+        // user reached for the mic to finish it — destroying work is a far worse
+        // failure than a clumsy concatenation.
+        .onChange(of: dictation.transcript) { _, spoken in
+            guard dictation.listening || !spoken.isEmpty else { return }
+            let base = typedBeforeDictation.trimmingCharacters(in: .whitespacesAndNewlines)
+            prompt = base.isEmpty ? spoken : base + " " + spoken
+        }
+    }
+
+    /// Start/stop dictation, moving the transcript into the prompt field.
+    ///
+    /// The transcript REPLACES nothing the user typed by hand: it appends, so a
+    /// half-typed prompt finished by voice is not silently destroyed.
+    private func toggleDictation() async {
+        if dictation.listening {
+            dictation.stop()
+            return
+        }
+        typedBeforeDictation = prompt
+        await dictation.start()
     }
 
     private var sessionPicker: some View {
