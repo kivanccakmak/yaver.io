@@ -63,7 +63,13 @@ import * as oracle from "./_visionOracle.mjs";
 
 const SURFACE = (process.argv[2] || "tv").toLowerCase();
 const TOKEN = process.env.YAVER_TEST_TOKEN || "";
-const BOX = process.env.VIBE_BOX_HOST || "http://100.75.123.78:18080";
+// The box address has NO DEFAULT, deliberately.
+//
+// It used to fall back to one machine's tailnet IP. That is the single-user bug
+// CLAUDE.md forbids wearing a test's clothes: every arc silently targeted one
+// person's box, so anyone else's run measured a machine they do not own, and a
+// real overlay address sat in a PUBLIC repo. Unset is unset — say so and skip.
+const BOX = process.env.VIBE_BOX_HOST || "";
 const WORKDIR = process.env.VIBE_PROJECT_PATH || "/root/Workspace/yaver.io/mobile";
 const PROJECT = process.env.VIBE_PROJECT_NAME || "mobile";
 const BUDGET_MS = Number(process.env.VIBE_BUDGET_MS || 12 * 60_000);
@@ -165,6 +171,11 @@ function skip(reason, remedy) {
   if (remedy) console.log(`[${SURFACE}] fix: ${remedy}`);
   console.log(`\n${SURFACE}: SKIPPED (NAMED)`);
   process.exit(0);
+}
+
+if (!BOX) {
+  skip("set VIBE_BOX_HOST (e.g. http://<your-box>:18080)",
+    "yaver devices — then use that machine's reachable address");
 }
 
 /** Step 0b — can this box actually capture? Ask the agent, do not find out in 12 minutes. */

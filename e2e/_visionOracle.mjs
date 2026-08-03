@@ -133,7 +133,7 @@ const KNOWN_SCREENS = [
     // headset/phone screen, 2026-08-03, when the visionOS app could not reach a
     // box on a Tailscale address:
     //
-    //   "Couldn't reach 100.75.123.78: The resource could not be loaded because
+    //   "Couldn't reach <box>: The resource could not be loaded because
     //    the App Transport Security policy requires the use of a secure
     //    connection."
     //
@@ -199,6 +199,29 @@ export function nameFromText(text, opts = {}) {
     if (row.match.some((m) => low.includes(m))) return { cause: row.cause, say: row.say };
   }
   return null;
+}
+
+/**
+ * Just the text on a frame, with no interpretation.
+ *
+ * explainFrame answers "which known screen is this?", which is the right
+ * question when you are diagnosing a failure. It is the WRONG question when a
+ * caller wants to assert on wording the table has no row for — a progress
+ * heartbeat, an elapsed counter, a streamed log line. Those callers were
+ * reaching into `explainFrame(...).text`, which only exists when the oracle
+ * recognises OR quotes the screen, so a frame it could read but chose not to
+ * classify handed back nothing.
+ *
+ * Added 2026-08-03 for the iOS-simulator narration arc, which needs to prove a
+ * sentence appeared on a surface with no DOM. The headless layer grows a verb
+ * rather than each caller growing a private copy of readFrame.
+ *
+ * @param {string} pngPath
+ * @returns {string} the text, or "" if the oracle could not read the frame
+ */
+export function textOf(pngPath) {
+  const read = readFrame(pngPath);
+  return read && read.text ? read.text : "";
 }
 
 /**

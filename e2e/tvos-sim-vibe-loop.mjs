@@ -47,7 +47,14 @@ import { decodePng, samplePixels } from "./_framePixels.mjs";
 import * as oracle from "./_visionOracle.mjs";
 
 const TOKEN = process.env.YAVER_TEST_TOKEN || "";
-const BOX = process.env.VIBE_BOX_HOST || "http://100.75.123.78:18080";
+
+// The box address has NO DEFAULT, deliberately.
+//
+// It used to fall back to one machine's tailnet IP. That is the single-user bug
+// CLAUDE.md forbids wearing a test's clothes: every arc silently targeted one
+// person's box, so anyone else's run measured a machine they do not own, and a
+// real overlay address sat in a PUBLIC repo. Unset is unset — say so and skip.
+const BOX = process.env.VIBE_BOX_HOST || "";
 const PROJECT = process.env.VIBE_PROJECT_NAME || "mobile";
 const WORKDIR = process.env.VIBE_PROJECT_PATH || "/root/Workspace/yaver.io/mobile";
 const SIM = process.env.TV_SIM_NAME || "YaverTV-AppStore-1080p";
@@ -82,6 +89,8 @@ async function api(path, init = {}) {
   return res.headers.get("content-type")?.includes("json") ? res.json() : res.arrayBuffer();
 }
 
+if (!BOX) skip("set VIBE_BOX_HOST (e.g. http://<your-box>:18080)",
+  "yaver devices — then use that machine's reachable address");
 if (!TOKEN) skip("set YAVER_TEST_TOKEN (a session token for the box's owner)");
 if (process.platform !== "darwin") skip("tvOS simulators are macOS-only");
 

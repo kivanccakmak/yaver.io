@@ -53,7 +53,13 @@ import { decodePng, samplePixels } from "./_framePixels.mjs";
 import { classifyVibeColor, samplePoints } from "../web/lib/vibeVerdict.ts";
 
 const TOKEN = process.env.YAVER_TEST_TOKEN || "";
-const BOX = process.env.VIBE_BOX_HOST || "http://100.75.123.78:18080";
+// The box address has NO DEFAULT, deliberately.
+//
+// It used to fall back to one machine's tailnet IP. That is the single-user bug
+// CLAUDE.md forbids wearing a test's clothes: every arc silently targeted one
+// person's box, so anyone else's run measured a machine they do not own, and a
+// real overlay address sat in a PUBLIC repo. Unset is unset — say so and skip.
+const BOX = process.env.VIBE_BOX_HOST || "";
 const SIM_NAME = process.env.VISION_SIM_NAME || "Apple Vision Pro";
 const BUNDLE_ID = process.env.VISION_BUNDLE_ID || "io.yaver.mobile";
 const RUN_ID = process.env.LOOP_RUN_ID || new Date().toISOString().replace(/[:.]/g, "-");
@@ -98,6 +104,10 @@ function sh(cmd, opts = {}) {
 
 if (!TOKEN) {
   skip("set YAVER_TEST_TOKEN (a session token for the box's owner)");
+}
+if (!BOX) {
+  skip("set VIBE_BOX_HOST (e.g. http://<your-box>:18080)",
+    "yaver devices — then use that machine's reachable address");
 }
 if (process.platform !== "darwin") {
   skip("visionOS simulators are macOS-only");
@@ -220,10 +230,10 @@ function observe(label) {
  * The failure check comes FIRST, and it is not defensive tidiness. On this
  * arc's very first run the app rendered:
  *
- *   "Couldn't reach 100.75.123.78: The resource could not be loaded because the
+ *   "Couldn't reach <box>: The resource could not be loaded because the
  *    App Transport Security policy requires the use of a secure connection."
  *
- * and the assertion `waitForText("100.75.123.78")` PASSED — because the host
+ * and the assertion `waitForText("<box>")` PASSED — because the host
  * appears inside the error message. A positive needle matched an error that
  * says the exact opposite of what the assertion claims to prove. That is a
  * false green produced by the harness, on the same run that found a real
