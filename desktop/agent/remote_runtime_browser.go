@@ -298,12 +298,95 @@ func (rt browserWindowRuntime) cleanup() error {
 	return os.RemoveAll(rt.root)
 }
 
+// BrowserWindowLaunchError carries the browser_window.* reason as a FIELD.
+//
+// It used to be interpolated into the error STRING — `fmt.Errorf("launch
+// headless chromium: %s: %w", reason, err)` — so the five browser_window codes
+// travelled as prose. A client wanting to distinguish "install Chrome" from "the
+// snap cannot enter our private HOME" had to regex the sentence, which is
+// precisely what reason codes exist to abolish, and so no surface ever read any
+// of them (measured 2026-08-04: five of the twenty codes emitted into silence).
+//
+// Error() keeps the exact sentence it always produced, so every existing caller
+// that only prints the error is byte-for-byte unaffected. The Reason and Gap are
+// additive, for callers that can render a route.
+type BrowserWindowLaunchError struct {
+	Reason string
+	Gap    *CapabilityGap
+	Err    error
+}
+
+func (e *BrowserWindowLaunchError) Error() string {
+	if e.Reason == ReasonBrowserWindowChromeMissing {
+		return fmt.Sprintf("launch headless chromium: %s: %v (install Chrome or Chromium)", e.Reason, e.Err)
+	}
+	return fmt.Sprintf("launch headless chromium: %s: %v", e.Reason, e.Err)
+}
+
+func (e *BrowserWindowLaunchError) Unwrap() error { return e.Err }
+
 func browserWindowLaunchError(err error) error {
 	reason := browserWindowLaunchErrorReason(err)
-	if reason == ReasonBrowserWindowChromeMissing {
-		return fmt.Errorf("launch headless chromium: %s: %w (install Chrome or Chromium)", reason, err)
+	return &BrowserWindowLaunchError{Reason: reason, Gap: browserWindowGap(reason), Err: err}
+}
+
+// browserWindowGap turns each browser_window reason into a named cause with the
+// route that actually helps — and the routes genuinely differ, which is the whole
+// reason these are five codes and not one.
+func browserWindowGap(reason string) *CapabilityGap {
+	switch reason {
+	case ReasonBrowserWindowChromeMissing:
+		// A real, deterministic fix: chromium has an install recipe, and
+		// capabilityGapForMissingTools validates it against the same tables
+		// `yaver install` consults, so this can never advertise a 404.
+		gap := capabilityGapForMissingTools([]string{"chromium"})
+		if gap != nil {
+			gap.Code = ReasonBrowserWindowChromeMissing
+			gap.Summary = "No browser is installed, so this machine cannot open a browser window."
+		}
+		return gap
+
+	case ReasonBrowserWindowChromeSnapConfined:
+		// A browser IS installed, so "install Chrome" reads as nonsense and an
+		// installer button would be a no-op. The remedy is a DIFFERENT build.
+		return &CapabilityGap{
+			Code:       ReasonBrowserWindowChromeSnapConfined,
+			Capability: "browser-window",
+			Summary:    "The browser on this machine is a snap, and a snap cannot enter the private directory this lane hands it.",
+			Constraint: "Snap confinement blocks it, so installing more snaps cannot help. Install the unconfined build — " +
+				"Google's .deb, or `snap remove chromium` plus your distro's chromium package — then try again.",
+		}
+
+	case ReasonBrowserWindowChromeProfile:
+		return &CapabilityGap{
+			Code:       ReasonBrowserWindowChromeProfile,
+			Capability: "browser-window",
+			Summary:    "The browser profile this lane uses is locked by another process.",
+			Constraint: "A previous browser is still holding the profile. It usually clears on its own; " +
+				"if it does not, the stale process is the thing to end, not the browser to reinstall.",
+		}
+
+	case ReasonBrowserWindowChromeRuntimeDir:
+		return &CapabilityGap{
+			Code:       ReasonBrowserWindowChromeRuntimeDir,
+			Capability: "browser-window",
+			Summary:    "The browser could not create its runtime directory.",
+			Constraint: "This is a filesystem permission or space problem on the box, not a missing browser — " +
+				"reinstalling would change nothing.",
+		}
+
+	case ReasonBrowserWindowChromeLaunch:
+		return &CapabilityGap{
+			Code:       ReasonBrowserWindowChromeLaunch,
+			Capability: "browser-window",
+			Summary:    "The browser is installed but refused to start.",
+			// Deliberately no AIFix: this is the machine's environment, not the
+			// project's source, and a coding agent cannot repair it.
+			Constraint: "The browser exists and exits immediately. The launch output on the box is the evidence; " +
+				"a reinstall is worth trying only if that output names a missing library.",
+		}
 	}
-	return fmt.Errorf("launch headless chromium: %s: %w", reason, err)
+	return nil
 }
 
 func browserWindowChromeExecPath() string {

@@ -58,6 +58,24 @@ var unwiredReasonCodes = map[string]string{
 	// surface reads it; see the NO-CONSUMER block below.
 	"auth.sdk.scope_denied": "now EMITTED (sdkScopeDenied, 4 sites); no surface reads it yet.",
 
+	// The five browser_window.chrome_* codes were removed from this list on
+	// 2026-08-04: each now rides a CapabilityGap (browserWindowGap) with a remedy
+	// that differs per code, so the generic renderers consume them. They had been
+	// interpolated into an error STRING, which is why no surface could read them.
+	//
+	// task.manager_unavailable and the three capability-snapshot codes moved out
+	// of this list on 2026-08-04 as they were consumed.
+	//
+	// ONE LIMITATION THIS GUARD CANNOT SEE, stated so nobody mistakes its count
+	// for more than it measures: it proves a surface tree REFERENCES the code, not
+	// that a rendered screen calls the code that references it. The three
+	// capability-snapshot codes are classified by web+mobile capabilityReadiness.ts
+	// — and no component fetches /capabilities/snapshot yet, so the classifier has
+	// no call site. That is genuine progress (the next panel cannot render a Retry
+	// over "Xcode does not exist on Linux") but it is NOT a rendered pixel, and a
+	// count of 21 WIRED should be read with that in mind.
+	"task.manager_unavailable": "emitted by feedback_http.go's promptless/no-task-manager refusal; no surface classifies it yet — the 503 sentence carries the meaning today.",
+
 	// ── NO-CONSUMER: the agent sends these; no surface reads one of them. ──
 	// This is the real layer-B gap. A code sent into silence is
 	// indistinguishable from prose — every one of these arrives on a surface
@@ -67,26 +85,18 @@ var unwiredReasonCodes = map[string]string{
 	// mistake today, and the 400 body already carries the sentence.
 	"task.prompt_missing": "emitted by createTask (promptless refusal); no surface reads it yet.",
 
-	"connectivity.no_viable_transport":    "emitted on /capabilities/snapshot (capabilities_snapshot.go); no surface reads it.",
-	"connectivity.relay.auth_expired":     "emitted by planRemoteBoxRepair → ops remote_repair; no surface reads it.",
-	"connectivity.relay.pin_stale":        "emitted by planRemoteBoxRepair; no surface reads it. Reads as a possible MITM — must never render as an auth problem.",
-	"runner.claude.auth_required":         "emitted by the runner-auth lane; no surface reads it.",
-	"runner.opencode.unusable":            "emitted by the runner-auth lane; no surface reads it.",
-	"reload.dev_server_unavailable":       "emitted by the reload lane; no surface reads it.",
-	"reload.native_rebuild_required":      "emitted by the reload lane; no surface reads it.",
-	"reload.preview_worker.offline":       "emitted by the reload lane; no surface reads it.",
-	"build.hermes.failed":                 "emitted by the build lane; no surface reads it.",
-	"build.native.failed":                 "emitted by the build lane; no surface reads it.",
-	"deploy.testflight.xcode_missing":     "emitted on /capabilities/snapshot; no surface reads it.",
-	"deploy.play.android_sdk_missing":     "emitted on /capabilities/snapshot; no surface reads it.",
-	"browser_window.chrome_missing":       "emitted by remote_runtime_browser.go; no surface reads it. A real, frequently-hit family (snap-confined Chrome) — wire, do not delete.",
-	"browser_window.chrome_profile_lock":  "emitted by remote_runtime_browser.go; no surface reads it.",
-	"browser_window.chrome_runtime_dir":   "emitted by remote_runtime_browser.go; no surface reads it.",
-	"browser_window.chrome_launch_failed": "emitted by remote_runtime_browser.go; no surface reads it.",
-	"browser_window.chrome_snap_confined": "emitted by remote_runtime_browser.go; no surface reads it. Distinct remedy from chrome_missing: install the UNCONFINED build.",
-	"device.identity_conflict":            "LOG-ONLY: its only uses are inside a log.Printf in auth_bootstrap.go, so it is on no wire and no surface could read it even in principle. Put it on a payload BEFORE writing any client. A box in this state can otherwise only render as 'unreachable'.",
-	"agent.binary_unrunnable":             "emitted by planRemoteBoxRepair; no surface reads it.",
-	"agent.not_serving":                   "emitted by planRemoteBoxRepair; no surface reads it.",
+	"connectivity.relay.auth_expired": "emitted by planRemoteBoxRepair → ops remote_repair; no surface reads it.",
+	"connectivity.relay.pin_stale":    "emitted by planRemoteBoxRepair; no surface reads it. Reads as a possible MITM — must never render as an auth problem.",
+	"runner.claude.auth_required":     "emitted by the runner-auth lane; no surface reads it.",
+	"runner.opencode.unusable":        "emitted by the runner-auth lane; no surface reads it.",
+	"reload.dev_server_unavailable":   "emitted by the reload lane; no surface reads it.",
+	"reload.native_rebuild_required":  "emitted by the reload lane; no surface reads it.",
+	"reload.preview_worker.offline":   "emitted by the reload lane; no surface reads it.",
+	"build.hermes.failed":             "emitted by the build lane; no surface reads it.",
+	"build.native.failed":             "emitted by the build lane; no surface reads it.",
+	"device.identity_conflict":        "LOG-ONLY: its only uses are inside a log.Printf in auth_bootstrap.go, so it is on no wire and no surface could read it even in principle. Put it on a payload BEFORE writing any client. A box in this state can otherwise only render as 'unreachable'.",
+	"agent.binary_unrunnable":         "emitted by planRemoteBoxRepair; no surface reads it.",
+	"agent.not_serving":               "emitted by planRemoteBoxRepair; no surface reads it.",
 }
 
 // reasonCodeRidesTheGapEnvelope reports whether this file attaches the code to a
