@@ -205,24 +205,57 @@ async function explainPreviewFrame(): Promise<string> {
  * Degrades to "unknown" (and therefore to the strict FAIL) whenever the box
  * cannot be asked — an unreachable box must never soften a verdict.
  */
-async function workingTreeChanged(): Promise<"changed" | "unchanged" | "unknown"> {
+async function treeFingerprint(): Promise<string | null> {
   const host = process.env.VIBE_BOX_HOST;
   const token = process.env.YAVER_TEST_TOKEN;
   const path = process.env.VIBE_PROJECT_PATH;
-  if (!host || !token || !path) return "unknown";
+  if (!host || !token || !path) return null;
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   try {
-    const res = await fetch(`${host}/exec`, {
+    // /exec is ASYNCHRONOUS — it answers {execId, pid} and NOT the output. The
+    // first version of this helper read body.stdout from that reply, got "" every
+    // time, and would therefore have compared "" to "" and concluded "unchanged"
+    // on every run: a guard that silently always returns the strict answer is as
+    // useless as one that always skips. The output lives on /exec/<id>.
+    const started = await fetch(`${host}/exec`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ command: `git -C ${path} status --porcelain`, timeout: 20 }),
     });
-    if (!res.ok) return "unknown";
-    const body = (await res.json()) as { stdout?: string; output?: string };
-    const out = (body.stdout ?? body.output ?? "").trim();
-    return out.length > 0 ? "changed" : "unchanged";
+    if (!started.ok) return null;
+    const { execId } = (await started.json()) as { execId?: string };
+    if (!execId) return null;
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 400));
+      const res = await fetch(`${host}/exec/${execId}`, { headers });
+      if (!res.ok) continue;
+      const body = (await res.json()) as { exec?: { status?: string; stdout?: string } };
+      if (body.exec?.status === "completed") return (body.exec.stdout ?? "").trim();
+    }
+    return null;
   } catch {
-    return "unknown";
+    return null;
   }
+}
+
+/**
+ * Did THIS turn change the tree? A DELTA, never an absolute.
+ *
+ * The first version asked "is the tree dirty?" — which is useless on any real
+ * project: sfmg carries the developer's own uncommitted work, so the answer was
+ * permanently "changed" and every pixel miss would have SKIPPED, masking exactly
+ * the product failures this arc exists to catch. A guard that can only ever
+ * return one answer is not a guard.
+ *
+ * Comparing a before/after fingerprint measures the turn instead of the
+ * repository's history. Null anywhere (box unreachable, /exec unavailable) stays
+ * "unknown", which keeps the verdict strict.
+ */
+async function turnChangedTree(before: string | null): Promise<"changed" | "unchanged" | "unknown"> {
+  if (before === null) return "unknown";
+  const after = await treeFingerprint();
+  if (after === null) return "unknown";
+  return after === before ? "unchanged" : "changed";
 }
 
 /**
@@ -613,6 +646,9 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
     `Every container that paints the full-screen background must be ${target} ` +
     `(the outer SafeAreaView AND any KeyboardAvoidingView/ScrollView/View that covers it), ` +
     `so the whole screen reads ${target}. Only the ${screenName} background — nothing else.`;
+  // Fingerprint the tree BEFORE the turn, so the verdict can tell "this turn
+  // edited something" from "this repository already had edits in it".
+  const treeBefore = await treeFingerprint();
   if (mobileSendVibe) {
     await mobileSendVibe(targetPrompt);
   } else {
@@ -624,8 +660,8 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
   const hit = await waitForColor(page, target, TURN_BUDGET_MS, mobileReloadPreview ?? undefined);
   if (!hit.ok) {
     // Distinguish "the edit landed somewhere we are not looking" from "nothing
-    // happened". Only the second is the product failing. See workingTreeChanged.
-    const tree = await workingTreeChanged();
+    // happened". Only the second is the product failing. See turnChangedTree.
+    const tree = await turnChangedTree(treeBefore);
     if (tree === "changed") {
       test.skip(
         true,
@@ -653,7 +689,37 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
   }
   const back = await waitForColor(page, "black", TURN_BUDGET_MS, mobileReloadPreview ?? undefined);
   expect(back.ok, `preview never reverted to black (last ${back.color})${back.said ? ` — ${back.said}` : ""}`).toBe(true);
-}
+
+
+  // THE PIXELS COMING BACK IS NOT PROOF THE PROJECT CAME BACK.
+  //
+  // Measured 2026-08-04: this arc PASSED on sfmg — red, then black again — and
+  // left `contentStyle: { backgroundColor: '#FF0000' }` on the login Stack.Screen
+  // and `backgroundColor: 'red'` on language-select. The revert turn had restored
+  // what was VISIBLE and not everything it introduced, so a green run silently
+  // deposited sediment in a real project with the developer's own uncommitted work
+  // in it. Run this arc a few times and that accumulates, invisibly, forever.
+  //
+  // So the verdict now includes the repository. A mismatch is reported loudly
+  // rather than failing the colour assertion — the loop DID prove the product
+  // works, and conflating "the product is broken" with "the test did not tidy up"
+  // is the same category error this file keeps correcting. It names the exact
+  // paths so a human can revert them.
+  if (treeBefore !== null) {
+    const treeAfter = await treeFingerprint();
+    if (treeAfter !== null && treeAfter !== treeBefore) {
+      const before = new Set(treeBefore.split("\n").map((l) => l.trim()).filter(Boolean));
+      const leftover = treeAfter
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l && !before.has(l));
+      console.warn(
+        `[vibe-loop] RESIDUE: the colour was reverted but the working tree was not restored. ` +
+        `Still changed after the revert turn: ${leftover.length ? leftover.join(", ") : "(same files, different content)"}. ` +
+        `Revert these by hand — the arc mutates a real project and must leave it as it found it.`,
+      );
+    }
+  }}
 
 test.describe("vibe colour closed loop", () => {
   test.skip(!haveCreds(),
