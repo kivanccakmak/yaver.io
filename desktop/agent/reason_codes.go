@@ -67,6 +67,15 @@ const (
 	// regex-matched — by mobile/src/lib/capabilityGap.ts and
 	// web/lib/capabilityGap.ts. First client-read reason code in the file.
 	ReasonCapabilityToolchainMissing = "capability.toolchain_missing"
+	// ReasonTaskManagerUnavailable is "this agent has no task manager, so
+	// nothing that creates a task can succeed here".
+	//
+	// Named while auditing the 816 ok:true replies for operations that did not
+	// happen (handoff #14). feedback_fix answered 200 {"ok":true} when
+	// s.taskMgr was nil — a success alert over a no-op, with the user believing
+	// a coding agent had picked up their feedback.
+	ReasonTaskManagerUnavailable = "task.manager_unavailable"
+
 	// ReasonTaskPromptMissing is "this task carries no instruction".
 	//
 	// Named because of what happened without it: POST /tasks reads the prompt

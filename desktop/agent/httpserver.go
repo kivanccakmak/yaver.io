@@ -14476,7 +14476,14 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		if args.Runner != "" {
 			payload["runner"] = args.Runner
 		}
-		body, _, _ := s.feedbackHttpMCP("POST", "/feedback/"+args.ID+"/fix", payload)
+		// CHECK THE STATUS. feedback_delete does, three cases below; this one
+		// discarded it, so a 503 "no task manager is running" came back to the
+		// runner as a RESULT — the same no-op-reported-as-success the handler
+		// itself was just fixed for, one layer up.
+		body, status, _ := s.feedbackHttpMCP("POST", "/feedback/"+args.ID+"/fix", payload)
+		if status >= 400 {
+			return mcpToolError(fmt.Sprintf("feedback_fix failed: HTTP %d — %s", status, strings.TrimSpace(string(body))))
+		}
 		return mcpToolResult(string(body))
 
 	case "feedback_delete":

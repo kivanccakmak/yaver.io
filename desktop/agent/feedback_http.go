@@ -461,10 +461,28 @@ func (s *HTTPServer) handleFeedbackFix(w http.ResponseWriter, r *http.Request, f
 		return
 	}
 
-	jsonReply(w, http.StatusOK, map[string]interface{}{
-		"ok":        true,
-		"prompt":    prompt,
-		"changeSet": nil,
+	// NO TASK MANAGER MEANS NO FIX HAPPENED. Do not report success for it.
+	//
+	// This is the false green CLAUDE.md names by name: `if s.taskMgr != nil`
+	// with no else, then `{"ok":true}` — so a box with no task manager answered
+	// 200 OK with a prompt and no taskId, and every surface rendered a success
+	// alert over a no-op. The user believes a coding agent is working on their
+	// feedback; nothing is.
+	//
+	// The correct shape was already two files away — task_proof_http.go answers
+	// 503 "task manager not running on this agent" — which is what makes this an
+	// omission rather than a policy.
+	//
+	// 503, not 500: the agent is healthy, this capability is simply not running
+	// here, and the distinction decides whether a client retries.
+	jsonReply(w, http.StatusServiceUnavailable, map[string]interface{}{
+		"ok":    false,
+		"error": "no task manager is running on this agent, so no fix task was created",
+		"code":  ReasonTaskManagerUnavailable,
+		// The prompt is still returned: it was genuinely generated, it is the
+		// expensive part, and a caller can dispatch it elsewhere. Returning it
+		// beside ok:false is honest; returning it beside ok:true was not.
+		"prompt": prompt,
 	})
 }
 
