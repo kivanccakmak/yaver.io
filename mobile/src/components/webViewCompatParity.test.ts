@@ -82,5 +82,21 @@ for (const rel of previewSurfaces) {
   );
 }
 
+// BOTH browser-preview implementations must consume the probe-unsupported
+// signal. Landing it in one is the drift that shipped a broken heartbeat,
+// dropped SSE frames and a dead shake gesture in apps.tsx while DevPreview.tsx
+// was fine — and here it would mean one surface waits forever on a confirmation
+// the browser forbids, while the other renders.
+for (const rel of ["./DevPreview.tsx", "../../app/(tabs)/apps.tsx"]) {
+  const src = stripComments(readFileSync(join(__dirname, rel), "utf8"));
+  // `=== WEBVIEW_PROBE_UNSUPPORTED` and not just the identifier: the import line
+  // alone satisfied a bare includes(), so deleting the actual handler still
+  // passed. Proven by trying exactly that.
+  ok(
+    src.includes("=== WEBVIEW_PROBE_UNSUPPORTED"),
+    `${rel} must handle WEBVIEW_PROBE_UNSUPPORTED — on RN-web the preview iframe is cross-origin, so the ready-probe can NEVER fire and a surface that waits for it hangs on a rendering app`,
+  );
+}
+
 console.log(`\nwebViewCompatParity: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -27,6 +27,11 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
 export const WEBVIEW_SUPPORTED = true;
+
+/** Message `type` emitted when the ready-probe cannot run (cross-origin frame).
+ *  A caller MUST treat this as "stop waiting for the probe", not as an error:
+ *  the frame is fine, only the confirmation channel is unavailable. */
+export const WEBVIEW_PROBE_UNSUPPORTED = "yaver.webview.probe_unsupported";
 export const WEBVIEW_UNSUPPORTED_REASON = "";
 
 export interface WebViewProps {
@@ -83,10 +88,26 @@ export const WebView = forwardRef<any, WebViewProps>(function WebView(props, ref
     // caller's ready-probe never fires — which is the truthful outcome, not a
     // silent success.
     if (frame && injectedJavaScript) {
-      runInFrame(
+      const ran = runInFrame(
         frame,
         `window.ReactNativeWebView = window.ReactNativeWebView || { postMessage: function (m) { parent.postMessage(m, "*"); } };\n${injectedJavaScript}`,
       );
+      if (!ran) {
+        // Report the impossibility on the SAME channel the probe would have
+        // used, so a caller that is waiting for a probe result gets an answer
+        // instead of silence. It must stop gating on a signal that cannot come.
+        onMessage?.({
+          nativeEvent: {
+            data: JSON.stringify({
+              type: WEBVIEW_PROBE_UNSUPPORTED,
+              reason: "cross-origin",
+              detail:
+                "the preview is served from a different origin than the app, so the browser forbids " +
+                "injecting the ready-probe. The frame is rendering; readiness simply cannot be confirmed this way.",
+            }),
+          },
+        });
+      }
     }
     onLoadEnd?.();
   };
@@ -109,17 +130,25 @@ export const WebView = forwardRef<any, WebViewProps>(function WebView(props, ref
   );
 });
 
-function runInFrame(frame: HTMLIFrameElement | null, js: string) {
-  if (!frame) return;
+/** Returns true when the script actually ran. False means cross-origin. */
+function runInFrame(frame: HTMLIFrameElement | null, js: string): boolean {
+  if (!frame) return false;
   try {
     const win = frame.contentWindow as any;
-    if (!win) return;
-    // Same-origin only. Cross-origin throws SecurityError, which we swallow on
-    // purpose: the caller learns nothing ran because its probe never fires,
-    // which beats a fabricated "ready".
+    if (!win) return false;
+    // Same-origin only. Cross-origin throws SecurityError by browser design.
     win.eval(js);
+    return true;
   } catch {
-    /* cross-origin frame — cannot inject, by browser design */
+    // SWALLOWING THIS WAS THE BUG. The old comment argued that a silent skip
+    // "beats a fabricated ready" — true, and a false dichotomy. The third option
+    // is to SAY SO, which is what the caller needs: with the probe unable to
+    // fire, DevPreview waited forever on "The dev server reported ready. The
+    // WebView has not confirmed the first rendered frame yet." while the iframe
+    // was displaying the app perfectly. Measured 2026-08-05 driving sfmg on the
+    // RN-web browser lane, where the app is served from :8099 and the bundle
+    // from the box — cross-origin by construction, so the wait could NEVER end.
+    return false;
   }
 }
 

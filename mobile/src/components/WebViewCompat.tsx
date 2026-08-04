@@ -24,5 +24,12 @@ export type { WebViewProps } from "react-native-webview";
 /** Native can always render an embedded browser. */
 export const WEBVIEW_SUPPORTED = true;
 
+/** Mirrors the web twin. On NATIVE the ready-probe always runs (a real WebView
+ *  can inject regardless of origin), so this is never emitted here — but the
+ *  constant must exist on both sides or a caller importing it from the wrong
+ *  twin is a runtime crash Metro picks per platform and tsc cannot see. The
+ *  parity test pins it. */
+export const WEBVIEW_PROBE_UNSUPPORTED = "yaver.webview.probe_unsupported";
+
 /** Why not, when unsupported. Empty on native — it IS supported. */
 export const WEBVIEW_UNSUPPORTED_REASON = "";

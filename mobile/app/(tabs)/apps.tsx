@@ -20,7 +20,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 // made the preview the ONE screen that could not render when Yaver's own app ran
 // as RN-web. The web sibling implements the same surface with an <iframe>.
 // Native resolves to the real WebView, unchanged. See WebViewCompat.web.tsx.
-import { WebView } from "../../src/components/WebViewCompat";
+import { WebView, WEBVIEW_PROBE_UNSUPPORTED } from "../../src/components/WebViewCompat";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Platform } from "react-native";
@@ -545,6 +545,9 @@ export default function AppsScreen() {
   // helpers below (sendTaskOrWarn / offerAgentFix) can surface status from
   // any callback without forward-reference TDZ errors.
   const [nativeLoading, setNativeLoading] = useState(false);
+  // Set when the readiness probe is IMPOSSIBLE (cross-origin iframe on RN-web),
+  // as opposed to merely slow — one is worth waiting for, the other never ends.
+  const [probeUnavailable, setProbeUnavailable] = useState<string | null>(null);
   // Live tail of the latest bundler stdout line. Updated from /dev/events
   // SSE on every event.logLine push. Rendered below the progress bar so
   // the user can see Metro is actively chewing through modules and not
@@ -3624,6 +3627,18 @@ export default function AppsScreen() {
                   // the authed quicClient, never straight from the page (/dev/
                   // is unauthenticated by design).
                   if (handlePreviewScreenMessage(m, devStatus?.workDir)) return;
+                  // THE PROBE CANNOT RUN — stop waiting for it. Same fix as
+                  // DevPreview.tsx: on RN-web the preview is a cross-origin
+                  // <iframe>, so the browser forbids injecting the ready-probe
+                  // and the old copy waited forever on "has not confirmed the
+                  // first rendered frame" while the app rendered fine. Landing
+                  // this in only ONE of the two browser-preview implementations
+                  // is the drift that shipped a broken heartbeat, dropped SSE
+                  // frames and a dead shake gesture before.
+                  if (m && m.type === WEBVIEW_PROBE_UNSUPPORTED) {
+                    setProbeUnavailable(String(m.detail || m.reason || "the ready-probe cannot run on this frame"));
+                    return;
+                  }
                   if (m && (m.t === "yaver-preview-probe" || m.t === "yaver-preview-timeout")) {
                     setWebPreviewProbe((m.state || null) as PreviewProbeState | null);
                     if (m.t === "yaver-preview-timeout") {
@@ -3895,7 +3910,9 @@ export default function AppsScreen() {
                     ) : connectionDropped ? (
                       <Text style={s.previewStepCmd}>{`Yaver ${describeConnectionStatus(connectionStatus)}. Reconnect, then reload the preview.`}</Text>
                     ) : healthyLogs ? (
-                      <Text style={s.previewStepCmd}>The dev server reported ready. The WebView has not confirmed the first rendered frame yet.</Text>
+                      <Text style={s.previewStepCmd}>{probeUnavailable
+                        ? `The dev server is ready and the preview is rendering. Readiness cannot be confirmed automatically here — ${probeUnavailable}`
+                        : "The dev server reported ready. The WebView has not confirmed the first rendered frame yet."}</Text>
                     ) : (
                       <Text style={s.previewStepCmd}>{devServerStepsFor(devStatus?.framework)}</Text>
                     )}

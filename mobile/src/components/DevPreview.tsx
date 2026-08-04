@@ -30,6 +30,7 @@ import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureT
 import { isActiveDevServerStatus } from "../lib/devServerState";
 import { mustUseNativePreview as mustUseNativePreviewLane } from "../lib/devLane";
 import { PREVIEW_READY_SCRIPT, PREVIEW_LANE_SCRIPT } from "../lib/previewReadyScript";
+import { WEBVIEW_PROBE_UNSUPPORTED } from "./WebViewCompat";
 import { detectCompileFailure } from "../lib/compileFailure";
 import { previewBundlePath } from "../lib/previewBundlePath";
 import { browserLaneProbeLine, doctorBrowserLane, type BrowserLaneProbeResult } from "../lib/browserLaneDoctor";
@@ -188,6 +189,10 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
   // the agent streamed an error. Drives the failure panel (with logs) instead of
   // an endless spinner or a black page.
   const [previewFailed, setPreviewFailed] = useState(false);
+  // Set when the readiness probe is IMPOSSIBLE (cross-origin iframe on RN-web),
+  // as opposed to merely slow. Distinguishing the two is the whole point: one is
+  // worth waiting for, the other never resolves.
+  const [probeUnavailable, setProbeUnavailable] = useState<string | null>(null);
   // Rolling tail of dev-server log lines, for the starting + failure panels.
   const [logLines, setLogLines] = useState<string[]>([]);
   const [previewProbe, setPreviewProbe] = useState<PreviewProbeState | null>(null);
@@ -1173,6 +1178,20 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                     // probe and got none of the feature. Forwarded over the
                     // authed quicClient, never straight from the page.
                     if (handlePreviewScreenMessage(m, status?.workDir)) return;
+                    // THE PROBE CANNOT RUN — stop waiting for it.
+                    //
+                    // On RN-web the preview is an <iframe>, and the app and the
+                    // bundle are different origins, so the browser forbids
+                    // injecting the ready-probe. Without this the surface sat on
+                    // "The dev server reported ready. The WebView has not
+                    // confirmed the first rendered frame yet." forever, while the
+                    // frame was rendering the app perfectly. A wait gated on a
+                    // signal that can never arrive is the defect; the frame is
+                    // fine, only the confirmation channel is gone.
+                    if (m && m.type === WEBVIEW_PROBE_UNSUPPORTED) {
+                      setProbeUnavailable(String(m.detail || m.reason || "the ready-probe cannot run on this frame"));
+                      return;
+                    }
                     if (m && (m.t === "yaver-preview-probe" || m.t === "yaver-preview-timeout")) {
                       setPreviewProbe((m.state || null) as PreviewProbeState | null);
                       if (m.t === "yaver-preview-timeout") {
@@ -1350,7 +1369,9 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
 	                          {compileCard.detail}
 	                        </Text>
 	                      ) : healthyLogs ? (
-	                        <Text style={styles.previewStepCmd}>The dev server reported ready. The WebView has not confirmed the first rendered frame yet.</Text>
+	                        <Text style={styles.previewStepCmd}>{probeUnavailable
+	                          ? `The dev server is ready and the preview is rendering. Readiness cannot be confirmed automatically here — ${probeUnavailable}`
+	                          : "The dev server reported ready. The WebView has not confirmed the first rendered frame yet."}</Text>
 	                      ) : (
 	                        <Text style={styles.previewStepCmd}>{devServerSteps(frameworkLabel)}</Text>
 	                      )}
