@@ -232,17 +232,34 @@ func ProbeBrowserLane(ctx context.Context, previewURL string, wait time.Duration
 		wait = 90 * time.Second
 	}
 
-	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx,
-		append(chromedp.DefaultExecAllocatorOptions[:],
-			chromedp.Flag("headless", true),
-			chromedp.Flag("disable-gpu", true),
-			chromedp.Flag("no-sandbox", true),
-			chromedp.Flag("mute-audio", true),
-			// The preview is served over the agent's self-signed LAN TLS in some
-			// paths; a cert refusal would otherwise present as a blank page.
-			chromedp.Flag("ignore-certificate-errors", true),
-			chromedp.WindowSize(430, 932), // phone-shaped: layout bugs show up here
-		)...)
+	// PIN THE BINARY, like every other launcher in this tree.
+	//
+	// This allocator used DefaultExecAllocatorOptions and never set ExecPath, so
+	// chromedp did its OWN search — and on the owner's box that finds
+	// /usr/bin/chromium-browser, which is the SNAP REDIRECTOR: it cannot create
+	// its temp dir under a daemon and dies with "cannot create temporary
+	// directory for the root file system", while /usr/bin/google-chrome sits
+	// right there and works (measured 2026-08-05: version=FAIL/headless=FAIL for
+	// both snap paths, OK/OK for google-chrome).
+	//
+	// browser.go already fixed exactly this and pins resolveLaunchableChrome's
+	// answer. The fix landed in ONE of two launchers, which is the drift rule by
+	// name — and the consequence was that the phone's browser lane could never
+	// render sfmg on this box while the dashboard's could.
+	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("mute-audio", true),
+		// The preview is served over the agent's self-signed LAN TLS in some
+		// paths; a cert refusal would otherwise present as a blank page.
+		chromedp.Flag("ignore-certificate-errors", true),
+		chromedp.WindowSize(430, 932), // phone-shaped: layout bugs show up here
+	)
+	if cp := preferredChromePath(); cp != "" {
+		allocOpts = append(allocOpts, chromedp.ExecPath(cp))
+	}
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, allocOpts...)
 	defer allocCancel()
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 	defer browserCancel()
@@ -253,10 +270,29 @@ func ProbeBrowserLane(ctx context.Context, previewURL string, wait time.Duration
 	// Navigate. chromedp surfaces transport failures here; HTTP status is read
 	// separately below because a 4xx still "navigates" successfully.
 	if err := chromedp.Run(runCtx, chromedp.Navigate(previewURL)); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "exec") ||
-			strings.Contains(strings.ToLower(err.Error()), "executable") {
+		// CLASSIFY A LAUNCH FAILURE AS A LAUNCH FAILURE.
+		//
+		// This used to look only for "exec"/"executable" in the message. The
+		// snap-confined Chrome dies with
+		//
+		//   chrome failed to start: cannot create temporary directory for the
+		//   root file system: No such file or directory
+		//
+		// which contains NEITHER word, so it fell through to StageNavigate and
+		// the phone rendered "Browser lane stopped at navigate" with the remedy
+		// "the preview URL refused the connection — the dev server bound a
+		// different port … check /dev/status". Measured on the owner's box
+		// 2026-08-05: a Chrome that never started, reported as a dev-server port
+		// problem. The user is sent to inspect a healthy dev server while the
+		// actual cause — which binary was launched — goes unmentioned.
+		//
+		// browserWindowLaunchErrorReason already knows every one of these
+		// signatures and returns the browser_window.* code for it, so the
+		// classification is shared rather than re-derived here. One vocabulary,
+		// or the two lanes disagree about the same failure.
+		if reason := browserWindowLaunchErrorReason(err); reason != "" {
 			res.Stage = BrowserLaneStageNoBrowser
-			res.Detail = "could not launch Chrome: " + err.Error()
+			res.Detail = "could not launch Chrome (" + reason + "): " + err.Error()
 			return finish()
 		}
 		res.Stage = BrowserLaneStageNavigate
