@@ -51,10 +51,20 @@ struct GapFix: Equatable, Sendable {
     let label: String
     let method: String
     let path: String
-    /// log-stream NAME, e.g. "install:flutter"; served at GET /streams/<stream>
+    /// log-stream NAME, e.g. "install:flutter"; served at GET /streams/<stream>.
+    /// Empty on an INSTANT fix, which has nothing to stream.
     let stream: String
     let est: String?
     let retry: Bool
+    /// The request body the route REQUIRES, supplied by the agent. A route whose
+    /// arguments the client has to guess is not invocable: POST
+    /// /vibing/preview/stop with no body answers 400 "project is required".
+    /// Empty for routes that need no body (every /install/<tool>).
+    var body: [String: String] = [:]
+    /// The fix answers SYNCHRONOUSLY — stopping a session, releasing a lock.
+    /// Without this flag the no-stream guard in parseCapabilityGap would DROP
+    /// such a fix, which is how a correct signal ends up with no consumer.
+    var instant: Bool = false
 }
 
 /// "This machine is missing something, and here is the tap that fixes it."
@@ -348,20 +358,34 @@ enum FailureSignals {
         if let f = o["fix"] as? [String: Any] {
             let path = str(f["path"])
             let stream = str(f["stream"])
-            // No path or no stream = an install the user could start and never
-            // see. That is the "silent 1.2 GB download" defect; refuse to
-            // render it.
-            if !path.isEmpty && !stream.isEmpty {
+            let instant = (f["instant"] as? Bool) == true
+            // No path, or no way to SEE the fix, = an action the user could start
+            // and never observe. That is the "silent 1.2 GB download" defect;
+            // refuse to render it. An instant fix is exempt: it answers in
+            // milliseconds and re-runs the original request, which is what makes
+            // it visible.
+            if !path.isEmpty && (!stream.isEmpty || instant) {
                 let label = str(f["label"])
                 let method = str(f["method"])
                 let est = str(f["est"])
+                // Only string values survive: the routes that carry a body carry
+                // identifiers (project, session), and accepting arbitrary JSON
+                // here would mean re-encoding something we cannot type.
+                var body: [String: String] = [:]
+                if let raw = f["body"] as? [String: Any] {
+                    for (k, v) in raw {
+                        if let s = v as? String { body[k] = s }
+                    }
+                }
                 fix = GapFix(
                     label: label.isEmpty ? "Install" : label,
                     method: method.isEmpty ? "POST" : method,
                     path: path,
                     stream: stream,
                     est: est.isEmpty ? nil : est,
-                    retry: (f["retry"] as? Bool) == true
+                    retry: (f["retry"] as? Bool) == true,
+                    body: body,
+                    instant: instant
                 )
             }
         }
@@ -434,6 +458,38 @@ enum FailureSignals {
     /// reports success — "return them to what they were doing".
     static func gapRetriesAfterFix(_ gap: CapabilityGap?) -> Bool {
         gap?.fix?.retry == true
+    }
+
+    /// True when the fix answers synchronously: POST it, then re-run the original
+    /// request. No stream view, because there is nothing to stream.
+    static func gapFixIsInstant(_ gap: CapabilityGap?) -> Bool {
+        gap?.fix?.instant == true
+    }
+
+    /// True when this surface must NOT offer a retry.
+    ///
+    /// A retry is honest only when nothing has to change first. A gap with a FIX
+    /// has a route, and a retry beside it invites the user to press the thing
+    /// that just failed; a CONSTRAINED gap states a settled fact that retrying
+    /// cannot alter. Both were being rendered with "Try again" on this surface —
+    /// measured 2026-08-03 on the preview 409, where the button could not
+    /// succeed for as long as another surface held the lock.
+    static func gapSuppressesRetry(_ gap: CapabilityGap?) -> Bool {
+        guard let gap else { return false }
+        if gap.fix != nil { return true }
+        if let c = gap.constraint, !c.isEmpty { return true }
+        return false
+    }
+
+    /// Wire code for "another surface is already previewing this project" —
+    /// reason_codes.go ReasonPreviewSessionActive. The route is the gap's own
+    /// fix (POST /vibing/preview/stop); this constant exists so a view can say
+    /// "Stop it and take over" in the surface's own words.
+    static let previewSessionActive = "preview.session_active"
+
+    /// True when the refusal is the preview lock, not a missing capability.
+    static func isPreviewSessionActive(_ gap: CapabilityGap?) -> Bool {
+        gap?.code == previewSessionActive
     }
 
     // ── 2. Stream recovery ────────────────────────────────────────────────

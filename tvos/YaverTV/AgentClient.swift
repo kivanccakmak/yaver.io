@@ -473,6 +473,23 @@ actor AgentClient {
             ?? InstallStarted(ok: true, tool: tool, stream: "install:\(tool)")
     }
 
+    /// Invoke a gap's route AS GIVEN — method, path and the body the agent
+    /// pre-filled. The generic form of installTool: a `GapFix` is a route, and a
+    /// UI must be able to press it without knowing what the failure was.
+    ///
+    /// Before this existed, the TV's fix button called `gapInstallTool` and gave
+    /// up on anything that was not `/install/<tool>` ("This gap carries no
+    /// install route."), so the first non-install remedy the agent produced —
+    /// the preview takeover — would have rendered a button that refused itself.
+    func invokeGapFix(_ fix: GapFix) async throws {
+        _ = try await request(
+            fix.method.isEmpty ? "POST" : fix.method,
+            path: fix.path,
+            jsonBody: fix.body.isEmpty ? [:] : fix.body,
+            failure: fix.label
+        )
+    }
+
     /// Tail GET /streams/<name>. A 1.2 GB SDK behind a silent spinner is the
     /// same defect as a silent `serve` — the user cannot tell fetching from
     /// hung — so every line goes to the surface as it arrives.

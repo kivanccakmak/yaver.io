@@ -145,7 +145,12 @@ struct WebPreviewStreamView: View {
     @ViewBuilder
     private func gapPanel(_ gap: CapabilityGap) -> some View {
         VStack(spacing: 18) {
-            Image(systemName: "shippingbox.and.arrow.backward")
+            // The icon follows the CODE, not the type name. A shipping box over
+            // "your TV is already previewing sfmg" reads as a download, which is
+            // the wrong story about a lock someone else is holding.
+            Image(systemName: FailureSignals.isPreviewSessionActive(gap)
+                ? "rectangle.on.rectangle.angled"
+                : "shippingbox.and.arrow.backward")
                 .font(.system(size: 52))
                 .foregroundStyle(.orange)
             Text(FailureSignals.gapTitle(gap))
@@ -182,7 +187,13 @@ struct WebPreviewStreamView: View {
                     .foregroundStyle(.orange)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 820)
-                Button("Try again") { restart() }
+                // A CONSTRAINED gap is a settled fact about this machine, and a
+                // retry cannot change a settled fact. Offering one here was the
+                // same defect as the preview-lock "Try again": an action that
+                // reads as hope and can only ever fail.
+                if !FailureSignals.gapSuppressesRetry(gap) {
+                    Button("Try again") { restart() }
+                }
             }
         }
     }
@@ -197,7 +208,61 @@ struct WebPreviewStreamView: View {
     /// POST the gap's route, stream its output into the log panel, and — when
     /// the gap says the original operation should be retried — return the user
     /// to what they were doing instead of making them find the button again.
+    /// POST a synchronous route, then re-run what the user originally asked for.
+    /// The takeover case: the other surface's preview stops, this one starts, and
+    /// the next thing on screen is the frame — which is the confirmation.
+    private func startInstantFix(_ gap: CapabilityGap, _ fix: GapFix) {
+        fixing = true
+        fixStartedAt = Date()
+        fixTicker = Date()
+        appendLog("\(fix.method) \(fix.path) …")
+        fixTask?.cancel()
+        fixTask = Task {
+            // Same box that refused us. A takeover applied to a different box
+            // stops a preview nobody was watching and leaves this one blocked.
+            guard let client = fellBackToRunner ? store.runnerClient() : store.renderClient() else {
+                await MainActor.run {
+                    fixing = false
+                    error = store.machineSplitActive
+                        ? "Your render machine needs the relay to be reachable from this TV."
+                        : "No machine selected"
+                }
+                return
+            }
+            do {
+                try await client.invokeGapFix(fix)
+            } catch {
+                await MainActor.run {
+                    fixing = false
+                    self.error = "\(fix.label) failed: \(error.localizedDescription)"
+                }
+                return
+            }
+            await MainActor.run {
+                fixing = false
+                self.gap = nil
+                if FailureSignals.gapRetriesAfterFix(gap) {
+                    restart()
+                } else {
+                    // No retry requested: say it worked rather than leaving the
+                    // panel on a cleared gap with nothing in its place.
+                    appendLog("\(fix.label) done.")
+                }
+            }
+        }
+    }
+
     private func startFix(_ gap: CapabilityGap) {
+        // An INSTANT route (stop a session, release a lock) answers in
+        // milliseconds and has nothing to stream, so it takes the short path:
+        // POST exactly what the agent said, then return the user to what they
+        // were doing. This is the branch the preview-lock takeover uses; without
+        // it the button below refused every non-install remedy with "This gap
+        // carries no install route" — a button that argues with itself.
+        if FailureSignals.gapFixIsInstant(gap), let fix = gap.fix {
+            startInstantFix(gap, fix)
+            return
+        }
         guard let tool = FailureSignals.gapInstallTool(gap) else {
             error = gap.constraint ?? "This gap carries no install route."
             return
