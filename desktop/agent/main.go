@@ -3974,9 +3974,21 @@ func runServe(args []string) {
 		quicServer := NewQUICServer(*quicPort, cfg.AuthToken, hostname, taskMgr, WithQUICPlacementBackend(cfg.ConvexSiteURL, cfg.DeviceID))
 		go func() {
 			if err := quicServer.Start(ctx); err != nil {
+				// A failed bind used to be ONE log line inside a goroutine, and
+				// the agent then carried on advertising a quicHost for a socket
+				// that did not exist — six days of it on ubuntu-4gb-hel1-1,
+				// where a co-located yaver-relay owns :4433. Record it so the
+				// heartbeat stops publishing the address, and NAME the holder
+				// so the reader does not go hunting a stale agent.
+				markQUICUnavailable(*quicPort, err)
 				log.Printf("QUIC server error: %v", err)
+				for _, line := range quicConflictLogLines(*quicPort, err) {
+					log.Print(line)
+				}
 			}
 		}()
+	} else {
+		markQUICDisabled(*quicPort)
 	}
 
 	// Start LAN discovery beacon (UDP broadcast for same-network mobile discovery)
@@ -10375,7 +10387,7 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 	initialConnectionPreferences := connectionPreferencesForHeartbeat(cfgAtStart, lastIPs, lastPublicEndpoints)
 	// Initial beat carries no metrics sample (keeps startup fast — no 1s CPU
 	// sampling on the boot path); metrics start flowing from the first tick.
-	if hbInit, err := SendHeartbeat(baseURL, currentToken(), deviceID, runners, installedRunnerIDs, lastIP, lastIPs, lastPublicEndpoints, &initialRecoveryPosture, initialConnectionPreferences, nil); err != nil {
+	if hbInit, err := SendHeartbeat(baseURL, currentToken(), deviceID, runners, installedRunnerIDs, quicAdvertisedHost(lastIP), lastIPs, lastPublicEndpoints, &initialRecoveryPosture, initialConnectionPreferences, nil); err != nil {
 		if errors.Is(err, ErrAuthExpired) {
 			log.Println("[auth] WARNING: Auth token expired! Run 'yaver auth' to re-authenticate.")
 			authExpiredLogged = true
@@ -10459,7 +10471,7 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 
 		currentRecoveryPosture := computeRecoveryTransportPosture(cfgNow)
 		currentConnectionPreferences := connectionPreferencesForHeartbeat(cfgNow, currentIPs, currentPublicEndpoints)
-		if hbMain, err := SendHeartbeat(baseURL, currentToken(), deviceID, runners, installedRunnerIDs, currentIP, currentIPs, currentPublicEndpoints, &currentRecoveryPosture, currentConnectionPreferences, metricsSamples); err != nil {
+		if hbMain, err := SendHeartbeat(baseURL, currentToken(), deviceID, runners, installedRunnerIDs, quicAdvertisedHost(currentIP), currentIPs, currentPublicEndpoints, &currentRecoveryPosture, currentConnectionPreferences, metricsSamples); err != nil {
 			if errors.Is(err, ErrAuthExpired) {
 				// Try to refresh token first — backend may rotate.
 				if !refreshAndPersist("on-401") {
@@ -10483,7 +10495,7 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 					// Retry heartbeat
 					retryRecoveryPosture := computeRecoveryTransportPosture(cfgNow)
 					retryConnectionPreferences := connectionPreferencesForHeartbeat(cfgNow, currentIPs, currentPublicEndpoints)
-					if hbRetry, retryErr := SendHeartbeat(baseURL, currentToken(), deviceID, runners, installedRunnerIDs, currentIP, currentIPs, currentPublicEndpoints, &retryRecoveryPosture, retryConnectionPreferences, metricsSamples); retryErr != nil {
+					if hbRetry, retryErr := SendHeartbeat(baseURL, currentToken(), deviceID, runners, installedRunnerIDs, quicAdvertisedHost(currentIP), currentIPs, currentPublicEndpoints, &retryRecoveryPosture, retryConnectionPreferences, metricsSamples); retryErr != nil {
 						log.Printf("heartbeat retry failed: %v", retryErr)
 					} else {
 						hbResult = hbRetry
