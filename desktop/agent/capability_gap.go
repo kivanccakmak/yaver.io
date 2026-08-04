@@ -67,6 +67,26 @@ type GapFix struct {
 	Est    string `json:"est,omitempty"` // "~1.2 GB · usually 3–10 min · 42 GB free on /opt"
 	Retry  bool   `json:"retry"`         // re-issue the original request on success
 
+	// Body is the request body the route REQUIRES, already filled in by the
+	// producer. A route whose arguments the client has to guess is not
+	// invocable: POST /vibing/preview/stop with no body answers 400 "project is
+	// required", so a takeover button built from method+path alone would be one
+	// more action that cannot succeed — the exact defect this type exists to
+	// abolish. Nil for routes that need no body (every /install/<tool>).
+	Body map[string]interface{} `json:"body,omitempty"`
+
+	// Instant marks a fix that answers SYNCHRONOUSLY and has nothing to stream:
+	// stopping a session, releasing a lock, flipping a setting. The no-stream
+	// guard (see the renderers' parseGapFix) exists to stop a 1.2 GB download
+	// hiding behind a silent spinner — but applying it to a 20 ms POST would
+	// DROP the button instead of rendering it, which is how a correct signal
+	// ends up with no consumer. Retry is what makes an instant fix visible: the
+	// original operation runs again and the user lands back where they were.
+	//
+	// Exactly one of Stream / Instant / Confirm must be set. A fix with none of
+	// the three is an action the user could start and never see.
+	Instant bool `json:"instant,omitempty"`
+
 	// Confirm marks a DESTRUCTIVE fix as two-step. Set only by the reclaim
 	// route today (capability_resources.go): the client must call the preview
 	// first and show the user exactly what would be deleted, with sizes,
@@ -74,9 +94,10 @@ type GapFix struct {
 	// server-side too — this field tells the UI to render the preview, it does
 	// not grant permission.
 	//
-	// A confirm-gated fix is the one legal case of an empty Stream: it answers
-	// synchronously and its preview is what makes it visible, so the "no
-	// stream = a 1.2 GB download nobody can watch" rule does not apply.
+	// A confirm-gated fix is one of two legal cases of an empty Stream (the
+	// other is Instant): it answers synchronously and its preview is what makes
+	// it visible, so the "no stream = a 1.2 GB download nobody can watch" rule
+	// does not apply.
 	Confirm *GapConfirm `json:"confirm,omitempty"`
 }
 

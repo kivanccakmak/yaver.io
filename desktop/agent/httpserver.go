@@ -1122,6 +1122,10 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/vibing/preview/clips", s.authSDKOrGuest(s.handleVibePreviewClips))
 	mux.HandleFunc("/vibing/preview/clip/", s.authSDKOrGuest(s.handleVibePreviewClip))
 	mux.HandleFunc("/vibing/preview/summaries", s.authSDKOrGuest(s.handleVibePreviewSummaries))
+	// "Can a new preview session be claimed yet?" — a read, so it rides the
+	// same guest/SDK scope as status. Exists so callers poll a fact instead of
+	// sleeping through the teardown window.
+	mux.HandleFunc("/vibing/preview/release", s.authSDKOrGuest(s.handleVibePreviewRelease))
 	mux.HandleFunc("/vibing/preview/clip/upload", s.auth(s.handleVibePreviewClipUpload))
 	mux.HandleFunc("/feedback-work/config", s.auth(s.handleFeedbackWorkConfig))
 
@@ -1876,7 +1880,7 @@ func spatialSDKRequestAllowed(method, path string) bool {
 		return true
 	case method == http.MethodPost && strings.HasPrefix(path, "/remote-runtime/sessions/"):
 		return true
-	case method == http.MethodGet && path == "/vibing/preview/status":
+	case method == http.MethodGet && (path == "/vibing/preview/status" || path == "/vibing/preview/release"):
 		return true
 	case method == http.MethodPost && path == "/vibing/preview/snapshot":
 		return true
@@ -1962,7 +1966,7 @@ func companionSessionAllowed(method, path, scope string) bool {
 		// servers, not run commands.
 		case method == http.MethodGet && (path == "/droid/frame" || path == "/capture/frame.jpg" || path == "/dev/events" || path == "/dev/status" || path == "/dev/target"):
 			return true
-		case method == http.MethodGet && (path == "/vibing/preview/status" || path == "/vibing/preview/summaries" || path == "/vibing/preview/clips" || path == "/vibing/preview/events"):
+		case method == http.MethodGet && (path == "/vibing/preview/status" || path == "/vibing/preview/release" || path == "/vibing/preview/summaries" || path == "/vibing/preview/clips" || path == "/vibing/preview/events"):
 			return true
 		case method == http.MethodGet && (strings.HasPrefix(path, "/vibing/preview/frames/") || strings.HasPrefix(path, "/vibing/preview/clip/") || strings.HasPrefix(path, "/streams/")):
 			return true
@@ -1985,6 +1989,26 @@ func companionSessionAllowed(method, path, scope string) bool {
 // so clients CLASSIFY instead of regexing the prose — mobile already carries
 // three drifting relay-auth matchers; do not seed a fourth. A scope 403 is
 // never retryable; surfaces route to an agent update instead of a Try again.
+// sdkScopeDenied writes the 403 for an SDK token whose scopes do not cover the
+// endpoint. Shaped exactly like companionScopeDenied — stable `code`, the
+// granted scopes, and the path that was refused — so a client classifies instead
+// of regexing prose.
+//
+// NOT retryable, and the body says so by carrying no fix: the token lacks the
+// scope, so nothing changes by asking again. The route is minting a token with
+// the scope (`yaver sdk-token create --scopes …`), which only the OWNER can do —
+// which is why this is a Constraint-shaped refusal rather than a GapFix the SDK
+// caller could press.
+func sdkScopeDenied(w http.ResponseWriter, path string, scopes []string) {
+	jsonReply(w, http.StatusForbidden, map[string]interface{}{
+		"ok":     false,
+		"error":  "SDK token scope does not allow this endpoint",
+		"code":   ReasonAuthSDKScopeDenied,
+		"path":   path,
+		"scopes": scopes,
+	})
+}
+
 func companionScopeDenied(w http.ResponseWriter, scope string) {
 	jsonReply(w, http.StatusForbidden, map[string]interface{}{
 		"ok":    false,
@@ -2833,7 +2857,14 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 			if info.isSdk {
 				// Check scope
 				if !requestAllowedByScopes(r.Method, r.URL.Path, info.scopes) {
-					jsonError(w, http.StatusForbidden, "SDK token scope does not allow this endpoint")
+					// NAMED, like every other scope denial. auth.sdk.scope_denied was the
+					// ONE reason code with neither producer nor consumer, while its sibling
+					// auth.session.scope_denied has been wired since 2026-07-27 — an SDK
+					// caller got a bare sentence where a companion caller got a code.
+					// FOUR call sites, not one: the check is duplicated across the auth
+					// wrappers, so naming it in one place would have left three surfaces
+					// still guessing. A scope denial is NOT retryable.
+					sdkScopeDenied(w, r.URL.Path, info.scopes)
 					return
 				}
 				// Check IP binding
@@ -2917,7 +2948,7 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 
 		// Check scope
 		if !requestAllowedByScopes(r.Method, r.URL.Path, sdkInfo.Scopes) {
-			jsonError(w, http.StatusForbidden, "SDK token scope does not allow this endpoint")
+			sdkScopeDenied(w, r.URL.Path, sdkInfo.Scopes)
 			return
 		}
 		stampSdkRunnerScope(r, sdkInfo.Scopes)
@@ -3055,7 +3086,7 @@ func (s *HTTPServer) authSDKOrGuest(next http.HandlerFunc) http.HandlerFunc {
 					return
 				}
 				if !requestAllowedByScopes(r.Method, r.URL.Path, info.scopes) {
-					jsonError(w, http.StatusForbidden, "SDK token scope does not allow this endpoint")
+					sdkScopeDenied(w, r.URL.Path, info.scopes)
 					return
 				}
 				if len(info.allowedCIDRs) > 0 {
@@ -3133,7 +3164,7 @@ func (s *HTTPServer) authSDKOrGuest(next http.HandlerFunc) http.HandlerFunc {
 		}
 		s.tokenCache.Store(token, info)
 		if !requestAllowedByScopes(r.Method, r.URL.Path, info.scopes) {
-			jsonError(w, http.StatusForbidden, "SDK token scope does not allow this endpoint")
+			sdkScopeDenied(w, r.URL.Path, info.scopes)
 			return
 		}
 		stampSdkRunnerScope(r, info.scopes)
@@ -6347,6 +6378,33 @@ func jsonReply(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
+}
+
+// jsonErrorWithGap is jsonError plus the two fields that turn a refusal into a
+// route: the stable `code` and the `capabilityGap` object carrying the next tap.
+//
+// It exists because `{ok:false, error:"<prose>"}` is the shape of ~1764 error
+// replies in this agent and layer D appears in almost none of them
+// (docs/audits/failure-plumbing-measured-2026-08-03.md). Every call site that
+// wanted to do better had to hand-build the map, so almost none did. `code` is
+// promoted to a top level field as well as living inside the gap, because that
+// is where companionScopeDenied already puts it and where every client already
+// looks (tvos AgentClient.swift reads obj["code"]).
+//
+// gap may be nil: the helper then degrades to exactly jsonError, so it is always
+// safe to call from a path whose producer sometimes has no route.
+func jsonErrorWithGap(w http.ResponseWriter, status int, msg string, gap *CapabilityGap) {
+	if gap == nil {
+		jsonError(w, status, msg)
+		return
+	}
+	payload := map[string]interface{}{
+		"ok":            false,
+		"error":         msg,
+		"code":          gap.Code,
+		"capabilityGap": gap,
+	}
+	jsonReply(w, status, payload)
 }
 
 func jsonError(w http.ResponseWriter, status int, msg string) {
@@ -17338,6 +17396,25 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			return mcpToolJSON(map[string]interface{}{"sessions": []interface{}{}})
 		}
 		return mcpToolJSON(map[string]interface{}{"sessions": s.vibePreviewMgr.Status()})
+
+	case "vibe_preview_release":
+		// The verb that replaced a sleep. Poll this after vibe_preview_stop
+		// instead of guessing how long teardown takes: it reports the session
+		// entry AND the capture goroutine, which is the part still holding the
+		// browser target after Stop() has already returned.
+		var args struct {
+			Project string `json:"project"`
+		}
+		_ = json.Unmarshal(call.Arguments, &args)
+		if strings.TrimSpace(args.Project) == "" {
+			return mcpToolError("vibe_preview_release: project is required")
+		}
+		if s.vibePreviewMgr == nil {
+			return mcpToolJSON(map[string]interface{}{
+				"release": PreviewRelease{Project: args.Project, Released: true},
+			})
+		}
+		return mcpToolJSON(map[string]interface{}{"release": s.vibePreviewMgr.ReleaseState(args.Project)})
 
 	case "vibe_preview_snapshot":
 		if s.vibePreviewMgr == nil {

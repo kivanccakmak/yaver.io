@@ -4999,6 +4999,17 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			},
 		},
 		{
+			"name":        "vibe_preview_release",
+			"description": "Answer 'could a new preview session for this project be claimed right now?' — reports the still-active session and any capture loop still winding down, with named blockers. Poll this after vibe_preview_stop instead of sleeping.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"project"},
+				"properties": map[string]interface{}{
+					"project": map[string]interface{}{"type": "string", "description": "Project name"},
+				},
+			},
+		},
+		{
 			"name":        "vibe_preview_snapshot",
 			"description": "Force one capture against an active session. Returns the new frame's seq + content hash. Pair with vibe_preview_summarize to ask Claude what changed.",
 			"inputSchema": map[string]interface{}{

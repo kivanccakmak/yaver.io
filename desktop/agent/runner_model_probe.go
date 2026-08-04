@@ -115,10 +115,29 @@ func mcpRunnerModelProbe(runner string, models []string) interface{} {
 		}
 	}
 	if _, err := exec.LookPath("codex"); err != nil {
-		return map[string]interface{}{
+		// A REMEDY THAT NAMES AN ACTION MUST CARRY THE ROUTE TO IT.
+		//
+		// The prose here already told the reader exactly what to run
+		// (`install_tool {tool:"codex"}`) — which means the product knew the fix
+		// and still handed back a sentence for a human to retype. That is the
+		// whole defect `remedy` was measured for: 1 of its 4 uses was invocable,
+		// and prose in a field whose NAME promises a route is worse than none,
+		// because layer D gets ticked off in review while the surface has nothing
+		// to render as a button.
+		//
+		// capabilityGapForMissingTools resolves the install against the same
+		// tables `yaver install` consults, so this can never advertise a route
+		// that 404s, and on a platform with no codex recipe it degrades to an
+		// honest Constraint instead of a button that cannot work.
+		out := map[string]interface{}{
 			"error":  "codex is not installed on this machine",
 			"remedy": "Install it first — ops verb install_tool {tool:\"codex\"} — then re-probe.",
 		}
+		if gap := capabilityGapForMissingTools([]string{"codex"}); gap != nil {
+			out["code"] = gap.Code
+			out["capabilityGap"] = gap
+		}
+		return out
 	}
 
 	candidates := models

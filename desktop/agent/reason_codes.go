@@ -1,9 +1,9 @@
 package main
 
 const (
-	ReasonConnectivityNoViableTransport    = "connectivity.no_viable_transport"
-	ReasonConnectivityRelayAuthExpired     = "connectivity.relay.auth_expired"
-	ReasonRunnerCodexNotAuthenticated      = "runner.codex.not_authenticated"
+	ReasonConnectivityNoViableTransport = "connectivity.no_viable_transport"
+	ReasonConnectivityRelayAuthExpired  = "connectivity.relay.auth_expired"
+	ReasonRunnerCodexNotAuthenticated   = "runner.codex.not_authenticated"
 	// ReasonRunnerCodexRefreshLineageLost is `invalid_grant` on the refresh
 	// exchange: the refresh token this machine holds has been consumed or
 	// revoked. A DISTINCT code from not_authenticated on purpose — the remedy
@@ -34,7 +34,7 @@ const (
 	// parseable — the fingerprint of a process killed mid-write (the OOM shape
 	// on a small box). Named separately so the remedy can say "a write was
 	// interrupted" instead of sending the reader after a parser bug.
-	ReasonRunnerCodexCredentialCorrupt = "runner.codex.credential_corrupt"
+	ReasonRunnerCodexCredentialCorrupt     = "runner.codex.credential_corrupt"
 	ReasonRunnerCodexLinuxSandboxBlocked   = "runner.codex.linux_sandbox_blocked"
 	ReasonRunnerClaudeAuthRequired         = "runner.claude.auth_required"
 	ReasonRunnerOpenCodeUnusable           = "runner.opencode.unusable"
@@ -62,6 +62,23 @@ const (
 	// regex-matched — by mobile/src/lib/capabilityGap.ts and
 	// web/lib/capabilityGap.ts. First client-read reason code in the file.
 	ReasonCapabilityToolchainMissing = "capability.toolchain_missing"
+	// ReasonPreviewSessionActive is "a preview of this project is already
+	// running on this box, held by another surface". One session per project is
+	// a real constraint — one headless Chrome per project, one capture loop —
+	// but it is a TAKEOVER, not a dead end: POST /vibing/preview/stop has always
+	// existed and every client already wraps it.
+	//
+	// Named because of what shipped without it. The refusal was a bare
+	// fmt.Errorf string; vibe_preview_http.go then prose-matched the agent's own
+	// sentence (`strings.Contains(msg, "already active")`) to pick a status code,
+	// and the 409 body carried no code and no route. Measured on tvOS AND
+	// visionOS in one run on 2026-08-03: both rendered "Preview unavailable ·
+	// preview session for project "sfmg" already active; stop it first" over a
+	// **"Try again"** button that could not succeed while the lock was held.
+	// Never offer an action that cannot succeed — a dead retry turns a one-tap
+	// fix into an infinite loop and teaches the user the product is broken
+	// rather than busy.
+	ReasonPreviewSessionActive = "preview.session_active"
 	// ReasonCapabilityInsufficientDisk is "the tool is installable here, and
 	// this machine does not have the room". A DIFFERENT code from
 	// toolchain_missing on purpose: the remedy is not an install, it is

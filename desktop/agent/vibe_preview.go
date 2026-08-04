@@ -87,8 +87,12 @@ const (
 
 // VibePreviewSession is a single active preview, one per (project, target).
 type VibePreviewSession struct {
-	ID         string             `json:"id"`
-	Project    string             `json:"project"`
+	ID      string `json:"id"`
+	Project string `json:"project"`
+	// Surface that started this session, when it said so (X-Yaver-Surface or the
+	// body field). Empty on older clients — the refusal then says "another
+	// surface", which is honest, rather than inventing a holder.
+	Surface    string             `json:"surface,omitempty"`
 	TargetURL  string             `json:"targetUrl"`
 	BrowserID  string             `json:"browserId"`
 	Mode       VibePreviewMode    `json:"mode"`
@@ -223,6 +227,21 @@ type VibePreviewManager struct {
 	// summaryCtr is the seq number assigned to the next QueueSummary
 	// call. Persisted in summaries.jsonl alongside the text.
 	summaryCtr uint64
+
+	// liveLoops counts capture goroutines that have started and not yet
+	// returned, per project.
+	//
+	// It exists so "is the preview released yet?" can be ANSWERED rather than
+	// waited out. Stop() removes the session from the map and closes the browser
+	// synchronously, so `sessions` is empty the instant Stop returns — but the
+	// capture goroutine may still be inside captureOnce, holding the browser
+	// target that the NEXT surface is about to ask for. The all-surfaces e2e loop
+	// papered over exactly that window with `await sleep(4000)`, which is both
+	// slower than necessary and wrong under load.
+	//
+	// HEADLESS FIRST, from CLAUDE.md: a question you can only answer by waiting
+	// is a missing endpoint. This counter is the measurement behind that endpoint.
+	liveLoops map[string]int
 }
 
 // activeVibePreviewMgr is the process-wide singleton accessor. main.go's
@@ -258,14 +277,15 @@ func ActiveVibePreviewManager() *VibePreviewManager {
 // Start will return an error if browser is nil.
 func NewVibePreviewManager(browser vibePreviewBrowserGetter) *VibePreviewManager {
 	return &VibePreviewManager{
-		sessions: make(map[string]*VibePreviewSession),
-		ring:     make(map[string][]*vibeFrameRecord),
-		seqCtr:   make(map[string]*uint64),
-		subs:     make(map[string][]chan VibePreviewEvent),
-		eventLog: make(map[string][]VibePreviewEvent),
-		clips:    make(map[string][]*VibeClipRecord),
-		browser:  browser,
-		nowFn:    time.Now,
+		sessions:  make(map[string]*VibePreviewSession),
+		ring:      make(map[string][]*vibeFrameRecord),
+		seqCtr:    make(map[string]*uint64),
+		subs:      make(map[string][]chan VibePreviewEvent),
+		eventLog:  make(map[string][]VibePreviewEvent),
+		clips:     make(map[string][]*VibeClipRecord),
+		liveLoops: make(map[string]int),
+		browser:   browser,
+		nowFn:     time.Now,
 	}
 }
 
@@ -306,6 +326,13 @@ type VibePreviewStartOpts struct {
 	// chosen form factor. Zero means "use the profile".
 	Width  int `json:"width,omitempty"`
 	Height int `json:"height,omitempty"`
+	// Surface is who is asking — "tv", "vision", "mobile", "web". Read from the
+	// X-Yaver-Surface header when the body omits it, which every native surface
+	// already sends on every request (tvos/YaverTV/AgentClient.swift:623), so the
+	// commonest collision (TV vs headset) names itself with no client change.
+	// Recorded on the session purely so the NEXT surface's refusal can say who
+	// holds the lock instead of "another surface".
+	Surface string `json:"surface,omitempty"`
 }
 
 // Start boots a new preview session: opens a headless Chrome, navigates to
@@ -319,7 +346,10 @@ func (m *VibePreviewManager) Start(opts VibePreviewStartOpts) (*VibePreviewSessi
 		return nil, fmt.Errorf("vibe-preview manager not initialised")
 	}
 	if m.browser == nil {
-		return nil, fmt.Errorf("browser automation unavailable: install Chrome/Chromium")
+		// Typed for the same reason as the lock above: the 503 used to be picked
+		// by matching this sentence. Routed to the shared capability-gap producer
+		// at the HTTP layer, so "no browser" gets a streamed Install button.
+		return nil, &PreviewBrowserUnavailableError{}
 	}
 	if opts.Project == "" {
 		return nil, fmt.Errorf("project is required")
@@ -343,10 +373,16 @@ func (m *VibePreviewManager) Start(opts VibePreviewStartOpts) (*VibePreviewSessi
 	}
 
 	// One session per project — caller must Stop before re-Starting.
+	//
+	// TYPED, not a sentence: the HTTP layer used to prose-match this very string
+	// to choose a status code, and the surfaces rendered a "Try again" that could
+	// not succeed while the lock was held. The error carries the holding session
+	// so the refusal can become a takeover route (vibe_preview_takeover.go).
 	m.mu.Lock()
-	if _, exists := m.sessions[opts.Project]; exists {
+	if existing, exists := m.sessions[opts.Project]; exists {
+		held := cloneSession(existing)
 		m.mu.Unlock()
-		return nil, fmt.Errorf("preview session for project %q already active; stop it first", opts.Project)
+		return nil, &PreviewSessionActiveError{Project: opts.Project, Active: held}
 	}
 	m.mu.Unlock()
 
@@ -370,6 +406,7 @@ func (m *VibePreviewManager) Start(opts VibePreviewStartOpts) (*VibePreviewSessi
 	sess := &VibePreviewSession{
 		ID:        browserID,
 		Project:   opts.Project,
+		Surface:   opts.Surface,
 		TargetURL: opts.TargetURL,
 		BrowserID: browserID,
 		Mode:      opts.Mode,
@@ -523,6 +560,23 @@ func (m *VibePreviewManager) runCaptureLoop(ctx context.Context, project string,
 	if fps <= 0 {
 		return
 	}
+	// Register BEFORE the first tick and release on every exit path, so
+	// PreviewRelease can report the truth rather than a guess. The increment
+	// happens inside the goroutine on purpose: a counter bumped by the caller
+	// and decremented by the goroutine is a leak the first time an fps<=0 loop
+	// returns early, which is precisely the shape above.
+	m.mu.Lock()
+	m.liveLoops[project]++
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		if m.liveLoops[project] <= 1 {
+			delete(m.liveLoops, project)
+		} else {
+			m.liveLoops[project]--
+		}
+		m.mu.Unlock()
+	}()
 	interval := time.Duration(float64(time.Second) / fps)
 	if interval < 50*time.Millisecond {
 		interval = 50 * time.Millisecond // hard floor 20 FPS
@@ -859,8 +913,12 @@ func cloneSession(s *VibePreviewSession) *VibePreviewSession {
 		return nil
 	}
 	return &VibePreviewSession{
-		ID:         s.ID,
-		Project:    s.Project,
+		ID:      s.ID,
+		Project: s.Project,
+		// Field-by-field means every new field must be added HERE too, or it
+		// silently reads as empty everywhere the clone is what ships. Surface is
+		// what lets a refusal name the surface holding the lock.
+		Surface:    s.Surface,
 		TargetURL:  s.TargetURL,
 		BrowserID:  s.BrowserID,
 		Mode:       s.Mode,

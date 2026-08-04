@@ -11,6 +11,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -41,18 +42,33 @@ func (s *HTTPServer) handleVibePreviewStart(w http.ResponseWriter, r *http.Reque
 	if opts.NetMode == "" {
 		opts.NetMode = strings.TrimSpace(r.Header.Get("X-Yaver-NetMode"))
 	}
+	// Same precedence for the surface: body wins, header is the free fallback
+	// every native surface already sends. Recorded so the NEXT surface's refusal
+	// can name who holds the lock.
+	if opts.Surface == "" {
+		opts.Surface = strings.TrimSpace(r.Header.Get("X-Yaver-Surface"))
+	}
 
 	sess, err := s.vibePreviewMgr.Start(opts)
 	if err != nil {
-		// 409 for "already active", 503 for "no browser", 400 for the rest.
-		msg := err.Error()
+		// CLASSIFY BY TYPE, never by prose. This switch used to read
+		// `strings.Contains(msg, "already active")` against a string produced two
+		// files away — the agent regexing its own sentence to pick a status code,
+		// one layer earlier than the client-side matchers this codebase already
+		// pays for. A rewording in vibe_preview.go silently turned a 409 into a
+		// 400 and no test could see it.
+		//
+		// Both refusals now carry a NAMED cause and an INVOCABLE route, so no
+		// surface has to guess and none of them may offer a dead retry.
+		var active *PreviewSessionActiveError
+		var noBrowser *PreviewBrowserUnavailableError
 		switch {
-		case strings.Contains(msg, "already active"):
-			jsonError(w, http.StatusConflict, msg)
-		case strings.Contains(msg, "browser automation unavailable"):
-			jsonError(w, http.StatusServiceUnavailable, msg)
+		case errors.As(err, &active):
+			jsonErrorWithGap(w, http.StatusConflict, active.Error(), previewSessionActiveGap(active))
+		case errors.As(err, &noBrowser):
+			jsonErrorWithGap(w, http.StatusServiceUnavailable, noBrowser.Error(), previewBrowserUnavailableGap())
 		default:
-			jsonError(w, http.StatusBadRequest, msg)
+			jsonError(w, http.StatusBadRequest, err.Error())
 		}
 		return
 	}
@@ -105,6 +121,36 @@ func (s *HTTPServer) handleVibePreviewStatus(w http.ResponseWriter, r *http.Requ
 	jsonReply(w, http.StatusOK, map[string]interface{}{
 		"ok":       true,
 		"sessions": sessions,
+	})
+}
+
+// handleVibePreviewRelease — GET /vibing/preview/release?project=X
+//
+// "Could a new preview session for this project be claimed right now?" —
+// answered, not waited out. Cheap enough to poll at 200 ms; the all-surfaces
+// e2e loop replaced a fixed 4-second sleep with it.
+func (s *HTTPServer) handleVibePreviewRelease(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	project := strings.TrimSpace(r.URL.Query().Get("project"))
+	if project == "" {
+		jsonError(w, http.StatusBadRequest, "project query param required")
+		return
+	}
+	// A manager that does not exist cannot be holding anything. Reporting
+	// "released" here is the honest answer, not an optimistic one.
+	if s.vibePreviewMgr == nil {
+		jsonReply(w, http.StatusOK, map[string]interface{}{
+			"ok":      true,
+			"release": PreviewRelease{Project: project, Released: true},
+		})
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":      true,
+		"release": s.vibePreviewMgr.ReleaseState(project),
 	})
 }
 
