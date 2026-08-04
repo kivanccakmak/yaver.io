@@ -12,7 +12,15 @@ import {
   Text,
   View,
 } from "react-native";
-import { WebView } from "react-native-webview";
+// WebViewCompat, not react-native-webview directly: the real WebView ships NO
+// web build — on RN-web it renders the literal string "React Native WebView
+// does not support this platform." (measured against 13.15.0: lib/WebView.js is
+// the platform-neutral fallback, there is no .web.js and no `browser` field).
+// So the preview — the one screen the browser lane exists to show — was the one
+// screen that could not draw. apps.tsx was migrated to the shim; THIS file was
+// not, which is the two-browser-preview-implementations drift CLAUDE.md names by
+// name. Native resolves to the real WebView, byte-for-byte unchanged.
+import { WebView } from "./WebViewCompat";
 import { router } from "expo-router";
 import { describeDevReloadResult, devReloadReachedTarget, quicClient, type DevServerStatus } from "../lib/quic";
 import { previewAgentHealthIsAuthoritative, previewHealthCanOfferProjectFix } from "../lib/previewHealth";

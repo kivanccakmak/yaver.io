@@ -51,5 +51,36 @@ ok(webSrc.includes("ReactNativeWebView"), "web sibling bridges window.ReactNativ
 // reload() is called imperatively by the preview screen.
 ok(/reload\s*\(/.test(webSrc), "web sibling implements reload()");
 
+// ── The guard that was missing, and the drift it would have caught ──────────
+//
+// The twins agreeing with each other proves nothing if the PREVIEW SCREENS do
+// not use them. Measured 2026-08-04: apps.tsx had been migrated to the shim
+// while DevPreview.tsx and app/(tabs)/project.tsx still imported
+// react-native-webview directly — so on RN-web those screens rendered the
+// library's own "React Native WebView does not support this platform." text.
+// That is the "a fix that lands in one of two browser-preview implementations
+// is not landed" rule (CLAUDE.md), and the parity test above could never see it
+// because it only ever read the two shim files.
+//
+// Only the BROWSER-PREVIEW surfaces are listed. Screens that are native-only by
+// nature (camera, terminal, remote desktop, droid control) may import the real
+// WebView — forbidding it everywhere would be a rule people route around.
+const previewSurfaces = [
+  "../../app/(tabs)/apps.tsx",
+  "../../app/(tabs)/project.tsx",
+  "./DevPreview.tsx",
+];
+for (const rel of previewSurfaces) {
+  const src = stripComments(readFileSync(join(__dirname, rel), "utf8"));
+  ok(
+    !/from ["']react-native-webview["']/.test(src),
+    `${rel} must import WebViewCompat, not react-native-webview — the raw library renders an error string on RN-web`,
+  );
+  ok(
+    /WebViewCompat/.test(src),
+    `${rel} must reference WebViewCompat`,
+  );
+}
+
 console.log(`\nwebViewCompatParity: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

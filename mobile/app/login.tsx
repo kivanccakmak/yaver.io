@@ -6,7 +6,7 @@ import * as Linking from "expo-linking";
 import * as ExpoLinking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { router } from "expo-router";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -26,12 +26,20 @@ import { useAuth } from "../src/context/AuthContext";
 import { useColors, useTheme } from "../src/context/ThemeContext";
 import { useResponsiveLayout } from "../src/hooks/useResponsiveLayout";
 import {
+  formatUserCode,
+  startDeviceCodeSignIn,
+  waitForDeviceCodeToken,
+} from "../src/lib/deviceCodeSignIn";
+import {
   type OAuthProvider,
   getConvexSiteUrl,
   getOAuthUrl,
   getAuthConfig,
   signupWithEmail,
   loginWithEmail,
+  saveToken,
+  saveUser,
+  validateTokenDetailed,
 } from "../src/lib/auth";
 import {
   PasskeyCancelled,
@@ -95,6 +103,86 @@ export default function LoginScreen() {
   const isTablet = layout.isTablet;
   const [isLoading, setIsLoading] = useState(false);
   const [showEmailForm, setShowEmailForm] = useState(false);
+  // Code sign-in. The whole flow is three bits of state: the short code to show,
+  // a line saying what is happening, and a cancel flag the poll loop reads.
+  const [deviceCode, setDeviceCode] = useState<{ userCode: string; secret: string } | null>(null);
+  const [deviceCodeNote, setDeviceCodeNote] = useState("");
+  const deviceCodeCancelled = useRef(false);
+
+  // Sign in with a short code — no browser, no keyboard on this device.
+  //
+  // backend/convex/deviceCode.ts has shipped this flow the whole time; this
+  // screen simply had no entry point to it, so a new phone or a simulator could
+  // not be signed in without a human driving a browser. That is what blocked
+  // every automated iOS/Android arc at its first step.
+  //
+  // THIS DEVICE CREATES THE CODE. poll/claim key off the 40-hex SECRET, not the
+  // short code the human reads — so a screen that merely accepts a typed code
+  // could never complete. The short code is for the approver to recognise.
+  const startCodeSignIn = React.useCallback(async () => {
+    deviceCodeCancelled.current = false;
+    setDeviceCodeNote("");
+    setIsLoading(true);
+    let started: { userCode: string; deviceCode: string };
+    try {
+      started = await startDeviceCodeSignIn({ machineName: "Yaver mobile", platform: "mobile", environment: "mobile" });
+    } catch (err) {
+      // Say why. A tap that appears to do nothing is the failure mode this
+      // whole seam exists to remove.
+      setDeviceCodeNote(err instanceof Error ? err.message : String(err));
+      setIsLoading(false);
+      return;
+    }
+    setDeviceCode({ userCode: started.userCode, secret: started.deviceCode });
+    setDeviceCodeNote("Waiting for approval…");
+    setIsLoading(false);
+
+    const result = await waitForDeviceCodeToken(started.deviceCode, {
+      isCancelled: () => deviceCodeCancelled.current,
+      onTick: ({ elapsedMs, unreachableReason }) => {
+        // Narrate the wait, and NEVER let an unreachable server render as
+        // "waiting for you" — they look identical and mean opposite things.
+        const secs = Math.round(elapsedMs / 1000);
+        setDeviceCodeNote(
+          unreachableReason
+            ? `Can't reach Yaver right now (${unreachableReason}) — still trying · ${secs}s`
+            : `Waiting for approval… ${secs}s`,
+        );
+      },
+    });
+
+    if (result.kind === "cancelled") return;
+    if (result.kind === "token") {
+      await saveToken(result.token);
+      const validated = await validateTokenDetailed(result.token);
+      if (validated.kind === "valid") {
+        await saveUser(validated.user);
+        setDeviceCode(null);
+        await finishLogin();
+        return;
+      }
+      // The token minted but did not validate. Do not strand the user on a
+      // screen that says "approved" — name it and let them retry.
+      setDeviceCodeNote(
+        validated.kind === "networkError"
+          ? "Signed in, but Yaver could not be reached to confirm it. Check your connection and try again."
+          : "That approval did not produce a usable session. Start a new code.",
+      );
+      return;
+    }
+    setDeviceCodeNote(
+      result.kind === "expired"
+        ? "That code expired. Tap to get a new one."
+        : `No approval arrived${result.lastReason ? ` (${result.lastReason})` : ""}. Tap to get a new one.`,
+    );
+    setDeviceCode(null);
+  }, []);
+
+  const cancelCodeSignIn = React.useCallback(() => {
+    deviceCodeCancelled.current = true;
+    setDeviceCode(null);
+    setDeviceCodeNote("");
+  }, []);
   const [isSignUp, setIsSignUp] = useState(false);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -704,6 +792,54 @@ export default function LoginScreen() {
                   </Pressable>
                 </View>
 
+                {/* Sign in with a code. One row when idle, a panel while a code
+                    is live — the flow every other surface already had and this
+                    one did not. Placed AFTER the providers because it is the
+                    fallback path (no browser here, or signing in a simulator),
+                    not the thing most people want first. */}
+                {!showEmailForm && (
+                  deviceCode ? (
+                    <View style={[styles.deviceCodePanel, { backgroundColor: c.bgCard, borderColor: providerBorderColor }]}>
+                      <Text style={[styles.deviceCodeLabel, { color: c.textMuted }]}>
+                        Approve this code from a signed-in device
+                      </Text>
+                      <Text
+                        selectable
+                        accessibilityLabel={`Sign-in code ${formatUserCode(deviceCode.userCode).split("").join(" ")}`}
+                        style={[styles.deviceCodeValue, { color: c.textPrimary }]}
+                      >
+                        {formatUserCode(deviceCode.userCode)}
+                      </Text>
+                      {deviceCodeNote ? (
+                        <Text style={[styles.deviceCodeNote, { color: c.textMuted }]}>{deviceCodeNote}</Text>
+                      ) : null}
+                      <Pressable onPress={cancelCodeSignIn} hitSlop={8}>
+                        <Text style={[styles.deviceCodeCancel, { color: c.textMuted }]}>Cancel</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <>
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.button,
+                          { backgroundColor: c.bgCard, borderColor: providerBorderColor },
+                          pressed && styles.buttonPressed,
+                        ]}
+                        disabled={isLoading}
+                        onPress={() => void startCodeSignIn()}
+                      >
+                        <View style={styles.buttonContent}>
+                          <Ionicons name="keypad-outline" size={17} color={c.textPrimary} style={styles.buttonIcon} />
+                          <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Sign in with a code</Text>
+                        </View>
+                      </Pressable>
+                      {deviceCodeNote ? (
+                        <Text style={[styles.deviceCodeNote, { color: c.textMuted }]}>{deviceCodeNote}</Text>
+                      ) : null}
+                    </>
+                  )
+                )}
+
                 {emailPasswordEnabled ? (
                   !showEmailForm ? (
                     <>
@@ -1099,6 +1235,31 @@ const styles = StyleSheet.create({
   versionText: {
     fontSize: 11,
     marginTop: 8,
+  },
+  deviceCodePanel: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    gap: 6,
+  },
+  deviceCodeLabel: {
+    fontSize: 12,
+  },
+  deviceCodeValue: {
+    fontSize: 30,
+    fontWeight: "700",
+    letterSpacing: 4,
+    fontVariant: ["tabular-nums"],
+  },
+  deviceCodeNote: {
+    fontSize: 12,
+    textAlign: "center",
+  },
+  deviceCodeCancel: {
+    fontSize: 13,
+    marginTop: 2,
   },
   divider: {
     flexDirection: "row",
