@@ -136,6 +136,22 @@ type CapabilityGap struct {
 	// AND pre-formatted, so no surface invents its own byte formatter.
 	Resource *CapabilityResource `json:"resource,omitempty"`
 
+	// AIFix is the LAST-RESORT route: hand this failure to a coding agent.
+	//
+	// Offered only when no deterministic fixer exists. "Fix in Yaver" costs an
+	// LLM run; POST /install/flutter costs one command, so spending the former
+	// on a class that has the latter is the most expensive possible answer to
+	// the cheapest possible question. Fix (deterministic) always wins; AIFix is
+	// what a Constraint used to be alone with.
+	//
+	// WHY IT IS PART OF THIS TYPE. "Fix with <runner>" already existed — as a
+	// hand-rolled widget in ONE web component, wired to ONE error path
+	// (RuntimeLabView's renderFixWithRunnerRow → dispatchBuildFix). So mobile,
+	// tvOS and visionOS could not offer it at all, and no other failure class
+	// could either. Putting it on the gap makes it available to every surface
+	// and every failure through the renderer they already have.
+	AIFix *GapFix `json:"aiFix,omitempty"`
+
 	// Reclaim is the space-freeing route offered whenever disk is the blocker
 	// or nearly is. A refusal that is only a refusal is a dead end with a
 	// sentence — the exact thing CapabilityGap exists to make impossible — so
@@ -499,4 +515,97 @@ func capabilityGapSummary(tools []string) string {
 		names = append(names, capabilityDisplayName(t))
 	}
 	return fmt.Sprintf("%s aren't installed on this machine.", strings.Join(names, ", "))
+}
+
+// aiFixRoute builds the "hand it to a coding agent" route for a failure that
+// has no deterministic fixer.
+//
+// The body is pre-filled — same rule as every other route here: a route whose
+// arguments the caller must invent is not invocable, and POST /tasks refuses a
+// body with no prompt (ReasonTaskPromptMissing), so a half-built AI route would
+// 400 on every surface that pressed it.
+//
+// Instant, because the POST answers immediately with the created task; the WORK
+// is then visible wherever that surface already shows tasks. It is deliberately
+// NOT Retry: re-issuing the original operation the moment the task is created
+// would race the runner that has not started yet.
+func aiFixRoute(runner, title, prompt string) *GapFix {
+	runner = strings.TrimSpace(runner)
+	if runner == "" || strings.TrimSpace(prompt) == "" || strings.TrimSpace(title) == "" {
+		// Never advertise a route we cannot fill in. A "Fix with" button with no
+		// runner is the dead button this whole file exists to abolish.
+		return nil
+	}
+	return &GapFix{
+		Label:  "Fix with " + runnerCapabilityName(runner),
+		Method: "POST",
+		Path:   "/tasks",
+		Body: map[string]interface{}{
+			"title":       title,
+			"description": prompt,
+			"runner":      runner,
+		},
+		Instant: true,
+	}
+}
+
+// compileFailureGap turns "your app failed to compile" into a NAMED cause with
+// the only route that can actually help: a coding agent.
+//
+// WHY THIS ONE GETS AIFix AND MOST GAPS DO NOT. Yaver has a deterministic fixer
+// for a missing toolchain (install it), for a full disk (reclaim), for a held
+// preview lock (stop it). It has none for `The class 'IconData' can't be
+// extended outside of its library` — that is the USER'S SOURCE, and no command
+// the agent can run repairs it. This is precisely the case the escalation rule
+// reserves an LLM run for.
+//
+// Before this, a compile failure emitted a `type:"error"` dev event carrying a
+// detail string and NOTHING else — no code to switch on, no route to press. A
+// Flutter preview sat blank while /dev/status reported perfect health
+// (2026-07-25), and even after that was fixed the surface could only render the
+// sentence. The user then had to retype the error into the chat themselves,
+// which is the manual step this route removes.
+//
+// Degrades honestly: with no runner installed, aiFixRoute returns nil and the
+// gap is a named Constraint — still far better than an unlabelled error, and it
+// never advertises a button that cannot work.
+func compileFailureGap(framework, detail string, installedRunners []string) *CapabilityGap {
+	summary := "Your app failed to compile, so there is nothing to preview."
+	if f := strings.TrimSpace(framework); f != "" {
+		summary = fmt.Sprintf("The %s app failed to compile, so there is nothing to preview.", f)
+	}
+	gap := &CapabilityGap{
+		Code:       ReasonBuildCompileFailed,
+		Capability: "project-compiles",
+		Summary:    summary,
+		Detail:     strings.TrimSpace(detail),
+		// The dev server is FINE — saying so stops the user restarting a healthy
+		// process, which is the first thing anyone tries when a preview is blank.
+		Constraint: "The dev server is running; the project's own source does not compile. " +
+			"Yaver has no command that fixes source code, so this is not something the agent can repair for you.",
+	}
+	// Prefer the first installed runner. The caller passes the probed list, so
+	// this can never name a runner that is not on the box.
+	for _, r := range installedRunners {
+		if fix := aiFixRoute(r, "Fix the compile error", compileFixPrompt(framework, detail)); fix != nil {
+			gap.AIFix = fix
+			break
+		}
+	}
+	return gap
+}
+
+// compileFixPrompt is what the coding agent is actually asked. It carries the
+// compiler's own words: a prompt that says "fix the build" without them makes
+// the runner re-derive what the agent already knew.
+func compileFixPrompt(framework, detail string) string {
+	body := strings.TrimSpace(detail)
+	if body == "" {
+		return ""
+	}
+	lead := "The project fails to compile. Fix the cause and change nothing else."
+	if f := strings.TrimSpace(framework); f != "" {
+		lead = fmt.Sprintf("The %s project fails to compile. Fix the cause and change nothing else.", f)
+	}
+	return lead + "\n\nThe compiler said:\n" + body
 }

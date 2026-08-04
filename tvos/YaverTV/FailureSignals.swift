@@ -76,9 +76,16 @@ struct CapabilityGap: Equatable, Sendable {
     let capability: String
     let summary: String
     let detail: String?
-    /// nil ⇒ no fixer exists here; `constraint` says why.
+    /// nil ⇒ no DETERMINISTIC fixer exists here; `constraint` says why, and
+    /// `aiFix` may still offer to hand the failure to a coding agent.
     let fix: GapFix?
     let constraint: String?
+    /// LAST-RESORT route: "Fix with Codex". Present only when `fix` is nil —
+    /// an LLM run is the most expensive answer, so a deterministic route always
+    /// wins. Before this lived on the gap, the button existed only as a
+    /// hand-rolled widget in one WEB component, so this surface could never
+    /// offer it for any failure at all.
+    var aiFix: GapFix? = nil
 }
 
 /// Named relay limit verdict (the monetization boundary, rendered as itself).
@@ -390,6 +397,29 @@ enum FailureSignals {
             }
         }
 
+        var aiFix: GapFix?
+        if let a = o["aiFix"] as? [String: Any] {
+            let path = str(a["path"])
+            if !path.isEmpty {
+                var body: [String: String] = [:]
+                if let raw = a["body"] as? [String: Any] {
+                    for (k, v) in raw { if let sv = v as? String { body[k] = sv } }
+                }
+                let label = str(a["label"])
+                let method = str(a["method"])
+                aiFix = GapFix(
+                    label: label.isEmpty ? "Fix with the coding agent" : label,
+                    method: method.isEmpty ? "POST" : method,
+                    path: path,
+                    stream: str(a["stream"]),
+                    est: nil,
+                    retry: (a["retry"] as? Bool) == true,
+                    body: body,
+                    instant: (a["instant"] as? Bool) == true
+                )
+            }
+        }
+
         let detail = str(o["detail"])
         let constraint = str(o["constraint"])
         return CapabilityGap(
@@ -398,7 +428,8 @@ enum FailureSignals {
             summary: summary,
             detail: detail.isEmpty ? nil : detail,
             fix: fix,
-            constraint: constraint.isEmpty ? nil : constraint
+            constraint: constraint.isEmpty ? nil : constraint,
+            aiFix: aiFix
         )
     }
 
@@ -458,6 +489,17 @@ enum FailureSignals {
     /// reports success — "return them to what they were doing".
     static func gapRetriesAfterFix(_ gap: CapabilityGap?) -> Bool {
         gap?.fix?.retry == true
+    }
+
+    /// The "hand it to a coding agent" button, or nil.
+    ///
+    /// nil whenever a DETERMINISTIC fix exists: escalating to an LLM run when one
+    /// command would do is the most expensive possible answer to the cheapest
+    /// possible question, and showing both invites the user to pick the costly
+    /// one. Mirrors gapAIFixLabel in the two capabilityGap.ts twins.
+    static func gapAIFixLabel(_ gap: CapabilityGap?) -> String? {
+        guard let gap, let ai = gap.aiFix, gap.fix == nil else { return nil }
+        return ai.label.isEmpty ? "Fix with the coding agent" : ai.label
     }
 
     /// True when the fix answers synchronously: POST it, then re-run the original

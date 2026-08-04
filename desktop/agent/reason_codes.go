@@ -34,15 +34,20 @@ const (
 	// parseable — the fingerprint of a process killed mid-write (the OOM shape
 	// on a small box). Named separately so the remedy can say "a write was
 	// interrupted" instead of sending the reader after a parser bug.
-	ReasonRunnerCodexCredentialCorrupt     = "runner.codex.credential_corrupt"
-	ReasonRunnerCodexLinuxSandboxBlocked   = "runner.codex.linux_sandbox_blocked"
-	ReasonRunnerClaudeAuthRequired         = "runner.claude.auth_required"
-	ReasonRunnerOpenCodeUnusable           = "runner.opencode.unusable"
-	ReasonReloadDevServerUnavailable       = "reload.dev_server_unavailable"
-	ReasonReloadNativeRebuildRequired      = "reload.native_rebuild_required"
-	ReasonReloadPreviewWorkerOffline       = "reload.preview_worker.offline"
-	ReasonBuildHermesFailed                = "build.hermes.failed"
-	ReasonBuildNativeFailed                = "build.native.failed"
+	ReasonRunnerCodexCredentialCorrupt   = "runner.codex.credential_corrupt"
+	ReasonRunnerCodexLinuxSandboxBlocked = "runner.codex.linux_sandbox_blocked"
+	ReasonRunnerClaudeAuthRequired       = "runner.claude.auth_required"
+	ReasonRunnerOpenCodeUnusable         = "runner.opencode.unusable"
+	ReasonReloadDevServerUnavailable     = "reload.dev_server_unavailable"
+	ReasonReloadNativeRebuildRequired    = "reload.native_rebuild_required"
+	ReasonReloadPreviewWorkerOffline     = "reload.preview_worker.offline"
+	ReasonBuildHermesFailed              = "build.hermes.failed"
+	ReasonBuildNativeFailed              = "build.native.failed"
+	// ReasonBuildCompileFailed is "the dev server is up and the project's own
+	// source does not compile". Distinct from the build.* codes above, which are
+	// about Yaver's build steps: this one is the USER'S code, so there is no
+	// deterministic fixer and it is the canonical AIFix case.
+	ReasonBuildCompileFailed               = "build.compile_failed"
 	ReasonDeployTestFlightXcodeMissing     = "deploy.testflight.xcode_missing"
 	ReasonDeployPlaystoreAndroidSDKMissing = "deploy.play.android_sdk_missing"
 	ReasonAuthSDKScopeDenied               = "auth.sdk.scope_denied"
@@ -62,6 +67,19 @@ const (
 	// regex-matched — by mobile/src/lib/capabilityGap.ts and
 	// web/lib/capabilityGap.ts. First client-read reason code in the file.
 	ReasonCapabilityToolchainMissing = "capability.toolchain_missing"
+	// ReasonTaskPromptMissing is "this task carries no instruction".
+	//
+	// Named because of what happened without it: POST /tasks reads the prompt
+	// from `description`/`userPrompt`, and a caller that used a different key
+	// got a task that spawned a real runner turn on an EMPTY prompt, watched the
+	// model reply "Ready. What would you like me to do?", and then reported
+	// `review` — a terminal state every surface polls for as "done" — with the
+	// working tree untouched. A metered LLM turn spent on a request the agent
+	// could see was empty before it started.
+	//
+	// Constraint-shaped on purpose: only the caller has the missing text, so
+	// there is no route the surface could offer.
+	ReasonTaskPromptMissing = "task.prompt_missing"
 	// ReasonPreviewSessionActive is "a preview of this project is already
 	// running on this box, held by another surface". One session per project is
 	// a real constraint — one headless Chrome per project, one capture loop —

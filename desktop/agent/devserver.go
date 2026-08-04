@@ -1926,10 +1926,18 @@ func (m *DevServerManager) recordRecentLog(line string) {
 	// looking at says "your app failed to compile: <reason>" instead of nothing.
 	if devBuildFailureLine(line) {
 		detail := "The app failed to compile — the dev server is running but has nothing to serve:\n" + strings.Join(compileErrorLines(tail), "\n")
+		// A DETAIL STRING IS NOT A ROUTE. This event used to carry the compiler's
+		// words and nothing else: no code to switch on, no button to press, so
+		// every surface rendered a wall of text and the user retyped the error
+		// into the chat by hand. A compile error is the one failure class Yaver
+		// has no command for, which is exactly when escalating to a coding agent
+		// is the right answer rather than the expensive one.
+		gap := compileFailureGap(m.frameworkNameForEvents(), detail, collectInstalledRunnerIDs())
 		m.emit(DevServerEvent{
 			Type:      "error",
 			Framework: m.frameworkNameForEvents(),
 			Message:   detail,
+			Gap:       gap,
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 		})
 		// An EVENT alone is not enough. Events reach whoever is subscribed at

@@ -62,6 +62,11 @@ var unwiredReasonCodes = map[string]string{
 	// This is the real layer-B gap. A code sent into silence is
 	// indistinguishable from prose — every one of these arrives on a surface
 	// that then falls back to regexing the sentence beside it.
+	// task.prompt_missing is emitted by createTask's promptless guard. No
+	// surface reads it yet — a caller sending the wrong key is a developer-facing
+	// mistake today, and the 400 body already carries the sentence.
+	"task.prompt_missing": "emitted by createTask (promptless refusal); no surface reads it yet.",
+
 	"connectivity.no_viable_transport":    "emitted on /capabilities/snapshot (capabilities_snapshot.go); no surface reads it.",
 	"connectivity.relay.auth_expired":     "emitted by planRemoteBoxRepair → ops remote_repair; no surface reads it.",
 	"connectivity.relay.pin_stale":        "emitted by planRemoteBoxRepair; no surface reads it. Reads as a possible MITM — must never render as an auth problem.",
@@ -84,6 +89,16 @@ var unwiredReasonCodes = map[string]string{
 	"agent.not_serving":                   "emitted by planRemoteBoxRepair; no surface reads it.",
 }
 
+// reasonCodeRidesTheGapEnvelope reports whether this file attaches the code to a
+// CapabilityGap. Deliberately narrow: it wants the code set as the Code field of
+// a gap literal, which is the one shape the generic renderers key off.
+func reasonCodeRidesTheGapEnvelope(body, symbol string) bool {
+	return strings.Contains(body, "Code:       "+symbol) ||
+		strings.Contains(body, "Code: "+symbol) ||
+		strings.Contains(body, "Code:  "+symbol) ||
+		strings.Contains(body, "gap.Code = "+symbol)
+}
+
 var rxReasonCodeDecl = regexp.MustCompile(`^\s*(Reason[A-Za-z0-9]+)\s*=\s*"([^"]+)"`)
 
 type reasonCodeWiring struct {
@@ -92,7 +107,11 @@ type reasonCodeWiring struct {
 	emitters []string
 	// logOnly are files where the code appears ONLY inside a log call — visible
 	// to whoever reads the journal on that box, and to nobody else.
-	logOnly   []string
+	logOnly []string
+	// envelope are files where the code is attached to a CapabilityGap, i.e. it
+	// reaches every surface through the generic gap renderers without any
+	// surface naming it.
+	envelope  []string
 	consumers []string
 }
 
@@ -273,6 +292,24 @@ func measureReasonCodeWiring(t *testing.T) []reasonCodeWiring {
 				c.logOnly = append(c.logOnly, p)
 				continue
 			}
+			// A CODE ON THE CapabilityGap ENVELOPE IS ALREADY CONSUMED.
+			//
+			// This guard's first model counted a consumer only when a surface file
+			// mentioned the LITERAL. That is backwards for the architecture we
+			// actually want: the renderers are deliberately code-AGNOSTIC — they
+			// take the gap, show summary/detail/constraint and render fix/aiFix as
+			// buttons, without knowing which failure it is. So a correctly-designed
+			// gap has no literal on any surface, and the guard reported it as
+			// "emitted into silence" while three surfaces rendered it.
+			//
+			// Caught by build.compile_failed on 2026-08-04. Left alone, this guard
+			// would have pushed every future gap toward hardcoding its code into
+			// each client — the exact per-surface drift CapabilityGap exists to
+			// prevent. Measuring the appearance of a string instead of the
+			// behaviour, for the third time in this file's history.
+			if reasonCodeRidesTheGapEnvelope(body, c.symbol) {
+				c.envelope = append(c.envelope, p)
+			}
 			c.emitters = append(c.emitters, p)
 		}
 		for p, body := range consumerSrc {
@@ -304,6 +341,10 @@ func TestReasonCodeWiring_Ratchet(t *testing.T) {
 				t.Errorf("%s is WIRED now (%d emitters, %d consumers) but is still listed in unwiredReasonCodes — delete the line. An allowlist that outlives its defect is how the audit this test replaced became wrong.",
 					c.literal, len(c.emitters), len(c.consumers))
 			}
+		case hasE && !hasC && len(c.envelope) > 0:
+			// Consumed generically. Counted separately so the summary never
+			// implies a per-surface switch that deliberately does not exist.
+			wired++
 		case hasE && !hasC:
 			emittedOnly++
 			if !listed {
@@ -344,6 +385,42 @@ func TestReasonCodeWiring_Ratchet(t *testing.T) {
 
 	t.Logf("reason codes: %d total · %d WIRED · %d emitted-with-no-consumer · %d consumed-but-never-emitted · %d dead (of which %d reach only a log line)",
 		len(codes), wired, emittedOnly, consumedOnly, dead, logOnly)
+}
+
+// TestGenericGapRenderersExist is the assumption behind counting an
+// envelope-carried code as consumed.
+//
+// The ratchet treats "attached to a CapabilityGap" as reaching every surface.
+// That is only true while the surfaces actually HAVE a generic gap renderer, so
+// this asserts each one — otherwise the concession silently turns into a way to
+// mark anything consumed by wrapping it in a struct.
+func TestGenericGapRenderersExist(t *testing.T) {
+	root := repoRoot(t)
+	for _, r := range []struct {
+		path  string
+		needs []string
+	}{
+		{filepath.Join("mobile", "src", "lib", "capabilityGap.ts"), []string{"parseCapabilityGap", "gapFixLabel", "gapAIFixLabel"}},
+		{filepath.Join("web", "lib", "capabilityGap.ts"), []string{"parseCapabilityGap", "gapFixLabel", "gapAIFixLabel"}},
+		{filepath.Join("tvos", "YaverTV", "FailureSignals.swift"), []string{"parseCapabilityGap", "gapFixLabel", "gapAIFixLabel"}},
+	} {
+		body, err := os.ReadFile(filepath.Join(root, r.path))
+		if err != nil {
+			t.Errorf("%s is missing — a surface with no generic gap renderer cannot consume an envelope-carried code, so the ratchet's concession is void", r.path)
+			continue
+		}
+		for _, need := range r.needs {
+			// The OPEN PAREN matters. Without it this check could not fail:
+			// renaming gapAIFixLabel to gapAIFixLabelRENAMED still CONTAINS
+			// "gapAIFixLabel", so the break-test passed and the guard was a guess
+			// (proven 2026-08-04 by trying exactly that). `name(` is present in
+			// the declaration on all three surfaces — `export function name(` in
+			// TS, `static func name(` in Swift — and absent after any rename.
+			if !strings.Contains(string(body), need+"(") {
+				t.Errorf("%s has no %s — the ratchet counts envelope-carried codes as consumed BECAUSE this renderer exists", r.path, need)
+			}
+		}
+	}
 }
 
 // TestReasonCodeWiring_ToolchainMissingIsEmitted pins the specific claim the

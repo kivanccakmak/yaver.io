@@ -39,7 +39,9 @@ import {
   capabilityGapFromDevEvent,
   capabilityGapFromStatus,
   gapBody,
+  gapAIFixLabel,
   gapConstraint,
+  gapFixBody,
   gapFixLabel,
   gapHeadroomLine,
   gapReclaimLabel,
@@ -199,6 +201,24 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
   // deterministic one-command fix already existed, and no Install at all.
   const [previewGap, setPreviewGap] = useState<CapabilityGap | null>(null);
   const [gapFixRunning, setGapFixRunning] = useState(false);
+  // Hand a failure with no deterministic fixer to a coding agent, pressing the
+  // route the AGENT supplied. See quicClient.invokeGapFix for why the body is
+  // never rebuilt on this side.
+  const runGapAIFix = useCallback(async (gap: CapabilityGap) => {
+    const fix = gap.aiFix;
+    if (!fix || gapFixRunning) return;
+    setGapFixRunning(true);
+    try {
+      await (quicClient as any).invokeGapFix(fix.method, fix.path, gapFixBody(fix));
+      pushLog(`[fix] sent to the runner — ${fix.label}`);
+      setPreviewGap(null);
+    } catch (err) {
+      // Say it failed. A silent no-op is the false green this seam removes.
+      pushLog(`[fix] could not hand it to the runner: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setGapFixRunning(false);
+    }
+  }, [gapFixRunning]);
   const [gapFixStartedAt, setGapFixStartedAt] = useState<number | null>(null);
   const [gapFixNow, setGapFixNow] = useState(Date.now());
   const gapFixCancelRef = useRef<(() => void) | null>(null);
@@ -1267,9 +1287,31 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                               </Text>
                             </Pressable>
                           ) : (
-                            <Text style={[styles.previewSubtle, { color: "#f59e0b", textAlign: "left" }]} selectable>
-                              {gapConstraint(gap) || "Yaver has no installer for this on this machine."}
-                            </Text>
+                            <>
+                              <Text style={[styles.previewSubtle, { color: "#f59e0b", textAlign: "left" }]} selectable>
+                                {gapConstraint(gap) || "Yaver has no installer for this on this machine."}
+                              </Text>
+                              {/* NO DETERMINISTIC FIXER, BUT A CODING AGENT CAN
+                                  TRY. The constraint stays visible above — the
+                                  user must know the dev server is healthy and it
+                                  is their own source that will not compile — and
+                                  the escalation is a tap instead of "retype the
+                                  compiler output into the chat yourself".
+                                  Web-only was the previous state of this button
+                                  (one hand-rolled widget in RuntimeLabView), so
+                                  this phone could not offer it for any failure. */}
+                              {gapAIFixLabel(gap) ? (
+                                <Pressable
+                                  onPress={() => void runGapAIFix(gap)}
+                                  disabled={gapFixRunning}
+                                  style={[styles.previewBtn, { borderColor: "#7c5cff", marginTop: 8 }]}
+                                >
+                                  <Text style={[styles.previewBtnText, { color: gapFixRunning ? "#9ca3af" : "#7c5cff" }]}>
+                                    {gapFixRunning ? "Sending to the runner…" : gapAIFixLabel(gap)}
+                                  </Text>
+                                </Pressable>
+                              ) : null}
+                            </>
                           )}
                           {/* When space is the blocker — or nearly is — the
                               refusal ships the route that frees it. The phone

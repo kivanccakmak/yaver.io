@@ -17,6 +17,8 @@ import { isRunnerBrowserAuthTerminal } from "@/lib/agent-client";
 import { isAgentAuthErrorMessage } from "@/lib/agentAuthError";
 import { detectCompileFailure } from "@/lib/compileFailure";
 import {
+  gapAIFixLabel,
+  gapFixBody,
   capabilityGapFromDevEvent,
   gapBody,
   gapFixLabel,
@@ -2210,6 +2212,28 @@ export default function RuntimeLabView({
     }
   }, [activeTaskStream?.id, appendLog, runnerStopBusy]);
 
+  // Hand the failure to a coding agent, using the route the AGENT built — its
+  // body already carries the compiler's own words, so the runner is not asked to
+  // re-derive what the agent already knew. Never invent the prompt here: a
+  // client-side guess is how two surfaces end up sending different instructions
+  // for the same failure.
+  const runRuntimeGapAIFix = useCallback(async (gap: CapabilityGap) => {
+    const fix = gap.aiFix;
+    if (!fix || runtimeGapBusy) return;
+    setRuntimeGapBusy(true);
+    try {
+      await agentClient.invokeGapFix(fix.method, fix.path, gapFixBody(fix));
+      appendLog(`sent the compile error to the runner (${fix.label})`);
+      setRuntimeGap(null);
+    } catch (err) {
+      // Say it failed. A silent no-op here is the false green this whole seam
+      // exists to remove.
+      appendLog(`could not hand it to the runner: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setRuntimeGapBusy(false);
+    }
+  }, [appendLog, runtimeGapBusy]);
+
   const openTaskHistoryItem = useCallback(async (taskId: string) => {
     if (!taskId) return;
     try {
@@ -3531,6 +3555,26 @@ export default function RuntimeLabView({
                             >
                               {runtimeGapBusy ? "Installing… (output in the runtime console)" : gapFixLabel(runtimeGap)}
                             </button>
+                          ) : gapAIFixLabel(runtimeGap) ? (
+                            // NO DETERMINISTIC FIXER, BUT A CODING AGENT CAN TRY.
+                            // The constraint still shows — the user must know the
+                            // dev server is fine and it is their source that does
+                            // not compile — and the escalation sits under it as a
+                            // route rather than as advice to retype the error into
+                            // the chat by hand.
+                            <div className="mt-2">
+                              <div className="text-[11px] text-amber-700/90 dark:text-amber-200/80">
+                                {runtimeGap.constraint}
+                              </div>
+                              <button
+                                type="button"
+                                disabled={runtimeGapBusy}
+                                onClick={() => void runRuntimeGapAIFix(runtimeGap)}
+                                className="mt-2 rounded-md bg-[#7c5cff] px-3 py-1.5 text-[11px] font-semibold text-white disabled:opacity-60"
+                              >
+                                {runtimeGapBusy ? "Sending to the runner…" : gapAIFixLabel(runtimeGap)}
+                              </button>
+                            </div>
                           ) : (
                             <div className="mt-2 text-[11px] text-amber-700/90 dark:text-amber-200/80">
                               {runtimeGap.constraint || "Yaver has no installer for this on this machine."}

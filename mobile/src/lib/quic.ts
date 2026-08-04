@@ -2717,6 +2717,38 @@ export class QuicClient {
     if (!res.ok) throw new Error(`Failed to stop task: ${res.status}`);
   }
 
+  /**
+   * Invoke a CapabilityGap's route AS GIVEN — method, path, and the body the
+   * AGENT pre-filled.
+   *
+   * One generic invoker per surface, deliberately, instead of a wrapper per
+   * failure class: the whole value of a typed route is that the client does not
+   * need to know which failure it is fixing. Mirrors web's
+   * agentClient.invokeGapFix so the two surfaces cannot drift on the semantics.
+   *
+   * Never rebuild the body here. The agent's body carries the compiler's own
+   * words for an AI fix and the project name for a preview takeover; a
+   * client-side guess is how two surfaces end up sending different instructions
+   * for the same failure.
+   */
+  async invokeGapFix(method: string, path: string, body?: Record<string, unknown> | null): Promise<void> {
+    this.assertConnected();
+    const verb = (method || "POST").toUpperCase();
+    const res = await this.fetchWithTimeout(`${this.baseUrl}${path}`, {
+      method: verb,
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: verb === "GET" || verb === "HEAD" ? undefined : JSON.stringify(body ?? {}),
+    });
+    if (!res.ok) {
+      let msg = `${verb} ${path} failed (${res.status})`;
+      try {
+        const parsed = await res.json();
+        if (parsed && typeof parsed.error === "string" && parsed.error) msg = parsed.error;
+      } catch { /* keep the status line */ }
+      throw new Error(msg);
+    }
+  }
+
   /** Mark a reviewed task complete. */
   async completeTask(taskId: string): Promise<void> {
     this.assertConnected();

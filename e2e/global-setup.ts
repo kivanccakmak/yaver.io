@@ -46,6 +46,25 @@ async function createDummyUser(): Promise<TestUser> {
 
   if (!res.ok) {
     const text = await res.text();
+    // A DEPLOYMENT THAT FORBIDS EMAIL/PASSWORD IS NOT A TEST FAILURE.
+    //
+    // Measured 2026-08-04: running any spec under the default config against
+    // the real deployment died here — "Email/password sign-in is not enabled
+    // for this email" — BEFORE a single test line ran. Every arc in the suite
+    // then reported as failed, including arcs that supply their own token and
+    // never wanted a dummy user. That is a harness fault presented as a product
+    // fault, which is the exact false signal this suite exists to remove.
+    //
+    // Signalled, not swallowed: specs that genuinely need the dummy user read
+    // E2E_DUMMY_USER_UNAVAILABLE and skip with this reason, so "we could not
+    // provision a user" never reads as "the product is broken".
+    if (res.status === 403 && /not enabled/i.test(text)) {
+      throw new DummyUserUnavailable(
+        `the deployment refuses email/password signup (${res.status} ${text.trim()}). ` +
+        `Arcs that bring their own token should run under playwright.device.config.ts, ` +
+        `which skips this provisioning entirely.`,
+      );
+    }
     throw new Error(
       `[e2e setup] Failed to create dummy test user: ${res.status} ${text}`,
     );
@@ -55,13 +74,28 @@ async function createDummyUser(): Promise<TestUser> {
   return { email, password, fullName, token: data.token, userId: data.userId };
 }
 
+/** Thrown when the deployment will not provision a dummy user at all. */
+class DummyUserUnavailable extends Error {}
+
 export default async function globalSetup(): Promise<void> {
   if (process.env.E2E_SKIP_LIVE_AUTH === "1") {
     console.log("[e2e setup] Skipping live dummy-user creation.");
     return;
   }
 
-  const user = await createDummyUser();
+  let user: TestUser;
+  try {
+    user = await createDummyUser();
+  } catch (err) {
+    if (err instanceof DummyUserUnavailable) {
+      // Name it loudly and let the run proceed. Specs that need the user skip
+      // themselves; specs that carry their own token are unaffected.
+      process.env.E2E_DUMMY_USER_UNAVAILABLE = err.message;
+      console.warn(`[e2e setup] No dummy user: ${err.message}`);
+      return;
+    }
+    throw err;
+  }
 
   process.env.E2E_USER_EMAIL = user.email;
   process.env.E2E_USER_PASSWORD = user.password;

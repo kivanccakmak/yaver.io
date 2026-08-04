@@ -116,6 +116,13 @@ export type CapabilityGap = {
   /** The space-freeing route offered when disk is the blocker or nearly is.
    *  Always confirm-gated. */
   reclaim?: GapFix | null;
+  /** LAST-RESORT route: hand the failure to a coding agent ("Fix with Codex").
+   *  Present only when NO deterministic fixer exists — an LLM run is the most
+   *  expensive answer, so `fix` always wins when both are set. Before this was
+   *  part of the gap, "Fix with <runner>" existed as a hand-rolled widget in one
+   *  web component wired to one error path, so no other surface could offer it
+   *  and no other failure could carry it. */
+  aiFix?: GapFix | null;
 };
 
 function str(v: unknown): string {
@@ -195,6 +202,7 @@ export function parseCapabilityGap(raw: unknown): CapabilityGap | null {
   };
   gap.fix = parseGapFix(o.fix);
   gap.reclaim = parseGapFix(o.reclaim);
+  gap.aiFix = parseGapFix(o.aiFix);
 
   const rawRes = o.resource;
   if (rawRes && typeof rawRes === "object") {
@@ -338,6 +346,18 @@ export function gapSuppressesRetry(gap: CapabilityGap | null | undefined): boole
 /** True when disk space — not a missing toolchain — is what stopped this. */
 export function gapIsDiskBlocked(gap: CapabilityGap | null | undefined): boolean {
   return Boolean(gap && (gap.code === CAPABILITY_INSUFFICIENT_DISK || gap.resource?.level === "insufficient"));
+}
+
+/** The "hand it to a coding agent" button, or null.
+ *
+ *  Deliberately returns null whenever a DETERMINISTIC fix exists: escalating to
+ *  an LLM run when one command would do is the most expensive possible answer to
+ *  the cheapest possible question, and showing both invites the user to pick the
+ *  costly one. */
+export function gapAIFixLabel(gap: CapabilityGap | null | undefined): string | null {
+  if (!gap || !gap.aiFix) return null;
+  if (gap.fix) return null;
+  return gap.aiFix.label || "Fix with the coding agent";
 }
 
 /** The reclaim button's label, or null when there is nothing to reclaim. */

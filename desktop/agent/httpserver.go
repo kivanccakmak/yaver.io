@@ -4806,6 +4806,39 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "title is required")
 		return
 	}
+	// A TASK WITH NO PROMPT MUST BE REFUSED, NOT RUN.
+	//
+	// Measured 2026-08-04 by the sfmg vibe loop: a caller that sent the prompt
+	// under the wrong key (`input`, which nothing here reads) got a task that
+	// SPAWNED A REAL RUNNER TURN, let the model answer "Ready. What would you
+	// like me to do with sfmg?", and then settled on `review` — a terminal,
+	// success-shaped state — with the working tree untouched.
+	//
+	// Two rules broken at once: never report success for an operation that did
+	// not happen, and never spend the user's metered LLM turn on a request the
+	// agent could see was empty before it started. `review` is exactly the
+	// status a caller polls for as "done", so the false green propagates to
+	// every surface.
+	//
+	// customCommand is a legitimate promptless task (it runs a command, not a
+	// model), so it satisfies the requirement on its own.
+	if strings.TrimSpace(body.Description) == "" &&
+		strings.TrimSpace(body.UserPrompt) == "" &&
+		strings.TrimSpace(body.CustomCommand) == "" {
+		jsonErrorWithGap(w, http.StatusBadRequest,
+			"this task has no prompt — send the instruction in `description` (or `userPrompt`), or set `customCommand` for a non-model task",
+			&CapabilityGap{
+				Code:       ReasonTaskPromptMissing,
+				Capability: "task-prompt",
+				Summary:    "That task arrived with no instruction, so nothing was started.",
+				Detail: "The agent reads the instruction from `description` (or `userPrompt`); " +
+					"`customCommand` is the promptless alternative for running a command. " +
+					"Nothing was dispatched and no runner turn was spent.",
+				Constraint: "Only the caller has the text — the agent cannot invent an instruction, " +
+					"so there is no button that fixes this from here.",
+			})
+		return
+	}
 
 	source := body.Source
 	if source == "" {
