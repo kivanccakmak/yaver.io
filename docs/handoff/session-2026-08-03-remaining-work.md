@@ -227,6 +227,28 @@ Open product gaps from it, none yet built:
    Cloud Workspace that is not ready on this agent"* — so the one button offered
    was also a dead route.
 
+## #11 — the wire analysis, done so nobody repeats it (2026-08-04)
+
+**Check the WIRE before writing any client.** Twice in one session a "fix" was a
+producer nothing could reach: `device.identity_conflict` only ever hit a
+`log.Printf`, and the freshly-typed `browser_window` gap was dropped by
+`jsonError(w, 400, err.Error())` at the HTTP layer. Both were found by looking,
+not by a guard. Measured state of every remaining silent family:
+
+| family | codes | wire | consumer status |
+|---|---|---|---|
+| `reload.*` + `build.*` | 5 | **LIVE** — ride `IncidentEvent.Code`; `/incidents` is fetched by **both** web (`agent-client.ts:7050`) and mobile (`quic.ts:9287`) | **best next target.** `ConnectivityView.tsx:239` renders `incident.title \|\| incident.code` — it DISPLAYS the code and never switches on it |
+| capability snapshot | 3 | live route, but **no component fetches** `/capabilities/snapshot` | classifier landed (`capabilityReadiness.ts`, twins + parity); needs a panel that fetches |
+| `browser_window.chrome_*` | 5 | **LIVE** — typed gap on the session-create/attach 400 | generic gap renderers consume it |
+| `remote_repair` (`agent.*`, `relay.*`) | 4 | ops verb only; **no surface calls `remote_repair`** | needs a caller before a client |
+| `device.identity_conflict` | 1 | **LIVE** — `/info.identityConflict` (added 2026-08-04) | needs a client |
+| `task.prompt_missing`, `task.manager_unavailable` | 2 | live 400/503 bodies | sentence carries it today |
+
+So the honest order for #11 is: **incidents first** (5 codes, both surfaces
+already fetching), then a capabilities panel, then a `remote_repair` caller.
+Only after those does #13 (deleting the client prose matchers) stop trading a
+wrong diagnosis for none.
+
 ## P3 — from the audits, in dependency order
 
 11. **Consume the 20 emitted-but-unread codes** (not 7 — measured). A code sent
