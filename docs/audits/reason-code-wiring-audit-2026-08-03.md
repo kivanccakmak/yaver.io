@@ -1,109 +1,157 @@
-# Reason-code audit — 2 of 31 codes are actually wired
+# Reason-code audit — 20 of 31 codes are emitted into silence
 
-**Date:** 2026-08-03 · **Method:** every `Reason*` constant in
-`desktop/agent/reason_codes.go`, cross-referenced against emitters (the Go
-symbol *and* the string literal, in `desktop/agent/` and `backend/`, excluding
-tests and the declaration file) and consumers (`mobile/`, `web/`, `tvos/`,
-`visionos/`, `watch/`, `wear/`).
+> **CORRECTED 2026-08-03 (same day, second pass).** The first version of this
+> file said *"2 of 31 codes are actually wired"*, reported **8 codes as
+> NEVER-EMITTED** and **14 as DEAD**, and named `capability.toolchain_missing`
+> as "the cheapest user-visible win in the repo" because six surfaces
+> supposedly waited on a code nothing sent.
+>
+> **That was wrong on 29 of 31 rows, and wrong in the direction that costs a
+> session.** `capability.toolchain_missing` has had an emitter since
+> **2026-07-27** — `capability_gap.go:362`, commit `7b9e42c66`, six days before
+> the audit. So has `capability.insufficient_disk` (`:418`). So does every code
+> the table called DEAD except one. A session acting on the old table would have
+> spent a pass re-emitting codes that were already emitted, and would have found
+> the real hole only by accident.
+>
+> **The measurement now lives in code**, not here:
+> `desktop/agent/reason_code_wiring_test.go`. It is a ratchet — it fails when a
+> code goes unwired *and* when its allowlist claims a fixed code is still
+> broken. Both directions were proven by breaking them. Read the test output,
+> not this prose:
+>
+> ```
+> reason codes: 31 total · 10 WIRED · 20 emitted-with-no-consumer
+>               · 0 consumed-but-never-emitted · 1 dead
+> ```
+>
+> **Update 2026-08-04**, after acting on the fix order below: `32 total · 11
+> WIRED · 21 emitted-with-no-consumer · 0 consumed-but-never-emitted · 0 dead`.
+> `preview.session_active` was added AND wired end-to-end in the same change
+> (agent → tvOS/visionOS/mobile/web), and `auth.sdk.scope_denied` — the only
+> genuinely dead code — is now emitted from all four SDK scope-denial sites in
+> `httpserver.go`. The duplication is the finding worth carrying: the scope check
+> exists four times, so wiring one site would have left three surfaces guessing.
+
+**Method** (unchanged in intent, now executed by the test on every run): every
+`Reason*` constant in `desktop/agent/reason_codes.go`, cross-referenced against
+emitters (the Go symbol **or** the string literal, in `desktop/agent/` and
+`backend/`, excluding tests and the declaration file) and consumers (the string
+literal in `mobile/`, `web/`, `tvos/`, `visionos/`, `watch/`, `wear/`, excluding
+tests).
 
 ## Result
 
 | | count |
 |---|---|
-| **WIRED** — emitted and consumed | **2** |
-| **NEVER-EMITTED** — a surface switches on it; nothing ever sends it | **8** |
-| **NO-CONSUMER** — the agent sends it; no surface reads it | **7** |
-| **DEAD** — neither end exists | **14** |
+| **WIRED** — emitted and consumed | **10** |
+| **NO-CONSUMER** — the agent sends it; no surface reads it | **20** |
+| **NEVER-EMITTED** — a surface switches on it; nothing sends it | **0** |
+| **DEAD** — neither end exists | **1** |
 
-`reason_codes.go` exists to end prose-matching. Today 29 of its 31 codes cannot
-close that loop, so every surface still falls back to regexing sentences — and
-those regexes drift, which is the failure this file was created to prevent.
+## The actual finding: layer B produces, and nobody listens
 
-## The sharpest finding: eight codes are consumed but never emitted
+The old table's story was "the UI is built and the signal is missing." The
+measured story is the exact inverse: **the agent emits almost everything and the
+surfaces read almost none of it.** Twenty codes travel on a real wire — the
+`/capabilities/snapshot` body, the `ops remote_repair` findings, the reload and
+build lanes, the browser-window lane, `auth_bootstrap`'s identity-conflict
+refusal — and not one surface keys off any of them. Every one of those arrives
+next to a sentence, so every surface still regexes the sentence.
 
-These are **dead UI branches**. The client code is written, shipped, and can
-never execute, because no producer exists on either the agent or the backend:
+That is CLAUDE.md's own corollary, at scale: **"a signal with no consumer is not
+shipped."** It also means the standing fix order was backwards. Emitting is
+done. Consuming is the whole remaining job.
 
-| code | client files ready | emitters |
-|---|---|---|
-| `capability.toolchain_missing` | **6** | 0 |
-| `auth.session.scope_denied` | 4 | 0 |
-| `runner.codex.refresh_lineage_lost` | 3 | 0 |
-| `runner.codex.refresh_failed` | 2 | 0 |
-| `runner.codex.credential_expired` | 2 | 0 |
-| `runner.codex.credential_is_copy` | 2 | 0 |
-| `runner.codex.credential_corrupt` | 2 | 0 |
-| `capability.insufficient_disk` | 2 | 0 |
+Three of the twenty are worth naming, because the missing consumer changes what
+the user is told:
 
-**`capability.toolchain_missing` is the one that hurts.** Six surfaces are
-already built to render a missing toolchain as a named cause with an install
-route. CLAUDE.md's worked example is exactly this case: Flutter was not
-installed, the agent knew (`exec flutter: executable file not found in $PATH`),
-`flutter_install.go` existed and was arch-aware, `POST /install/flutter`
-worked — and the phone showed *"Waiting for the dev server to report its
-address…"*.
-
-The UI was never the missing layer. **The signal was.** Six surfaces were
-waiting for a message the agent never sends.
+- **`device.identity_conflict`** — a box whose `(deviceId, hardwareId,
+  publicKey)` triple is claimed by other hardware has *no channel left* to say
+  "I am alive and need signing in": `needsAuth` is never set. With no consumer
+  for this code, every surface can only render "unreachable", and the user is
+  sent to check a network that is fine. Seen live on `ubuntu-4gb-hel1-1`
+  (2026-07-31).
+- **`browser_window.chrome_snap_confined`** — a real, frequently-hit family. The
+  remedy is *not* "install Chrome" (one is installed); it is installing the
+  unconfined build. With no consumer, the surface cannot tell the two apart.
+  **Wire these five, do not delete them.**
+- **`connectivity.relay.pin_stale`** — the handshake is refused *before* any
+  credential is sent, and the refusal reads like a possible MITM. A surface with
+  no consumer for it will report it as an auth problem, which is exactly what it
+  must never be called.
 
 ## Full table
 
-| code | emitters | client consumers | state |
+Generated by the test; `unwiredReasonCodes` in
+`desktop/agent/reason_code_wiring_test.go` carries the same list with a one-line
+reason per row, and deleting a row is how a fix gets recorded.
+
+| code | emitters | consumers | state |
 |---|---|---|---|
-| `connectivity.no_viable_transport` | 0 | 0 | **DEAD** |
-| `connectivity.relay.auth_expired` | 0 | 0 | **DEAD** |
-| `runner.codex.not_authenticated` | 1 | 2 | **WIRED** |
-| `runner.codex.refresh_lineage_lost` | 0 | 3 | **NEVER-EMITTED** |
-| `runner.codex.refresh_failed` | 0 | 2 | **NEVER-EMITTED** |
-| `runner.codex.credential_expired` | 0 | 2 | **NEVER-EMITTED** |
-| `runner.codex.credential_is_copy` | 0 | 2 | **NEVER-EMITTED** |
-| `runner.codex.credential_corrupt` | 0 | 2 | **NEVER-EMITTED** |
-| `runner.codex.linux_sandbox_blocked` | 1 | 2 | **WIRED** |
-| `runner.claude.auth_required` | 1 | 0 | **NO-CONSUMER** |
-| `runner.opencode.unusable` | 1 | 0 | **NO-CONSUMER** |
-| `reload.dev_server_unavailable` | 1 | 0 | **NO-CONSUMER** |
-| `reload.native_rebuild_required` | 1 | 0 | **NO-CONSUMER** |
-| `reload.preview_worker.offline` | 1 | 0 | **NO-CONSUMER** |
-| `build.hermes.failed` | 1 | 0 | **NO-CONSUMER** |
-| `build.native.failed` | 1 | 0 | **NO-CONSUMER** |
-| `deploy.testflight.xcode_missing` | 0 | 0 | **DEAD** |
-| `deploy.play.android_sdk_missing` | 0 | 0 | **DEAD** |
-| `auth.sdk.scope_denied` | 0 | 0 | **DEAD** |
-| `auth.session.scope_denied` | 0 | 4 | **NEVER-EMITTED** |
-| `capability.toolchain_missing` | 0 | 6 | **NEVER-EMITTED** |
-| `capability.insufficient_disk` | 0 | 2 | **NEVER-EMITTED** |
-| `browser_window.chrome_missing` | 0 | 0 | **DEAD** |
-| `browser_window.chrome_profile_lock` | 0 | 0 | **DEAD** |
-| `browser_window.chrome_runtime_dir` | 0 | 0 | **DEAD** |
-| `browser_window.chrome_launch_failed` | 0 | 0 | **DEAD** |
-| `browser_window.chrome_snap_confined` | 0 | 0 | **DEAD** |
-| `device.identity_conflict` | 0 | 0 | **DEAD** |
-| `agent.binary_unrunnable` | 0 | 0 | **DEAD** |
-| `agent.not_serving` | 0 | 0 | **DEAD** |
-| `connectivity.relay.pin_stale` | 0 | 0 | **DEAD** |
+| `runner.codex.not_authenticated` | ✅ | ✅ | **WIRED** |
+| `runner.codex.refresh_lineage_lost` | ✅ | ✅ | **WIRED** |
+| `runner.codex.refresh_failed` | ✅ | ✅ | **WIRED** |
+| `runner.codex.credential_expired` | ✅ | ✅ | **WIRED** |
+| `runner.codex.credential_is_copy` | ✅ | ✅ | **WIRED** |
+| `runner.codex.credential_corrupt` | ✅ | ✅ | **WIRED** |
+| `runner.codex.linux_sandbox_blocked` | ✅ | ✅ | **WIRED** |
+| `auth.session.scope_denied` | ✅ | ✅ | **WIRED** |
+| `capability.toolchain_missing` | ✅ | ✅ | **WIRED** |
+| `capability.insufficient_disk` | ✅ | ✅ | **WIRED** |
+| `connectivity.no_viable_transport` | ✅ | — | **NO-CONSUMER** |
+| `connectivity.relay.auth_expired` | ✅ | — | **NO-CONSUMER** |
+| `connectivity.relay.pin_stale` | ✅ | — | **NO-CONSUMER** |
+| `runner.claude.auth_required` | ✅ | — | **NO-CONSUMER** |
+| `runner.opencode.unusable` | ✅ | — | **NO-CONSUMER** |
+| `reload.dev_server_unavailable` | ✅ | — | **NO-CONSUMER** |
+| `reload.native_rebuild_required` | ✅ | — | **NO-CONSUMER** |
+| `reload.preview_worker.offline` | ✅ | — | **NO-CONSUMER** |
+| `build.hermes.failed` | ✅ | — | **NO-CONSUMER** |
+| `build.native.failed` | ✅ | — | **NO-CONSUMER** |
+| `deploy.testflight.xcode_missing` | ✅ | — | **NO-CONSUMER** |
+| `deploy.play.android_sdk_missing` | ✅ | — | **NO-CONSUMER** |
+| `browser_window.chrome_missing` | ✅ | — | **NO-CONSUMER** |
+| `browser_window.chrome_profile_lock` | ✅ | — | **NO-CONSUMER** |
+| `browser_window.chrome_runtime_dir` | ✅ | — | **NO-CONSUMER** |
+| `browser_window.chrome_launch_failed` | ✅ | — | **NO-CONSUMER** |
+| `browser_window.chrome_snap_confined` | ✅ | — | **NO-CONSUMER** |
+| `device.identity_conflict` | ✅ | — | **NO-CONSUMER** |
+| `agent.binary_unrunnable` | ✅ | — | **NO-CONSUMER** |
+| `agent.not_serving` | ✅ | — | **NO-CONSUMER** |
+| `auth.sdk.scope_denied` | — | — | **DEAD** |
 
-## Fix order
+## Fix order (revised — the old one pointed at a hole that does not exist)
 
-1. **Emit the eight NEVER-EMITTED codes.** The UI already exists — this is the
-   cheapest user-visible win in the list, and `capability.toolchain_missing`
-   alone closes a documented, repeated incident.
-2. **Consume the seven NO-CONSUMER codes**, or delete them. A code the agent
-   sends into silence is indistinguishable from prose.
-3. **Decide on the 14 DEAD codes.** Five of them are `browser_window.chrome_*`,
-   which is a real and frequently-hit failure family (snap-confined Chrome) —
-   those deserve wiring, not deletion.
-4. **Then remove the substring classifiers.** Not before: deleting a regex
-   whose replacement code is never emitted turns a bad diagnosis into none.
+1. **Consume the 20 NO-CONSUMER codes**, highest-blast-radius first:
+   `device.identity_conflict` (a live box that can only render as
+   "unreachable"), the five `browser_window.chrome_*`, then
+   `connectivity.relay.pin_stale`. Land the consumer with a test that fails when
+   it is removed.
+2. **Decide `auth.sdk.scope_denied`** — wire it into the SDK-token 403 or delete
+   the constant.
+3. **Then, and only then, remove the client prose matchers.** Unchanged from the
+   first version and still the right order: deleting a regex whose replacement
+   code no surface reads trades a wrong diagnosis for none.
 
 ## Guard
 
-A code with neither producer nor consumer should not compile clean and silent.
-This audit is a script's worth of work (see the commands in the commit) and
-belongs in CI, so the next code added is wired or is visibly not.
+`desktop/agent/reason_code_wiring_test.go`. Runs in under a second, walks the
+declaration plus every producer and consumer tree, and ratchets in both
+directions. Proven by breaking it twice: dropping a genuinely-unwired code from
+the allowlist fails as new drift; listing a wired code fails as a stale entry.
 
-## Provenance
+## Provenance — why the first pass was wrong, stated plainly
 
-Both counts verified twice — once by Go symbol, once by string literal —
-because `rg` was observed mangling its own output in this environment during
-this session and produced two confident, wrong readings before `grep` caught
-them.
+The first version claimed both counts were "verified twice — once by Go symbol,
+once by string literal". They were not: `ReasonCapabilityToolchainMissing`
+appears in `desktop/agent/capability_gap.go`, a non-test, non-declaration file
+inside the scanned root, and a symbol scan cannot miss it. The most likely cause
+is the environment trap the same session documented one paragraph below the
+claim — **`rg` mangling its own output here** — applied to a scan whose result
+was never spot-checked against a single known emitter.
+
+The lesson is the one CLAUDE.md already states, and this file is now the second
+worked example of it: **never infer a fact you can measure, and never let the
+measurement live only in prose.** A document cannot be re-run. A test is re-run
+by whoever next disagrees with it.
