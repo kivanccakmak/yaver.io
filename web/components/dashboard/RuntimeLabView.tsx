@@ -35,6 +35,7 @@ import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 import { StreamHealthNotice } from "./StreamHealthNotice";
 import { clampDevPct, formatDevProgressLine } from "@/lib/devEventLine";
 import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
+import { describeRunnerTurn } from "@/lib/runnerTurnHeartbeat";
 import { CONVEX_URL } from "@/lib/constants";
 import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
@@ -766,6 +767,20 @@ function taskTimeLabel(task: Pick<Task, "createdAt" | "updatedAt">): string {
   return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+// taskStartedAtMs is when THIS turn began, in ms, or null when the task carries
+// no usable timestamp. Used so re-attaching to a turn already five minutes old
+// reports "5:02 elapsed" and not "0:00" — an elapsed counter that restarts on
+// every reattach is worse than none, because it reads as progress.
+function taskStartedAtMs(task: Pick<Task, "createdAt" | "updatedAt">): number | null {
+  const ts = Number(task.createdAt) || 0;
+  // Guard the unit: these are epoch MILLISECONDS everywhere in this client
+  // (taskTimeLabel above relies on it). A seconds-valued field would render as
+  // 1970 and print a five-digit "elapsed", so refuse it rather than print it.
+  if (ts < 1_000_000_000_000) return null;
+  if (ts > Date.now() + 60_000) return null; // clock skew on the box
+  return ts;
+}
+
 function taskOutputSuggestsRender(lines: string[], status: TaskStatus): boolean {
   if (status === "completed" || status === "review") return true;
   const recent = lines.slice(-30).join("\n").toLowerCase();
@@ -1129,6 +1144,20 @@ export default function RuntimeLabView({
     lastOutputAt: number;
   } | null>(null);
   const [buildNowTick, setBuildNowTick] = useState(() => Date.now());
+  // Runner-turn heartbeat. The status pill says "RUNNING", which is the
+  // INVENTORY — a word that looks identical one second and forty minutes into a
+  // turn, and identical again when the runner has silently stopped producing.
+  // The preview lane already narrates itself ("62% · 3:53 elapsed · last output
+  // 4s ago"); the runner lane did not, so the one question a user actually has
+  // — "is the AI still working, and can I stop it?" — had no answer on screen.
+  // Deliberately three facts and one button, rendered only while the turn is
+  // live: a control surface accretes until the thing you came for is buried.
+  const [runnerTurn, setRunnerTurn] = useState<{
+    taskId: string;
+    startedAt: number;
+    lastOutputAt: number;
+  } | null>(null);
+  const [runnerStopBusy, setRunnerStopBusy] = useState(false);
   // Runtime-console rows expanded to show their full multi-line payload.
   const [expandedLogRows, setExpandedLogRows] = useState<Set<string>>(new Set());
   // "Fix with <runner>" dispatch state — one fix task in flight per box, ever.
@@ -1242,6 +1271,11 @@ export default function RuntimeLabView({
     if (taskPollRef.current) clearInterval(taskPollRef.current);
     taskPollRef.current = null;
     setTaskStreamHealth(null);
+    // The heartbeat describes a LIVE turn. Every path that stops watching the
+    // turn — it finished, the session closed, the component unmounted — must
+    // clear it, or the row keeps counting elapsed time for a runner that is no
+    // longer running, which is a lie in the one place the user is trusting.
+    setRunnerTurn(null);
   }, []);
 
   useEffect(() => () => {
@@ -1691,6 +1725,18 @@ export default function RuntimeLabView({
   }, [opencodeSnapshot?.models, selectedRunner, selectedRunnerRow?.models]);
   const effectiveChatModel = safeModelForRunner(selectedRunner, selectedModel, availableModels) || selectedModel;
   const selectedRunnerName = selectedRunnerRow?.name || selectedRunner || "Runner";
+  // The one line that answers "is the remote runner actually working?". Null for
+  // every non-live status, so the row simply is not there the rest of the time.
+  const runnerHeartbeat = runnerTurn && runnerTurn.taskId === activeTaskStream?.id
+    ? describeRunnerTurn({
+        status: activeTaskStream?.status,
+        runnerName: selectedRunnerRow?.name || selectedRunner,
+        startedAt: runnerTurn.startedAt,
+        lastOutputAt: runnerTurn.lastOutputAt,
+        now: buildNowTick,
+        hasOutput: (activeTaskStream?.lines.length || 0) > 0,
+      })
+    : null;
   const chatStatusTone = activeTaskStream?.status === "failed"
     ? "border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-200"
     : activeTaskStream?.status === "completed"
@@ -1872,11 +1918,14 @@ export default function RuntimeLabView({
 
   const runtimeCompileCard = useMemo(() => detectCompileFailure(null, devLogTail), [devLogTail]);
 
-  // 1 Hz tick for the build heartbeat row — only while a build is running,
-  // so a working preview never gets a surprise re-render from an idle timer.
+  // 1 Hz tick for the build AND runner-turn heartbeat rows — only while one of
+  // them is live, so a working preview never gets a surprise re-render from an
+  // idle timer. Both rows read the same clock: two tickers would drift and print
+  // two different "elapsed" values for the same minute.
   const buildProgressActive = buildProgress !== null;
+  const runnerTurnActive = runnerTurn !== null;
   useEffect(() => {
-    if (!buildProgressActive) return;
+    if (!buildProgressActive && !runnerTurnActive) return;
     setBuildNowTick(Date.now());
     const id = window.setInterval(() => {
       setBuildNowTick(Date.now());
@@ -1892,7 +1941,7 @@ export default function RuntimeLabView({
       });
     }, 1000);
     return () => window.clearInterval(id);
-  }, [buildProgressActive]);
+  }, [buildProgressActive, runnerTurnActive]);
 
   /** POST the gap's fix and stream it into the runtime console the user is
    *  already reading. Driven entirely by the typed route the agent shipped. */
@@ -2046,6 +2095,12 @@ export default function RuntimeLabView({
       return taskRowsEqual(prev, next) ? prev : next;
     });
     if (task.status !== "queued" && task.status !== "running") return;
+    // The turn is live from here on, so start narrating it. startedAt is the
+    // task's own timestamp when it has one: attaching to a turn that began five
+    // minutes ago must not report "0:00 elapsed".
+    const attachedAt = Date.now();
+    const taskStartedAt = taskStartedAtMs(task) ?? attachedAt;
+    setRunnerTurn({ taskId: task.id, startedAt: taskStartedAt, lastOutputAt: attachedAt });
     // Recovery-wrapped: a severed stream is named + reattached instead of
     // freezing this transcript on its last line. lib/taskStreamWithRecovery.ts.
     taskStreamStopRef.current = streamTaskOutputWithRecovery(
@@ -2054,6 +2109,7 @@ export default function RuntimeLabView({
       (line) => {
         const trimmed = String(line || "").trimEnd();
         if (!trimmed) return;
+        setRunnerTurn((prev) => (prev && prev.taskId === task.id ? { ...prev, lastOutputAt: Date.now() } : prev));
         setActiveTaskStream((prev) => {
           if (!prev || prev.id !== task.id) return prev;
           if (prev.lines[prev.lines.length - 1] === trimmed) return prev;
@@ -2090,6 +2146,13 @@ export default function RuntimeLabView({
         setActiveTaskStream((prev) => {
           if (!prev || prev.id !== task.id) return prev;
           const lines = taskOutputLines(fresh, prev.lines);
+          // The poll is a SECOND source of output. If the SSE leg is severed and
+          // only polling still sees the turn growing, the heartbeat must credit
+          // that growth — otherwise it reports "no output for 4m" about a runner
+          // that is visibly writing, which is the same false alarm in reverse.
+          if (lines.length > prev.lines.length) {
+            setRunnerTurn((turn) => (turn && turn.taskId === task.id ? { ...turn, lastOutputAt: Date.now() } : turn));
+          }
           const serverTurns = taskConversationTurns(fresh);
           const pendingUserTurns = mergePendingUserTurns(prev.pendingUserTurns, taskPendingFollowUpTurns(fresh), serverTurns);
           const next = {
@@ -2118,6 +2181,34 @@ export default function RuntimeLabView({
       });
     }, 2000);
   }, [stopActiveTaskStream]);
+
+  // stopRunnerTurn asks the BOX to end the turn — POST /tasks/{id}/stop, which
+  // has existed the whole time. Distinct from closeChatSession and from
+  // stopActiveTaskStream, both of which only stop this browser from WATCHING:
+  // before this button, every control in the chat header let go of the rope and
+  // none of them stopped the runner, so a turn the user wanted to abandon kept
+  // spending tokens on the box with no way to say stop from the surface they
+  // were looking at.
+  //
+  // It does NOT flip the pill itself. The 2 s poll owns the status, and a UI
+  // that reports "stopped" before the box agrees is the false green this
+  // codebase keeps re-learning; the button reports only that the request was
+  // accepted, and the pill changes when the box actually changes.
+  const stopRunnerTurn = useCallback(async () => {
+    const taskId = activeTaskStream?.id;
+    if (!taskId || runnerStopBusy) return;
+    setRunnerStopBusy(true);
+    try {
+      await agentClient.stopTask(taskId);
+      appendLog(`asked the box to stop task ${taskId}`);
+    } catch (err) {
+      // Say so, in the console the user already reads. A stop that silently
+      // failed is worse than no button: they believe it stopped and it did not.
+      appendLog(`stop failed: ${err instanceof Error ? err.message : String(err)} — the turn is still running on the box`);
+    } finally {
+      setRunnerStopBusy(false);
+    }
+  }, [activeTaskStream?.id, appendLog, runnerStopBusy]);
 
   const openTaskHistoryItem = useCallback(async (taskId: string) => {
     if (!taskId) return;
@@ -3917,6 +4008,37 @@ export default function RuntimeLabView({
                     <p className={`text-[11px] leading-4 ${runnerSaveNotice.tone === "ok" ? "text-emerald-600 dark:text-emerald-300" : runnerSaveNotice.tone === "warn" ? "text-amber-600 dark:text-amber-300" : "text-rose-600 dark:text-rose-300"}`}>
                       {runnerSaveNotice.text}
                     </p>
+                  ) : null}
+                </div>
+              ) : null}
+              {runnerHeartbeat ? (
+                // ONE quiet row while the turn is live: what is happening, for
+                // how long, when it last spoke — and the one action that was
+                // missing entirely. `RUNNING` alone cannot distinguish a runner
+                // thinking from a runner that stopped, and nothing in this
+                // header could end a turn on the box (Close and Delete only stop
+                // this browser watching). Disappears the moment the turn does.
+                <div className="mt-2 flex min-h-9 items-center gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2.5 py-1.5 dark:border-[#2a3039] dark:bg-[#101318]">
+                  <span
+                    aria-hidden="true"
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${runnerHeartbeat.warn ? "bg-amber-500" : "animate-pulse bg-emerald-500"}`}
+                  />
+                  <span
+                    className={`min-w-0 flex-1 truncate text-[11px] leading-5 tabular-nums ${runnerHeartbeat.warn ? "text-amber-700 dark:text-amber-300" : "text-[#475467] dark:text-[#9aa3af]"}`}
+                    title={runnerHeartbeat.text}
+                  >
+                    {runnerHeartbeat.text}
+                  </span>
+                  {runnerHeartbeat.canStop ? (
+                    <button
+                      type="button"
+                      onClick={() => void stopRunnerTurn()}
+                      disabled={runnerStopBusy}
+                      title="Ask the machine to end this turn"
+                      className="shrink-0 rounded-md border border-[#d7dce3] bg-white px-2 py-1 text-[10px] font-semibold text-[#475467] hover:text-[#1f2933] disabled:cursor-not-allowed disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#d7dce3] dark:hover:text-[#e6e8ec]"
+                    >
+                      {runnerStopBusy ? "Stopping…" : "Stop"}
+                    </button>
                   ) : null}
                 </div>
               ) : null}

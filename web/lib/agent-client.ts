@@ -5269,10 +5269,49 @@ export class AgentClient {
         },
         body: JSON.stringify({ ...opts, mode: opts.mode ?? "live" }),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        // The refusal is the informative part, and this used to discard it: a
+        // 409 "another surface already has this project" arrived, `null` came
+        // out, and the caller printed "is Chrome/Chromium installed?" — a
+        // confidently wrong diagnosis of a lock. Carry the agent's named cause
+        // and its route out as a throw so the panel can render the takeover.
+        const data = await res.json().catch(() => ({} as Record<string, unknown>));
+        const err = new Error(
+          typeof data?.error === "string" && data.error ? data.error : `start preview failed (${res.status})`,
+        ) as Error & { code?: string; capabilityGap?: unknown; status?: number };
+        err.status = res.status;
+        if (typeof data?.code === "string") err.code = data.code;
+        if (data?.capabilityGap) err.capabilityGap = data.capabilityGap;
+        throw err;
+      }
       const data = await res.json();
       return data?.session ?? null;
-    } catch { return null; }
+    } catch (err) {
+      // A transport failure is still `null` — the caller's existing shape. Only
+      // a REFUSAL the agent explained propagates, so no existing call site
+      // starts throwing on a dropped connection.
+      if (err instanceof Error && ((err as { code?: string }).code || (err as { capabilityGap?: unknown }).capabilityGap)) throw err;
+      return null;
+    }
+  }
+
+  /** Invoke a CapabilityGap's route AS GIVEN — method, path, and the body the
+   *  agent pre-filled. A `GapFix` is a route, so a surface must be able to press
+   *  it without knowing which failure produced it; every per-failure wrapper we
+   *  write instead is one more place the next remedy will not reach. Throws with
+   *  the agent's own sentence so the caller can say what failed. */
+  async invokeGapFix(method: string, path: string, body?: Record<string, unknown> | null): Promise<void> {
+    this.assertConnected();
+    const verb = (method || "POST").toUpperCase();
+    const res = await fetch(`${this.devBaseUrl}${path}`, {
+      method: verb,
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: verb === "GET" || verb === "HEAD" ? undefined : JSON.stringify(body ?? {}),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({} as Record<string, unknown>));
+      throw new Error(typeof data?.error === "string" && data.error ? data.error : `${verb} ${path} failed (${res.status})`);
+    }
   }
 
   async stopVibePreview(project: string): Promise<boolean> {

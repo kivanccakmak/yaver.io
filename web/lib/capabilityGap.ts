@@ -34,6 +34,15 @@ export const CAPABILITY_TOOLCHAIN_MISSING = "capability.toolchain_missing";
  *  that cannot help. Mirrors ReasonCapabilityInsufficientDisk. */
 export const CAPABILITY_INSUFFICIENT_DISK = "capability.insufficient_disk";
 
+/** "Another surface is already previewing this project." NOT a capability gap in
+ *  spirit — nothing is missing — but the same envelope, because the shape a
+ *  surface needs is identical: a named cause plus one invocable route. The route
+ *  is POST /vibing/preview/stop, which existed all along; what shipped instead
+ *  was "Preview unavailable · already active; stop it first" over a **Try
+ *  again** button that could not succeed while the lock was held (measured on
+ *  tvOS and visionOS, 2026-08-03). Mirrors ReasonPreviewSessionActive. */
+export const PREVIEW_SESSION_ACTIVE = "preview.session_active";
+
 /** The preview half of a DESTRUCTIVE route. A fix carrying this must not be
  *  invoked until the client has fetched `path` and shown the user exactly what
  *  would be deleted, with sizes. The agent enforces it too (the apply route
@@ -53,12 +62,24 @@ export type GapFix = {
   method: string;
   path: string;
   /** log-stream NAME, e.g. "install:flutter"; served at GET /streams/<stream>.
-   *  Empty ONLY on a confirm-gated fix, which answers synchronously and is made
-   *  visible by its preview instead. */
+   *  Empty ONLY on a confirm-gated or instant fix, both of which answer
+   *  synchronously and are made visible another way. */
   stream: string;
   est?: string;
   retry?: boolean;
   confirm?: GapConfirm | null;
+  /** The request body the route REQUIRES, supplied by the agent. A route whose
+   *  arguments the client has to guess is not invocable: POST
+   *  /vibing/preview/stop with no body answers 400 "project is required", so a
+   *  button built from method+path alone would be one more action that cannot
+   *  succeed. Absent for routes that need no body (every /install/<tool>). */
+  body?: Record<string, unknown> | null;
+  /** The fix answers SYNCHRONOUSLY and has nothing to stream — stopping a
+   *  session, releasing a lock, flipping a setting. `retry` is what makes it
+   *  visible: the original operation runs again and the user lands back where
+   *  they were. Without this flag the no-stream guard below would DROP such a
+   *  fix, which is how a correct signal ends up with no consumer. */
+  instant?: boolean;
 };
 
 /** The headroom measurement behind a warning or a disk refusal. Bytes AND a
@@ -129,11 +150,19 @@ function parseGapFix(raw: unknown): GapFix | null {
     }
   }
 
-  // No stream AND no confirm = an action the user could start and never see.
-  // That is the "silent 1.2 GB download" defect; refuse to render it. A
-  // confirm-gated fix is exempt: it answers synchronously and its preview is
-  // what makes it visible.
-  if (!stream && !confirm) return null;
+  const instant = f.instant === true;
+
+  // No stream AND no confirm AND not instant = an action the user could start
+  // and never see. That is the "silent 1.2 GB download" defect; refuse to render
+  // it. Two exemptions, both of which are visible another way: a confirm-gated
+  // fix shows its preview first, and an instant fix answers in milliseconds and
+  // re-runs the original operation.
+  if (!stream && !confirm && !instant) return null;
+
+  let body: Record<string, unknown> | null = null;
+  if (f.body && typeof f.body === "object" && !Array.isArray(f.body)) {
+    body = f.body as Record<string, unknown>;
+  }
 
   return {
     label: str(f.label) || "Install",
@@ -143,6 +172,8 @@ function parseGapFix(raw: unknown): GapFix | null {
     est: str(f.est) || undefined,
     retry: f.retry === true,
     confirm,
+    body,
+    instant,
   };
 }
 
@@ -275,6 +306,33 @@ export function gapConstraint(gap: CapabilityGap | null | undefined): string | n
 export function gapWarning(gap: CapabilityGap | null | undefined): string | null {
   if (!gap || !gap.warning) return null;
   return gap.warning;
+}
+
+/** The body a caller must POST when invoking the fix, or null. Read it from the
+ *  gap rather than rebuilding it: the agent knows which project/session the route
+ *  refers to, and a client that re-derives it can pick the wrong one. */
+export function gapFixBody(fix: GapFix | null | undefined): Record<string, unknown> | null {
+  if (!fix || !fix.body) return null;
+  return fix.body;
+}
+
+/** True when the fix answers synchronously — render a plain button and re-issue
+ *  the original request, rather than opening a stream view over nothing. */
+export function gapFixIsInstant(gap: CapabilityGap | null | undefined): boolean {
+  return Boolean(gap && gap.fix && gap.fix.instant);
+}
+
+/** True when the surface must NOT offer a retry.
+ *
+ *  A retry is only ever honest when nothing has to change first. Two cases where
+ *  it cannot be: a gap with a FIX (the fix is the route — a retry beside it
+ *  invites the user to press the thing that just failed), and a CONSTRAINED gap
+ *  (a settled fact about the machine, which retrying cannot alter). This is the
+ *  rule the tvOS preview panel broke: a 409 whose lock was still held, with
+ *  "Try again" as the only button. */
+export function gapSuppressesRetry(gap: CapabilityGap | null | undefined): boolean {
+  if (!gap) return false;
+  return Boolean(gap.fix) || Boolean(gap.constraint);
 }
 
 /** True when disk space — not a missing toolchain — is what stopped this. */

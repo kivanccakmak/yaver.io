@@ -14,6 +14,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { agentClient } from "@/lib/agent-client";
+import {
+  capabilityGapFromError,
+  gapBody,
+  gapConstraint,
+  gapFixBody,
+  gapFixLabel,
+  gapRetriesAfterFix,
+  gapTitle,
+  type CapabilityGap,
+} from "@/lib/capabilityGap";
 
 interface VibeEvent {
   type: string;
@@ -48,6 +58,11 @@ export default function VibePreviewView() {
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
   const [activeClipUrl, setActiveClipUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A refusal the agent NAMED, with its route. Separate from `error` because a
+  // gap is not a red wall — it is a thing the user can act on, and rendering it
+  // as an error string is how the route gets thrown away.
+  const [startGap, setStartGap] = useState<CapabilityGap | null>(null);
+  const [startGapBusy, setStartGapBusy] = useState(false);
   const unsubRef = useRef<null | (() => void)>(null);
   const frameUrlRef = useRef<string | null>(null);
 
@@ -98,15 +113,60 @@ export default function VibePreviewView() {
     setClips(await agentClient.listVibeClips(project) as VibeClip[]);
   }, [project]);
 
+  // Invoke the gap's route exactly as the agent described it — method, path, and
+  // the body it pre-filled — then re-run the start when the gap says to. The
+  // whole value of a typed route is that this function does not need to know
+  // WHICH failure it is fixing.
+  const runStartGapFix = useCallback(async () => {
+    const gap = startGap;
+    const fix = gap?.fix;
+    if (!gap || !fix || startGapBusy) return;
+    setStartGapBusy(true);
+    try {
+      await agentClient.invokeGapFix(fix.method, fix.path, gapFixBody(fix));
+      setStartGap(null);
+      if (gapRetriesAfterFix(gap)) {
+        // Return them to what they were trying to do. Deferred a tick so the
+        // panel clears first — otherwise a fast agent makes the takeover look
+        // like nothing happened.
+        setTimeout(() => void handleStartRef.current?.(), 0);
+      }
+    } catch (err) {
+      // Never silently swallow: a fix that failed while the button said
+      // "Working…" is the false green this whole seam exists to prevent.
+      setError(`${fix.label} failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setStartGapBusy(false);
+    }
+  }, [startGap, startGapBusy]);
+
   const handleStart = useCallback(async () => {
     setError(null);
     if (!project || !targetUrl) {
       setError("project and target URL required");
       return;
     }
-    const sess = await agentClient.startVibePreview({ project, targetUrl, mode: "live" });
+    setStartGap(null);
+    let sess: Awaited<ReturnType<typeof agentClient.startVibePreview>> = null;
+    try {
+      sess = await agentClient.startVibePreview({ project, targetUrl, mode: "live" });
+    } catch (err) {
+      // A refusal the agent EXPLAINED. Render its named cause and its route —
+      // the takeover button for a held lock, the install button for a missing
+      // browser — instead of the old sentence, which guessed "Chrome missing"
+      // for every failure and was wrong for the commonest one.
+      const gap = capabilityGapFromError(err);
+      if (gap) {
+        setStartGap(gap);
+        return;
+      }
+      setError(err instanceof Error ? err.message : String(err));
+      return;
+    }
     if (!sess) {
-      setError("could not start preview — is Chrome/Chromium installed on the agent?");
+      // Genuinely no answer — a dropped connection, not a refusal. Say that,
+      // and do not name a cause we did not measure.
+      setError("could not reach the agent to start the preview — check the connection and try again");
       return;
     }
     setActive(true);
@@ -134,6 +194,12 @@ export default function VibePreviewView() {
 
     void refreshClips();
   }, [project, targetUrl, refreshFrame, refreshClips]);
+
+  // A ref, not a dependency: runStartGapFix needs to re-run the start after the
+  // takeover, and closing over handleStart directly would make the two callbacks
+  // mutually dependent.
+  const handleStartRef = useRef<typeof handleStart | null>(null);
+  handleStartRef.current = handleStart;
 
   const handleStop = useCallback(async () => {
     if (project) await agentClient.stopVibePreview(project);
@@ -291,6 +357,33 @@ export default function VibePreviewView() {
           )}
         </div>
       </div>
+
+      {startGap && (
+        // The named cause and its ONE route. Route first, prose second — and no
+        // retry: the whole point is that pressing start again cannot work until
+        // something changes, which is what the button does.
+        <div className="border-b border-warning/30 bg-warning-soft px-5 py-3">
+          <div className="text-sm font-semibold text-warning-soft-fg">{gapTitle(startGap)}</div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {gapFixLabel(startGap) ? (
+              <button
+                type="button"
+                onClick={() => void runStartGapFix()}
+                disabled={startGapBusy}
+                className="rounded-md border border-warning/40 bg-warning/10 px-2.5 py-1.5 text-xs font-semibold text-warning-soft-fg disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {startGapBusy ? "Working…" : gapFixLabel(startGap)}
+              </button>
+            ) : null}
+            {gapBody(startGap) ? (
+              <span className="text-xs text-warning-soft-fg/80">{gapBody(startGap)}</span>
+            ) : null}
+          </div>
+          {gapConstraint(startGap) ? (
+            <div className="mt-1 text-xs text-warning-soft-fg/80">{gapConstraint(startGap)}</div>
+          ) : null}
+        </div>
+      )}
 
       {error && (
         <div className="border-b border-danger/30 bg-danger-soft px-5 py-2 text-sm text-danger-soft-fg">
