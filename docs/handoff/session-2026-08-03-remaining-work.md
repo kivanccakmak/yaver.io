@@ -4,13 +4,27 @@ Everything below is **open**. Landed work is in the four commits listed at the
 bottom; this file is only what is NOT done.
 
 Two audits written this session are the evidence base for most of it:
-* `docs/audits/reason-code-wiring-audit-2026-08-03.md` — 2 of 31 reason codes wired
+* `docs/audits/reason-code-wiring-audit-2026-08-03.md` — **CORRECTED.** Its first
+  version was wrong on 29 of 31 rows; the measurement is now a ratchet test
+  (`desktop/agent/reason_code_wiring_test.go`): **31 codes · 10 wired · 20
+  emitted-into-silence · 0 never-emitted · 1 dead.**
 * `docs/audits/failure-plumbing-measured-2026-08-03.md` — layer D exists once in 1764 error replies
 
 ---
 
 ## P0 — in the user's way right now
 
+### 1. ~~Preview session is a singleton with no takeover route~~ — **DONE 2026-08-04**
+Typed `PreviewSessionActiveError` → 409 carrying `code: preview.session_active`
+plus a `CapabilityGap` whose fix is `POST /vibing/preview/stop` with the body
+pre-filled, `instant`, `retry`. The `strings.Contains` switch is gone (guarded by
+`TestPreviewStartHandler_DoesNotProseMatch`). Consumers landed on tvOS/visionOS
+(generic route invocation, "Try again" suppressed), mobile + web capabilityGap
+twins (`instant`/`body` parsed), and the web preview panel. The 503 "no browser"
+sibling now routes through the same producer, so it gets a streamed Install
+button. Test invokes the advertised route against real Chrome and takes over.
+
+*Original report, kept for context:*
 ### 1. Preview session is a singleton with no takeover route
 **Measured:** after one surface opens a project, every other surface gets
 `Preview unavailable · preview session for project "sfmg" already active; stop
@@ -36,16 +50,40 @@ the existing `stopPreview()`, and **suppress "Try again"**.
 > cannot succeed.** A dead retry button converts a one-tap fix into an infinite
 > loop and teaches the user the product is broken rather than busy.
 
-### 2. Emit `capability.toolchain_missing`
-**Six** client files already render it. **Zero** emitters, agent or backend.
-This reframes the documented Flutter incident (CLAUDE.md's worked example): it
-was never a UI gap — six surfaces were waiting for a message nothing sends.
-One emitter closes it. Cheapest user-visible win in the repo.
+### 2. ~~Emit `capability.toolchain_missing`~~ — **VOID. It was already emitted.**
+**Measured, not inferred:** `capability_gap.go:362` has set this code on every
+missing-toolchain gap since **2026-07-27** (`7b9e42c66`), six days before the
+audit that called it never-emitted, and `capability.insufficient_disk` since the
+same commit series (`:418`). Both are WIRED — emitter plus consumers on mobile,
+web and tvOS. There is nothing to build here.
+
+**What the corrected measurement found instead:** 20 codes the agent *does*
+emit that **no surface reads** — `/capabilities/snapshot`, `ops remote_repair`,
+the reload/build lanes, all five `browser_window.chrome_*`, and
+`device.identity_conflict`. That inverts the fix order: emitting is done,
+consuming is the whole job. See P3 #11–13, now correctly scoped, and the
+ratchet test that will fail if any of it regresses.
 
 ---
 
 ## P1 — unblocks all automated surface testing
 
+### 3. ~~Code-based sign-in on the phone~~ — **DONE 2026-08-04, proven against the real backend**
+`mobile/src/lib/deviceCodeSignIn.ts` + a "Sign in with a code" path in
+`app/login.tsx`. THIS DEVICE creates the code (poll/claim key off the 40-hex
+secret, so a screen that merely accepts a typed code could never complete) and
+shows the short one for an approver.
+Every call aborts on a deadline, and the poll loop is wall-clock bounded —
+proven by removing the bound and watching the test hang forever.
+An unreachable server is reported as such, never as "waiting for approval".
+**Headless proof against the live deployment** (`scratchpad/devicecode_proof.mjs`):
+create → 200 · poll before approval → `pending`, no token leak · authorize with a
+session bearer → 200 · poll → `authorized` + 64-char token · that token against
+`/auth/validate` (the exact call the app makes next) → 200 · replay poll →
+`expired`, no second token.
+This unblocks #5 and #6.
+
+*Original report:*
 ### 3. Code-based sign-in on the phone  *(blocks #5, #6)*
 `backend/convex/deviceCode.ts` ships the whole flow and **six** live HTTP
 routes: `/auth/device-code/{authorize,broker,poll,claim,events,pending}`.
@@ -65,6 +103,18 @@ code — so the phone must create and hold it, not just accept a typed code.
 Once built, the loop closes with no human in it: the simulator shows the short
 code, the Vision oracle OCRs it, the agent's session authorizes it.
 
+### 4. ~~Make `remedy` a typed route~~ — **DONE 2026-08-04**
+`GapFix` gained `Body` (the arguments a route requires — without them
+`/vibing/preview/stop` answers 400, i.e. another action that cannot succeed) and
+`Instant` (synchronous fix, nothing to stream; without the flag the renderers'
+no-stream guard DROPPED such a button). `jsonErrorWithGap` gives every handler a
+one-line way to emit `code` + `capabilityGap`. `runner_model_probe`'s missing-codex
+remedy now carries the real install route. Permanent guard:
+`remedy_is_a_route_test.go` — a ratchet that fails when a remedy NAMES an
+invocable action without a typed route beside it, and when its allowlist goes
+stale or contains keys that match nothing.
+
+*Original report:*
 ### 4. Make `remedy` a typed route, not a string
 Only **1** of 4 current uses is invocable (`stream-over-webrtc`); the other
 three are English prose in a field whose name promises a route. Prose in
@@ -84,6 +134,21 @@ installed on `iPhone 17 Pro` (`24B591E9-B94A-40CC-8C08-8CCD8EFB1EA2`).
 `e2e/android-emu-vibe-loop.mjs`. Same blocker. Launch-frame triage is in, so it
 now skips in ~20s instead of burning a 10-minute budget on a sign-in screen.
 
+### 7. ~~RN-web arc cannot open the fullscreen preview~~ — **DETERMINED + FIXED 2026-08-04**
+**Measured, not guessed.** RN-web's `Modal` CAN present (`react-native-web@0.21`
+ships it; `presentationStyle` is iOS-only and simply ignored). The blocker is the
+WebView *inside* it: `react-native-webview@13.15.0` has no web build — no
+`.web.js`, no `browser` field — so the platform-neutral `lib/WebView.js` is
+picked and it renders the literal string *"React Native WebView does not support
+this platform."*
+**The product already had the fix and it had drifted:** `WebViewCompat.tsx` /
+`.web.tsx` (an `<iframe>` wearing the WebView API) existed and `apps.tsx` used
+it, while `DevPreview.tsx` and `app/(tabs)/project.tsx` still imported the raw
+library — the "one of two browser-preview implementations" drift by name. Both
+migrated; `webViewCompatParity.test.ts` now also asserts that the preview
+surfaces import the shim, proven by breaking it.
+
+*Original report:*
 ### 7. RN-web arc cannot open the fullscreen preview
 `e2e/tests/sfmg-preview-narration.spec.ts` signs in against the box fine, but
 "Open in Yaver" does not leave the Tasks tab. Unresolved whether
@@ -91,6 +156,16 @@ now skips in ~20s instead of burning a 10-minute budget on a sign-in screen.
 under RN-web at all. **Determine which** — do not guess; if it cannot, mark the
 arc native-only in the file.
 
+### 8. ~~`releasePreview()` ends in a 4-second sleep~~ — **DONE 2026-08-04**
+`GET /vibing/preview/release?project=X` + ops verb `vibe_preview_release` answer
+"could a new session be claimed right now?" with NAMED blockers. It probes the
+operation: the session entry AND the capture goroutine, which is the part still
+holding the browser target after `Stop()` has already returned — the race the
+sleep was hiding. The e2e loop now polls it (15 s cap, warns instead of silently
+proceeding). Negative control:
+`TestPreviewRelease_CountsTheCaptureLoopNotJustTheMap`.
+
+*Original report:*
 ### 8. `releasePreview()` ends in a 4-second sleep
 `e2e/all-surfaces-sfmg-loop.mjs` — there is no verb answering "is the preview
 released yet?". A question you can only answer by waiting is a missing
@@ -111,15 +186,74 @@ WebRTC** button; the mic overlays the running app instead of replacing it.
 
 ---
 
+## Landed 2026-08-04 beyond the numbered list
+
+* **`auth.sdk.scope_denied` wired** (#12) — was the ONE code with neither
+  producer nor consumer. Now emitted by `sdkScopeDenied` from **all four** SDK
+  scope-denial sites in `httpserver.go`. The duplication is the finding: the
+  scope check exists four times, so wiring one site would have left three
+  surfaces still guessing.
+* **QUIC honesty** (`quic_listen_state.go`) — `ubuntu-4gb-hel1-1` has had NO
+  QUIC listener since 2026-07-27 because a co-located `yaver-relay.service` owns
+  UDP 4433, and the agent kept heartbeating a `quicHost` for a socket that does
+  not exist. A failed bind is now recorded, the address is suppressed (empty is
+  already a supported state), and the startup log names the holder + the probe,
+  warning that the holder is a Yaver relay which must **not** be killed.
+* **The wiring ratchet learned that a log line is not a wire.** Its first
+  version counted any non-test mention as an emitter, so it reported
+  `device.identity_conflict` as "emitted with no consumer" when in truth its only
+  uses are `log.Printf` — no surface could consume it even in principle. LOG-ONLY
+  is now its own reported state. Same class of error as the audit it replaced,
+  one level subtler: counting the appearance of a string instead of the behaviour.
+
+## Incident found while working — worth not rediscovering
+
+A Fast Reload failed with `HTTP 502: tunnel read error`, and the web UI called it
+a network fault (*"device not connected to relay… a power-cycle would not address
+this"*). It was a **lifecycle** event: the agent was SIGTERM'd three seconds into
+`expo export`, restarted, and re-registered — so it looked online again while the
+in-flight build and the SSE stream were gone. Not OOM, not a crash, not an update
+(auto-update had said "already up-to-date" nine minutes earlier). **Who issued
+the stop is unresolved** — systemd does not record the requester. Full detail in
+the memory `project_agent_restart_midbuild_and_quic_conflict`.
+
+Open product gaps from it, none yet built:
+1. A restart must ANNOUNCE itself to subscribed surfaces; today it surfaces as a
+   502 the client blames on the network.
+2. The restart orphaned `adb`, `tmux: server` and the vibe-preview Chromes into
+   the new unit ("a context kill does not free you while a grandchild holds the
+   pipe").
+3. `Fix with opencode` on that error panel itself failed — *"placement selected a
+   Cloud Workspace that is not ready on this agent"* — so the one button offered
+   was also a dead route.
+
 ## P3 — from the audits, in dependency order
 
-11. **Consume or delete the 7 emitted-but-unread codes.** A code sent into
-    silence is indistinguishable from prose.
-12. **Decide the 14 dead codes.** Five are `browser_window.chrome_*` — a real,
-    frequently-hit family (snap-confined Chrome). Wire, don't delete.
-13. **Then** remove the 6 client prose matchers in `mobile/`. **Not before** —
-    deleting a regex whose replacement code is never emitted trades a wrong
-    diagnosis for none.
+11. **Consume the 20 emitted-but-unread codes** (not 7 — measured). A code sent
+    into silence is indistinguishable from prose. Highest blast radius first:
+    `device.identity_conflict` (a live box in this state can *only* render as
+    "unreachable" — `needsAuth` is never set, so the user is sent to check a
+    network that is fine), then the five `browser_window.chrome_*`, then
+    `connectivity.relay.pin_stale` (must never be reported as an auth problem).
+    Land each consumer with a test that fails when it is removed; the ratchet in
+    `reason_code_wiring_test.go` fails if the allowlist is not updated with it.
+
+    **Half the work is already done and nobody noticed** (measured 2026-08-04):
+    BOTH mobile (`src/lib/quic.ts:4848`) and web (`lib/agent-client.ts:6894`)
+    already fetch `/capabilities/snapshot`, and BOTH already carry a
+    `reasonCode?: string` field in their parsed types (`quic.ts:885`,
+    `agent-client.ts:1598`). They parse it and never switch on it. So the
+    remaining work for that family is a shared classifier — code → sentence +
+    route — not new plumbing.
+
+    **And check the wire first:** `device.identity_conflict` reaches only a
+    `log.Printf`, so it has no consumer *by construction*. Codes in that state
+    are now reported as LOG-ONLY by the ratchet; putting them on a payload comes
+    before writing any client for them.
+12. **Decide `auth.sdk.scope_denied`** — the *one* genuinely dead code. Wire it
+    into the SDK-token 403 or delete the constant.
+13. **Then** remove the client prose matchers. **Not before** — deleting a regex
+    whose replacement code no surface reads trades a wrong diagnosis for none.
 14. **Audit the 814 `ok:true` replies** for operations that did not happen.
     Highest-risk pass in the repo: a false green is invisible by construction.
     CLAUDE.md already names two (`feedback_fix` with no task manager,

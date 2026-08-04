@@ -164,12 +164,15 @@ async function probeSelfDevelopmentRefusal(project) {
  * four surfaces as broken when the truth is one lock and no key.
  *
  * The route exists and always did — POST /vibing/preview/stop, and every
- * client already wraps it (mobile/src/lib/vibePreview.ts:153,
- * web/lib/agent-client.ts:5281, tvos/YaverTV/AgentClient.swift:354). What is
- * missing is any UI offering it from the error that names it; the screens
- * offer "Try again", which cannot succeed while the lock is held. That is a
- * product defect (task #16), tracked separately. This function is the runner
- * refusing to be blocked by it.
+ * client already wraps it (mobile/src/lib/vibePreview.ts, web/lib/agent-client.ts,
+ * tvos/YaverTV/AgentClient.swift).
+ *
+ * FIXED IN THE PRODUCT 2026-08-04, not just worked around here: the 409 now
+ * carries `code: preview.session_active` and a CapabilityGap whose fix is that
+ * same stop route, body pre-filled, instant + retry — so tvOS, visionOS, mobile
+ * and web render "Stop it and take over" and suppress the "Try again" that
+ * could never succeed. This function stays because a test runner must claim a
+ * clean session deterministically, not because the surfaces still lack a key.
  */
 async function releasePreview(project) {
   for (const path of ["/vibing/preview/stop", "/dev/web-preview/stop"]) {
@@ -179,12 +182,41 @@ async function releasePreview(project) {
       body: JSON.stringify({ project: project.name }),
     }).catch(() => null);
   }
-  // The stop is asynchronous on the box; give the port a moment to actually
-  // free before the next surface tries to claim it. Probing the operation
-  // would be better than sleeping, but there is no "is it released" verb yet —
-  // that gap is worth an ops verb (HEADLESS FIRST: a question you can only
-  // answer by waiting is a missing endpoint).
-  await new Promise((r) => setTimeout(r, 4000));
+  // POLL THE OPERATION, DO NOT SLEEP THROUGH IT.
+  //
+  // This used to be `await sleep(4000)` with a comment admitting the gap: the
+  // stop is partly asynchronous (the capture goroutine can still hold the
+  // browser target after Stop() has returned), and there was no verb that could
+  // say when it was done. There is now — GET /vibing/preview/release, which
+  // reports the session entry AND any capture loop still winding down, with
+  // named blockers.
+  //
+  // A fixed sleep is wrong in both directions: too long on an idle box (four
+  // seconds × surfaces × projects, every run) and too short on a loaded one,
+  // where the next surface then hits the lock and the run reports a product
+  // defect that is really a harness race.
+  const deadline = Date.now() + 15000;
+  let last = null;
+  while (Date.now() < deadline) {
+    const res = await fetch(
+      `${BOX}/vibing/preview/release?project=${encodeURIComponent(project.name)}`,
+      { headers: { Authorization: `Bearer ${TOKEN}` } },
+    ).catch(() => null);
+    if (!res || !res.ok) {
+      // An agent too old to know the verb cannot answer, and guessing would
+      // reintroduce the race silently. Fall back to the old wait ONCE and say so.
+      log(`   (release verb unavailable — falling back to a fixed wait)`);
+      await new Promise((r) => setTimeout(r, 4000));
+      return;
+    }
+    const body = await res.json().catch(() => null);
+    last = body?.release ?? null;
+    if (last?.released) return;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  // Never silently proceed: a surface that starts against a still-held lock
+  // must be reported as the harness state it is, not as a product verdict.
+  log(`   WARNING: preview for ${project.name} not released after 15s — blockers: ${(last?.blockers || ["unknown"]).join("; ")}`);
 }
 
 /** Run one surface arc to completion and classify what it said. */
