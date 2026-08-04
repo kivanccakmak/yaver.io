@@ -698,11 +698,17 @@ func checkInstalled(name string) string {
 }
 
 func compositeInstallSatisfied(name string) bool {
+	// ONE SOURCE PER PLAN. These used to be a second, hand-copied list, and it
+	// drifted exactly where it hurt: the plan installed "chromium" (the snap stub
+	// on Ubuntu) while this satisfaction check agreed with it, so a fresh install
+	// provisioned a browser that cannot launch under a daemon AND then reported
+	// itself satisfied. Referencing the plan vars means a change to what gets
+	// installed cannot silently disagree with what counts as installed.
 	required := map[string][]string{
-		"tdd":            {"pre-commit", "pytest", "ruff", "vitest", "eslint", "prettier"},
-		"backend-dev":    {"sqlite3", "vercel", "convex", "postgresql-client", "postgresql", "redis-tools", "redis-server", "supabase", "mqtt-broker", "mqtt-clients"},
-		"pi-dev-node":    {"git", "gh", "uv", "docker", "mobile", "tmux", "ffmpeg", "opencode", "tdd", "backend-dev"},
-		"vibe-preview":   {"chromium", "ffmpeg", "maestro", "appium", "android-sdk"},
+		"tdd":            tddPlanNames,
+		"backend-dev":    backendDevPlanNames,
+		"pi-dev-node":    piDevNodePlanNames,
+		"vibe-preview":   vibePreviewPlanNames,
 		"remote-runtime": {"android-sdk"},
 	}
 	targets, ok := required[name]
@@ -890,8 +896,30 @@ func integrationsHelpText(name string) string {
 // GOOS, from any host. The xcodegen/cliclick bug below was darwin-only, which
 // is precisely why nothing on a Linux CI box ever noticed it.
 var (
-	piDevNodePlanNames   = []string{"git", "gh", "uv", "docker", "mobile", "tmux", "ffmpeg", "opencode", "tdd", "backend-dev"}
-	vibePreviewPlanNames = []string{"chromium", "ffmpeg", "maestro", "appium", "android-sdk"}
+	piDevNodePlanNames = []string{"git", "gh", "uv", "docker", "mobile", "tmux", "ffmpeg", "opencode", "tdd", "backend-dev"}
+	// CHROME, NOT CHROMIUM — and this ordering is the whole fix.
+	//
+	// This plan is what `npm i -g yaver-cli` provisions (cli/src/postinstall.js
+	// runs `yaver install vibe-preview`). It used to name "chromium", whose Linux
+	// step is `apt-get install -y chromium || snap install chromium` — and on
+	// stock Ubuntu there IS no apt candidate, so every fresh install landed on
+	// the SNAP. A snap Chromium cannot create its temp dir when launched from a
+	// daemon; it dies with "cannot create temporary directory for the root file
+	// system".
+	//
+	// So the preview browser a new user received was, by construction, one that
+	// could never capture a frame. Everything downstream then looked like a
+	// different bug: the phone's browser lane "stopped at navigate", the
+	// dashboard captured fine (it had found google-chrome), and three separate
+	// launchers were patched before anyone asked what the INSTALLER had put
+	// there. Measured on the owner's box 2026-08-05 — both snap paths fail
+	// --version and headless, /usr/bin/google-chrome passes both.
+	//
+	// The "chrome" recipe adds Google's own apt repo and installs
+	// google-chrome-stable: an unconfined build that works under a daemon.
+	// "chromium" stays available as an explicit choice for distros that ship a
+	// genuine deb, but it must not be what a fresh install silently gets.
+	vibePreviewPlanNames = []string{"chrome", "ffmpeg", "maestro", "appium", "android-sdk"}
 	backendDevPlanNames  = []string{"sqlite3", "vercel", "convex", "postgresql-client", "postgresql", "redis-tools", "redis-server", "supabase", "mqtt-broker", "mqtt-clients"}
 	tddPlanNames         = []string{"pre-commit", "pytest", "ruff", "vitest", "eslint", "prettier"}
 )
