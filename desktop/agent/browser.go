@@ -295,8 +295,20 @@ func (bm *BrowserManager) OpenSessionWithViewport(id string, headful bool, proxy
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), allocOpts...)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
-	// Boot Chrome.
-	if err := chromedp.Run(browserCtx); err != nil {
+	// Boot Chrome, and PIN THE VIEWPORT — not just the window.
+	//
+	// chromedp.WindowSize above sets the OS WINDOW; CaptureScreenshot captures the
+	// VIEWPORT, and headless Chrome does not guarantee they match. Measured
+	// 2026-08-04: a session opened with WindowSize(390, 844) produced a 500x701
+	// PNG — neither the request nor the 1280x900 fallback. The 2026-08-03 fix
+	// above stopped the size being thrown away entirely; this is the second half,
+	// because a window flag alone still leaves Chrome to pick the canvas.
+	//
+	// EmulateViewport issues Emulation.setDeviceMetricsOverride, which is the only
+	// way to make the captured pixels exactly the size that was asked for. Without
+	// it every per-surface layout verdict — TV, visionOS, phone, watch — is a
+	// statement about a canvas no user of that surface has.
+	if err := chromedp.Run(browserCtx, chromedp.EmulateViewport(int64(width), int64(height))); err != nil {
 		browserCancel()
 		allocCancel()
 		return fmt.Errorf("launch chrome: %w%s", err, chromeLaunchRemedy(err))
