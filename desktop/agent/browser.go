@@ -280,9 +280,7 @@ func (bm *BrowserManager) OpenSessionWithViewport(id string, headful bool, proxy
 	// This used to be gated on `profileDir != ""`, i.e. the ONE caller that
 	// happened to want a persistent profile got a correct binary and every other
 	// caller — including the preview capture — took whatever chromedp guessed.
-	if cp := preferredChromePath(); cp != "" {
-		allocOpts = append(allocOpts, chromedp.ExecPath(cp))
-	}
+
 	if profileDir != "" {
 		// F2: persistent clearance/cookies; share this dir with the co-browse session so a
 		// human-solved Cloudflare challenge carries over to headless collection.
@@ -292,7 +290,7 @@ func (bm *BrowserManager) OpenSessionWithViewport(id string, headful bool, proxy
 		allocOpts = append(allocOpts, chromedp.ProxyServer(proxyURL))
 	}
 
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), allocOpts...)
+	allocCtx, allocCancel := newPinnedChromeAllocator(context.Background(), allocOpts...)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
 	// Boot Chrome, and PIN THE VIEWPORT — not just the window.

@@ -528,7 +528,7 @@ func (m *twinJobManager) runWebChromeDP(job *twinJob, req twinJobRequest, localD
 		base, allocCancel = chromedp.NewRemoteAllocator(base, u)
 		job.log("attaching", "web-chromedp "+u)
 	} else {
-		base, allocCancel = chromedp.NewExecAllocator(base, chromedp.DefaultExecAllocatorOptions[:]...)
+		base, allocCancel = newPinnedChromeAllocator(base, chromedp.DefaultExecAllocatorOptions[:]...)
 		job.log("running", "web-chromedp local browser")
 	}
 	defer allocCancel()

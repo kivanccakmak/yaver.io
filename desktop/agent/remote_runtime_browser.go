@@ -102,7 +102,7 @@ func (p *browserWindowPool) open(ctx context.Context, width, height int) (*brows
 		),
 		chromedp.WindowSize(width, height),
 	)
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), allocOpts...)
+	allocCtx, allocCancel := newPinnedChromeAllocator(context.Background(), allocOpts...)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
 	// Boot off browserCtx, NOT the request ctx.

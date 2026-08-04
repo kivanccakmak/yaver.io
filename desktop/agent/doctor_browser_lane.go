@@ -256,10 +256,8 @@ func ProbeBrowserLane(ctx context.Context, previewURL string, wait time.Duration
 		chromedp.Flag("ignore-certificate-errors", true),
 		chromedp.WindowSize(430, 932), // phone-shaped: layout bugs show up here
 	)
-	if cp := preferredChromePath(); cp != "" {
-		allocOpts = append(allocOpts, chromedp.ExecPath(cp))
-	}
-	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, allocOpts...)
+
+	allocCtx, allocCancel := newPinnedChromeAllocator(ctx, allocOpts...)
 	defer allocCancel()
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 	defer browserCancel()

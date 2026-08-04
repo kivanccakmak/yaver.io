@@ -158,7 +158,7 @@ func (bm *BrowserManager) OpenInteractiveSession(id, profileDir string, width, h
 		allocOpts = append(allocOpts, chromedp.ExecPath(chromePath))
 	}
 
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), allocOpts...)
+	allocCtx, allocCancel := newPinnedChromeAllocator(context.Background(), allocOpts...)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
 	// Boot Chrome. A cold first launch with a fresh profile can take a while —

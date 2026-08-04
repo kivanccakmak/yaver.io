@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/chromedp/chromedp"
 )
 
 // browser_resolve.go — WHICH Chrome, decided by launching one.
@@ -219,4 +221,37 @@ func chromeAttemptsSummary(attempts []chromeAttempt) string {
 		parts = append(parts, a.Detail)
 	}
 	return strings.Join(parts, "; ")
+}
+
+// newPinnedChromeAllocator is the ONLY sanctioned way to build a chromedp exec
+// allocator in this tree.
+//
+// WHY A CHOKEPOINT INSTEAD OF FIVE CORRECT CALL SITES. chromedp searches for a
+// browser itself when ExecPath is unset, and on any box with a snap it finds
+// /usr/bin/chromium-browser — the redirector, which cannot create its temp dir
+// under a daemon. The tree had FIVE allocators; four pinned the probed binary
+// and one (twin_jobs.go) did not, and the one that did not was invisible until
+// someone went looking. Before that, doctor_browser_lane.go was the unpinned
+// one, and it cost a full debugging pass: the phone could not render the browser
+// lane on a box where the dashboard could, because the two used different
+// launchers.
+//
+// A rule that must be remembered at five call sites is a rule that will be
+// forgotten at the sixth. This makes the correct thing the only thing, and
+// TestEveryChromeAllocatorIsPinned makes a sixth unpinned one fail the build.
+//
+// Resolution comes from resolveLaunchableChrome, which probes by RUNNING each
+// candidate: PATH order alone is exactly what is untrustworthy here, since
+// `which chromium-browser` cheerfully returns the snap stub.
+func newPinnedChromeAllocator(ctx context.Context, opts ...chromedp.ExecAllocatorOption) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cp, _ := resolveLaunchableChrome(ctx); cp != "" {
+		opts = append(opts, chromedp.ExecPath(cp))
+	}
+	// No launchable candidate: fall through unpinned rather than refuse. chromedp
+	// may still find something in a user session, and a browser that MIGHT work
+	// beats not trying — the attempts are recorded either way.
+	return chromedp.NewExecAllocator(ctx, opts...)
 }
