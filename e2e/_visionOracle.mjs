@@ -105,9 +105,22 @@ const KNOWN_SCREENS = [
     say: "the app is showing the SIGN-IN screen — the session did not reach the surface, so no vibe could have been applied",
   },
   {
+    // OBSERVATION ONLY — no remedy. This entry used to assert "this is the
+    // confined-snap Chrome failure; the box needs an unconfined build", and on
+    // 2026-08-04 it said exactly that about a box whose /usr/bin/google-chrome
+    // launches headless perfectly (measured: it dumped real DOM). The agent had
+    // logged no browser error at all; the oracle had simply text-matched and
+    // then prescribed infrastructure surgery nobody had verified was needed.
+    //
+    // A confidently wrong remedy costs more than no remedy: it sends someone to
+    // reinstall a browser that works, and it hides the real cause for as long as
+    // they believe it. The oracle can see PIXELS — it cannot see which binaries
+    // exist, which one was picked, or why a launch failed. The component that
+    // CAN is the agent, which probes them and emits browser_window.chrome_*
+    // with a remedy that differs per cause (browserWindowGap).
     match: ["cannot create temporary directory", "chrome failed to start"],
     cause: "browser-cannot-launch",
-    say: "the capture browser could not start — this is the confined-snap Chrome failure; the box needs an unconfined build",
+    say: "the frame carries a browser launch error — the agent's browser_window.* gap names the specific cause and its fix",
   },
   {
     // Chrome's own error page, read straight off the frame. Added after a
