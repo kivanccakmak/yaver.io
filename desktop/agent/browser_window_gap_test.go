@@ -18,7 +18,9 @@ package main
 //   * launch_failed         it exists and exits; the launch output is the evidence.
 
 import (
+	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -109,5 +111,42 @@ func TestBrowserWindowGapsDifferPerReason(t *testing.T) {
 	// An unknown reason must not fabricate a gap.
 	if browserWindowGap("browser_window.something_new") != nil {
 		t.Error("an unrecognised reason must not invent a remedy")
+	}
+}
+
+// TestBrowserWindowGapReachesTheHTTPReply — the gap must leave the process.
+//
+// Caught during the change that added it: browserWindowLaunchError produced a
+// perfectly good CapabilityGap and the session-create handler replied
+// `jsonError(w, 400, err.Error())`, so the gap was dropped and the code travelled
+// inside the sentence again — the precise state these five codes started in.
+//
+// A typed error is not a wire. This asserts the handler helper carries it, so the
+// producer cannot silently become useful-to-nobody a second time.
+func TestBrowserWindowGapReachesTheHTTPReply(t *testing.T) {
+	rec := httptest.NewRecorder()
+	inner := errors.New(`exec: "google-chrome": executable file not found in $PATH`)
+	remoteRuntimeCreateError(rec, browserWindowLaunchError(inner))
+
+	var body map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode reply: %v", err)
+	}
+	if body["code"] == nil || body["code"] == "" {
+		t.Errorf("reply carries no code — a client must classify without regexing %q", body["error"])
+	}
+	if body["capabilityGap"] == nil {
+		t.Fatal("reply carries no capabilityGap: the typed error was built and then thrown away at the HTTP layer")
+	}
+	// And an ordinary error must still look exactly as it always did.
+	plain := httptest.NewRecorder()
+	remoteRuntimeCreateError(plain, errors.New("some other failure"))
+	var pb map[string]interface{}
+	_ = json.Unmarshal(plain.Body.Bytes(), &pb)
+	if pb["capabilityGap"] != nil {
+		t.Error("a non-browser error must not grow a gap")
+	}
+	if pb["error"] != "some other failure" {
+		t.Errorf("the plain path must be unchanged, got %v", pb["error"])
 	}
 }

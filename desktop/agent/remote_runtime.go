@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -1766,6 +1767,20 @@ func (s *HTTPServer) handleRemoteRuntimeCapabilities(w http.ResponseWriter, r *h
 	jsonReply(w, http.StatusOK, remoteRuntimeCapabilitiesForProjectCached(workDir, framework, refresh))
 }
 
+// remoteRuntimeCreateError replies to a session-create/attach failure, carrying
+// the typed CapabilityGap when the failure has one.
+//
+// Degrades to exactly the previous behaviour for every other error, so nothing
+// that already worked changes shape.
+func remoteRuntimeCreateError(w http.ResponseWriter, err error) {
+	var bw *BrowserWindowLaunchError
+	if errors.As(err, &bw) && bw.Gap != nil {
+		jsonErrorWithGap(w, http.StatusBadRequest, bw.Error(), bw.Gap)
+		return
+	}
+	jsonError(w, http.StatusBadRequest, err.Error())
+}
+
 func (s *HTTPServer) handleRemoteRuntimeSessions(w http.ResponseWriter, r *http.Request) {
 	mgr := s.ensureRemoteRuntimeManager()
 	switch r.Method {
@@ -1790,7 +1805,13 @@ func (s *HTTPServer) handleRemoteRuntimeSessions(w http.ResponseWriter, r *http.
 			session, _ = mgr.Update(session.ID, func(cur *RemoteRuntimeSession) { cur.Runner = strings.TrimSpace(req.Runner) })
 		}
 		if err != nil {
-			jsonError(w, http.StatusBadRequest, err.Error())
+			// CARRY THE GAP. browserWindowLaunchError types the five
+			// browser_window.* reasons and attaches a remedy that differs per
+			// code — install a browser / install the UNCONFINED build / end the
+			// process holding the profile / fix permissions / read the launch
+			// output. Replying with err.Error() alone put the code back inside a
+			// sentence, which is how all five ended up unread in the first place.
+			remoteRuntimeCreateError(w, err)
 			return
 		}
 		// Proxied sessions are already booted on the builder — the
@@ -1800,7 +1821,10 @@ func (s *HTTPServer) handleRemoteRuntimeSessions(w http.ResponseWriter, r *http.
 		if proxy := mgr.proxiedFor(session.ID); proxy == nil {
 			session, err = mgr.Attach(session.ID)
 			if err != nil {
-				jsonError(w, http.StatusBadRequest, err.Error())
+				// Attach launches the browser too, so the same typed refusal can
+				// arrive here. One helper for both paths: a route that only one of
+				// two entry points carries is the drift this codebase pays for.
+				remoteRuntimeCreateError(w, err)
 				return
 			}
 		}
