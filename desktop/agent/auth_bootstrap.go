@@ -779,6 +779,11 @@ func notifyConvexAuthExpired(cfg *Config, httpPort int) {
 		if kind := classifyBootstrapRejection(resp.StatusCode, body); kind != identityConflictNone {
 			log.Printf("[auth-expired-convex] %s (%s) — Convex said: %s",
 				deviceIdentityConflictRemedy(kind, cfg.DeviceID), ReasonDeviceIdentityConflict, body)
+			// PUT IT ON A WIRE, not only in the journal. A box that fails this
+			// check cannot set needsAuth, so /info is its only remaining way to
+			// say "I am running and my identity is claimed elsewhere" — without
+			// this every surface can only render it as unreachable.
+			markDeviceIdentityConflict(kind.String(), cfg.DeviceID, deviceIdentityConflictRemedy(kind, cfg.DeviceID))
 			return
 		}
 		log.Printf("[auth-expired-convex] Convex returned %d: %s", resp.StatusCode, body)
@@ -904,6 +909,9 @@ func notifyConvexBootstrap(cfg *Config, httpPort int) {
 			if kind := classifyBootstrapRejection(resp.StatusCode, body); kind != identityConflictNone {
 				log.Printf("[bootstrap-convex] %s (%s) — Convex said: %s",
 					deviceIdentityConflictRemedy(kind, cfg.DeviceID), ReasonDeviceIdentityConflict, body)
+				// Same wire as the sibling site above — both refusals must record it, or
+				// which code path rejected the box decides whether any surface can see it.
+				markDeviceIdentityConflict(kind.String(), cfg.DeviceID, deviceIdentityConflictRemedy(kind, cfg.DeviceID))
 				return
 			}
 			log.Printf("[bootstrap-convex] Convex returned %d: %s", resp.StatusCode, body)

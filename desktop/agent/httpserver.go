@@ -3388,8 +3388,20 @@ func (s *HTTPServer) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"hardware":       cachedHardwareProfile(),
 		"lifecycleState": lifecycle.State,
 		"lifecycle":      lifecycle,
-		"osUser":         osUserName,
-		"homeDir":        osHome,
+		// A box whose device identity is claimed by other hardware cannot set
+		// needsAuth (Convex refuses it before that), so /info is its ONLY way to
+		// say "I am running and this is why the control plane will not have me".
+		// Without this the box can only appear unreachable, and the user is sent
+		// to check a network that is fine. Omitted entirely when there is no
+		// conflict — a field that is always present teaches surfaces to ignore it.
+		"osUser": osUserName,
+		"identityConflict": func() interface{} {
+			if c := DeviceIdentityConflict(); c.Active {
+				return c
+			}
+			return nil
+		}(),
+		"homeDir": osHome,
 		"runner": map[string]interface{}{
 			"id":       runnerID,
 			"name":     runnerName,

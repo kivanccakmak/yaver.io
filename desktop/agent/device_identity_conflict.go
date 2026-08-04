@@ -39,6 +39,21 @@ const (
 	identityConflictPublicKey
 )
 
+// String names the kind for the wire. `string(kind)` on an int enum yields a
+// single RUNE, not a name — go vet caught exactly that mistake being introduced
+// on 2026-08-04, which would have published "\x01" as the conflict kind to every
+// surface that read /info.
+func (k deviceIdentityConflictKind) String() string {
+	switch k {
+	case identityConflictHardware:
+		return "hardware-mismatch"
+	case identityConflictPublicKey:
+		return "public-key-mismatch"
+	default:
+		return ""
+	}
+}
+
 // classifyBootstrapRejection reads Convex's answer to /devices/bootstrap.
 //
 // It matches on the error TEXT because that is what the endpoint returns today

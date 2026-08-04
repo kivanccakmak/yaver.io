@@ -94,7 +94,7 @@ var unwiredReasonCodes = map[string]string{
 	"reload.preview_worker.offline":   "emitted by the reload lane; no surface reads it.",
 	"build.hermes.failed":             "emitted by the build lane; no surface reads it.",
 	"build.native.failed":             "emitted by the build lane; no surface reads it.",
-	"device.identity_conflict":        "LOG-ONLY: its only uses are inside a log.Printf in auth_bootstrap.go, so it is on no wire and no surface could read it even in principle. Put it on a payload BEFORE writing any client. A box in this state can otherwise only render as 'unreachable'.",
+	"device.identity_conflict":        "now on a WIRE (/info identityConflict) instead of only a log line; no surface reads it yet — that client is the next piece.",
 	"agent.binary_unrunnable":         "emitted by planRemoteBoxRepair; no surface reads it.",
 	"agent.not_serving":               "emitted by planRemoteBoxRepair; no surface reads it.",
 }
