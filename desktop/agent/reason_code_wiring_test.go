@@ -76,6 +76,11 @@ var unwiredReasonCodes = map[string]string{
 	// count of 21 WIRED should be read with that in mind.
 	"task.manager_unavailable": "emitted by feedback_http.go's promptless/no-task-manager refusal; no surface classifies it yet — the 503 sentence carries the meaning today.",
 
+	// The reload.* and build.* families left this list on 2026-08-04: they ride
+	// IncidentEvent.Code, /incidents was ALREADY fetched by both surfaces, and
+	// incidentSignals.ts now classifies them (rendered by ConnectivityView, which
+	// previously printed the code as fallback text and never switched on it).
+	//
 	// ── NO-CONSUMER: the agent sends these; no surface reads one of them. ──
 	// This is the real layer-B gap. A code sent into silence is
 	// indistinguishable from prose — every one of these arrives on a surface
@@ -89,11 +94,6 @@ var unwiredReasonCodes = map[string]string{
 	"connectivity.relay.pin_stale":    "emitted by planRemoteBoxRepair; no surface reads it. Reads as a possible MITM — must never render as an auth problem.",
 	"runner.claude.auth_required":     "emitted by the runner-auth lane; no surface reads it.",
 	"runner.opencode.unusable":        "emitted by the runner-auth lane; no surface reads it.",
-	"reload.dev_server_unavailable":   "emitted by the reload lane; no surface reads it.",
-	"reload.native_rebuild_required":  "emitted by the reload lane; no surface reads it.",
-	"reload.preview_worker.offline":   "emitted by the reload lane; no surface reads it.",
-	"build.hermes.failed":             "emitted by the build lane; no surface reads it.",
-	"build.native.failed":             "emitted by the build lane; no surface reads it.",
 	"device.identity_conflict":        "now on a WIRE (/info identityConflict) instead of only a log line; no surface reads it yet — that client is the next piece.",
 	"agent.binary_unrunnable":         "emitted by planRemoteBoxRepair; no surface reads it.",
 	"agent.not_serving":               "emitted by planRemoteBoxRepair; no surface reads it.",

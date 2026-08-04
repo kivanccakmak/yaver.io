@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { classifyIncident } from "@/lib/incidentSignals";
 import { CONVEX_URL } from "@/lib/constants";
 import { agentClient, type CapabilitySnapshot, type ConnectionState, type ConnectAttemptDiagnostic, type IncidentEvent, type InfraSummary, type TailscaleStatus } from "@/lib/agent-client";
 import type { Device } from "@/lib/use-devices";
@@ -240,6 +241,41 @@ export default function ConnectivityView({
                   </div>
                   <div className="mt-2 text-sm text-surface-300">{incident.userMessage}</div>
                   {incident.suggestedAction ? <div className="mt-1 text-xs text-surface-500">{incident.suggestedAction}</div> : null}
+                  {/* CLASSIFY THE CODE, do not just print it. `incident.code`
+                      was already on this line as fallback TEXT — displayed and
+                      never switched on — so five reason codes rode a live wire
+                      into a string. The agent's own prose stays above; this adds
+                      only what prose cannot carry: whose fault it is, and
+                      whether pressing anything again could possibly help. */}
+                  {(() => {
+                    const v = classifyIncident(incident.code);
+                    if (!v) return null;
+                    return (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                        <span
+                          className={`rounded-full px-2 py-0.5 font-semibold ${
+                            v.fault === "project"
+                              ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                              : v.fault === "transient"
+                                ? "bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                                : "bg-surface-800 text-surface-300"
+                          }`}
+                        >
+                          {v.title}
+                        </span>
+                        {v.retryable ? (
+                          <span className="text-surface-500">reconnects on its own — retrying is worth it</span>
+                        ) : (
+                          <span className="text-surface-500">retrying will not change this</span>
+                        )}
+                        {v.aiFixable ? (
+                          <span className="text-amber-700/80 dark:text-amber-300/80">
+                            your project&apos;s own build — a coding agent can attempt it
+                          </span>
+                        ) : null}
+                      </div>
+                    );
+                  })()}
                   {incident.logRefs?.length ? <div className="mt-1 text-[11px] text-surface-600">Logs: {incident.logRefs.join(", ")}</div> : null}
                 </div>
               ))}
