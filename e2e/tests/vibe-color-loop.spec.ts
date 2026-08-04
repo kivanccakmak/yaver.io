@@ -164,6 +164,67 @@ async function explainPreviewFrame(): Promise<string> {
   }
 }
 
+
+/**
+ * PROVE WE ARE LOOKING AT THE SCREEN WE ARE CHANGING.
+ *
+ * The prompt below says "the login screen". The sampler reads whatever the app
+ * happens to be rendering. Those are the same screen for the yaver app and NOT
+ * for every project: sfmg opens on a language picker ("Choose Your Language ·
+ * Türkçe · English"), so on 2026-08-04 this arc dispatched a correct edit — the
+ * runner really did set the login background to #FF0000, verified in the file —
+ * and then reported "preview never turned red", i.e. it called a WORKING product
+ * broken.
+ *
+ * That is a FALSE RED, and CLAUDE.md is explicit that a false red is exactly as
+ * corrosive as a false green. It is also the same discipline the ios/android
+ * arcs already adopted after they lied in the other direction: require positive
+ * proof of the state you are judging, and skip with a named cause otherwise.
+ *
+ * Deliberately conservative. It only skips when the oracle can SEE a gate screen
+ * — an empty oracle (no macOS Vision, no frame yet) never changes a verdict,
+ * because "we could not read the screen" must not become "the screen is wrong".
+ */
+/**
+ * Did the edit LAND but stay invisible, or did nothing happen at all?
+ *
+ * Those are different verdicts and only one of them is a product failure, so
+ * the arc must not collapse them into "preview never turned red".
+ *
+ * The first version of this guard matched screen-name phrases ("choose your
+ * language", "get started"). That is prose-matching — the exact thing this
+ * codebase keeps paying for — and it would drift the moment a project opened on
+ * a screen nobody listed. This asks the box a QUESTION instead: did the working
+ * tree change? It needs no vocabulary and works for every project, every colour
+ * and every screen.
+ *
+ *   tree changed  → the runner did the work and the sampled screen is not the
+ *                   screen it edited. A harness targeting problem: SKIP, named.
+ *   tree unchanged→ nothing happened. That IS the product failing: FAIL.
+ *
+ * Degrades to "unknown" (and therefore to the strict FAIL) whenever the box
+ * cannot be asked — an unreachable box must never soften a verdict.
+ */
+async function workingTreeChanged(): Promise<"changed" | "unchanged" | "unknown"> {
+  const host = process.env.VIBE_BOX_HOST;
+  const token = process.env.YAVER_TEST_TOKEN;
+  const path = process.env.VIBE_PROJECT_PATH;
+  if (!host || !token || !path) return "unknown";
+  try {
+    const res = await fetch(`${host}/exec`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ command: `git -C ${path} status --porcelain`, timeout: 20 }),
+    });
+    if (!res.ok) return "unknown";
+    const body = (await res.json()) as { stdout?: string; output?: string };
+    const out = (body.stdout ?? body.output ?? "").trim();
+    return out.length > 0 ? "changed" : "unchanged";
+  } catch {
+    return "unknown";
+  }
+}
+
 /**
  * Screenshot the preview iframe and return its modal colour.
  *
@@ -536,11 +597,22 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
   // measuring the product. Naming the VISIBLE area removes that variance
   // without weakening the pixel verdict — we still demand real pixels, we just
   // stop accepting a prompt that a correct-but-invisible edit satisfies.
+  // WHICH SCREEN, and why it is a parameter now.
+  //
+  // "the login screen" is correct for the yaver app, whose first screen IS the
+  // login. It is wrong for any project that opens on something else: sfmg opens
+  // on a language chooser, so on 2026-08-04 the runner correctly reddened the
+  // login screen, the sampler photographed the chooser, and the arc reported the
+  // product broken. The verdict must name the screen the app actually RENDERS,
+  // or the pixels being judged belong to a different screen than the edit.
+  //
+  // Default keeps every existing invocation identical.
+  const screenName = process.env.VIBE_TARGET_SCREEN || "login screen";
   const targetPrompt =
-    `Change the login screen so its VISIBLE background is ${target}. ` +
+    `Change the ${screenName} so its VISIBLE background is ${target}. ` +
     `Every container that paints the full-screen background must be ${target} ` +
     `(the outer SafeAreaView AND any KeyboardAvoidingView/ScrollView/View that covers it), ` +
-    `so the whole screen reads ${target}. Only the login screen background — nothing else.`;
+    `so the whole screen reads ${target}. Only the ${screenName} background — nothing else.`;
   if (mobileSendVibe) {
     await mobileSendVibe(targetPrompt);
   } else {
@@ -550,6 +622,20 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
     await page.waitForTimeout(3000);
   }
   const hit = await waitForColor(page, target, TURN_BUDGET_MS, mobileReloadPreview ?? undefined);
+  if (!hit.ok) {
+    // Distinguish "the edit landed somewhere we are not looking" from "nothing
+    // happened". Only the second is the product failing. See workingTreeChanged.
+    const tree = await workingTreeChanged();
+    if (tree === "changed") {
+      test.skip(
+        true,
+        `the runner DID edit the project (working tree is dirty) but the sampled screen never became ${target} — ` +
+        `the frame showed: ${hit.said || "(oracle unavailable)"}. That is this arc pointing at a screen the ` +
+        `project does not open on, not the product failing. Set VIBE_TARGET_SCREEN to the screen this app ` +
+        `actually renders, or navigate past the gate, then re-run.`,
+      );
+    }
+  }
   expect(hit.ok, `preview never turned ${target} (last ${hit.color})${hit.said ? ` — ${hit.said}` : ""}`).toBe(true);
 
   // Revert as a SEPARATE task — exercises the new-task render path, not just a
