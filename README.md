@@ -1,3 +1,5 @@
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.kivanccakmak%2Fyaver.svg)](https://mcptoplist.com/server/io.github.kivanccakmak%2Fyaver)
+
 <p align="center">
   <img src="./assets/readme/hero.svg" width="100%" alt="Yaver — an open-source, self-hostable MCP server. Your coding agent builds a full-stack app on your own machine, it hot-reloads on your real phone, and you keep fixing it from inside the running app.">
 </p>
