@@ -1217,7 +1217,16 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                 originWhitelist={["*"]}
               />
               )}
-              {!webContentLoaded && (
+              {/* THE OVERLAY MUST NOT OUTLIVE ITS OWN PROBE.
+                   webContentLoaded is set by the injected ready-probe, and on a
+                   cross-origin frame that probe can NEVER fire — so this overlay
+                   covered an app that was rendering perfectly, forever. Measured
+                   2026-08-05 on sfmg: the card underneath even said "the preview
+                   is rendering", and it was drawn ON TOP of the rendering
+                   preview. Explaining why you cannot confirm something, while
+                   hiding the thing you are describing, is worse than silence.
+                   When the probe is impossible we show the frame. */}
+              {!webContentLoaded && !probeUnavailable && (
                 <View style={styles.previewOverlay}>
                   {previewFailed ? (
                     (() => {

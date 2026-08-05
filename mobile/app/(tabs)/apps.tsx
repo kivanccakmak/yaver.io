@@ -3859,7 +3859,12 @@ export default function AppsScreen() {
                 ) : null}
               </>
             ) : null}
-            {bundleUrl && !webPreviewContentLoaded && (
+            {/* Same fix as DevPreview.tsx: webPreviewContentLoaded is set by the
+                 injected ready-probe, which CANNOT fire on a cross-origin frame,
+                 so this overlay hid a rendering app forever while its own text
+                 said "the preview is rendering". Both browser-preview
+                 implementations or neither — the drift rule. */}
+              {bundleUrl && !webPreviewContentLoaded && !probeUnavailable && (
               <View style={s.previewOverlay}>
                 {webPreviewFailed ? (
                   (() => {

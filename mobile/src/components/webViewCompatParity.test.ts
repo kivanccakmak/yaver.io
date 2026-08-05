@@ -98,5 +98,21 @@ for (const rel of ["./DevPreview.tsx", "../../app/(tabs)/apps.tsx"]) {
   );
 }
 
+// AND the overlay must lift when the probe is impossible. Reporting the reason
+// is only half the fix: the card explaining "readiness cannot be confirmed"
+// was drawn ON TOP of the app it was describing, so the user saw an
+// explanation instead of their running app. Explaining why you cannot confirm
+// something while hiding the thing itself is worse than silence.
+for (const [rel, gate] of [
+  ["./DevPreview.tsx", "!webContentLoaded && !probeUnavailable"],
+  ["../../app/(tabs)/apps.tsx", "!webPreviewContentLoaded && !probeUnavailable"],
+] as const) {
+  const src = stripComments(readFileSync(join(__dirname, rel), "utf8"));
+  ok(
+    src.includes(gate),
+    `${rel} must lift the preview overlay when the ready-probe is impossible (expected \`${gate}\`) — otherwise a rendering app stays hidden behind a card describing it`,
+  );
+}
+
 console.log(`\nwebViewCompatParity: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
