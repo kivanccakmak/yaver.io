@@ -106,14 +106,24 @@ async function main() {
         });
         if (!res.ok) throw new Error(`dispatch failed: HTTP ${res.status} ${(await res.text()).slice(0, 160)}`);
         const body = await res.json();
-        const id = body.id || body.task?.id;
+        // The agent replies {ok, taskId, status, runnerId, model, …}. Reading
+        // `id` found nothing and the arc reported FAILED for a dispatch that had
+        // plainly succeeded — a false red of the harness's own making, on the
+        // run meant to validate the surface.
+        const id = body.taskId || body.id || body.task?.id;
         if (!id) throw new Error(`dispatch returned no task id: ${JSON.stringify(body).slice(0, 160)}`);
         return id;
       },
       getTask: async (taskId) => {
         const res = await fetch(`${BOX}/tasks/${taskId}`, { headers: H });
         if (!res.ok) return { id: taskId, status: "running" };
-        const t = await res.json();
+        const body = await res.json();
+        // The agent wraps single-task reads: {ok:true, task:{…}}. Reading
+        // `status` off the envelope gave undefined forever, so the poll loop
+        // never saw one of TERMINAL and timed out on a task that had reached
+        // `review` minutes earlier. Third shape bug in this file from
+        // hand-rolling the wire — see the note at the bottom.
+        const t = body.task || body;
         return { id: taskId, status: t.status, resultText: t.resultText, output: t.output };
       },
       speak: async (text) => { spoken.push(text); },
@@ -128,7 +138,13 @@ async function main() {
   const carDispatched = Boolean(carResult.taskId) && !carResult.declined;
   // A driver's only feedback is the sentence. An empty one is the car equivalent
   // of a silent spinner.
-  const carSpoke = spoken.length > 0 && spoken.every((s) => s.trim().length > 0);
+  //
+  // Assert the RETURNED sentence, not the injected speak() dep: carVoiceCoding
+  // states plainly that it "does NOT speak — the caller decides how to deliver
+  // `spoken`", and the Tier 1 surface delivers it as a MessagingStyle
+  // notification rather than as audio. An arc that required speak() to fire
+  // would mark the shipped contract broken for honouring itself.
+  const carSpoke = typeof carResult.spoken === "string" && carResult.spoken.trim().length > 0;
   const after = await treeFingerprint();
   const treeChanged = after !== null && after !== before;
 
@@ -145,7 +161,16 @@ async function main() {
   // exactly as the watch does, and assert the box accepted it.
   const watchRes = await fetch(`${BOX}/ops`, {
     method: "POST", headers: H,
-    body: JSON.stringify({ verb: "desktop_voice", args: { text: "what is the status of this project" } }),
+    // Mirror watch/YaverWatch/DesktopVoiceClient.swift:69 EXACTLY: arguments go
+    // under `payload`, and the verb reads {transcript, dryRun}. Sending them
+    // under `args` produced ok:false/bad_payload/"`transcript` is required" —
+    // true of the decoded payload, false of the request, and the reason /ops now
+    // names the keys it ignored (opsRejectMisnamedPayload).
+    //
+    // dryRun proves the lane accepts and ROUTES the utterance without acting on
+    // the desktop: the watch's contribution is the dispatch, and that is what is
+    // under test here.
+    body: JSON.stringify({ verb: "desktop_voice", payload: { transcript: "what is on screen", dryRun: true } }),
   }).catch((e) => ({ ok: false, status: 0, statusText: String(e) }));
   const watchBody = watchRes.ok ? await watchRes.json().catch(() => ({})) : {};
   // /ops answers 200 with ok:false for an unknown verb, so the STATUS is not the
@@ -157,6 +182,28 @@ async function main() {
     detail: `http=${watchRes.status} ok=${JSON.stringify(watchBody?.ok)} code=${watchBody?.result?.code ?? watchBody?.code ?? "-"}`,
     note: "pixels NOT asserted: watchOS has no frame path at all",
   });
+
+  // ── Clean up after ourselves ──────────────────────────────────────────────
+  //
+  // This arc asks a REAL coding agent to edit a REAL project, so it leaves a
+  // real edit behind. Two earlier runs of this file each added the marker line
+  // and left it there, and the next run then reported a baseline of 18 dirty
+  // files instead of 17 — the arc corrupting the very measurement it depends on.
+  //
+  // The removal is deliberately surgical: it deletes the ONE line this arc asked
+  // for, and only if it is present exactly once. `git checkout --` on the file
+  // would be shorter and would silently destroy whatever else a concurrent
+  // session had in progress there, which is the standing rule against
+  // bulldozing someone else's work.
+  const MARKER = "// vibe loop reached this file";
+  const TARGET = `${PROJECT_PATH}/src/theme/colors.ts`;
+  // sed -i is the one-liner every box already has; a python heredoc through
+  // /exec adds a quoting layer that can fail silently and leave the residue.
+  // `\#` delimits so the marker's own slashes need no escaping.
+  const cleanup = await boxExec(
+    `grep -qxF ${JSON.stringify(MARKER)} ${TARGET} && sed -i '\\#^// vibe loop reached this file$#d' ${TARGET} && echo removed || echo absent`,
+  );
+  log(`cleanup: ${cleanup ?? "could not run"} (${MARKER})`);
 
   // ── Report ────────────────────────────────────────────────────────────────
   console.log("\n─── sfmg vibing · render-incapable surfaces ───");
@@ -171,6 +218,23 @@ async function main() {
   }
   console.log("\nall render-incapable surfaces dispatched a real coding turn");
 }
+
+// ── Why three bugs in one file, and what stops the fourth ──────────────────
+//
+// This arc got the wire wrong three times in a row: `id` instead of `taskId`,
+// the unwrapped `/tasks/<id>` envelope, and `args` instead of `payload`. Every
+// one was a FALSE RED — the box did the work, and the harness reported the
+// surface broken. A false red is as corrosive as a false green, and worse here,
+// because it lands on the run whose whole job is to say whether the surface
+// works.
+//
+// The common cause is that this file re-implements shapes the shipped clients
+// already know. Where a client is importable (carVoiceCoding.ts) this arc drives
+// it and got that part right on the first try. Where it is not — a Swift watch
+// client cannot be imported into node — the shape is copied, and a copy drifts.
+// So each copied shape now carries a file:line citation to its source, which is
+// the cheapest thing that makes drift reviewable. The agent-side half of the fix
+// is that /ops no longer stays silent about a key it ignored.
 
 main().catch((err) => {
   console.error(`[render-incapable] arc error: ${err?.stack || err}`);

@@ -48,6 +48,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { alreadyPassed, allPassed, record, render } from "./_loopLedger.mjs";
+import { HEAVY, LIGHT, awaitCapacity, machinePressure } from "./_loadGuard.mjs";
 
 const BOX = process.env.VIBE_BOX_HOST || "";
 const TOKEN = process.env.YAVER_TEST_TOKEN || "";
@@ -55,6 +57,26 @@ const RUN_ID = process.env.LOOP_RUN_ID || "all-surfaces";
 const HERE = new URL("./", import.meta.url).pathname;
 const RUN_DIR = join(HERE, "test-results", "loops", RUN_ID);
 const ONLY = (process.env.ONLY_SURFACES || "").split(",").map((s) => s.trim()).filter(Boolean);
+
+/**
+ * WHICH MACHINE IS UNDER TEST — and why the suite cares.
+ *
+ * `local`  the agent on this developer machine.
+ * `remote` a shared box (today: a 4 GB Hetzner arm64 instance).
+ *
+ * The remote box is the scarcest resource in the whole loop: 4 GB of RAM, an
+ * OOM death-spiral on record when the agent crosses ~2.4 GB, and other people's
+ * work running on it at the same time. So the suite is LOCAL-FIRST — nothing
+ * reaches the box until the same arc has proven itself somewhere cheaper. That
+ * is not merely polite; a arc that fails for lack of RAM teaches nothing about
+ * the product, and it costs someone else their run.
+ *
+ * Derived from the host rather than declared, so it cannot disagree with the
+ * box actually being driven.
+ */
+const TARGET = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(BOX) ? "local" : "remote";
+const FORCE = process.env.LOOP_FORCE === "1";
+const MAX_AGE_H = Number(process.env.LOOP_MAX_AGE_HOURS || 12);
 
 const log = (m) => console.log(`[all-surfaces] ${m}`);
 
@@ -96,11 +118,15 @@ const PROJECTS = [
  * suite: never spend a 20-minute UI run to learn a fact an API call answers.
  */
 const SURFACES = [
-  { id: "headless", script: "native-headless-vibe.mjs", env: { SURFACE: "headless" } },
-  { id: "tvos", script: "tvos-sim-vibe-loop.mjs", env: {} },
-  { id: "visionos", script: "visionos-sim-loop.mjs", env: {} },
-  { id: "ios", script: "ios-sim-preview-narration.mjs", env: {} },
-  { id: "android", script: "android-emu-vibe-loop.mjs", env: {} },
+  // `weight` picks the capacity budget. A simulator or emulator arc boots a
+  // whole OS image and must not start on a pinned machine; a headless probe is
+  // mostly waiting on the network and can run when the box is busier.
+  { id: "headless", script: "native-headless-vibe.mjs", env: { SURFACE: "headless" }, weight: "light" },
+  { id: "car-watch", script: "render-incapable-vibe-loop.mjs", env: {}, weight: "light" },
+  { id: "tvos", script: "tvos-sim-vibe-loop.mjs", env: {}, weight: "heavy" },
+  { id: "visionos", script: "visionos-sim-loop.mjs", env: {}, weight: "heavy" },
+  { id: "ios", script: "ios-sim-preview-narration.mjs", env: {}, weight: "heavy" },
+  { id: "android", script: "android-emu-vibe-loop.mjs", env: {}, weight: "heavy" },
 ];
 
 mkdirSync(RUN_DIR, { recursive: true });
@@ -282,8 +308,31 @@ try {
   process.exit(0);
 }
 
+const P0 = machinePressure();
+log(`target=${TARGET} · box=${BOX}`);
+log(`this machine: ${P0.cores} cores, load ${P0.loadPerCore.toFixed(1)}/core, ${P0.freeMB} MB reclaimable of ${P0.totalMB} MB`);
+log(`ledger for ${TARGET}:\n${render(TARGET)}`);
+
 for (const project of PROJECTS) {
   log(`\n═══ project ${project.name} (${project.path}) ═══`);
+
+  // ── LOCAL-FIRST GATE ──────────────────────────────────────────────────────
+  // The 4 GB box is shared and easy to wedge, so an arc only earns a run there
+  // after passing locally on the same code. Reported as NAMED, never as a
+  // failure: "not yet proven cheaply" is a scheduling fact about this suite,
+  // not a statement about the product.
+  if (TARGET === "remote" && !FORCE) {
+    const wanted = SURFACES.filter((s) => !ONLY.length || ONLY.includes(s.id)).map((s) => s.id);
+    const gate = allPassed("local", project.name, wanted, MAX_AGE_H);
+    if (!gate.ok) {
+      log(`SKIP ${project.name} on the remote box — these have not passed locally on this code yet: ${gate.missing.join(", ")}`);
+      log(`  run the same command against a local agent first, or set LOOP_FORCE=1 to override deliberately`);
+      for (const id of gate.missing) {
+        results.push({ project: project.name, surface: id, verdict: "NAMED", reason: "gated: not yet proven against a local agent on this code" });
+      }
+      continue;
+    }
+  }
 
   if (project.selfDevelopment) {
     const probe = await probeSelfDevelopmentRefusal(project);
@@ -296,11 +345,39 @@ for (const project of PROJECTS) {
 
   for (const surface of SURFACES) {
     if (ONLY.length && !ONLY.includes(surface.id)) continue;
-    log(`── ${project.name} on ${surface.id} …`);
+
+    // ── Already proven on this exact code? ────────────────────────────────
+    // The ledger honours a pass only for the current git HEAD + dirty
+    // fingerprint, so this can never hide a regression: edit any tracked file
+    // and every entry stops counting. See _loopLedger.mjs.
+    const prior = FORCE ? null : alreadyPassed(TARGET, project.name, surface.id, MAX_AGE_H);
+    if (prior) {
+      log(`── ${project.name} on ${surface.id}: skipping, ${prior.verdict} ${prior.ageHours.toFixed(1)}h ago on this code (LOOP_FORCE=1 to re-run)`);
+      results.push({ project: project.name, surface: surface.id, verdict: prior.verdict, reason: `from ledger (${prior.at.slice(0, 16).replace("T", " ")})`, fromLedger: true });
+      continue;
+    }
+
+    // ── Is there room to run it? ──────────────────────────────────────────
+    const budget = surface.weight === "heavy" ? HEAVY : LIGHT;
+    const cap = await awaitCapacity({ budget, log: (m) => log(`   ${m}`) });
+    if (!cap.ok) {
+      const why = `machine too busy to judge this surface honestly — ${cap.reasons.join("; ")}`;
+      log(`── ${project.name} on ${surface.id}: NAMED — ${why}`);
+      results.push({ project: project.name, surface: surface.id, verdict: "NAMED", reason: why });
+      record({ target: TARGET, project: project.name, surface: surface.id, verdict: "NAMED", detail: why });
+      continue;
+    }
+
+    log(`── ${project.name} on ${surface.id} … (load ${cap.pressure.loadPerCore.toFixed(1)}/core, ${cap.pressure.freeMB} MB free)`);
     // Claim a clean session for THIS surface, never an inherited one.
     await releasePreview(project);
+    const started = Date.now();
     const r = runSurface(surface, project);
     results.push({ project: project.name, surface: surface.id, ...r });
+    record({
+      target: TARGET, project: project.name, surface: surface.id,
+      verdict: r.verdict, detail: r.reason, durationMs: Date.now() - started,
+    });
     log(`   ${r.verdict} — ${r.reason}`);
 
     // A surface that hit the lock anyway is reported as what it is, so the
