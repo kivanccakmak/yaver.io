@@ -14,7 +14,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -60,14 +62,89 @@ func opsVerbIsLocalOnlySecret(verb string) bool {
 	return false
 }
 
+// opsUnknownTopLevelKeys names the top-level request keys /ops does not know.
+//
+// WHY THIS EXISTS. `json.Decode` into OpsRequest silently DROPS unknown keys, so
+// a caller that wraps its arguments under the wrong name — `args`, `arguments`,
+// `input`, `params` are all natural guesses — sends a request with no `payload`
+// at all. The verb then sees an empty struct and answers with whatever its own
+// required-field check says, e.g. desktop_voice's "`transcript` is required".
+//
+// That reply is TRUE about the payload and FALSE about the request: the caller
+// DID send a transcript, and is now told it is missing. Measured 2026-08-05
+// against the real box while writing the watch arc — the payload was
+// `{"verb":"desktop_voice","args":{"transcript":"…"}}` and the answer named the
+// one field that had actually been supplied. Nothing in the reply pointed at the
+// wrapper, which is the only thing that was wrong.
+//
+// This is the four-layer rule at the SIGNAL layer: the agent already HAS the
+// information (it saw the `args` key and threw it away), so the fix is to carry
+// it, not to make every client author rediscover it. Naming the ignored keys and
+// the expected one turns a debugging session into one round trip.
+func opsUnknownTopLevelKeys(raw []byte) []string {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil // not an object; the typed decode already reported it
+	}
+	var unknown []string
+	for k := range probe {
+		switch k {
+		case "machine", "verb", "payload":
+		default:
+			unknown = append(unknown, k)
+		}
+	}
+	sort.Strings(unknown) // stable message for tests and for humans diffing logs
+	return unknown
+}
+
+// opsRejectMisnamedPayload returns a refusal when the request carries NO
+// `payload` but DOES carry unknown top-level keys — the misnamed-wrapper shape.
+//
+// Deliberately narrow. A request with a valid `payload` plus stray keys is
+// forwarded untouched (a newer client may send fields this build predates), and
+// a request with neither is a genuine no-argument call, which many verbs accept.
+// Only the combination is diagnosable, and only then does this speak.
+func opsRejectMisnamedPayload(req OpsRequest, raw []byte) *OpsResult {
+	if len(req.Payload) > 0 {
+		return nil
+	}
+	unknown := opsUnknownTopLevelKeys(raw)
+	if len(unknown) == 0 {
+		return nil
+	}
+	return &OpsResult{
+		OK:   false,
+		Code: "bad_payload",
+		Error: "verb arguments go under `payload`; this request had no `payload` and I ignored these top-level keys: " +
+			strings.Join(unknown, ", ") + ". Resend as {\"verb\":\"" + req.Verb + "\",\"payload\":{…}}.",
+		Initial: map[string]interface{}{
+			"ignoredKeys": unknown,
+			"expectedKey": "payload",
+		},
+	}
+}
+
 func (s *HTTPServer) handleOps(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	if err != nil {
+		http.Error(w, `{"error":"could not read request body"}`, http.StatusBadRequest)
+		return
+	}
 	var req OpsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(raw, &req); err != nil {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	// Say "your arguments were under the wrong key" instead of letting the verb
+	// report the field it never received. See opsRejectMisnamedPayload.
+	if bad := opsRejectMisnamedPayload(req, raw); bad != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(*bad)
 		return
 	}
 	if opsVerbIsLocalOnlySecret(req.Verb) && opsCallIsRemote(r) {
@@ -107,9 +184,21 @@ func (s *HTTPServer) handleOpsPlan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	if err != nil {
+		http.Error(w, `{"error":"could not read request body"}`, http.StatusBadRequest)
+		return
+	}
 	var req OpsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(raw, &req); err != nil {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	// /ops/plan answers the same question about the same request shape, so it
+	// must not stay silent where /ops now speaks.
+	if bad := opsRejectMisnamedPayload(req, raw); bad != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(*bad)
 		return
 	}
 	caller, callerScope := opsCallerFromRequest(r)
