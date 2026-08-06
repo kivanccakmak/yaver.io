@@ -56,6 +56,21 @@ const PROJECT = process.env.VIBE_PROJECT || "yaver / mobile";
 /** A runner turn + rebuild + reload. Generous: a loop that times out early
  *  reports failure for a system that was merely slow. */
 const TURN_BUDGET_MS = Number(process.env.VIBE_BUDGET_MS || 12 * 60_000);
+/** Relay HTTP base for the box (VIBE_BOX_HOST) — the tree-level guards
+ *  (turnChangedTree / residue) are SILENTLY DISABLED without it, which is
+ *  exactly how a false green slipped through on 2026-08-06: the pixel verdict
+ *  said black while the box's working tree still held `backgroundColor:"red"`
+ *  (a revert task raced the still-running red task, which re-applied its edit
+ *  after the arc had already sampled "black"). The relay password header
+ *  (VIBE_RELAY_PW) is required for /d/<id>/exec on the public relay. */
+const VIBE_BOX_HOST = process.env.VIBE_BOX_HOST || "";
+const VIBE_RELAY_PW = process.env.VIBE_RELAY_PW || "";
+/** Project dir on the box (VIBE_PROJECT_PATH) + the file the arc's prompt
+ *  edits (VIBE_TARGET_FILE, relative to that dir). The repo-level colour-truth
+ *  guard needs both to ask the box "is the red literal actually in the tree?".
+ *  Defaults match the yaver mobile app: the loop's most-tested target. */
+const VIBE_PROJECT_PATH = process.env.VIBE_PROJECT_PATH || "/root/Workspace/yaver.io/mobile";
+const VIBE_TARGET_FILE = process.env.VIBE_TARGET_FILE || "app/login.tsx";
 
 function creds() {
   return {
@@ -210,7 +225,11 @@ async function treeFingerprint(): Promise<string | null> {
   const token = process.env.YAVER_TEST_TOKEN;
   const path = process.env.VIBE_PROJECT_PATH;
   if (!host || !token || !path) return null;
-  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  // The public relay /d/<id>/exec requires the relay password; without it the
+  // probe answers relay_password_missing and the guard degrades to "unknown" —
+  // the silent-disable that let the 2026-08-06 false green through.
+  if (VIBE_RELAY_PW) headers["X-Relay-Password"] = VIBE_RELAY_PW;
   try {
     // /exec is ASYNCHRONOUS — it answers {execId, pid} and NOT the output. The
     // first version of this helper read body.stdout from that reply, got "" every
@@ -256,6 +275,164 @@ async function turnChangedTree(before: string | null): Promise<"changed" | "unch
   const after = await treeFingerprint();
   if (after === null) return "unknown";
   return after === before ? "unchanged" : "changed";
+}
+
+/**
+ * REPO-LEVEL COLOUR TRUTH — the guard that would have caught the 2026-08-06
+ * false green.
+ *
+ * The pixel verdict reads the PREVIEW. A revert task can restore the pixels to
+ * black while the working tree still holds the colour literal — exactly what
+ * happened when the loop's revert task raced the still-running red task (the
+ * red task re-applied its edit AFTER the arc sampled "black"). Pixels and repo
+ * disagreed and the arc passed. This guard asks the box directly what colour
+ * literals its working-tree diff contains, so a pixel verdict can never
+ * outrank the repository truth.
+ *
+ * Extraction is MECHANICAL (regex the diff for hex/rgb/named tokens, quoting-
+ * safe via a box-side python one-liner) and done on the box to keep the relay
+ * payload small; CLASSIFICATION is the SAME unit-tested `classifyVibeColor`
+ * that judges the pixels — one classifier for both surfaces, so a model
+ * writing `#D32F2F` or `'red'` instead of "red" cannot make the two disagree
+ * (measured 2026-08-06 twice: a hand-rolled "red|#ff0000" pattern missed
+ * #D32F2F, then a double-quote-only extractor missed `'red'`).
+ *
+ * Tokens are returned WITH multiplicity: the gates compare red OCCURRENCE
+ * COUNTS against a baseline captured before the turn, so pre-existing red
+ * literals in the developer's uncommitted work (sfmg's tree carries some)
+ * neither fake a pass nor block one — the turn must add occurrences, and the
+ * revert must remove them again.
+ */
+async function repoColors(): Promise<{ tokens: string[] }> {
+  const host = VIBE_BOX_HOST;
+  const token = creds().token;
+  if (!host || !token || !VIBE_PROJECT_PATH) return { tokens: [] };
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  if (VIBE_RELAY_PW) headers["X-Relay-Password"] = VIBE_RELAY_PW;
+  try {
+    const started = await fetch(`${host}/exec`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        command:
+          `git -C ${VIBE_PROJECT_PATH} diff | grep '^+' | ` +
+          `python3 -c 'import sys,re; s=sys.stdin.read(); ` +
+          `print("\\n".join(re.findall(r"#[0-9a-fA-F]{3,8}|rgb\\([^)]*\\)|rgba\\([^)]*\\)|` +
+          `[\\x27\\x22\\x60](red|green|blue|black|white|yellow|orange|purple|pink|cyan|magenta|gray|grey)` +
+          `[\\x27\\x22\\x60]", s)))'`,
+        timeout: 30,
+      }),
+    });
+    if (!started.ok) return { tokens: [] };
+    const { execId } = (await started.json()) as { execId?: string };
+    if (!execId) return { tokens: [] };
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 400));
+      const res = await fetch(`${host}/exec/${execId}`, { headers });
+      if (!res.ok) continue;
+      const body = (await res.json()) as { exec?: { status?: string; stdout?: string } };
+      if (body.exec?.status === "completed") {
+        const tokens = (body.exec.stdout ?? "").split("\n").map((s) => s.trim()).filter(Boolean);
+        return { tokens };
+      }
+    }
+    return { tokens: [] };
+  } catch {
+    return { tokens: [] };
+  }
+}
+
+/** Count red-classified colour occurrences in a token list (same classifier as the pixels). */
+function redOccurrences(tokens: string[]): number {
+  return tokens.filter((t) => classifyVibeColor(parseColorToken(t)) === "red").length;
+}
+
+/** Parse a colour token (hex / rgb() / named) into an [r,g,b] tuple, or null. */
+function parseColorToken(tok: string): number[] | null {
+  const hex = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.exec(tok);
+  if (hex) {
+    let h = hex[1];
+    if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+    const n = parseInt(h.slice(0, 6), 16);
+    if (Number.isNaN(n)) return null;
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  const rgb = /^rgba?\(\s*([0-9.]+)[,\s]+([0-9.]+)[,\s]+([0-9.]+)/.exec(tok);
+  if (rgb) {
+    const [r, g, b] = [rgb[1], rgb[2], rgb[3]].map(Number);
+    if ([r, g, b].some((v) => Number.isNaN(v))) return null;
+    return [r, g, b];
+  }
+  const named: Record<string, number[]> = {
+    red: [255, 0, 0], green: [0, 128, 0], blue: [0, 0, 255], black: [0, 0, 0],
+    white: [255, 255, 255], yellow: [255, 255, 0], orange: [255, 165, 0],
+    purple: [128, 0, 128], pink: [255, 192, 203], cyan: [0, 255, 255],
+    magenta: [255, 0, 255], gray: [128, 128, 128], grey: [128, 128, 128],
+  };
+  // The extraction may hand us a quoted name ('red' / "red" / `red`) — strip
+  // any quote characters before the lookup (measured 2026-08-06: sfmg's model
+  // wrote `backgroundColor: 'red'` with single quotes, which the pre-fix
+  // classifier missed entirely).
+  return named[tok.replace(/^['"\u0060]|['"\u0060]$/g, "").toLowerCase()] || null;
+}
+
+/**
+ * RUNNER-FINISHES CONTRACT (AGENTS.md: "Let the runner finish. Then render
+ * exactly once when the task reaches a renderable terminal state").
+ *
+ * The 2026-08-06 incidents BOTH came from judging mid-edit: the pixel gate
+ * fired while the red task was still building (hot reload shows the edit
+ * before the file settles), the arc sent the revert, and the two tasks raced
+ * the same file — pixels passed, the tree disagreed. This polls the box's OWN
+ * task list (via relay /exec, the same path as the tree guards) until the
+ * newest task whose title contains `fragment` reaches a terminal state. Only
+ * then may pixels or repo be judged.
+ *
+ * Returns the terminal status; "timeout" if the budget runs out.
+ */
+async function waitForTaskTerminal(fragment: string, budgetMs = 240_000): Promise<string> {
+  const host = VIBE_BOX_HOST;
+  const token = creds().token;
+  if (!host || !token) return "unknown";
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  if (VIBE_RELAY_PW) headers["X-Relay-Password"] = VIBE_RELAY_PW;
+  const deadline = Date.now() + budgetMs;
+  let last = "unknown";
+  while (Date.now() < deadline) {
+    try {
+      const started = await fetch(`${host}/exec`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          command:
+            `curl -s -m 5 -H "Authorization: Bearer ${token}" "http://localhost:18080/tasks?limit=8" | ` +
+            `python3 -c 'import json,sys; d=json.load(sys.stdin); [print(t.get("title","")[:60]+"\\t"+str(t.get("status",""))) for t in d.get("tasks",[])]'`,
+          timeout: 12,
+        }),
+      });
+      if (started.ok) {
+        const { execId } = (await started.json()) as { execId?: string };
+        if (execId) {
+          for (let i = 0; i < 8; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+            const res = await fetch(`${host}/exec/${execId}`, { headers });
+            if (!res.ok) continue;
+            const body = (await res.json()) as { exec?: { status?: string; stdout?: string } };
+            if (body.exec?.status === "completed") {
+              const lines = (body.exec.stdout ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+              const match = lines.find((l) => l.includes(fragment));
+              if (match) {
+                last = match.split("\t").pop() || last;
+                if (["completed", "failed", "stopped", "review"].includes(last)) return last;
+              }
+            }
+          }
+        }
+      }
+    } catch { /* keep polling */ }
+    await new Promise((r) => setTimeout(r, 8000));
+  }
+  return last === "unknown" ? "timeout" : last;
 }
 
 /**
@@ -649,6 +826,9 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
   // Fingerprint the tree BEFORE the turn, so the verdict can tell "this turn
   // edited something" from "this repository already had edits in it".
   const treeBefore = await treeFingerprint();
+  // Baseline colour tokens too — the repo-truth gates compare against this so
+  // pre-existing developer work can never masquerade as (or hide) the turn.
+  const colorsBefore = await repoColors();
   if (mobileSendVibe) {
     await mobileSendVibe(targetPrompt);
   } else {
@@ -672,7 +852,32 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
       );
     }
   }
+  // RUNNER-FINISHES CONTRACT: the pixel gate above can fire mid-edit (hot
+  // reload shows the change while the runner is still building — measured
+  // 2026-08-06: the red task's diff transiently held NO colour token because
+  // the model had swapped the literal for a constant before defining it).
+  // Judging the repo while the runner works races the edit, exactly as the
+  // revert-vs-red task race did. Wait for the task to reach a terminal state.
+  const redTerminal = await waitForTaskTerminal(`VISIBLE background`, TURN_BUDGET_MS);
+  expect(redTerminal, `the red turn's task must reach a terminal state (saw ${redTerminal})`)
+    .not.toBe("timeout");
+  expect(redTerminal, `the red turn's task must not fail (saw ${redTerminal})`)
+    .not.toBe("failed");
   expect(hit.ok, `preview never turned ${target} (last ${hit.color})${hit.said ? ` — ${hit.said}` : ""}`).toBe(true);
+
+  // REPO-TRUTH GATE (red): the pixel verdict alone is not the edit landing.
+  // The 2026-08-06 race — a revert task running while the red task was still
+  // building, the red task re-applying after the revert — proved pixels can
+  // say the right thing while the repository disagrees. The working-tree diff
+  // must show a NEW red-classified literal (classified by the SAME unit-tested
+  // classifier as the pixels, so a model writing #D32F2F cannot dodge it).
+  const afterRed = await repoColors();
+  const redBefore = redOccurrences(colorsBefore.tokens);
+  const redAfter = redOccurrences(afterRed.tokens);
+  expect(redAfter, `repo must show MORE red occurrences after the red turn ` +
+    `(red went ${redBefore} → ${redAfter}; baseline tokens: ${colorsBefore.tokens.join(", ") || "(none)"}; ` +
+    `after tokens: ${afterRed.tokens.join(", ") || "(none)"} — pixels said red but the box's working tree disagrees)`)
+    .toBeGreaterThan(redBefore);
 
   // Revert as a SEPARATE task — exercises the new-task render path, not just a
   // follow-up on a warm session.
@@ -689,6 +894,30 @@ async function runVibeArc(page: Page, target: string, surface: YaverSurface) {
   }
   const back = await waitForColor(page, "black", TURN_BUDGET_MS, mobileReloadPreview ?? undefined);
   expect(back.ok, `preview never reverted to black (last ${back.color})${back.said ? ` — ${back.said}` : ""}`).toBe(true);
+
+  // Same runner-finishes contract on the revert turn — the 2026-08-06 race
+  // (revert sent while the red task was still running) cannot recur if the
+  // revert's own task is allowed to reach a terminal state first.
+  const revertTerminal = await waitForTaskTerminal(`Revert the login page`, TURN_BUDGET_MS);
+  expect(revertTerminal, `the revert turn's task must reach a terminal state (saw ${revertTerminal})`)
+    .not.toBe("timeout");
+  expect(revertTerminal, `the revert turn's task must not fail (saw ${revertTerminal})`)
+    .not.toBe("failed");
+
+  // REPO-TRUTH GATE (black) — THE guard this loop was missing.
+  //
+  // Measured 2026-08-06: pixels went black, the arc passed, and the box's
+  // working tree still held the colour literal — the revert task had raced the
+  // still-running red task, which re-applied its edit AFTER the arc sampled
+  // black. Pixels alone could not see it; the repository can. A black pixel
+  // verdict with the colour still in the tree is a FAIL, not a pass.
+  const afterBlack = await repoColors();
+  const redAfterBlack = redOccurrences(afterBlack.tokens);
+  expect(redAfterBlack, `repo must be clean of the red the turn introduced after the revert turn ` +
+    `(red occurrences ${redBefore} → ${redAfterBlack}; baseline tokens: ` +
+    `${colorsBefore.tokens.join(", ") || "(none)"}; after tokens: ${afterBlack.tokens.join(", ") || "(none)"}). ` +
+    `This is the false-green the repo-truth gate exists to catch.`)
+    .toBeLessThanOrEqual(redBefore);
 
 
   // THE PIXELS COMING BACK IS NOT PROOF THE PROJECT CAME BACK.
@@ -774,10 +1003,18 @@ test.describe("vibe colour closed loop", () => {
     //
     // So: SKIP with the reason, rather than fail. A red here would blame the
     // product for a credential the harness was never given.
-    test.skip(!creds().email || !creds().password,
-      "the mobile arc needs YAVER_TEST_EMAIL + YAVER_TEST_PASSWORD: it signs in through the " +
-      "app's OWN flow, which also establishes the device/relay credentials. A session token " +
-      "restores auth but leaves every device call 401 — see the comment above.");
+    //
+    // 2026-08-06 experiment: the token path below (seeding both storage keys
+    // from /auth/validate) is now allowed to run when only a token is present.
+    // The 2026-08-02 measurement (every device call 401 → empty project list)
+    // predates the current full-scope owner token flow; if the token path now
+    // completes the arc it stays enabled, and if it fails on the documented
+    // empty-device-list it gets reverted to skip.
+    test.skip(!creds().token && !(creds().email && creds().password),
+      "the mobile arc needs YAVER_TEST_TOKEN (token path, 2026-08-06 experiment) or " +
+      "YAVER_TEST_EMAIL + YAVER_TEST_PASSWORD (app's own flow, which also establishes " +
+      "the device/relay credentials). A session token restores auth but on 2026-08-02 " +
+      "left every device call 401 — see the comment above.");
 
     // A NEW CONTEXT with the full device descriptor — not setViewportSize.
     //

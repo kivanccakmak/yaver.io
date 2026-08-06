@@ -2798,6 +2798,7 @@ export const OPENCODE_PROVIDER_CATALOGUE: OpenCodeCatalogueProvider[] = [
     keyEnv: "DEEPSEEK_API_KEY",
     blurb: "DeepSeek-hosted coding/reasoning models.",
     models: [
+      { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", hint: "fast flash model — current default" },
       { id: "deepseek-chat", label: "DeepSeek Chat" },
       { id: "deepseek-reasoner", label: "DeepSeek Reasoner" },
     ],
