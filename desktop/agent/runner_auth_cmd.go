@@ -254,8 +254,11 @@ func collectRunnerAuthStatusRows() ([]runnerAuthStatusRow, error) {
 		// CLI, or a shell wrapper) would register Installed=true and
 		// the feedback SDK / tasks picker would falsely advertise it
 		// as a usable runner. The sigOK probe runs `<path> --version`
-		// with a 1.5s timeout (cached for 5 min so the poll loop stays
-		// cheap) and matches the banner against a per-runner signature.
+		// with a bounded timeout (5s, cached for 5 min so the poll
+		// loop stays cheap) and matches the banner against a per-runner
+		// signature. 2026-08-07: the budget was 1.5s and a genuine
+		// opencode cold start (2.08s on ubuntu-4gb-hel1-1) got rejected
+		// as "not installed" — see runnerSignatureProbeTimeout.
 		sigOK, sigVersion := verifyRunnerBinarySignature(runner.ID, path)
 		if !sigOK {
 			row.Installed = false

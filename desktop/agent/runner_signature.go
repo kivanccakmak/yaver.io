@@ -50,7 +50,22 @@ var (
 	runnerSignatureTTL   = 5 * time.Minute
 )
 
-const runnerSignatureProbeTimeout = 1500 * time.Millisecond
+// runnerSignatureProbeTimeout bounds one `<bin> --version` probe.
+//
+// Measured 2026-08-07 on ubuntu-4gb-hel1-1: a genuine opencode 1.14.21 cold
+// start took 2.08s to print its banner, so a 1.5s budget declared the runner
+// "does not match the expected signature" — a REAL, working, authenticated
+// deepseek-v4-flash runner vanished from the runner list and the agent
+// refused to dispatch to the box. That is the "inventory says no, operation
+// says yes" defect pointing the wrong way: a probe that rejects the real
+// thing is worse than no probe at all.
+//
+// 5s still bounds the fork (CommandContext kills the probe), the result is
+// cached for runnerSignatureTTL so the poll loop stays cheap, and the
+// WaitDelay below still reaps forked grandchildren. Foreign binaries that
+// hang are rejected by the timeout exactly as before — just with room for a
+// real CLI's cold start to win.
+const runnerSignatureProbeTimeout = 5 * time.Second
 
 // verifyRunnerBinarySignature runs `<path> --version` and confirms the
 // output looks like the runner we asked for. Returns (true, "<first line

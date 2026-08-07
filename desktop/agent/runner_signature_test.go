@@ -142,6 +142,38 @@ func TestVerifyRunnerBinarySignature_UnknownRunnerIsTrusted(t *testing.T) {
 	}
 }
 
+// TestVerifyRunnerBinarySignature_AcceptsSlowColdStartOpenCode guards the
+// exact failure measured 2026-08-07 on ubuntu-4gb-hel1-1: a genuine opencode
+// 1.14.21 cold start printed its banner in 2.08s, but the probe budget was
+// 1.5s — so the runner was declared "does not match the expected signature"
+// and the agent refused to dispatch tasks to the box. The probe must give a
+// REAL CLI's cold start room to win while still rejecting foreign/hanging
+// binaries by timeout.
+//
+// The fake sleeps 2s before printing a bare-version banner, mimicking the
+// measured cold start. With the 5s budget this is accepted; with the old
+// 1.5s budget it was rejected — the test would have caught the bug.
+func TestVerifyRunnerBinarySignature_AcceptsSlowColdStartOpenCode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fakes don't run on windows; skip on this platform")
+	}
+	runnerSignatureCacheClear()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "opencode-slow")
+	// `sleep 2` then print a bare version — the opencode 1.14.21 shape.
+	body := "#!/bin/sh\nsleep 2\nprintf '1.14.21\\n'\n"
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatalf("write slow opencode fake: %v", err)
+	}
+	ok, version := verifyRunnerBinarySignature("opencode", path)
+	if !ok {
+		t.Fatalf("slow cold-starting opencode must be accepted (probe budget must outlast a real cold start)")
+	}
+	if version != "1.14.21" {
+		t.Fatalf("version = %q, want 1.14.21", version)
+	}
+}
+
 func TestVerifyRunnerBinarySignature_CachesResult(t *testing.T) {
 	runnerSignatureCacheClear()
 	dir := t.TempDir()
