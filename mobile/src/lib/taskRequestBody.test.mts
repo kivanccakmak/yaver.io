@@ -29,3 +29,18 @@ test("mobile task request body includes allowLocalFallback only for final handof
   });
   assert.equal(body.allowLocalFallback, true);
 });
+
+test("mobile task request body carries portable project identity and MCP allowlist", () => {
+  const body = buildSendTaskRequestBody({
+    title: "Audit Medici",
+    description: "",
+    runner: "opencode",
+    codeMode: true,
+    workDir: "/Users/kivanccakmak/Workspace/medici.ai",
+    projectName: "medici.ai",
+    mcpServers: ["tusrehber"],
+  });
+  assert.equal(body.projectName, "medici.ai");
+  assert.equal(body.workDir, "/Users/kivanccakmak/Workspace/medici.ai");
+  assert.deepEqual(body.mcpServers, ["tusrehber"]);
+});

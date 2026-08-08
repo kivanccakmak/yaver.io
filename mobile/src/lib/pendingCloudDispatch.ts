@@ -21,6 +21,9 @@ export type PendingCloudTaskParams = {
   speechContext?: SpeechContextInput;
   images?: ImageAttachment[];
   workDir?: string;
+  projectName?: string;
+  projectDir?: string;
+  mcpServers?: string[];
   mode?: string;
   video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" };
   codeMode?: boolean;

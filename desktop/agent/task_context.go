@@ -11,6 +11,10 @@ import (
 // the workDir for THIS TASK to that project. The global workDir is unchanged.
 // This enables "fix login in talos" from mobile when serving from ~/yaver.io.
 func (tm *TaskManager) autoSwitchProject(task *Task, prompt string) {
+	if !promptHasExplicitProjectIntent(prompt) {
+		return
+	}
+
 	// Strategy 1: Pattern-based extraction (verbs + project name)
 	lower := strings.ToLower(prompt)
 	patterns := []string{
@@ -75,38 +79,23 @@ func (tm *TaskManager) autoSwitchProject(task *Task, prompt string) {
 			return
 		}
 	}
+}
 
-	// Strategy 2: Brute-force — check every word in the prompt against known projects
-	projects := listDiscoveredProjects()
-	if len(projects) == 0 {
-		return
+func promptHasExplicitProjectIntent(prompt string) bool {
+	lower := strings.ToLower(strings.TrimSpace(prompt))
+	if lower == "" {
+		return false
 	}
-	projectNames := map[string]string{} // lowercase name → path
-	for _, p := range projects {
-		name := strings.ToLower(filepath.Base(p.Path))
-		projectNames[name] = p.Path
-		// Also add without common suffixes/prefixes
-		for _, suffix := range []string{"-app", "_app", "-mobile", "_mobile", "-web", "_web"} {
-			trimmed := strings.TrimSuffix(name, suffix)
-			if trimmed != name && len(trimmed) > 2 {
-				projectNames[trimmed] = p.Path
-			}
+	projectWords := []string{
+		"project", "repo", "repository", "workspace", "codebase",
+		"work on", "switch to", "open ", "load ", "start ", "run ", "test ", "deploy ", "build ", "fix ", "add ", "update ",
+	}
+	for _, word := range projectWords {
+		if strings.Contains(lower, word) {
+			return true
 		}
 	}
-
-	words := strings.Fields(lower)
-	for _, word := range words {
-		word = strings.TrimRight(word, ".,!?;:'\"")
-		if len(word) < 3 {
-			continue
-		}
-		if path, ok := projectNames[word]; ok {
-			task.WorkDir = path
-			log.Printf("[task %s] Auto-detected project: %s (word %q found in prompt)",
-				task.ID, filepath.Base(path), word)
-			return
-		}
-	}
+	return false
 }
 
 // yaverDevServerContext returns the Yaver dev server proxy instructions

@@ -6,6 +6,7 @@ import { makeRealCarVoiceDeps, type CarVoiceConfig, type CarVoiceTaskRef } from 
 import { connectionManager } from "../lib/connectionManager";
 import { appLog } from "../lib/logger";
 import { runtimeSurfaceClient } from "../lib/runtimeSurfaceClient";
+import { loadKeepLastProjectEnabled, loadLastTaskProject } from "../lib/taskComposerPrefs";
 import { watchBridgeBus } from "../lib/watchEntry";
 import { isDeviceAsleep, wakeManagedDevice } from "../lib/wakeMachine";
 
@@ -59,6 +60,7 @@ function makeWatchDeps(deviceId: string) {
     dispatchTask: async (title, prompt) => {
       if (!deviceId) throw new Error("No Yaver device selected");
       const client = connectionManager.clientFor(deviceId);
+      const lastProject = (await loadKeepLastProjectEnabled()) ? await loadLastTaskProject(deviceId) : null;
       const t = await client.sendTask(
         title,
         prompt,
@@ -67,10 +69,13 @@ function makeWatchDeps(deviceId: string) {
         undefined,
         undefined,
         undefined,
-        undefined,
+        lastProject?.path,
         undefined,
         undefined,
         true,
+        undefined,
+        lastProject?.name,
+        [],
       );
       return { id: t.id };
     },

@@ -41,6 +41,7 @@ import WakeProgress from "../src/components/WakeProgress";
 import { connectionManager } from "../src/lib/connectionManager";
 import { quicClient } from "../src/lib/quic";
 import { loadLocalSpeechConfig } from "../src/lib/auth";
+import { loadKeepLastProjectEnabled, loadLastTaskProject } from "../src/lib/taskComposerPrefs";
 import { speakText } from "../src/lib/speech";
 import {
   makeRealCarVoiceDeps,
@@ -183,6 +184,7 @@ export default function CarVoiceCodingScreen() {
       speakAcknowledgement: true,
     };
     const client = connectionManager.clientFor(deviceId);
+    const lastProject = (await loadKeepLastProjectEnabled()) ? await loadLastTaskProject(deviceId || "default") : null;
     const deps = makeRealCarVoiceDeps({
       config,
       // codeMode=true → terminal-style ("yaver code") prompt wrapping.
@@ -195,10 +197,13 @@ export default function CarVoiceCodingScreen() {
           undefined,
           undefined,
           undefined,
-          undefined,
+          lastProject?.path,
           undefined,
           undefined,
           true,
+          undefined,
+          lastProject?.name,
+          [],
         );
         return { id: t.id };
       },

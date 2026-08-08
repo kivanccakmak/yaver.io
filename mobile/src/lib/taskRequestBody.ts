@@ -7,6 +7,9 @@ export type SendTaskRequestBodyArgs = {
   speechContext?: Record<string, unknown> | undefined;
   images?: unknown[];
   workDir?: string;
+  projectName?: string;
+  projectDir?: string;
+  mcpServers?: string[];
   mode?: string;
   video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" };
   codeMode?: boolean;
@@ -25,6 +28,9 @@ export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<
     ...(args.speechContext ? { speechContext: args.speechContext } : {}),
     ...(args.images?.length ? { images: args.images } : {}),
     ...(args.workDir ? { workDir: args.workDir } : {}),
+    ...(args.projectName ? { projectName: args.projectName } : {}),
+    ...(args.projectDir ? { projectDir: args.projectDir } : {}),
+    ...(args.mcpServers?.length ? { mcpServers: args.mcpServers } : {}),
     ...(args.video?.enabled ? { videoEnabled: true } : {}),
     ...(args.video?.source ? { videoSource: args.video.source } : {}),
     ...(args.allowLocalFallback ? { allowLocalFallback: true } : {}),

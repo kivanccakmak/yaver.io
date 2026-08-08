@@ -30,11 +30,14 @@ import (
 
 // taskForkRequest is the wire format for POST /tasks/{id}/fork.
 type taskForkRequest struct {
-	Runner       string `json:"runner"`                 // claude | codex | opencode (required)
-	Model        string `json:"model,omitempty"`        // empty = runner default
-	Mode         string `json:"mode,omitempty"`         // opencode mode: build | plan | <custom> | "" = defaultAgent
-	Input        string `json:"input"`                  // user's new message (required)
-	ContextWords int    `json:"contextWords,omitempty"` // word budget for recent-context handoff (default 1200)
+	Runner             string   `json:"runner"`                 // claude | codex | opencode (required)
+	Model              string   `json:"model,omitempty"`        // empty = runner default
+	Mode               string   `json:"mode,omitempty"`         // opencode mode: build | plan | <custom> | "" = defaultAgent
+	Input              string   `json:"input"`                  // user's new message (required)
+	ContextWords       int      `json:"contextWords,omitempty"` // word budget for recent-context handoff (default 1200)
+	AllowLocalFallback bool     `json:"allowLocalFallback,omitempty"`
+	ProjectDir         string   `json:"projectDir,omitempty"`
+	MCPServers         []string `json:"mcpServers,omitempty"`
 }
 
 // taskForkResponse is the wire format we return.
@@ -120,8 +123,14 @@ func (s *HTTPServer) handleTaskFork(w http.ResponseWriter, r *http.Request, pare
 	// operates on the same code. Without this the new task's workdir
 	// would be the agent's global cwd which is rarely the right answer
 	// for runner switches.
+	mcpServers := req.MCPServers
+	if len(mcpServers) == 0 {
+		mcpServers = append([]string{}, parent.MCPServers...)
+	}
 	taskOpts := TaskCreateOptions{
-		WorkDir:           parent.WorkDir,
+		WorkDir:           firstNonEmpty(strings.TrimSpace(req.ProjectDir), parent.WorkDir),
+		ProjectName:       parent.ProjectName,
+		MCPServers:        mcpServers,
 		InitialUserPrompt: req.Input,
 		Mode:              req.Mode,
 		// Carry the parent's conversation into the child for DISPLAY only, so
@@ -150,12 +159,13 @@ func (s *HTTPServer) handleTaskFork(w http.ResponseWriter, r *http.Request, pare
 			Title:          "Fork task " + parent.ID,
 			Source:         "runner-switch-fork",
 			Runner:         req.Runner,
+			ProjectName:    parent.ProjectName,
 			WorkDir:        firstNonEmpty(parent.WorkDir, s.taskMgr.workDir),
 			TargetDeviceID: s.deviceID,
 		})
 		if previewPlacement, perr := s.previewTaskPlacement(r.Context(), meta); perr != nil {
 			log.Printf("[placement] fork preview skipped before task create: %v", perr)
-		} else if shouldDeferLocalTaskForPlacement(previewPlacement, s.deviceID) {
+		} else if !req.AllowLocalFallback && shouldDeferLocalTaskForPlacement(previewPlacement, s.deviceID) {
 			pendingTaskID := newPendingCloudTaskID()
 			recordedPlacement := previewPlacement
 			if placement, rerr := s.recordTaskPlacement(r.Context(), pendingTaskID, meta); rerr != nil {

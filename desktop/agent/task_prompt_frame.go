@@ -55,6 +55,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 )
 
@@ -316,6 +317,7 @@ func (tm *TaskManager) armedSystemFrame(task *Task, contextDir string) string {
 	var sb strings.Builder
 
 	sb.WriteString(taskSourcePromptSuffix(task.Source))
+	sb.WriteString(projectSelectionFrame(task, contextDir))
 
 	switch {
 	case task.AskMode:
@@ -351,6 +353,27 @@ func (tm *TaskManager) armedSystemFrame(task *Task, contextDir string) string {
 	}
 
 	return sb.String()
+}
+
+func projectSelectionFrame(task *Task, contextDir string) string {
+	if task == nil {
+		return ""
+	}
+	name := strings.TrimSpace(task.ProjectName)
+	if name == "" {
+		name = DetectProjectInfo(contextDir).Name
+	}
+	if name == "" {
+		name = filepath.Base(strings.TrimSpace(contextDir))
+	}
+	if name == "." || name == string(filepath.Separator) || name == "" {
+		return ""
+	}
+	dir := strings.TrimSpace(contextDir)
+	if dir == "" {
+		return fmt.Sprintf("\n[Yaver selected project]\nProject: %s\n", name)
+	}
+	return fmt.Sprintf("\n[Yaver selected project]\nProject: %s\nRunner working directory: %s\n", name, dir)
 }
 
 // armedOutputShape is the viewport + verbosity pair: what surface this output

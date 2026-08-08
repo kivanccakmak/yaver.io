@@ -34,6 +34,7 @@ var fieldsWeForbidInAnyConvexPayload = []string{
 	"path",    // absolute FS path — includes username
 	"absPath", // explicit abs path
 	"workDir", // working directory — same problem
+	"projectDir",
 	"sourcePath",
 	"filePath",
 	// Secrets

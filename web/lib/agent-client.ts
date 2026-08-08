@@ -1834,6 +1834,8 @@ export type CreateTaskParams = {
   customCommand?: string;
   projectName?: string;
   workDir?: string;
+  projectDir?: string;
+  mcpServers?: string[];
   videoEnabled?: boolean;
   videoSource?: "browser" | "sim-ios" | "sim-android" | "phone" | "";
   askMode?: boolean;
@@ -1872,6 +1874,8 @@ export function buildCreateTaskBody(params: CreateTaskParams): Record<string, un
     customCommand: params.customCommand ?? "",
     projectName: params.projectName ?? "",
     workDir: params.workDir ?? "",
+    projectDir: params.projectDir ?? "",
+    mcpServers: params.mcpServers ?? [],
     videoEnabled: params.videoEnabled ?? false,
     videoSource: params.videoSource ?? "",
     askMode: params.askMode ?? false,
@@ -2219,6 +2223,8 @@ export class AgentClient {
     customCommand?: string;
     projectName?: string;
     workDir?: string;
+    projectDir?: string;
+    mcpServers?: string[];
     /** Toggle the post-completion video summary. When true, after
      *  the task finishes the agent records a short MP4 demonstration
      *  via vibe-preview (sim/emulator MP4 for mobile, browser frame
@@ -2438,7 +2444,7 @@ export class AgentClient {
    */
   async forkTask(
     taskId: string,
-    args: { runner: string; model?: string; mode?: string; input: string; contextWords?: number },
+    args: { runner: string; model?: string; mode?: string; input: string; contextWords?: number; allowLocalFallback?: boolean; projectDir?: string; mcpServers?: string[] },
   ): Promise<{ taskId: string; runnerId: string; parentTaskId: string; contextWordsUsed: number }> {
     this.assertConnected();
     const res = await fetch(`${this.taskBaseUrl}/tasks/${taskId}/fork`, {
@@ -2450,9 +2456,14 @@ export class AgentClient {
         mode: args.mode ?? "",
         input: args.input,
         contextWords: args.contextWords,
+        allowLocalFallback: args.allowLocalFallback ?? false,
+        projectDir: args.projectDir ?? "",
+        mcpServers: args.mcpServers ?? [],
       }),
     });
     if (!res.ok) {
+      const cloudRequired = await decodeCloudWorkspaceRequiredError(res);
+      if (cloudRequired) throw cloudRequired;
       const text = await res.text().catch(() => "");
       throw new Error(`Failed to fork task: ${res.status} ${text}`);
     }

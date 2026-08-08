@@ -37,6 +37,7 @@ const TILES: Tile[] = [
   { key: "appletv", label: "Apple TV", detail: "Remote · now playing", icon: "tv-outline", route: "/appletv-remote" },
   { key: "capture", label: "Capture & Stream", detail: "Capture card · scenes", icon: "videocam-outline", route: "/appletv-remote?surface=glass" },
   { key: "desktop", label: "Remote Desktop", detail: "Watch a box's screen", icon: "desktop-outline", route: "/remote-desktop" },
+  { key: "coding", label: "Coding", detail: "Box · project · agent", icon: "code-slash-outline", route: "/tv-coding" },
   { key: "devices", label: "Devices", detail: "Status · reachability", icon: "hardware-chip-outline", route: "/connections" },
   { key: "camera", label: "Phone Camera", detail: "Push a camera source", icon: "camera-outline", route: "/stream-camera" },
   { key: "assistant", label: "Assistant", detail: "Ask Yaver", icon: "chatbubbles-outline", route: "/assistant" },

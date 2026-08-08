@@ -22,6 +22,8 @@ export type PendingCloudTaskParams = {
   mode?: string;
   projectName?: string;
   workDir?: string;
+  projectDir?: string;
+  mcpServers?: string[];
   videoEnabled?: boolean;
   askMode?: boolean;
   allowLocalFallback?: boolean;

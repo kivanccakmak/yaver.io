@@ -9,7 +9,7 @@ import { capStreamText } from "@/lib/streamBuffer";
 import { sliceAfterFrameBoundary } from "@/lib/promptFraming";
 import { groomRunnerTranscript } from "@/lib/runnerTranscript";
 import { classifyStreamEnd, planStreamRecovery } from "@/lib/taskStreamRecovery";
-import { agentClient, isRunnerBrowserAuthTerminal, type AgentGraphRun, type ConnectionState, type GitCommitRow, type GitProviderStatusRow, type GitRemoteRepo, type GitStatusRow, type MachineInfo, type Runner, type Task } from "@/lib/agent-client";
+import { agentClient, isRunnerBrowserAuthTerminal, type AgentGraphRun, type ConnectionState, type GitCommitRow, type GitProviderStatusRow, type GitRemoteRepo, type GitStatusRow, type MachineInfo, type McpServer, type Runner, type Task } from "@/lib/agent-client";
 import {
   capabilityGapFromError,
   gapBody,
@@ -322,6 +322,43 @@ const SECTION_DEFAULTS: Record<SectionKey, SectionState> = {
 };
 
 const SECTION_STORAGE_KEY = "yaver_vibe_sections_v1";
+const LAST_PROJECT_STORAGE_PREFIX = "yaver:vibe-coding:last-project:";
+const KEEP_LAST_PROJECT_STORAGE_KEY = "yaver:vibe-coding:keep-last-project";
+
+function keepLastProjectEnabled(): boolean {
+  if (typeof window === "undefined") return true;
+  return window.localStorage.getItem(KEEP_LAST_PROJECT_STORAGE_KEY) !== "0";
+}
+
+function setKeepLastProjectEnabled(enabled: boolean) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(KEEP_LAST_PROJECT_STORAGE_KEY, enabled ? "1" : "0");
+}
+
+function lastProjectStorageKey(deviceId?: string | null): string {
+  return `${LAST_PROJECT_STORAGE_PREFIX}${String(deviceId || "default").trim() || "default"}`;
+}
+
+function loadLastProjectPath(deviceId?: string | null): string {
+  if (typeof window === "undefined") return "";
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(lastProjectStorageKey(deviceId)) || "{}");
+    return typeof parsed?.path === "string" ? parsed.path : "";
+  } catch {
+    return "";
+  }
+}
+
+function saveLastProject(deviceId: string | undefined | null, project: Project | null) {
+  if (typeof window === "undefined" || !project?.path) return;
+  window.localStorage.setItem(lastProjectStorageKey(deviceId), JSON.stringify({
+    name: project.name,
+    path: project.path,
+    branch: project.branch,
+    gitRemote: project.gitRemote,
+    updatedAt: Date.now(),
+  }));
+}
 
 function loadSectionState(): Record<SectionKey, SectionState> {
   if (typeof window === "undefined") return { ...SECTION_DEFAULTS };
@@ -432,6 +469,9 @@ export default function VibeCodingView({
   const [projects, setProjects] = useState<Project[]>([]);
   const [runners, setRunners] = useState<Runner[]>([]);
   const [selectedProjectPath, setSelectedProjectPath] = useState("");
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
+  const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
+  const [keepLastProject, setKeepLastProject] = useState(() => keepLastProjectEnabled());
   // Deep link from the Projects wizard: /dashboard?tab=vibe&project=<path>
   // [&app=<monorepo-app>][&preview=web]. Read once at mount — the wizard's
   // "Vibe in browser" routes here so the user lands with the project
@@ -800,7 +840,7 @@ export default function VibeCodingView({
         // task kept running on the box. `null` here means "we could not ask";
         // the merge below then KEEPS what we already had (mobile's fetchTasks
         // has always done this via its `catch {}`).
-        const [projectRows, runnerRows, tasks, preview, currentDevStatus, git, commits, gitProviders, machineInventory] = await Promise.all([
+        const [projectRows, runnerRows, tasks, preview, currentDevStatus, git, commits, gitProviders, machineInventory, mcpRows] = await Promise.all([
           agentClient.listProjects().catch(() => []),
           agentClient.getRunners().catch(() => []),
           agentClient.listTasks(12).catch(() => null),
@@ -810,9 +850,11 @@ export default function VibeCodingView({
           selectedProjectPath ? agentClient.gitLog(selectedProjectPath, 8).catch(() => []) : Promise.resolve([]),
           agentClient.gitProviderStatus().catch(() => []),
           agentClient.consoleMachines().catch(() => ({ machines: [] })),
+          agentClient.listMcpServers().catch(() => []),
         ]);
         if (cancelled) return;
         setProjects(projectRows);
+        setMcpServers((mcpRows || []).filter((server) => server.enabled));
         setRunners((runnerRows || []).filter((runner) => runner.installed));
         setTaskList((prev) => {
           // The poll could not reach the box — hold the last known list rather
@@ -852,9 +894,12 @@ export default function VibeCodingView({
         if (!selectedProjectPath && projectRows.length > 0) {
           const wanted = deepLinkRef.current;
           const tail = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() || p;
+          const lastPath = keepLastProjectEnabled() ? loadLastProjectPath(connectedDevice?.id) : "";
           const match = wanted
             ? projectRows.find((row) => row.path === wanted.project) ||
               projectRows.find((row) => tail(row.path) === tail(wanted.project))
+            : lastPath
+              ? projectRows.find((row) => row.path === lastPath) || projectRows.find((row) => tail(row.path) === tail(lastPath))
             : null;
           setSelectedProjectPath((match || projectRows[0]).path);
           if (wanted && match && wanted.preview === "web") {
@@ -1353,6 +1398,8 @@ export default function VibeCodingView({
           mode: selectedRunner === "opencode" && selectedMode ? selectedMode : undefined,
           projectName: selectedProject.name,
           workDir: selectedProject.path,
+          projectDir: selectedProject.path,
+          mcpServers: selectedMcpServers,
           videoEnabled: videoSummaryEnabled,
 	          askMode: rawRunnerCommand ? false : detectAskIntent(promptText),
         },
@@ -1423,6 +1470,8 @@ export default function VibeCodingView({
       mode: selectedRunner === "opencode" && selectedMode ? selectedMode : undefined,
       projectName: selectedProject.name,
       workDir: selectedProject.path,
+      projectDir: selectedProject.path,
+      mcpServers: selectedMcpServers,
       videoEnabled: videoSummaryEnabled,
       // Console auto-detect: a natural-language question ("how do I test
       // STT/TTS?") routes to ask mode — deep grounded analysis, explain-first
@@ -1433,6 +1482,7 @@ export default function VibeCodingView({
     let task: Task;
     try {
       task = await agentClient.createTask(taskParams);
+      if (keepLastProject) saveLastProject(connectedDevice?.id, selectedProject);
     } catch (err) {
       const gap = capabilityGapFromError(err);
       if (gap) {
@@ -1565,6 +1615,9 @@ export default function VibeCodingView({
           model: selectedModel || undefined,
           mode: selectedMode || undefined,
           input: promptText,
+          allowLocalFallback: true,
+          projectDir: selectedProject?.path,
+          mcpServers: selectedMcpServers,
         });
         setComposer("");
         setActiveTaskId(result.taskId);
@@ -1637,8 +1690,11 @@ export default function VibeCodingView({
       model: selectedModel || undefined,
       projectName: selectedProject.name,
       workDir: selectedProject.path,
+      projectDir: selectedProject.path,
+      mcpServers: selectedMcpServers,
       videoEnabled: videoSummaryEnabled,
     });
+    if (keepLastProject) saveLastProject(connectedDevice?.id, selectedProject);
     setActiveGraphRunId(null);
     setActiveTaskId(task.id);
     setBusy(plan.startedLabel);
@@ -2006,6 +2062,8 @@ export default function VibeCodingView({
             model: activeTask.model || selectedModel || undefined,
             projectName: selectedProject.name,
             workDir: selectedProject.path,
+            projectDir: selectedProject.path,
+            mcpServers: selectedMcpServers,
             videoEnabled: videoSummaryEnabled,
           }).then((task) => {
             setTaskList((prev) => [task, ...prev.filter((row) => row.id !== task.id)]);
@@ -2267,7 +2325,10 @@ export default function VibeCodingView({
                 {projects.map((project) => (
                   <button
                     key={project.path}
-                    onClick={() => setSelectedProjectPath(project.path)}
+                    onClick={() => {
+                      setSelectedProjectPath(project.path);
+                      if (keepLastProject) saveLastProject(connectedDevice?.id, project);
+                    }}
                     className={`rounded-2xl border p-3 text-left ${
                       selectedProjectPath === project.path
                         ? "border-indigo-500/40 bg-indigo-500/10"
@@ -2342,6 +2403,58 @@ export default function VibeCodingView({
                   </select>
                 </>
               ) : null}
+              <div className="mt-4 rounded-xl border border-surface-800 bg-surface-950/60 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-surface-500">Task configuration</div>
+                    <div className="mt-1 truncate text-xs text-surface-300">
+                      {selectedProject?.name || "No project"} · {selectedMcpServers.length ? `${selectedMcpServers.length} MCP` : "No MCPs"}
+                    </div>
+                  </div>
+                  <label className="flex shrink-0 items-center gap-2 text-[11px] text-surface-400">
+                    <input
+                      type="checkbox"
+                      checked={keepLastProject}
+                      onChange={(event) => {
+                        setKeepLastProject(event.target.checked);
+                        setKeepLastProjectEnabled(event.target.checked);
+                        if (event.target.checked) saveLastProject(connectedDevice?.id, selectedProject);
+                      }}
+                    />
+                    keep
+                  </label>
+                </div>
+                {mcpServers.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {mcpServers.map((server) => {
+                      const active = selectedMcpServers.includes(server.name);
+                      return (
+                        <button
+                          key={server.name}
+                          type="button"
+                          onClick={() => {
+                            setSelectedMcpServers((prev) =>
+                              prev.includes(server.name)
+                                ? prev.filter((name) => name !== server.name)
+                                : [...prev, server.name],
+                            );
+                          }}
+                          className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                            active
+                              ? "border-brand/40 bg-brand-soft text-brand-softFg"
+                              : "border-surface-700 bg-surface-950 text-surface-400 hover:border-surface-600"
+                          }`}
+                          title={`${server.url} · ${server.toolCount ?? 0} tools`}
+                        >
+                          {server.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="mt-3 text-xs text-surface-500">No enabled MCP servers.</div>
+                )}
+              </div>
               {/* OpenCode-only: build vs plan agent picker. Maps to
                   `--agent <mode>` on `opencode run`. The user's
                   opencode.json defines what each agent does (different

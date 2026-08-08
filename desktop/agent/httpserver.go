@@ -4767,24 +4767,30 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Title              string             `json:"title"`
-		Description        string             `json:"description"`
-		UserPrompt         string             `json:"userPrompt,omitempty"`
-		Model              string             `json:"model"`
-		Runner             string             `json:"runner"`         // runner ID: "claude", "codex", "opencode" — empty uses default
-		Mode               string             `json:"mode,omitempty"` // runner-specific subcommand: opencode "build" / "plan" / custom agent
-		CustomCommand      string             `json:"customCommand"`  // arbitrary command — runs via sh -c
-		ProjectName        string             `json:"projectName,omitempty"`
-		BundleID           string             `json:"bundleId,omitempty"` // mobile-app bundle id (e.g. io.example.sfmg) — used to resolve project for feedback-source tasks
-		Source             string             `json:"source"`             // client type: "mobile", "desktop-app", "web", "cli"
-		PlacementKind      string             `json:"placementKind,omitempty"`
-		ForceCloud         bool               `json:"forceCloud,omitempty"`
-		ForceRelaySource   bool               `json:"forceRelaySource,omitempty"`
-		AllowLocalFallback bool               `json:"allowLocalFallback,omitempty"`
-		Verbosity          *int               `json:"verbosity,omitempty"`
-		Images             []ImageAttachment  `json:"images,omitempty"`
-		WorkDir            string             `json:"workDir,omitempty"`
-		SliceContract      *TaskSliceContract `json:"sliceContract,omitempty"`
+		Title         string `json:"title"`
+		Description   string `json:"description"`
+		UserPrompt    string `json:"userPrompt,omitempty"`
+		Model         string `json:"model"`
+		Runner        string `json:"runner"`         // runner ID: "claude", "codex", "opencode" — empty uses default
+		Mode          string `json:"mode,omitempty"` // runner-specific subcommand: opencode "build" / "plan" / custom agent
+		CustomCommand string `json:"customCommand"`  // arbitrary command — runs via sh -c
+		// ProjectName is the portable project identity selected by the UI.
+		// The runner machine resolves it against its own checkouts; do not
+		// assume a path picked on a Mac exists on Hetzner Ubuntu.
+		ProjectName        string            `json:"projectName,omitempty"`
+		BundleID           string            `json:"bundleId,omitempty"` // mobile-app bundle id (e.g. io.example.sfmg) — used to resolve project for feedback-source tasks
+		Source             string            `json:"source"`             // client type: "mobile", "desktop-app", "web", "cli"
+		PlacementKind      string            `json:"placementKind,omitempty"`
+		ForceCloud         bool              `json:"forceCloud,omitempty"`
+		ForceRelaySource   bool              `json:"forceRelaySource,omitempty"`
+		AllowLocalFallback bool              `json:"allowLocalFallback,omitempty"`
+		Verbosity          *int              `json:"verbosity,omitempty"`
+		Images             []ImageAttachment `json:"images,omitempty"`
+		WorkDir            string            `json:"workDir,omitempty"`
+		// MCPServers is the per-task external MCP allowlist. Empty means no
+		// external MCPs; Yaver's own MCP doorway remains available.
+		MCPServers    []string           `json:"mcpServers,omitempty"`
+		SliceContract *TaskSliceContract `json:"sliceContract,omitempty"`
 		// Runner/render machine split (task_ensure_clone.go): the surface
 		// passes the project's git identity so a runner box without the
 		// source can materialize its own clone, plus the push policy that
@@ -4996,7 +5002,9 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	// and could otherwise override the guest prompt prefix that keeps the
 	// AI agent inside the host's workdir.
 	taskOpts := TaskCreateOptions{
-		WorkDir: body.WorkDir,
+		WorkDir:     body.WorkDir,
+		ProjectName: body.ProjectName,
+		MCPServers:  append([]string{}, body.MCPServers...),
 		// What the user typed. Feedback / shake clients send no userPrompt,
 		// so the fallback to the (now clean) title is what keeps their own
 		// sentence in their own bubble.
@@ -5011,6 +5019,8 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		// Strip owner-only fields. If the host resolved a guest project,
 		// keep that server-approved workDir.
 		taskOpts.WorkDir = guestWorkDir
+		taskOpts.ProjectName = ""
+		taskOpts.MCPServers = nil
 		taskOpts.SliceContract = nil
 		// Snapshot guest policy into the task BEFORE it starts, so runtime
 		// guards (autoSwitchProject, container gating, API-key filtering)

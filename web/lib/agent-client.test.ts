@@ -30,6 +30,21 @@ test("web createTask body can mark final Cloud Workspace handoff", () => {
   assert.equal(body.allowLocalFallback, true);
 });
 
+test("web createTask body carries portable project identity and MCP allowlist", () => {
+  const body = buildCreateTaskBody({
+    title: "Audit Medici",
+    description: "",
+    runner: "opencode",
+    projectName: "medici.ai",
+    workDir: "/Users/kivanccakmak/Workspace/medici.ai",
+    projectDir: "/Users/kivanccakmak/Workspace/medici.ai",
+    mcpServers: ["tusrehber"],
+  });
+  assert.equal(body.projectName, "medici.ai");
+  assert.equal(body.projectDir, "/Users/kivanccakmak/Workspace/medici.ai");
+  assert.deepEqual(body.mcpServers, ["tusrehber"]);
+});
+
 test("web bundle preview URL preserves agent-minted signature in relay mode", () => {
   const client = new AgentClient() as any;
   client.host = "ignored";

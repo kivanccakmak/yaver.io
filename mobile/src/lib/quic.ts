@@ -2240,7 +2240,7 @@ export class QuicClient {
    * HTTP, the runner pool, and the same Task type. The toggle only
    * changes which prompt-prefix the agent injects.
    */
-  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: SpeechContextInput, images?: ImageAttachment[], workDir?: string, mode?: string, video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" }, codeMode?: boolean, allowLocalFallback?: boolean): Promise<Task> {
+  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: SpeechContextInput, images?: ImageAttachment[], workDir?: string, mode?: string, video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" }, codeMode?: boolean, allowLocalFallback?: boolean, projectName?: string, mcpServers?: string[]): Promise<Task> {
     this.assertConnected();
     // Hard 30s timeout — without it, a stale relay tunnel (e.g. after a
     // failed device-switch attempt) makes this POST hang forever and
@@ -2264,7 +2264,7 @@ export class QuicClient {
     // timed out.)
     let res: Response;
     try {
-      res = await this.sendTaskRequest(title, description, model, runner, customCommand, sc, images, workDir, mode, video, codeMode, allowLocalFallback);
+      res = await this.sendTaskRequest(title, description, model, runner, customCommand, sc, images, workDir, mode, video, codeMode, allowLocalFallback, projectName, mcpServers);
     } catch (e) {
       if (e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message))) {
         throw new Error(
@@ -2318,6 +2318,8 @@ export class QuicClient {
     video: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" } | undefined,
     codeMode: boolean | undefined,
     allowLocalFallback: boolean | undefined,
+    projectName: string | undefined,
+    mcpServers: string[] | undefined,
   ): Promise<Response> {
     return this.fetchWithTimeout(`${this.baseUrl}/tasks`, {
       method: "POST",
@@ -2332,6 +2334,8 @@ export class QuicClient {
         speechContext: sc,
         images,
         workDir,
+        projectName,
+        mcpServers,
         video,
         codeMode,
         allowLocalFallback,
@@ -2828,7 +2832,16 @@ export class QuicClient {
    */
   async forkTask(
     taskId: string,
-    args: { runner: string; model?: string; mode?: string; input: string; contextWords?: number; allowLocalFallback?: boolean },
+    args: {
+      runner: string;
+      model?: string;
+      mode?: string;
+      input: string;
+      contextWords?: number;
+      allowLocalFallback?: boolean;
+      projectDir?: string;
+      mcpServers?: string[];
+    },
   ): Promise<{ taskId: string; runnerId: string; parentTaskId: string; contextWordsUsed: number }> {
     this.assertConnected();
     // Same iOS conn-pool headroom + hard timeout as continueTask/sendTask: a fork
@@ -2846,6 +2859,8 @@ export class QuicClient {
           input: args.input,
           contextWords: args.contextWords,
           allowLocalFallback: args.allowLocalFallback ?? false,
+          projectDir: args.projectDir ?? "",
+          mcpServers: args.mcpServers ?? [],
         }),
       }, 30000);
     } catch (e) {

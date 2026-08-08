@@ -23,6 +23,7 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -110,7 +111,14 @@ import {
   type YaverAgentHistoryTurn,
 } from "../../src/lib/yaverAgentRunner";
 import type { YaverAgentToolContext } from "../../src/lib/yaverAgentTools";
-import { loadTaskVideoSummaryEnabled } from "../../src/lib/taskComposerPrefs";
+import {
+  loadKeepLastProjectEnabled,
+  loadLastTaskProject,
+  loadTaskVideoSummaryEnabled,
+  saveKeepLastProjectEnabled,
+  saveLastTaskProject,
+} from "../../src/lib/taskComposerPrefs";
+import { listMcpServers, type McpServer } from "../../src/lib/mcpServers";
 import { withAlpha } from "../../src/lib/themeUtils";
 import { lightCardShadow, monoFamily, spacing, typography } from "../../src/theme/tokens";
 import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
@@ -268,6 +276,19 @@ function normalizePreviewLine(line: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+function projectNameFromPath(path: string): string | undefined {
+  const leaf = String(path || "").split(/[\\/]/).filter(Boolean).pop()?.trim();
+  return leaf || undefined;
+}
+
+type ComposerProject = {
+  name: string;
+  path: string;
+  branch?: string;
+  framework?: string;
+  gitRemote?: string;
+};
 
 function extractAssistantActivity(text: string, maxItems = 4): string[] {
   const seen = new Set<string>();
@@ -1637,7 +1658,7 @@ export default function TasksScreen() {
     runner?: string;
     openNew?: string;
   }>();
-  const projectDir = typeof taskParams.dir === "string" ? taskParams.dir : "";
+  const routeProjectDir = typeof taskParams.dir === "string" ? taskParams.dir : "";
   const initialPrompt = typeof taskParams.prompt === "string" ? taskParams.prompt : "";
   const initialTitle = typeof taskParams.title === "string" ? taskParams.title : "";
   const initialRunner = typeof taskParams.runner === "string" ? taskParams.runner : "";
@@ -1670,6 +1691,17 @@ export default function TasksScreen() {
     }) || null;
   }, [devices]);
   const [showNewTask, setShowNewTask] = useState(false);
+  const [composerProjects, setComposerProjects] = useState<ComposerProject[]>([]);
+  const [selectedProjectPath, setSelectedProjectPath] = useState<string>(routeProjectDir);
+  const [availableMcpServers, setAvailableMcpServers] = useState<McpServer[]>([]);
+  const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
+  const [showProjectPicker, setShowProjectPicker] = useState(false);
+  const [keepLastProject, setKeepLastProject] = useState(true);
+  const selectedComposerProject = useMemo(
+    () => composerProjects.find((project) => project.path === selectedProjectPath) || null,
+    [composerProjects, selectedProjectPath],
+  );
+  const projectDir = selectedComposerProject?.path || selectedProjectPath || routeProjectDir;
   // Multi-target wizard state. Only used when DeviceContext.multiTargetMode
   // is true: the FAB opens the wizard first, the wizard sets pendingTarget
   // (and switches the QUIC client to that device via selectDevice), then
@@ -1767,6 +1799,23 @@ export default function TasksScreen() {
     userPickedRunnerRef.current = false;
     userPickedModelRef.current = false;
   }, [activeDevice?.id]);
+
+  useEffect(() => {
+    if (routeProjectDir) {
+      setSelectedProjectPath(routeProjectDir);
+    }
+  }, [routeProjectDir]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadKeepLastProjectEnabled().then((enabled) => {
+      if (!cancelled) setKeepLastProject(enabled);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const [runnerAuthModalRunner, setRunnerAuthModalRunner] = useState<string | null>(null);
   // Target device id for the runner-auth modal. When set, the modal routes
   // /runner-auth/browser/* through /peer/<id> so the OAuth flow runs on
@@ -1854,10 +1903,12 @@ export default function TasksScreen() {
       speechContext?: any;
       images?: ImageAttachment[];
       workDir?: string;
+      projectName?: string;
       mode?: string;
       video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" };
       codeMode?: boolean;
       allowLocalFallback?: boolean;
+      mcpServers?: string[];
     },
   ): Promise<Task> => {
     const row = await saveCloudWorkspaceRequiredDispatch({
@@ -2392,6 +2443,8 @@ export default function TasksScreen() {
             currentRow.params.video,
             currentRow.params.codeMode,
             true,
+            currentRow.params.projectName,
+            currentRow.params.mcpServers,
           );
           if (currentRow.placementId) {
             await rebindTaskPlacement(currentRow.placementId, task.id, "running").catch(() => undefined);
@@ -3746,10 +3799,12 @@ export default function TasksScreen() {
         speechContext: speechCtx,
         images: attachedImages.length > 0 ? attachedImages : undefined,
         workDir: projectDir || undefined,
+        projectName: selectedComposerProject?.name || projectNameFromPath(projectDir),
         mode: effectiveRunner === "opencode" && effectiveOpencodeMode ? effectiveOpencodeMode : undefined,
         video: videoSummaryEnabled ? { enabled: true } : undefined,
         codeMode: true,
         allowLocalFallback: false,
+        mcpServers: selectedMcpServers,
       };
       pendingCloudTaskParams = taskParams;
       const rawTask = await sendClient.sendTask(
@@ -3764,7 +3819,20 @@ export default function TasksScreen() {
         taskParams.mode,
         taskParams.video,
         taskParams.codeMode,
+        taskParams.allowLocalFallback,
+        taskParams.projectName,
+        taskParams.mcpServers,
       );
+      if (taskParams.projectName && keepLastProject) {
+        const runnerDeviceId = connectionManager.roleDeviceId("runner") || pendingTarget?.deviceId || activeDevice?.id || "default";
+        void saveLastTaskProject({
+          deviceId: runnerDeviceId,
+          name: taskParams.projectName,
+          path: projectDir || undefined,
+          branch: selectedComposerProject?.branch,
+          gitRemote: selectedComposerProject?.gitRemote,
+        });
+      }
       // Stamp the task with the device + model we KNOW we sent it to
       // (sendTask response doesn't always echo deviceName; with the
       // pool the legitimate source is whichever client we picked).
@@ -3940,6 +4008,7 @@ export default function TasksScreen() {
     taskHaptics.retry();
     void retryClient.sendTask(
       task.title, "", retryModel, retryRunner, undefined, undefined, undefined, projectDir || undefined,
+      undefined, undefined, undefined, undefined, selectedComposerProject?.name || projectNameFromPath(projectDir), selectedMcpServers,
     ).then((retried) => {
       const deviceName = taskDevice?.name || task.deviceName || activeDevice?.name || retried.deviceName;
       const next = { ...retried, deviceId: taskDevice?.id || task.deviceId, deviceName, model: retried.model || retryModel };
@@ -4218,6 +4287,8 @@ export default function TasksScreen() {
             // that is waking. allowLocalFallback keeps the fork here even when
             // Convex would prefer a cloud lane (2026-08-08).
             allowLocalFallback: true,
+            projectDir: projectDir || undefined,
+            mcpServers: selectedMcpServers,
           });
           // Switch the chat to the new child so subsequent follow-ups
           // continue against the forked task.
@@ -4308,6 +4379,7 @@ export default function TasksScreen() {
             description: optimisticText,
             runner: (selectedRunner || selectedTask.runnerId || "claude").trim(),
             workDir: projectDir || undefined,
+            projectName: projectNameFromPath(projectDir),
           });
           setSelectedTask((prev) => (prev && prev.id === selectedTask.id ? forkTask : prev));
           setTasks((prev) => [forkTask, ...prev.filter((t) => t.id !== forkTask.id)]);
@@ -4608,6 +4680,55 @@ export default function TasksScreen() {
     connectionStatus === "connected" ? "connecting" :
     connectionStatus;
   const isEffectivelyConnected = effectiveState === "connected";
+
+  useEffect(() => {
+    if (!isEffectivelyConnected) return;
+    let cancelled = false;
+    const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
+    void (async () => {
+      const [projectRows, mcpRows, keep] = await Promise.all([
+        connectionManager.runnerClient().listProjects().catch(() => [] as ComposerProject[]),
+        listMcpServers().catch(() => [] as McpServer[]),
+        loadKeepLastProjectEnabled(),
+      ]);
+      if (cancelled) return;
+      const normalizedProjects = (projectRows || [])
+        .filter((project: any) => project?.path)
+        .map((project: any) => ({
+          name: String(project.name || projectNameFromPath(project.path) || "Project"),
+          path: String(project.path),
+          branch: project.branch ? String(project.branch) : undefined,
+          framework: project.framework ? String(project.framework) : undefined,
+          gitRemote: project.gitRemote ? String(project.gitRemote) : undefined,
+        }));
+      setComposerProjects(normalizedProjects);
+      setAvailableMcpServers((mcpRows || []).filter((server) => server.enabled));
+      setKeepLastProject(keep);
+
+      if (routeProjectDir) return;
+      if (selectedProjectPath && normalizedProjects.some((project) => project.path === selectedProjectPath)) return;
+      if (keep) {
+        const last = await loadLastTaskProject(runnerDeviceId);
+        if (cancelled) return;
+        const match = last
+          ? normalizedProjects.find((project) =>
+              (last.path && project.path === last.path) ||
+              project.name.toLowerCase() === last.name.toLowerCase() ||
+              projectNameFromPath(project.path)?.toLowerCase() === last.name.toLowerCase())
+          : null;
+        if (match) {
+          setSelectedProjectPath(match.path);
+          return;
+        }
+      }
+      if (!selectedProjectPath && normalizedProjects[0]) {
+        setSelectedProjectPath(normalizedProjects[0].path);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeDevice?.id, isEffectivelyConnected, routeProjectDir, selectedProjectPath]);
 
   // Fetch agent info (project, todo stats) every 5s
   useEffect(() => {
@@ -5796,6 +5917,27 @@ export default function TasksScreen() {
                   off (which deletes what was already reported). Silent prompt
                   mutation is a defect; this is the disclosure. */}
               <ScreenContextChip workDir={projectDir} style={{ marginBottom: 8 }} />
+              <View style={s.composerScopeRow}>
+                <Pressable
+                  style={({ pressed }) => [
+                    s.scopeChip,
+                    { backgroundColor: c.bgCardElevated, borderColor: selectedComposerProject ? c.accent : c.border },
+                    pressed && { opacity: 0.65 },
+                  ]}
+                  onPress={() => setShowProjectPicker(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Configure project and MCPs for this task"
+                >
+                  <Ionicons name="options-outline" size={16} color={selectedComposerProject ? c.accent : c.textMuted} />
+                  <Text style={[s.scopeChipText, { color: c.textSecondary }]} numberOfLines={1}>
+                    {[
+                      selectedComposerProject?.name || projectNameFromPath(projectDir) || "Project",
+                      selectedMcpServers.length ? `${selectedMcpServers.length} MCP` : "No MCPs",
+                    ].join(" · ")}
+                  </Text>
+                  <Text style={{ color: c.textMuted, fontSize: 10 }}>▾</Text>
+                </Pressable>
+              </View>
               <View
                 style={[
                   s.composerShell,
@@ -5965,6 +6107,114 @@ export default function TasksScreen() {
               </View>
             </View>
           </KeyboardAvoidingView>
+        </Modal>
+
+        <Modal visible={showProjectPicker} animationType="slide" transparent onRequestClose={() => setShowProjectPicker(false)}>
+          <Pressable style={[s.modalOverlay, { justifyContent: "flex-start" }]} onPress={() => setShowProjectPicker(false)} />
+          <View style={[s.agentPickerSheet, { backgroundColor: c.bgCard, maxHeight: "72%" }]}>
+            <View style={[s.agentPickerHeader, { borderBottomColor: c.border }]}>
+              <Text style={[s.agentPickerTitle, { color: c.textPrimary }]}>Task configuration</Text>
+              <Pressable onPress={() => setShowProjectPicker(false)}>
+                <Text style={{ color: c.accent, fontSize: 16, fontWeight: "600" }}>Done</Text>
+              </Pressable>
+            </View>
+            <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+              <View style={s.keepLastRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "600" }}>Keep last project</Text>
+                  <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 2 }}>Auto-select this runner box's last project.</Text>
+                </View>
+                <Switch
+                  value={keepLastProject}
+                  onValueChange={(value) => {
+                    setKeepLastProject(value);
+                    void saveKeepLastProjectEnabled(value);
+                  }}
+                />
+              </View>
+              {composerProjects.length === 0 ? (
+                <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 18 }}>
+                  No projects reported by the runner machine yet.
+                </Text>
+              ) : (
+                <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+                  {composerProjects.map((project) => {
+                    const active = project.path === selectedProjectPath;
+                    return (
+                      <Pressable
+                        key={project.path}
+                        onPress={() => {
+                          setSelectedProjectPath(project.path);
+                          if (keepLastProject) {
+                            const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
+                            void saveLastTaskProject({
+                              deviceId: runnerDeviceId,
+                              name: project.name,
+                              path: project.path,
+                              branch: project.branch,
+                              gitRemote: project.gitRemote,
+                            });
+                          }
+                        }}
+                        style={[
+                          s.projectPickerRow,
+                          { borderColor: active ? c.accent : c.border, backgroundColor: active ? withAlpha(c.accent, "1f") : c.bg },
+                        ]}
+                      >
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }} numberOfLines={1}>{project.name}</Text>
+                          <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }} numberOfLines={1}>{project.path}</Text>
+                          {[project.branch, project.framework].filter(Boolean).length ? (
+                            <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }} numberOfLines={1}>
+                              {[project.branch, project.framework].filter(Boolean).join(" · ")}
+                            </Text>
+                          ) : null}
+                        </View>
+                        {active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : null}
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              )}
+              <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 18 }]}>MCP SERVERS</Text>
+              <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 10 }}>
+                Empty means only Yaver tools.
+              </Text>
+              {availableMcpServers.length === 0 ? (
+                <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 18 }}>
+                  No enabled MCP servers registered on this runner.
+                </Text>
+              ) : (
+                availableMcpServers.map((server) => {
+                  const active = selectedMcpServers.includes(server.name);
+                  return (
+                    <Pressable
+                      key={server.name}
+                      onPress={() => {
+                        setSelectedMcpServers((prev) =>
+                          prev.includes(server.name)
+                            ? prev.filter((name) => name !== server.name)
+                            : [...prev, server.name],
+                        );
+                      }}
+                      style={[
+                        s.projectPickerRow,
+                        { borderColor: active ? c.accent : c.border, backgroundColor: active ? withAlpha(c.accent, "1f") : c.bg },
+                      ]}
+                    >
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }} numberOfLines={1}>{server.name}</Text>
+                        <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }} numberOfLines={1}>
+                          {server.toolCount ?? 0} tools{server.hasAuth ? " · auth" : ""}
+                        </Text>
+                      </View>
+                      {active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : <Ionicons name="ellipse-outline" size={20} color={c.textMuted} />}
+                    </Pressable>
+                  );
+                })
+              )}
+            </View>
+          </View>
         </Modal>
 
 
@@ -6496,6 +6746,12 @@ export default function TasksScreen() {
                       undefined,
                       undefined,
                       projectDir || undefined,
+                      undefined,
+                      undefined,
+                      undefined,
+                      undefined,
+                      selectedComposerProject?.name || projectNameFromPath(projectDir),
+                      selectedMcpServers,
                     ).then((retried) => {
                       const next = {
                         ...retried,
@@ -6851,6 +7107,12 @@ export default function TasksScreen() {
                                   undefined,
                                   undefined,
                                   projectDir || undefined,
+                                  undefined,
+                                  undefined,
+                                  undefined,
+                                  undefined,
+                                  selectedComposerProject?.name || projectNameFromPath(projectDir),
+                                  selectedMcpServers,
                                 ).then((retried) => {
                                   const next = {
                                     ...retried,
@@ -7653,6 +7915,11 @@ const s = StyleSheet.create({
   agentPickerHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1 },
   agentPickerTitle: { fontSize: 17, fontWeight: "700" },
   agentPickerSection: { fontSize: 11, fontWeight: "600", letterSpacing: 0.5, marginTop: 16, marginBottom: 8, marginLeft: 20 },
+  composerScopeRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  scopeChip: { minHeight: 34, maxWidth: "100%", borderWidth: 1, borderRadius: 17, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 7 },
+  scopeChipText: { fontSize: 12, fontWeight: "600", flexShrink: 1 },
+  keepLastRow: { minHeight: 52, flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 },
+  projectPickerRow: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 10 },
   agentPickerChips: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, marginBottom: 4 },
   input: { borderWidth: 1, borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 12 },
   inputMultiline: { minHeight: 160 },

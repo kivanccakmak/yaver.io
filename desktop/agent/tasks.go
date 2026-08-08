@@ -957,6 +957,17 @@ type TaskCreateOptions struct {
 	SliceContract *TaskSliceContract
 	Placement     *TaskPlacementMetadata
 
+	// ProjectName is the portable project identity selected by the surface.
+	// It is intentionally not a path: a phone/web surface may select Medici
+	// from a Mac, while the task actually runs on a Hetzner Ubuntu box whose
+	// checkout lives elsewhere. The runner machine resolves this against its
+	// own discovered projects before spawning.
+	ProjectName string
+
+	// MCPServers is the per-task external MCP allowlist. Empty means no
+	// external MCPs; the runner still gets Yaver's own MCP doorway.
+	MCPServers []string
+
 	// SeedTurns is prior conversation history to PREPEND to the new task's
 	// Turns purely for DISPLAY continuity — it is NOT re-sent to the runner
 	// (the runner receives its context via the prompt/handoff). A fork sets
@@ -1117,8 +1128,8 @@ type Task struct {
 	// schedule with resume enabled re-fires, so the run picks up where the
 	// previous fire left off (claude/glm via SessionID, opencode via
 	// --continue, codex via exec resume). Default false = fresh spawn.
-	ResumeLast   bool                  `json:"-"`
-	Output       string                `json:"output"`
+	ResumeLast bool   `json:"-"`
+	Output     string `json:"output"`
 	// RawOutput is the raw runner stdout tail (ANSI intact) retained for
 	// the console view's `?rawSince=` replay. Mirrors `Output` — written
 	// by readRawOutput BEFORE the grooming filters, tail-capped to
@@ -1126,8 +1137,8 @@ type Task struct {
 	// shipped in task listings (surfaces get it via the SSE raw frames /
 	// the raw replay endpoint), so it is deliberately not `json:"-"`-
 	// hidden here: the field lives on the in-memory Task only.
-	RawOutput    string `json:"-"`
-	ResultText   string // Extracted clean result text from Claude
+	RawOutput    string                `json:"-"`
+	ResultText   string                // Extracted clean result text from Claude
 	Failure      *TaskFailureDiagnosis `json:"failure,omitempty"`
 	CostUSD      float64               // Total API cost
 	InputTokens  int                   // Tokens consumed (prompt + cache reads + cache creation)
@@ -1138,6 +1149,14 @@ type Task struct {
 	FinishedAt   *time.Time            `json:"finished_at,omitempty"`
 
 	WorkDir string `json:"workDir,omitempty"` // per-task workDir (auto-detected from prompt)
+	// ProjectName is the portable project identity selected by the user. It is
+	// safe to echo because it is a basename/display name, not an absolute path.
+	ProjectName string `json:"projectName,omitempty"`
+
+	// MCPServers is deliberately not echoed to generic task JSON. It controls
+	// runner spawn scope only; UI state owns what it selected.
+	MCPServers []string `json:"-"`
+
 	// Runner/render machine split (task_ensure_clone.go): git identity the
 	// surface passed so THIS box can materialize its own clone when it was
 	// chosen as the runner but lacks the source, and the push policy that
@@ -1271,10 +1290,46 @@ type Task struct {
 }
 
 func (tm *TaskManager) effectiveTaskWorkDir(task *Task) string {
-	if task != nil && strings.TrimSpace(task.WorkDir) != "" {
-		return strings.TrimSpace(task.WorkDir)
+	if task != nil {
+		if dir := strings.TrimSpace(task.WorkDir); isScannableProjectDir(dir) {
+			return dir
+		}
+		if resolved := resolveTaskProjectOnThisMachine(task.ProjectName, task.WorkDir); resolved != "" {
+			return resolved
+		}
+		if strings.TrimSpace(task.WorkDir) != "" {
+			return strings.TrimSpace(task.WorkDir)
+		}
 	}
 	return tm.workDir
+}
+
+func resolveTaskProjectOnThisMachine(projectName, pathHint string) string {
+	want := map[string]bool{}
+	for _, raw := range []string{projectName, pathHint, basenameSlug(pathHint)} {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		want[strings.ToLower(raw)] = true
+		if slug := basenameSlug(raw); slug != "" {
+			want[strings.ToLower(slug)] = true
+		}
+	}
+	if len(want) == 0 {
+		return ""
+	}
+	for _, p := range listDiscoveredProjects() {
+		path := strings.TrimSpace(p.Path)
+		if path == "" || !isScannableProjectDir(path) {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(path))
+		if want[base] || want[strings.ToLower(path)] {
+			return path
+		}
+	}
+	return ""
 }
 
 func formatTaskSliceContract(contract *TaskSliceContract) string {
@@ -1383,9 +1438,9 @@ type TaskInfo struct {
 	// leaked into every label and a task that ran on a sibling box
 	// looked like it ran on whichever device the phone was focused
 	// on at view time.
-	DeviceName   string                `json:"deviceName,omitempty"`
-	SessionID    string                `json:"sessionId,omitempty"`
-	Output       string                `json:"output,omitempty"`
+	DeviceName string `json:"deviceName,omitempty"`
+	SessionID  string `json:"sessionId,omitempty"`
+	Output     string `json:"output,omitempty"`
 	// RawOutput is the tail of the runner's RAW stdout (ANSI escape
 	// sequences, TUI redraws, box-drawing — everything the grooming filters
 	// strip) retained for the console/terminal view. Only populated on the
@@ -1395,7 +1450,7 @@ type TaskInfo struct {
 	// RawOffset is the byte length of the FULL retained raw tail at
 	// snapshot time — the cursor a client passes to `?rawSince=` to resume
 	// the raw stream without re-fetching bytes it already rendered.
-	RawOffset int `json:"rawOffset,omitempty"`
+	RawOffset    int                   `json:"rawOffset,omitempty"`
 	ResultText   string                `json:"resultText,omitempty"`
 	Failure      *TaskFailureDiagnosis `json:"failure,omitempty"`
 	CostUSD      float64               `json:"costUsd,omitempty"`
@@ -1962,6 +2017,8 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		eventCh:                     make(chan map[string]interface{}, 32),
 		doneCh:                      make(chan struct{}),
 		WorkDir:                     strings.TrimSpace(opts.WorkDir),
+		ProjectName:                 strings.TrimSpace(opts.ProjectName),
+		MCPServers:                  append([]string{}, opts.MCPServers...),
 		GitRemote:                   strings.TrimSpace(opts.GitRemote),
 		GitBranch:                   strings.TrimSpace(opts.GitBranch),
 		AutoPush:                    strings.TrimSpace(opts.AutoPush),
@@ -2904,11 +2961,13 @@ func (tm *TaskManager) startProcess(task *Task) error {
 
 	// Determine working directory
 	taskDir := tm.effectiveTaskWorkDir(task)
-	mcpScope := prepareRunnerMCPScope(runner.RunnerID, taskDir)
+	mcpScope := prepareRunnerMCPScope(runner.RunnerID, taskDir, task.MCPServers)
 	switch normalizeRunnerID(runner.RunnerID) {
 	case "codex":
 		args = insertArgsAfter(args, "exec", mcpScope.Args)
 	case "claude", "glm":
+		args = append(args, mcpScope.Args...)
+	case "opencode":
 		args = append(args, mcpScope.Args...)
 	}
 	// An isolation-required guest task (requireIsolation:true) runs confined as

@@ -9,7 +9,7 @@ import (
 )
 
 func TestCodexYaverOnlyMCPArgsIgnoreUserConfig(t *testing.T) {
-	args := codexYaverOnlyMCPArgs("/tmp/yaver")
+	args := codexYaverOnlyMCPArgs("/tmp/yaver", nil)
 	joined := strings.Join(args, "\x00")
 	for _, want := range []string{
 		"--ignore-user-config",
@@ -48,7 +48,7 @@ func TestPrepareClaudeYaverOnlyConfigStripsForeignMCPs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env, err := prepareClaudeYaverOnlyConfig("/tmp/yaver", work)
+	env, err := prepareClaudeYaverOnlyConfig("/tmp/yaver", work, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestPrepareOpenCodeYaverOnlyConfigPreservesProviderConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env, err := prepareOpenCodeYaverOnlyConfig("/tmp/yaver")
+	env, err := prepareOpenCodeYaverOnlyConfig("/tmp/yaver", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

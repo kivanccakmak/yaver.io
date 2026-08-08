@@ -55,6 +55,24 @@ func TestFirstMessageCarriesThePreamble(t *testing.T) {
 	}
 }
 
+func TestFirstMessageCarriesSelectedProjectFrame(t *testing.T) {
+	tm := framedTestManager(t)
+	task := framedMobileTask(tm)
+	task.ProjectName = "medici.ai"
+
+	got := tm.composeTurnPrompt(task, "run text-to-text tests", promptFramePolicy{ArmPreamble: true})
+
+	for _, want := range []string{
+		"[Yaver selected project]",
+		"Project: medici.ai",
+		"Runner working directory: " + tm.workDir,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("selected project frame missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 // --- 2. every later turn is the user's words --------------------------------
 
 func TestFollowUpIsTheUsersWordsVerbatim(t *testing.T) {
