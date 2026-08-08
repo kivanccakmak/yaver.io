@@ -77,13 +77,22 @@ Do not "fix" these as part of this work; they belong to their own sessions.
 | 5 Build\|Plan toggle | ❌ not started |
 | 6 Verify | ❌ not started |
 
-## Landed after this dump (fill in as they land)
-- [ ] Task 3 ternary closed + mobile tsc green (only pre-existing errors)
-- [ ] Task 3 cleanup: `defaultTaskInputMode` removed (`auth.ts`, `settings.tsx`)
-- [ ] Mobile commit (Task 3) landed separately from web/parallel work
-- [ ] Task 1 web page.tsx wiring landed
-- [ ] Task 2 console raw view landed
-- [ ] Task 4 provider-badge dedup landed
-- [ ] Task 5 Build|Plan toggle landed
-- [ ] Task 6 verification (headless SSE probe + closed loop) noted
-- [ ] `NEXT_DEV_TASKS.md` rewritten to the post-session state
+## Landed after this dump (filled in at session end)
+- [x] Task 3 ternary closed + mobile tsc green (only pre-existing errors) — `19a83549e`
+- [x] Task 3 cleanup: `defaultTaskInputMode` removed (`auth.ts`, `settings.tsx`) — `19a83549e`
+- [x] Mobile commit (Task 3) landed separately from web/parallel work — `19a83549e`
+- [x] Task 1 web page.tsx wiring landed — `25c8b6fe3` (rawSince hunks of
+  `agent-client.ts` split out; the parallel session's forkTask hunks in the
+  same file were left unstaged for them)
+- [x] Task 2 console raw view landed — `25c8b6fe3`
+- [x] Task 4 provider-badge dedup landed — `25c8b6fe3`
+- [x] Task 5 Build|Plan toggle landed — `25c8b6fe3`
+- [~] Task 6 verification: `go test` (TestRaw/TestCreateTask/TestHandleTaskFork)
+  green, `web` tsc clean, `mobile` tsc only pre-existing errors. **Headless
+  live probe BLOCKED on this Mac:** the RUNNING agent is 1.99.405, which
+  predates the raw lane (`d671b7c02` ships in the next CLI release). A
+  throwaway opencode task confirmed the endpoint answers but emits no
+  `raw_replay`/`raw` frames from the old binary — correct behaviour, wrong
+  binary. The live probe + closed loop must run after the next CLI publish
+  (owner-only). Steps are written into `NEXT_DEV_TASKS.md` Task 6.
+- [x] `NEXT_DEV_TASKS.md` rewritten to the post-session state — `9752f6a8a`
