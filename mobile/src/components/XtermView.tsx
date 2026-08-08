@@ -34,6 +34,8 @@ export interface XtermHandle {
   write(bytes: Uint8Array): void;
   fit(): void;
   focus(): void;
+  /** Clear the grid + scrollback (raw_replay full-snapshot replace). */
+  reset(): void;
 }
 
 export interface XtermViewProps {
@@ -97,6 +99,9 @@ function bridgeScript(opts: {
   // PTY stdout bytes → grid
   window.__yvWrite = function (b64) { term.write(b64ToBytes(b64)); };
   window.__yvFit = doFit;
+  // Full reset — clears the grid AND the scrollback. Used when a raw_replay
+  // snapshot (full=true) replaces the screen instead of appending.
+  window.__yvReset = function () { try { term.reset(); } catch (e) {} };
 
   window.addEventListener("resize", doFit);
   // initial fit after layout settles, then announce ready
@@ -161,6 +166,9 @@ const XtermView = forwardRef<XtermHandle, XtermViewProps>(function XtermView(
       },
       focus() {
         webRef.current?.injectJavaScript("window.term && window.term.focus();true;");
+      },
+      reset() {
+        webRef.current?.injectJavaScript("window.__yvReset && window.__yvReset();true;");
       },
     }),
     [],

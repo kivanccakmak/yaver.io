@@ -749,12 +749,6 @@ export interface UserSettings {
     diagnostics?: string[];
     updatedAt: number;
   }>;
-  /** Preferred default input mode for task creation: "voice" or "text".
-   * When "voice", the task composer opens with dictation armed by default.
-   * When "text", it opens with the keyboard-focused text input. Users can still
-   * manually switch modes for any individual task. Default: "voice" for existing
-   * users who already expect voice-first experience. */
-  defaultTaskInputMode?: "voice" | "text";
 }
 
 // ── Local secret storage (iOS Keychain / Android SecureStore) ───────

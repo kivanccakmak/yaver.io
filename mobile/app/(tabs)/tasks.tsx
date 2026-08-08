@@ -54,6 +54,7 @@ import NoMachineEmpty from "../../src/components/NoMachineEmpty";
 import TaskTargetWizard, { type TaskTarget } from "../../src/components/TaskTargetWizard";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import type { ThemeColors } from "../../src/constants/colors";
+import XtermView, { type XtermHandle } from "../../src/components/XtermView";
 import { appTag } from "../../src/lib/appVersion";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
@@ -2504,6 +2505,75 @@ export default function TasksScreen() {
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRuntimeRenderRef = useRef<{ taskId: string; source: string; workDir?: string } | null>(null);
 
+  // ── opencode terminal view ──────────────────────────────────────────
+  // opencode tasks stream their RAW runner stdout (ANSI + TUI intact) as
+  // `raw`/`raw_replay` SSE frames (agent 1.99.406+, commit d671b7c02). The
+  // dashboard chat can't render a TUI, so opencode tasks get a Chat|Terminal
+  // toggle that paints the raw bytes into XtermView. Terminal is READ-ONLY
+  // (opencode runs on the box) — the composer stays reachable in Chat view.
+  // Raw buffer discipline (per task, survives status changes and toggle):
+  //   rawBufRef     — retained tail of raw bytes (cap ~512KB, mirrors the
+  //                   agent's rawOutputMaxBytes)
+  //   rawWrittenRef — index into rawBufRef already handed to the terminal,
+  //                   so remount/onReady never re-writes old bytes
+  //   rawCursorRef  — the agent's authoritative byte cursor, passed back as
+  //                   `rawSince` on reattach to resume without gaps
+  //   rawTaskIdRef  — the task the buffer belongs to; reset when it changes
+  const [taskViewMode, setTaskViewMode] = useState<"chat" | "terminal">("chat");
+  const xtermRef = useRef<XtermHandle | null>(null);
+  const rawBufRef = useRef("");
+  const rawWrittenRef = useRef(0);
+  const rawCursorRef = useRef(0);
+  const rawTaskIdRef = useRef<string | null>(null);
+  const RAW_TERMINAL_CAP = 512 * 1024;
+  const isOpenCodeTask = !!selectedTask && normalizeTaskRunnerId(selectedTask.runnerId) === "opencode";
+
+  // Single raw-frame sink shared by the live stream and the one-shot seed —
+  // two copies of this logic would drift (see AGENTS.md cross-surface parity).
+  const handleRawChunk = useCallback((text: string, offset: number, full: boolean) => {
+    if (full) {
+      // Snapshot to REPLACE the terminal with, not an increment.
+      rawBufRef.current = text;
+      rawWrittenRef.current = 0;
+      xtermRef.current?.reset();
+    } else {
+      rawBufRef.current = (rawBufRef.current + text).slice(-RAW_TERMINAL_CAP);
+    }
+    if (typeof offset === "number") rawCursorRef.current = offset;
+    // Only push to the terminal when it is mounted; while hidden (Chat view)
+    // the bytes stay in rawBufRef and the mount's onReady drains them.
+    if (xtermRef.current && rawWrittenRef.current < rawBufRef.current.length) {
+      const tail = rawBufRef.current.slice(rawWrittenRef.current);
+      rawWrittenRef.current = rawBufRef.current.length;
+      try {
+        xtermRef.current.write(new TextEncoder().encode(tail));
+      } catch {
+        // terminal write is best-effort — the buffer is authoritative
+      }
+    }
+  }, [RAW_TERMINAL_CAP]);
+
+  // Drain whatever accumulated while the terminal was unmounted (Chat view)
+  // or not yet booted, then refit. Wired to XtermView's onReady.
+  const drainRawToTerminal = useCallback(() => {
+    const x = xtermRef.current;
+    if (!x) return;
+    if (rawWrittenRef.current < rawBufRef.current.length) {
+      const tail = rawBufRef.current.slice(rawWrittenRef.current);
+      rawWrittenRef.current = rawBufRef.current.length;
+      try {
+        x.write(new TextEncoder().encode(tail));
+      } catch {
+        // best-effort
+      }
+    }
+    try {
+      x.fit();
+    } catch {
+      // best-effort
+    }
+  }, []);
+
   // SSE stream for the selected running task (full live terminal stream)
   const sseAbortRef = useRef<(() => void) | null>(null);
   // Health of that stream, rendered above the composer. A stream that drops
@@ -2535,6 +2605,17 @@ export default function TasksScreen() {
       return;
     }
 
+    // The raw terminal buffer is per-task: switching the selected task
+    // clears it so the terminal reseeds from a full raw_replay snapshot.
+    // Status changes (queued→running→completed) keep the buffer so the
+    // terminal resumes with `rawSince=<cursor>` instead of repainting.
+    if (rawTaskIdRef.current !== selectedTask.id) {
+      rawTaskIdRef.current = selectedTask.id;
+      rawCursorRef.current = 0;
+      rawBufRef.current = "";
+      rawWrittenRef.current = 0;
+    }
+
     // Bytes of transcript received from the STREAM. This is the offset the
     // agent resumes from (`?since=`), so a reattach after a dropped tunnel
     // replays only what we missed instead of duplicating the scrollback.
@@ -2544,7 +2625,7 @@ export default function TasksScreen() {
     let reattachTimer: ReturnType<typeof setTimeout> | undefined;
     setStreamHealth(null);
 
-    const subscribe = (since: number) => {
+    const subscribe = (since: number, rawSince: number) => {
     if (disposed) return;
     const abort = connectionManager.runnerClient().streamTaskOutput(
       selectedTask.id,
@@ -2645,6 +2726,15 @@ export default function TasksScreen() {
       },
       {
         since,
+        // Resume the RAW stdout lane from the same cursor the last stream
+        // reached, so the terminal never repaints or gaps across a drop.
+        rawSince,
+        onRaw: (text, offset, full) => {
+          handleRawChunk(text, offset, full);
+          // Raw bytes are output too — they prove the runner is alive.
+          attempt = 0;
+          setStreamHealth(null);
+        },
         onEnd: (info) => {
           if (disposed) return;
           // The transport used to end here in silence (`xhr.onerror` was an
@@ -2665,14 +2755,14 @@ export default function TasksScreen() {
           }
           setStreamHealth({ kind: "reattaching", message: plan.message });
           attempt += 1;
-          reattachTimer = setTimeout(() => subscribe(received), plan.delayMs);
+          reattachTimer = setTimeout(() => subscribe(received, rawCursorRef.current), plan.delayMs);
         },
       },
     );
     sseAbortRef.current = abort;
     };
 
-    subscribe(0);
+    subscribe(0, rawCursorRef.current);
 
     // Late-join replay: if the agent already asked while no client
     // was subscribed, the SSE writer will replay on connect. But the
@@ -2705,6 +2795,44 @@ export default function TasksScreen() {
       sseAbortRef.current = null;
     };
   }, [selectedTask?.id, selectedTask?.status, streamReattachNonce]);
+
+  // Terminal seed for tasks that never stream. A FINISHED opencode task has
+  // no live SSE (the effect above only subscribes while the runner is
+  // coding), so opening Terminal view for one subscribes once with
+  // `rawSince=0`, drains the raw_replay snapshot into the buffer + terminal,
+  // then aborts. Re-fetches on every entry to Terminal view so the tail is
+  // always authoritative (covers the final bytes that arrived after the
+  // last live frame).
+  useEffect(() => {
+    if (!selectedTask || taskViewMode !== "terminal") return;
+    if (taskStatusMeansRunnerIsCoding(selectedTask.status)) return; // live stream owns the raw lane
+    if (normalizeTaskRunnerId(selectedTask.runnerId) !== "opencode") return;
+    if (!quicClient.isConnected) return;
+    let disposed = false;
+    let seeded = false;
+    let abort: () => void = () => {};
+    abort = connectionManager.runnerClient().streamTaskOutput(
+      selectedTask.id,
+      () => { /* chat interest only — the live effect owns chat for coding tasks */ },
+      undefined,
+      undefined,
+      {
+        rawSince: 0,
+        onRaw: (text, offset, full) => {
+          if (disposed || seeded) return;
+          seeded = true;
+          handleRawChunk(text, offset, full);
+          // One-shot: the finished task's raw_replay IS the whole retained
+          // tail — close the stream, the terminal has everything.
+          abort();
+        },
+      },
+    );
+    return () => {
+      disposed = true;
+      abort();
+    };
+  }, [selectedTask?.id, selectedTask?.status, taskViewMode, handleRawChunk]);
 
   // The queued render intent lands here, once, when the turn reaches a
   // renderable terminal state.
@@ -4085,6 +4213,11 @@ export default function TasksScreen() {
           const result = await connectionManager.runnerClient().forkTask(selectedTask.id, {
             runner: forkRunner,
             input: optimisticText,
+            // A fork continues a conversation the user is ALREADY having with
+            // this machine — placement must not bounce it to a Cloud Workspace
+            // that is waking. allowLocalFallback keeps the fork here even when
+            // Convex would prefer a cloud lane (2026-08-08).
+            allowLocalFallback: true,
           });
           // Switch the chat to the new child so subsequent follow-ups
           // continue against the forked task.
@@ -4164,6 +4297,29 @@ export default function TasksScreen() {
       // The send failed, so the message never reached the runner. Take the
       // optimistic turn back out rather than leaving a phantom message.
       rollbackOptimisticTurn();
+      // A fork refused with 409 cloud_workspace_required (placement prefers a
+      // Cloud Workspace that is waking/blocked). We send allowLocalFallback:true
+      // so this should be rare — but if an older agent ignores it, defer the
+      // fork like a new task instead of surfacing a raw 409 dead end.
+      if (err instanceof CloudWorkspaceRequiredError && selectedTask) {
+        try {
+          const forkTask = await saveDeferredCloudWorkspaceTask(err, {
+            title: `Continue "${normalizeTaskTitle(selectedTask.title)}" on ${(selectedRunner || selectedTask.runnerId || "claude").trim()}`,
+            description: optimisticText,
+            runner: (selectedRunner || selectedTask.runnerId || "claude").trim(),
+            workDir: projectDir || undefined,
+          });
+          setSelectedTask((prev) => (prev && prev.id === selectedTask.id ? forkTask : prev));
+          setTasks((prev) => [forkTask, ...prev.filter((t) => t.id !== forkTask.id)]);
+          Alert.alert(
+            "Cloud Workspace is preparing",
+            "Yaver kept this switch on your phone and will dispatch it when the assigned workspace is ready.",
+          );
+          return;
+        } catch {
+          // fall through to the generic alert below
+        }
+      }
       // SURFACE it. A silent rollback is exactly why the second follow-up
       // "vanished" with no explanation (2026-07-21): the user saw the message
       // disappear and had no idea it hadn't sent. The typed text is preserved
@@ -6521,6 +6677,38 @@ export default function TasksScreen() {
                     render its preview as an in-modal overlay instead. */}
                 {isEffectivelyConnected && <DevPreview hostedInModal />}
 
+                {/* opencode Chat|Terminal toggle — opencode tasks stream raw
+                    runner stdout (ANSI + TUI) that the chat bubbles flatten,
+                    so offer a real terminal view. Other runners keep the chat
+                    only (no toggle, zero surface change). */}
+                {isOpenCodeTask ? (
+                  <View style={{ flexDirection: "row", justifyContent: "center", paddingVertical: 8 }}>
+                    <View style={{ flexDirection: "row", borderRadius: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCardElevated, overflow: "hidden" }}>
+                      {(["chat", "terminal"] as const).map((mode) => (
+                        <Pressable
+                          key={mode}
+                          onPress={() => setTaskViewMode(mode)}
+                          style={[
+                            { paddingHorizontal: 18, paddingVertical: 6 },
+                            taskViewMode === mode && { backgroundColor: c.accent },
+                          ]}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Show ${mode} view`}
+                        >
+                          <Text
+                            style={[
+                              { fontSize: 13, fontWeight: "600", textTransform: "capitalize" },
+                              { color: taskViewMode === mode ? "#fff" : c.textMuted },
+                            ]}
+                          >
+                            {mode}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+
                 {/* Chat messages */}
                 {/* FlatList (not ScrollView+.map) so streaming a 60-message
                     chat doesn't re-render every prior bubble each token —
@@ -6530,6 +6718,16 @@ export default function TasksScreen() {
                     equality, so windowed rows skip re-render entirely.
                     PhaseStatusLine + DebugSection ride along as
                     ListFooterComponent. */}
+                {isOpenCodeTask && taskViewMode === "terminal" ? (
+                  <XtermView
+                    ref={xtermRef}
+                    onReady={drainRawToTerminal}
+                    background="#0b0e14"
+                    foreground="#d7dce5"
+                    fontSize={12}
+                    style={s.chatScroll}
+                  />
+                ) : (
                   <FlatList
                     ref={chatScrollRef as any}
                     data={chatMessages}
@@ -6690,6 +6888,7 @@ export default function TasksScreen() {
                       </>
                     }
                   />
+                )}
 
                 {/* Follow-up input: compact bar, expands to full card on tap */}
                 {followUpExpanded ? (

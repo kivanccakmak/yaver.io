@@ -280,7 +280,6 @@ export default function SettingsScreen() {
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [ttsProvider, setTtsProvider] = useState<TtsProvider>("device");
   const [ttsTaskMode, setTtsTaskMode] = useState(false);
-  const [defaultTaskInputMode, setDefaultTaskInputMode] = useState<"voice" | "text">("voice");
   const [verbosity, setVerbosity] = useState(10);
   const [showSpeechConfig, setShowSpeechConfig] = useState(false);
   const [isSavingSpeech, setIsSavingSpeech] = useState(false);

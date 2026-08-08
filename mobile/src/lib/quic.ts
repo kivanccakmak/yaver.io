@@ -2828,7 +2828,7 @@ export class QuicClient {
    */
   async forkTask(
     taskId: string,
-    args: { runner: string; model?: string; mode?: string; input: string; contextWords?: number },
+    args: { runner: string; model?: string; mode?: string; input: string; contextWords?: number; allowLocalFallback?: boolean },
   ): Promise<{ taskId: string; runnerId: string; parentTaskId: string; contextWordsUsed: number }> {
     this.assertConnected();
     // Same iOS conn-pool headroom + hard timeout as continueTask/sendTask: a fork
@@ -2845,6 +2845,7 @@ export class QuicClient {
           mode: args.mode ?? "",
           input: args.input,
           contextWords: args.contextWords,
+          allowLocalFallback: args.allowLocalFallback ?? false,
         }),
       }, 30000);
     } catch (e) {
@@ -2856,6 +2857,14 @@ export class QuicClient {
       throw e;
     }
     if (!res.ok) {
+      // Fork is a continuation of a conversation the user is ALREADY having
+      // with this machine. When placement prefers a Cloud Workspace that is
+      // waking/blocked, the agent answers 409 cloud_workspace_required — the
+      // same deferral shape as sendTask — so decode it identically and let
+      // the caller route through the pending-cloud-dispatch flow instead of
+      // surfacing a raw "Failed to fork task: 409" dead end (2026-08-08).
+      const cloudRequired = await decodeCloudWorkspaceRequiredError(res);
+      if (cloudRequired) throw cloudRequired;
       const text = await res.text().catch(() => "");
       throw new Error(`Failed to fork task: ${res.status} ${text}`);
     }
@@ -2974,6 +2983,12 @@ export class QuicClient {
    * Event types currently emitted by the daemon (handleTaskByID/streamOutput):
    *   - {type:"output", text} — text chunk; routed to onData
    *   - {type:"done", status} — terminal state; routed to onDone
+   *   - {type:"raw", text, offset} — the runner's RAW stdout bytes (ANSI +
+   *     TUI intact), offset = authoritative byte cursor; routed to onRaw.
+   *     Only emitted when `?rawSince=` was requested.
+   *   - {type:"raw_replay", text, offset, full} — one-shot seed of the raw
+   *     tail at subscribe time (full=true → replace, else append); routed
+   *     to onRaw. Only emitted when `?rawSince=` was requested.
    *   - {type:"agent_question", question} — runner is asking the human;
    *     routed to onEvent. The UI should render a sheet and POST the
    *     answer to /tasks/{id}/answer (see answerTaskQuestion below).
@@ -3000,6 +3015,22 @@ export class QuicClient {
        */
       since?: number;
       /**
+       * Byte offset into the task's RAW stdout tail this caller already
+       * holds. Pass 0 to seed a terminal with the full retained tail
+       * (`?rawSince=0` → a `raw_replay` frame with full=true); pass the
+       * offset from a previous `raw`/`raw_replay` frame to resume without
+       * duplicates. Omit to keep the byte-for-byte pre-raw stream (no
+       * `raw_replay` frame, no `raw` frames).
+       */
+      rawSince?: number;
+      /**
+       * Raw stdout bytes (ANSI + TUI intact). full=true means the text is a
+       * snapshot to REPLACE the terminal with; false means append. Offset is
+       * the agent's authoritative raw byte cursor — pass it back as
+       * `rawSince` on reattach.
+       */
+      onRaw?: (text: string, offset: number, full: boolean) => void;
+      /**
        * How the stream ENDED. Previously this was `xhr.onerror = () => {}`
        * with the comment "silent (matches the previous behavior)" — so a
        * relay bounce or box drop mid-render stopped the transcript growing
@@ -3019,10 +3050,19 @@ export class QuicClient {
     // onprogress callback fires as data arrives on both platforms.
     // Same workaround that settings.tsx already uses for `yaver logs -f`.
     const since = Number(opts?.since || 0);
-    const url =
-      since > 0
-        ? `${this.baseUrl}/tasks/${taskId}/output?since=${encodeURIComponent(String(Math.floor(since)))}`
-        : `${this.baseUrl}/tasks/${taskId}/output`;
+    const rawSince = opts?.rawSince;
+    // Both cursors ride the SAME stream: `?since=` (groomed transcript) and
+    // `?rawSince=` (raw runner stdout) are independent params on one
+    // endpoint, so a single XHR feeds both the chat bubbles and the
+    // terminal. rawSince=0 is meaningful (full snapshot) so it is appended
+    // whenever the caller passed a value, including 0.
+    let url = `${this.baseUrl}/tasks/${taskId}/output`;
+    const q: string[] = [];
+    if (since > 0) q.push(`since=${encodeURIComponent(String(Math.floor(since)))}`);
+    if (typeof rawSince === "number" && rawSince >= 0) {
+      q.push(`rawSince=${encodeURIComponent(String(Math.floor(rawSince)))}`);
+    }
+    if (q.length) url += `?${q.join("&")}`;
     const xhr = new XMLHttpRequest();
     let lastIndex = 0;
     let aborted = false;
@@ -3065,6 +3105,24 @@ export class QuicClient {
             // equals the byte length for ASCII, and `?since=` is sliced in
             // bytes. See desktop/agent/stream_cursor.go.
             onData(evt.text, typeof evt.offset === "number" ? evt.offset : undefined);
+          } else if (evt.type === "raw" && evt.text) {
+            // Raw runner stdout (ANSI + TUI intact) for the terminal view.
+            // offset is the raw byte cursor — the caller passes it back as
+            // `rawSince` on reattach so the terminal resumes without gaps.
+            opts?.onRaw?.(
+              evt.text,
+              typeof evt.offset === "number" ? evt.offset : 0,
+              false,
+            );
+          } else if (evt.type === "raw_replay" && evt.text) {
+            // One-shot seed of the raw tail at subscribe time. full=true →
+            // the caller's terminal must RESET before appending (snapshot,
+            // not increment). Only sent when the caller asked with `?rawSince=`.
+            opts?.onRaw?.(
+              evt.text,
+              typeof evt.offset === "number" ? evt.offset : 0,
+              evt.full === true,
+            );
           } else if (evt.type === "done") {
             // Record the terminal frame even when the caller passed no
             // onDone — it is what separates "the task finished" from
