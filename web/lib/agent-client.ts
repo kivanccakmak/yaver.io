@@ -88,6 +88,12 @@ export interface Task {
   runnerId?: string;
   model?: string;
   output: string[];
+  /** Tail of the runner's RAW stdout (ANSI + TUI bytes, ungroomed) from
+   *  `GET /tasks/{id}` — seeds the opencode terminal view. `rawOffset` is
+   *  the byte length of the FULL retained tail, the cursor for
+   *  `streamTaskOutput({ rawSince })` resume. */
+  rawOutput?: string;
+  rawOffset?: number;
   resultText?: string;
   costUsd?: number;
   turns?: ConversationTurn[];
@@ -2334,6 +2340,8 @@ export class AgentClient {
       output: typeof t.output === "string" && t.output
         ? t.output.split("\n").filter((l: string) => l)
         : Array.isArray(t.output) ? t.output : [],
+      rawOutput: typeof t.rawOutput === "string" ? t.rawOutput : undefined,
+      rawOffset: typeof t.rawOffset === "number" ? t.rawOffset : undefined,
       resultText: t.resultText || undefined,
       costUsd: t.costUsd || undefined,
       turns: t.turns || undefined,
@@ -3351,6 +3359,15 @@ export class AgentClient {
        */
       since?: number;
       /**
+       * Byte offset into the task's RAW stdout tail (ANSI + TUI, ungroomed)
+       * this caller already rendered (`?rawSince=`). The agent answers with a
+       * `raw_replay` frame (full snapshot when 0/absent) followed by live
+       * `raw` frames, so the opencode terminal view reattaches without
+       * re-rendering bytes it already drew. Omit for byte-for-byte old
+       * behaviour (no raw frames at all on this stream).
+       */
+      rawSince?: number;
+      /**
        * How the stream ENDED. This used to be a bare `catch {}` commented
        * "Silent best-effort stream; callers usually poll task status too" —
        * but the poll goes over the SAME dead transport, so a relay bounce
@@ -3362,10 +3379,13 @@ export class AgentClient {
   ): () => void {
     const controller = new AbortController();
     const since = Number(opts?.since || 0);
-    const url =
-      since > 0
-        ? `${this.taskBaseUrl}/tasks/${taskId}/output?since=${encodeURIComponent(String(Math.floor(since)))}`
-        : `${this.taskBaseUrl}/tasks/${taskId}/output`;
+    const rawSince = Number(opts?.rawSince || 0);
+    const qs: string[] = [];
+    if (since > 0) qs.push(`since=${encodeURIComponent(String(Math.floor(since)))}`);
+    if (rawSince > 0) qs.push(`rawSince=${encodeURIComponent(String(Math.floor(rawSince)))}`);
+    const url = qs.length > 0
+      ? `${this.taskBaseUrl}/tasks/${taskId}/output?${qs.join("&")}`
+      : `${this.taskBaseUrl}/tasks/${taskId}/output`;
     let sawDone = false;
     let cancelled = false;
     let endReported = false;

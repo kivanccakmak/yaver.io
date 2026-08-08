@@ -39,6 +39,10 @@ export interface TaskStreamSource {
     onEvent?: (event: Record<string, unknown>) => void,
     opts?: {
       since?: number;
+      /** Byte offset into the task's RAW stdout tail already rendered —
+       *  resume the opencode terminal view (`?rawSince=`) without
+       *  re-rendering bytes. See AgentClient.streamTaskOutput. */
+      rawSince?: number;
       onEnd?: (info: { sawDone: boolean; cancelled: boolean; error?: string }) => void;
     },
   ): () => void;
@@ -53,6 +57,11 @@ export interface TaskStreamRecoveryOptions {
    *  SHORTER than ours (task re-created / output reset), so what follows
    *  REPLACES rather than appends. */
   onResumeFull?: () => void;
+  /** Byte offset into the task's RAW stdout tail this caller already
+   *  rendered (opencode terminal view). Drives the `?rawSince=` resume on
+   *  every (re)subscribe; 0/absent starts the raw replay from the retained
+   *  tail head. */
+  rawSince?: number;
 }
 
 /**
@@ -71,6 +80,11 @@ export function streamTaskOutputWithRecovery(
   // Bytes received from the STREAM — the offset the agent resumes from, so a
   // reattach replays only what we missed instead of the whole transcript.
   let received = 0;
+  // Bytes of RAW stdout the terminal view already rendered. Updated from the
+  // authoritative `raw_replay.offset` / `raw.offset` frames; passed as
+  // `?rawSince=` on every subscribe so an opencode terminal reattaches
+  // without re-rendering its scrollback.
+  let rawReceived = options?.rawSince ?? 0;
   let attempt = 0;
   let disposed = false;
   let stop: (() => void) | null = null;
@@ -97,14 +111,22 @@ export function streamTaskOutputWithRecovery(
         onChunk(chunk);
       },
       (event) => {
-        if (event && (event as { type?: string }).type === "resume" && (event as { full?: boolean }).full === true) {
+        const ev = event as { type?: string; offset?: number; [k: string]: unknown };
+        if (ev.type === "resume" && ev.full === true) {
           received = 0;
           options?.onResumeFull?.();
         }
-        onEvent?.(event as Record<string, unknown>);
+        // Authoritative raw byte cursor — the terminal view's resume offset.
+        // Also lets a raw_replay full-snapshot reset the cursor so a
+        // re-subscribe never requests a since that's past the retained tail.
+        if ((ev.type === "raw_replay" || ev.type === "raw") && typeof ev.offset === "number") {
+          rawReceived = ev.offset;
+        }
+        onEvent?.(ev);
       },
       {
         since,
+        rawSince: rawReceived,
         onEnd: (info) => {
           if (disposed) return;
           const plan = planStreamRecovery({

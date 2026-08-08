@@ -288,6 +288,9 @@ async function renderOverview() {
         <span class="tag ${task.status === 'completed' ? 'ok' : (task.status === 'failed' ? 'down' : '')}">${task.status}</span>
         <span class="name">${task.title || task.id}</span>
         <span class="muted">${task.runnerId || ''}</span>
+        <div class="actions" style="margin-left:auto">
+          <button class="act" onclick="showTaskRaw('${task.id}')" title="Raw runner stdout (ANSI + TUI intact)">Raw</button>
+        </div>
       </div>
       ${task.resultText ? `<div class="muted" style="margin-top:6px">${task.resultText}</div>` : ""}
       ${video}
@@ -307,6 +310,116 @@ async function renderOverview() {
     <p class="tip">Standalone in-agent console. Full dashboard with richer UI: <a href="https://yaver.io/dashboard" style="color:#818cf8">yaver.io/dashboard</a></p>
   `;
 }
+
+// ── Task Raw view ─────────────────────────────────────────────────────
+// Per-task RAW runner stdout (ANSI + TUI intact). The agent retains a
+// tail-capped byte buffer (rawOutputMaxBytes, 512KB) and replays it via
+// `GET /tasks/{id}/output?rawSince=<bytes>`:
+//   - `rawSince=0`        → one `raw_replay` frame (full=true = snapshot)
+//   - live frames         → `raw` frames until the stream closes
+// Rendered into a `.terminal-screen` pre (`white-space: pre-wrap`) — ANSI is
+// NOT re-stripped, the bytes paint as the runner produced them.
+let taskRawController = null;   // AbortController for the current stream
+let taskRawLive = false;        // one-shot tail vs live subscribe
+let taskRawCursor = 0;          // raw byte cursor for `?rawSince=`
+let taskRawBuffer = "";         // accumulated raw bytes (cap 512KB)
+
+function taskRawStop() {
+  if (taskRawController) { try { taskRawController.abort(); } catch {} taskRawController = null; }
+  taskRawLive = false;
+}
+
+function taskRawPaint() {
+  const el = document.getElementById("rawScreen");
+  if (el) { el.textContent = taskRawBuffer || "(no raw output)"; el.scrollTop = el.scrollHeight; }
+}
+
+function taskRawStatus(text) {
+  const el = document.getElementById("rawStatus");
+  if (el) el.textContent = text || "";
+}
+
+async function taskRawSubscribe(id) {
+  taskRawStop();
+  const ac = new AbortController();
+  taskRawController = ac;
+  const url = `${root}/tasks/${id}/output?rawSince=${taskRawCursor}`;
+  taskRawStatus(taskRawLive ? "subscribing (live)…" : "fetching raw tail…");
+  let res;
+  try {
+    res = await fetch(url, { headers, signal: ac.signal });
+  } catch (e) {
+    if (e.name !== "AbortError") { taskRawStatus("request failed: " + e.message); return; }
+    return;
+  }
+  if (!res.ok || !res.body) { taskRawStatus("HTTP " + res.status); return; }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const evt = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        const line = evt.split("\n").find(l => l.startsWith("data: "));
+        if (!line) continue;
+        let frame;
+        try { frame = JSON.parse(line.slice(6)); } catch { continue; }
+        if (frame.type === "raw_replay" || frame.type === "raw") {
+          if (frame.text) {
+            if (frame.type === "raw_replay" && frame.full === true) taskRawBuffer = frame.text;
+            else taskRawBuffer = (taskRawBuffer + frame.text).slice(-512 * 1024);
+          }
+          if (typeof frame.offset === "number") taskRawCursor = frame.offset;
+          taskRawPaint();
+          if (frame.type === "raw_replay" && !taskRawLive) {
+            // One-shot tail: the snapshot IS the whole retained buffer.
+            taskRawStatus("tail shown · " + taskRawCursor + " bytes");
+            try { reader.cancel(); } catch {}
+            return;
+          }
+        }
+      }
+    }
+    taskRawStatus("stream ended");
+  } catch (e) {
+    if (e.name !== "AbortError") taskRawStatus("stream error: " + e.message);
+  }
+}
+
+window.showTaskRaw = async (id) => {
+  let task = null;
+  try {
+    const t = await api("/tasks/" + id);
+    task = t.task || t;
+  } catch {}
+  view.innerHTML = `
+    <button class="act" onclick="taskRawStop(); render()">← Back</button>
+    <div style="margin-top:12px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        ${task ? `<span class="tag ${task.status === 'completed' ? 'ok' : (task.status === 'failed' ? 'down' : '')}">${task.status}</span>
+        <span class="name">${task.title || task.id}</span>
+        <span class="muted">${task.runnerId || ''}</span>` : `<span class="muted">${id}</span>`}
+        <button class="act" id="rawToggleBtn" onclick="taskRawToggleLive('${id}')">▶ Live</button>
+        <span class="muted" id="rawStatus"></span>
+      </div>
+      <pre class="terminal-screen" id="rawScreen"></pre>
+    </div>`;
+  taskRawCursor = 0;
+  taskRawBuffer = "";
+  taskRawLive = false;
+  await taskRawSubscribe(id);
+};
+
+window.taskRawToggleLive = (id) => {
+  taskRawLive = !taskRawLive;
+  const btn = document.getElementById("rawToggleBtn");
+  if (btn) btn.textContent = taskRawLive ? "⏸ Tail" : "▶ Live";
+  taskRawSubscribe(id);
+};
 
 async function renderContainers() {
   const r = await api("/console/containers?all=1");
