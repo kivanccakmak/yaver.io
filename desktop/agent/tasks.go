@@ -62,6 +62,18 @@ func saveImages(taskID string, images []ImageAttachment) []string {
 // TaskStatus represents the lifecycle state of a task.
 type TaskStatus string
 
+// rawOutputMaxBytes caps the in-memory raw runner-stdout tail retained on
+// the Task for the console view's `?rawSince=` replay. Raw bytes are dense
+// (ANSI + TUI redraws can exceed the groomed text 10x), so an uncapped
+// tail would hold a multi-hour opencode run hostage in RAM — same defect
+// the streamBuffer caps exist for. Keep the tail; the head is rarely
+// useful by 512KB of terminal bytes.
+const rawOutputMaxBytes = 512 * 1024
+
+// rawOutputTruncatedMarker marks the head of a tail-capped raw replay so a
+// client opening the console mid-run knows the earliest bytes were dropped.
+const rawOutputTruncatedMarker = "\n…[console replay truncated — earlier terminal bytes dropped]…\n"
+
 const (
 	TaskStatusQueued   TaskStatus = "queued"
 	TaskStatusRunning  TaskStatus = "running"
@@ -1107,7 +1119,15 @@ type Task struct {
 	// --continue, codex via exec resume). Default false = fresh spawn.
 	ResumeLast   bool                  `json:"-"`
 	Output       string                `json:"output"`
-	ResultText   string                // Extracted clean result text from Claude
+	// RawOutput is the raw runner stdout tail (ANSI intact) retained for
+	// the console view's `?rawSince=` replay. Mirrors `Output` — written
+	// by readRawOutput BEFORE the grooming filters, tail-capped to
+	// rawOutputMaxBytes so a runaway TUI can't hold memory forever. Never
+	// shipped in task listings (surfaces get it via the SSE raw frames /
+	// the raw replay endpoint), so it is deliberately not `json:"-"`-
+	// hidden here: the field lives on the in-memory Task only.
+	RawOutput    string `json:"-"`
+	ResultText   string // Extracted clean result text from Claude
 	Failure      *TaskFailureDiagnosis `json:"failure,omitempty"`
 	CostUSD      float64               // Total API cost
 	InputTokens  int                   // Tokens consumed (prompt + cache reads + cache creation)
@@ -1218,6 +1238,16 @@ type Task struct {
 	cancel           context.CancelFunc
 	stdin            io.WriteCloser
 	outputCh         chan string
+	// rawOutputCh carries the runner's RAW stdout bytes — ANSI escape
+	// sequences, cursor addressing, TUI box-drawing, everything — as they
+	// arrived from the process, BEFORE the per-runner grooming filters
+	// (opencodeStreamFilter / stripANSI) turn them into chat text. The
+	// console view on mobile + web feeds these exact bytes into xterm.js,
+	// so a task run under opencode looks the way it does in a real
+	// terminal instead of a flattened paragraph. Drops on full (same
+	// policy as outputCh) — the raw replay endpoint (`?rawSince=`) is the
+	// reliable recovery path.
+	rawOutputCh chan []byte
 	// echoGuard suppresses a raw-mode runner's verbatim echo of the
 	// Yaver-framed prompt before it reaches task.Output or the live stream.
 	// Armed by startProcess / startResume with the exact bytes we sent; nil
@@ -1356,6 +1386,16 @@ type TaskInfo struct {
 	DeviceName   string                `json:"deviceName,omitempty"`
 	SessionID    string                `json:"sessionId,omitempty"`
 	Output       string                `json:"output,omitempty"`
+	// RawOutput is the tail of the runner's RAW stdout (ANSI escape
+	// sequences, TUI redraws, box-drawing — everything the grooming filters
+	// strip) retained for the console/terminal view. Only populated on the
+	// task-detail endpoint, and wire-capped below; the SSE stream is the
+	// live path (`?rawSince=` replay + `raw` frames).
+	RawOutput string `json:"rawOutput,omitempty"`
+	// RawOffset is the byte length of the FULL retained raw tail at
+	// snapshot time — the cursor a client passes to `?rawSince=` to resume
+	// the raw stream without re-fetching bytes it already rendered.
+	RawOffset int `json:"rawOffset,omitempty"`
 	ResultText   string                `json:"resultText,omitempty"`
 	Failure      *TaskFailureDiagnosis `json:"failure,omitempty"`
 	CostUSD      float64               `json:"costUsd,omitempty"`
@@ -1918,6 +1958,7 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		runner:                      taskRunner,
 		CreatedAt:                   now,
 		outputCh:                    make(chan string, 512),
+		rawOutputCh:                 make(chan []byte, 256),
 		eventCh:                     make(chan map[string]interface{}, 32),
 		doneCh:                      make(chan struct{}),
 		WorkDir:                     strings.TrimSpace(opts.WorkDir),
@@ -3229,6 +3270,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 
 					// Re-create channels for the new process
 					task.outputCh = make(chan string, 512)
+					task.rawOutputCh = make(chan []byte, 256)
 					task.eventCh = make(chan map[string]interface{}, 32)
 					task.doneCh = make(chan struct{})
 
@@ -3504,6 +3546,11 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 			n, err := r.Read(buf)
 			if n > 0 {
 				payload := buf[:n]
+				// Retain the RAW bytes BEFORE any grooming filter runs. The
+				// console view on mobile + web feeds these exact bytes to
+				// xterm.js, so an opencode run paints its TUI the way it
+				// does in a real terminal. See emitRaw.
+				tm.emitRaw(task, payload)
 				if ocFilter != nil {
 					payload = ocFilter.process(payload)
 				} else if stripLiveANSI {
@@ -3635,6 +3682,43 @@ func (tm *TaskManager) armPromptEchoGuard(task *Task, prompt string) {
 	tm.mu.Lock()
 	task.echoGuard = newPromptEchoGuard(prompt)
 	tm.mu.Unlock()
+}
+
+// emitRaw retains the runner's RAW stdout bytes — ANSI and all — for the
+// console view, BEFORE the per-runner grooming filters strip them. Called
+// once per raw chunk in readRawOutput, immediately after the read, so the
+// retained tail is byte-for-byte what the process wrote to the terminal.
+//
+// Two consumers, both tail-capped:
+//   - task.rawOutputCh carries the chunk to live SSE subscribers (drops on
+//     full, same policy as outputCh; the replay endpoint is the recovery
+//     path).
+//   - task.RawOutput accumulates a tail-capped byte buffer that
+//     `GET /tasks/{id}/output?rawSince=` replays to a late-joining or
+//     reconnecting console client.
+func (tm *TaskManager) emitRaw(task *Task, chunk []byte) {
+	if task == nil || len(chunk) == 0 {
+		return
+	}
+	// Copy before any async send: chunk aliases the read buffer, which the
+	// next Read call reuses.
+	cp := make([]byte, len(chunk))
+	copy(cp, chunk)
+	// Retain BEFORE the live send, so by the time a subscriber drains the
+	// channel the retained tail already includes this chunk — the `offset`
+	// the SSE raw frame carries is then a cursor that can never point past
+	// bytes the subscriber is about to receive.
+	tm.mu.Lock()
+	task.RawOutput += string(chunk)
+	if len(task.RawOutput) > rawOutputMaxBytes {
+		task.RawOutput = rawOutputTruncatedMarker +
+			task.RawOutput[len(task.RawOutput)-rawOutputMaxBytes:]
+	}
+	tm.mu.Unlock()
+	select {
+	case task.rawOutputCh <- cp:
+	default:
+	}
 }
 
 // emit pushes text to both the output buffer and the streaming channel.
@@ -4199,6 +4283,7 @@ func (tm *TaskManager) ResumeTaskWithOptions(id, input string, images []ImageAtt
 
 	// Re-create channels for the new run
 	task.outputCh = make(chan string, 512)
+	task.rawOutputCh = make(chan []byte, 256)
 	task.eventCh = make(chan map[string]interface{}, 32)
 	task.doneCh = make(chan struct{})
 
@@ -4365,6 +4450,7 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 				task.FinishedAt = nil
 				task.Status = TaskStatusQueued
 				task.outputCh = make(chan string, 512)
+				task.rawOutputCh = make(chan []byte, 256)
 				task.eventCh = make(chan map[string]interface{}, 32)
 				task.doneCh = make(chan struct{})
 				tm.persist()
@@ -4728,6 +4814,7 @@ func (tm *TaskManager) CreateChainedTasks(tasks []ChainedTaskInput, model, sourc
 			runner:       taskRunner,
 			CreatedAt:    now,
 			outputCh:     make(chan string, 512),
+			rawOutputCh:  make(chan []byte, 256),
 			eventCh:      make(chan map[string]interface{}, 32),
 			doneCh:       make(chan struct{}),
 			ChainID:      chainID,

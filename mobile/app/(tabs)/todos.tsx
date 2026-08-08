@@ -180,7 +180,7 @@ export default function TodosScreen() {
       return;
     }
     try {
-      const result = await quicClient.sendTask(todo.title, "");
+      const result = await quicClient.sendTask(todo.title, todo.title);
       await persist(todos.map(t => t.id === todo.id ? { ...t, done: true, taskId: result?.id } : t));
     } catch (e: any) {
       Alert.alert("Couldn't Send Todo", `Yaver couldn't send this todo to your agent. Check your connection and try again.\n\n${e?.message || "Failed"}`);

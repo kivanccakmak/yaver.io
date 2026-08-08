@@ -4600,6 +4600,15 @@ func (s *HTTPServer) taskInfoFromTask(task *Task, r *http.Request) TaskInfo {
 	if len(output) > 10000 {
 		output = output[len(output)-10000:]
 	}
+	// Raw tail: full retained tail is capped at rawOutputMaxBytes by
+	// emitRaw; the WIRE gets the last taskWireRawOutputCap bytes plus the
+	// authoritative byte length (rawOffset) so a client can seed a terminal
+	// and resume the raw stream from `?rawSince=<rawOffset>` without overlap.
+	rawOutput := task.RawOutput
+	rawOffset := len(rawOutput)
+	if len(rawOutput) > taskWireRawOutputCap {
+		rawOutput = rawOutput[len(rawOutput)-taskWireRawOutputCap:]
+	}
 	hostname, _ := os.Hostname()
 	info := TaskInfo{
 		ID:          task.ID,
@@ -4614,6 +4623,8 @@ func (s *HTTPServer) taskInfoFromTask(task *Task, r *http.Request) TaskInfo {
 		DeviceName: hostname,
 		SessionID:  task.SessionID,
 		Output:     output,
+		RawOutput:  rawOutput,
+		RawOffset:  rawOffset,
 		ResultText: task.ResultText,
 		Failure:    task.Failure,
 		CostUSD:    task.CostUSD,
@@ -4664,6 +4675,14 @@ const (
 	taskWireResultTextCap  = 64 * 1024
 	taskWireTurnContentCap = 16 * 1024
 	taskWireMaxTurns       = 50
+	// taskWireRawOutputCap caps the raw stdout tail shipped on the
+	// task-detail JSON. Raw ANSI/TUI bytes are denser than the groomed
+	// transcript (an opencode run redraws the same line hundreds of times),
+	// so the full retained tail (rawOutputMaxBytes, 512KB) would make every
+	// 2s poll a ~512KB relay transfer for the whole duration of a run. 64KB
+	// seeds any terminal screen; the SSE `?rawSince=` replay + `raw` frames
+	// are the live path.
+	taskWireRawOutputCap = 64 * 1024
 )
 
 func capTaskTranscript(info *TaskInfo) {
@@ -4834,17 +4853,28 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	//
 	// customCommand is a legitimate promptless task (it runs a command, not a
 	// model), so it satisfies the requirement on its own.
+	//
+	// `title` is ALSO a legitimate prompt carrier. startProcess falls back to
+	// task.Title when no PromptText was scaffolded (tasks.go), and the mobile
+	// code-mode composer sends the user's text in `title` with `description`
+	// empty. On 2026-08-07 the phone's every code-mode task was refused with
+	// "this task has no prompt" — the guard checked description/userPrompt/
+	// customCommand but not title, while the runner would happily have used
+	// title. A task with a non-empty title is never promptless; only a body
+	// where ALL FOUR are empty must be refused.
 	if strings.TrimSpace(body.Description) == "" &&
 		strings.TrimSpace(body.UserPrompt) == "" &&
-		strings.TrimSpace(body.CustomCommand) == "" {
+		strings.TrimSpace(body.CustomCommand) == "" &&
+		strings.TrimSpace(body.Title) == "" {
 		jsonErrorWithGap(w, http.StatusBadRequest,
-			"this task has no prompt — send the instruction in `description` (or `userPrompt`), or set `customCommand` for a non-model task",
+			"this task has no prompt — send the instruction in `description` (or `userPrompt`), set `customCommand` for a non-model task, or put it in `title`",
 			&CapabilityGap{
 				Code:       ReasonTaskPromptMissing,
 				Capability: "task-prompt",
 				Summary:    "That task arrived with no instruction, so nothing was started.",
 				Detail: "The agent reads the instruction from `description` (or `userPrompt`); " +
-					"`customCommand` is the promptless alternative for running a command. " +
+					"`customCommand` is the promptless alternative for running a command; " +
+					"`title` also counts when it carries the instruction (mobile code-mode). " +
 					"Nothing was dispatched and no runner turn was spent.",
 				Constraint: "Only the caller has the text — the agent cannot invent an instruction, " +
 					"so there is no button that fixes this from here.",
@@ -5356,6 +5386,47 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 		flusher.Flush()
 	}
 
+	// Raw replay. `?rawSince=<bytes>` resumes the runner's RAW stdout tail —
+	// ANSI escape sequences, TUI redraws, box-drawing, everything the
+	// grooming filters strip — which is the terminal-view path for opencode.
+	// The offset is a byte position in the FULL retained tail (the same
+	// string getTask exposes as rawOutput/rawOffset), so a client that
+	// seeded xterm from a poll can resume without re-rendering bytes it
+	// already holds. Mirrors the groomed resume semantics: `full` tells the
+	// client whether the frame is a tail increment (append) or a full
+	// snapshot (replace), and a `since` past the end falls back to a full
+	// snapshot. Omitting `rawSince` is byte-for-byte the old behavior —
+	// no raw_replay frame is emitted at all, and live `raw` frames below
+	// are additive, so existing mobile/web clients are untouched.
+	rawSinceRequested := r.URL.Query().Has("rawSince")
+	if rawSinceRequested {
+		s.taskMgr.mu.RLock()
+		fullRaw := task.RawOutput
+		s.taskMgr.mu.RUnlock()
+		rawSince := 0
+		if n, err := strconv.Atoi(r.URL.Query().Get("rawSince")); err == nil && n > 0 {
+			rawSince = n
+		}
+		rawFull := rawSince <= 0 || rawSince > len(fullRaw)
+		rawReplay := fullRaw
+		if !rawFull {
+			// Same rune-backup as the groomed slice: `rawSince` arrives as
+			// JS UTF-16 units; slicing mid-rune ships invalid UTF-8.
+			rawSince = alignToRuneStart(fullRaw, rawSince)
+			rawReplay = fullRaw[rawSince:]
+		}
+		rawOffset := len(fullRaw)
+		if rawReplay != "" || rawFull {
+			fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
+				"type":   "raw_replay",
+				"text":   rawReplay,
+				"offset": rawOffset,
+				"full":   rawFull,
+			}))
+			flusher.Flush()
+		}
+	}
+
 	// If already finished, send done event and return.
 	if currentStatus == TaskStatusFinished || currentStatus == TaskStatusReview || currentStatus == TaskStatusFailed || currentStatus == TaskStatusStopped {
 		fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
@@ -5379,6 +5450,16 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	// Stream live output from the channel.
+	//
+	// Cap per-chunk size before shipping to mobile / web. A runaway codex
+	// stdout (npm install logs, bytecode dumps, 4 GB tarball pulls) used to
+	// ship verbatim and froze the mobile transcript view's main thread when
+	// it tried to render the accumulated buffer. We protect every consumer
+	// at the source: anything above maxStreamChunkBytes gets truncated with
+	// a readable marker. The full stream is still preserved in task.Output
+	// for the Logs view. The raw terminal lane uses the same cap — xterm.js
+	// tolerates a partial escape sequence at a chunk boundary.
+	const maxStreamChunkBytes = 4096
 	for {
 		select {
 		case <-ctx.Done():
@@ -5388,6 +5469,34 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 				continue
 			}
 			fmt.Fprintf(w, "data: %s\n\n", jsonString(ev))
+			flusher.Flush()
+		case raw := <-task.rawOutputCh:
+			// Live RAW bytes (ANSI + TUI, ungroomed) for the terminal view.
+			// rawOutputCh is deliberately never closed (emitRaw does a
+			// non-blocking send, which would panic on a closed channel), so
+			// this case simply stops firing once the process ends and the
+			// closed outputCh case terminates the stream. Same chunk cap +
+			// rune alignment as the groomed frames: xterm.js tolerates a
+			// partial escape sequence at a chunk boundary (it buffers
+			// incomplete sequences), and the `?rawSince=` replay is the
+			// reliable recovery path for a late join.
+			//
+			// `offset` is the AUTHORITATIVE raw byte cursor — len(RawOutput)
+			// AFTER emitRaw retained this chunk (emitRaw appends before it
+			// sends), so a client that re-subscribes with `?rawSince=<offset>`
+			// never re-renders bytes it already drew.
+			s.taskMgr.mu.RLock()
+			rawOff := len(task.RawOutput)
+			s.taskMgr.mu.RUnlock()
+			if len(raw) > maxStreamChunkBytes {
+				keep := alignToRuneStart(string(raw), maxStreamChunkBytes)
+				raw = raw[:keep]
+			}
+			fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
+				"type":   "raw",
+				"text":   string(raw),
+				"offset": rawOff,
+			}))
 			flusher.Flush()
 		case text, ok := <-task.outputCh:
 			if !ok {
@@ -5421,7 +5530,6 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 			// at the source: anything above maxStreamChunkBytes gets
 			// truncated with a readable marker. The full stream is
 			// still preserved in task.Output for the Logs view.
-			const maxStreamChunkBytes = 4096
 			if len(text) > maxStreamChunkBytes {
 				// Same rune-cutting bug as the resume slice above: a hard
 				// byte cut lands mid-rune and ships invalid UTF-8.

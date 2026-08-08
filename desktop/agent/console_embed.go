@@ -69,7 +69,7 @@ const consoleFallbackHTML = `<!doctype html><html lang="en"><head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root{color-scheme:dark}
-  body{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0b0d10;color:#d1d5db;margin:0;padding:1.5rem;max-width:820px;margin:0 auto}
+  body{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#000000;color:#d1d5db;margin:0;padding:1.5rem;max-width:820px;margin:0 auto}
   h1{font-size:1.25rem;margin:0 0 1rem}
   h2{font-size:1rem;margin:1.5rem 0 .5rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em}
   a{color:#818cf8}

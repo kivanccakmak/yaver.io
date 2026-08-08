@@ -3287,7 +3287,7 @@ export default function TasksScreen() {
       const initialTask: Task = {
         id: taskId,
         title: promptText,
-        description: "",
+        description: promptText,
         status: "running" as TaskStatus,
         runnerId: "yaver-agent",
         output: [],
@@ -3519,7 +3519,7 @@ export default function TasksScreen() {
       }
       const taskParams = {
         title,
-        description: "",
+        description: title,
         model: effectiveRunner === "custom" ? undefined : effectiveModel,
         runner: effectiveRunner === "custom" ? "custom" : effectiveRunner,
         customCommand: effectiveRunner === "custom" ? customCommand.trim() || undefined : undefined,

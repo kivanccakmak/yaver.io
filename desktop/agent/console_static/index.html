@@ -7,7 +7,7 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-         background: #0b0d10; color: #d1d5db; min-height: 100vh; padding: 16px; }
+         background: #000000; color: #d1d5db; min-height: 100vh; padding: 16px; }
   header { display: flex; align-items: center; gap: 12px; padding: 12px 8px 20px;
            border-bottom: 1px solid #1f2937; margin-bottom: 16px; }
   header h1 { font-size: 16px; font-weight: 700; flex: 1; letter-spacing: .02em; }
@@ -47,7 +47,7 @@
   .tip { color: #737373; font-size: 11px; margin: 8px 0; }
   .actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .terminal-wrap { display: grid; gap: 10px; }
-  .terminal-screen { background: #05070a; border: 1px solid #1f2937; border-radius: 8px; padding: 12px;
+  .terminal-screen { background: #000000; border: 1px solid #1f2937; border-radius: 8px; padding: 12px;
     min-height: 320px; max-height: 60vh; overflow: auto; white-space: pre-wrap; font-size: 12px; line-height: 1.45; }
   .terminal-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   .terminal-status { font-size: 11px; color: #737373; }
@@ -276,7 +276,7 @@ async function renderOverview() {
   const recentTasks = ((t.tasks || []).slice(0, 6)).map(task => {
     const video = task.videoClipUrl && task.videoStatus === "ready"
       ? `<div style="margin-top:8px">
-           <video controls preload="metadata" poster="${task.videoPosterUrl || ''}" style="width:100%;max-width:420px;border-radius:8px;border:1px solid #1f2937;background:#05070a">
+           <video controls preload="metadata" poster="${task.videoPosterUrl || ''}" style="width:100%;max-width:420px;border-radius:8px;border:1px solid #1f2937;background:#000000">
              <source src="${task.videoClipUrl}" type="video/mp4">
            </video>
          </div>`

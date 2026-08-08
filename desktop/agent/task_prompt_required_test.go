@@ -58,12 +58,15 @@ func startTaskTestServer(t *testing.T) *httptest.Server {
 
 // TestCreateTask_RefusesAPromptlessBody is the regression. The body below is
 // EXACTLY the one that burned a turn: a title, and the instruction under a key
-// nothing reads.
+// nothing reads. The title is whitespace so the body is still promptless —
+// were a non-empty title present, the runner would use it as the prompt
+// (tasks.go startProcess fallback) and the task would legitimately run; the
+// guard's job is to refuse only bodies with NO instruction anywhere.
 func TestCreateTask_RefusesAPromptlessBody(t *testing.T) {
 	srv := startTaskTestServer(t)
 
 	res, body := postTask(t, srv, map[string]interface{}{
-		"title":       "vibe loop: background to black",
+		"title":       "   ", // whitespace title — still promptless
 		"input":       "change the background to black", // the key that is NOT read
 		"projectName": "sfmg",
 	})
@@ -97,6 +100,28 @@ func TestCreateTask_RefusesAPromptlessBody(t *testing.T) {
 	}
 }
 
+// TestCreateTask_AcceptsTitleOnlyBody guards the mobile code-mode shape.
+// The phone's composer sends the user's text in `title` with `description`
+// empty (mobile/app/(tabs)/tasks.tsx). On 2026-08-07 every such task was
+// refused with "this task has no prompt" even though startProcess would have
+// used title as the prompt — the guard checked description/userPrompt/
+// customCommand but not title. A non-empty title is a prompt; it must run.
+func TestCreateTask_AcceptsTitleOnlyBody(t *testing.T) {
+	srv := startTaskTestServer(t)
+	res, body := postTask(t, srv, map[string]interface{}{
+		"title":  "hey — deep analysis audit on the differences",
+		"runner": "opencode",
+		"source": "mobile-code",
+	})
+	if res.StatusCode == http.StatusBadRequest {
+		if got := body["code"]; got == ReasonTaskPromptMissing {
+			t.Fatal("title-only body (mobile code-mode shape) must not be refused as promptless")
+		}
+	}
+	// The guard must not be the thing that stops this — a 201 (created) is the
+	// expected outcome; any non-400 that isn't a promptless refusal passes.
+}
+
 // TestCreateTask_AcceptsEveryLegitimatePromptShape — the guard must not break
 // the three bodies that are genuinely valid, or it trades one broken lane for
 // three.
@@ -109,6 +134,8 @@ func TestCreateTask_AcceptsEveryLegitimatePromptShape(t *testing.T) {
 		{"userPrompt", map[string]interface{}{"title": "t", "userPrompt": "make it black"}},
 		// customCommand runs a command, not a model — promptless by nature.
 		{"customCommand", map[string]interface{}{"title": "t", "customCommand": "echo hi"}},
+		// title carries the instruction (mobile code-mode composer shape).
+		{"title", map[string]interface{}{"title": "make it black"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := startTaskTestServer(t)
@@ -124,14 +151,17 @@ func TestCreateTask_AcceptsEveryLegitimatePromptShape(t *testing.T) {
 
 // TestCreateTask_WhitespaceIsNotAPrompt — a body whose instruction is spaces or
 // a newline is empty in every way that matters, and must not reach a runner.
+// The title is whitespace too: a non-empty title is now a legitimate prompt
+// carrier (mobile code-mode shape), so only a body that is whitespace in EVERY
+// field is truly promptless.
 func TestCreateTask_WhitespaceIsNotAPrompt(t *testing.T) {
 	srv := startTaskTestServer(t)
 	res, body := postTask(t, srv, map[string]interface{}{
-		"title":       "t",
+		"title":       "   \n\t ",
 		"description": "   \n\t ",
 	})
 	if res.StatusCode != http.StatusBadRequest || body["code"] != ReasonTaskPromptMissing {
-		t.Errorf("whitespace-only description must be refused, got %d %v", res.StatusCode, body["code"])
+		t.Errorf("whitespace-only body must be refused, got %d %v", res.StatusCode, body["code"])
 	}
 }
 

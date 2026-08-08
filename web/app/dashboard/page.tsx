@@ -4067,6 +4067,19 @@ export default function DashboardPage() {
                         <span className={`h-1.5 w-1.5 rounded-full ${activeTask.status === "running" || activeTask.status === "queued" ? "animate-pulse bg-amber-400" : activeTask.status === "review" ? "bg-violet-400" : activeTask.status === "completed" ? "bg-emerald-400" : "bg-surface-600"}`} />
                         <span className="truncate text-sm font-medium text-surface-200">{displayTaskTitle(activeTask.title)}</span>
                         <span className={`text-[10px] ${statusColor(activeTask.status)}`}>{activeTask.status}</span>
+                        {activeRunnerId ? (
+                          <span
+                            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                              activeTask.status === "running" || activeTask.status === "queued"
+                                ? "border-emerald-400/60 bg-emerald-400/10 text-emerald-800 dark:text-emerald-200"
+                                : "border-surface-700 bg-surface-900 text-surface-300"
+                            }`}
+                            title={`This task is being executed by ${runnerLabel(activeRunnerId)} on ${connectedDevice?.name || "this machine"}.`}
+                          >
+                            <span className={`h-1.5 w-1.5 rounded-full ${activeTask.status === "running" || activeTask.status === "queued" ? "animate-pulse bg-emerald-400" : "bg-surface-500"}`} />
+                            {runnerLabel(activeRunnerId)}
+                          </span>
+                        ) : null}
                         {activeTask.status === "review" ? (
                           <button
                             type="button"
@@ -4114,7 +4127,11 @@ export default function DashboardPage() {
                         {chatMsgs.length === 0 ? (
                           <div className="flex h-full items-center justify-center gap-2 text-[12px] text-surface-600">
                             {(activeTask.status === "running" || activeTask.status === "queued") && <span className="h-3 w-3 animate-spin rounded-full border border-surface-500 border-t-transparent" />}
-                            {activeTask.status === "running" || activeTask.status === "queued" ? "Working..." : "No messages yet"}
+                            {activeTask.status === "running" || activeTask.status === "queued" ? (
+                              <span>
+                                <span className="font-medium text-emerald-700 dark:text-emerald-300">{runnerLabel(activeRunnerId)}</span> is working...
+                              </span>
+                            ) : "No messages yet"}
                           </div>
                         ) : (
                           <div className="mx-auto flex max-w-3xl flex-col gap-3">
@@ -4229,7 +4246,10 @@ export default function DashboardPage() {
                         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-surface-800 bg-surface-950/60 px-3 py-2 text-[11px] text-surface-400">
                           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
                             <span className="text-surface-500">Agent</span>
-                            <span className="rounded-full border border-amber-400/30 bg-amber-400/5 px-2 py-0.5 text-amber-800 dark:text-amber-100">{runnerName}</span>
+                            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/60 bg-emerald-400/10 px-2 py-0.5 text-emerald-800 dark:text-emerald-200" title={`${runnerName} is the active agent for this chat.`}>
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                              {runnerName}
+                            </span>
                             {providerEntry ? (
                               <>
                                 <span className="text-surface-700">·</span>
@@ -4293,11 +4313,19 @@ export default function DashboardPage() {
                                       title={runner.error || runner.warning || runner.name}
                                       className={`rounded-full border px-2.5 py-1 transition ${
                                         active
-                                          ? "border-amber-400/60 bg-amber-400/10 text-amber-800 dark:text-amber-100"
+                                          ? "border-emerald-400/70 bg-emerald-400/10 text-emerald-800 dark:text-emerald-200"
                                           : "border-surface-700 bg-surface-900 text-surface-300 hover:border-surface-500"
                                       }`}
                                     >
-                                      {runner.name}
+                                      {active ? (
+                                        <span className="inline-flex items-center gap-1.5">
+                                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                                          <span className="font-semibold">{runner.name}</span>
+                                          <span className="text-[9px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">active</span>
+                                        </span>
+                                      ) : (
+                                        runner.name
+                                      )}
                                     </button>
                                   );
                                 })}
@@ -4339,8 +4367,12 @@ export default function DashboardPage() {
                             </>
                           ) : null}
                           {activeRunnerId ? (
-                            <span>
-                              Active: <span className="text-surface-300">{runnerLabel(activeRunnerId)}</span>
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="text-surface-500">Active:</span>
+                              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/60 bg-emerald-400/10 px-2 py-0.5 font-medium text-emerald-800 dark:text-emerald-200">
+                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                                {runnerLabel(activeRunnerId)}
+                              </span>
                             </span>
                           ) : null}
                         </div>
