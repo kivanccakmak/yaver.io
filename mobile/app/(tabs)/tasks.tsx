@@ -53,6 +53,7 @@ import EmptyState from "../../src/components/EmptyState";
 import NoMachineEmpty from "../../src/components/NoMachineEmpty";
 import TaskTargetWizard, { type TaskTarget } from "../../src/components/TaskTargetWizard";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
+import type { ThemeColors } from "../../src/constants/colors";
 import { appTag } from "../../src/lib/appVersion";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
@@ -1244,9 +1245,19 @@ function TaskCardInner({
                 : rid === "opencode" ? "OpenCode"
                 : rid;
               if (!runnerLabel) return null;
+              // Next to the runner, show the model that actually ran it
+              // (e.g. "OpenCode · DeepSeek V4 Flash"). Task.model is stamped
+              // by the agent at creation; a missing model renders the runner
+              // alone rather than a guessed label.
+              const rawModel = (item as any)?.model as string | undefined;
+              let modelShort: string | undefined;
+              if (rawModel) {
+                const tail = rawModel.includes("/") ? rawModel.split("/").pop()! : rawModel;
+                modelShort = tail.split("-").map((p) => (p ? p.charAt(0).toUpperCase() + p.slice(1) : p)).join(" ");
+              }
               return (
                 <Text style={[s.taskRunnerLabel, { color: c.textMuted }]} numberOfLines={1}>
-                  {runnerLabel}
+                  {runnerLabel}{modelShort ? ` · ${modelShort}` : ""}
                 </Text>
               );
             })()}
@@ -1514,6 +1525,87 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
 }
 
 // ── Main screen ──────────────────────────────────────────────────────
+
+/**
+ * LogsPanelContent — the "Logs" sheet body, shared by two hosts:
+ *
+ *  1. the top-level native <Modal> (list screen, no task detail open), and
+ *  2. an absolute overlay INSIDE the task-detail <Modal>.
+ *
+ * It MUST be a component and not a second native Modal for case 2: iOS
+ * cannot present a second native <Modal> while another is on screen — the
+ * newcomer mounts invisibly behind it, so tapping Logs from the chat did
+ * nothing (2026-08-08). The chat path renders this panel over the chat
+ * modal instead.
+ */
+function LogsPanelContent({
+  c,
+  selectedTask,
+  taskLogLines,
+  combinedLogText,
+  logs,
+  onClose,
+}: {
+  c: ThemeColors;
+  selectedTask: Task | null;
+  taskLogLines: string[];
+  combinedLogText: string;
+  logs: LogEntry[];
+  onClose: () => void;
+}) {
+  return (
+    <View style={s.logsModalOverlay}>
+      <Pressable style={{ height: 80 }} onPress={onClose} />
+      <View style={[s.logsModal, { backgroundColor: c.bg }]}>
+        <View style={[s.logsHeader, { borderBottomColor: c.border }]}>
+          <Text style={[s.logsTitle, { color: c.textPrimary }]}>{selectedTask ? "Live Logs" : "Connection Logs"}</Text>
+          <View style={s.logsHeaderActions}>
+            <Pressable onPress={() => {
+              ExpoClipboard.setStringAsync(combinedLogText || "No logs yet.");
+              Alert.alert("Copied", "Logs copied to clipboard.");
+            }}>
+              <Text style={[s.logsActionText, { color: c.accent }]}>Copy</Text>
+            </Pressable>
+            <Pressable onPress={onClose} style={{ marginLeft: 16 }}>
+              <Text style={[s.logsActionText, { color: c.textMuted }]}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+        <ScrollView style={s.logsScroll} contentContainerStyle={s.logsScrollContent}>
+          {selectedTask ? (
+            <>
+              <Text style={[s.logsSectionTitle, { color: c.textPrimary }]}>
+                {normalizeTaskTitle(selectedTask.title)} · {selectedTask.status}
+              </Text>
+              {taskLogLines.length === 0 ? (
+                <Text style={[s.logsEmpty, { color: c.textMuted }]}>No task output yet.</Text>
+              ) : (
+                taskLogLines.map((line, i) => (
+                  <Text key={`task-${i}`} style={[s.logLine, { color: c.textPrimary }]}>
+                    {line}
+                  </Text>
+                ))
+              )}
+              <View style={[s.logsSectionDivider, { backgroundColor: c.border }]} />
+              <Text style={[s.logsSectionTitle, { color: c.textPrimary }]}>Connection</Text>
+            </>
+          ) : null}
+          {logs.length === 0 ? (
+            <Text style={[s.logsEmpty, { color: c.textMuted }]}>No logs yet.</Text>
+          ) : (
+            logs.slice().reverse().map((entry, i) => (
+              <Text key={i} style={[s.logLine, {
+                color: entry.level === "error" ? "#ef4444" : entry.level === "warn" ? "#eab308" : c.textSecondary,
+              }]}>
+                {new Date(entry.timestamp).toLocaleTimeString()} {entry.message}
+              </Text>
+            ))
+          )}
+        </ScrollView>
+      </View>
+    </View>
+  );
+}
 
 export default function TasksScreen() {
   const c = useColors();
@@ -6820,59 +6912,38 @@ export default function TasksScreen() {
               </View>
             )}
           </KeyboardAvoidingView>
+          {/* In-chat Logs overlay. iOS cannot present a second native Modal
+              while the task-detail Modal is up — the newcomer mounts
+              invisibly behind it, so the TaskHeader Logs button did nothing.
+              Render the same panel as an absolute overlay INSIDE this Modal
+              instead (2026-08-08). */}
+          {showLogs ? (
+            <View style={[StyleSheet.absoluteFillObject, { zIndex: 60 }]} pointerEvents="box-none">
+              <LogsPanelContent
+                c={c}
+                selectedTask={selectedTask}
+                taskLogLines={taskLogLines}
+                combinedLogText={combinedLogText}
+                logs={logs}
+                onClose={() => setShowLogs(false)}
+              />
+            </View>
+          ) : null}
         </Modal>
         {/* ── Logs Modal ─────────────────────────────────────────── */}
-        <Modal visible={showLogs} animationType="slide" transparent onRequestClose={() => setShowLogs(false)}>
-          <View style={s.logsModalOverlay}>
-            <Pressable style={{ height: 80 }} onPress={() => setShowLogs(false)} />
-            <View style={[s.logsModal, { backgroundColor: c.bg }]}>
-              <View style={[s.logsHeader, { borderBottomColor: c.border }]}>
-                <Text style={[s.logsTitle, { color: c.textPrimary }]}>{selectedTask ? "Live Logs" : "Connection Logs"}</Text>
-                <View style={s.logsHeaderActions}>
-                  <Pressable onPress={() => {
-                    ExpoClipboard.setStringAsync(combinedLogText || "No logs yet.");
-                    Alert.alert("Copied", "Logs copied to clipboard.");
-                  }}>
-                    <Text style={[s.logsActionText, { color: c.accent }]}>Copy</Text>
-                  </Pressable>
-                  <Pressable onPress={() => setShowLogs(false)} style={{ marginLeft: 16 }}>
-                    <Text style={[s.logsActionText, { color: c.textMuted }]}>Close</Text>
-                  </Pressable>
-                </View>
-              </View>
-              <ScrollView style={s.logsScroll} contentContainerStyle={s.logsScrollContent}>
-                {selectedTask ? (
-                  <>
-                    <Text style={[s.logsSectionTitle, { color: c.textPrimary }]}>
-                      {normalizeTaskTitle(selectedTask.title)} · {selectedTask.status}
-                    </Text>
-                    {taskLogLines.length === 0 ? (
-                      <Text style={[s.logsEmpty, { color: c.textMuted }]}>No task output yet.</Text>
-                    ) : (
-                      taskLogLines.map((line, i) => (
-                        <Text key={`task-${i}`} style={[s.logLine, { color: c.textPrimary }]}>
-                          {line}
-                        </Text>
-                      ))
-                    )}
-                    <View style={[s.logsSectionDivider, { backgroundColor: c.border }]} />
-                    <Text style={[s.logsSectionTitle, { color: c.textPrimary }]}>Connection</Text>
-                  </>
-                ) : null}
-                {logs.length === 0 ? (
-                  <Text style={[s.logsEmpty, { color: c.textMuted }]}>No logs yet.</Text>
-                ) : (
-                  logs.slice().reverse().map((entry, i) => (
-                    <Text key={i} style={[s.logLine, {
-                      color: entry.level === "error" ? "#ef4444" : entry.level === "warn" ? "#eab308" : c.textSecondary,
-                    }]}>
-                      {new Date(entry.timestamp).toLocaleTimeString()} {entry.message}
-                    </Text>
-                  ))
-                )}
-              </ScrollView>
-            </View>
-          </View>
+        {/* Gated on !selectedTask: with the task-detail <Modal> up, iOS
+            refuses a second native Modal (it mounts invisibly behind) — the
+            chat path renders LogsPanelContent as an overlay INSIDE the chat
+            modal instead (see the overlay in the chat Modal below). */}
+        <Modal visible={showLogs && !selectedTask} animationType="slide" transparent onRequestClose={() => setShowLogs(false)}>
+          <LogsPanelContent
+            c={c}
+            selectedTask={selectedTask}
+            taskLogLines={taskLogLines}
+            combinedLogText={combinedLogText}
+            logs={logs}
+            onClose={() => setShowLogs(false)}
+          />
         </Modal>
         {/* Per-session actions, opened by long-press.
             Closing a tmux session KILLS whatever is running in it — an agent
