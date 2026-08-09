@@ -19,12 +19,12 @@ import (
 // fan-out live API calls to every machine.
 
 type convexSyncer struct {
-	mu          sync.Mutex
-	convexURL   string
-	authToken   string
-	deviceID    string
-	lastAudit   int64 // last pushed audit entry timestamp (unix ns)
-	client      *http.Client
+	mu        sync.Mutex
+	convexURL string
+	authToken string
+	deviceID  string
+	lastAudit int64 // last pushed audit entry timestamp (unix ns)
+	client    *http.Client
 	// Payload dedup — agents on quiet machines produce the same
 	// {projects, services} every tick. Hash the marshalled payload
 	// and skip the Convex call entirely when nothing changed. Saves
@@ -122,6 +122,11 @@ func (s *convexSyncer) syncAll(ctx context.Context) {
 	s.lastSyncAt = time.Now()
 	s.successCount++
 	s.mu.Unlock()
+
+	// The tmux runner-session ledger is a separate mutation with its own change
+	// detection (a quiet box makes zero calls here too). It rides the same tick
+	// so a new runner seat / a /exit'd seat lands in Convex within ~60s.
+	syncTmuxSessionsToConvex(ctx)
 }
 
 // syncProjects walks every project directory the agent knows about and pushes
@@ -412,12 +417,20 @@ var convexMutationRecorder func(path string, args map[string]interface{})
 // callMutation invokes a Convex mutation via the HTTP action endpoint. Silent
 // on failure — sync is best-effort.
 func (s *convexSyncer) callMutation(path string, args map[string]interface{}) {
+	s.callMutationOK(path, args)
+}
+
+// callMutationOK invokes a Convex mutation and reports whether it succeeded.
+// callers that mutate local state only on success (e.g. the tmux session
+// cache, which must keep un-acked closures to retry) use the boolean;
+// fire-and-forget sync keeps using callMutation.
+func (s *convexSyncer) callMutationOK(path string, args map[string]interface{}) bool {
 	if convexMutationRecorder != nil {
 		convexMutationRecorder(path, args)
 		s.mu.Lock()
 		s.successCount++
 		s.mu.Unlock()
-		return
+		return true
 	}
 	body, _ := json.Marshal(map[string]interface{}{
 		"path":   path,
@@ -426,7 +439,7 @@ func (s *convexSyncer) callMutation(path string, args map[string]interface{}) {
 	})
 	req, err := http.NewRequest(http.MethodPost, s.convexURL+"/api/mutation", bytes.NewReader(body))
 	if err != nil {
-		return
+		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.authToken)
@@ -436,7 +449,7 @@ func (s *convexSyncer) callMutation(path string, args map[string]interface{}) {
 		s.failCount++
 		s.lastError = err.Error()
 		s.mu.Unlock()
-		return
+		return false
 	}
 	defer res.Body.Close()
 	_, _ = io.Copy(io.Discard, res.Body)
@@ -444,10 +457,12 @@ func (s *convexSyncer) callMutation(path string, args map[string]interface{}) {
 	if res.StatusCode >= 400 {
 		s.failCount++
 		s.lastError = fmt.Sprintf("%s: HTTP %d", path, res.StatusCode)
-	} else {
-		s.successCount++
+		s.mu.Unlock()
+		return false
 	}
+	s.successCount++
 	s.mu.Unlock()
+	return true
 }
 
 // SyncStatus exposes a snapshot of the syncer's state for /sync/status.
