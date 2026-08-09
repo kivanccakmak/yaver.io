@@ -61,3 +61,37 @@ test("relay-credential label is honest + actionable (names the real cause, sugge
   assert.match(c.label.toLowerCase(), /relay/, "label should name the relay, not the agent");
   assert.ok(c.suggestedAction && /sign in/i.test(c.suggestedAction), "should route the user to the fix");
 });
+
+// 4.7 (2026-08-09 audit): a relay-credential 401 that SURVIVES the /d/<id>
+// proxy's server-side self-heal on a device whose heartbeats are fresh is a
+// TUNNEL outage wearing a password costume — the proxy already repaired real
+// password problems before the body ever reached the UI, and re-auth rides
+// the very tunnel that is missing. Fresh heartbeats + surviving credential
+// body must downgrade to an honest "Relay tunnel down", never scare the user
+// into re-auth.
+test("fresh heartbeats + surviving relay-credential 401 → relay tunnel down, NOT a password scare", () => {
+  const c = classifyFetchError({
+    error: new Error(RELAY_401_BODY),
+    response: { status: 401 },
+    path: "relay",
+    deviceOnline: true,
+  });
+  assert.equal(c.reason, "relay-stale", `expected relay-stale, got ${c.reason} (${c.label})`);
+  assert.match(c.label.toLowerCase(), /tunnel/, "label should name the tunnel, not the password");
+  assert.equal(c.label.toLowerCase().includes("password"), false, "must not blame credentials the proxy already repaired");
+  assert.ok(c.suggestedAction && /restart the agent/i.test(c.suggestedAction), "should route the user to the machine-side fix");
+});
+
+// NEGATIVE CONTROL for the above: the SAME 401 body with NO fresh heartbeats
+// (device offline / unknown) keeps the credential copy — the downgrade must
+// be gated on deviceOnline, never applied by default.
+test("no fresh heartbeats + relay-credential 401 → keeps the password copy (downgrade is gated)", () => {
+  const c = classifyFetchError({
+    error: new Error(RELAY_401_BODY),
+    response: { status: 401 },
+    path: "relay",
+    deviceOnline: false,
+  });
+  assert.equal(c.reason, "relay-credential", `expected relay-credential, got ${c.reason} (${c.label})`);
+  assert.match(c.label.toLowerCase(), /password/, "without fresh heartbeats the password copy stays");
+});

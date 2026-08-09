@@ -1942,6 +1942,19 @@ export class AgentClient {
 
   private roleBase(deviceId: string | null, role: "AI runner" | "render"): string {
     if (!deviceId) return this.baseUrl;
+    // Same-origin relay proxy wins over the raw relay URL when the dashboard
+    // itself is served from the proxy host (https://yaver.io). The proxy
+    // injects X-Relay-Password server-side and self-heals missing/invalid
+    // passwords via /settings/repair-relay, while the raw
+    // `https://public.yaver.io/d/<id>` form sends only a bearer token and
+    // 401s when the relay password is stale — the exact class that made
+    // stream reattach retry the SAME dead URL five times (2026-08-09 audit:
+    // "LIVE OUTPUT LOST … could not be picked back up after 5 attempts").
+    // Every (re)subscribe rebuilds this URL, so the retry ladder gets a fresh,
+    // working candidate per attempt instead of the dead relay leg.
+    if (deviceId && this.sameOriginProxyUsable) {
+      return `/d/${deviceId}`;
+    }
     if (this._activeRelayUrl) return `${this._activeRelayUrl}/d/${deviceId}`;
     // Primary transport is direct/tunnel (localhost, Tailscale, mesh). Cross-
     // device role traffic still rides the relay: the relay authorizes each
@@ -1957,6 +1970,20 @@ export class AgentClient {
       `but this session has no relay configured and is connected ${this._activeTunnelUrl ? "through a direct tunnel" : "directly"} to another machine. ` +
       `Nothing was sent to the wrong box — sign in again to refresh the relay list, or clear the machine-roles split in Settings.`,
     );
+  }
+
+  /** True when the dashboard is served from the host that runs the /d/<id>
+   *  same-origin relay proxy (yaver.io). Cross-origin deployments (a local
+   *  dev server on :3000, a self-hosted dashboard) fall through to the raw
+   *  relay URL. */
+  private get sameOriginProxyUsable(): boolean {
+    if (typeof window === "undefined") return false;
+    try {
+      const host = window.location.hostname;
+      return host === "yaver.io" || host.endsWith(".yaver.io");
+    } catch {
+      return false;
+    }
   }
 
   /** Relay password usable for role-routed cross-device requests: the active

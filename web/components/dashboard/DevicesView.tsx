@@ -49,6 +49,7 @@ import {
 } from "@/lib/managed-cloud";
 import { leaveSharedAccess } from "@/lib/guests";
 import { classifyDiagnostic, classifyFetchError, summarizeFailures, type ClassifiedFailure } from "@/lib/connection-error";
+import { collapseTopLevelProjects } from "@/lib/projectTopLevel";
 import {
   probeAllowed,
   probeFailed,
@@ -1776,6 +1777,7 @@ function useDeviceRuntimeInfo(device: Device, enabled: boolean, token: string | 
           response: lastDetails?.status ? { status: lastDetails.status } : null,
           path: lastDetails?.path,
           url: lastDetails?.url,
+          deviceOnline: device.online,
         });
         recordLastFailure(device.id, {
           reason: classified.reason,
@@ -1832,6 +1834,12 @@ function useAgentWirelessDevices(device: Device, enabled: boolean, token: string
     for (const ep of eps) {
       if (ep === yaverEp) continue;
       if (/^https:\/\//i.test(ep)) candidates.push(ep.replace(/\/+$/, ""));
+    }
+    // Same-origin relay proxy first — see useDeviceProjects/useDeviceRuntimeInfo
+    // for why it beats the raw relay URL when activeRelayUrl is null or the
+    // relay leg is flapping (2026-08-09 audit).
+    if (device.id) {
+      candidates.push(`/d/${device.id}`);
     }
     if (agentClient.activeRelayUrl && device.id) {
       candidates.push(`${agentClient.activeRelayUrl}/d/${device.id}`);
@@ -2039,6 +2047,15 @@ function useDeviceProjects(device: Device, enabled: boolean, token: string | nul
     // and we end up with a misleading "fetch failed" error.
     type Candidate = { url: string; path: "relay" | "tunnel" | "direct" | "subdomain" };
     const candidates: Candidate[] = [];
+    // Same-origin relay proxy FIRST, mirroring useDeviceRuntimeInfo: it injects
+    // X-Relay-Password server-side, self-heals missing/invalid passwords via
+    // /settings/repair-relay, and works even when agentClient.activeRelayUrl is
+    // null (a box connected over a direct/tunnel transport, or a non-active
+    // device card). The old `activeRelayUrl`-only form produced "no reachable
+    // URL" for exactly those rows (2026-08-09 audit, ubuntu-4gb card).
+    if (device.id) {
+      candidates.push({ url: `/d/${device.id}`, path: "relay" });
+    }
     if (agentClient.activeRelayUrl && device.id) {
       candidates.push({ url: `${agentClient.activeRelayUrl}/d/${device.id}`, path: "relay" });
     }
@@ -2078,7 +2095,14 @@ function useDeviceProjects(device: Device, enabled: boolean, token: string | nul
       branch: typeof p?.branch === "string" ? p.branch : undefined,
       framework: typeof p?.framework === "string" ? p.framework : undefined,
       tags: Array.isArray(p?.tags) ? p.tags.map(String) : undefined,
-      remote: typeof p?.remote === "string" && p.remote.trim() ? p.remote : undefined,
+      // The agent's /projects endpoint emits `gitRemote` (classify.go
+      // projectInfo), not `remote` — a mapper that read the wrong key made
+      // every project chip on the rail show the "no git remote" (∅) marker
+      // even for repos with a configured origin (2026-08-09 audit). Accept
+      // both spellings so older agents keep working.
+      remote:
+        (typeof p?.gitRemote === "string" && p.gitRemote.trim() ? p.gitRemote : undefined) ??
+        (typeof p?.remote === "string" && p.remote.trim() ? p.remote : undefined),
       monorepoRoot:
         typeof p?.monorepoRoot === "string" && p.monorepoRoot.trim() ? p.monorepoRoot : undefined,
       monorepoApp:
@@ -2163,6 +2187,7 @@ function useDeviceProjects(device: Device, enabled: boolean, token: string | nul
           response: lastDetails?.status ? { status: lastDetails.status } : null,
           path: lastDetails?.path,
           url: lastDetails?.url,
+          deviceOnline: device.online,
         });
         recordLastFailure(device.id, {
           reason: classified.reason,
@@ -5055,6 +5080,7 @@ function DeviceProjectsRail({
         response: errorDetails?.status ? { status: errorDetails.status } : null,
         path: errorDetails?.path,
         url: errorDetails?.url,
+        deviceOnline: device.online,
       })
     : null;
 
@@ -5080,6 +5106,28 @@ function DeviceProjectsRail({
     : loading
       ? "(…)"
       : "(— unavailable)";
+
+  // LESS IS MORE rail: a box with 153 discovered projects (module-cache junk
+  // and nested clones before the 2026-08-09 agent fixes) buried the real
+  // repos in a wall of chips. The rail folds to at most `railCap` projects —
+  // git-configured, top-level ones first (monorepo apps are part of their
+  // root repo, never pickable rows of their own) — with a "Show all (N)"
+  // unfold for the rest.
+  const [railExpanded, setRailExpanded] = useState(false);
+  const railCap = 3;
+  // Top-level first: nested clones (yaver.io/mobile) and monorepo-app rows
+  // fold into their root — the rail is a git-project summary, not a picker
+  // that should offer "yaver mobile" (2026-08-09).
+  const orderedProjects = ready
+    ? collapseTopLevelProjects([...(projects as any[])]).sort((a, b) => {
+        const aGit = !!(a.remote && a.remote.length > 0) ? 1 : 0;
+        const bGit = !!(b.remote && b.remote.length > 0) ? 1 : 0;
+        if (aGit !== bGit) return bGit - aGit;
+        return String(a.name).localeCompare(String(b.name));
+      })
+    : [];
+  const shownProjects = railExpanded ? orderedProjects : orderedProjects.slice(0, railCap);
+  const hiddenCount = orderedProjects.length - shownProjects.length;
 
   return (
     <details className="mt-1.5 rounded-lg border border-slate-200 bg-slate-50/70 dark:border-surface-800 dark:bg-surface-900/30">
@@ -5114,52 +5162,63 @@ function DeviceProjectsRail({
             </div>
           </div>
         ) : (
-          (projects || []).map((p) => {
-            const stack = (p.framework || "").toUpperCase();
-            const hasGit = !!(p.remote && p.remote.length > 0);
-            const isMonorepoApp = !!(p.monorepoApp && p.monorepoApp.length > 0);
-            const tip = [
-              p.path,
-              stack && `stack: ${stack.toLowerCase()}`,
-              p.branch && `branch: ${p.branch}`,
-              hasGit ? `git: ${p.remote}` : "no git remote",
-              isMonorepoApp && `monorepo app: ${p.monorepoApp}`,
-            ]
-              .filter(Boolean)
-              .join(" · ");
-            return (
+          <>
+            {shownProjects.map((p) => {
+              const stack = (p.framework || "").toUpperCase();
+              const hasGit = !!(p.remote && p.remote.length > 0);
+              const isMonorepoApp = !!(p.monorepoApp && p.monorepoApp.length > 0);
+              const tip = [
+                p.path,
+                stack && `stack: ${stack.toLowerCase()}`,
+                p.branch && `branch: ${p.branch}`,
+                hasGit ? `git: ${p.remote}` : "no git remote",
+                isMonorepoApp && `monorepo app: ${p.monorepoApp}`,
+              ]
+                .filter(Boolean)
+                .join(" · ");
+              return (
+                <button
+                  key={`pr:${device.id}:${p.name}`}
+                  type="button"
+                  onClick={onShowDetails}
+                  className="inline-flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wider text-emerald-800 hover:bg-emerald-100 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200 dark:hover:bg-emerald-500/20"
+                  title={tip || undefined}
+                >
+                  <span className="text-emerald-900 dark:text-emerald-100">{p.name}</span>
+                  {stack ? (
+                    <span className="rounded bg-emerald-100 px-1 text-[9px] font-normal normal-case text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300/80">
+                      {stack}
+                    </span>
+                  ) : null}
+                  {/* Git-configured marker. The little link glyph means
+                      the project has a configured `origin` remote and is
+                      pushable; absence means the dir is on disk but has
+                      no git history yet. */}
+                  {hasGit ? (
+                    <span className="text-emerald-700 dark:text-emerald-300/80" title={`git remote: ${p.remote}`}>⌬</span>
+                  ) : (
+                    <span className="text-slate-400 dark:text-surface-600" title="no git remote configured">∅</span>
+                  )}
+                  {/* Monorepo-app marker. Filled when the agent's
+                      workspace manifest declares this project as one app
+                      inside a multi-app yaver.workspace.yaml — distinct
+                      from a top-level repo. */}
+                  {isMonorepoApp ? (
+                    <span className="text-amber-700 dark:text-amber-300/80" title={`monorepo app · root ${p.monorepoRoot}`}>◫</span>
+                  ) : null}
+                </button>
+              );
+            })}
+            {hiddenCount > 0 ? (
               <button
-                key={`pr:${device.id}:${p.name}`}
                 type="button"
-                onClick={onShowDetails}
-                className="inline-flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wider text-emerald-800 hover:bg-emerald-100 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200 dark:hover:bg-emerald-500/20"
-                title={tip || undefined}
+                onClick={() => setRailExpanded((v) => !v)}
+                className="inline-flex items-center gap-1 rounded border border-slate-300 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-200 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-300 dark:hover:bg-surface-700"
               >
-                <span className="text-emerald-900 dark:text-emerald-100">{p.name}</span>
-                {stack ? (
-                  <span className="rounded bg-emerald-100 px-1 text-[9px] font-normal normal-case text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300/80">
-                    {stack}
-                  </span>
-                ) : null}
-                {/* Git-configured marker. The little link glyph means
-                    the project has a configured `origin` remote and is
-                    pushable; absence means the dir is on disk but has
-                    no git history yet. */}
-                {hasGit ? (
-                  <span className="text-emerald-700 dark:text-emerald-300/80" title={`git remote: ${p.remote}`}>⌬</span>
-                ) : (
-                  <span className="text-slate-400 dark:text-surface-600" title="no git remote configured">∅</span>
-                )}
-                {/* Monorepo-app marker. Filled when the agent's
-                    workspace manifest declares this project as one app
-                    inside a multi-app yaver.workspace.yaml — distinct
-                    from a top-level repo. */}
-                {isMonorepoApp ? (
-                  <span className="text-amber-700 dark:text-amber-300/80" title={`monorepo app · root ${p.monorepoRoot}`}>◫</span>
-                ) : null}
+                {railExpanded ? `Show fewer (${railCap})` : `Show all (${orderedProjects.length})`}
               </button>
-            );
-          })
+            ) : null}
+          </>
         )}
       </div>
     </details>
@@ -5704,6 +5763,7 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
         response: runtimeErrorDetails?.status ? { status: runtimeErrorDetails.status } : null,
         path: runtimeErrorDetails?.path,
         url: runtimeErrorDetails?.url,
+        deviceOnline: device.online,
       })
     : null;
   const { status: updateStatus, error: updateError, loading: updateLoading, updating, trigger: triggerUpdate } =
@@ -5728,6 +5788,7 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
         response: projectsErrorDetails?.status ? { status: projectsErrorDetails.status } : null,
         path: projectsErrorDetails?.path,
         url: projectsErrorDetails?.url,
+        deviceOnline: device.online,
       })
     : null;
   const allRunners = (device.runners || []).map((r) => r?.runnerId || "").filter(Boolean);

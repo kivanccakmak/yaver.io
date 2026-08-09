@@ -53,6 +53,17 @@ export interface ClassifyFetchErrorInput {
   path?: "relay" | "tunnel" | "direct" | "subdomain";
   url?: string;
   authExpired?: boolean;
+  /**
+   * The device's Convex heartbeat freshness (its `online` flag). When a relay
+   * lane 401s with a credential message but the box is heartbeating fine, the
+   * surviving 401 means the RELAY leg to that box is dead — the /d/<id> proxy
+   * already self-heals real password problems via /settings/repair-relay, so
+   * a credential message that reaches the UI is a tunnel outage wearing a
+   * password costume. Mislabeling it "relay password missing or stale" sends
+   * the user to re-auth — which rides the very tunnel that is missing
+   * (2026-08-09 audit: magara / Ofis2 "Relay refused" while heartbeats fresh).
+   */
+  deviceOnline?: boolean;
 }
 
 const SUBDOMAIN_RE = /^https?:\/\/[0-9a-f-]{36}\.yaver\.io/i;
@@ -127,6 +138,21 @@ export function classifyFetchError(input: ClassifyFetchErrorInput): ClassifiedFa
     // ("invalid token") transits a perfectly working relay lane and must
     // keep the agent copy.
     if (path === "relay" && isRelayCredentialDenyMessage(raw)) {
+      if (input.deviceOnline) {
+        // Fresh heartbeats + surviving credential 401 = tunnel outage, not a
+        // credential problem. The proxy self-heals passwords server-side, so
+        // the honest label is "no tunnel — restart the agent on the box".
+        return {
+          reason: "relay-stale",
+          label: "Relay tunnel down",
+          detail:
+            "The agent is alive (its heartbeats are fresh) but its relay tunnel isn't established, so nothing reached it through the relay. " +
+            "Restart the agent on the box to re-register its tunnel.",
+          suggestedAction: "Restart the agent on that machine (`yaver serve` or the system service).",
+          status,
+          raw,
+        };
+      }
       return {
         reason: "relay-credential",
         label: "Relay refused: account relay password missing or stale",
