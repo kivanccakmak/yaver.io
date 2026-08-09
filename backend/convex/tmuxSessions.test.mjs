@@ -90,3 +90,10 @@ test("GET /tmux-sessions HTTP route is wired into the CORS allowlist", () => {
   // Bearer-authed like every other client-facing route.
   assert.match(httpSource, /authHeader\?\.startsWith\("Bearer "\)/);
 });
+
+test("web tmux ledger client normalizes object responses before dashboard render", () => {
+  const src = readFileSync(new URL("../../web/lib/tmux-sessions.ts", import.meta.url), "utf8");
+  assert.match(src, /Array\.isArray\(data\)/);
+  assert.match(src, /Array\.isArray\(data\?\.sessions\)/);
+  assert.match(src, /return \[\];/);
+});

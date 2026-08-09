@@ -60,5 +60,8 @@ export async function listTmuxRunnerSessions(
   if (!res.ok) {
     throw new Error(data?.error || `Failed to list tmux sessions (${res.status})`);
   }
-  return (data ?? []) as TmuxRunnerSessionRecord[];
+  if (Array.isArray(data)) return data as TmuxRunnerSessionRecord[];
+  if (Array.isArray(data?.sessions)) return data.sessions as TmuxRunnerSessionRecord[];
+  if (Array.isArray(data?.rows)) return data.rows as TmuxRunnerSessionRecord[];
+  return [];
 }

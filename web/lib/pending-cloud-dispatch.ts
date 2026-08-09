@@ -89,7 +89,7 @@ function normalizePendingRow(row: PendingCloudDispatch, now = Date.now()): Pendi
     ...row,
     dispatchExpiresAt,
     dispatchStatus: expired ? "expired" : row.dispatchStatus,
-    lastError: expired && !row.lastError ? "Local Cloud Workspace dispatch window expired." : row.lastError,
+    lastError: expired && !row.lastError ? "Local remote-machine dispatch window expired." : row.lastError,
   };
 }
 
@@ -246,7 +246,7 @@ function wakeProgressMessage(status: TaskPlacementStatus): string | undefined {
   const progress = typeof run.progress === "number" && Number.isFinite(run.progress)
     ? ` (${Math.max(0, Math.min(100, Math.round(run.progress)))}%)`
     : "";
-  return `Cloud Workspace wake: ${phase}${progress}`;
+  return `Remote machine wake: ${phase}${progress}`;
 }
 
 function blockerActionForWake(status: TaskPlacementStatus): TaskPlacementActivation["action"] | undefined {
@@ -327,10 +327,10 @@ export function pendingCloudTaskPlaceholder(row: PendingCloudDispatch): Task {
     status: pendingCloudDispatchTaskStatus(normalized.dispatchStatus),
     runnerId: normalized.params.runner,
     output: [
-      "Cloud Workspace is waking. Yaver has not sent this prompt to the currently connected machine.",
+      "Remote machine is preparing. Yaver has not sent this prompt to the currently connected machine.",
       normalized.targetDeviceId
-        ? "Yaver will dispatch it from this browser after the target workspace connects."
-        : "Yaver will dispatch it from this browser after the workspace is assigned and connects.",
+        ? "Yaver will dispatch it from this browser after the target machine connects."
+        : "Yaver will dispatch it from this browser after the target machine is assigned and connects.",
       normalized.placementCreditLabel ? `Estimate: ${normalized.placementCreditLabel}` : "",
       normalized.wakePhase ? `Wake phase: ${normalized.wakePhase}${typeof normalized.wakeProgress === "number" ? ` (${Math.round(normalized.wakeProgress)}%)` : ""}` : "",
       normalized.dispatchStatus ? `Dispatch status: ${normalized.dispatchStatus}` : "",
@@ -344,5 +344,9 @@ export function pendingCloudTaskPlaceholder(row: PendingCloudDispatch): Task {
     placementLane: normalized.placementLane,
     placementReason: normalized.placementReason,
     placementCreditLabel: normalized.placementCreditLabel,
+    pendingCloudBlockedAction: normalized.blockedAction,
+    pendingCloudBlockedReason: normalized.blockedReason,
+    pendingCloudExpiresAt: normalized.dispatchExpiresAt,
+    pendingCloudTargetDeviceId: normalized.targetDeviceId,
   };
 }

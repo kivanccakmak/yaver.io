@@ -128,6 +128,10 @@ export interface Task {
   placementLane?: string;
   placementReason?: string;
   placementCreditLabel?: string;
+  pendingCloudBlockedAction?: string;
+  pendingCloudBlockedReason?: string;
+  pendingCloudExpiresAt?: number;
+  pendingCloudTargetDeviceId?: string | null;
   /** tmux session driving this task (`tmux attach -t <tmuxSession>`). Surfaced
    *  in the task UI on every surface (mobile/web/tvOS/car/AR-VR) so the running
    *  session is always identifiable. tmuxSessionId is tmux's internal id ("$1");

@@ -449,7 +449,7 @@ export default function InfraScreen() {
           {/* Yaver-managed parked boxes — a snapshotted+deleted cloud box that
               costs nothing while asleep and can be recreated from its snapshot
               on demand. Prominent Wake button + a staged waking-up ladder. */}
-          <ParkedMachinesSection c={c} token={token} />
+          {!HIDE_PAID_UI && <ParkedMachinesSection c={c} token={token} />}
 
           {/* Sudo password sheet. Only the install stream can open
               it; the password flows through /install/sudo and never

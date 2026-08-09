@@ -29,6 +29,7 @@
  */
 
 import type { SpeechProvider, TtsProvider } from "./auth";
+import { CloudWorkspaceRequiredError } from "./cloudWorkspaceRequired";
 
 // ── Injected surface ─────────────────────────────────────────────────
 
@@ -242,6 +243,12 @@ export async function dispatchAndSummarize(
   try {
     taskId = await deps.dispatch(titleFromTranscript(clean), clean);
   } catch (e) {
+    if (e instanceof CloudWorkspaceRequiredError || (e as any)?.action === "cloud_workspace_required" || (e as any)?.pendingTaskId) {
+      const taskId = (e as any)?.pendingTaskId;
+      const spoken = "Your remote machine is waking. I'll let you know when it's done.";
+      onStep?.({ stage: "dispatched", taskId, text: spoken });
+      return { transcript: clean, taskId, status: "queued", spoken };
+    }
     const spoken = "I couldn't reach your box.";
     onStep?.({ stage: "error", text: spoken });
     return { transcript: clean, spoken, error: msgOf(e) };

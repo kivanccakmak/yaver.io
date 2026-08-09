@@ -135,18 +135,18 @@ actor SessionClient {
     /// single live session happened to be the user's own hand-rolled tmux window,
     /// the guess drove THAT: a prompt typed into a personal Claude Code session,
     /// its private scrollback rendered back onto a television. Name the session.
-    func sendText(_ text: String, session: String?, waitMs: Int = 6000) async throws -> SessionTurnResult {
-        try await turn(text: text, choice: nil, session: session, waitMs: waitMs)
+    func sendText(_ text: String, session: String?, waitMs: Int = 6000, surfaceId: String = "tvos") async throws -> SessionTurnResult {
+        try await turn(text: text, choice: nil, session: session, waitMs: waitMs, surfaceId: surfaceId)
     }
 
     /// Answer a menu the pane is showing.
-    func sendChoice(_ choice: String, session: String?, waitMs: Int = 6000) async throws -> SessionTurnResult {
-        try await turn(text: nil, choice: choice, session: session, waitMs: waitMs)
+    func sendChoice(_ choice: String, session: String?, waitMs: Int = 6000, surfaceId: String = "tvos") async throws -> SessionTurnResult {
+        try await turn(text: nil, choice: choice, session: session, waitMs: waitMs, surfaceId: surfaceId)
     }
 
-    private func turn(text: String?, choice: String?, session: String?, waitMs: Int) async throws -> SessionTurnResult {
+    private func turn(text: String?, choice: String?, session: String?, waitMs: Int, surfaceId: String = "tvos") async throws -> SessionTurnResult {
         do {
-            return try await runtimeTurn(text: text, choice: choice, session: session, waitMs: waitMs)
+            return try await runtimeTurn(text: text, choice: choice, session: session, waitMs: waitMs, surfaceId: surfaceId)
         } catch {
             // Older agents do not have runtime_turn yet. The direct endpoint is
             // still the proven TV path, so keep it as a rollout fallback.
@@ -179,14 +179,14 @@ actor SessionClient {
         return []
     }
 
-    private func runtimeTurn(text: String?, choice: String?, session: String?, waitMs: Int) async throws -> SessionTurnResult {
+    private func runtimeTurn(text: String?, choice: String?, session: String?, waitMs: Int, surfaceId: String = "tvos") async throws -> SessionTurnResult {
         var target: [String: Any] = [:]
         if let session, !session.isEmpty { target["session"] = session }
         var payload: [String: Any] = [
             "utterance": text ?? "",
             "target": target,
             "surface": [
-                "id": "tvos",
+                "id": surfaceId,
                 "class": "tv-apple",
                 "interaction": "dpad",
                 "visualBudget": "panel",

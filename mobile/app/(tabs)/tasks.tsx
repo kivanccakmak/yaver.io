@@ -79,11 +79,13 @@ import {
 import { connectionManager } from "../../src/lib/connectionManager";
 import { markTaskDeleted, getDeletedTaskIds, cacheTaskTurns, getCachedTaskTurns, cacheTaskList, getCachedTaskList } from "../../src/lib/storage";
 import {
+  activateTaskPlacement,
   getTaskPlacementStatus,
   listTaskDispatchIntents,
   rebindTaskPlacement,
   updateTaskDispatchIntent,
 } from "../../src/lib/taskPlacement";
+import { activationBlockReason } from "../../src/lib/taskPlacementCore";
 import {
   isRunnerSeat,
   listTmuxRunnerSessions,
@@ -1080,11 +1082,13 @@ function TaskCardInner({
   onPress,
   onDelete,
   onComplete,
+  onBlockedAction,
 }: {
   item: Task;
   onPress: () => void;
   onDelete: () => void;
   onComplete: () => void;
+  onBlockedAction?: (task: Task) => void;
 }) {
   const c = useColors();
   const { isDark } = useTheme();
@@ -1181,6 +1185,19 @@ function TaskCardInner({
     () => buildTaskPreviewText(item),
     [item.id, item.status, item.resultText, item.output.length, item.output[item.output.length - 1]],
   );
+  const blockedReason = String(item.pendingCloudBlockedReason || "").trim();
+  const isPendingRemoteTask = item.id.startsWith("pending-cloud:");
+  const expiresInHours =
+    typeof item.pendingCloudExpiresAt === "number"
+      ? Math.max(0, Math.ceil((item.pendingCloudExpiresAt - Date.now()) / 3_600_000))
+      : null;
+  const blockedActionLabel =
+    item.pendingCloudBlockedAction === "runner_auth_required" ? `Sign in to ${displayRunnerLabel(item.runnerId || "runner")}` :
+    item.pendingCloudBlockedAction === "resize_required" ||
+    item.pendingCloudBlockedAction === "resize_failed" ||
+    item.pendingCloudBlockedAction === "wake_failed" ? "Retry" :
+    item.pendingCloudBlockedAction ? "Open Yaver web" :
+    "";
 
   return (
     <Animated.View
@@ -1306,6 +1323,38 @@ function TaskCardInner({
           </View>
         </View>
         <Text style={[s.taskTitle, { color: c.textPrimary }]} numberOfLines={2}>{normalizeTaskTitle(item.title)}</Text>
+        {isPendingRemoteTask && (blockedReason || item.pendingCloudBlockedAction || item.status === "stopped") ? (
+          <View style={[s.pendingCloudBanner, { borderColor: "#f59e0b55", backgroundColor: isDark ? "#451a0322" : "#fff7ed" }]}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[s.pendingCloudTitle, { color: isDark ? "#fbbf24" : "#92400e" }]}>
+                {item.status === "stopped" ? "Remote dispatch expired" : "Needs your action"}
+              </Text>
+              <Text style={[s.pendingCloudText, { color: isDark ? "#fcd34d" : "#9a3412" }]} numberOfLines={3}>
+                {blockedReason || "This task is waiting for the selected remote machine."}
+                {expiresInHours !== null && item.status !== "stopped" ? ` Expires in ~${expiresInHours}h.` : ""}
+              </Text>
+            </View>
+            {blockedActionLabel && item.status !== "stopped" ? (
+              <Pressable
+                hitSlop={8}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  onBlockedAction?.(item);
+                }}
+                style={({ pressed }) => [
+                  s.pendingCloudButton,
+                  { borderColor: "#f59e0b77", backgroundColor: isDark ? "#78350f" : "#ffedd5", opacity: pressed ? 0.75 : 1 },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={blockedActionLabel}
+              >
+                <Text style={[s.pendingCloudButtonText, { color: isDark ? "#fffbeb" : "#7c2d12" }]} numberOfLines={1}>
+                  {blockedActionLabel}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
         {isRunning ? (
           <View style={s.taskPhaseRow}>
             <PhaseChip task={item} />
@@ -2531,6 +2580,49 @@ export default function TasksScreen() {
       clearInterval(id);
     };
   }, [connectedDeviceIds, devices, token]);
+
+  const handlePendingCloudBlockedAction = useCallback(async (task: Task) => {
+    const action = task.pendingCloudBlockedAction;
+    if (action === "runner_auth_required") {
+      openRunnerAuthModal(task.runnerId || "codex", task.pendingCloudTargetDeviceId || task.deviceId || null);
+      return;
+    }
+    if (action === "yaver_auth_required" || action === "billing_required") {
+      await Linking.openURL("https://yaver.io").catch(() => {
+        Alert.alert("Open Yaver web", "Go to https://yaver.io from a browser to finish account setup.");
+      });
+      return;
+    }
+    if (action === "resize_required" || action === "resize_failed" || action === "wake_failed") {
+      if (!task.placementId) {
+        Alert.alert("Retry unavailable", "This saved task does not have a placement id.");
+        return;
+      }
+      try {
+        const activation = await activateTaskPlacement({ placementId: task.placementId });
+        const blockedReason = activationBlockReason(activation);
+        await updatePendingCloudDispatch(task.id, {
+          dispatchStatus: blockedReason ? "blocked" : "queued",
+          blockedAction: blockedReason ? activation.action : undefined,
+          blockedReason: blockedReason || undefined,
+          clearedBlockedAction: !blockedReason,
+          updatedAt: Date.now(),
+        });
+        await updateTaskDispatchIntent({
+          localTaskId: task.id,
+          status: blockedReason ? "blocked" : "dispatching",
+          blockedAction: blockedReason ? activation.action : undefined,
+          reason: blockedReason || undefined,
+          clearBlockedAction: !blockedReason,
+        }).catch(() => undefined);
+        await fetchTasks();
+      } catch (err: any) {
+        Alert.alert("Retry failed", err?.message || "The remote machine is still not ready.");
+      }
+      return;
+    }
+    Alert.alert("Needs attention", task.pendingCloudBlockedReason || "This task is waiting for the selected remote machine.");
+  }, [fetchTasks, openRunnerAuthModal]);
 
   const hasRunningTask = tasks.some(t => t.status === "running" || t.status === "queued");
   const effectiveFilter = statusFilter;
@@ -3934,8 +4026,8 @@ export default function TasksScreen() {
         pendingOpenTaskRef.current = pendingTask;
         setShowNewTask(false);
         Alert.alert(
-          "Cloud Workspace is preparing",
-          "Yaver kept this prompt on your phone and will dispatch it when the assigned workspace is ready.",
+          "Remote machine is preparing",
+          "Yaver kept this prompt on your phone and will dispatch it when the assigned machine is ready.",
         );
       } else if (isAuthError(e)) {
         Alert.alert(
@@ -4448,8 +4540,8 @@ export default function TasksScreen() {
           setSelectedTask((prev) => (prev && prev.id === selectedTask.id ? forkTask : prev));
           setTasks((prev) => [forkTask, ...prev.filter((t) => t.id !== forkTask.id)]);
           Alert.alert(
-            "Cloud Workspace is preparing",
-            "Yaver kept this switch on your phone and will dispatch it when the assigned workspace is ready.",
+            "Remote machine is preparing",
+            "Yaver kept this switch on your phone and will dispatch it when the assigned machine is ready.",
           );
           return;
         } catch {
@@ -5454,6 +5546,7 @@ export default function TasksScreen() {
                 onPress={() => setSelectedTask(item)}
                 onDelete={() => handleDeleteTask(item.id)}
                 onComplete={() => handleCompleteTask(item.id)}
+                onBlockedAction={handlePendingCloudBlockedAction}
               />
             );
             // Wrap in flex View when 2-col so each cell takes 50%.
@@ -6673,6 +6766,7 @@ export default function TasksScreen() {
                           onPress={() => setSelectedTask(item)}
                           onDelete={() => handleDeleteTask(item.id)}
                           onComplete={() => handleCompleteTask(item.id)}
+                          onBlockedAction={handlePendingCloudBlockedAction}
                         />
                       </View>
                     );
@@ -8057,6 +8151,11 @@ const s = StyleSheet.create({
   taskRunnerLabel: { fontSize: 11, maxWidth: 132, textAlign: "right" },
   taskActionButton: { width: 32, height: 28, borderRadius: 14, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   taskTitle: { fontSize: 16, fontWeight: "600", lineHeight: 22, letterSpacing: -0.2 },
+  pendingCloudBanner: { marginTop: 10, borderWidth: 1, borderRadius: 10, padding: 10, flexDirection: "row", alignItems: "center", gap: 10 },
+  pendingCloudTitle: { fontSize: 12, fontWeight: "800", marginBottom: 2 },
+  pendingCloudText: { fontSize: 12, lineHeight: 16 },
+  pendingCloudButton: { minHeight: 30, maxWidth: 132, borderRadius: 999, borderWidth: 1, paddingHorizontal: 10, alignItems: "center", justifyContent: "center" },
+  pendingCloudButtonText: { fontSize: 11, fontWeight: "800" },
   taskPhaseRow: { marginBottom: 8 },
   phaseChip: { alignSelf: "flex-start", paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, borderWidth: 1 },
   phaseChipText: { fontSize: 11, fontWeight: "700", textTransform: "lowercase", letterSpacing: 0.25 },

@@ -28,7 +28,7 @@ struct AddBoxView: View {
             Text("Add a box").font(.system(size: 34, weight: .bold))
             TextField("Name (e.g. magara)", text: $name)
             TextField("LAN host or IP (e.g. 192.168.1.20)", text: $host)
-            TextField("Machine ID (managed cloud box — optional, enables Wake)", text: $machineId)
+            TextField("Machine ID (optional, enables Wake)", text: $machineId)
             Button("Save") {
                 let trimmed = host.trimmingCharacters(in: .whitespaces)
                 guard !trimmed.isEmpty else { return }

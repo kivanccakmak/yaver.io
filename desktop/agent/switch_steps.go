@@ -396,7 +396,7 @@ func execEmitRewrite(state *SwitchState, step *SwitchStep) (string, error) {
 	if err := os.WriteFile(out, []byte(state.RewritePrompt), 0o644); err != nil {
 		return "", err
 	}
-	return "Rewrite prompt written to " + out + ". Run `yaver task create --from-file " + out + "` or pick it up via the dashboard.", nil
+	return "Rewrite prompt written to " + out + ". Run `yaver code \"$(cat " + out + ")\"` or pick it up via the dashboard.", nil
 }
 
 // ---- export-for-ai ----

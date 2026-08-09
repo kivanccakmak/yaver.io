@@ -192,10 +192,10 @@ func (s *HTTPServer) dispatchWatchTranscript(w http.ResponseWriter, text, projec
 		writeJSON(w, http.StatusOK, watchReply{
 			V:      1,
 			Kind:   "handoff",
-			Target: "cloud-workspace",
+			Target: "remote-machine",
 			TaskID: pendingTaskID,
 			Status: status,
-			Spoken: "Your Cloud Workspace is getting ready. Continue on your phone.",
+			Spoken: "Your remote machine is getting ready. Continue on your phone.",
 		})
 		return
 	} else if previewPlacement != nil {

@@ -13,7 +13,7 @@ import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskS
 import { StreamHealthNotice } from "@/components/dashboard/StreamHealthNotice";
 import WebShellModal from "@/components/dashboard/WebShellModal";
 import RemoteDesktopModal from "@/components/dashboard/RemoteDesktopModal";
-import { agentClient, agentClientPool, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary } from "@/lib/agent-client";
+import { agentClient, agentClientPool, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary, type McpServer } from "@/lib/agent-client";
 import { isRunnerSeat, listTmuxRunnerSessions, type TmuxRunnerSessionRecord } from "@/lib/tmux-sessions";
 import { CONVEX_URL } from "@/lib/constants";
 import { useMachineRoles } from "@/lib/useMachineRoles";
@@ -1129,6 +1129,8 @@ export default function DashboardPage() {
   const [outputLines, setOutputLines] = useState<string[]>([]);
   const [chatMsgs, setChatMsgs] = useState<ChatMsg[]>([]);
   const [runners, setRunners] = useState<Runner[]>([]);
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
+  const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
   const [selectedRunner, setSelectedRunner] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [selectedOpenCodeMode, setSelectedOpenCodeMode] = useState<string>("");
@@ -1950,6 +1952,10 @@ export default function DashboardPage() {
         placementLane: fresh.placementLane || activeTask.placementLane,
         placementReason: fresh.placementReason || activeTask.placementReason,
         placementCreditLabel: fresh.placementCreditLabel || activeTask.placementCreditLabel,
+        pendingCloudBlockedAction: fresh.pendingCloudBlockedAction || activeTask.pendingCloudBlockedAction,
+        pendingCloudBlockedReason: fresh.pendingCloudBlockedReason || activeTask.pendingCloudBlockedReason,
+        pendingCloudExpiresAt: fresh.pendingCloudExpiresAt || activeTask.pendingCloudExpiresAt,
+        pendingCloudTargetDeviceId: fresh.pendingCloudTargetDeviceId || activeTask.pendingCloudTargetDeviceId,
       });
     }
   }, [tasks, activeTask]);
@@ -2146,6 +2152,7 @@ export default function DashboardPage() {
         if (connectedDevice?.id === d.id) {
           setTimeout(async () => {
             try { setRunners(await agentClient.getRunners()); } catch {}
+            try { setMcpServers((await agentClient.listMcpServers()).filter((server) => server.enabled)); } catch {}
             try { setAgentInfo(await agentClient.getInfo()); } catch {}
           }, 1500);
         }
@@ -2388,6 +2395,7 @@ export default function DashboardPage() {
         }
       } catch {}
       try { setRunners(await agentClient.getRunners()); } catch {}
+      try { setMcpServers((await agentClient.listMcpServers()).filter((server) => server.enabled)); } catch {}
     } catch (err: any) {
       const firstDiagnostics = agentClient.lastConnectDiagnostics;
       const canTryAutoReauth = Boolean(token && device.id && agentClient.configuredRelayServers.length > 0);
@@ -2433,6 +2441,7 @@ export default function DashboardPage() {
             clearLastFailure(device.id);
             try { setAgentInfo(await agentClient.getInfo()); } catch {}
             try { setRunners(await agentClient.getRunners()); } catch {}
+            try { setMcpServers((await agentClient.listMcpServers()).filter((server) => server.enabled)); } catch {}
             return;
           }
         } catch {}
@@ -2549,7 +2558,7 @@ export default function DashboardPage() {
             const base = prev.filter((msg) => !msg.queued);
             return [
               ...base,
-              { role: "assistant", text: "Cloud Workspace is connected. Dispatching the queued task now…" },
+              { role: "assistant", text: "Remote machine is connected. Dispatching the queued task now…" },
             ];
           });
         } catch (err) {
@@ -2588,7 +2597,7 @@ export default function DashboardPage() {
     };
   }, [activeTask?.id, connState, connectedDevice?.id, devices, token]);
 
-  const disconnect = () => { agentClient.disconnect(); setConnectedDevice(null); setAgentInfo(null); setTasks([]); setActiveTask(null); setOutputLines([]); setChatMsgs([]); setRunners([]); setSelectedRunner(""); setSelectedModel(""); setConnectError(null); setPendingFollowUps([]); };
+  const disconnect = () => { agentClient.disconnect(); setConnectedDevice(null); setAgentInfo(null); setTasks([]); setActiveTask(null); setOutputLines([]); setChatMsgs([]); setRunners([]); setMcpServers([]); setSelectedMcpServers([]); setSelectedRunner(""); setSelectedModel(""); setConnectError(null); setPendingFollowUps([]); };
 
   // Stream C — silent auto-connect on load (parity with mobile/tvOS). Rule:
   // connect to the primary if it's online, else the secondary; if a preference
@@ -2673,6 +2682,9 @@ export default function DashboardPage() {
     if (!isConnected) return;
     try {
       setRunners(await agentClient.getRunners());
+    } catch {}
+    try {
+      setMcpServers((await agentClient.listMcpServers()).filter((server) => server.enabled));
     } catch {}
   };
 
@@ -2852,6 +2864,7 @@ export default function DashboardPage() {
               model: selectedModel || undefined,
               mode: selectedRunner === "opencode" && selectedOpenCodeMode ? selectedOpenCodeMode : undefined,
               workDir: preferredSurfaceProjectPath || undefined,
+              mcpServers: selectedMcpServers,
             },
             createdAt: now,
             updatedAt: now,
@@ -2901,7 +2914,7 @@ export default function DashboardPage() {
               ...base,
               {
                 role: "assistant",
-                text: "Cloud Workspace is waking. I queued this locally and did not send it to the currently connected machine.",
+                text: "Remote machine is preparing. I queued this locally and did not send it to the currently connected machine.",
                 queued: true,
               },
             ];
@@ -2915,6 +2928,7 @@ export default function DashboardPage() {
           model: selectedModel || undefined,
           mode: selectedRunner === "opencode" && selectedOpenCodeMode ? selectedOpenCodeMode : undefined,
           workDir: preferredSurfaceProjectPath || undefined,
+          mcpServers: selectedMcpServers,
         };
         fallbackPendingCloudTask = {
           localTaskId: "",
@@ -2969,7 +2983,7 @@ export default function DashboardPage() {
             ...base,
             {
               role: "assistant",
-              text: "Cloud Workspace is waking. I queued this locally and did not send it to the currently connected machine.",
+              text: "Remote machine is preparing. I queued this locally and did not send it to the currently connected machine.",
               queued: true,
             },
           ];
@@ -3001,6 +3015,73 @@ export default function DashboardPage() {
       setSending(false);
     }
   };
+
+  const handlePendingCloudBlockedAction = useCallback(async (task: Task) => {
+    const action = task.pendingCloudBlockedAction;
+    if (action === "runner_auth_required") {
+      const runner = String(task.runnerId || selectedRunner || "codex").trim();
+      if (runner === "claude" || runner === "claude-code" || runner === "codex") {
+        setChatRunnerAuthModal(runner === "claude-code" ? "claude" : runner);
+      } else {
+        setConnectError(`${runnerLabel(runner)} needs sign-in on the selected machine.`);
+      }
+      return;
+    }
+    if (action === "yaver_auth_required" || action === "billing_required") {
+      window.open("https://yaver.io", "_blank", "noopener,noreferrer");
+      return;
+    }
+    if (action === "resize_required" || action === "resize_failed" || action === "wake_failed") {
+      if (!token || !task.placementId) {
+        setConnectError("Retry unavailable: this saved task has no placement id.");
+        return;
+      }
+      try {
+        const activation = await activateTaskPlacement(token, { placementId: task.placementId });
+        const blockedReason = activationBlockReason(activation);
+        updatePendingCloudDispatch(task.id, {
+          dispatchStatus: blockedReason ? "blocked" : "queued",
+          blockedAction: blockedReason ? activation.action : undefined,
+          blockedReason: blockedReason || undefined,
+          clearedBlockedAction: !blockedReason,
+          updatedAt: Date.now(),
+        });
+        void updateTaskDispatchIntent(token, {
+          localTaskId: task.id,
+          status: blockedReason ? "blocked" : "dispatching",
+          blockedAction: blockedReason ? activation.action : undefined,
+          reason: blockedReason || undefined,
+          clearBlockedAction: !blockedReason,
+        }).catch(() => null);
+        const nextTask = pendingCloudTaskPlaceholder({
+          localTaskId: task.id,
+          placementId: task.placementId,
+          placementLane: task.placementLane,
+          placementReason: task.placementReason,
+          placementCreditLabel: task.placementCreditLabel,
+          targetDeviceId: task.pendingCloudTargetDeviceId,
+          dispatchStatus: blockedReason ? "blocked" : "queued",
+          blockedAction: blockedReason ? activation.action : undefined,
+          blockedReason: blockedReason || undefined,
+          params: {
+            title: task.title,
+            description: task.description || task.title,
+            runner: task.runnerId,
+            model: task.model,
+          },
+          createdAt: task.createdAt,
+          updatedAt: Date.now(),
+          attempts: 0,
+        });
+        setActiveTask(nextTask);
+        setTasks((prev) => prev.map((row) => row.id === task.id ? nextTask : row));
+      } catch (err: any) {
+        setConnectError(err?.message || "Remote machine retry failed.");
+      }
+      return;
+    }
+    setConnectError(task.pendingCloudBlockedReason || "This task is waiting for the selected remote machine.");
+  }, [selectedRunner, token]);
 
   // Dispatch queued follow-ups when the active task transitions out
   // of running/queued. Drains one per transition: continueTask kicks
@@ -4475,9 +4556,39 @@ export default function DashboardPage() {
                               activeTask.placementCreditLabel,
                             ].filter(Boolean).join(" · ")}
                           </span>
-                        ) : null}
-                      </div>
-                      <div ref={outputRef} className="flex-1 overflow-y-auto bg-surface-950 px-4 py-5">
+	                        ) : null}
+	                      </div>
+                      {activeTask.id.startsWith("pending-cloud:") && (activeTask.pendingCloudBlockedAction || activeTask.pendingCloudBlockedReason || activeTask.status === "stopped") ? (
+                        <div className="border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs text-amber-900 dark:text-amber-100">
+                          <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2">
+                            <span className="font-semibold">
+                              {activeTask.status === "stopped" ? "Remote dispatch expired" : "Needs your action"}
+                            </span>
+                            <span className="min-w-0 flex-1 text-amber-800/90 dark:text-amber-100/80">
+                              {activeTask.pendingCloudBlockedReason || "This task is waiting for the selected remote machine."}
+                              {typeof activeTask.pendingCloudExpiresAt === "number" && activeTask.status !== "stopped"
+                                ? ` Expires in ~${Math.max(0, Math.ceil((activeTask.pendingCloudExpiresAt - Date.now()) / 3_600_000))}h.`
+                                : ""}
+                            </span>
+                            {activeTask.status !== "stopped" ? (
+                              <button
+                                type="button"
+                                onClick={() => void handlePendingCloudBlockedAction(activeTask)}
+                                className="rounded-full border border-amber-400/40 bg-amber-200/40 px-3 py-1 text-[11px] font-semibold text-amber-950 hover:bg-amber-200/70 dark:bg-amber-400/10 dark:text-amber-100"
+                              >
+                                {activeTask.pendingCloudBlockedAction === "runner_auth_required"
+                                  ? `Sign in to ${runnerLabel(activeTask.runnerId || selectedRunner)}`
+                                  : activeTask.pendingCloudBlockedAction === "resize_required" ||
+                                    activeTask.pendingCloudBlockedAction === "resize_failed" ||
+                                    activeTask.pendingCloudBlockedAction === "wake_failed"
+                                    ? "Retry"
+                                    : "Open Yaver web"}
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+	                      <div ref={outputRef} className="flex-1 overflow-y-auto bg-surface-950 px-4 py-5">
                         {isOpenCodeTask ? (
                           <div className="mx-auto mb-3 flex max-w-3xl justify-center">
                             <div className="flex items-center gap-1 rounded-full border border-surface-700 bg-surface-900/80 p-1 text-[11px] font-semibold shadow-sm">
@@ -5283,7 +5394,7 @@ export default function DashboardPage() {
                         || Boolean(activeRunnerAuthIssue);
                       return (
                         <>
-                          <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
+	                          <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
                             onKeyDown={e => {
                               // See lib/composerKeys.ts (2026-07-27 "it removed
                               // my second line"): an IME commit and every
@@ -5308,13 +5419,44 @@ export default function DashboardPage() {
                                 });
                               }
                             }}
-                            placeholder={placeholder} rows={1}
-                            disabled={Boolean(activeRunnerAuthIssue)}
-                            className="max-h-32 w-full resize-none rounded-xl border border-surface-700 bg-surface-950 px-4 py-3 text-sm text-surface-50 caret-surface-50 placeholder-surface-400 outline-none focus:border-surface-500 disabled:cursor-not-allowed disabled:opacity-60" style={{ minHeight: "48px" }} />
-                          <button type="submit" disabled={disabled}
-                            className="h-12 shrink-0 rounded-xl bg-surface-100 px-5 text-sm font-medium text-surface-900 hover:bg-surface-50 disabled:opacity-30">
-                            {buttonLabel}
-                          </button>
+	                            placeholder={placeholder} rows={1}
+	                            disabled={Boolean(activeRunnerAuthIssue)}
+	                            className="max-h-32 w-full resize-none rounded-xl border border-surface-700 bg-surface-950 px-4 py-3 text-sm text-surface-50 caret-surface-50 placeholder-surface-400 outline-none focus:border-surface-500 disabled:cursor-not-allowed disabled:opacity-60" style={{ minHeight: "48px" }} />
+	                          <button type="submit" disabled={disabled}
+	                            className="h-12 shrink-0 rounded-xl bg-surface-100 px-5 text-sm font-medium text-surface-900 hover:bg-surface-50 disabled:opacity-30">
+	                            {buttonLabel}
+	                          </button>
+                          {!taskRunning && mcpServers.length > 0 ? (
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-surface-500 md:col-span-2">
+                              <span className="font-semibold uppercase tracking-[0.14em]">
+                                {selectedMcpServers.length ? `${selectedMcpServers.length} MCP` : "No MCP"}
+                              </span>
+                              {mcpServers.map((server) => {
+                                const active = selectedMcpServers.includes(server.name);
+                                return (
+                                  <button
+                                    key={server.name}
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedMcpServers((prev) =>
+                                        prev.includes(server.name)
+                                          ? prev.filter((name) => name !== server.name)
+                                          : [...prev, server.name],
+                                      );
+                                    }}
+                                    className={`rounded-full border px-2.5 py-1 font-semibold ${
+                                      active
+                                        ? "border-brand/40 bg-brand-soft text-brand-softFg"
+                                        : "border-surface-800 bg-surface-950 text-surface-400 hover:border-surface-700"
+                                    }`}
+                                    title={`${server.url} · ${server.toolCount ?? 0} tools`}
+                                  >
+                                    {server.name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
                         </>
                       );
                     })()}

@@ -6783,6 +6783,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			Verbosity *int   `json:"verbosity"`
 			Runner    string `json:"runner"`
 			Model     string `json:"model"`
+			DeviceID  string `json:"device_id"`
 			// Mode is the runner-specific subcommand selector. Currently
 			// honored by opencode where it maps to `--agent <mode>` —
 			// e.g. "build" / "plan" / any custom agent the user has
@@ -6799,6 +6800,30 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		json.Unmarshal(call.Arguments, &args)
 		if args.Prompt == "" {
 			return mcpToolError("prompt is required")
+		}
+		if deviceID := strings.TrimSpace(args.DeviceID); deviceID != "" && deviceID != s.deviceID {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			body := map[string]interface{}{
+				"title":        args.Prompt,
+				"description":  args.Prompt,
+				"userPrompt":   "",
+				"source":       "mcp",
+				"runner":       strings.TrimSpace(args.Runner),
+				"model":        strings.TrimSpace(args.Model),
+				"mode":         strings.TrimSpace(args.Mode),
+				"videoEnabled": args.VideoEnabled,
+				"videoSource":  strings.TrimSpace(args.VideoSource),
+				"askFreely":    args.AskFreely,
+			}
+			out, err := proxyToDeviceJSON(ctx, "create_task", deviceID, http.MethodPost, "/tasks", body)
+			if err != nil {
+				return mcpToolError(fmt.Sprintf("failed to create task on device %s: %v", shortDeviceID(deviceID), err))
+			}
+			out["ok"] = true
+			out["targetDeviceId"] = deviceID
+			out["mode"] = "remote_device"
+			return mcpToolJSON(out)
 		}
 		var vc *TaskVerbosity
 		if args.Verbosity != nil {

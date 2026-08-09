@@ -6,7 +6,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		// --- Task Management ---
 		{
 			"name":        "create_task",
-			"description": "Create a new coding task. Yaver previews placement first: ordinary tasks run on this machine, while Cloud Workspace tasks are handed to the assigned workspace or return action=\"cloud_workspace_required\" with a pendingTaskId if the workspace is waking or needs auth. Returns a structured task object when accepted; when video recording is enabled and a clip exists, the task includes videoClipId/videoStatus/videoClipUrl/videoPosterUrl so MCP clients can render a watch link or inline player for demos recorded on the producing machine.",
+			"description": "Create a new coding task. By default it runs on this agent's machine; pass device_id to run it on another owned Yaver machine over the same relay/direct device routing used by the CLI. Returns a structured task object when accepted; when video recording is enabled and a clip exists, the task includes videoClipId/videoStatus/videoClipUrl/videoPosterUrl so MCP clients can render a watch link or inline player for demos recorded on the producing machine.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"prompt"},
@@ -29,6 +29,10 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 					"model": map[string]interface{}{
 						"type":        "string",
 						"description": "Model id forwarded to the runner (e.g. claude-opus-4-7, gpt-5-codex, or any opencode-configured provider/model). Empty = runner default.",
+					},
+					"device_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional owned Yaver device id/name/alias to create the task on. Empty runs on the local MCP host.",
 					},
 					"mode": map[string]interface{}{
 						"type":        "string",

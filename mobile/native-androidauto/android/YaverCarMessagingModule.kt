@@ -180,7 +180,7 @@ class YaverCarMessagingModule(
                 .build()
 
             NotificationManagerCompat.from(ctx)
-                .notify(conversationId.hashCode(), notif)
+                .notify("$conversationId/$messageId".hashCode(), notif)
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("car_messaging_failed", e.message, e)

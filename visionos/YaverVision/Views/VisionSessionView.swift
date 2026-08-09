@@ -257,7 +257,7 @@ struct VisionSessionView: View {
         defer { loading = false }
         do {
             guard let sessionClient else { throw AgentError(message: "No machine selected") }
-            apply(try await sessionClient.sendText(text, session: selectedSession))
+            apply(try await sessionClient.sendText(text, session: selectedSession, surfaceId: "vision"))
         } catch {
             self.error = error.localizedDescription
         }

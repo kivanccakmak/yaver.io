@@ -17,7 +17,7 @@ import { getConvexSiteUrlSync } from "../../src/lib/backendConfig";
 import { useLocalSearchParams, router } from "expo-router";
 import { Device, useDevice } from "../../src/context/DeviceContext";
 import { appTag } from "../../src/lib/appVersion";
-import { ENABLE_GUEST_FEATURES } from "../../src/lib/launchFlags";
+import { ENABLE_GUEST_FEATURES, HIDE_PAID_UI } from "../../src/lib/launchFlags";
 import { useAuth } from "../../src/context/AuthContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { chipPalette } from "../../src/lib/chipPalette";
@@ -819,7 +819,7 @@ function DeviceCard({
           ) : null}
           {/* Up/down for a Yaver-hosted (managed) box. Resume when paused/stopped,
               else Pause. Self-hosted boxes have no machineId ⇒ nothing here. */}
-          {!device.isGuest && device.machineId ? (
+          {!HIDE_PAID_UI && !device.isGuest && device.machineId ? (
             device.machineStatus === "paused" ||
             device.machineStatus === "stopped" ||
             device.machineStatus === "suspended" ? (

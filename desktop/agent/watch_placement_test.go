@@ -74,7 +74,7 @@ func TestWatchTurnDefersCloudPlacementInsteadOfRunningLocal(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.Kind != "handoff" || resp.Target != "cloud-workspace" || resp.Status != "runner_auth_required" {
+	if resp.Kind != "handoff" || resp.Target != "remote-machine" || resp.Status != "runner_auth_required" {
 		t.Fatalf("response = %#v", resp)
 	}
 	if !strings.HasPrefix(resp.TaskID, "pending-cloud:") {

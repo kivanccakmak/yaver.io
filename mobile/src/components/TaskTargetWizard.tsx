@@ -518,6 +518,7 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
     if (eligibleDevices.length === 1) {
       const only = eligibleDevices[0];
       if (pickedDevice?.id === only.id) return;
+      if (!only.online || (only.needsAuth && !only.online)) return;
       setPickedDevice(only);
       const seed = primaryRunnerByDevice[only.id];
       if (seed) {

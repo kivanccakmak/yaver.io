@@ -547,6 +547,10 @@ export interface Task {
   placementLane?: string;
   placementReason?: string;
   placementCreditLabel?: string;
+  pendingCloudBlockedAction?: string;
+  pendingCloudBlockedReason?: string;
+  pendingCloudExpiresAt?: number;
+  pendingCloudTargetDeviceId?: string | null;
   autoRetry?: boolean;
   /** Number of auto-retries so far. */
   autoRetryCount?: number;

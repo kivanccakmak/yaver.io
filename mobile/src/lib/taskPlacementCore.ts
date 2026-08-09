@@ -75,22 +75,22 @@ export function taskPlacementRequestBody(
 
 export function activationBlockReason(activation: PlacementActivationHelper): string | null {
   if (activation.action === "yaver_auth_required") {
-    return activation.reason || "Yaver Cloud Workspace needs Yaver account authorization before this task can run.";
+    return activation.reason || "The selected remote machine needs Yaver account authorization before this task can run.";
   }
   if (activation.action === "runner_auth_required") {
-    return activation.reason || "Cloud Workspace is online, but the selected runner needs browser authorization.";
+    return activation.reason || "The selected remote machine is online, but the selected runner needs browser authorization.";
   }
   if (activation.action === "billing_required") {
-    return activation.reason || "Cloud Workspace requires an active subscription from Yaver web before this task can run.";
+    return activation.reason || "The selected remote machine is not available for this task yet.";
   }
   if (activation.action === "resize_required") {
-    return activation.reason || "Cloud Workspace needs a larger profile before this task can run.";
+    return activation.reason || "The selected remote machine needs a larger profile before this task can run.";
   }
   if (activation.action === "resize_failed") {
-    return activation.error || activation.reason || "Cloud Workspace resize request failed.";
+    return activation.error || activation.reason || "Remote machine resize request failed.";
   }
   if (activation.action === "wake_failed") {
-    return activation.error || activation.reason || "Cloud Workspace wake failed before this task could run.";
+    return activation.error || activation.reason || "Remote machine wake failed before this task could run.";
   }
   return null;
 }
@@ -134,7 +134,7 @@ export function expensiveCloudPlacementMessage(decision?: PlacementHelperDecisio
   const estimate = decision?.creditEstimate?.display || placementCreditLabel(decision);
   return [
     `This is a ${label}.`,
-    "It may use more of your included Cloud Workspace allowance or require Boost if you run many of these this month.",
+    "It may need a larger remote machine if you run many of these this month.",
     estimate ? `Estimate: ${estimate}` : "",
     "Continue?",
   ].filter(Boolean).join("\n\n");

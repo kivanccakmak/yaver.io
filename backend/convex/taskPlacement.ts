@@ -361,10 +361,17 @@ async function candidateOwnedDevice(
     .withIndex("by_userId", (q: any) => q.eq("userId", userId))
     .collect();
   const online = devices.filter((d: any) => d.isOnline && !d.needsAuth);
+  const settings = await ctx.db
+    .query("userSettings")
+    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .first();
   const selected = args.targetDeviceId
     ? online.find((d: any) => d.deviceId === args.targetDeviceId)
     : undefined;
-  const pool = selected ? [selected] : online;
+  const pool = selected ? [selected] : orderOwnedDeviceCandidates(online, {
+    primaryDeviceId: settings?.primaryDeviceId,
+    secondaryDeviceId: settings?.secondaryDeviceId,
+  });
   return pool.find((d: any) => {
     if (args.runnerId && Array.isArray(d.installedRunnerIds) && !d.installedRunnerIds.includes(args.runnerId)) {
       return false;
@@ -372,6 +379,24 @@ async function candidateOwnedDevice(
     if (!args.needsBuild) return true;
     return Array.isArray(d.publishCapabilities) && d.publishCapabilities.length > 0;
   }) ?? null;
+}
+
+export function orderOwnedDeviceCandidates<T extends { deviceId?: string }>(
+  devices: T[],
+  settings?: { primaryDeviceId?: string | null; secondaryDeviceId?: string | null } | null,
+): T[] {
+  const out: T[] = [];
+  const pushById = (id?: string | null) => {
+    if (!id) return;
+    const found = devices.find((d) => d.deviceId === id);
+    if (found && !out.includes(found)) out.push(found);
+  };
+  pushById(settings?.primaryDeviceId);
+  pushById(settings?.secondaryDeviceId);
+  for (const device of devices) {
+    if (!out.includes(device)) out.push(device);
+  }
+  return out;
 }
 
 export function selectTaskPlacementCloudMachine(machines: any[], resourceClass: ResourceClass) {
