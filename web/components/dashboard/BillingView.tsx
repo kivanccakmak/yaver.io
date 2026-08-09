@@ -227,7 +227,7 @@ export default function BillingView({ token }: { token: string | null | undefine
     const label = productLabel(sub?.plan);
     if (
       !window.confirm(
-        `Cancel ${label}? This stops future renewal. Linked Yaver-managed relay/workspace resources will be scheduled for teardown.`
+        `Cancel ${label}? This stops future renewal. ${label} stays active until the end of the paid period — your data and workspace are preserved until then.`
       )
     ) {
       return;
@@ -245,7 +245,7 @@ export default function BillingView({ token }: { token: string | null | undefine
         setMsg(`✗ ${j?.error || "Couldn't cancel subscription."}`);
         return;
       }
-      setMsg(`✓ ${label} cancelled`);
+      setMsg(`✓ ${label} cancels at the end of the paid period`);
       await Promise.all([loadSub(), loadWallet()]);
     } catch (e: any) {
       setMsg(`✗ ${e?.message || String(e)}`);

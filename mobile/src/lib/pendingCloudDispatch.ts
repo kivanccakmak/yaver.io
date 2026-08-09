@@ -28,6 +28,13 @@ export type PendingCloudTaskParams = {
   video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" };
   codeMode?: boolean;
   allowLocalFallback?: boolean;
+  /** Yaver goal-mode objective (opencode goal plugin) — carried through the
+   *  pending-cloud placeholder so a deferred dispatch still arms goal-mode. */
+  goal?: string;
+  /** Whether the runner sees Yaver's own `yaver mcp` doorway (default true).
+   *  Carried through the placeholder so a deferred dispatch honors the
+   *  user's deselect of the `yaver` chip. */
+  includeYaverMcp?: boolean;
 };
 
 export type PendingCloudDispatch = {

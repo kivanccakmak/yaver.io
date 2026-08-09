@@ -91,6 +91,7 @@ func mcpYaverBillingStatus() interface{} {
 	}
 	var s struct {
 		Subscribed         bool     `json:"subscribed"`
+		PaymentProblem     bool     `json:"paymentProblem"`
 		Tier               *string  `json:"tier"`
 		SubscriptionStatus *string  `json:"subscriptionStatus"`
 		CurrentPeriodEnd   *float64 `json:"currentPeriodEnd"`
@@ -103,6 +104,7 @@ func mcpYaverBillingStatus() interface{} {
 	out := map[string]interface{}{
 		"signed_in":           true,
 		"subscribed":          s.Subscribed,
+		"payment_problem":     s.PaymentProblem,
 		"tier":                s.Tier,
 		"subscription_status": s.SubscriptionStatus,
 		"included_hours_left": s.IncludedHoursLeft,
@@ -114,6 +116,15 @@ func mcpYaverBillingStatus() interface{} {
 			tier = *s.Tier
 		}
 		out["next_action"] = fmt.Sprintf("You're on the %s plan. Use yaver_billing_manage to update payment, change plan, or cancel.", tier)
+	} else if s.PaymentProblem {
+		// Truthful past_due state (audit G3): the user still has a
+		// subscription row, it is just not paying. Name the problem and the
+		// route to fix it instead of offering a second checkout.
+		status := "past due"
+		if s.SubscriptionStatus != nil && *s.SubscriptionStatus != "" {
+			status = *s.SubscriptionStatus
+		}
+		out["next_action"] = fmt.Sprintf("There is a payment problem on your subscription (%s) — your workspace is safely parked. Update your payment method via yaver_billing_manage.", status)
 	} else {
 		out["next_action"] = "No active Yaver plan. Use yaver_billing_checkout to subscribe — Relay Pro ($9/mo) or Cloud Workspace ($29/mo, BYO Claude/Codex/OpenCode)."
 	}

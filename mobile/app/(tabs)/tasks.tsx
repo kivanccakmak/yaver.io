@@ -1917,6 +1917,9 @@ export default function TasksScreen() {
   const [selectedProjectPath, setSelectedProjectPath] = useState<string>(routeProjectDir);
   const [availableMcpServers, setAvailableMcpServers] = useState<McpServer[]>([]);
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
+  // Yaver's own MCP doorway — user-selectable, defaults ON (the agent
+  // injects `yaver mcp` unless the task explicitly opts out).
+  const [includeYaverMcp, setIncludeYaverMcp] = useState(true);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [keepLastProject, setKeepLastProject] = useState(true);
   const selectedComposerProject = useMemo(
@@ -2005,11 +2008,31 @@ export default function TasksScreen() {
           )}
           <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 18 }]}>MCP SERVERS</Text>
           <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 10 }}>
-            Empty means only Yaver tools.
+            Yaver tools are on by default — toggle them off to run with only external MCPs.
           </Text>
+          <Pressable
+            key="yaver"
+            onPress={() => setIncludeYaverMcp((prev) => !prev)}
+            style={[
+              s.projectPickerRow,
+              { borderColor: includeYaverMcp ? c.accent : c.border, backgroundColor: includeYaverMcp ? withAlpha(c.accent, "1f") : c.bg },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Toggle Yaver tools"
+          >
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }} numberOfLines={1}>
+                yaver{includeYaverMcp ? "" : " (off)"}
+              </Text>
+              <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }} numberOfLines={1}>
+                Yaver's own MCP doorway — agent state, tasks, projects, feedback.
+              </Text>
+            </View>
+            {includeYaverMcp ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : <Ionicons name="ellipse-outline" size={20} color={c.textMuted} />}
+          </Pressable>
           {availableMcpServers.length === 0 ? (
-            <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 18 }}>
-              No enabled MCP servers registered on this runner.
+            <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 12 }}>
+              No enabled external MCP servers registered on this runner.
             </Text>
           ) : (
             availableMcpServers.map((server) => {
@@ -2279,6 +2302,8 @@ export default function TasksScreen() {
       codeMode?: boolean;
       allowLocalFallback?: boolean;
       mcpServers?: string[];
+      goal?: string;
+      includeYaverMcp?: boolean;
     },
   ): Promise<Task> => {
     const row = await saveCloudWorkspaceRequiredDispatch({
@@ -2815,6 +2840,8 @@ export default function TasksScreen() {
             true,
             currentRow.params.projectName,
             currentRow.params.mcpServers,
+            currentRow.params.goal,
+            currentRow.params.includeYaverMcp,
           );
           if (currentRow.placementId) {
             await rebindTaskPlacement(currentRow.placementId, task.id, "running").catch(() => undefined);
@@ -4223,6 +4250,7 @@ export default function TasksScreen() {
         allowLocalFallback: false,
         mcpServers: selectedMcpServers,
         goal: goalIntent ? goalText : undefined,
+        includeYaverMcp,
       };
       pendingCloudTaskParams = taskParams;
       const rawTask = await sendClient.sendTask(
@@ -4241,6 +4269,7 @@ export default function TasksScreen() {
         taskParams.projectName,
         taskParams.mcpServers,
         taskParams.goal,
+        taskParams.includeYaverMcp,
       );
       if (taskParams.projectName && keepLastProject) {
         const runnerDeviceId = connectionManager.roleDeviceId("runner") || pendingTarget?.deviceId || activeDevice?.id || "default";

@@ -1,6 +1,180 @@
 import { v } from "convex/values";
 import { action, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { randomHex } from "./auth";
+import { hetznerPickAvailableServerType } from "./cloudLifecycle";
+import { sharedHostDeletionDecision } from "./relayPool";
+
+// Location candidates per region group, most-preferred first. The pool host is
+// created ONCE per ~20 tenants, so a sold-out preferred location must fall back
+// to another datacenter in the SAME region group (EU stays EU — a relay in the
+// US does not serve an EU buyer's latency expectations, and the inverse is
+// true for US buyers). Same rule as Cloud Workspace wake (cloudLifecycle).
+const RELAY_LOCATION_CANDIDATES: Record<string, string[]> = {
+  eu: ["fsn1", "nbg1", "hel1"],
+  us: ["ash", "hil"],
+};
+
+// A relay is pass-through: 1 vCPU / 2 GB is ample (the scarce resource is
+// BANDWIDTH, not compute). Anything cheaper-sufficient is preferred; the
+// selector ranks by gross €/h so an expensive box is never picked.
+const RELAY_MIN_REQ = { minCores: 1, minRamGb: 2, minDiskGb: 20, architecture: "x86" as const };
+
+/** First region-group location where ANY sufficient server type is orderable. */
+async function pickRelayLocation(token: string, region: string): Promise<string | undefined> {
+  const candidates = RELAY_LOCATION_CANDIDATES[String(region || "eu").startsWith("us") ? "us" : "eu"];
+  for (const location of candidates) {
+    const t = await hetznerPickAvailableServerType(token, location, RELAY_MIN_REQ);
+    if (t) return location;
+  }
+  return undefined;
+}
+
+/** Cheapest orderable sufficient server type in `location`, or the env override. */
+async function pickRelayServerType(token: string, location: string): Promise<string> {
+  const envType = (process.env.YAVER_RELAY_SERVER_TYPE || "").trim();
+  if (envType) return envType;
+  const picked = await hetznerPickAvailableServerType(token, location, RELAY_MIN_REQ);
+  return picked ?? "cpx12"; // last-resort default (cpx12 = €13.49/mo, verified orderable 2026-07-21)
+}
+
+/**
+ * docker-compose for the relay container.
+ *
+ * SECURITY / AUTH (2026-08-09 audit): the shared relay MUST validate per-user
+ * passwords against Convex (CONVEX_URL) — a box running only a shared
+ * RELAY_PASSWORD accepts exactly ONE tenant's password, locking every other
+ * tenant on the shared host out AND enforcing no ownership. Per-user mode
+ * (validateRelayAccess → /relay/validate) checks password + device ownership +
+ * paid entitlement per connection, fail-closed.
+ *
+ *  - SHARED hosts: per-user auth only (no RELAY_PASSWORD at all) + a random
+ *    per-host RELAY_ADMIN_TOKEN so admin endpoints (/tunnels, /admin/*) are
+ *    not reachable with any tenant's password.
+ *  - DEDICATED (Private Relay) hosts: the tenant's own password is the shared
+ *    secret (single tenant — no cross-tenant exposure) + Convex validation +
+ *    admin token.
+ */
+function relayCloudInit(args: {
+  domain: string;
+  convexSite: string;
+  adminToken: string;
+  sharedPassword?: string;
+}): string {
+  const envLines = [
+    `- CONVEX_URL=${args.convexSite}`,
+    `- RELAY_ADMIN_TOKEN=${args.adminToken}`,
+    ...(args.sharedPassword ? [`- RELAY_PASSWORD=${args.sharedPassword}`] : []),
+    "- RELAY_QUIC_PORT=4433",
+    "- RELAY_HTTP_PORT=8080",
+    "- RELAY_DATA_DIR=/data",
+  ].join("\n");
+
+  return `#cloud-config
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-v2
+  - nginx
+  - certbot
+  - python3-certbot-nginx
+  - jq
+  - curl
+  - ca-certificates
+  - ufw
+  - git
+  - unzip
+  - build-essential
+  - tmux
+runcmd:
+  - systemctl enable docker
+  - systemctl start docker
+  - mkdir -p /opt/yaver-relay
+  - |
+    cat > /opt/yaver-relay/docker-compose.yml <<'YML'
+    services:
+      relay:
+        image: ghcr.io/kivanccakmak/yaver-relay:latest
+        container_name: yaver-relay
+        restart: always
+        ports:
+          - "4433:4433/udp"
+          - "8080:8080"
+        environment:
+${envLines}
+        volumes:
+          - relay-data:/data
+      watchtower:
+        image: containrrr/watchtower
+        container_name: yaver-watchtower
+        restart: always
+        volumes:
+          - /var/run/docker.sock:/var/run/docker.sock
+        command: --interval 3600 --cleanup
+    volumes:
+      relay-data:
+    YML
+  - cd /opt/yaver-relay && docker compose pull && docker compose up -d
+  - |
+    cat > /etc/nginx/sites-available/relay <<'NGINX'
+    server {
+        listen 80;
+        server_name ${args.domain};
+        location / {
+            proxy_pass http://127.0.0.1:8080;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_read_timeout 300s;
+            proxy_buffering off;
+        }
+    }
+    NGINX
+  - ln -sf /etc/nginx/sites-available/relay /etc/nginx/sites-enabled/
+  - rm -f /etc/nginx/sites-enabled/default
+  - nginx -t && systemctl reload nginx
+  - ufw allow 80/tcp || true
+  - ufw allow 443/tcp || true
+  - ufw allow 4433/udp || true
+`;
+}
+
+/**
+ * Point the user's OTHER self-hosted devices at their managed relay once it
+ * answers (this is the actual delivery of Relay Pro — the box nobody dials is
+ * worth nothing). Only repoints when the user has no custom relay (empty, the
+ * platform default, or already this domain); a self-hosted relay the user
+ * configured themselves is never clobbered. Idempotent.
+ */
+async function wireUserRelayUrl(
+  ctx: { runQuery: (ref: any, args: any) => Promise<any>; runMutation: (ref: any, args: any) => Promise<any> },
+  relay: { userId: any },
+  domain: string,
+): Promise<void> {
+  try {
+    const target = `https://${domain}`;
+    const settings = await ctx.runQuery(internal.userSettings.getByUserId, { userId: relay.userId });
+    const platform = await ctx.runQuery(internal.platformConfig.getClientConfig, {});
+    let defaultRelayUrl: string | undefined;
+    try {
+      const relays: Array<{ httpUrl?: string }> = JSON.parse(String(platform?.relay_servers ?? "[]"));
+      defaultRelayUrl = relays[0]?.httpUrl;
+    } catch { /* not configured */ }
+    const current = settings?.relayUrl;
+    if (current && current !== defaultRelayUrl && current !== target) {
+      console.log(`[provision] user ${relay.userId} has a custom relayUrl (${current}) — not overwriting with ${target}`);
+      return;
+    }
+    await ctx.runMutation(internal.userSettings.setRelayForUser, {
+      userId: relay.userId,
+      relayUrl: target,
+    });
+    console.log(`[provision] wired ${relay.userId} to their managed relay ${target}`);
+  } catch (e) {
+    console.error(`[provision] relayUrl wiring failed for ${relay.userId}:`, e);
+  }
+}
 
 /**
  * Provision a managed relay server.
@@ -70,152 +244,97 @@ export const provision = internalAction({
       return;
     }
 
-    // ─── Shared pool assignment (before ANY provider spend) ──────────────
-    // Relay Pro rides a shared multi-tenant host. A dedicated box per
-    // subscriber is 16% gross against $9/mo and cannot scale to zero (a relay
-    // is useless when off), so the box is created ONCE per ~20 tenants and
-    // reused thereafter. Safe because the relay is pass-through: it authorizes
-    // nothing, executes no tenant code, and cross-tenant bridging is refused in
-    // Convex before any forwarding. See relayPool.ts.
-    const slot = await ctx.runMutation(internal.relayPool.assignToPool, {
-      relayId: args.relayId,
-      region: args.region,
-    });
-    const existingHost = await ctx.runQuery(internal.relayPool.hostEndpoint, {
-      hostKey: slot.hostKey,
-    });
+    // ─── Pool assignment (before ANY provider spend) ─────────────────────
+    // Relay Pro rides a shared multi-tenant host by default. A dedicated box
+    // per subscriber is 16% gross against $9/mo and cannot scale to zero (a
+    // relay is useless when off), so the box is created ONCE per ~20 tenants
+    // and reused thereafter. Safe because the relay is pass-through AND the
+    // box validates each tenant's password per-user via Convex
+    // (CONVEX_URL in the container env — see relayCloudInit). A dedicated
+    // ("Private Relay") row skips the pool entirely.
+    const relay = await ctx.runQuery(internal.managedRelays.getById, { relayId: args.relayId });
+    const dedicated = Boolean(relay?.isDedicated);
     const shortId = args.userId.substring(0, 8);
-    // Host boxes are named per POOL SLOT, not per user — the box serves many
-    // tenants, so naming it after the first one would be a lie that outlives
-    // that tenant's subscription.
-    const serverName = slot.hostKey;
     const subdomain = `${shortId}.relay`;
     const domain = `${shortId}.relay.yaver.io`;
+    const convexSite =
+      process.env.CONVEX_SITE_URL || "https://perceptive-minnow-557.eu-west-1.convex.site";
 
-    // Map region to Hetzner location
-    const location = args.region.startsWith("us") ? "ash" : "fsn1";
+    let slot: { hostKey: string; reason: string } | null = null;
+    if (!dedicated) {
+      slot = await ctx.runMutation(internal.relayPool.assignToPool, {
+        relayId: args.relayId,
+        region: args.region,
+      });
+    }
+    const hostKey = dedicated ? null : (slot?.hostKey ?? null);
 
     try {
-      // ── Step 1: Create Hetzner server ──────────────────────────
-
-      // CAX11 is arm64 — pick the matching yaver release asset. If you
-      // later switch to an amd64 server_type, flip the asset name here.
-      // The release ships the binary inside a .tar.gz (single file
-      // named `yaver`), never as a raw asset — extract on the box.
-      const yaverAsset = "yaver-linux-arm64.tar.gz";
-      const yaverReleaseUrl = `https://github.com/kivanccakmak/yaver.io/releases/latest/download/${yaverAsset}`;
-
-      const cloudConfig = `#cloud-config
-package_update: true
-packages:
-  - docker.io
-  - docker-compose-v2
-  - nginx
-  - certbot
-  - python3-certbot-nginx
-  - jq
-  - curl
-  - ca-certificates
-  - ufw
-  - git
-  - unzip
-  - build-essential
-  - tmux
-runcmd:
-  - systemctl enable docker
-  - systemctl start docker
-  # Install the yaver CLI on the managed relay so the box is usable as a
-  # devops console (yaver sdk-token, yaver dns *, yaver guests *, etc.)
-  # without SSHing in with extra tooling. Non-fatal on failure.
-  - |
-    ( curl -fsSL "${yaverReleaseUrl}" -o /tmp/yaver.tgz \
-      && tar -xzf /tmp/yaver.tgz -C /usr/local/bin yaver \
-      && chmod +x /usr/local/bin/yaver \
-      && rm -f /tmp/yaver.tgz \
-      && /usr/local/bin/yaver --version >/dev/null 2>&1 ) || echo "[cloud-init] yaver install skipped (release not yet published for arm64)"
-  - mkdir -p /opt/yaver-relay
-  - |
-    cat > /opt/yaver-relay/docker-compose.yml <<'YML'
-    services:
-      relay:
-        image: ghcr.io/kivanccakmak/yaver-relay:latest
-        container_name: yaver-relay
-        restart: always
-        ports:
-          - "4433:4433/udp"
-          - "8080:8080"
-        environment:
-          - RELAY_PASSWORD=${args.password}
-          - RELAY_QUIC_PORT=4433
-          - RELAY_HTTP_PORT=8080
-          - RELAY_DATA_DIR=/data
-        volumes:
-          - relay-data:/data
-      watchtower:
-        image: containrrr/watchtower
-        container_name: yaver-watchtower
-        restart: always
-        volumes:
-          - /var/run/docker.sock:/var/run/docker.sock
-        command: --interval 3600 --cleanup
-    volumes:
-      relay-data:
-    YML
-  - cd /opt/yaver-relay && docker compose pull && docker compose up -d
-  - |
-    cat > /etc/nginx/sites-available/relay <<'NGINX'
-    server {
-        listen 80;
-        server_name ${domain};
-        location / {
-            proxy_pass http://127.0.0.1:8080;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_read_timeout 300s;
-            proxy_buffering off;
+      // ── REUSE (shared only): another tenant already provisioned this host.
+      // This is the whole saving — every tenant after the first costs nothing
+      // but its share. Only valid for pooled rows; a dedicated relay always
+      // gets its own box.
+      if (hostKey) {
+        const existingHost = await ctx.runQuery(internal.relayPool.hostEndpoint, { hostKey });
+        if (existingHost?.serverId && existingHost.serverIp) {
+          await ctx.runMutation(internal.managedRelays.updateProvisioned, {
+            relayId: args.relayId,
+            hetznerServerId: existingHost.serverId,
+            serverIp: existingHost.serverIp,
+            domain,
+          });
+          // The tenant still gets its OWN canonical hostname pointing at the
+          // shared host, so its relay URL is stable and independent of which
+          // box it happens to sit on today.
+          await fetch(
+            `https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records`,
+            {
+              method: "POST",
+              headers: { Authorization: `Bearer ${CF_API_TOKEN}`, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                type: "A", name: subdomain, content: existingHost.serverIp,
+                proxied: false, ttl: 60,
+              }),
+            },
+          ).catch(() => { /* DNS is best-effort; IP-direct still works */ });
+          console.log(`[provision] Relay ${domain} joined shared host ${hostKey} (${slot?.reason ?? ""})`);
+          await ctx.scheduler.runAfter(60_000, internal.provisionRelay.healthCheck, {
+            relayId: args.relayId, domain,
+          });
+          return;
         }
-    }
-    NGINX
-  - ln -sf /etc/nginx/sites-available/relay /etc/nginx/sites-enabled/
-  - rm -f /etc/nginx/sites-enabled/default
-  - nginx -t && systemctl reload nginx
-  - ufw allow 80/tcp || true
-  - ufw allow 443/tcp || true
-  - ufw allow 4433/udp || true
-`;
+      }
 
-      // REUSE: another tenant already provisioned this host. This is the whole
-      // saving — every tenant after the first costs nothing but its share, and
-      // creating a second box here would silently restore the 16% margin.
-      if (existingHost?.serverId && existingHost.serverIp) {
-        await ctx.runMutation(internal.managedRelays.updateProvisioned, {
+      // ── Capacity-aware placement ─────────────────────────────────────────
+      // The pool host is created ONCE per ~20 tenants, so a sold-out
+      // preferred location/type would fail the whole pool. Ask Hetzner what
+      // is orderable: first location in the region group with ANY sufficient
+      // type, then the cheapest sufficient type there (same machinery the
+      // Cloud wake path uses — verified 2026-07-21: cax11 was sold out EU-wide
+      // and cpx12 was the cheapest orderable x86 type).
+      const location = await pickRelayLocation(HCLOUD_TOKEN, args.region);
+      if (!location) {
+        await ctx.runMutation(internal.managedRelays.setStatus, {
           relayId: args.relayId,
-          hetznerServerId: existingHost.serverId,
-          serverIp: existingHost.serverIp,
-          domain,
-        });
-        // The tenant still gets its OWN canonical hostname pointing at the
-        // shared host, so its relay URL is stable and independent of which box
-        // it happens to sit on today.
-        await fetch(
-          `https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records`,
-          {
-            method: "POST",
-            headers: { Authorization: `Bearer ${CF_API_TOKEN}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              type: "A", name: subdomain, content: existingHost.serverIp,
-              proxied: false, ttl: 60,
-            }),
-          },
-        ).catch(() => { /* DNS is best-effort; IP-direct still works */ });
-        console.log(`[provision] Relay ${domain} joined shared host ${slot.hostKey} (${slot.reason})`);
-        await ctx.scheduler.runAfter(60_000, internal.provisionRelay.healthCheck, {
-          relayId: args.relayId, domain,
+          status: "error",
+          errorMessage: `No orderable relay server type in any ${String(args.region || "eu").startsWith("us") ? "US" : "EU"} location — capacity is temporarily exhausted.`,
         });
         return;
       }
+      const serverType = await pickRelayServerType(HCLOUD_TOKEN, location);
+      // Host boxes are named per POOL SLOT, not per user — the box serves many
+      // tenants, so naming it after the first one would be a lie that outlives
+      // that tenant's subscription. Dedicated boxes are named per relay row.
+      const serverName = dedicated
+        ? `relay-dedicated-${args.relayId.toString().substring(0, 8)}`
+        : (hostKey ?? `relay-${shortId}`);
+      const adminToken = randomHex(24);
+      const cloudConfig = relayCloudInit({
+        domain,
+        convexSite,
+        adminToken,
+        sharedPassword: dedicated ? args.password : undefined,
+      });
 
       const hetznerResp = await fetch("https://api.hetzner.cloud/v1/servers", {
         method: "POST",
@@ -225,25 +344,14 @@ runcmd:
         },
         body: JSON.stringify({
           name: serverName,
-          // ⚠️ VERIFIED AGAINST THE LIVE CATALOG 2026-07-21.
-          // This was "cax11" (ARM, €6.99/mo) — which is SOLD OUT in every EU
-          // datacenter, so provisioning a new pool host would have failed at
-          // create. It also could never be resized: change-type cannot cross
-          // architectures, and ZERO ARM types are currently orderable.
-          //
-          // cpx12 (1c/2GB, €13.49/mo) is the cheapest EU-available x86 type. It
-          // is dearer per box, but the pool amortises it across ~20 tenants:
-          // €0.67/user → 92% margin on Relay Pro, versus 16% dedicated. A relay
-          // is pass-through, so 1 core and 2 GB is ample — the scarce resource
-          // is BANDWIDTH, not CPU.
-          //
-          // Re-check before trusting this: `hcloud server-type list`.
-          server_type: process.env.YAVER_RELAY_SERVER_TYPE || "cpx12",
+          server_type: serverType,
           image: "ubuntu-24.04",
           location,
           // Labelled by POOL SLOT so the orphan sweep and cleanup can reason
           // about it; `user` is the tenant who happened to create it first.
-          labels: { service: "yaver-relay", pool: slot.hostKey, user: shortId, managed: "true" },
+          labels: dedicated
+            ? { service: "yaver-relay", dedicated: "true", user: shortId, managed: "true" }
+            : { service: "yaver-relay", pool: hostKey ?? "", user: shortId, managed: "true" },
           user_data: cloudConfig,
         }),
       });
@@ -306,7 +414,7 @@ runcmd:
         });
       }
 
-      console.log(`[provision] Relay provisioned: ${domain} (${serverIp}), server ${serverId}`);
+      console.log(`[provision] Relay provisioned: ${domain} (${serverIp}), server ${serverId}, type ${serverType} @ ${location}`);
 
       // ── Step 4: Schedule SSL setup ────────────────────────────
       // SSL is handled by cloud-init: certbot runs after nginx is up

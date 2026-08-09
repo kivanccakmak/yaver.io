@@ -1133,6 +1133,21 @@ export default defineSchema({
         }),
       ),
     ),
+    // Per-device MCP selection preference (2026-08-09). The canonical
+    // cross-surface memory for which MCP servers a task should attach, plus
+    // whether Yaver's own `yaver mcp` doorway is included (default true).
+    // Privacy-limited: MCP names only (server URLs/keys stay on the agent).
+    // Row without mcpServers = default selection (no externals, yaver on).
+    mcpServersByDevice: v.optional(
+      v.array(
+        v.object({
+          deviceId: v.string(),
+          mcpServers: v.optional(v.array(v.string())),
+          includeYaverMcp: v.optional(v.boolean()),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
     // Per-subsystem managed: true|false toggle. true = use Yaver's
     // hosted infrastructure for that subsystem (managed relay,
     // managed analytics, managed storage, …). false = user hosts

@@ -2244,7 +2244,7 @@ export class QuicClient {
    * HTTP, the runner pool, and the same Task type. The toggle only
    * changes which prompt-prefix the agent injects.
    */
-  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: SpeechContextInput, images?: ImageAttachment[], workDir?: string, mode?: string, video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" }, codeMode?: boolean, allowLocalFallback?: boolean, projectName?: string, mcpServers?: string[], goal?: string): Promise<Task> {
+  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: SpeechContextInput, images?: ImageAttachment[], workDir?: string, mode?: string, video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" }, codeMode?: boolean, allowLocalFallback?: boolean, projectName?: string, mcpServers?: string[], goal?: string, includeYaverMcp?: boolean): Promise<Task> {
     this.assertConnected();
     // Hard 30s timeout — without it, a stale relay tunnel (e.g. after a
     // failed device-switch attempt) makes this POST hang forever and
@@ -2268,7 +2268,7 @@ export class QuicClient {
     // timed out.)
     let res: Response;
     try {
-      res = await this.sendTaskRequest(title, description, model, runner, customCommand, sc, images, workDir, mode, video, codeMode, allowLocalFallback, projectName, mcpServers, goal);
+      res = await this.sendTaskRequest(title, description, model, runner, customCommand, sc, images, workDir, mode, video, codeMode, allowLocalFallback, projectName, mcpServers, goal, includeYaverMcp);
     } catch (e) {
       if (e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message))) {
         throw new Error(
@@ -2325,6 +2325,7 @@ export class QuicClient {
     projectName: string | undefined,
     mcpServers: string[] | undefined,
     goal: string | undefined,
+    includeYaverMcp: boolean | undefined,
   ): Promise<Response> {
     return this.fetchWithTimeout(`${this.baseUrl}/tasks`, {
       method: "POST",
@@ -2345,6 +2346,7 @@ export class QuicClient {
         codeMode,
         allowLocalFallback,
         goal,
+        includeYaverMcp,
       })),
     }, 30000);
   }
@@ -2847,6 +2849,7 @@ export class QuicClient {
       allowLocalFallback?: boolean;
       projectDir?: string;
       mcpServers?: string[];
+      includeYaverMcp?: boolean;
     },
   ): Promise<{ taskId: string; runnerId: string; parentTaskId: string; contextWordsUsed: number }> {
     this.assertConnected();
@@ -2867,6 +2870,7 @@ export class QuicClient {
           allowLocalFallback: args.allowLocalFallback ?? false,
           projectDir: args.projectDir ?? "",
           mcpServers: args.mcpServers ?? [],
+          includeYaverMcp: args.includeYaverMcp ?? true,
         }),
       }, 30000);
     } catch (e) {

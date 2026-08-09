@@ -29,6 +29,23 @@ import {
   parseGitHubRepoFullName,
   requestGitHubInstallationTokenForRepo,
 } from "./githubAppAuth";
+import {
+  billingProductIdFromPayload,
+  billingStateFlags,
+  isFullyRefundedOrder,
+  normalizeBillingProduct,
+  PAYMENT_PROBLEM_STATUSES,
+  subscriptionPeriodEnd,
+  subscriptionPlanFromPayload,
+} from "./billingWebhook";
+export {
+  billingStateFlags,
+  normalizeBillingProduct,
+  subscriptionPeriodEnd,
+  subscriptionPlanFromPayload,
+  isFullyRefundedOrder,
+  billingProductIdFromPayload,
+};
 
 // Apple Sign-In identity-token verification (audit 2026-07-13). JWKS is fetched
 // + cached by jose. Audience = the native app bundle id; override via env if the
@@ -494,23 +511,6 @@ function normalizeCloudPurchasePlan(value: unknown): CloudPurchasePlanId {
   const normalized = String(value || "").trim();
   if (normalized === "cloud-workspace") return "cloud-workspace";
   return "cloud-agent";
-}
-
-export function normalizeBillingProduct(value: unknown): BillingProductId | null {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized || normalized === "relay-pro" || normalized === "relay-monthly" || normalized === "relay-yearly" || normalized === "managed-relay") {
-    return "relay-pro";
-  }
-  if (
-    normalized === "cloud-workspace" ||
-    normalized === "yaver-cloud" ||
-    normalized === "cloud-agent" ||
-    normalized === "cpu" ||
-    normalized === "gpu"
-  ) {
-    return "cloud-workspace";
-  }
-  return null;
 }
 
 export function variantForBillingProduct(productId: BillingProductId): { variantId?: string; envName: string } {
@@ -5989,6 +5989,38 @@ function generateRelayPassword(): string {
   return result;
 }
 
+type WebhookHttpCtx = {
+  runQuery: (ref: any, args: any) => Promise<any>;
+  runMutation: (ref: any, args: any) => Promise<any>;
+  scheduler: { runAfter: (delayMs: number, ref: any, args: any) => Promise<any> };
+};
+
+/**
+ * Park every active managed machine for a user (payment failure / pause /
+ * refund). Volume-backed state is preserved — the box costs only its storage
+ * once parked, and a later payment/start restores it cheaply. Best-effort: a
+ * parking failure must never fail the webhook 200.
+ */
+async function parkAllActiveMachines(ctx: WebhookHttpCtx, userId: any): Promise<number> {
+  let parked = 0;
+  try {
+    const machines: any[] = (await ctx.runQuery(internal.cloudMachines.listForUser, {
+      userId,
+    })) ?? [];
+    for (const machine of machines) {
+      if (machine.status !== "active") continue;
+      await ctx.scheduler.runAfter(0, internal.cloudLifecycle.pauseMachine, {
+        machineId: machine._id,
+        dryRun: false,
+      });
+      parked++;
+    }
+  } catch (e) {
+    console.error(`[billing] parkAllActiveMachines failed for ${userId}:`, e);
+  }
+  return parked;
+}
+
 /** POST /webhooks/lemonsqueezy — LemonSqueezy webhook (no auth — validated by signature). */
 http.route({
   path: "/webhooks/lemonsqueezy",
@@ -6034,24 +6066,33 @@ http.route({
     const customerId = String(data.customer_id);
 
     switch (eventName) {
+      // ── Lifecycle events that converge to "upsert + (re)apply entitlements"
+      // ──────────────────────────────────────────────────────────────────────
+      // subscription_unpaused: billing resumed — re-sync status/plan and
+      //   re-apply entitlements, but NEVER auto-start compute (no surprise
+      //   provider spend on unpause; the user starts the workspace).
+      // subscription_payment_success: renewal — explicitly re-fire the
+      //   idempotent per-period allowance grant so a renewal never depends on
+      //   LemonSqueezy also sending `subscription_updated` (audit G1).
+      // subscription_plan_changed: variant swap in the LS portal — refresh
+      //   the local plan label + entitlements from the SAME inputs as create.
       case "subscription_created":
       case "subscription_updated":
-      case "subscription_resumed": {
-        const rawProductType = payload.meta?.custom_data?.product_type || "relay-pro";
-        const billingProductId = normalizeBillingProduct(rawProductType) ?? "relay-pro";
+      case "subscription_resumed":
+      case "subscription_unpaused":
+      case "subscription_payment_success":
+      case "subscription_plan_changed": {
+        const billingProductId = billingProductIdFromPayload(payload);
         const productType = billingProductId === "cloud-workspace" ? "cloud-workspace" : "relay-pro";
         const machineType =
-          rawProductType === "gpu" || payload.meta?.custom_data?.machine_type === "gpu"
+          payload.meta?.custom_data?.product_type === "gpu" ||
+          payload.meta?.custom_data?.machine_type === "gpu"
             ? "gpu"
             : cloudMachineTypeForPlacement(payload.meta?.custom_data?.machine_profile);
         const isCloudWorkspaceProduct = billingProductId === "cloud-workspace";
-        const plan = isCloudWorkspaceProduct
-          ? "cloud-workspace"
-          : data.variant_name?.includes("yearly")
-            ? "relay-yearly"
-            : "relay-pro";
+        const plan = subscriptionPlanFromPayload(payload, data);
         const status = normalizeLemonSqueezySubscriptionStatus(data.status);
-        const periodEnd = new Date(data.renews_at || data.ends_at).getTime();
+        const periodEnd = subscriptionPeriodEnd(data);
 
         const subId = await ctx.runMutation(internal.subscriptions.upsertFromWebhook, {
           lemonSqueezyId,
@@ -6139,7 +6180,67 @@ http.route({
         break;
       }
 
-      case "subscription_cancelled":
+      // Billing intentionally paused (user-initiated, or LS paused after
+      // repeated failures). LemonSqueezy stopped billing — local state must
+      // converge or the box keeps running on our dime while the billing page
+      // still says "Active" (2026-08-09 audit G1 cost leak).
+      //   - status → "paused" (truthful everywhere)
+      //   - managed inference / entitlements revoked
+      //   - active managed compute PARKED (volume preserved — cheap resume)
+      //   - relay rows left in place: shared relays cost nothing parked and
+      //     resume should be fast when the user unpauses.
+      case "subscription_paused": {
+        await ctx.runMutation(internal.subscriptions.upsertFromWebhook, {
+          lemonSqueezyId,
+          lemonSqueezyCustomerId: customerId,
+          userId: user._id,
+          plan: subscriptionPlanFromPayload(payload, data),
+          status: "paused",
+          currentPeriodEnd: subscriptionPeriodEnd(data),
+        });
+        await ctx.scheduler.runAfter(0, internal.plans.revokePlanEntitlements, {
+          userId: user._id,
+        });
+        await parkAllActiveMachines(ctx, user._id);
+        break;
+      }
+
+      // ── Termination: cancel-at-period-end vs expired ─────────────────────
+      // The customer paid through ends_at. `subscription_cancelled` means the
+      // user SCHEDULED cancellation (LemonSqueezy keeps billing nothing more
+      // but the sub stays live until ends_at) — so we preserve paid service
+      // through period end and only tear down when the period actually ends.
+      // `subscription_expired` is the real end: revoke + tear down now.
+      // (2026-08-09 audit G4 — previously both tore down immediately, so a
+      // user who cancelled lost their workspace mid-period.)
+      case "subscription_cancelled": {
+        const endsAt = subscriptionPeriodEnd(data);
+        const alreadyPast = endsAt <= Date.now();
+        await ctx.runMutation(internal.subscriptions.upsertFromWebhook, {
+          lemonSqueezyId,
+          lemonSqueezyCustomerId: customerId,
+          userId: user._id,
+          plan: subscriptionPlanFromPayload(payload, data),
+          status: "cancelled",
+          currentPeriodEnd: endsAt,
+        });
+        // Keep paid entitlements + resources through the period end. The
+        // billing page shows "cancels on <date>" via cancelledAt/periodEnd;
+        // the allowance meter and idle auto-park already bound the cost of
+        // the remaining period (plan §37).
+        if (!alreadyPast) {
+          console.log(
+            `[billing] subscription ${lemonSqueezyId} cancelled — service preserved until ${new Date(endsAt).toISOString()} (period-end semantics)`,
+          );
+          break;
+        }
+        // ends_at already past (late-delivered or retroactive event):
+        // fall through to full teardown, same as expired.
+        console.log(
+          `[billing] subscription ${lemonSqueezyId} cancelled with ends_at in the past — tearing down`,
+        );
+      }
+      // eslint-disable-next-line no-fallthrough
       case "subscription_expired": {
         const sub = await ctx.runMutation(internal.subscriptions.cancel, { lemonSqueezyId });
 
@@ -6150,13 +6251,12 @@ http.route({
           userId: user._id,
         });
 
-        // Tear the box down on BOTH cancel and expiry. A managed box
-        // costs Yaver money every hour it runs; the moment the user
-        // cancels we stop that spend (deprovision snapshots first, so
-        // a resubscribe can be restored from the snapshot). Previously
-        // only `subscription_expired` deprovisioned, leaving a paid
-        // box running through the rest of a cancelled period.
-        if (sub && (eventName === "subscription_expired" || eventName === "subscription_cancelled")) {
+        // Tear the box down on expiry (and on a cancelled event whose period
+        // already ended). A managed box costs Yaver money every hour it runs;
+        // the moment the paid period is over we stop that spend (deprovision
+        // snapshots first, so a resubscribe can be restored from the
+        // snapshot).
+        if (sub) {
           const [relays, machines] = await Promise.all([
             ctx.runQuery(internal.managedRelays.listBySubscription, { subscriptionId: sub }),
             ctx.runQuery(internal.cloudMachines.listBySubscription, { subscriptionId: sub }),
@@ -6184,18 +6284,13 @@ http.route({
       }
 
       case "subscription_payment_failed": {
-        const rawProductType = payload.meta?.custom_data?.product_type || "relay-pro";
-        const billingProductId = normalizeBillingProduct(rawProductType) ?? "relay-pro";
         await ctx.runMutation(internal.subscriptions.upsertFromWebhook, {
           lemonSqueezyId,
           lemonSqueezyCustomerId: customerId,
           userId: user._id,
-          plan:
-            billingProductId === "relay-pro"
-              ? "relay-pro"
-              : "cloud-workspace",
+          plan: subscriptionPlanFromPayload(payload, data),
           status: "past_due",
-          currentPeriodEnd: Date.now(),
+          currentPeriodEnd: subscriptionPeriodEnd(data),
         });
         // ─── Stop the meter on a failing card ──────────────────────────────
         // Until 2026-07-21 this branch set the status and RETURNED: the box
@@ -6237,6 +6332,49 @@ http.route({
       // through plans.applyPlanEntitlements → cloudLifecycle.topUpForOrder.
       case "order_created": {
         console.warn(`[billing] ${legacyCreditPackWebhookDisabledMessage()}`);
+        break;
+      }
+
+      // Full refund → the money came back, so the paid entitlement is gone
+      // and no new provider spend may be authorized. Revoke entitlements,
+      // park compute, and deprovision linked paid relay infrastructure.
+      //
+      // Partial refunds: explicit rule — service is PRESERVED (the user has
+      // paid for the period; only part was returned). Logged for ops
+      // visibility rather than guessed at (plan §5 REFUNDED).
+      case "order_refunded": {
+        if (!isFullyRefundedOrder(data)) {
+          console.warn(
+            `[billing] order_refunded with order status "${String(data?.status || "").trim()}" — partial/other refund, service preserved (explicit rule), logged for ops`,
+          );
+          break;
+        }
+        // The order links its subscription via relationships (normal case);
+        // refund falls back to the user's governing paid row when absent.
+        const lsSubId = String(payload?.data?.relationships?.subscription?.data?.id ?? "");
+        const refundedSubId = await ctx.runMutation(internal.subscriptions.refund, {
+          lemonSqueezyId: lsSubId || undefined,
+          userId: user._id,
+        });
+        if (refundedSubId) {
+          const relays: any[] = (await ctx.runQuery(
+            internal.managedRelays.listBySubscription,
+            { subscriptionId: refundedSubId },
+          )) ?? [];
+          for (const relay of relays) {
+            if (relay.hetznerServerId && relay.domain) {
+              await ctx.scheduler.runAfter(0, internal.provisionRelay.deprovision, {
+                relayId: relay._id,
+                hetznerServerId: relay.hetznerServerId,
+                domain: relay.domain,
+              });
+            }
+          }
+        }
+        await ctx.scheduler.runAfter(0, internal.plans.revokePlanEntitlements, {
+          userId: user._id,
+        });
+        await parkAllActiveMachines(ctx, user._id);
         break;
       }
     }
@@ -6726,12 +6864,17 @@ http.route({
     const pol = await ctx.runQuery(internal.gatewayPolicy.getAuthContext, {
       userId: session.userDocId as any,
     });
-    const subscribed = !!sub && (sub.status === "active" || sub.status === "past_due");
+    // Truthful billing state (audit G3): a subscription is "subscribed" only
+    // when it is ACTIVE. past_due/unpaid/payment_failed rows carry the raw
+    // status AND a named paymentProblem flag so surfaces can render "payment
+    // issue — workspace parked", never a green "subscribed" state.
+    const { subscribed, paymentProblem } = billingStateFlags(sub?.status);
     const productId = subscribed ? productForSubscriptionPlan(sub?.plan) : "free";
     const runnerMode = pol.enabled ? "managed" : "byok";
     return jsonResponse({
       ok: true,
       subscribed,
+      paymentProblem,
       productId,
       tier: productId === "cloud-workspace" ? "cloud-workspace" : productId === "relay-pro" ? "relay-pro" : null,
       runnerMode,
@@ -6790,8 +6933,12 @@ http.route({
 
 /** POST /billing/cancel — user-initiated unsubscribe for Relay Pro or Cloud
  *  Workspace. Cancels the caller's current LemonSqueezy subscription through
- *  the existing internal cancel path and immediately schedules teardown for
- *  linked Yaver-managed resources. */
+ *  the existing internal cancel path (LemonSqueezy DELETE = cancel at period
+ *  end). PERIOD-END SEMANTICS (plan §37): the customer has paid through
+ *  ends_at, so paid entitlements and resources are preserved until the period
+ *  ends; the billing page shows "cancels on <date>". Immediate teardown is a
+ *  separate, explicit "decommission" action (dev-deprovision), never the
+ *  default cancel. */
 http.route({
   path: "/billing/cancel",
   method: "POST",
@@ -6821,49 +6968,25 @@ http.route({
       return errorResponse("Current subscription is not Relay Pro or Cloud Workspace", 400);
     }
 
+    // Cancel the LemonSqueezy subscription (at period end) + local row. No
+    // teardown here — the `subscription_expired` webhook (or the reconcile
+    // sweep) tears down at the actual end of the paid period.
+    await ctx.runMutation(internal.subscriptions.cancelById, {
+      subscriptionId: sub._id,
+    });
+
     const [relays, machines] = await Promise.all([
       ctx.runQuery(internal.managedRelays.listBySubscription, { subscriptionId: sub._id }),
       ctx.runQuery(internal.cloudMachines.listBySubscription, { subscriptionId: sub._id }),
     ]);
 
-    await ctx.runMutation(internal.subscriptions.cancelById, {
-      subscriptionId: sub._id,
-    });
-
-    let relaysScheduled = 0;
-    for (const relay of relays) {
-      if (relay.hetznerServerId && relay.domain) {
-        await ctx.scheduler.runAfter(0, internal.provisionRelay.deprovision, {
-          relayId: relay._id,
-          hetznerServerId: relay.hetznerServerId,
-          domain: relay.domain,
-        });
-        relaysScheduled++;
-      }
-    }
-
-    let machinesScheduled = 0;
-    for (const machine of machines) {
-      if (String(machine.userId) !== String(session.userDocId)) continue;
-      const managedDenied = denyNonYaverManagedMachine(machine);
-      if (managedDenied) continue;
-      if (machine.status !== "stopped" && machine.status !== "stopping" && machine.status !== "removed") {
-        await ctx.runMutation(internal.cloudMachines.deprovision, {
-          machineId: machine._id,
-        });
-        machinesScheduled++;
-      }
-    }
-
-    await ctx.scheduler.runAfter(0, internal.plans.revokePlanEntitlements, {
-      userId: session.userDocId as any,
-    });
-
     return jsonResponse({
       ok: true,
       productId,
-      relaysScheduled,
-      machinesScheduled,
+      cancelsAt: sub.currentPeriodEnd ?? null,
+      relaysPreserved: relays.length,
+      machinesPreserved: machines.length,
+      note: "Subscription cancels at the end of the paid period; your workspace and data stay intact until then.",
     });
   }),
 });

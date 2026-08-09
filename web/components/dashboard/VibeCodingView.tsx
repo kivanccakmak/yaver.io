@@ -72,7 +72,7 @@ import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow
 import { diagnoseRunnerFailure, formatFailureTime, runnerFailureFromTaskFailure } from "@/lib/runnerFailure";
 import { describeSidecarNoise, partitionRunnerOutput } from "@/lib/runnerOutputNoise";
 import { isRawRunnerCommand } from "@/lib/raw-runner-command";
-import { loadLastProjectFromConvex, saveLastProjectToConvex } from "@/lib/runtimeProjectSettings";
+import { loadLastProjectFromConvex, loadMCPServersFromConvex, saveLastProjectToConvex, saveMCPServersToConvex } from "@/lib/runtimeProjectSettings";
 import PreviewPane from "./PreviewPane";
 import { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice } from "./DevicesView";
 
@@ -501,6 +501,9 @@ export default function VibeCodingView({
   const [selectedProjectPath, setSelectedProjectPath] = useState("");
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
+  // Yaver's own MCP doorway — user-selectable, defaults ON (the agent
+  // injects `yaver mcp` unless the task explicitly opts out).
+  const [includeYaverMcp, setIncludeYaverMcp] = useState(true);
   const [keepLastProject, setKeepLastProject] = useState(() => keepLastProjectEnabled());
   // Deep link from the Projects wizard: /dashboard?tab=vibe&project=<path>
   // [&app=<monorepo-app>][&preview=web]. Read once at mount — the wizard's
@@ -1477,6 +1480,7 @@ export default function VibeCodingView({
           workDir: selectedProject.path,
           projectDir: selectedProject.path,
           mcpServers: selectedMcpServers,
+          includeYaverMcp,
           videoEnabled: videoSummaryEnabled,
           goal: goalObjective || undefined,
 	          askMode: rawRunnerCommand ? false : detectAskIntent(goalPrompt),
@@ -1550,6 +1554,7 @@ export default function VibeCodingView({
       workDir: selectedProject.path,
       projectDir: selectedProject.path,
       mcpServers: selectedMcpServers,
+      includeYaverMcp,
       videoEnabled: videoSummaryEnabled,
       goal: goalObjective || undefined,
       // Console auto-detect: a natural-language question ("how do I test
@@ -1697,6 +1702,7 @@ export default function VibeCodingView({
           allowLocalFallback: true,
           projectDir: selectedProject?.path,
           mcpServers: selectedMcpServers,
+          includeYaverMcp,
         });
         setComposer("");
         setActiveTaskId(result.taskId);
@@ -1771,6 +1777,7 @@ export default function VibeCodingView({
       workDir: selectedProject.path,
       projectDir: selectedProject.path,
       mcpServers: selectedMcpServers,
+      includeYaverMcp,
       videoEnabled: videoSummaryEnabled,
     });
     if (keepLastProject) saveLastProjectBoth(CONVEX_URL, token, connectedDevice?.id, selectedProject);
@@ -2143,6 +2150,7 @@ export default function VibeCodingView({
             workDir: selectedProject.path,
             projectDir: selectedProject.path,
             mcpServers: selectedMcpServers,
+            includeYaverMcp,
             videoEnabled: videoSummaryEnabled,
           }).then((task) => {
             setTaskList((prev) => [task, ...prev.filter((row) => row.id !== task.id)]);
@@ -2503,36 +2511,48 @@ export default function VibeCodingView({
                     keep
                   </label>
                 </div>
-                {mcpServers.length > 0 ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {mcpServers.map((server) => {
-                      const active = selectedMcpServers.includes(server.name);
-                      return (
-                        <button
-                          key={server.name}
-                          type="button"
-                          onClick={() => {
-                            setSelectedMcpServers((prev) =>
-                              prev.includes(server.name)
-                                ? prev.filter((name) => name !== server.name)
-                                : [...prev, server.name],
-                            );
-                          }}
-                          className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
-                            active
-                              ? "border-brand/40 bg-brand-soft text-brand-softFg"
-                              : "border-surface-700 bg-surface-950 text-surface-400 hover:border-surface-600"
-                          }`}
-                          title={`${server.url} · ${server.toolCount ?? 0} tools`}
-                        >
-                          {server.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="mt-3 text-xs text-surface-500">No enabled MCP servers.</div>
-                )}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {/* Yaver's own MCP doorway — always rendered so the user
+                      can explicitly deselect it (the agent injects `yaver
+                      mcp` unless the task opts out). */}
+                  <button
+                    key="yaver"
+                    type="button"
+                    onClick={() => setIncludeYaverMcp((prev) => !prev)}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                      includeYaverMcp
+                        ? "border-brand/40 bg-brand-soft text-brand-softFg"
+                        : "border-surface-700 bg-surface-950 text-surface-400 hover:border-surface-600"
+                    }`}
+                    title="Yaver's own MCP doorway (agent state, tasks, projects, feedback…). Deselect to run the task with only the external MCPs below."
+                  >
+                    yaver{includeYaverMcp ? "" : " (off)"}
+                  </button>
+                  {mcpServers.map((server) => {
+                    const active = selectedMcpServers.includes(server.name);
+                    return (
+                      <button
+                        key={server.name}
+                        type="button"
+                        onClick={() => {
+                          setSelectedMcpServers((prev) =>
+                            prev.includes(server.name)
+                              ? prev.filter((name) => name !== server.name)
+                              : [...prev, server.name],
+                          );
+                        }}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                          active
+                            ? "border-brand/40 bg-brand-soft text-brand-softFg"
+                            : "border-surface-700 bg-surface-950 text-surface-400 hover:border-surface-600"
+                        }`}
+                        title={`${server.url} · ${server.toolCount ?? 0} tools`}
+                      >
+                        {server.name}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               {/* OpenCode-only: build vs plan agent picker. Maps to
                   `--agent <mode>` on `opencode run`. The user's

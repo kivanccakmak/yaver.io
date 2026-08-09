@@ -1856,6 +1856,11 @@ export type CreateTaskParams = {
    *  opencode runner honors it; other runners ignore the field. Surfaces
    *  set this when the composer input is `/goal <objective>`. */
   goal?: string;
+  /** Whether the runner sees Yaver's own `yaver mcp` doorway. Defaults
+   *  true (absent = include). A surface sets false when the user explicitly
+   *  deselects the `yaver` chip, so the runner gets ONLY the external MCPs
+   *  in mcpServers — possibly none. */
+  includeYaverMcp?: boolean;
 };
 
 export function buildCreateTaskBody(params: CreateTaskParams): Record<string, unknown> {
@@ -1898,6 +1903,9 @@ export function buildCreateTaskBody(params: CreateTaskParams): Record<string, un
     gitBranch: params.gitBranch ?? "",
     autoPush: params.autoPush ?? "",
     goal: params.goal ?? "",
+    // Absent = include (server default true); only an explicit false strips
+    // Yaver's own MCP doorway so the task runs with ONLY selected externals.
+    includeYaverMcp: params.includeYaverMcp ?? true,
     source: "web",
   };
 }
@@ -2291,6 +2299,9 @@ export class AgentClient {
     /** Yaver goal-mode objective (opencode goal plugin). Set when the
      *  composer input was `/goal <objective>`; empty for one-shot tasks. */
     goal?: string;
+    /** Whether the runner sees Yaver's own `yaver mcp` doorway (default
+     *  true). Set false when the user deselects the `yaver` chip. */
+    includeYaverMcp?: boolean;
   }): Promise<Task> {
     this.assertConnected();
     // The create chain must be BOUNDED — a hung agent /tasks route used to
@@ -2514,7 +2525,7 @@ export class AgentClient {
    */
   async forkTask(
     taskId: string,
-    args: { runner: string; model?: string; mode?: string; input: string; contextWords?: number; allowLocalFallback?: boolean; projectDir?: string; mcpServers?: string[] },
+    args: { runner: string; model?: string; mode?: string; input: string; contextWords?: number; allowLocalFallback?: boolean; projectDir?: string; mcpServers?: string[]; includeYaverMcp?: boolean },
   ): Promise<{ taskId: string; runnerId: string; parentTaskId: string; contextWordsUsed: number }> {
     this.assertConnected();
     const res = await this.fetchWithTimeout(
@@ -2531,6 +2542,7 @@ export class AgentClient {
           allowLocalFallback: args.allowLocalFallback ?? false,
           projectDir: args.projectDir ?? "",
           mcpServers: args.mcpServers ?? [],
+          includeYaverMcp: args.includeYaverMcp ?? true,
         }),
       },
       30_000,

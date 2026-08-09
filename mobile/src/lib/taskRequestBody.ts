@@ -21,6 +21,9 @@ export type SendTaskRequestBodyArgs = {
    *  opencode runner honors it; other runners ignore the field. Surfaces
    *  set this when the composer input is `/goal <objective>`. */
   goal?: string;
+  /** Whether the runner sees Yaver's own `yaver mcp` doorway (default
+   *  true). Set false when the user deselects the `yaver` chip. */
+  includeYaverMcp?: boolean;
 };
 
 export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<string, unknown> {
@@ -42,5 +45,8 @@ export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<
     ...(args.video?.source ? { videoSource: args.video.source } : {}),
     ...(args.allowLocalFallback ? { allowLocalFallback: true } : {}),
     ...(args.goal ? { goal: args.goal } : {}),
+    // Absent = include (server default true); only an explicit false strips
+    // Yaver's own MCP doorway so the task runs with ONLY selected externals.
+    ...(args.includeYaverMcp === false ? { includeYaverMcp: false } : {}),
   };
 }

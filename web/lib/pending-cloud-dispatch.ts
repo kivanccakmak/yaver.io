@@ -31,6 +31,10 @@ export type PendingCloudTaskParams = {
    *  the pending-cloud placeholder so a deferred dispatch still arms
    *  goal-mode on the assigned machine. */
   goal?: string;
+  /** Whether the runner sees Yaver's own `yaver mcp` doorway (default
+   *  true). Carried through the placeholder so a deferred dispatch honors
+   *  the user's deselect of the `yaver` chip. */
+  includeYaverMcp?: boolean;
 };
 
 export type PendingCloudDispatch = {

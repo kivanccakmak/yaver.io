@@ -70,6 +70,13 @@ const runtimeProjectPreferenceValidator = v.object({
   updatedAt: v.optional(v.number()),
 });
 
+const mcpServersPreferenceValidator = v.object({
+  deviceId: v.string(),
+  mcpServers: v.optional(v.union(v.array(v.string()), v.null())),
+  includeYaverMcp: v.optional(v.union(v.boolean(), v.null())),
+  updatedAt: v.optional(v.number()),
+});
+
 const runtimeProjectCatalogValidator = v.object({
   deviceId: v.string(),
   projects: v.array(v.object({
@@ -281,6 +288,23 @@ type RuntimeProjectCatalogRow = {
   updatedAt: number;
 };
 
+// Per-device MCP selection preference (2026-08-09). Mirrors the
+// defaultRuntimeProjectByDevice pattern: replace-by-deviceId so the last
+// write wins regardless of surface. `includeYaverMcp` defaults true.
+type MCPServersPreferencePatch = {
+  deviceId: string;
+  mcpServers?: string[] | null;
+  includeYaverMcp?: boolean | null;
+  updatedAt?: number;
+};
+
+type MCPServersPreferenceRow = {
+  deviceId: string;
+  mcpServers?: string[];
+  includeYaverMcp?: boolean;
+  updatedAt: number;
+};
+
 type OpenCodeConfigSnapshotRow = {
   deviceId: string;
   model?: string;
@@ -358,6 +382,36 @@ function mergeRuntimeProjectCatalog(
     .slice(0, 200);
   const filtered = (existing ?? []).filter((row) => row.deviceId !== deviceId);
   const next = [...filtered, { deviceId, projects, updatedAt: payload.updatedAt ?? Date.now() }];
+  return next.length > 0 ? next : undefined;
+}
+
+function sanitizeMCPServersPreference(payload: MCPServersPreferencePatch): MCPServersPreferenceRow | undefined {
+  const deviceId = cleanRuntimeText(payload.deviceId, 120);
+  if (!deviceId) return undefined;
+  const row: MCPServersPreferenceRow = {
+    deviceId,
+    updatedAt: payload.updatedAt ?? Date.now(),
+  };
+  const servers = (payload.mcpServers ?? [])
+    .map((name) => cleanRuntimeText(name, 80))
+    .filter((name): name is string => !!name)
+    .slice(0, 40);
+  if (servers.length > 0) row.mcpServers = servers;
+  if (payload.includeYaverMcp !== undefined && payload.includeYaverMcp !== null) {
+    row.includeYaverMcp = !!payload.includeYaverMcp;
+  }
+  return row;
+}
+
+function mergeMCPServersPreference(
+  existing: MCPServersPreferenceRow[] | undefined,
+  payload: MCPServersPreferencePatch,
+): MCPServersPreferenceRow[] | undefined {
+  const deviceId = cleanRuntimeText(payload.deviceId, 120);
+  if (!deviceId) return existing;
+  const filtered = (existing ?? []).filter((row) => row.deviceId !== deviceId);
+  const row = sanitizeMCPServersPreference(payload);
+  const next = row ? [...filtered, row] : filtered;
   return next.length > 0 ? next : undefined;
 }
 
@@ -627,11 +681,13 @@ async function patchOwnedDeviceRuntimeProjectCache(
   args: {
     defaultRuntimeProjectForDevice?: RuntimeProjectPreferencePatch;
     runtimeProjectCatalogForDevice?: RuntimeProjectCatalogPatch;
+    mcpServersForDevice?: MCPServersPreferencePatch;
   },
 ) {
   const touched = new Set<string>();
   if (args.defaultRuntimeProjectForDevice?.deviceId) touched.add(args.defaultRuntimeProjectForDevice.deviceId);
   if (args.runtimeProjectCatalogForDevice?.deviceId) touched.add(args.runtimeProjectCatalogForDevice.deviceId);
+  if (args.mcpServersForDevice?.deviceId) touched.add(args.mcpServersForDevice.deviceId);
   for (const deviceId of touched) {
     const device = await ctx.db
       .query("devices")
@@ -680,6 +736,19 @@ export const getByToken = query({
       .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
       .first();
     return normalizeSettingsForClient(settings);
+  },
+});
+
+/** Get the RAW settings row by userId (internal — used by the managed-relay
+ *  wiring so it can decide whether to repoint the user's relayUrl without
+ *  overwriting a custom self-hosted relay). */
+export const getByUserId = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, { userId }) => {
+    return await ctx.db
+      .query("userSettings")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .first();
   },
 });
 
@@ -732,6 +801,7 @@ export const set = internalMutation({
     ),
     opencodeConfigForDevice: v.optional(openCodeConfigSnapshotPatchValidator),
     defaultRuntimeProjectForDevice: v.optional(runtimeProjectPreferenceValidator),
+    mcpServersForDevice: v.optional(mcpServersPreferenceValidator),
     defaultRuntimeTargetForDevice: v.optional(runtimeTargetPreferenceValidator),
     machineRolesForProject: v.optional(machineRolesValidator),
     runtimeProjectCatalogForDevice: v.optional(runtimeProjectCatalogValidator),
@@ -855,6 +925,12 @@ export const set = internalMutation({
         args.defaultRuntimeProjectForDevice as RuntimeProjectPreferencePatch,
       );
     }
+    if (args.mcpServersForDevice !== undefined) {
+      patch.mcpServersByDevice = mergeMCPServersPreference(
+        existing?.mcpServersByDevice as MCPServersPreferenceRow[] | undefined,
+        args.mcpServersForDevice as MCPServersPreferencePatch,
+      );
+    }
     if (args.defaultRuntimeTargetForDevice !== undefined) {
       patch.defaultRuntimeTargetByDevice = mergeRuntimeTargetPreference(
         existing?.defaultRuntimeTargetByDevice as RuntimeTargetPreferenceRow[] | undefined,
@@ -876,6 +952,7 @@ export const set = internalMutation({
     }
     await patchOwnedDeviceRuntimeProjectCache(ctx, args.userId, {
       defaultRuntimeProjectForDevice: args.defaultRuntimeProjectForDevice as RuntimeProjectPreferencePatch | undefined,
+      mcpServersForDevice: args.mcpServersForDevice as MCPServersPreferencePatch | undefined,
       runtimeProjectCatalogForDevice: args.runtimeProjectCatalogForDevice as RuntimeProjectCatalogPatch | undefined,
     });
     if (args.managed !== undefined) {
@@ -942,6 +1019,7 @@ export const setByToken = mutation({
     ),
     opencodeConfigForDevice: v.optional(openCodeConfigSnapshotPatchValidator),
     defaultRuntimeProjectForDevice: v.optional(runtimeProjectPreferenceValidator),
+    mcpServersForDevice: v.optional(mcpServersPreferenceValidator),
     defaultRuntimeTargetForDevice: v.optional(runtimeTargetPreferenceValidator),
     machineRolesForProject: v.optional(machineRolesValidator),
     runtimeProjectCatalogForDevice: v.optional(runtimeProjectCatalogValidator),
@@ -1064,6 +1142,12 @@ export const setByToken = mutation({
         args.defaultRuntimeProjectForDevice as RuntimeProjectPreferencePatch,
       );
     }
+    if (args.mcpServersForDevice !== undefined) {
+      patch.mcpServersByDevice = mergeMCPServersPreference(
+        existing?.mcpServersByDevice as MCPServersPreferenceRow[] | undefined,
+        args.mcpServersForDevice as MCPServersPreferencePatch,
+      );
+    }
     if (args.defaultRuntimeTargetForDevice !== undefined) {
       patch.defaultRuntimeTargetByDevice = mergeRuntimeTargetPreference(
         existing?.defaultRuntimeTargetByDevice as RuntimeTargetPreferenceRow[] | undefined,
@@ -1085,6 +1169,7 @@ export const setByToken = mutation({
     }
     await patchOwnedDeviceRuntimeProjectCache(ctx, userId, {
       defaultRuntimeProjectForDevice: args.defaultRuntimeProjectForDevice as RuntimeProjectPreferencePatch | undefined,
+      mcpServersForDevice: args.mcpServersForDevice as MCPServersPreferencePatch | undefined,
       runtimeProjectCatalogForDevice: args.runtimeProjectCatalogForDevice as RuntimeProjectCatalogPatch | undefined,
     });
     if (args.managed !== undefined) {

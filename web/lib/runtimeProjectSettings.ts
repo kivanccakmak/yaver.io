@@ -162,3 +162,70 @@ export async function saveLastProjectToConvex(
   }
 }
 
+// ── MCP selection preference, Convex-backed (2026-08-09) ───────────────
+// Per-device `mcpServersByDevice` (replace-by-deviceId): which external MCP
+// servers a task attaches, plus whether Yaver's own `yaver mcp` doorway is
+// included (default true). Synced so the phone and the web dashboard agree.
+
+export type MCPServersPreference = {
+  deviceId: string;
+  mcpServers?: string[];
+  includeYaverMcp?: boolean;
+  updatedAt?: number;
+};
+
+/** Read mcpServersByDevice for one device. Null when absent / unreadable
+ *  (caller falls back to local state). */
+export async function loadMCPServersFromConvex(
+  convexUrl: string,
+  token: string | null | undefined,
+  deviceId: string | null | undefined,
+): Promise<MCPServersPreference | null> {
+  if (!token || !deviceId) return null;
+  try {
+    const res = await fetch(`${convexUrl}/settings`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    const rows = data?.settings?.mcpServersByDevice;
+    if (!Array.isArray(rows)) return null;
+    const row = rows.find((r: any) => r?.deviceId === deviceId);
+    if (!row) return null;
+    return {
+      deviceId,
+      ...(Array.isArray(row.mcpServers) ? { mcpServers: row.mcpServers.map(String) } : {}),
+      ...(typeof row.includeYaverMcp === "boolean" ? { includeYaverMcp: row.includeYaverMcp } : {}),
+      ...(typeof row.updatedAt === "number" ? { updatedAt: row.updatedAt } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Write mcpServersForDevice (replace-by-deviceId on the server). MCP names
+ *  only — URLs/keys stay on the agent. Never blocks task creation. */
+export async function saveMCPServersToConvex(
+  convexUrl: string,
+  token: string | null | undefined,
+  pref: MCPServersPreference,
+): Promise<void> {
+  if (!token || !pref.deviceId) return;
+  try {
+    await fetch(`${convexUrl}/settings`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mcpServersForDevice: {
+          deviceId: pref.deviceId,
+          ...(pref.mcpServers?.length ? { mcpServers: pref.mcpServers } : {}),
+          ...(typeof pref.includeYaverMcp === "boolean" ? { includeYaverMcp: pref.includeYaverMcp } : {}),
+        },
+      }),
+    });
+  } catch {
+    // Never block task creation on a failed settings write.
+  }
+}
+

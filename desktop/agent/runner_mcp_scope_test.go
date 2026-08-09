@@ -135,3 +135,39 @@ func TestPrepareOpenCodeYaverOnlyConfigPreservesProviderConfig(t *testing.T) {
 		t.Fatalf("scoped opencode mcp = %v, want only yaver", mcp)
 	}
 }
+
+func TestPrepareOpenCodeYaverOnlyConfigExcludesYaverWhenDeselected(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("OPENCODE_CONFIG", "")
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	cfgDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"provider": {"openrouter": {"apiKey": "secret"}}}`
+	if err := os.WriteFile(filepath.Join(cfgDir, "opencode.jsonc"), []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	env, err := prepareOpenCodeYaverOnlyConfig("/tmp/yaver", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(strings.TrimPrefix(env[0], "OPENCODE_CONFIG="))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["provider"] == nil {
+		t.Fatal("provider config was not preserved when yaver deselected")
+	}
+	mcp, _ := got["mcp"].(map[string]any)
+	if len(mcp) != 0 {
+		t.Fatalf("scoped opencode mcp = %v, want empty when yaver deselected (no external servers)", mcp)
+	}
+}

@@ -185,3 +185,34 @@ export const hostEndpoint = internalQuery({
     return null;
   },
 });
+
+/**
+ * ─── THE deprovision decision — never delete a box other tenants still use ──
+ *
+ * A shared host serves up to RELAY_TENANTS_PER_HOST tenants from ONE Hetzner
+ * box. `deprovision` used to delete the box unconditionally, so the FIRST
+ * tenant to cancel took the relay offline for everyone else on the host —
+ * a fleet-wide outage triggered by one subscription ending (2026-08-09 audit).
+ *
+ * Rule: mark the departing tenant's row stopped FIRST (so hostIsEmpty no longer
+ * counts it), then delete the provider box ONLY when the host is empty. A
+ * dedicated relay (no sharedHostKey) is tenant-private and always deletable.
+ *
+ * Pure so the decision is unit-testable without Convex.
+ */
+export function sharedHostDeletionDecision(args: {
+  sharedHostKey?: string | null;
+  /** Live tenant count AFTER this tenant's row has been marked stopped. */
+  liveTenantsOnHost: number;
+}): { deleteServer: boolean; reason: string } {
+  if (!args.sharedHostKey) {
+    return { deleteServer: true, reason: "dedicated relay — box is tenant-private" };
+  }
+  if (args.liveTenantsOnHost <= 0) {
+    return { deleteServer: true, reason: "last tenant on shared host — drain and delete the box" };
+  }
+  return {
+    deleteServer: false,
+    reason: `${args.liveTenantsOnHost} tenant(s) still on shared host — box must stay`,
+  };
+}

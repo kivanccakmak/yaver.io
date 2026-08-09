@@ -38,6 +38,10 @@ type taskForkRequest struct {
 	AllowLocalFallback bool     `json:"allowLocalFallback,omitempty"`
 	ProjectDir         string   `json:"projectDir,omitempty"`
 	MCPServers         []string `json:"mcpServers,omitempty"`
+	// IncludeYaverMcp defaults true (nil = include). A surface sets false
+	// when the user deselected the `yaver` chip, so the forked task runs
+	// with ONLY the external MCPs in mcpServers.
+	IncludeYaverMcp *bool `json:"includeYaverMcp,omitempty"`
 }
 
 // taskForkResponse is the wire format we return.
@@ -131,6 +135,9 @@ func (s *HTTPServer) handleTaskFork(w http.ResponseWriter, r *http.Request, pare
 		WorkDir:           firstNonEmpty(strings.TrimSpace(req.ProjectDir), parent.WorkDir),
 		ProjectName:       parent.ProjectName,
 		MCPServers:        mcpServers,
+		// nil = include Yaver's own MCP doorway (default); explicit false
+		// strips it so the forked task runs with ONLY selected externals.
+		IncludeYaverMcp:   req.IncludeYaverMcp == nil || *req.IncludeYaverMcp,
 		InitialUserPrompt: req.Input,
 		Mode:              req.Mode,
 		// Carry the parent's conversation into the child for DISPLAY only, so

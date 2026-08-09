@@ -33,6 +33,15 @@ export const listBySubscription = internalQuery({
   },
 });
 
+/** Get one relay row by its Convex id (internal — used by deprovision so it
+ *  can tell shared-pool rows from dedicated ones before touching the box). */
+export const getById = internalQuery({
+  args: { relayId: v.id("managedRelays") },
+  handler: async (ctx, { relayId }) => {
+    return await ctx.db.get(relayId);
+  },
+});
+
 // Create a pending managed relay (called after payment confirmed)
 export const create = internalMutation({
   args: {

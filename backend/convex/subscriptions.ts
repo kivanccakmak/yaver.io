@@ -240,6 +240,51 @@ export const cancel = internalMutation({
   },
 });
 
+// Full-refund convergence (LemonSqueezy `order_refunded` with order status
+// "refunded"). The money came back, so the paid entitlement is gone and no
+// new provider spend may be authorized. Status "refunded" is deliberately a
+// DIFFERENT value from "cancelled" — a refund is a money event, not a
+// scheduling event, and every fail-closed gate (`isActive`,
+// `canProvisionManaged`) treats it as not-active anyway.
+//
+// Resolves the row by lemonSqueezyId when the order links one (the normal
+// case), else falls back to the user's governing paid row. Returns the
+// refunded row's Convex id (or null) so the webhook can park/deprovision
+// linked compute and relay resources.
+export const refund = internalMutation({
+  args: {
+    lemonSqueezyId: v.optional(v.string()),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, { lemonSqueezyId, userId }) => {
+    let sub: { _id: any; status?: string } | null = null;
+    if (lemonSqueezyId) {
+      sub = await ctx.db
+        .query("subscriptions")
+        .withIndex("by_lemon_id", (q) => q.eq("lemonSqueezyId", lemonSqueezyId))
+        .first();
+    }
+    if (!sub) {
+      const rows = await ctx.db
+        .query("subscriptions")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .collect();
+      sub =
+        rows
+          .filter((s) => ["active", "past_due", "paused"].includes(s.status))
+          .sort((a, b) => (b.updatedAt ?? b.createdAt ?? 0) - (a.updatedAt ?? a.createdAt ?? 0))[0] ??
+        null;
+    }
+    if (!sub) return null;
+    await ctx.db.patch(sub._id, {
+      status: "refunded",
+      cancelledAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    return sub._id;
+  },
+});
+
 // Mark expired subscriptions (called by cron or webhook)
 export const markExpired = internalMutation({
   args: {},
