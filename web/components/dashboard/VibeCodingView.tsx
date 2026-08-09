@@ -380,6 +380,7 @@ type Project = {
   name: string;
   path: string;
   branch?: string;
+  gitRemote?: string;
   framework?: string;
   tags?: string[];
 };
