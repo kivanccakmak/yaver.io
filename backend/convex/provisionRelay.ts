@@ -3,7 +3,10 @@ import { action, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { randomHex } from "./auth";
 import { hetznerPickAvailableServerType } from "./cloudLifecycle";
-import { sharedHostDeletionDecision } from "./relayPool";
+import {
+  sharedHostDeletionDecision,
+  sharedHostGraceSnapshotDecision,
+} from "./relayPool";
 
 // Location candidates per region group, most-preferred first. The pool host is
 // created ONCE per ~20 tenants, so a sold-out preferred location must fall back
@@ -483,7 +486,7 @@ export const healthCheck = internalAction({
   },
 });
 
-// Deprovision — called when subscription expires
+// Deprovision — called when subscription expires / owner stops a dev relay.
 export const deprovision = internalAction({
   args: {
     relayId: v.id("managedRelays"),
@@ -495,63 +498,23 @@ export const deprovision = internalAction({
     const CF_API_TOKEN = process.env.CF_API_TOKEN;
     const CF_ZONE_ID = process.env.CF_ZONE_ID;
 
-    if (!HCLOUD_TOKEN) {
-      // Never silently return leaving the row in a stale state while
-      // the box still bills — surface it so the operator sets the
-      // platform token (--prod) and retries.
-      await ctx.runMutation(internal.managedRelays.setStatus, {
-        relayId: args.relayId,
-        status: "error",
-        errorMessage:
-          "Platform HCLOUD_TOKEN is not configured on this Convex deployment — the relay box was NOT deleted. Set it with `npx convex env set HCLOUD_TOKEN <token> --prod`, then retry.",
-      });
-      return;
-    }
-    if (!CF_API_TOKEN || !CF_ZONE_ID) {
-      // DNS cleanup is secondary — proceed to delete the box anyway,
-      // just skip the Cloudflare record removal below.
-      console.error("[deprovision] CF creds missing — deleting box, skipping DNS cleanup");
-    }
+    // Fetch the row FIRST — the delete decision AND the snapshot decision
+    // both depend on whether this is a shared-pool row or a dedicated relay.
+    const relay = await ctx.runQuery(internal.managedRelays.getById, {
+      relayId: args.relayId,
+    });
 
-    try {
-      // Grace snapshot before delete — a resubscribe can be restored
-      // from it (CLAUDE.md: never delete un-snapshotted). Best-effort:
-      // a failed snapshot must NOT leave a paid box running forever,
-      // so we log and still delete. Cost-safety wins for managed
-      // teardown (opposite tradeoff from the disposable dev box).
+    // Mark the tenant gone FIRST so hostIsEmpty no longer counts this row
+    // when we ask whether the shared host can be drained.
+    await ctx.runMutation(internal.managedRelays.setStatus, {
+      relayId: args.relayId,
+      status: "stopped",
+    });
+
+    // DNS cleanup ALWAYS — this tenant's own subdomain must stop resolving
+    // even when the shared box stays up for the other tenants.
+    if (CF_API_TOKEN && CF_ZONE_ID && args.domain) {
       try {
-        const snapResp = await fetch(`https://api.hetzner.cloud/v1/servers/${args.hetznerServerId}/actions/create_image`, {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${HCLOUD_TOKEN}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "snapshot", description: `yaver-predelete-relay-${args.relayId}-${Date.now()}` }),
-        });
-        // RECORD THE ID. Until 2026-07-21 this response was discarded, which
-        // made the snapshot simultaneously (a) permanently billed and (b)
-        // impossible to restore from — defeating the entire stated purpose of
-        // taking it, and invisible to the orphan sweep because no row referenced
-        // it. An unrecorded snapshot is pure cost with zero recovery value.
-        if (snapResp.ok) {
-          const sj = (await snapResp.json()) as { image?: { id?: number } };
-          if (sj.image?.id) {
-            await ctx.runMutation(internal.managedRelays.setSnapshot, {
-              relayId: args.relayId,
-              lastSnapshotId: String(sj.image.id),
-            });
-          }
-        }
-      } catch (snapErr) {
-        console.error("[deprovision] grace snapshot failed (continuing with delete):", snapErr);
-      }
-
-      // Delete Hetzner server
-      await fetch(`https://api.hetzner.cloud/v1/servers/${args.hetznerServerId}`, {
-        method: "DELETE",
-        headers: { "Authorization": `Bearer ${HCLOUD_TOKEN}` },
-      });
-
-      // Find and delete Cloudflare DNS record (only if CF creds are
-      // configured — DNS cleanup is secondary to deleting the box).
-      if (CF_API_TOKEN && CF_ZONE_ID) {
         const listResp = await fetch(
           `https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records?name=${args.domain}`,
           { headers: { "Authorization": `Bearer ${CF_API_TOKEN}` } }
@@ -567,12 +530,85 @@ export const deprovision = internalAction({
             }
           );
         }
+      } catch (e) {
+        console.error("[deprovision] DNS cleanup failed:", e);
       }
+    }
 
-      // Update status
+    // ─── Shared host: never delete a box other tenants still use ──────────
+    // A shared host serves up to RELAY_TENANTS_PER_HOST tenants from ONE
+    // Hetzner box. The pre-fix behaviour deleted the box unconditionally, so
+    // the FIRST tenant to cancel took the relay offline for everyone else on
+    // the host — a fleet-wide outage triggered by one subscription ending.
+    // Rule (relayPoolPolicy.sharedHostDeletionDecision): delete ONLY when the
+    // host is drained. Dedicated relays are tenant-private and always
+    // deletable.
+    if (relay?.sharedHostKey) {
+      const { tenants } = await ctx.runQuery(internal.relayPool.hostIsEmpty, {
+        hostKey: relay.sharedHostKey,
+      });
+      const decision = sharedHostDeletionDecision({
+        sharedHostKey: relay.sharedHostKey,
+        liveTenantsOnHost: tenants,
+      });
+      if (!decision.deleteServer) {
+        console.log(
+          `[deprovision] ${decision.reason} — keeping box, releasing this tenant's slot`,
+        );
+        return;
+      }
+    }
+
+    if (!HCLOUD_TOKEN) {
+      // Never silently return leaving the row in a stale state while
+      // the box still bills — surface it so the operator sets the
+      // platform token (--prod) and retries.
       await ctx.runMutation(internal.managedRelays.setStatus, {
         relayId: args.relayId,
-        status: "stopped",
+        status: "error",
+        errorMessage:
+          "Platform HCLOUD_TOKEN is not configured on this Convex deployment — the relay box was NOT deleted. Set it with `npx convex env set HCLOUD_TOKEN <token> --prod`, then retry.",
+      });
+      return;
+    }
+
+    try {
+      // Grace snapshot BEFORE delete — ONLY for dedicated relays. A dedicated
+      // box is tenant-private, so a resubscribe can be restored from it.
+      // SHARED pool hosts are deliberately NOT snapshotted: they are
+      // pass-through with no tenant data, and a drained host's snapshot is a
+      // billed orphan with no restore path (measured 2026-08-09: a 0.39 GB
+      // `yaver-predelete-relay-*` snapshot left billed by a shared teardown).
+      if (sharedHostGraceSnapshotDecision(relay?.sharedHostKey)) {
+        try {
+          const snapResp = await fetch(`https://api.hetzner.cloud/v1/servers/${args.hetznerServerId}/actions/create_image`, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${HCLOUD_TOKEN}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "snapshot", description: `yaver-predelete-relay-${args.relayId}-${Date.now()}` }),
+          });
+          // RECORD THE ID. Until 2026-07-21 this response was discarded, which
+          // made the snapshot simultaneously (a) permanently billed and (b)
+          // impossible to restore from — defeating the entire stated purpose of
+          // taking it, and invisible to the orphan sweep because no row referenced
+          // it. An unrecorded snapshot is pure cost with zero recovery value.
+          if (snapResp.ok) {
+            const sj = (await snapResp.json()) as { image?: { id?: number } };
+            if (sj.image?.id) {
+              await ctx.runMutation(internal.managedRelays.setSnapshot, {
+                relayId: args.relayId,
+                lastSnapshotId: String(sj.image.id),
+              });
+            }
+          }
+        } catch (snapErr) {
+          console.error("[deprovision] grace snapshot failed (continuing with delete):", snapErr);
+        }
+      }
+
+      // Delete Hetzner server
+      await fetch(`https://api.hetzner.cloud/v1/servers/${args.hetznerServerId}`, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${HCLOUD_TOKEN}` },
       });
 
       console.log(`[deprovision] Relay deprovisioned: ${args.domain}`);
