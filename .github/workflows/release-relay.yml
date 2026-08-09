@@ -144,7 +144,7 @@ jobs:
           node-version: "20"
       - name: Update Convex relay version
         env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY_3 || secrets.CONVEX_DEPLOY_KEY_2 || secrets.CONVEX_DEPLOY_KEY }}
         run: |
           cd backend && npm ci
           ../scripts/update-convex-version.sh relay "$VERSION"

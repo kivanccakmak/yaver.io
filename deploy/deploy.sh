@@ -18,8 +18,13 @@ require_owner_locked_path() {
   fi
 
   local owner mode
-  owner="$(stat -f '%Su' "$path" 2>/dev/null || stat -c '%U' "$path" 2>/dev/null || true)"
-  mode="$(stat -f '%Lp' "$path" 2>/dev/null || stat -c '%a' "$path" 2>/dev/null || true)"
+  if stat -c '%U' "$path" >/dev/null 2>&1; then
+    owner="$(stat -c '%U' "$path" 2>/dev/null || true)"
+    mode="$(stat -c '%a' "$path" 2>/dev/null || true)"
+  else
+    owner="$(stat -f '%Su' "$path" 2>/dev/null || true)"
+    mode="$(stat -f '%Lp' "$path" 2>/dev/null || true)"
+  fi
 
   if [ -n "$owner" ] && [ "$owner" != "$(id -un)" ]; then
     echo "ERROR: refusing deploy because $path is owned by $owner, not $(id -un)." >&2

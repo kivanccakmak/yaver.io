@@ -5,9 +5,9 @@ set -eo pipefail
 #
 # Portable across machines. Secrets resolution order, first hit wins:
 #
-#   1. CONVEX_DEPLOY_KEY env var (CI path; GitHub Actions sets this from the
-#      repo secret of the same name, and local devs export it or use a
-#      gitignored env file)
+#   1. CONVEX_DEPLOY_KEY_3 / _2 / CONVEX_DEPLOY_KEY env var (CI path; GitHub
+#      Actions sets this from the repo secret, and local devs export it or use
+#      a gitignored env file)
 #
 # `yaver vault` is deliberately not consulted: a v2 vault is master-key
 # encrypted and unrecoverable if that key is lost, and the call swallowed its
@@ -15,27 +15,33 @@ set -eo pipefail
 #
 # Paste it inline for a one-shot deploy:
 #
-#   CONVEX_DEPLOY_KEY=<key> ./scripts/deploy-convex.sh
+#   CONVEX_DEPLOY_KEY_3=<key> ./scripts/deploy-convex.sh
 #
 # The key is the deploy key from Convex dashboard
 # (perceptive-minnow-557 → Settings → Deploy Keys).
 
 cd "$(dirname "$0")/.."
 
+if [ -f "$HOME/.convex/yaver.env" ]; then
+  # shellcheck source=/dev/null
+  set -a; source "$HOME/.convex/yaver.env"; set +a
+fi
 
-# Prefer the rotated CONVEX_DEPLOY_KEY_2 if present; the older
-# CONVEX_DEPLOY_KEY name still works as a fallback for CI workflows
-# that haven't switched yet. `npx convex` only reads CONVEX_DEPLOY_KEY,
-# so promote whichever variant is set into the canonical name.
-if [ -n "${CONVEX_DEPLOY_KEY_2:-}" ]; then
+# Prefer the newest rotated deploy key if present; older names still work as
+# fallbacks for CI workflows or local machines that have not switched yet.
+# `npx convex` only reads CONVEX_DEPLOY_KEY, so promote whichever variant is
+# set into the canonical name.
+if [ -n "${CONVEX_DEPLOY_KEY_3:-}" ]; then
+  export CONVEX_DEPLOY_KEY="$CONVEX_DEPLOY_KEY_3"
+elif [ -n "${CONVEX_DEPLOY_KEY_2:-}" ]; then
   export CONVEX_DEPLOY_KEY="$CONVEX_DEPLOY_KEY_2"
 fi
 
 if [ -z "${CONVEX_DEPLOY_KEY:-}" ]; then
-  echo "ERROR: CONVEX_DEPLOY_KEY / CONVEX_DEPLOY_KEY_2 is not set." >&2
+  echo "ERROR: CONVEX_DEPLOY_KEY_3 / CONVEX_DEPLOY_KEY_2 / CONVEX_DEPLOY_KEY is not set." >&2
   echo >&2
   echo "Pick one:" >&2
-  echo "  1. CONVEX_DEPLOY_KEY_2=<key> $0" >&2
+  echo "  1. CONVEX_DEPLOY_KEY_3=<key> $0" >&2
   echo "  2. add it to a gitignored env file you source before running this" >&2
   echo >&2
   echo "(`yaver vault` is deliberately NOT an option: the vault ships off in v1," >&2
