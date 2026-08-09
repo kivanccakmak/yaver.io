@@ -10240,6 +10240,26 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		json.Unmarshal(call.Arguments, &args)
 		return mcpToolJSON(mcpDiskUsage(args.Path))
+	case "disk_manage":
+		var args struct {
+			Action          string   `json:"action"`
+			Path            string   `json:"path"`
+			Classes         []string `json:"classes"`
+			DryRun          *bool    `json:"dryRun"`
+			Threshold       int      `json:"thresholdPercent"`
+			MinAgeMinutes   int      `json:"minAgeMinutes"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		switch args.Action {
+		case "scan":
+			return mcpToolJSON(diskGuardScanHandler(OpsContext{}, mustJSONMarshal(diskGuardScanPayload{Path: args.Path, Threshold: args.Threshold})))
+		case "clear":
+			return mcpToolJSON(diskGuardClearHandler(OpsContext{}, mustJSONMarshal(diskGuardClearPayload{Path: args.Path, Classes: args.Classes, DryRun: args.DryRun, MinAgeMin: args.MinAgeMinutes})))
+		case "sweep":
+			return mcpToolJSON(diskGuardSweepHandler(OpsContext{}, mustJSONMarshal(diskGuardSweepPayload{Path: args.Path, Threshold: args.Threshold, DryRun: args.DryRun})))
+		default:
+			return mcpToolError("disk_manage: action must be scan, clear, or sweep")
+		}
 	case "wifi_info":
 		return mcpToolJSON(mcpWiFiInfo())
 	case "public_ip":
@@ -19701,6 +19721,18 @@ func mcpToolJSON(data interface{}) interface{} {
 		return mcpToolError("json marshal error: " + err.Error())
 	}
 	return mcpToolResult(string(out))
+}
+
+// mustJSONMarshal marshals a payload for an ops-verb handler invoked from an
+// MCP tool. The payload types are static, so an error here is a programming
+// bug, not a runtime condition — panic with the cause rather than returning a
+// half-marshalled blob.
+func mustJSONMarshal(v interface{}) json.RawMessage {
+	out, err := json.Marshal(v)
+	if err != nil {
+		panic("mustJSONMarshal: " + err.Error())
+	}
+	return out
 }
 
 func mcpToolResult(text string) interface{} {

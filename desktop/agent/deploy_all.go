@@ -141,9 +141,29 @@ func repoRootFromCWD() string {
 	return cwd
 }
 
+// deployMinFreeBytes is the free-space floor below which a deploy refuses to
+// start. On 2026-08-10 a MacBook Air at 100% disk (454 MiB free) let every
+// deploy run for ~20 minutes and die with `no space left on device` mid-archive
+// — nothing named the disk as the cause until the build failed. A deploy needs
+// several GiB of scratch (Xcode DerivedData + archives, Gradle deps, Convex
+// esbuild), so a floor of 2 GiB fails fast in seconds with a named cause and a
+// route to fix, instead of dying at minute 20.
+const deployMinFreeBytes = 2 << 30 // 2 GiB
+
 // deployPreflight is the seam tests use to intercept the build+test
 // gate without shelling out. Returns nil on green.
 var deployPreflight = func(ctx context.Context, repoRoot string) error {
+	// Disk capacity FIRST: a full disk is the classic silent build-killer.
+	// The gate probes the real capability (free bytes) rather than trusting
+	// an inventory of "has space ever" — the disk can be 100% the moment
+	// before `go build` runs. When it is, name the cause and the route to
+	// fix (the same disk guard the MCP disk_manage tool drives) instead of
+	// letting the build die with a generic nospc at minute 20.
+	fs, err := diskGuardStat(repoRoot)
+	if err == nil && fs.FreeBytes < deployMinFreeBytes {
+		return fmt.Errorf("deploy preflight: only %s free on %s (need >= %s) — a build here would die with 'no space left on device'",
+			humanBytesDG(fs.FreeBytes), fs.Path, humanBytesDG(deployMinFreeBytes))
+	}
 	agentDir := filepath.Join(repoRoot, "desktop", "agent")
 	buildCmd := exec.CommandContext(ctx, "go", "build", "./...")
 	buildCmd.Dir = agentDir

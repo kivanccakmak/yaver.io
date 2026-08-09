@@ -474,7 +474,53 @@ func diskGuardClasses() []diskGuardClass {
 			},
 			KeepNewest: 0,
 		},
+		{
+			Name: "go-build-cache",
+			Why: "the Go toolchain build cache ($XDG_CACHE_HOME/go-build, ~/Library/Caches/go-build on macOS). Every entry regenerates on demand — a warm cache only saves compile time, and clearing it costs nothing but a rebuild. Proven regenerable 2026-08-10: a 22 GB cache was cleared (`go clean -cache`) and `go build ./...` succeeded immediately after. This is the single largest safe reclaim on any Go-heavy box, and it was the exact artifact that filled a MacBook Air to 100% (454 MiB free) and killed every deploy with `no space left on device` at minute 20. Only entries idle past minAge qualify, so an in-flight build's hot cache is never taken.",
+			Collect: func(minAge time.Duration) ([]diskGuardCandidate, error) {
+				return diskGuardCollectGoBuildCache(minAge)
+			},
+			KeepNewest: 0,
+		},
 	}
+}
+
+// diskGuardCollectGoBuildCache finds the Go toolchain build cache at
+// os.UserCacheDir()/go-build. The Go toolchain regenerates any entry on
+// demand, so this is the safest large reclaim class on a Go-heavy box.
+func diskGuardCollectGoBuildCache(minAge time.Duration) ([]diskGuardCandidate, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return nil, err
+	}
+	root := filepath.Join(cacheDir, "go-build")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	cutoff := time.Now().Add(-minAge)
+	var out []diskGuardCandidate
+	for _, e := range entries {
+		full := filepath.Join(root, e.Name())
+		// A top-level entry's own mtime does not move when files inside it
+		// change; walk for the newest mtime so an active build's cache is
+		// never taken (same rule as yaver-tmp-dirs).
+		newest := diskGuardNewestMTime(full)
+		if newest.After(cutoff) {
+			continue
+		}
+		var size int64
+		if e.IsDir() {
+			size, _ = dirSizeDG(full)
+		} else if info, err := e.Info(); err == nil {
+			size = info.Size()
+		}
+		out = append(out, diskGuardCandidate{Path: full, Bytes: size, ModTime: newest})
+	}
+	return out, nil
 }
 
 // yaverTempMaxAge is deliberately much longer than diskGuardDefaultMinAge:
