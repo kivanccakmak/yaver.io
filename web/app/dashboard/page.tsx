@@ -899,103 +899,6 @@ const CONNECTION_REQUIRED_TABS = new Set<string>([
 // shared HIDE_PAID_UI flag (imported from @/lib/launchFlags). Owned machines
 // stay reachable via the Devices tab, so hiding the Cloud tab loses no control.
 
-/** Handle the mounted opencode terminal exposes to the page. `null` when
- *  unmounted. `write` appends raw bytes (ANSI + TUI, exactly what the agent
- *  retained); `reset` clears the screen for a raw_replay full snapshot;
- *  `fit` reflows to the container (window resize). */
-type RawTermHandle = { write: (data: string) => void; reset: () => void; fit: () => void } | null;
-
-/**
- * RawTaskTerminal — the opencode terminal view. Mounts xterm.js into the
- * caller's div and hands a write/reset handle up so the page's SSE handler
- * can stream `raw`/`raw_replay` frames straight into it (same pattern as
- * TmuxPane / TerminalView). No stdin: the dashboard only renders.
- */
-function RawTaskTerminal({
-  taskId,
-  onReady,
-}: {
-  taskId: string;
-  onReady: (h: RawTermHandle) => void;
-}) {
-  const mountRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    let term: any;
-    let fit: any;
-
-    (async () => {
-      const [{ Terminal }, { FitAddon }] = await Promise.all([
-        import("@xterm/xterm"),
-        import("@xterm/addon-fit"),
-      ]);
-      if (cancelled || !mountRef.current) return;
-      term = new Terminal({
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-        fontSize: 12,
-        theme: { background: "#05070a", foreground: "#d1d5db", cursor: "#818cf8", selectionBackground: "#1f2937" },
-        scrollback: 5000,
-        convertEol: true,
-        disableStdin: true,
-      });
-      fit = new FitAddon();
-      term.loadAddon(fit);
-      term.open(mountRef.current);
-      fit.fit();
-      onReady({
-        write: (d) => term.write(d),
-        reset: () => term.reset(),
-        fit: () => { try { fit.fit(); } catch { /* ignore */ } },
-      });
-    })();
-
-    return () => {
-      cancelled = true;
-      onReady(null);
-      try { term?.dispose(); } catch { /* ignore */ }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskId]);
-
-  return <div ref={mountRef} className="h-full min-h-[320px] w-full" />;
-}
-
-/**
- * TerminalStatusStrip — the quiet status line above the opencode terminal.
- *
- * `live` is never inferred from task status alone: it is armed by the raw SSE
- * lane on every live frame and decays after ~3s of silence, so a runner that
- * claims `running` but has stopped emitting shows as Idle — the false-green
- * class AGENTS.md hunts for. One line, no chips, no grid.
- */
-function TerminalStatusStrip({ live, status }: { live: boolean; status?: string }) {
-  const done = !!status && ["completed", "done", "succeeded", "failed", "cancelled", "stopped"].includes(status);
-  const statusLabel = done ? "finished" : status || "—";
-  return (
-    <div className="flex items-center justify-between border-b border-surface-800 bg-surface-950/80 px-3 py-1.5 text-[10px] tracking-wide">
-      <span className="inline-flex items-center gap-1.5 font-semibold uppercase">
-        {live ? (
-          <>
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-            <span className="text-emerald-300">Live</span>
-          </>
-        ) : (
-          <>
-            <span className="h-1.5 w-1.5 rounded-full bg-surface-600" />
-            <span className="text-surface-500">Idle</span>
-          </>
-        )}
-      </span>
-      <span className="inline-flex items-center gap-2 text-surface-500">
-        <span className="capitalize">{statusLabel}</span>
-        <span className="text-surface-700">·</span>
-        <span>read-only</span>
-      </span>
-    </div>
-  );
-}
-
 // Long assistant outputs collapse behind a "Show details" toggle — same
 // spirit as mobile's bubble collapse. Thresholds mirror mobile's
 // buildAssistantPreview (>30 non-empty lines or >2500 chars).
@@ -1085,39 +988,14 @@ export default function DashboardPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const pendingDispatchRef = useRef<Set<string>>(new Set());
-  // ── opencode terminal view ─────────────────────────────────────────
+  // ── opencode raw-lane note ─────────────────────────────────────────
   // opencode tasks stream their RAW runner stdout (ANSI + TUI intact) as
-  // `raw`/`raw_replay` SSE frames (agent 1.99.406+, commit d671b7c02). The
-  // chat bubbles flatten that into text, so opencode tasks get a
-  // Chat|Terminal toggle that paints the raw bytes into xterm.js. Terminal
-  // is READ-ONLY (opencode runs on the box).
-  //   rawTermRef    — the mounted terminal handle (null while unmounted or
-  //                   xterm is still booting; writes queue in the page)
-  //   rawBufRef     — retained raw tail (cap ~512KB, mirrors the agent's
-  //                   rawOutputMaxBytes); rawWrittenRef = index already
-  //                   handed to the terminal, so remounts never re-write
-  //   rawCursorRef  — the agent's authoritative raw byte cursor, passed as
-  //                   `?rawSince=` so a re-subscribe resumes without gaps
-  const [taskViewMode, setTaskViewMode] = useState<"chat" | "terminal">("chat");
-  const rawTermRef = useRef<RawTermHandle>(null);
-  const rawBufRef = useRef("");
-  const rawWrittenRef = useRef(0);
-  const rawCursorRef = useRef(0);
-  const prevTaskIdRef = useRef<string | null>(null);
-  const isOpenCodeTask = !!activeTask && String(activeTask.runnerId || "").toLowerCase() === "opencode";
-  const showOpenCodeTerminal = isOpenCodeTask && taskViewMode === "terminal";
-  const RAW_TERMINAL_CAP = 512 * 1024;
-  // ── terminal liveness ─────────────────────────────────────────────────
-  // Armed by the raw SSE lane on every LIVE frame (never the full-replace
-  // snapshot seed), decays after ~3s of silence. Drives the Live/Idle strip
-  // above the terminal — the honest "is it still writing?" answer.
-  const [rawLive, setRawLive] = useState(false);
-  const rawLiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const markRawLive = useCallback(() => {
-    setRawLive(true);
-    if (rawLiveTimerRef.current) clearTimeout(rawLiveTimerRef.current);
-    rawLiveTimerRef.current = setTimeout(() => setRawLive(false), 3000);
-  }, []);
+  // `raw`/`raw_replay` SSE frames (agent 1.99.406+, commit d671b7c02).
+  // The Chat|Terminal toggle is GONE (2026-08-09, user call — same as
+  // mobile): the dashboard task view is chat-only, and the raw console
+  // look renders inside the chat bubbles via AnsiConsoleText. The
+  // transport still supports rawSince/onRaw for other surfaces; nothing
+  // on this page consumes it.
   // Pending agent_question pulled from the SSE stream. When non-null
   // the dashboard renders an inline answer card above the composer;
   // submitting POSTs to /tasks/{id}/answer (via answerTaskQuestion),
@@ -1817,40 +1695,10 @@ export default function DashboardPage() {
           // consumed (registry was cancelled by StopTask); close
           // the card.
           setAgentQuestion(null);
-          setRawLive(false);
-        } else if (isOpenCode && (evt.type === "raw_replay" || evt.type === "raw")) {
-          // Raw runner stdout (ANSI + TUI) → the opencode terminal view.
-          // raw_replay is the one-shot seed (full=true → REPLACE the screen,
-          // else append); raw is live. offset is the agent's authoritative
-          // byte cursor — the terminal resumes from it via `?rawSince=`.
-          const rawEvt = evt as { text?: string; offset?: number; full?: boolean };
-          if (!rawEvt.text) return;
-          if (typeof rawEvt.offset === "number") rawCursorRef.current = rawEvt.offset;
-          if (evt.type === "raw_replay" && rawEvt.full === true) {
-            rawBufRef.current = rawEvt.text;
-            rawWrittenRef.current = 0;
-            rawTermRef.current?.reset();
-          } else {
-            rawBufRef.current = (rawBufRef.current + rawEvt.text).slice(-RAW_TERMINAL_CAP);
-            markRawLive(); // live bytes → the terminal strip's Live dot
-          }
-          // Push to the terminal only while it is mounted; while hidden
-          // (Chat view) bytes stay in rawBufRef and the mount's onReady
-          // drains them.
-          const term = rawTermRef.current;
-          if (term && rawWrittenRef.current < rawBufRef.current.length) {
-            const tail = rawBufRef.current.slice(rawWrittenRef.current);
-            rawWrittenRef.current = rawBufRef.current.length;
-            term.write(tail);
-          }
         }
       },
       {
         onHealth: setTaskStreamHealth,
-        // Resume the raw lane from the last cursor this page saw. The
-        // recovery wrapper also tracks its own cursor from frame offsets,
-        // so internal reattaches stay gap-free either way.
-        rawSince: isOpenCode ? rawCursorRef.current : undefined,
       },
     );
     // Late-join replay: if the agent already asked while no client
@@ -1871,77 +1719,6 @@ export default function DashboardPage() {
   }, [activeTask?.id, activeTask?.status, appendAssistantChunk]);
 
   useEffect(() => { if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }, [outputLines, chatMsgs]);
-
-  // Terminal state is per-task: switching tasks clears the raw buffer,
-  // cursor, and resets the view to Chat (a fresh task's TUI starts at 0).
-  useEffect(() => {
-    if (prevTaskIdRef.current !== activeTask?.id) {
-      prevTaskIdRef.current = activeTask?.id ?? null;
-      rawBufRef.current = "";
-      rawWrittenRef.current = 0;
-      rawCursorRef.current = 0;
-      setRawLive(false);
-      if (activeTask) setTaskViewMode("chat");
-    }
-  }, [activeTask?.id]);
-
-  // Terminal seed for tasks that never stream. A FINISHED opencode task has
-  // no live SSE (the effect above only subscribes while the runner is
-  // coding), so opening Terminal view seeds from getTask's rawOutput tail
-  // (agent ships the last 64KB + rawOffset). While xterm is still booting,
-  // the bytes sit in rawBufRef and the mount's onReady drains them.
-  useEffect(() => {
-    if (!activeTask || taskViewMode !== "terminal") return;
-    if (String(activeTask.runnerId || "").toLowerCase() !== "opencode") return;
-    if (activeTask.status === "running" || activeTask.status === "queued") return; // SSE owns the raw lane
-    if (rawBufRef.current.length > 0) return; // already seeded
-    let cancelled = false;
-    void agentClient.getTask(activeTask.id).then((t) => {
-      if (cancelled || !t.rawOutput) return;
-      rawBufRef.current = t.rawOutput;
-      rawWrittenRef.current = 0;
-      if (t.rawOffset) rawCursorRef.current = t.rawOffset;
-      const term = rawTermRef.current;
-      if (term) {
-        term.reset();
-        term.write(t.rawOutput);
-        rawWrittenRef.current = t.rawOutput.length;
-      }
-      // else: onReady drains rawBufRef once xterm boots
-    });
-    return () => { cancelled = true; };
-  }, [activeTask?.id, activeTask?.status, taskViewMode]);
-
-  // Reflow the opencode terminal with the window.
-  useEffect(() => {
-    const onResize = () => { try { rawTermRef.current?.fit(); } catch { /* ignore */ } };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  // RawTermHandle lifecycle: null when the terminal unmounts, live handle
-  // once xterm boots. Drains whatever accumulated while hidden/booting.
-  //
-  // BUG FIX (2026-08-09, e2e closed loop): this used to drain only the DELTA
-  // since the previous instance (`rawWrittenRef → buffer end`). That is
-  // correct while the SAME terminal stays mounted mid-run, but a fresh mount
-  // is a BLANK screen — and after the task finishes, toggling Chat → Terminal
-  // remounted an empty terminal forever: rawWrittenRef already equalled the
-  // buffer length (all bytes were painted to the OLD instance), so nothing
-  // drained, and the finished-task seed effect skipped because the buffer
-  // was non-empty. A new instance must RESET the cursor and replay the whole
-  // retained tail, exactly like a raw_replay full=true snapshot.
-  const handleTerminalReady = useCallback((h: RawTermHandle) => {
-    rawTermRef.current = h;
-    if (h) {
-      rawWrittenRef.current = 0;
-      const full = rawBufRef.current;
-      if (full.length > 0) {
-        h.write(full);
-        rawWrittenRef.current = full.length;
-      }
-    }
-  }, []);
 
   // Reconcile the activeTask's status from the polled tasks list. With-
   // out this, activeTask.status stays at "running" forever even after
@@ -4622,28 +4399,10 @@ export default function DashboardPage() {
                         </div>
                       ) : null}
 	                      <div ref={outputRef} className="flex-1 overflow-y-auto bg-surface-950 px-4 py-5">
-                        {isOpenCodeTask ? (
-                          <div className="mx-auto mb-3 flex max-w-3xl justify-center">
-                            <div className="flex items-center gap-1 rounded-full border border-surface-700 bg-surface-900/80 p-1 text-[11px] font-semibold shadow-sm">
-                              {(["chat", "terminal"] as const).map((mode) => (
-                                <button
-                                  key={mode}
-                                  type="button"
-                                  onClick={() => setTaskViewMode(mode)}
-                                  aria-pressed={taskViewMode === mode}
-                                  className={taskViewMode === mode
-                                    ? "flex items-center gap-1.5 rounded-full bg-indigo-500 px-3.5 py-1 text-white shadow"
-                                    : "flex items-center gap-1.5 rounded-full px-3.5 py-1 text-surface-400 hover:text-surface-200"}
-                                >
-                                  <span className={taskViewMode === mode ? "font-mono opacity-90" : "font-mono opacity-60"} aria-hidden>
-                                    {mode === "chat" ? "C" : ">_"}
-                                  </span>
-                                  {mode === "chat" ? "Chat" : "Terminal"}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        ) : null}
+                        {/* NO Chat|Terminal toggle (2026-08-09, user call — same
+                            as mobile): the dashboard task view is chat-only.
+                            opencode's raw console look renders inside the
+                            bubbles via AnsiConsoleText. */}
                         <StreamHealthNotice health={taskStreamHealth} className="mx-auto mb-4 max-w-3xl" />
                         {activeRunnerAuthIssue ? (
                           <div className="mx-auto mb-4 max-w-3xl rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-100">
@@ -4660,14 +4419,7 @@ export default function DashboardPage() {
                             ) : null}
                           </div>
                         ) : null}
-                        {showOpenCodeTerminal ? (
-                          <div className="mx-auto flex h-full max-w-3xl flex-col">
-                            <TerminalStatusStrip live={rawLive} status={activeTask.status} />
-                            <div className="min-h-0 flex-1">
-                              <RawTaskTerminal taskId={activeTask!.id} onReady={handleTerminalReady} />
-                            </div>
-                          </div>
-                        ) : chatMsgs.length === 0 ? (
+                        {chatMsgs.length === 0 ? (
                           <div className="flex h-full items-center justify-center gap-2 text-[12px] text-surface-600">
                             {(activeTask.status === "running" || activeTask.status === "queued") && <span className="h-3 w-3 animate-spin rounded-full border border-surface-500 border-t-transparent" />}
                             {activeTask.status === "running" || activeTask.status === "queued" ? (

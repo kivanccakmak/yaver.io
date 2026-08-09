@@ -51,7 +51,32 @@ Full guide: CLAUDE.md. Agent-tool convention variant: AGENTS.md.`
 // MCP session start. Kept short by design — long strings here burn
 // input tokens on every reconnect.
 func mcpInstructions() string {
-	return mcpStaleDocsWarning
+	return mcpStaleDocsWarning + `
+
+Vision (screenshots, crash logs, UI failures, video frames):
+
+  If you are a TEXT-ONLY model (no vision), you cannot see the image
+  blocks some tools return. When a screenshot, pasted image, crash-log
+  capture, or UI-failure image is involved:
+
+    1. vision_analyze_image {source} — analyze an image and get TEXT
+       back: on-device OCR (free) plus a semantic verdict when a vision
+       provider is configured. source = file path, base64:..., or URL.
+    2. ui_inspect {surface: browser|selenium|droid|simulator|mac,
+       session_id?} — one-call capture + text analysis of a surface.
+    3. testkit_visual_check {session_id, question} — PASS/WARN/FAIL
+       pixel judgment for automated browser tests (needs a vision
+       provider: MISTRAL/OPENAI/ANTHROPIC key).
+    4. vision_pdf_extract {source} — pull text out of PDFs (crash logs,
+       reports). vision_diff {source_a, source_b} — changed-region stats.
+    5. mac_ui_snapshot — macOS Accessibility element tree of the
+       frontmost app (the Mac equivalent of droid_ui_texts / DOM).
+
+  Free-first: OCR and the accessibility/DOM trees cost nothing. The
+  vision LLM is only used when you ask for a semantic verdict, and the
+  server auto-rewrites image results into this text analysis for
+  text-only clients. If no vision provider is configured, the tools say
+  so and still return free OCR.`
 }
 
 // projectContextFiles reads the repo's agent-guidance files + an

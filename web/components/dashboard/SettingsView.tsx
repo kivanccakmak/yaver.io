@@ -8,6 +8,8 @@ import YaverAgentSettings from "./YaverAgentSettings";
 import McpServersCard from "./McpServersCard";
 import BillingView from "./BillingView";
 import GitSettingsCard from "./GitSettingsCard";
+import VisionSettingsCard from "./VisionSettingsCard";
+import OpenCodeModelCard from "./OpenCodeModelCard";
 import { ManagedCloudPanel } from "./ManagedCloudPanel";
 import { agentClient } from "@/lib/agent-client";
 import { HIDE_PAID_UI } from "@/lib/launchFlags";
@@ -967,6 +969,12 @@ export default function SettingsView({ user, onLogout }: SettingsViewProps) {
       <YaverAgentSettings connected={agentClient.isConnected} />
 
       <McpServersCard connected={agentClient.isConnected} />
+
+      {/* Vision — screenshots/crash logs/UI failures → text via Yaver MCP */}
+      <VisionSettingsCard />
+
+      {/* Coding model — which model opencode uses per machine */}
+      <OpenCodeModelCard devices={ownedDevices} />
 
       {/* Legal */}
       <div className="card mb-6">

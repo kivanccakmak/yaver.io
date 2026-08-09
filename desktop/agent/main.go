@@ -550,6 +550,11 @@ func main() {
 		runMCP(os.Args[2:])
 	case "email":
 		runEmail(os.Args[2:])
+	case "vision":
+		// Local image→text pipeline (same code as the MCP vision_* tools):
+		// `yaver vision describe <image> [--tier free|fast|quality] ...`
+		// Used headlessly by the opencode yaver-vision plugin for pasted images.
+		runVision(os.Args[2:])
 	case "acl":
 		runACL(os.Args[2:])
 	case "mesh":
@@ -12718,6 +12723,18 @@ func runMCPStdio(taskMgr *TaskManager, aclMgr *ACLManager, emailMgr *EmailManage
 
 		switch req.Method {
 		case "initialize":
+			// Same clientInfo capture as the HTTP transport — runner-aware
+			// vision adaptation (mcp_vision.go) needs to know who calls us.
+			var initReq struct {
+				ClientInfo *struct {
+					Name    string `json:"name"`
+					Version string `json:"version"`
+				} `json:"clientInfo"`
+			}
+			_ = json.Unmarshal(req.Params, &initReq)
+			if initReq.ClientInfo != nil {
+				srv.setMCPClient(initReq.ClientInfo.Name, initReq.ClientInfo.Version)
+			}
 			resp.Result = map[string]interface{}{
 				"protocolVersion": "2024-11-05",
 				"capabilities":    map[string]interface{}{"tools": map[string]interface{}{}},
@@ -12736,7 +12753,7 @@ func runMCPStdio(taskMgr *TaskManager, aclMgr *ACLManager, emailMgr *EmailManage
 			} else if denied := mcpToolDeniedAsPaidAtLaunch(tc.Name); denied != nil {
 				resp.Result = mcpToolError(denied.Reason)
 			} else {
-				resp.Result = srv.handleMCPToolCall(req.Params)
+				resp.Result = srv.finalizeMCPResult(srv.handleMCPToolCall(req.Params), tc.Name)
 			}
 		default:
 			resp.Error = &mcpError{Code: -32601, Message: "Method not found: " + req.Method}

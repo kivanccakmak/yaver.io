@@ -194,6 +194,17 @@ func mcpSeleniumToolCall(name string, args json.RawMessage) interface{} {
 		if err != nil {
 			return mcpToolError("selenium_screenshot: " + err.Error())
 		}
+		// Parity with browser_screenshot: emit a first-class MCP image block
+		// so vision-capable clients render the pixels. Text-only clients get
+		// this rewritten to a text analysis by finalizeMCPResult (mcp_vision.go).
+		if b64, _ := out["base64"].(string); b64 != "" {
+			return map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": fmt.Sprintf("Screenshot captured from Selenium session %s (%d bytes PNG)", a.SessionID, out["bytes"])},
+					{"type": "image", "data": b64, "mimeType": "image/png"},
+				},
+			}
+		}
 		return mcpToolJSON(out)
 	case "selenium_sessions":
 		return mcpToolJSON(seleniumMCP.list())

@@ -360,6 +360,91 @@ func (s *AutorunStore) DeployQuotaUsed(target string) (used, cap int, err error)
 	return
 }
 
+// ---- build bus leases (build_leases) ----------------------------------
+//
+// The build_leases table is the durable backend of the build/upload
+// coordination bus (buildbus.go). It is deliberately kept SEPARATE from
+// deploy_leases: deploy_leases is the autorun/deploy-script path with
+// quota+history semantics keyed by coarse target, while build_leases is the
+// generic {app}@{target} bus for ANY build/upload — TestFlight, Play, npm,
+// Convex, Cloudflare, the Go agent binary itself — from any session (MCP
+// stdio processes included). Same WAL store, same single-writer-conn
+// acquire semantics, different key space.
+
+// HeartbeatBuildLease pushes a live build_lease's TTL forward and updates
+// its stage. A long-running holder must call this every ~30s (the
+// BuildBusLease heartbeat loop does) or the lease expires and another
+// session can take over.
+func (s *AutorunStore) HeartbeatBuildLease(key, holder, stage string, ttl time.Duration) error {
+	if ttl <= 0 {
+		ttl = buildBusTTL
+	}
+	now := nowUnix()
+	res, err := s.db.Exec(`UPDATE build_leases SET stage=?, updated_at=?, expires_at=? WHERE target=? AND autorun_id=? AND ended_at IS NULL`,
+		stage, now, now+int64(ttl.Seconds()), key, holder)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no live build-bus lease for %s held by %s", key, holder)
+	}
+	return nil
+}
+
+// ReleaseBuildLease marks the build_lease terminal with an outcome.
+func (s *AutorunStore) ReleaseBuildLease(key, holder, outcome string) error {
+	now := nowUnix()
+	stage := "finished"
+	if outcome != "success" {
+		stage = "failed"
+	}
+	_, err := s.db.Exec(`UPDATE build_leases SET stage=?, ended_at=?, updated_at=?, outcome=? WHERE target=? AND autorun_id=?`,
+		stage, now, now, outcome, key, holder)
+	return err
+}
+
+// CurrentBuildLease returns the live holder of a build-bus key (or nil when
+// free).
+func (s *AutorunStore) CurrentBuildLease(key string) (*LeaseHeld, error) {
+	now := nowUnix()
+	var h LeaseHeld
+	var endedAt sql.NullInt64
+	var autorunID string
+	err := s.db.QueryRow(`SELECT autorun_id, holder, workdir, COALESCE(branch,''), COALESCE(build_number,''), stage, started_at, expires_at, ended_at
+	  FROM build_leases WHERE target=?`, key).
+		Scan(&autorunID, &h.Holder, &h.Workdir, &h.Branch, &h.Build, &h.Stage, &h.StartedAt, &h.ExpiresAt, &endedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	if endedAt.Valid || h.ExpiresAt <= now {
+		return nil, nil // dead/expired → free
+	}
+	h.Target = key
+	return &h, nil
+}
+
+// ListBuildLeases returns every live build-bus lease (for status surfaces).
+func (s *AutorunStore) ListBuildLeases() ([]BuildBusStatus, error) {
+	now := nowUnix()
+	rows, err := s.db.Query(`SELECT target, holder, workdir, COALESCE(branch,''), COALESCE(build_number,''), stage, started_at, expires_at
+	  FROM build_leases WHERE ended_at IS NULL AND expires_at > ?`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BuildBusStatus
+	for rows.Next() {
+		var st BuildBusStatus
+		if err := rows.Scan(&st.Key, &st.Holder, &st.Workdir, &st.Branch, &st.Build, &st.Stage, &st.StartedAt, &st.ExpiresAt); err != nil {
+			return nil, err
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}
+
 // ---- code locks (advisory path ownership) ------------------------------
 
 // CheckCodeLock returns a live conflicting lock over an ancestor/descendant of

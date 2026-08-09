@@ -43,6 +43,13 @@ type Config struct {
 	// ssh-agent (identity_file), the secure path magara already uses.
 	SSHTargets []SSHTarget `json:"ssh_targets,omitempty"`
 	WebBaseURL string      `json:"web_base_url,omitempty"`
+	// VisionKeys holds vision-LLM provider API keys, keyed by provider
+	// ("mistral" | "openai" | "anthropic"). This is the shared config seam
+	// that the vision stack (testkit/visual_llm.go, qa brain, ghost_vision,
+	// mcp_vision.go, `yaver vision` CLI) all read — one key enables vision
+	// everywhere, mirroring the env vars MISTRAL_API_KEY / OPENAI_API_KEY /
+	// ANTHROPIC_API_KEY. Never synced to Convex; stays in ~/.yaver/config.json.
+	VisionKeys map[string]string `json:"vision_keys,omitempty"`
 	TLSCert    string      `json:"tls_cert,omitempty"`
 	TLSKey     string      `json:"tls_key,omitempty"`
 	AutoStart  bool        `json:"auto_start,omitempty"`

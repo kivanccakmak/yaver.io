@@ -876,8 +876,7 @@ export interface APIKeyRecord {
   scopes?: string[];
 }
 
-// Matches ExecSession.Snapshot() in desktop/agent/exec.go.
-export interface ExecSnapshot {
+// Matches ExecSession.Snapshot() in desktop/agent/exec.go.export interface ExecSnapshot {
   id: string;
   command: string;
   status: "running" | "completed" | "failed";
@@ -2738,6 +2737,116 @@ export class AgentClient {
     });
     if (!res.ok) throw new Error(`Failed to get update status: ${res.status}`);
     return res.json();
+  }
+
+  /**
+   * getVisionStatus — GET /vision/status on the connected agent: which vision
+   * LLM providers are configured (key presence only, never key material),
+   * whether free on-device OCR is available, and the active provider/model
+   * override. Backs the VisionSettingsCard.
+   */
+  async getVisionStatus(): Promise<{
+    ok?: boolean;
+    providers_configured?: string[];
+    active_provider?: string;
+    model_override?: string;
+    free_ocr?: boolean;
+    free_ocr_note?: string;
+    mac_ui_snapshot_available?: boolean;
+    set_hint?: string;
+  }> {
+    this.assertConnected();
+    const res = await this.agentFetch("/vision/status", { headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to get vision status: ${res.status}`);
+    return res.json().catch(() => ({}));
+  }
+
+  /**
+   * setVisionKey — PUT /vision/key on the connected agent: store (or clear) a
+   * vision-LLM provider key in ~/.yaver/config.json vision_keys, the shared
+   * seam read by the MCP vision tools, `yaver vision`, QA and ghost vision.
+   */
+  async setVisionKey(
+    provider: string,
+    key: string,
+    clear = false,
+  ): Promise<{ ok?: boolean; provider?: string; stored?: boolean; note?: string }> {
+    this.assertConnected();
+    const res = await this.agentFetch("/vision/key", {
+      method: "PUT",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, key, clear }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Failed to set vision key: ${res.status}`);
+    return data;
+  }
+
+  /**
+   * getOpenCodeConfig — GET /runner/opencode/config on the connected agent
+   * (or /peer/<target>/runner/opencode/config for another owned machine):
+   * the merged opencode config summary (default model, build/plan models,
+   * providers, available models). Backs the OpenCodeModelCard.
+   */
+  async getOpenCodeConfig(target?: string): Promise<OpenCodeConfigSummary | null> {
+    if (!this.isConnected) return null;
+    try {
+      const res = await this.agentFetch(this.opencodeConfigPath(target), { headers: this.authHeaders });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data?.config || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * saveOpenCodeConfig — POST /runner/opencode/config: patch the opencode
+   * config (default/build/plan model, smallModel, defaultAgent, providers)
+   * on the connected agent or a peer device. The web/mobile "change the
+   * coding model" seam — e.g. point a machine at deepseek-v4-flash instead
+   * of its current default.
+   */
+  async saveOpenCodeConfig(
+    patch: {
+      defaultAgent?: string;
+      model?: string;
+      smallModel?: string;
+      buildModel?: string;
+      planModel?: string;
+      providers?: Array<{
+        id: string;
+        name?: string;
+        baseUrl?: string;
+        apiKey?: string;
+        models?: Record<string, unknown>;
+        delete?: boolean;
+      }>;
+    },
+    target?: string,
+  ): Promise<{ ok: boolean; config?: OpenCodeConfigSummary; error?: string }> {
+    if (!this.isConnected) return { ok: false, error: "not connected" };
+    try {
+      const res = await this.agentFetch(this.opencodeConfigPath(target), {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+      return { ok: true, config: data?.config };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** /peer/<target>/... proxy path; self-targeting drops the prefix
+   *  (mirrors mobile quicClient.peerEndpoint — the agent rejects
+   *  self-targeted peer calls with errProxyLocal). */
+  private opencodeConfigPath(target?: string): string {
+    const t = (target || "").trim();
+    if (!t) return "/runner/opencode/config";
+    return `/peer/${encodeURIComponent(t)}/runner/opencode/config`;
   }
 
   async triggerAgentUpdate(): Promise<{

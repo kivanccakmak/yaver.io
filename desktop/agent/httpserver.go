@@ -37,6 +37,16 @@ type HTTPServer struct {
 	token       string
 	ownerUserID string
 
+	// MCP client identity + resolved vision capability, captured from the
+	// MCP `initialize` handshake (clientInfo). Lets the server be runner-aware:
+	// a text-only client (e.g. opencode + deepseek-v4-flash) gets image blocks
+	// rewritten to text analysis; a vision-capable client (Claude Code / Codex)
+	// keeps native image blocks. See mcp_vision.go.
+	mcpClientMu      sync.RWMutex
+	mcpClientName    string
+	mcpClientVersion string
+	mcpVisionMode    string // "vision" | "text-only" ("" = unresolved)
+
 	// Co-vibe: who is on this machine, in which session, with what role.
 	// Lazily built (vibeRegistry()) so a machine nobody shares pays nothing.
 	vibeSessions *VibeSessionRegistry
@@ -366,6 +376,11 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// over an unsigned LAN beacon. See identity_proof.go.
 	mux.HandleFunc("/identity/prove", s.handleIdentityProve)
 	mux.HandleFunc("/health", s.handleHealth)
+	// Vision settings surface (web/mobile): GET status (providers configured,
+	// free-OCR availability — never key material), PUT a provider key into
+	// ~/.yaver/config.json vision_keys (the shared vision config seam).
+	mux.HandleFunc("/vision/status", s.auth(s.handleVisionStatus))
+	mux.HandleFunc("/vision/key", s.auth(s.handleVisionKeySet))
 	// P8: /health/deep — actionable per-subsystem health with
 	// graduated recovery hints. Auth-wrapped so it can't be scraped
 	// by unauthenticated clients (agent + keeper details leak).
@@ -6715,6 +6730,19 @@ func (s *HTTPServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Method {
 	case "initialize":
+		// Capture the calling client (clientInfo) so runner-aware behavior —
+		// e.g. rewriting image results to text for text-only models — can key
+		// off who is talking to us. See mcp_vision.go.
+		var initReq struct {
+			ClientInfo *struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"clientInfo"`
+		}
+		_ = json.Unmarshal(req.Params, &initReq)
+		if initReq.ClientInfo != nil {
+			s.setMCPClient(initReq.ClientInfo.Name, initReq.ClientInfo.Version)
+		}
 		resp.Result = map[string]interface{}{
 			"protocolVersion": "2024-11-05",
 			"capabilities": map[string]interface{}{
@@ -6748,7 +6776,7 @@ func (s *HTTPServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 		} else if denied := mcpToolDeniedByScope(r, tc.Name); denied != nil {
 			resp.Result = mcpToolError(denied.Reason)
 		} else {
-			resp.Result = s.handleMCPToolCallWithAddr(req.Params, r.RemoteAddr)
+			resp.Result = s.finalizeMCPResult(s.handleMCPToolCallWithAddr(req.Params, r.RemoteAddr), tc.Name)
 		}
 
 	case "notifications/initialized":
@@ -17548,6 +17576,24 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		data, _ := json.Marshal(evalResult)
 		return mcpToolResult(string(data))
+
+	case "vision_analyze_image":
+		return s.handleVisionAnalyzeImage(call.Arguments)
+
+	case "ui_inspect":
+		return s.handleUiInspect(call.Arguments)
+
+	case "testkit_visual_check":
+		return s.handleTestkitVisualCheck(call.Arguments)
+
+	case "vision_pdf_extract":
+		return s.handleVisionPDFExtract(call.Arguments)
+
+	case "vision_diff":
+		return s.handleVisionDiff(call.Arguments)
+
+	case "mac_ui_snapshot":
+		return s.handleMacUISnapshot(call.Arguments)
 
 	case "selenium_status",
 		"selenium_start",

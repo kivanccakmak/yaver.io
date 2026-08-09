@@ -7385,7 +7385,10 @@ export default function TasksScreen() {
                         </Text>
                         <Text style={{ color: c.textMuted, fontSize: 10, marginLeft: 4 }}>▾</Text>
                       </Pressable>
-                      {isRunning && <ActivityIndicator size="small" color={c.accent} />}
+                      {/* NO running spinner here (2026-08-09, user call): the
+                          runner is already named by the chip + the status
+                          pill + the Stop button + PhaseStatusLine. A pulsing
+                          circle beside a usable composer reads as blocked. */}
                     </View>
                     {/* What the agent is holding about the screen you're
                         previewing. Follow-ups are exactly the turn where "make

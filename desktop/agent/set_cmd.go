@@ -36,11 +36,73 @@ func runSet(args []string) {
 	switch strings.ToLower(args[0]) {
 	case "emailoauth", "email-oauth", "email_password", "email-password":
 		runSetEmailOAuth(context.Background(), args[1:], os.Stdin)
+	case "vision-key", "visionkey", "vision_key":
+		runSetVisionKey(args[1:])
 	case "help", "-h", "--help":
 		setUsage()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown subcommand: yaver set %s\n\n", args[0])
 		setUsage()
+		os.Exit(1)
+	}
+}
+
+// runSetVisionKey stores a vision-LLM provider API key in ~/.yaver/config.json
+// under `vision_keys` — the shared seam the whole vision stack reads
+// (mcp_vision.go resolvedVisionConfig, `yaver vision` CLI, web/mobile
+// settings). Never prints the key back.
+func runSetVisionKey(args []string) {
+	provider := ""
+	key := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--provider":
+			if i+1 < len(args) {
+				i++
+				provider = args[i]
+			}
+		case "--key":
+			if i+1 < len(args) {
+				i++
+				key = args[i]
+			}
+		default:
+			if provider == "" {
+				provider = args[i]
+			} else if key == "" {
+				key = args[i]
+			}
+		}
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	key = strings.TrimSpace(key)
+	switch provider {
+	case "mistral", "openai", "anthropic":
+	default:
+		fmt.Fprintln(os.Stderr, "usage: yaver set vision-key <provider> <key>\n       provider = mistral | openai | anthropic\n       Or: yaver set vision-key --provider mistral --key sk-...\n\nClear a key with: yaver set vision-key <provider> --clear")
+		os.Exit(2)
+	}
+	if args[len(args)-1] == "--clear" || key == "--clear" {
+		key = ""
+	}
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
+		os.Exit(1)
+	}
+	if cfg.VisionKeys == nil {
+		cfg.VisionKeys = map[string]string{}
+	}
+	if key == "" {
+		delete(cfg.VisionKeys, provider)
+		fmt.Printf("Vision key for %s cleared.\n", provider)
+	} else {
+		cfg.VisionKeys[provider] = key
+		fmt.Printf("Vision key for %s stored in ~/.yaver/config.json (shared by MCP vision tools, `yaver vision`, web/mobile settings).\n", provider)
+	}
+	if err := SaveConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "save config: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -55,6 +117,12 @@ Usage:
   yaver set emailOauth --email <email> --password-env YAVER_TEST_PASSWORD
   yaver set emailOauth --email <email> --password-stdin
   yaver set emailOauth --email <email> --password <password>
+  yaver set vision-key mistral sk-...        Store a vision-LLM API key
+  yaver set vision-key openai --clear        Clear a stored vision key
+
+Vision keys (vision_keys in ~/.yaver/config.json) are the shared seam read by
+the MCP vision_* tools, `yaver vision`, and the web/mobile settings surfaces.
+Set one key and every vision consumer picks it up.
 
 Options:
   --convex-url <url>       Convex site URL (defaults to production)

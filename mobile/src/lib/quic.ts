@@ -8790,6 +8790,61 @@ export class QuicClient {
   }
 
   /**
+   * getVisionStatus — GET /vision/status on the connected agent: which vision
+   * LLM providers are configured (key presence only, never key material),
+   * whether free on-device OCR is available, and the active provider/model.
+   * Backs the mobile Vision settings card.
+   */
+  async getVisionStatus(
+    target?: string,
+  ): Promise<{
+    ok?: boolean;
+    providers_configured?: string[];
+    active_provider?: string;
+    model_override?: string;
+    free_ocr?: boolean;
+    free_ocr_note?: string;
+    mac_ui_snapshot_available?: boolean;
+    set_hint?: string;
+  } | null> {
+    if (!this.isConnected && !this.hasConnectionInfo) return null;
+    try {
+      const base = this.peerEndpoint(target, "/vision/status");
+      const res = await this.fetchWithTimeout(base, { headers: this.authHeaders });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * setVisionKey — PUT /vision/key on the connected agent: store (or clear) a
+   * vision-LLM provider key in ~/.yaver/config.json vision_keys, the shared
+   * seam read by the MCP vision tools, `yaver vision`, QA and ghost vision.
+   */
+  async setVisionKey(
+    provider: string,
+    key: string,
+    clear = false,
+    target?: string,
+  ): Promise<{ ok?: boolean; provider?: string; stored?: boolean; note?: string } | null> {
+    this.assertConnected();
+    try {
+      const base = this.peerEndpoint(target, "/vision/key");
+      const res = await this.fetchWithTimeout(base, {
+        method: "PUT",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, key, clear }),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * /info on a peer (or on the connected device when target is
    * omitted). Used by the agent-update poll loop to detect when
    * the restarted process reports the new version.

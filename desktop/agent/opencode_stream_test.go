@@ -113,3 +113,76 @@ func TestOpencodeStreamFilter_OnlyRewritesLinesStartingWithDollarSpace(t *testin
 		t.Errorf("standalone `$ env` line should be rewritten:\n%s", got)
 	}
 }
+
+// The user-facing regression (2026-08-09): every opencode command card showed
+// "(no output captured)" — emitCommandStart + an immediate empty
+// command_end — while the command's stdout sat in the transcript as plain
+// lines. The lines following a `$ cmd` line ARE that command's output; the
+// filter must accumulate them and emit one command_output before the
+// command_end. Closed by the next `$ cmd` or by flush() at EOF.
+func TestOpencodeStreamFilter_CapturesCommandOutput(t *testing.T) {
+	task := &Task{eventCh: make(chan map[string]interface{}, 16)}
+	f := &opencodeStreamFilter{task: task}
+
+	f.process([]byte("$ ls -la /root/Workspace/medici.ai\ntotal 8\ndrwxr-xr-x 2 root root 4096 .\n$ echo ok\nok\n"))
+	f.flush() // close the last pending command (EOF)
+
+	s1 := drainOneEvent(t, task.eventCh)
+	if s1["type"] != "command_start" || s1["command"] != "ls -la /root/Workspace/medici.ai" {
+		t.Fatalf("bad command_start: %#v", s1)
+	}
+	o1 := drainOneEvent(t, task.eventCh)
+	if o1["type"] != "command_output" || o1["stream"] != "stdout" {
+		t.Fatalf("bad command_output: %#v", o1)
+	}
+	if chunk, _ := o1["chunk"].(string); !strings.Contains(chunk, "total 8") {
+		t.Fatalf("captured stdout missing the ls listing: %q", o1["chunk"])
+	}
+	e1 := drainOneEvent(t, task.eventCh)
+	if e1["type"] != "command_end" {
+		t.Fatalf("bad command_end: %#v", e1)
+	}
+
+	s2 := drainOneEvent(t, task.eventCh)
+	if s2["type"] != "command_start" || s2["command"] != "echo ok" {
+		t.Fatalf("bad command_start 2: %#v", s2)
+	}
+	o2 := drainOneEvent(t, task.eventCh)
+	if o2["type"] != "command_output" {
+		t.Fatalf("bad command_output 2: %#v", o2)
+	}
+	if chunk, _ := o2["chunk"].(string); !strings.Contains(chunk, "ok") {
+		t.Fatalf("captured stdout missing echo output: %q", o2["chunk"])
+	}
+	e2 := drainOneEvent(t, task.eventCh)
+	if e2["type"] != "command_end" {
+		t.Fatalf("bad command_end 2: %#v", e2)
+	}
+}
+
+// A command whose final output line has no trailing newline at EOF must
+// still flush its captured output — flush() closes the pending command.
+func TestOpencodeStreamFilter_FlushClosesPendingCommand(t *testing.T) {
+	task := &Task{eventCh: make(chan map[string]interface{}, 8)}
+	f := &opencodeStreamFilter{task: task}
+
+	f.process([]byte("$ ls\ntotal 4\n"))
+	f.process([]byte("done")) // partial final line, no newline
+	f.flush()                 // EOF
+
+	s := drainOneEvent(t, task.eventCh)
+	if s["type"] != "command_start" {
+		t.Fatalf("bad command_start: %#v", s)
+	}
+	o := drainOneEvent(t, task.eventCh)
+	if o["type"] != "command_output" {
+		t.Fatalf("flush must flush pending output: %#v", o)
+	}
+	if chunk, _ := o["chunk"].(string); !strings.Contains(chunk, "done") {
+		t.Fatalf("flush output must include the partial line: %q", o["chunk"])
+	}
+	e := drainOneEvent(t, task.eventCh)
+	if e["type"] != "command_end" {
+		t.Fatalf("flush must close the pending command: %#v", e)
+	}
+}

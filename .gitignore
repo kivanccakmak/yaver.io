@@ -127,3 +127,6 @@ desktop/agent/screenread/screenread
 # run and large (a single all-surfaces pass writes hundreds of PNGs).
 e2e/test-results/
 test-results/
+
+# yaver-test-sdk coverage output (generated per run)
+yaver-tests/.coverage.json

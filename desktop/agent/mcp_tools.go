@@ -1494,6 +1494,89 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 				"properties": map[string]interface{}{},
 			},
 		},
+		// --- Vision (runner-aware) ---
+		// Tools that turn pixels into text. For text-only clients (e.g. opencode
+		// + deepseek-v4-flash) the server ALSO auto-rewrites image-block results
+		// from screenshot tools into these text analyses — no vision model needed
+		// for OCR, and a configured provider (MISTRAL/OPENAI/ANTHROPIC key) adds
+		// a semantic verdict. See mcp_vision.go.
+		{
+			"name":        "vision_analyze_image",
+			"description": "Analyze an image and return TEXT (dims + on-device OCR + optional vision-LLM verdict). Accepts a file path, base64:..., data:image/...;base64,.., or http(s) URL as `source`, or a `session_id` of an open browser session for its current screenshot. `tier`: free (OCR only, $0) | fast (default) | quality (vision LLM). Optional `provider` (mistral|openai|anthropic) and `model` override the configured default. Use this when the user pastes a screenshot, a crash log image, or a UI failure and you cannot see pixels.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"source"},
+				"properties": map[string]interface{}{
+					"source":     map[string]interface{}{"type": "string", "description": "Image: file path, base64:..., data:image/...;base64,..., or http(s) URL. Or omit and pass session_id for a browser screenshot."},
+					"session_id": map[string]interface{}{"type": "string", "description": "Browser session whose current screenshot to analyze (alternative to source)."},
+					"question":   map[string]interface{}{"type": "string", "description": "What to look for. Defaults to a UI-inspection prompt."},
+					"tier":       map[string]interface{}{"type": "string", "enum": []string{"free", "fast", "quality"}, "description": "free = OCR only ($0, no LLM). fast/quality = OCR + vision LLM verdict."},
+					"provider":   map[string]interface{}{"type": "string", "enum": []string{"", "mistral", "openai", "anthropic"}, "description": "Vision provider override (default: configured/auto)."},
+					"model":      map[string]interface{}{"type": "string", "description": "Vision model override (e.g. pixtral-12b-2409, gpt-4o-mini)."},
+				},
+			},
+		},
+		{
+			"name":        "ui_inspect",
+			"description": "One-call per-surface UI inspection: capture the screen of a surface (browser | selenium | droid | simulator | mac) and return the full TEXT report (dimensions + on-device OCR + optional vision-LLM verdict). The optimized tool for 'is my UI broken?' loops on mobile and web development.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"surface"},
+				"properties": map[string]interface{}{
+					"surface":    map[string]interface{}{"type": "string", "enum": []string{"browser", "selenium", "droid", "simulator", "mac"}},
+					"session_id": map[string]interface{}{"type": "string", "description": "Browser or Selenium session id (required for browser/selenium)."},
+					"device":     map[string]interface{}{"type": "string", "description": "Android serial or iOS simulator device (optional)."},
+					"question":   map[string]interface{}{"type": "string", "description": "What to look for."},
+					"provider":   map[string]interface{}{"type": "string", "enum": []string{"", "mistral", "openai", "anthropic"}},
+					"model":      map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "testkit_visual_check",
+			"description": "Run the QA vision inspector on a Selenium session (or an image) and return PASS/WARN/FAIL + issues. The visual-assertion step for automated browser tests: start → navigate → snapshot (DOM/accessibility) → testkit_visual_check (pixel judgment). Requires a vision provider (MISTRAL/OPENAI/ANTHROPIC key) or an explicit provider/model.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Selenium session id to screenshot and judge."},
+					"image":      map[string]interface{}{"type": "string", "description": "Alternative to session_id: path / base64: / data: / URL."},
+					"question":   map[string]interface{}{"type": "string", "description": "Test-specific visual question. Defaults to a regression prompt."},
+					"provider":   map[string]interface{}{"type": "string", "enum": []string{"", "mistral", "openai", "anthropic"}},
+					"model":      map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "vision_pdf_extract",
+			"description": "Extract text from a PDF (crash logs, reports, docs). On macOS uses PDFKit (free, on-device); elsewhere requires pdftotext on PATH. Scanned/image-only PDFs return no text — OCR the pages with vision_analyze_image instead.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"source"},
+				"properties": map[string]interface{}{
+					"source": map[string]interface{}{"type": "string", "description": "PDF file path, base64:, data:, or http(s) URL."},
+				},
+			},
+		},
+		{
+			"name":        "vision_diff",
+			"description": "Pixel-diff two images (pure Go, $0): returns changed-pixel count, change ratio, and the bounding box of the changed region. Accepts paths, base64:, data:, or URLs. Use it to confirm a screenshot changed after an edit or that two renders are identical.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"source_a", "source_b"},
+				"properties": map[string]interface{}{
+					"source_a": map[string]interface{}{"type": "string", "description": "Image A (path / base64: / data: / URL)."},
+					"source_b": map[string]interface{}{"type": "string", "description": "Image B."},
+				},
+			},
+		},
+		{
+			"name":        "mac_ui_snapshot",
+			"description": "Dump the frontmost macOS app's UI element tree (role: title/value) via the Accessibility API — the Mac equivalent of droid_ui_texts / DOM. Free structural vision for the host screen. Requires Accessibility permission for the hosting terminal app.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
 		{
 			"name":        "system_info",
 			"description": "Get system information: hostname, OS, CPU count, disk usage, memory, load average. Useful for monitoring headless machines.",
@@ -3439,7 +3522,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "feedback_show",
-			"description": "Return the full feedback report for one id: error metadata, stack, screenshot URL, and a recent-events snapshot from the BlackBox.",
+			"description": "Return the full feedback report for one id: error metadata, stack, screenshots (absolute on-disk FILE PATHS — read them with vision_analyze_image to see the crash/UI state), and a recent-events snapshot from the BlackBox.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"id"},

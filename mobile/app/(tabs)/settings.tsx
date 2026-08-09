@@ -29,6 +29,7 @@ import { AppScreenHeader } from "../../src/components/AppScreenHeader";
 import { OpenCodeConfigModal } from "../../src/components/OpenCodeConfigModal";
 import { CodingAgentsSection } from "../../src/components/DeviceDetailsModal";
 import { YaverAgentSettings } from "../../src/components/YaverAgentSettings";
+import VisionSettingsSection from "../../src/components/VisionSettingsSection";
 import BoxInitSection from "../../src/components/BoxInitSection";
 import AttachModeSection from "../../src/components/AttachModeSection";
 import CloudProvidersSection from "../../src/components/CloudProvidersSection";
@@ -5083,6 +5084,8 @@ export default function SettingsScreen() {
               <View style={[styles.separator, { backgroundColor: c.borderSubtle, marginVertical: 16 }]} />
 
               <YaverAgentSettings connected={connectionStatus === "connected" && !activeDevice?.isGuest} />
+
+              <VisionSettingsSection connected={connectionStatus === "connected" && !activeDevice?.isGuest} />
 
               <View style={[styles.separator, { backgroundColor: c.borderSubtle, marginVertical: 16 }]} />
 

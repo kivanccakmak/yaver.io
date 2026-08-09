@@ -46,14 +46,33 @@ type opencodeStreamFilter struct {
 	// task + cmdSeq drive structured command_* events (command cards).
 	// opencode's raw stream gives us the command line but no captured
 	// output or exit code (that needs the opencode server event stream
-	// — the real P3). So we emit command_start + an immediate
-	// command_end with exitKnown=false: the card renders the command
-	// with a neutral "done" badge and "(no output captured — see
-	// transcript)", while the inline `**$ cmd**` pill still carries the
+	// — the real P3). We emit command_start + a command_end with
+	// exitKnown=false: the card renders the command with a neutral
+	// "done" badge, while the inline `**$ cmd**` pill still carries the
 	// narrative + its output below it. task may be nil in unit tests.
 	task   *Task
 	cmdSeq int
+
+	// Pending-command stdout capture (2026-08-09, user call): the lines
+	// that follow a `$ cmd` line ARE that command's output — opencode
+	// writes them straight to the raw stream, and the old code let them
+	// pass through as plain transcript while the CommandCard showed
+	// "(no output captured)" for a `ls` that printed a full listing.
+	// The following non-command lines are accumulated into the pending
+	// command's stdout and flushed as one command_output before the
+	// command_end — closed by the next `$ cmd` / banner / flush(EOF).
+	// Bounded by opencodeCmdOutputCap so a runaway capture can't balloon
+	// (the transcript stays authoritative either way).
+	pendingCmdID    string
+	pendingCmdSeq   int
+	pendingCmdOut   strings.Builder
+	pendingCmdBytes int
 }
+
+// opencodeCmdOutputCap bounds how much raw stream text is attributed to a
+// single shell command's stdout. The transcript always carries the full
+// stream; this only caps the secondary CommandCard view.
+const opencodeCmdOutputCap = 64 * 1024
 
 // opencodeShellLineRE matches a line whose only "real" content is the
 // `$ <command>` form opencode prints when invoking a shell tool. Lines
@@ -99,15 +118,39 @@ func (f *opencodeStreamFilter) process(chunk []byte) []byte {
 // flush returns whatever partial line remains in the leftover buffer,
 // e.g. when the underlying process closes stdout without a trailing
 // newline. Safe to call multiple times — subsequent calls return nil.
+// Always closes a still-pending command so its accumulated output is
+// never lost at EOF (the caller in tasks.go runs flush() after the read
+// loop ends).
 func (f *opencodeStreamFilter) flush() []byte {
-	if len(f.leftover) == 0 {
-		return nil
-	}
-	line := f.leftover
-	f.leftover = nil
 	var out bytes.Buffer
-	f.writeLine(&out, line, false)
+	if len(f.leftover) > 0 {
+		line := f.leftover
+		f.leftover = nil
+		f.writeLine(&out, line, false)
+	}
+	f.closePendingCommand()
 	return out.Bytes()
+}
+
+// closePendingCommand flushes a still-open command's captured stdout as
+// one command_output event, then closes it with the neutral exitKnown=false
+// "done" badge. No-op when nothing is pending. Callers: the next `$ cmd`
+// line, a banner line, and flush() at EOF.
+func (f *opencodeStreamFilter) closePendingCommand() {
+	if f.pendingCmdID == "" {
+		f.pendingCmdOut.Reset()
+		f.pendingCmdBytes = 0
+		return
+	}
+	if f.task != nil {
+		if f.pendingCmdBytes > 0 {
+			emitCommandOutput(f.task, f.pendingCmdID, "stdout", f.pendingCmdOut.String(), f.pendingCmdSeq)
+		}
+		emitCommandEnd(f.task, f.pendingCmdID, 0, false, 0, false)
+	}
+	f.pendingCmdID = ""
+	f.pendingCmdOut.Reset()
+	f.pendingCmdBytes = 0
 }
 
 func (f *opencodeStreamFilter) writeLine(out *bytes.Buffer, line []byte, hasNewline bool) {
@@ -117,6 +160,8 @@ func (f *opencodeStreamFilter) writeLine(out *bytes.Buffer, line []byte, hasNewl
 	// CLI might write CRLF).
 	clean = strings.TrimRight(clean, "\r")
 	if opencodeBannerLineRE.MatchString(clean) {
+		// A banner line is transport metadata, never command output.
+		f.closePendingCommand()
 		return
 	}
 	if m := opencodeShellLineRE.FindStringSubmatch(clean); m != nil {
@@ -129,16 +174,39 @@ func (f *opencodeStreamFilter) writeLine(out *bytes.Buffer, line []byte, hasNewl
 		out.WriteString("\n**$ ")
 		out.WriteString(m[1])
 		out.WriteString("**\n")
-		// Structured command card (P2P only — never Convex). No output
-		// or exit available from opencode's raw stream, so close it
-		// immediately with exitKnown=false (neutral "done" badge).
+		// Structured command card (P2P only — never Convex). Close any
+		// previous command (its accumulated output flushes now), then
+		// open the new one. exitKnown=false (neutral "done" badge) — the
+		// raw stream carries no exit status; the stdout that FOLLOWS this
+		// line is captured into the pending command instead (2026-08-09:
+		// previously the card closed empty and every `ls` showed
+		// "(no output captured)" while the listing sat in the transcript).
+		f.closePendingCommand()
 		if f.task != nil {
 			f.cmdSeq++
 			id := fmt.Sprintf("%s-oc%d", f.task.ID, f.cmdSeq)
 			emitCommandStart(f.task, id, m[1], nil, "", "opencode")
-			emitCommandEnd(f.task, id, 0, false, 0, false)
+			f.pendingCmdID = id
+			f.pendingCmdSeq = f.cmdSeq
+			f.pendingCmdOut.Reset()
+			f.pendingCmdBytes = 0
 		}
 		return
+	}
+	// Not a command line: if a command is open, this is its stdout.
+	if f.pendingCmdID != "" && f.pendingCmdBytes < opencodeCmdOutputCap {
+		n := len(clean)
+		if f.pendingCmdBytes+n > opencodeCmdOutputCap {
+			n = opencodeCmdOutputCap - f.pendingCmdBytes
+		}
+		if n > 0 {
+			f.pendingCmdOut.WriteString(clean[:n])
+			f.pendingCmdBytes += n
+		}
+		if hasNewline && f.pendingCmdBytes < opencodeCmdOutputCap {
+			f.pendingCmdOut.WriteByte('\n')
+			f.pendingCmdBytes++
+		}
 	}
 	out.WriteString(clean)
 	if hasNewline {
