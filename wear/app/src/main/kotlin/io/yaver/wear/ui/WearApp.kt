@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -23,6 +24,7 @@ import androidx.wear.compose.material.Text
 import io.yaver.wear.BoxLifecycle
 import io.yaver.wear.WatchProtocol
 import io.yaver.wear.WatchState
+import kotlinx.coroutines.delay
 
 /**
  * Wear Compose root.
@@ -48,6 +50,21 @@ fun WearApp(
     val phase by WatchState.phase.collectAsState()
     val phoneReachable by WatchState.phoneReachable.collectAsState()
     val wakeStatus by BoxLifecycle.status.collectAsState()
+
+    // Wall-clock bound on Phase.Working: the only prior exit was a later
+    // phone→watch push, so a lost Data Layer message or a phone that died
+    // mid-task left the wrist on "Working…" forever. 90s of silence returns
+    // the record button with an honest line — the task itself keeps running
+    // on the box and its summary still arrives on the phone.
+    LaunchedEffect(phase) {
+        if (phase is WatchState.Phase.Working) {
+            delay(90_000)
+            if (WatchState.phase.value is WatchState.Phase.Working) {
+                WatchState.setLine("Still working — I'll let you know on your phone when it's done.")
+                WatchState.setPhase(WatchState.Phase.Idle)
+            }
+        }
+    }
 
     MaterialTheme {
         Box(

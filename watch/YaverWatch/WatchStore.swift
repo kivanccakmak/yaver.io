@@ -51,6 +51,32 @@ final class WatchStore: ObservableObject {
     let lifecycle = BoxLifecycle()
     private var cancellables = Set<AnyCancellable>()
 
+    /// Wall-clock bound on the `.working` phase. The only prior exit was a
+    /// later phone→watch push, so a lost WCSession push or a phone that died
+    /// mid-task left the wrist on "Working…" forever. Entering `.working`
+    /// arms this; any terminal reply cancels it. Firing returns the record
+    /// button with an honest line — the task itself keeps running on the box
+    /// and its summary still arrives on the phone.
+    private static let workingTimeout: TimeInterval = 90
+    private var workingTimer: DispatchWorkItem?
+
+    private func armWorkingTimeout() {
+        workingTimer?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.phase == .working else { return }
+            self.lastLine = "Still working — I'll let you know on your phone when it's done."
+            self.phase = .idle
+            self.workingTimer = nil
+        }
+        workingTimer = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + WatchStore.workingTimeout, execute: item)
+    }
+
+    private func cancelWorkingTimeout() {
+        workingTimer?.cancel()
+        workingTimer = nil
+    }
+
     struct PendingConfirm: Equatable {
         let token: String
         let prompt: String
@@ -292,6 +318,9 @@ final class WatchStore: ObservableObject {
         // Any non-error reply means the box answered — clear any stale asleep
         // state so the record button comes back.
         if reply.kind != .error { lifecycle.markReachable() }
+        // Any reply that is NOT a fresh .working cancels the working-phase
+        // wall-clock bound below (we got the terminal word, or are moving on).
+        if reply.kind != .working { cancelWorkingTimeout() }
         switch reply.kind {
         case .ack:
             lastLine = reply.spoken ?? "On it."
@@ -299,6 +328,7 @@ final class WatchStore: ObservableObject {
         case .working:
             lastLine = reply.spoken ?? "Working…"
             phase = .working   // wait for the phone/agent to wake us with a summary
+            armWorkingTimeout()
         case .confirmNeeded:
             // Surface the confirm UI; do NOT auto-decide on the wrist.
             if let token = reply.token {

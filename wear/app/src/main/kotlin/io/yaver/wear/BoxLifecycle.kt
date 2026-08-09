@@ -110,6 +110,19 @@ object BoxLifecycle {
          * box that could not run it. Both Swift surfaces already guarded this.
          */
         object NeedsAuth : WakeStatus()
+
+        /**
+         * Phone-paired wake with no stored box URL to probe. The wrist cannot
+         * confirm the box itself, so the phone is driving the real resume.
+         *
+         * The ladder used to fabricate READY after an optimistic 90s window and
+         * re-send the pending turn — a false green: "Ready" was claimed and a
+         * command was fired without any health confirmation, so a box that
+         * wasn't actually up failed the re-send. Now the wrist hands control
+         * back to the phone, and the box's real ack (data-layer reply) is the
+         * only honest confirmation — its failure path re-surfaces Asleep.
+         */
+        object PendingPhone : WakeStatus()
     }
 
     private val _status = MutableStateFlow<WakeStatus>(WakeStatus.None)
@@ -207,13 +220,13 @@ object BoxLifecycle {
                 if (elapsed > 25_000 && currentPhase() == WakePhase.BOOTING) {
                     setPhase(WakePhase.CONNECTING)
                 }
-                // Phone-paired fallback: no URL to confirm with — after an
-                // optimistic window, call it ready and let the retry prove it.
+                // Phone-paired fallback: no URL to confirm with. The wrist must
+                // NOT fabricate READY — it cannot prove the box answered, and
+                // re-sending the pending turn against an unconfirmed box was the
+                // false-green this ladder used to ship. Hand control back to the
+                // phone; its reply (data layer) is the honest confirmation.
                 if (boxBaseUrl == null && elapsed > 90_000) {
-                    setPhase(WakePhase.READY)
-                    delay(1_200)
-                    _status.value = WakeStatus.None
-                    onReady()
+                    _status.value = WakeStatus.PendingPhone
                     return@launch
                 }
                 delay(pollMs)

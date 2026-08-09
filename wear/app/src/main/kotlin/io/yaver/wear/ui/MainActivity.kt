@@ -48,6 +48,12 @@ class MainActivity : ComponentActivity() {
      *  the user doesn't have to speak it again after the box comes back. */
     private var pendingTranscript: String? = null
 
+    /** When [pendingTranscript] was queued. A queued command older than
+     *  [pendingTranscriptMaxAgeMs] is stale — the user has moved on — and is
+     *  dropped instead of firing hours later at a freshly-woken box. */
+    private var pendingTranscriptAt: Long = 0L
+    private val pendingTranscriptMaxAgeMs: Long = 10 * 60 * 1000L
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -247,6 +253,7 @@ class MainActivity : ComponentActivity() {
     private fun applyStandaloneReply(reply: WatchProtocol.Reply, retryTranscript: String?) {
         if (reply is WatchProtocol.Reply.Error && reply.boxUnreachable) {
             pendingTranscript = retryTranscript
+            pendingTranscriptAt = System.currentTimeMillis()
             WatchState.setPhase(WatchState.Phase.Idle)
             BoxLifecycle.markAsleep()
             haptics.failure()
@@ -281,13 +288,25 @@ class MainActivity : ComponentActivity() {
                     boxBaseUrl = boxUrl,
                     onReady = {
                         haptics.success()
-                        // Re-send the command the box missed while it was asleep.
-                        pendingTranscript?.let { t ->
-                            pendingTranscript = null
+                        // Re-send the command the box missed while it was asleep —
+                        // but only while it is still fresh. A transcript queued
+                        // before a long/retried wake is stale; the user has moved
+                        // on and firing it hours later would surprise them.
+                        val t = pendingTranscript
+                        val age = System.currentTimeMillis() - pendingTranscriptAt
+                        pendingTranscript = null
+                        pendingTranscriptAt = 0L
+                        if (t != null && age <= pendingTranscriptMaxAgeMs) {
                             onTranscript(t)
                         }
                     },
-                    onTimeout = { haptics.failure() },
+                    onTimeout = {
+                        // The wake never completed — drop the queued command so it
+                        // can't fire at a later, unrelated wake. Speak again.
+                        pendingTranscript = null
+                        pendingTranscriptAt = 0L
+                        haptics.failure()
+                    },
                 )
             } catch (_: PhoneBridge.PhoneUnreachableException) {
                 BoxLifecycle.markPhoneNeeded()

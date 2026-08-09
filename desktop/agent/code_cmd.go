@@ -417,7 +417,16 @@ func streamCodeTaskRef(taskID, label string, remote *RemoteAgentCandidate) error
 		extraHeaders = remote.Headers
 		label = firstNonEmpty(remote.Label, remote.DeviceID, "cloud")
 	}
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", baseURL+"/tasks/"+taskID+"/output", nil)
+	// Idle bound: the Scan() loop has no read deadline of its own, so a
+	// server that holds the connection open but stops emitting used to pin
+	// the terminal for up to the 30-minute client timeout with ZERO output.
+	// The request is created under streamCtx so the idle timer's cancel
+	// actually interrupts the blocked read; 60s of silence is a named error
+	// with a route (check status / reattach), never a silent hang.
+	const streamIdleTimeout = 60 * time.Second
+	streamCtx, cancelStream := context.WithCancel(context.Background())
+	defer cancelStream()
+	req, _ := http.NewRequestWithContext(streamCtx, "GET", baseURL+"/tasks/"+taskID+"/output", nil)
 	req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
 	for k, v := range extraHeaders {
 		if strings.TrimSpace(v) != "" {
@@ -434,7 +443,10 @@ func streamCodeTaskRef(taskID, label string, remote *RemoteAgentCandidate) error
 	fmt.Printf("[%s] task %s\n\n", label, taskID)
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 1<<20), 1<<20)
+	idleTimer := time.AfterFunc(streamIdleTimeout, cancelStream)
+	defer idleTimer.Stop()
 	for scanner.Scan() {
+		idleTimer.Reset(streamIdleTimeout)
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
 			continue
@@ -455,6 +467,9 @@ func streamCodeTaskRef(taskID, label string, remote *RemoteAgentCandidate) error
 			return nil
 		}
 	}
+	if streamCtx.Err() != nil {
+		return fmt.Errorf("stream went idle for %s with no frames — the task may be stalled (task %s). Check `yaver status`, or reattach to see if it resumed.", streamIdleTimeout, taskID)
+	}
 	return scanner.Err()
 }
 
@@ -465,6 +480,12 @@ func streamCodeGraph(runID string) error {
 	}
 	nodeState := map[string]nodeSnapshot{}
 	taskOffsets := map[string]int{}
+	// Staleness bound: this loop used to poll forever — a node stuck
+	// `running` with no output and no status change ran until Ctrl-C with
+	// no diagnosis. Any status change or printed task delta counts as
+	// activity; silence past the cap is a named error with a route.
+	const graphStaleTimeout = 45 * time.Minute
+	lastActivity := time.Now()
 
 	for {
 		run, err := fetchCodeGraph(runID)
@@ -479,10 +500,15 @@ func streamCodeGraph(runID string) error {
 				if node.Placement != nil && node.Placement.Reason != "" && node.Status == AgentNodeRunning {
 					fmt.Printf("[%s] %s\n", label, node.Placement.Reason)
 				}
+				lastActivity = time.Now()
 			}
 			if node.TaskID != "" {
-				if err := streamGraphTaskDelta(node, taskOffsets); err != nil {
-					return err
+				delta, derr := streamGraphTaskDelta(node, taskOffsets)
+				if derr != nil {
+					return derr
+				}
+				if delta {
+					lastActivity = time.Now()
 				}
 			}
 			nodeState[node.Spec.ID] = nodeSnapshot{Status: string(node.Status), TaskID: node.TaskID}
@@ -495,6 +521,9 @@ func streamCodeGraph(runID string) error {
 				fmt.Println(run.Summary)
 			}
 			return nil
+		}
+		if time.Since(lastActivity) > graphStaleTimeout {
+			return fmt.Errorf("graph run %s has been silent for %s (no status changes and no task output). It may be wedged — stop it with `yaver stop`, or check the run on the dashboard.", runID, graphStaleTimeout)
 		}
 		time.Sleep(1200 * time.Millisecond)
 	}
@@ -521,28 +550,28 @@ func fetchCodeGraph(runID string) (*AgentGraphRun, error) {
 	return &parsed, nil
 }
 
-func streamGraphTaskDelta(node *AgentGraphNodeState, offsets map[string]int) error {
+func streamGraphTaskDelta(node *AgentGraphNodeState, offsets map[string]int) (bool, error) {
 	resp, err := localAgentRequest("GET", "/tasks/"+node.TaskID, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	taskMap, ok := resp["task"]
 	if !ok {
-		return nil
+		return false, nil
 	}
 	data, _ := json.Marshal(taskMap)
 	var task TaskInfo
 	if err := json.Unmarshal(data, &task); err != nil {
-		return err
+		return false, err
 	}
 	prev := offsets[task.ID]
 	if len(task.Output) <= prev {
-		return nil
+		return false, nil
 	}
 	label := graphNodeLabel(node)
 	printPrefixedDelta(label, task.Output[prev:])
 	offsets[task.ID] = len(task.Output)
-	return nil
+	return true, nil
 }
 
 func graphNodeLabel(node *AgentGraphNodeState) string {

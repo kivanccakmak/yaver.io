@@ -85,6 +85,13 @@ import {
   updateTaskDispatchIntent,
 } from "../../src/lib/taskPlacement";
 import {
+  isRunnerSeat,
+  listTmuxRunnerSessions,
+  tmuxRunnerSessionLabel,
+  type TmuxRunnerSessionRecord,
+} from "../../src/lib/tmuxRunnerSessions";
+import { timeAgo } from "../../src/lib/parkedMachines";
+import {
   listPendingCloudDispatches,
   mergePendingCloudDispatchIntents,
   mergePendingCloudPlacementStatus,
@@ -1866,6 +1873,7 @@ export default function TasksScreen() {
   const [tmuxSessions, setTmuxSessions] = useState<TmuxSession[]>([]);
   const [isLoadingTmux, setIsLoadingTmux] = useState(false);
   const [isAdopting, setIsAdopting] = useState<string | null>(null); // session name being adopted
+
   const chatScrollRef = useRef<FlatList>(null);
   const pendingOpenTaskRef = useRef<Task | null>(null);
   /** AbortController per in-flight yaver-agent run, keyed by synthetic
@@ -1883,6 +1891,33 @@ export default function TasksScreen() {
 
   // Speech state
   const { token, user, logout } = useAuth();
+  // Cross-device + offline tmux runner-session ledger from Convex
+  // (mobile/src/lib/tmuxRunnerSessions.ts). The P2P list above only sees the
+  // CONNECTED agent; this roster shows every machine's runner seats, open or
+  // closed, even before connecting — the "always keep vibing" inventory.
+  const [convexTmuxSessions, setConvexTmuxSessions] = useState<TmuxRunnerSessionRecord[]>([]);
+  const [isLoadingConvexTmux, setIsLoadingConvexTmux] = useState(false);
+  const refreshConvexTmuxSessions = useCallback(async () => {
+    if (!token) {
+      setConvexTmuxSessions([]);
+      return;
+    }
+    try {
+      const rows = await listTmuxRunnerSessions();
+      setConvexTmuxSessions(rows);
+    } catch {
+      // Offline / backend not yet deployed — the ledger degrades to hidden
+      // rather than blocking the modal.
+    }
+  }, [token]);
+  // Refresh while the modal is open (~30s cadence) so a /exit on any machine
+  // flips its seat to closed without closing/reopening the sheet.
+  useEffect(() => {
+    if (!showTmuxSessions) return;
+    refreshConvexTmuxSessions();
+    const t = setInterval(refreshConvexTmuxSessions, 30000);
+    return () => clearInterval(t);
+  }, [showTmuxSessions, refreshConvexTmuxSessions]);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   // Transient inline status for the composer's ⚡ Hermes-reload action.
@@ -2552,6 +2587,21 @@ export default function TasksScreen() {
   const liveRunnerSessions = tmuxSessions.filter(
     (sn) => !!sn.agentType && sn.agentType !== "shell" && sn.relationship !== "adopted",
   );
+
+  // Cross-device roster rows for the tmux modal. The connected agent's own
+  // sessions are already rendered from the P2P list, so drop (deviceId==focus
+  // && name already shown) — the Convex ledger contributes the OTHER machines
+  // plus anything closed on this one. Runner seats float to the top.
+  const p2pNames = new Set(tmuxSessions.map((sn) => sn.name));
+  const convexTmuxRows = useMemo(() => {
+    const rows = convexTmuxSessions.filter(
+      (r) => !(r.deviceId === activeDevice?.id && p2pNames.has(r.sessionName)),
+    );
+    const rank = (r: TmuxRunnerSessionRecord) =>
+      (r.status === "open" && isRunnerSeat(r) ? 0 :
+       r.status === "open" ? 1 : 2);
+    return [...rows].sort((a, b) => rank(a) - rank(b) || b.lastSeenAt - a.lastSeenAt);
+  }, [convexTmuxSessions, activeDevice?.id, p2pNames]);
 
   // Listen for streaming output — buffer updates to avoid UI freezing
   const outputBufferRef = useRef<Record<string, string[]>>({});
@@ -4602,6 +4652,7 @@ export default function TasksScreen() {
   const handleOpenTmuxSessions = async () => {
     setShowTmuxSessions(true);
     setIsLoadingTmux(true);
+    setIsLoadingConvexTmux(true);
     try {
       const sessions = await quicClient.listTmuxSessions();
       setTmuxSessions(sessions);
@@ -4609,6 +4660,11 @@ export default function TasksScreen() {
       setTmuxSessions([]);
     } finally {
       setIsLoadingTmux(false);
+    }
+    try {
+      await refreshConvexTmuxSessions();
+    } finally {
+      setIsLoadingConvexTmux(false);
     }
   };
 
@@ -4622,6 +4678,7 @@ export default function TasksScreen() {
       // Refresh both lists
       const [sessions] = await Promise.all([quicClient.listTmuxSessions(), fetchTasks()]);
       setTmuxSessions(sessions);
+      void refreshConvexTmuxSessions();
       // Resolve the task BEFORE closing, then hand the chat-detail
       // Modal off to the tmux Modal's dismiss — opening it in the same
       // tick makes it present invisibly behind the sheet on iOS.
@@ -4645,6 +4702,7 @@ export default function TasksScreen() {
       await markTaskDeleted(taskId);
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
       setTmuxSessions(await quicClient.listTmuxSessions());
+      void refreshConvexTmuxSessions();
       // If we're viewing this task, close the detail modal
       if (selectedTask?.id === taskId) setSelectedTask(null);
     } catch (e) {
@@ -4659,6 +4717,7 @@ export default function TasksScreen() {
       await markTaskDeleted(taskId);
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
       setTmuxSessions(await quicClient.listTmuxSessions());
+      void refreshConvexTmuxSessions();
       if (selectedTask?.id === taskId) setSelectedTask(null);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -7518,6 +7577,60 @@ export default function TasksScreen() {
                 </View>
               </View>
               <ScrollView style={s.logsScroll} contentContainerStyle={{ padding: 12 }}>
+                {/* Cross-device runner-seat ledger (Convex). Shown above the
+                    connected agent's own sessions: it covers every machine,
+                    open OR closed, even before connecting. Identifiers +
+                    lifecycle only — no pane previews here. */}
+                {convexTmuxRows.length > 0 ? (
+                  <View style={{ marginBottom: 12 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                      <Text style={[s.logsTitle, { color: c.textPrimary, fontSize: 14 }]}>All machines</Text>
+                      {isLoadingConvexTmux ? <ActivityIndicator size="small" color={c.accent} /> : null}
+                    </View>
+                    <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 8, lineHeight: 16 }}>
+                      {quicClient.isConnected
+                        ? "Runner seats on every box. Connect to a device to adopt its sessions."
+                        : "Every box's runner seats, open or closed. Connect to a device (Devices tab) to adopt and vibe."}
+                    </Text>
+                    {convexTmuxRows.map((r) => {
+                      const open = r.status === "open";
+                      const runnerSeat = isRunnerSeat(r);
+                      const chipBg = open && runnerSeat ? "#22c55e22" : open ? "#a1a1aa22" : "#f9731622";
+                      const chipColor = open && runnerSeat ? "#22c55e" : open ? "#a1a1aa" : "#f97316";
+                      const deviceLabel = r.deviceName || r.deviceId.slice(0, 8);
+                      return (
+                        <View
+                          key={`${r.deviceId}#${r.sessionName}`}
+                          style={[s.tmuxCard, { backgroundColor: c.bgCard, borderColor: c.border, padding: 10, marginBottom: 6 }]}
+                        >
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                            <View style={[s.statusBadge, { backgroundColor: chipBg }]}>
+                              <Text style={[s.statusText, { color: chipColor }]}>{r.runner}</Text>
+                            </View>
+                            <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600", flex: 1 }} numberOfLines={1}>
+                              {r.sessionName}
+                            </Text>
+                            <Text style={{ color: open ? "#22c55e" : "#f97316", fontSize: 11, fontWeight: "700", textTransform: "uppercase" }}>
+                              {r.status}
+                            </Text>
+                          </View>
+                          <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }} numberOfLines={1}>
+                            {deviceLabel}
+                            {r.deviceOnline ? " · online" : " · offline"}
+                            {open
+                              ? ` · seen ${timeAgo(r.lastSeenAt) ?? "just now"}`
+                              : ` · closed ${timeAgo(r.closedAt ?? r.lastSeenAt) ?? "just now"}`}
+                            {r.paneCount ? ` · ${r.paneCount} pane${r.paneCount !== 1 ? "s" : ""}` : ""}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ) : isLoadingConvexTmux && tmuxSessions.length === 0 ? (
+                  <View style={{ alignItems: "center", paddingTop: 20 }}>
+                    <ActivityIndicator size="small" color={c.accent} />
+                  </View>
+                ) : null}
                 {isLoadingTmux ? (
                   <View style={{ alignItems: "center", paddingTop: 40 }}>
                     <ActivityIndicator size="large" color={c.accent} />
@@ -7760,6 +7873,40 @@ export default function TasksScreen() {
                     );
                   })
                 )}
+                {(isLoadingConvexTmux || convexTmuxSessions.some(isRunnerSeat)) ? (
+                  <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: c.borderSubtle }}>
+                    <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: "700", textTransform: "uppercase", marginBottom: 8 }}>
+                      Runner seats
+                    </Text>
+                    {isLoadingConvexTmux && convexTmuxSessions.length === 0 ? (
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 6 }}>
+                        <ActivityIndicator size="small" color={c.accent} />
+                        <Text style={{ color: c.textMuted, fontSize: 12 }}>Checking machines...</Text>
+                      </View>
+                    ) : (
+                      convexTmuxSessions.filter(isRunnerSeat).slice(0, 8).map((session) => (
+                        <View
+                          key={`${session.deviceId}:${session.sessionName}:${session.paneId || session.sessionId || ""}`}
+                          style={[s.tmuxPaneActionRow, { borderColor: c.borderSubtle, marginBottom: 6 }]}
+                        >
+                          <View style={{ minWidth: 0, flex: 1 }}>
+                            <Text style={[s.tmuxPaneLabel, { color: c.textSecondary }]} numberOfLines={1}>
+                              {tmuxRunnerSessionLabel(session)}
+                            </Text>
+                            <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2 }} numberOfLines={1}>
+                              {session.deviceName || session.deviceId} · {session.deviceOnline ? "online" : "offline"} · {timeAgo(session.lastSeenAt)}
+                            </Text>
+                          </View>
+                          <View style={[s.statusBadge, { backgroundColor: session.status === "open" ? "#22c55e22" : "#a1a1aa22" }]}>
+                            <Text style={[s.statusText, { color: session.status === "open" ? "#22c55e" : "#a1a1aa" }]}>
+                              {session.status}
+                            </Text>
+                          </View>
+                        </View>
+                      ))
+                    )}
+                  </View>
+                ) : null}
               </ScrollView>
             </View>
           </View>

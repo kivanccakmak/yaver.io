@@ -51,8 +51,43 @@ fun WakeProgress(
             is BoxLifecycle.WakeStatus.Waking -> WakingView(phase = status.phase)
             is BoxLifecycle.WakeStatus.PhoneNeeded -> PhoneNeededView(onDismiss = onDismiss)
             is BoxLifecycle.WakeStatus.NeedsAuth -> NeedsAuthView(onDismiss = onDismiss)
+            is BoxLifecycle.WakeStatus.PendingPhone -> PendingPhoneView(onDismiss = onDismiss)
             is BoxLifecycle.WakeStatus.None -> Unit // caller shouldn't render this
         }
+    }
+}
+
+/**
+ * Phone-paired wake with no box URL: the wrist cannot confirm the box, so the
+ * phone drives the real resume and its reply here is the only honest READY.
+ * No spinner that claims progress it cannot measure — a flat, truthful line.
+ */
+@Composable
+private fun PendingPhoneView(onDismiss: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text = "Waking on your phone",
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.title3,
+            maxLines = 2,
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "It'll confirm here when the box answers",
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.caption2,
+            color = MaterialTheme.colors.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Chip(
+            label = { Text("Done") },
+            onClick = onDismiss,
+            colors = ChipDefaults.secondaryChipColors(),
+        )
     }
 }
 

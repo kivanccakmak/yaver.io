@@ -350,15 +350,31 @@ export type FeedbackWorkItem = {
 };
 
 async function placementFetch<T>(token: string, path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${CONVEX_URL}${path}`, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...(init.headers || {}),
-    },
-  });
+  // Bounded: a hung Convex placement action used to leave the dashboard's
+  // send button stuck on "…" forever (page.tsx awaits this before showing
+  // anything). 20s is plenty for a preview; degrade, don't deadlock.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  let res: Response;
+  try {
+    res = await fetch(`${CONVEX_URL}${path}`, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...(init.headers || {}),
+      },
+    });
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new Error("Timed out contacting the placement service after 20s.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
   if (!res.ok) {

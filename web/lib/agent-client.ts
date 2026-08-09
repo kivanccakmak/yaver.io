@@ -2251,10 +2251,25 @@ export class AgentClient {
     autoPush?: "never" | "ask" | "always" | "";
   }): Promise<Task> {
     this.assertConnected();
-    const res = await fetch(`${this.taskBaseUrl}/tasks`, {
-      method: "POST",
-      headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify(buildCreateTaskBody(params)),
+    // The create chain must be BOUNDED — a hung agent /tasks route used to
+    // leave the web dashboard's send button stuck on "…" forever (mobile's
+    // sendTask already carries a 30s timeout for the same reason). 30s is
+    // generous for task acceptance; the stream does the long tail.
+    const res = await this.fetchWithTimeout(
+      `${this.taskBaseUrl}/tasks`,
+      {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify(buildCreateTaskBody(params)),
+      },
+      30_000,
+    ).catch((err: any) => {
+      if (err?.name === "AbortError") {
+        throw new Error(
+          "Timed out waiting for the machine to accept the task after 30s. The box may be busy or unreachable — check its status dot and try again.",
+        );
+      }
+      throw err;
     });
     if (!res.ok) {
       const cloudRequired = await decodeCloudWorkspaceRequiredError(res);
@@ -2379,19 +2394,32 @@ export class AgentClient {
 
   async stopTask(taskId: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.taskBaseUrl}/tasks/${taskId}/stop`, {
-      method: "POST",
-      headers: this.authHeaders,
+    const res = await this.fetchWithTimeout(
+      `${this.taskBaseUrl}/tasks/${taskId}/stop`,
+      { method: "POST", headers: this.authHeaders },
+      15_000,
+    ).catch((err: any) => {
+      if (err?.name === "AbortError") throw new Error("Timed out stopping the task after 15s.");
+      throw err;
     });
     if (!res.ok) throw new Error(`Failed to stop task: ${res.status}`);
   }
 
   async continueTask(taskId: string, input: string): Promise<void> {
     this.assertConnected();
-    const res = await fetch(`${this.taskBaseUrl}/tasks/${taskId}/continue`, {
-      method: "POST",
-      headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ input }),
+    const res = await this.fetchWithTimeout(
+      `${this.taskBaseUrl}/tasks/${taskId}/continue`,
+      {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ input }),
+      },
+      30_000,
+    ).catch((err: any) => {
+      if (err?.name === "AbortError") {
+        throw new Error("Timed out sending the follow-up after 30s — the machine may be busy.");
+      }
+      throw err;
     });
     // 409 = the agent kept the prompt instead of spending it on a runner it
     // already knows cannot serve it. Not a failure — a promise. Keyed off the
@@ -2447,19 +2475,28 @@ export class AgentClient {
     args: { runner: string; model?: string; mode?: string; input: string; contextWords?: number; allowLocalFallback?: boolean; projectDir?: string; mcpServers?: string[] },
   ): Promise<{ taskId: string; runnerId: string; parentTaskId: string; contextWordsUsed: number }> {
     this.assertConnected();
-    const res = await fetch(`${this.taskBaseUrl}/tasks/${taskId}/fork`, {
-      method: "POST",
-      headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        runner: args.runner,
-        model: args.model ?? "",
-        mode: args.mode ?? "",
-        input: args.input,
-        contextWords: args.contextWords,
-        allowLocalFallback: args.allowLocalFallback ?? false,
-        projectDir: args.projectDir ?? "",
-        mcpServers: args.mcpServers ?? [],
-      }),
+    const res = await this.fetchWithTimeout(
+      `${this.taskBaseUrl}/tasks/${taskId}/fork`,
+      {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          runner: args.runner,
+          model: args.model ?? "",
+          mode: args.mode ?? "",
+          input: args.input,
+          contextWords: args.contextWords,
+          allowLocalFallback: args.allowLocalFallback ?? false,
+          projectDir: args.projectDir ?? "",
+          mcpServers: args.mcpServers ?? [],
+        }),
+      },
+      30_000,
+    ).catch((err: any) => {
+      if (err?.name === "AbortError") {
+        throw new Error("Timed out forking the task after 30s — the machine may be busy.");
+      }
+      throw err;
     });
     if (!res.ok) {
       const cloudRequired = await decodeCloudWorkspaceRequiredError(res);

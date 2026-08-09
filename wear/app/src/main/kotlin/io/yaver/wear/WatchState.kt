@@ -83,6 +83,10 @@ object WatchState {
      */
     fun applyReply(reply: WatchProtocol.Reply) {
         Speech.forReply(reply)
+        // A real reply from the phone/box means the wake has been answered on
+        // the phone's side — clear any lingering ladder state (incl. the
+        // PendingPhone hand-back) so the wrist returns to its normal record UI.
+        BoxLifecycle.reset()
         when (reply) {
             is WatchProtocol.Reply.Ack -> {
                 _line.value = reply.spoken
