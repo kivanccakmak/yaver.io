@@ -1,0 +1,23 @@
+# feature-blog-yaver-zero-reoauth — blog post: a fresh Yaver box arrives signed
+# in to Claude Code, Codex, and OpenCode.
+name: feature-blog-yaver-zero-reoauth
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /blog/yaver-zero-reoauth
+  - wait_for: h1
+  - assert.text: Zero re-OAuth
+  - assert.text: arrives signed in
+  - screenshot: true

@@ -35,6 +35,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { describeRawFailure, type NamedFailure } from "@/lib/rawFailure";
+import { assembleTrace } from "@/lib/_core/trace";
 
 export const RAW_FAILURE_EVENT = "yaver:raw-failure";
 
@@ -128,7 +129,17 @@ export default function RawFailureBanner({ onSignOut }: { onSignOut?: () => void
           <button
             type="button"
             onClick={() => {
-              void navigator.clipboard?.writeText(failure.raw).then(() => setCopied(true)).catch(() => {});
+              // Copy a full paste-ready trace (2026-08-09): surface identity,
+              // agent version, task/device context, the named error AND the
+              // raw blob — not just the raw bytes. Shared assembler from
+              // client-core so mobile copies the same shape.
+              const trace = assembleTrace({
+                surface: "web",
+                surfaceVersion: typeof document !== "undefined" ? document.title.split("·")[0]?.trim() || undefined : undefined,
+                error: `${failure.title}: ${failure.detail}${failure.action ? ` — ${failure.action}` : ""}`,
+                raw: failure.raw,
+              });
+              void navigator.clipboard?.writeText(trace).then(() => setCopied(true)).catch(() => {});
             }}
             className="rounded-md px-2 py-1 text-[11px] font-medium text-surface-400 hover:text-surface-200"
             title={failure.raw}

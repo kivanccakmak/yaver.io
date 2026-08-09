@@ -103,7 +103,11 @@ type RunnerConfig struct {
 	// plan / any custom agent the user has defined in their
 	// opencode.json config). Empty = runner default. Other runners
 	// ignore it.
-	Mode         string `json:"mode,omitempty"`
+	Mode string `json:"mode,omitempty"`
+	// Goal is the Yaver goal-mode objective (opencode goal plugin). When
+	// set on a task, startProcess wraps the opencode prompt so the runner
+	// opens a persistent goal (create_goal) and keeps working toward it.
+	Goal         string `json:"goal,omitempty"`
 	AutoDetected bool   `json:"-"` // true if user never explicitly chose a runner
 }
 
@@ -1049,6 +1053,15 @@ type TaskCreateOptions struct {
 	// changes the command semantics.
 	RawRunnerCommand bool
 
+	// Goal arms Yaver goal-mode on the task (opencode only, via the
+	// opencode-goal-plugin's create_goal tool / /goal command). When set, the
+	// opencode prompt frame is wrapped with the goal instruction so the
+	// runner opens a persistent goal and keeps working toward it across
+	// turns until complete/blocked/limited. Persisted on the Task + surfaced
+	// via TaskInfo.goal so every surface can render a Goal chip and drive
+	// /goal status|resume|clear.
+	Goal string
+
 	// Runner/render split fields — see the same-named Task fields and
 	// task_ensure_clone.go. Stripped for guests in the createTask handler.
 	GitRemote string
@@ -1122,7 +1135,10 @@ type Task struct {
 	GuestUserID string `json:"guestUserId,omitempty"` // set when task created by a guest
 	Model       string `json:"model,omitempty"`
 	RunnerID    string `json:"runnerId,omitempty"` // which runner is executing this task
-	SessionID   string `json:"session_id,omitempty"`
+	// Goal is the Yaver goal-mode objective (opencode goal plugin). Empty =
+	// one-shot task. Set = persistent goal the runner keeps working toward.
+	Goal      string `json:"goal,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
 	// ResumeLast asks startProcess to resume the prior session on the FIRST
 	// spawn (not just on follow-ups). Set by the scheduler when a recurring
 	// schedule with resume enabled re-fires, so the run picks up where the
@@ -1425,6 +1441,10 @@ type TaskInfo struct {
 	Description string     `json:"description"`
 	Status      TaskStatus `json:"status"`
 	RunnerID    string     `json:"runnerId,omitempty"`
+	// Goal is the Yaver goal-mode objective (opencode goal plugin). Empty =
+	// one-shot task; set = persistent goal. Surfaced so every surface can
+	// render a Goal chip + drive /goal status|resume|clear.
+	Goal string `json:"goal,omitempty"`
 	// Model is the model id the task launched with (claude-opus-4-7,
 	// gpt-5.4, "opus", etc.). Without this on the public Task API
 	// the mobile UI couldn't tell whether a task that's been around
@@ -1941,6 +1961,13 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		taskRunner.Mode = strings.TrimSpace(opts.Mode)
 	}
 
+	// Goal-mode objective (opencode goal plugin): persisted on the Task so
+	// every surface can render a Goal chip, and the opencode prompt frame
+	// wraps it into a create_goal call (startProcess). Empty = one-shot.
+	if strings.TrimSpace(opts.Goal) != "" {
+		taskRunner.Goal = strings.TrimSpace(opts.Goal)
+	}
+
 	if source == "" {
 		source = "mobile"
 	}
@@ -2010,6 +2037,7 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		Source:                      source,
 		Model:                       model,
 		RunnerID:                    taskRunner.RunnerID,
+		Goal:                        taskRunner.Goal,
 		runner:                      taskRunner,
 		CreatedAt:                   now,
 		outputCh:                    make(chan string, 512),
@@ -2831,6 +2859,19 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// claude takes the armed frame through --append-system-prompt; codex and
 	// opencode have no such channel and get it in band. Same bytes either way —
 	// composeTurn is the only assembler.
+	// Goal-mode (opencode goal plugin): when the task carries a goal
+	// objective, instruct the runner to open a persistent goal and keep
+	// working toward it — the plugin's create_goal tool + idle auto-continue
+	// keep the session alive across turns until complete/blocked/limited.
+	if task.Goal != "" && normalizeRunnerID(task.runner.RunnerID) == "opencode" && !rawRunnerCommand {
+		goalInstruction := "\n\n<yaver_goal>\n" +
+			"Open a persistent goal for this task using the create_goal tool with this objective:\n" +
+			"\"" + task.Goal + "\"\n" +
+			"Keep working toward the goal across turns until it is complete (with evidence), blocked, or a safety limit is reached. Report goal status when done.\n" +
+			"</yaver_goal>"
+		prompt = strings.TrimSpace(prompt) + goalInstruction
+	}
+
 	systemFrame, prompt := tm.composeTurn(task, prompt, promptFramePolicy{
 		ArmPreamble:        true,
 		RawRunnerCommand:   rawRunnerCommand,

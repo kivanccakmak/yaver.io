@@ -1,0 +1,23 @@
+# feature-add-device — /add-device: claim a device by QR/label. Unauthenticated
+# it deterministically renders "Sign in to claim a device." (auth-gated branch).
+name: feature-add-device
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /add-device
+  - wait_for: 'a[href="/auth"]'
+  - assert.text: Add a device
+  - assert.text: Sign in to claim a device.
+  - screenshot: true

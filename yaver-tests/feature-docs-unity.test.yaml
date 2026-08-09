@@ -1,0 +1,21 @@
+# feature-docs-unity — developer docs page /docs/unity (Unity integration).
+name: feature-docs-unity
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /docs/unity
+  - wait_for: h1
+  - assert.text: Unity
+  - screenshot: true

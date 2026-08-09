@@ -72,6 +72,7 @@ import RuntimeLabView, { type RuntimeLabIntent } from "@/components/dashboard/Ru
 import DevicesView, { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice, RUNNER_WHITELIST_SET, OPENCODE_PROVIDER_CATALOGUE, MODEL_OPTIONS_BY_RUNNER } from "@/components/dashboard/DevicesView";
 import { CapabilityShelf } from "@/components/dashboard/CapabilityShelf";
 import RawFailureBanner, { announceRawFailure } from "@/components/dashboard/RawFailureBanner";
+import { AnsiConsoleText, hasConsoleMarkup } from "@/components/dashboard/AnsiConsoleText";
 import { SessionDeathError } from "@/lib/rawFailure";
 import { isRelayCredentialDeny, RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
 import { usableTunnelUrls } from "@/lib/endpoints";
@@ -1035,10 +1036,20 @@ const ChatAssistantMsg = memo(function ChatAssistantMsg({
   // the transcript into one giant code block).
   const fenceCount = (head.match(/^```/gm) || []).length;
   const shown = collapsed ? (fenceCount % 2 === 1 ? `${head}\n\`\`\`` : head) : text;
+  // Console look (2026-08-09): when the assistant text carries opencode
+  // console shapes (ANSI escapes, `$` prompts, `> build` banners, git
+  // patches), render it through the shared ANSI console view instead of
+  // flattening to markdown — orange banners, green prompts, coloured
+  // patches, exactly as the terminal shows them.
+  const consoleMarkup = hasConsoleMarkup(shown);
   return (
     <div>
       <div className="prose-invert break-words [&_pre]:whitespace-pre-wrap">
-        <AssistantMarkdown text={shown} />
+        {consoleMarkup ? (
+          <AnsiConsoleText text={shown} />
+        ) : (
+          <AssistantMarkdown text={shown} />
+        )}
         {liveGrowing ? (
           <span className="ml-0.5 inline-block h-3 w-1.5 translate-y-[2px] animate-pulse bg-surface-300" aria-hidden />
         ) : null}
@@ -1910,12 +1921,25 @@ export default function DashboardPage() {
 
   // RawTermHandle lifecycle: null when the terminal unmounts, live handle
   // once xterm boots. Drains whatever accumulated while hidden/booting.
+  //
+  // BUG FIX (2026-08-09, e2e closed loop): this used to drain only the DELTA
+  // since the previous instance (`rawWrittenRef → buffer end`). That is
+  // correct while the SAME terminal stays mounted mid-run, but a fresh mount
+  // is a BLANK screen — and after the task finishes, toggling Chat → Terminal
+  // remounted an empty terminal forever: rawWrittenRef already equalled the
+  // buffer length (all bytes were painted to the OLD instance), so nothing
+  // drained, and the finished-task seed effect skipped because the buffer
+  // was non-empty. A new instance must RESET the cursor and replay the whole
+  // retained tail, exactly like a raw_replay full=true snapshot.
   const handleTerminalReady = useCallback((h: RawTermHandle) => {
     rawTermRef.current = h;
-    if (h && rawWrittenRef.current < rawBufRef.current.length) {
-      const tail = rawBufRef.current.slice(rawWrittenRef.current);
-      rawWrittenRef.current = rawBufRef.current.length;
-      h.write(tail);
+    if (h) {
+      rawWrittenRef.current = 0;
+      const full = rawBufRef.current;
+      if (full.length > 0) {
+        h.write(full);
+        rawWrittenRef.current = full.length;
+      }
     }
   }, []);
 
@@ -1928,35 +1952,44 @@ export default function DashboardPage() {
   // and the user can't type a follow-up. This effect re-finds the
   // active task in the polled list and syncs status / runnerId /
   // resultText / costUsd / turns whenever anything changed.
+  //
+  // BUG FIX (2026-08-09, e2e closed loop): this compared the RAW list row
+  // against activeTask, then stored FALLBACK values (placementId ||
+  // old placementId). The list endpoint strips placement fields, so the
+  // guard saw `undefined !== "abc"` forever while the set stored "abc" —
+  // setActiveTask every render → React "Maximum update depth exceeded"
+  // (thrown live in the dashboard during a task run). Compute the next
+  // value FIRST and compare the value that will actually be stored.
   useEffect(() => {
     if (!activeTask) return;
     const fresh = tasks.find((t) => t.id === activeTask.id);
     if (!fresh) return;
+    const next: typeof activeTask = {
+      ...fresh,
+      placementId: fresh.placementId || activeTask.placementId,
+      placementLane: fresh.placementLane || activeTask.placementLane,
+      placementReason: fresh.placementReason || activeTask.placementReason,
+      placementCreditLabel: fresh.placementCreditLabel || activeTask.placementCreditLabel,
+      pendingCloudBlockedAction: fresh.pendingCloudBlockedAction || activeTask.pendingCloudBlockedAction,
+      pendingCloudBlockedReason: fresh.pendingCloudBlockedReason || activeTask.pendingCloudBlockedReason,
+      pendingCloudExpiresAt: fresh.pendingCloudExpiresAt || activeTask.pendingCloudExpiresAt,
+      pendingCloudTargetDeviceId: fresh.pendingCloudTargetDeviceId || activeTask.pendingCloudTargetDeviceId,
+    };
     if (
-      fresh.status !== activeTask.status ||
-      fresh.resultText !== activeTask.resultText ||
-      fresh.costUsd !== activeTask.costUsd ||
-      fresh.turns?.length !== activeTask.turns?.length ||
-      fresh.placementId !== activeTask.placementId ||
+      next.status !== activeTask.status ||
+      next.resultText !== activeTask.resultText ||
+      next.costUsd !== activeTask.costUsd ||
+      next.turns?.length !== activeTask.turns?.length ||
+      next.placementId !== activeTask.placementId ||
       // Proof/video lifecycle transitions (capturing→ready/failed, clip id
       // arriving, stale flip) must re-render the TaskProofCard even when
       // status/resultText are already settled.
-      fresh.proofStatus !== activeTask.proofStatus ||
-      fresh.videoStatus !== activeTask.videoStatus ||
-      fresh.videoClipId !== activeTask.videoClipId ||
-      fresh.commitSha !== activeTask.commitSha
+      next.proofStatus !== activeTask.proofStatus ||
+      next.videoStatus !== activeTask.videoStatus ||
+      next.videoClipId !== activeTask.videoClipId ||
+      next.commitSha !== activeTask.commitSha
     ) {
-      setActiveTask({
-        ...fresh,
-        placementId: fresh.placementId || activeTask.placementId,
-        placementLane: fresh.placementLane || activeTask.placementLane,
-        placementReason: fresh.placementReason || activeTask.placementReason,
-        placementCreditLabel: fresh.placementCreditLabel || activeTask.placementCreditLabel,
-        pendingCloudBlockedAction: fresh.pendingCloudBlockedAction || activeTask.pendingCloudBlockedAction,
-        pendingCloudBlockedReason: fresh.pendingCloudBlockedReason || activeTask.pendingCloudBlockedReason,
-        pendingCloudExpiresAt: fresh.pendingCloudExpiresAt || activeTask.pendingCloudExpiresAt,
-        pendingCloudTargetDeviceId: fresh.pendingCloudTargetDeviceId || activeTask.pendingCloudTargetDeviceId,
-      });
+      setActiveTask(next);
     }
   }, [tasks, activeTask]);
 

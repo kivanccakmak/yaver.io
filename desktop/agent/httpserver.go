@@ -4616,6 +4616,7 @@ func (s *HTTPServer) taskInfoFromTask(task *Task, r *http.Request) TaskInfo {
 		Description: task.Description,
 		Status:      task.Status,
 		RunnerID:    task.RunnerID,
+		Goal:        task.Goal,
 		// Echo the model + deviceName so mobile UIs can render the
 		// task's authoritative target instead of inferring from the
 		// focused-device picker state.
@@ -4773,6 +4774,10 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		Model         string `json:"model"`
 		Runner        string `json:"runner"`         // runner ID: "claude", "codex", "opencode" — empty uses default
 		Mode          string `json:"mode,omitempty"` // runner-specific subcommand: opencode "build" / "plan" / custom agent
+		// Goal arms Yaver goal-mode (opencode goal plugin): a persistent
+		// objective the runner keeps working toward across turns instead of
+		// a one-shot task. Sent to opencode as a create_goal instruction.
+		Goal string `json:"goal,omitempty"`
 		CustomCommand string `json:"customCommand"`  // arbitrary command — runs via sh -c
 		// ProjectName is the portable project identity selected by the UI.
 		// The runner machine resolves it against its own checkouts; do not
@@ -5040,6 +5045,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		taskOpts.GuestSharedStorageMounts = mounts
 	}
 	taskOpts.Mode = strings.TrimSpace(body.Mode)
+	taskOpts.Goal = strings.TrimSpace(body.Goal)
 	// Video summary toggle propagates from request → task → OnTaskDone
 	// hook, where MaybeRecordTaskSummary fires the vibe-preview clip
 	// recorder when status flips to completed.
@@ -6796,6 +6802,9 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			// AskFreely opts the new task out of yaver's no-questions
 			// preamble + soft-question fallback (default false).
 			AskFreely bool `json:"ask_freely"`
+			// Goal arms Yaver goal-mode (opencode goal plugin): a persistent
+			// objective the runner keeps working toward across turns.
+			Goal string `json:"goal,omitempty"`
 		}
 		json.Unmarshal(call.Arguments, &args)
 		if args.Prompt == "" {
@@ -6812,6 +6821,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 				"runner":       strings.TrimSpace(args.Runner),
 				"model":        strings.TrimSpace(args.Model),
 				"mode":         strings.TrimSpace(args.Mode),
+				"goal":         strings.TrimSpace(args.Goal),
 				"videoEnabled": args.VideoEnabled,
 				"videoSource":  strings.TrimSpace(args.VideoSource),
 				"askFreely":    args.AskFreely,
@@ -6831,6 +6841,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		taskOpts := TaskCreateOptions{
 			Mode:         strings.TrimSpace(args.Mode),
+			Goal:         strings.TrimSpace(args.Goal),
 			VideoEnabled: args.VideoEnabled,
 			VideoSource:  strings.TrimSpace(args.VideoSource),
 			AskFreely:    args.AskFreely,

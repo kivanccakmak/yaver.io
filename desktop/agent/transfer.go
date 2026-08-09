@@ -48,6 +48,7 @@ type TransferTask struct {
 	CostUSD     float64           `json:"costUsd,omitempty"`
 	RunnerID    string            `json:"runnerId"`
 	Model       string            `json:"model,omitempty"`
+	Goal        string            `json:"goal,omitempty"` // opencode goal-mode objective, carried across transfer
 	WorkDir     string            `json:"workDir"`
 }
 
@@ -244,6 +245,7 @@ func ExportSession(tm *TaskManager, taskID string, opts ExportOptions) (*Transfe
 			ResultText:  task.ResultText,
 			CostUSD:     task.CostUSD,
 			RunnerID:    task.RunnerID,
+			Goal:        task.Goal,
 			WorkDir:     tm.workDir,
 		},
 	}

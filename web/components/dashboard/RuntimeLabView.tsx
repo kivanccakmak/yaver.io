@@ -38,6 +38,7 @@ import { StreamHealthNotice } from "./StreamHealthNotice";
 import { clampDevPct, formatDevProgressLine } from "@/lib/devEventLine";
 import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
 import { describeRunnerTurn } from "@/lib/runnerTurnHeartbeat";
+import { assembleTrace } from "@/lib/_core/trace";
 import { CONVEX_URL } from "@/lib/constants";
 import { useAuth } from "@/lib/use-auth";
 import type { Device } from "@/lib/use-devices";
@@ -2524,13 +2525,21 @@ export default function RuntimeLabView({
   const copyRuntimeConsole = useCallback(async () => {
     const text = log.length ? log.join("\n") : "No runtime operations yet.";
     try {
-      await navigator.clipboard.writeText(text);
+      // Full paste-ready trace (2026-08-09) — same shape mobile copies.
+      const trace = assembleTrace({
+        surface: "web",
+        surfaceVersion: typeof document !== "undefined" ? document.title.split("·")[0]?.trim() || undefined : undefined,
+        device: connectedDevice ? `${connectedDevice.name} (${connectedDevice.id})` : undefined,
+        relay: "configured",
+        logTail: text,
+      });
+      await navigator.clipboard.writeText(trace);
       setRuntimeConsoleCopied(true);
       window.setTimeout(() => setRuntimeConsoleCopied(false), 1400);
     } catch (err) {
       appendLog(`copy runtime console failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [appendLog, log]);
+  }, [appendLog, log, connectedDevice]);
 
   const copyTaskConsole = useCallback(async () => {
     const text = activeTaskStream?.lines.length
@@ -2538,13 +2547,26 @@ export default function RuntimeLabView({
       : activeTaskStream?.title || "";
     if (!text.trim()) return;
     try {
-      await navigator.clipboard.writeText(text);
+      const trace = assembleTrace({
+        surface: "web",
+        surfaceVersion: typeof document !== "undefined" ? document.title.split("·")[0]?.trim() || undefined : undefined,
+        device: connectedDevice ? `${connectedDevice.name} (${connectedDevice.id})` : undefined,
+        task: activeTaskStream
+          ? {
+              id: activeTaskStream.id,
+              status: activeTaskStream.status,
+              title: activeTaskStream.title,
+            }
+          : undefined,
+        logTail: text,
+      });
+      await navigator.clipboard.writeText(trace);
       setTaskConsoleCopied(true);
       window.setTimeout(() => setTaskConsoleCopied(false), 1400);
     } catch (err) {
       appendLog(`copy chat output failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [activeTaskStream?.lines, activeTaskStream?.title, appendLog]);
+  }, [activeTaskStream?.lines, activeTaskStream?.title, activeTaskStream?.id, activeTaskStream?.status, appendLog, connectedDevice]);
 
   useEffect(() => {
     void loadProjects();

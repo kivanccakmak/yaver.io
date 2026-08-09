@@ -38,6 +38,10 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 						"type":        "string",
 						"description": "Runner-specific subcommand. Currently honored by opencode where it maps to `--agent <mode>` — typically 'build' or 'plan', or any custom agent defined in the user's opencode.json. Other runners ignore it.",
 					},
+					"goal": map[string]interface{}{
+						"type":        "string",
+						"description": "Yaver goal-mode objective (opencode goal plugin). When set, the task runs as a persistent goal the opencode runner keeps working toward across turns (create_goal + idle auto-continue) until complete with evidence, blocked, or a safety limit. Empty = one-shot task. Requires the opencode-goal-plugin to be installed on the runner machine.",
+					},
 					"video_enabled": map[string]interface{}{
 						"type":        "boolean",
 						"description": "Toggle the post-completion video summary. When true, after the task finishes the agent records a short MP4 demonstrating the running result via vibe-preview (sim/emulator MP4 for mobile, browser frame burst for web). The mobile + web task views render a '▶ Watch demo' button. Default false.",

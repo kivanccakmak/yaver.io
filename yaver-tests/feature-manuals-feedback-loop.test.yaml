@@ -1,0 +1,22 @@
+# feature-manuals-feedback-loop — manual: visual feedback loop.
+name: feature-manuals-feedback-loop
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /manuals/feedback-loop
+  - wait_for: h1
+  - assert.text: Visual Feedback Loop
+  - assert.text: Bug Reports from Your Phone
+  - screenshot: true

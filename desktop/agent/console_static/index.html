@@ -404,6 +404,7 @@ window.showTaskRaw = async (id) => {
         <span class="name">${task.title || task.id}</span>
         <span class="muted">${task.runnerId || ''}</span>` : `<span class="muted">${id}</span>`}
         <button class="act" id="rawToggleBtn" onclick="taskRawToggleLive('${id}')">▶ Live</button>
+        <button class="act" onclick="taskRawCopy('${id}')">Copy</button>
         <span class="muted" id="rawStatus"></span>
       </div>
       <pre class="terminal-screen" id="rawScreen"></pre>
@@ -419,6 +420,32 @@ window.taskRawToggleLive = (id) => {
   const btn = document.getElementById("rawToggleBtn");
   if (btn) btn.textContent = taskRawLive ? "⏸ Tail" : "▶ Live";
   taskRawSubscribe(id);
+};
+
+// Copy the current raw tail as a paste-ready trace (2026-08-09) — same
+// shape the web/mobile surfaces copy, so a console diagnosis pastes into
+// the same issue format.
+window.taskRawCopy = (id) => {
+  const text = taskRawBuffer || "";
+  const header = [
+    "--- Yaver trace ---",
+    "surface: console",
+    "task: " + id,
+    "log-tail:",
+    text,
+  ].join("\n");
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(header).then(() => {
+      taskRawStatus("copied " + text.length + " bytes");
+    }).catch(() => taskRawStatus("copy failed"));
+  } else {
+    const ta = document.createElement("textarea");
+    ta.value = header;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); taskRawStatus("copied " + text.length + " bytes"); } catch (e) { taskRawStatus("copy failed: " + e.message); }
+    document.body.removeChild(ta);
+  }
 };
 
 async function renderContainers() {

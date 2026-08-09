@@ -3291,6 +3291,27 @@ export default function VibeCodingView({
                         <div className="text-[13px] leading-6 break-words [&_pre]:whitespace-pre-wrap">
                           <AssistantMarkdown text={visible} />
                         </div>
+                        {terminallyFailed ? (
+                          // Copy trace (2026-08-09): a failed vibe run copies a
+                          // paste-ready trace (surface+task+error+output) so a
+                          // follow-up prompt or a bug report starts with evidence.
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const trace = [
+                                "--- Yaver trace ---",
+                                "surface: vibe",
+                                `task: ${activeTask.id} status=${activeTask.status} runner=${activeTask.runnerId || ""} model=${activeTask.model || ""}`,
+                                "log-tail:",
+                                visible,
+                              ].join("\n");
+                              void navigator.clipboard?.writeText(trace).catch(() => {});
+                            }}
+                            className="mt-2 rounded-md border border-surface-700 bg-surface-900 px-2 py-1 text-[11px] font-semibold text-surface-300 hover:border-surface-500 hover:text-surface-100"
+                          >
+                            Copy trace
+                          </button>
+                        ) : null}
                         {note ? (
                           // Say what was set aside and why. Silence would be its
                           // own defect — the user watched something scroll past

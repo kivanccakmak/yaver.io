@@ -1,0 +1,25 @@
+# feature-blog-cloudflare-tunnels-shared-boxes — legacy blog slug that 307s to
+# /blog/yaver-relay-shared-boxes (web/app/blog/cloudflare-tunnels-shared-boxes/
+# page.tsx redirects). goto follows the redirect; the target page's h1 is the
+# trust-boundary post title.
+name: feature-blog-cloudflare-tunnels-shared-boxes
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /blog/cloudflare-tunnels-shared-boxes
+  - wait_for: h1
+  - assert.url: /blog/yaver-relay-shared-boxes
+  - assert.text: Yaver Relay, Shared Boxes, and the Real Trust Boundary
+  - screenshot: true

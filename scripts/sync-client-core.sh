@@ -18,6 +18,7 @@ SRC="$REPO_ROOT/shared/client-core/src"
 MIRRORS=(
   "mobile/src/_core"
   "sdk/feedback/react-native/src/_core"
+  "web/lib/_core"
 )
 
 mode="write"

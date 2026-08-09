@@ -5380,35 +5380,31 @@ func checkAutoUpdateGated(cfg *Config, gate func(latestVersion string) updateWin
 		}
 	}
 
-	// Backup the current binary so we have a rollback path. Best-
-	// effort: a missing previous file shouldn't block the update.
-	backupPath := exePath + ".previous"
-	_ = os.Remove(backupPath)
-	if err := copyFile(exePath, backupPath); err != nil {
-		log.Printf("[auto-update] (warn) backup of running binary failed: %v", err)
-	}
-
-	emitAgentUpdate("replace", "Replacing running binary at %s", exePath)
-	if err := os.Rename(tmpPath, exePath); err != nil {
+	// INSTALL TO A FRESH VERSIONED DIR, NEVER IN-PLACE OVER THE RUNNING
+	// BINARY. This is a hard product rule, learned the expensive way on
+	// 2026-08-09: auto-update used to `os.Rename(tmpPath, exePath)` where
+	// exePath was os.Executable() — which, when launched through
+	// ~/.yaver/bin/current/<platform>/yaver, resolves into the versioned
+	// dir `current` points at. Overwriting that file in place while the
+	// process runs from it POISONS the path on macOS 26's code-signing
+	// monitor: every subsequent exec of that path gets
+	// SIGKILL "Code Signature Invalid" (exit 137, taskgated), while the
+	// byte-identical binary in a fresh dir execs fine. Every runner MCP
+	// config and the launchd/systemd unit exec `current/...`, so a single
+	// in-place update silently killed every MCP handshake ("MCP client for
+	// `yaver` failed to start: handshaking with MCP server failed:
+	// connection closed") and every restart of the box's own agent.
+	//
+	// The correct shape: write the new bytes to a NEW versioned dir
+	// ~/.yaver/bin/<version>/<platform>/yaver, exec-probe THAT path (the
+	// OS will SIGKILL a poisoned binary at probe time, before we commit),
+	// then atomically repoint `current` at the new dir and exec the new
+	// path. The old versioned dir stays on disk untouched as the rollback.
+	installPath, _, repointErr := installVersionedAgentBinary(exePath, tmpPath, latestVersion)
+	if repointErr != nil {
 		os.Remove(tmpPath)
-		emitAgentUpdate("error", "Failed to replace binary: %v", err)
+		emitAgentUpdate("error", "Failed to install versioned binary: %v", repointErr)
 		return
-	}
-
-	// On macOS, re-adhoc-sign the freshly-placed binary. The release
-	// tarballs are adhoc-signed by `go build` but the kernel rejects
-	// a Mach-O whose on-disk bytes don't match the embedded signature
-	// with "load code signature error 2" → SIGKILL on first exec.
-	// Rebuilding the adhoc signature against the current bytes
-	// guarantees the next exec (including the systemd/launchd restart
-	// below) will not be killed by the kernel.
-	if runtime.GOOS == "darwin" {
-		if out, err := osexec.Command("codesign", "--force", "--sign", "-", exePath).CombinedOutput(); err != nil {
-			log.Printf("[auto-update] (warn) codesign adhoc re-sign failed: %v — %s", err, strings.TrimSpace(string(out)))
-		}
-		// Also strip quarantine just in case the tarball round-trip
-		// re-applied it. Best-effort; ignore errors.
-		_ = osexec.Command("xattr", "-dr", "com.apple.quarantine", exePath).Run()
 	}
 
 	emitAgentUpdate("restart", "Updated to v%s — restarting in 1s for the new binary to take effect", latestVersion)
@@ -5431,7 +5427,10 @@ func checkAutoUpdateGated(cfg *Config, gate func(latestVersion string) updateWin
 	//     Don't exit from under them — they'll see the "take effect
 	//     on next restart" line and can CTRL-C when they like.
 	// Re-exec into the new binary IN PLACE rather than exiting and hoping a
-	// supervisor respawns us.
+	// supervisor respawns us. execArgv uses installPath (the NEW versioned
+	// binary), never the old exePath: the old path is the one the code-signing
+	// monitor may have poisoned if a previous in-place update ever ran, and
+	// exec'ing it would restart onto a binary the kernel refuses to launch.
 	//
 	// 2026-07-20: an agent updated itself, logged "Running under launchd —
 	// exiting for automatic restart", exited — and nothing restarted it. Port
@@ -5449,9 +5448,9 @@ func checkAutoUpdateGated(cfg *Config, gate func(latestVersion string) updateWin
 	// so it is correct whether or not a supervisor exists — launchd/systemd see
 	// a live process and stay happy, and an unsupervised process still comes
 	// back on the new code. There is no window in which nothing is serving.
-	execArgv := append([]string{exePath}, os.Args[1:]...)
-	log.Println("[auto-update] Re-executing into the new binary (same pid, no supervisor required).")
-	if err := syscall.Exec(exePath, execArgv, os.Environ()); err != nil {
+	execArgv := append([]string{installPath}, os.Args[1:]...)
+	log.Printf("[auto-update] Re-executing into the new binary (same pid, no supervisor required): %s", installPath)
+	if err := syscall.Exec(installPath, execArgv, os.Environ()); err != nil {
 		// Exec failed, so we are still the old binary and still serving. Only
 		// now consider exiting, and only when a supervisor is PROVEN — never on
 		// the orphan heuristic that caused the outage above.
@@ -5468,9 +5467,207 @@ func checkAutoUpdateGated(cfg *Config, gate func(latestVersion string) updateWin
 	}
 }
 
+// installVersionedAgentBinary is the ONLY way auto-update may place a new
+// binary. It installs to a fresh versioned dir (~/.yaver/bin/<ver>/<plat>/),
+// exec-probes that path, and only then atomically repoints the `current`
+// symlink at the new dir. It NEVER writes over the running binary's file.
+//
+// Returns the new install path, the previous `current` target ("" when it did
+// not exist), and an error. On error the old binary + old `current` target are
+// left exactly as they were — rollback is not a step, it is the default.
+//
+// Why versioned + repoint (2026-08-09, macOS 26 code-signing monitor):
+// replacing the file behind `current` in place while the agent runs from it
+// makes taskgated SIGKILL every later exec of that path ("Code Signature
+// Invalid", exit 137) even when the bytes are valid — the box's own restarts
+// and every runner MCP handshake died until the symlink was repointed at a
+// fresh dir. Writing a NEW dir and repointing `current` keeps the old version
+// dir untouched on disk (rollback = repoint back) and never touches the
+// running file.
+func installVersionedAgentBinary(exePath, tmpPath, newVersion string) (installPath, prevCurrent string, err error) {
+	home, herr := os.UserHomeDir()
+	if herr != nil || strings.TrimSpace(exePath) == "" {
+		return "", "", fmt.Errorf("cannot resolve home or executable path: %v", herr)
+	}
+	binDir := filepath.Join(home, ".yaver", "bin")
+
+	// Derive the platform segment exactly as the npm launcher does
+	// (~/.yaver/bin/<version>/<platform>/yaver), e.g. darwin-arm64,
+	// linux-amd64. On Windows the layout uses the same pattern via the
+	// launcher; fall back to GOOS-GOARCH which matches what postinstall.js
+	// writes.
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	if seg := platformSegmentFromExePath(exePath); seg != "" {
+		platform = seg
+	}
+
+	versionDir := filepath.Join(binDir, newVersion)
+	installPath = filepath.Join(versionDir, platform, "yaver")
+	if runtime.GOOS == "windows" && !strings.HasSuffix(installPath, ".exe") {
+		installPath += ".exe"
+	}
+
+	// Record the current symlink target BEFORE we touch anything, so we can
+	// both report it and (conceptually) roll back to it.
+	currentLink := filepath.Join(binDir, "current")
+	if cur, rerr := os.Readlink(currentLink); rerr == nil {
+		prevCurrent = cur
+	}
+
+	// Place the new binary into a FRESH dir. The old versioned dirs (and the
+	// running binary) are never modified, so a poisoned path can never be
+	// created and rollback is always one symlink repoint away.
+	if err := os.MkdirAll(filepath.Dir(installPath), 0o755); err != nil {
+		return "", prevCurrent, fmt.Errorf("mkdir %s: %w", filepath.Dir(installPath), err)
+	}
+	if err := os.Rename(tmpPath, installPath); err != nil {
+		os.Remove(tmpPath)
+		return "", prevCurrent, fmt.Errorf("place binary at %s: %w", installPath, err)
+	}
+
+	// macOS: re-adhoc-sign the freshly-placed binary. The release tarballs
+	// are adhoc-signed by `go build` but the kernel rejects a Mach-O whose
+	// on-disk bytes don't match the embedded signature with
+	// "load code signature error 2" → SIGKILL on first exec. Rebuilding the
+	// adhoc signature against the current bytes guarantees the probe below
+	// (and every later exec) will not be killed by the kernel.
+	if runtime.GOOS == "darwin" {
+		if out, cerr := osexec.Command("codesign", "--force", "--sign", "-", installPath).CombinedOutput(); cerr != nil {
+			log.Printf("[auto-update] (warn) codesign adhoc re-sign failed: %v — %s", cerr, strings.TrimSpace(string(out)))
+		}
+		// Also strip quarantine just in case the tarball round-trip
+		// re-applied it. Best-effort; ignore errors.
+		_ = osexec.Command("xattr", "-dr", "com.apple.quarantine", installPath).Run()
+	}
+
+	// EXEC-PROBE THE NEW PATH BEFORE COMMITTING. The OS kills a poisoned
+	// binary at probe time (SIGKILL / non-zero exit), which is exactly when
+	// we still have the old `current` untouched and can abort cleanly. This
+	// is the "probe the operation, never the inventory" rule applied to the
+	// update itself: bytes on disk are inventory; a clean launch is the
+	// operation.
+	if !probeAgentBinary(installPath, newVersion) {
+		os.Remove(installPath)
+		return "", prevCurrent, fmt.Errorf("exec probe failed for %s (kernel rejected the binary — see crash reports); old binary left untouched", installPath)
+	}
+
+	// Atomically repoint `current` at the new version dir. tmp-link + rename
+	// (the same pattern ensureStableAutoStartExecutable uses) so there is no
+	// window where `current` does not exist.
+	tmpLink := currentLink + ".tmp-link"
+	_ = os.Remove(tmpLink)
+	if err := os.Symlink(versionDir, tmpLink); err != nil {
+		return "", prevCurrent, fmt.Errorf("create tmp link: %w", err)
+	}
+	if err := os.Rename(tmpLink, currentLink); err != nil {
+		_ = os.Remove(tmpLink)
+		return "", prevCurrent, fmt.Errorf("repoint %s: %w", currentLink, err)
+	}
+	log.Printf("[auto-update] Repointed %s → %s (prev: %s)", currentLink, versionDir, prevCurrent)
+	return installPath, prevCurrent, nil
+}
+
+// platformSegmentFromExePath pulls the <platform> segment out of a path shaped
+// like ~/.yaver/bin/<version>/<platform>/yaver. Returns "" when the path does
+// not match that layout, in which case the caller falls back to GOOS-GOARCH.
+func platformSegmentFromExePath(exePath string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	base := filepath.Join(home, ".yaver", "bin")
+	rel, rerr := filepath.Rel(base, exePath)
+	if rerr != nil || strings.HasPrefix(rel, "..") {
+		return ""
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) >= 3 && parts[0] != "" {
+		return parts[1]
+	}
+	return ""
+}
+
+// probeAgentBinary runs `yaver version` against a freshly-placed binary and
+// requires BOTH a zero exit and the expected version string. A poisoned or
+// otherwise non-executable binary fails one or both, so the caller can abort
+// the update while the old installation is still intact.
+func probeAgentBinary(path, wantVersion string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := osexec.CommandContext(ctx, path, "version")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("[auto-update] exec probe FAILED for %s: %v (out=%q)", path, err, strings.TrimSpace(string(out)))
+		return false
+	}
+	if !strings.Contains(string(out), wantVersion) {
+		log.Printf("[auto-update] exec probe version mismatch for %s: want %q got %q", path, wantVersion, strings.TrimSpace(string(out)))
+		return false
+	}
+	return true
+}
+
+// resolveCurrentAgentBinary resolves ~/.yaver/bin/current/<platform>/yaver to
+// its real path. Returns ("", "") when the symlink or binary is missing.
+// `cur` is the raw symlink target (the versioned dir name), `resolved` the
+// fully-resolved executable path.
+func resolveCurrentAgentBinary() (resolved, cur string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", ""
+	}
+	currentLink := filepath.Join(home, ".yaver", "bin", "current")
+	cur, err = os.Readlink(currentLink)
+	if err != nil {
+		return "", ""
+	}
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	if seg := platformSegmentFromExePath(os.Args[0]); seg != "" {
+		platform = seg
+	}
+	candidate := filepath.Join(currentLink, platform, "yaver")
+	if runtime.GOOS == "windows" {
+		candidate += ".exe"
+	}
+	// The binary might sit directly under `current` (npm launcher layout) or
+	// under a nested platform dir — try both.
+	for _, p := range []string{candidate, filepath.Join(currentLink, "yaver")} {
+		if info, serr := os.Stat(p); serr == nil && !info.IsDir() {
+			if r, rerr := filepath.EvalSymlinks(p); rerr == nil {
+				return r, cur
+			}
+			return p, cur
+		}
+	}
+	return "", cur
+}
+
+// newestInstalledAgentVersion scans ~/.yaver/bin/<version>/ dirs and returns
+// the highest semver present, "" when none are.
+func newestInstalledAgentVersion() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	binDir := filepath.Join(home, ".yaver", "bin")
+	entries, rerr := os.ReadDir(binDir)
+	if rerr != nil {
+		return ""
+	}
+	best := ""
+	for _, e := range entries {
+		if !e.IsDir() || !semver.IsValid("v"+e.Name()) {
+			continue
+		}
+		if best == "" || semver.Compare("v"+e.Name(), "v"+best) > 0 {
+			best = e.Name()
+		}
+	}
+	return best
+}
+
 // isSupervisedByLaunchd reports whether launchd will respawn this process if it
 // exits. Only signals that PROVE launchd owns us count.
-//
 // This used to also return true when getppid() == 1, described as "classic
 // launchd-owned parent". That check is wrong and it cost a user their agent on
 // 2026-07-20: a process started with nohup whose parent shell had exited was
@@ -6789,6 +6986,40 @@ func runDoctor() {
 		pass(fmt.Sprintf("%s (up to date)", version))
 	} else {
 		pass(fmt.Sprintf("%s (could not check for updates)", version))
+	}
+
+	// 1b. Binary path — the `current` symlink every supervisor and MCP
+	// config execs. 2026-08-09: auto-update replaced the binary behind
+	// `current` in place while running; macOS's code-signing monitor then
+	// SIGKILLed every later exec of that path (exit 137), killing the box's
+	// own restarts and every runner MCP handshake ("connection closed")
+	// until the symlink was repointed at a fresh dir. Doctor must make that
+	// state self-evident: resolve `current`, probe it, and say which version
+	// it actually points at vs which is newest on disk.
+	fmt.Println("\n── Binary path ──")
+	check("current symlink")
+	if resolved, cur := resolveCurrentAgentBinary(); resolved == "" {
+		warning("~/.yaver/bin/current missing or unreadable — supervisors and MCP configs exec this path")
+	} else {
+		pass(fmt.Sprintf("→ %s", resolved))
+		check("current exec probe")
+		// The probe must compare against the version the `current` DIRECTORY
+		// claims (e.g. "1.99.409"), not the doctor process's own build
+		// version — a dev-built doctor run against the installed agent would
+		// otherwise flag a healthy binary as poisoned (dev build says
+		// 1.99.285, installed says 1.99.409).
+		curVersion := filepath.Base(cur)
+		if probeAgentBinary(resolved, curVersion) {
+			pass("launches cleanly (version matches its directory)")
+		} else {
+			failed("binary at current FAILS to exec or version-mismatches — the code-signing-monitor poisoning signature; repoint current at a fresh versioned dir (npm install -g yaver-cli@latest) and restart the agent")
+		}
+		check("current is newest")
+		if newest := newestInstalledAgentVersion(); newest != "" && newest != curVersion {
+			warning(fmt.Sprintf("current points at %s but %s is installed (stale symlink)", curVersion, newest))
+		} else {
+			pass(fmt.Sprintf("%s is the newest installed", curVersion))
+		}
 	}
 
 	// 2. Auth

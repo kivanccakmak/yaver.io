@@ -599,6 +599,21 @@ func autorunRunsClaudeBinary(runner RunnerConfig) bool {
 	return normalizeRunnerID(runner.RunnerID) == "claude"
 }
 
+// autorunSupportsGoalCommand reports whether the runner can take a `/goal`
+// slash command in its TUI. claude has native /goal; opencode gains it via the
+// opencode-goal-plugin (which registers the command — see
+// https://github.com/prevalentWare/opencode-goal-plugin). codex has neither.
+// Autorun arming is best-effort: if the plugin is not installed on the box,
+// the literal text lands harmlessly as a prompt line (guarded by
+// autorunTmuxSetGoal's fresh-session-only gate).
+func autorunSupportsGoalCommand(runner RunnerConfig) bool {
+	switch normalizeRunnerID(runner.RunnerID) {
+	case "claude", "opencode":
+		return true
+	}
+	return false
+}
+
 // autorunUsesTmux reports whether this runner must be driven as a TUI. claude's
 // headless `-p` reports "OAuth session expired" while its TUI works, so driving
 // it any other way cannot succeed.

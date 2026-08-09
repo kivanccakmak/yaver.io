@@ -56,6 +56,8 @@ import TaskTargetWizard, { type TaskTarget } from "../../src/components/TaskTarg
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import type { ThemeColors } from "../../src/constants/colors";
 import XtermView, { type XtermHandle } from "../../src/components/XtermView";
+import { AnsiConsoleText, hasConsoleMarkup } from "../../src/components/AnsiConsoleText";
+import { assembleTrace } from "../../src/_core/trace";
 import { appTag } from "../../src/lib/appVersion";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
@@ -983,6 +985,12 @@ function ChatBubbleImpl({
   const renderedMarkdown = showRaw
     ? turn.content
     : (expanded || !preview.shouldCollapse ? preview.cleaned : collapsedMarkdown);
+  // Console look (2026-08-09): opencode streams raw ANSI (`$` prompts,
+  // `> build` banners, git patches). When the content carries console
+  // shapes, render it through the shared ANSI console view instead of
+  // flattening to markdown — orange banners, green prompts, coloured
+  // patches, same grammar as web and the terminal view.
+  const consoleMarkup = hasConsoleMarkup(showRaw ? turn.content : turn.content);
 
   return (
     <View style={s.assistantRow}>
@@ -1012,6 +1020,8 @@ function ChatBubbleImpl({
               </Text>
             </View>
           </View>
+        ) : consoleMarkup ? (
+          <AnsiConsoleText text={showRaw ? turn.content : renderedMarkdown} />
         ) : (
           <Markdown style={markdownStyles(c)}>
             {renderedMarkdown || " "}
@@ -1639,8 +1649,22 @@ function LogsPanelContent({
           <Text style={[s.logsTitle, { color: c.textPrimary }]}>{selectedTask ? "Live Logs" : "Connection Logs"}</Text>
           <View style={s.logsHeaderActions}>
             <Pressable onPress={() => {
-              ExpoClipboard.setStringAsync(combinedLogText || "No logs yet.");
-              Alert.alert("Copied", "Logs copied to clipboard.");
+              // Full paste-ready trace (2026-08-09) — same shape web copies.
+              const trace = assembleTrace({
+                surface: "mobile",
+                task: selectedTask
+                  ? {
+                      id: selectedTask.id,
+                      status: selectedTask.status,
+                      runner: selectedTask.runnerId,
+                      title: selectedTask.title,
+                    }
+                  : undefined,
+                error: selectedTask ? extractTaskErrorMessage(selectedTask) : undefined,
+                logTail: combinedLogText || "No logs yet.",
+              });
+              ExpoClipboard.setStringAsync(trace || "No logs yet.");
+              Alert.alert("Copied", "Trace copied to clipboard.");
             }}>
               <Text style={[s.logsActionText, { color: c.accent }]}>Copy</Text>
             </Pressable>
@@ -2763,17 +2787,29 @@ export default function TasksScreen() {
 
   // Drain whatever accumulated while the terminal was unmounted (Chat view)
   // or not yet booted, then refit. Wired to XtermView's onReady.
+  //
+  // BUG FIX (2026-08-09, e2e closed loop, parity with web): this used to
+  // drain only the DELTA since the previous instance (`rawWrittenRef →
+  // buffer end`). Correct while the SAME terminal stays mounted, but a fresh
+  // mount is a BLANK screen — toggling Chat → Terminal mid-run remounted an
+  // empty terminal: rawWrittenRef already equalled the buffer length (all
+  // bytes were painted to the OLD instance), so nothing drained and the new
+  // xterm stayed blank until the next live chunk. A new instance must RESET
+  // the cursor and replay the whole retained tail, like a raw_replay
+  // full=true snapshot. onReady only fires once per mount, so this can never
+  // double-write into a live instance.
   const drainRawToTerminal = useCallback(() => {
     const x = xtermRef.current;
     if (!x) return;
-    if (rawWrittenRef.current < rawBufRef.current.length) {
-      const tail = rawBufRef.current.slice(rawWrittenRef.current);
-      rawWrittenRef.current = rawBufRef.current.length;
+    rawWrittenRef.current = 0;
+    const full = rawBufRef.current;
+    if (full.length > 0) {
       try {
-        x.write(new TextEncoder().encode(tail));
+        x.write(new TextEncoder().encode(full));
       } catch {
-        // best-effort
+        // best-effort — the buffer is authoritative
       }
+      rawWrittenRef.current = full.length;
     }
     try {
       x.fit();
@@ -6104,46 +6140,87 @@ export default function TasksScreen() {
                   <Text style={{ color: c.textMuted, fontSize: 10 }}>▾</Text>
                 </Pressable>
               </View>
-              <View
-                style={[
-                  s.composerShell,
-                  {
+                <View style={[s.composerShell, {
                     backgroundColor: c.bg,
                     borderColor: c.border,
                   },
-                ]}
-              >
-                <TextInput
-                  style={[s.input, s.inputMultiline, s.composerInput, { color: c.textPrimary }]}
-                  placeholder={tasks.length > 0 ? "Send another command…" : "What should the agent do?"}
-                  placeholderTextColor={c.textMuted}
-                  value={newTaskText}
-                  onChangeText={(t) => { setNewTaskText(t); setInputFromSpeech(false); }}
-                  multiline numberOfLines={4} textAlignVertical="top" autoFocus
-                />
-                {isTranscribing && (
-                  <View style={s.transcribingRow}>
-                    <ActivityIndicator size="small" color={c.accent} />
-                    <Text style={{ color: c.textMuted, fontSize: 12, marginLeft: 8 }}>Transcribing...</Text>
+                ]}>
+                  <TextInput
+                    style={[s.input, s.inputMultiline, s.composerInput, { color: c.textPrimary }]}
+                    placeholder={tasks.length > 0 ? "Send another command…" : "What should the agent do?"}
+                    placeholderTextColor={c.textMuted}
+                    value={newTaskText}
+                    onChangeText={(t) => { setNewTaskText(t); setInputFromSpeech(false); }}
+                    multiline numberOfLines={4} textAlignVertical="top" autoFocus
+                  />
+                  {isTranscribing && (
+                    <View style={s.transcribingRow}>
+                      <ActivityIndicator size="small" color={c.accent} />
+                      <Text style={{ color: c.textMuted, fontSize: 12, marginLeft: 8 }}>Transcribing...</Text>
+                    </View>
+                  )}
+                  {reloadFlash && (
+                    <View style={s.transcribingRow}>
+                      <Ionicons name="flash" size={14} color={c.accent} />
+                      <Text style={{ color: c.textMuted, fontSize: 12, marginLeft: 8 }}>{reloadFlash}</Text>
+                    </View>
+                  )}
+                  {attachedImages.length > 0 && (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.attachmentStrip}>
+                      {attachedImages.map((img, i) => (
+                        <View key={i} style={s.attachmentPreviewWrap}>
+                          <Image source={{ uri: `data:${img.mimeType};base64,${img.base64}` }} style={s.attachmentPreviewImage} />
+                          <Pressable onPress={() => setAttachedImages((prev) => prev.filter((_, idx) => idx !== i))} style={[s.attachmentRemove, { backgroundColor: c.error }]}>
+                            <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>×</Text>
+                          </Pressable>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  )}
+                  {/* OpenCode quick Build|Plan mode — the two common agents,
+                      one tap, persisted to the device the task runs on. Custom
+                      agents / Default stay in the task-configuration sheet's
+                      OPENCODE AGENT rail. Mirrors the web dashboard's compact
+                      segmented control (2026-08-09). Sends `--agent <mode>`
+                      via taskParams.mode in handleCreateTask. */}
+                  {normalizeTaskRunnerId(resolveRunnerForSend() ?? "") === "opencode" && (
+                  <View style={[s.composerModeRow, { borderColor: withAlpha(c.border, "cc") }]}>
+                    <Text style={[s.composerModeLabel, { color: c.textMuted }]}>Mode</Text>
+                    <View style={s.composerModeSegmented}>
+                      {(["build", "plan"] as const).map((mode) => {
+                        const active = selectedOpenCodeMode === mode;
+                        return (
+                          <Pressable
+                            key={mode}
+                            onPress={() => {
+                              taskHaptics.send();
+                              setSelectedOpenCodeMode(mode);
+                              if (activeDevice?.id) {
+                                void setPrimaryRunnerForDevice(
+                                  activeDevice.id,
+                                  "opencode",
+                                  selectedModel || null,
+                                  mode,
+                                ).catch(() => {});
+                              }
+                            }}
+                            accessibilityRole="radio"
+                            accessibilityState={{ selected: active }}
+                            accessibilityLabel={`Run opencode in ${mode} mode`}
+                            style={[
+                              s.composerModeButton,
+                              { borderColor: active ? c.accent : c.border },
+                              active && { backgroundColor: c.accent + "20" },
+                            ]}
+                          >
+                            <Text style={[s.composerModeText, { color: active ? c.accent : c.textSecondary }]}>
+                              {mode === "build" ? "Build" : "Plan"}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
                   </View>
-                )}
-                {reloadFlash && (
-                  <View style={s.transcribingRow}>
-                    <Ionicons name="flash" size={14} color={c.accent} />
-                    <Text style={{ color: c.textMuted, fontSize: 12, marginLeft: 8 }}>{reloadFlash}</Text>
-                  </View>
-                )}
-                {attachedImages.length > 0 && (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.attachmentStrip}>
-                    {attachedImages.map((img, i) => (
-                      <View key={i} style={s.attachmentPreviewWrap}>
-                        <Image source={{ uri: `data:${img.mimeType};base64,${img.base64}` }} style={s.attachmentPreviewImage} />
-                        <Pressable onPress={() => setAttachedImages((prev) => prev.filter((_, idx) => idx !== i))} style={[s.attachmentRemove, { backgroundColor: c.error }]}>
-                          <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>×</Text>
-                        </Pressable>
-                      </View>
-                    ))}
-                  </ScrollView>
                 )}
                 <View style={[s.composerFooter, { borderTopColor: withAlpha(c.border, "cc") }]}>
                   <Pressable
@@ -7341,8 +7418,20 @@ export default function TasksScreen() {
                               }}
                               onOpenInAgent={() => setShowLogs(true)}
                               onCopyError={() => {
-                                ExpoClipboard.setStringAsync(errMsg);
-                                Alert.alert("Copied", "Error copied to clipboard.");
+                                // Full paste-ready trace (2026-08-09) — same
+                                // shape web copies; names task + error.
+                                const trace = assembleTrace({
+                                  surface: "mobile",
+                                  task: {
+                                    id: selectedTask.id,
+                                    status: selectedTask.status,
+                                    runner: selectedTask.runnerId,
+                                    title: selectedTask.title,
+                                  },
+                                  error: errMsg,
+                                });
+                                ExpoClipboard.setStringAsync(trace);
+                                Alert.alert("Copied", "Trace copied to clipboard.");
                               }}
                             />
                           );
@@ -8253,6 +8342,28 @@ const s = StyleSheet.create({
   attachmentPreviewWrap: { marginRight: 10, position: "relative" },
   attachmentPreviewImage: { width: 64, height: 64, borderRadius: 14 },
   attachmentRemove: { position: "absolute", top: -6, right: -6, width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  // OpenCode quick Build|Plan segmented control (composer banner, 2026-08-09).
+  composerModeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderTopWidth: 1,
+    paddingTop: 10,
+    paddingBottom: 12,
+    paddingHorizontal: 8,
+    marginTop: -2,
+  },
+  composerModeLabel: { fontSize: 11, fontWeight: "600", letterSpacing: 0.5, textTransform: "uppercase" },
+  composerModeSegmented: { flexDirection: "row", alignItems: "center", gap: 6 },
+  composerModeButton: {
+    minHeight: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  composerModeText: { fontSize: 12, fontWeight: "600" },
   composerFooter: {
     flexDirection: "row",
     alignItems: "center",

@@ -1,0 +1,23 @@
+# feature-blog-yaver-cloud-image — blog post: a dev box on any provider in 90s.
+# SSR'd h1 carries the post title.
+name: feature-blog-yaver-cloud-image
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /blog/yaver-cloud-image
+  - wait_for: h1
+  - assert.text: Yaver Cloud Image
+  - assert.text: in 90 seconds
+  - screenshot: true

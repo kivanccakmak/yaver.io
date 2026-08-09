@@ -1,0 +1,23 @@
+# feature-sandbox-test — /sandbox-test: no-auth dev harness for the browser
+# sandbox + mini-figma layer (dev builds only; production returns null).
+# SSR'd h1 is "Browser Sandbox".
+name: feature-sandbox-test
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /sandbox-test
+  - wait_for: h1
+  - assert.text: Browser Sandbox
+  - screenshot: true
