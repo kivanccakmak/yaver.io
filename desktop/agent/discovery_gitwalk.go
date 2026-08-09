@@ -37,7 +37,43 @@ var discoveryGitWalkSkipDirs = map[string]bool{
 	".expo": true, ".next": true, "vendor": true,
 	"homebrew": true, "Cellar": true, "Caskroom": true,
 	"AppData": true,
+	// Toolchain/module-cache dirs: never a user's checkout. Without these a
+	// scan falling back to `home` (projectDiscoveryRoots) lists every Go
+	// module cache clone (<mod>@v<ver> dirs are git repos) — the dashboard
+	// rail on the ubuntu-4gb box showed 153 "projects" of which ~140 were
+	// /root/go/pkg/mod junk (2026-08-09 audit; the box has 11 real repos).
+	// `.npm` / `.nvm` are hidden so the hidden-dir rule below already
+	// skips them; these are the non-hidden ones plus the module-cache
+	// shape guard in findGitRepoDirsWalk.
+	"go": true, "pkg": true, "mod": true, "src": true, "snap": true,
+	"venv": true, ".venv": true, ".cabal": true, ".stack": true,
+	"node_modules.tmp": true, "bower_components": true, "jspm_packages": true,
 }
+
+// isGoModuleCacheDir reports whether a directory has the Go module-cache
+// shape `<module>@v<major>[.<minor>...]` (e.g. github.com/foo@v1.2.3). The
+// cache stores each version as a git repo, so a plain skip on "pkg" is not
+// enough — repos nested under the version dirs would still be found if the
+// parent walk rule let them through.
+func isGoModuleCacheDir(name string) bool {
+	at := strings.Index(name, "@v")
+	if at <= 0 || at+2 >= len(name) {
+		return false
+	}
+	rest := name[at+2:]
+	if rest == "" || !isDigit(rest[0]) {
+		return false
+	}
+	// Must be a bare version after @v — digits with optional . separators.
+	for _, r := range rest {
+		if (r < '0' || r > '9') && r != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func isDigit(b byte) bool { return b >= '0' && b <= '9' }
 
 // discoveryGitWalkMaxDepth bounds how deep below a root a repo is looked for.
 // Matches the old `find -maxdepth 6` so behaviour is unchanged for anyone whose
@@ -90,6 +126,13 @@ func findGitRepoDirsWalk(budget time.Duration, emit func(string)) {
 			}
 
 			name := info.Name()
+			// Depth below the walk root — 0 = the root itself, 1 = a direct
+			// child. Hoisted once so both the module-cache guard and the
+			// max-depth bound below agree on the same number.
+			relDepth := 0
+			if rel, relErr := filepath.Rel(root, path); relErr == nil {
+				relDepth = strings.Count(rel, string(os.PathSeparator))
+			}
 			if name == ".git" {
 				repoDir := filepath.Dir(path)
 				if !seen[repoDir] {
@@ -99,7 +142,21 @@ func findGitRepoDirsWalk(budget time.Duration, emit func(string)) {
 				// Never descend into .git itself.
 				return filepath.SkipDir
 			}
-			if discoveryGitWalkSkipDirs[name] {
+			// Skip-map dirs never hold a checkout. Guarded on `path != root`
+			// exactly like the hidden-dir rule below: `~/src`, `~/go` etc.
+			// are themselves discovery ROOTS (projectDiscoveryRoots), so a
+			// root named "src" must never skip itself.
+			if discoveryGitWalkSkipDirs[name] && path != root {
+				return filepath.SkipDir
+			}
+			// Go module cache clones: <module>@v<version> dirs are git repos
+			// (per-version clones) and must never surface as projects. Guarded
+			// on NESTED depth, not just `path != root`: a genuine project
+			// directly under a discovery root whose name merely contains
+			// "@v1…" (Workspace/notamodulecache@v1) is a root CHILD and
+			// always survives via that root's own walk, while cache version
+			// dirs only ever appear nested (go/pkg/mod/host/owner/mod@vX).
+			if isGoModuleCacheDir(name) && relDepth > 0 {
 				return filepath.SkipDir
 			}
 			// Hidden dirs hold configs and caches, not checkouts. `.git` is
@@ -107,10 +164,8 @@ func findGitRepoDirsWalk(budget time.Duration, emit func(string)) {
 			if strings.HasPrefix(name, ".") && path != root {
 				return filepath.SkipDir
 			}
-			if rel, relErr := filepath.Rel(root, path); relErr == nil {
-				if strings.Count(rel, string(os.PathSeparator)) >= discoveryGitWalkMaxDepth {
-					return filepath.SkipDir
-				}
+			if relDepth >= discoveryGitWalkMaxDepth {
+				return filepath.SkipDir
 			}
 			return nil
 		})
