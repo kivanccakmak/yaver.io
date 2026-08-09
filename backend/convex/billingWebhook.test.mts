@@ -28,11 +28,15 @@ test("normalizeBillingProduct maps legacy names to the two-product catalog", () 
   assert.equal(normalizeBillingProduct("gpu"), "cloud-workspace");
 });
 
-test("normalizeBillingProduct fails closed on unknown values", () => {
+test("normalizeBillingProduct defaults empty to relay-pro and rejects unrecognized values", () => {
+  // Empty/null/undefined default to relay-pro — NEVER to the expensive
+  // cloud product (absent custom_data must not mint cloud entitlements).
+  assert.equal(normalizeBillingProduct(""), "relay-pro");
+  assert.equal(normalizeBillingProduct(null), "relay-pro");
+  assert.equal(normalizeBillingProduct(undefined), "relay-pro");
+  // Unrecognized non-empty values fail closed.
   assert.equal(normalizeBillingProduct("enterprise"), null);
-  assert.equal(normalizeBillingProduct(""), null);
-  assert.equal(normalizeBillingProduct(null), null);
-  assert.equal(normalizeBillingProduct(undefined), null);
+  assert.equal(normalizeBillingProduct("bitbucket"), null);
 });
 
 // ── billingProductIdFromPayload ────────────────────────────────────────────

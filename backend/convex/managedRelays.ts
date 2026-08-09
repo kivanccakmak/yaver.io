@@ -46,7 +46,11 @@ export const getById = internalQuery({
 export const create = internalMutation({
   args: {
     userId: v.id("users"),
-    subscriptionId: v.id("subscriptions"),
+    // Optional for the owner-dev path (/billing/yaver-cloud/dev-relay) —
+    // a dev relay is provisioned on the owner's real Hetzner account
+    // WITHOUT a LemonSqueezy subscription; canProvisionManaged's owner
+    // bypass is what authorises the spend. Paid relays always pass it.
+    subscriptionId: v.optional(v.id("subscriptions")),
     region: v.string(),
     password: v.string(),
   },

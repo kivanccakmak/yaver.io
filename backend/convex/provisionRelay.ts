@@ -197,7 +197,8 @@ async function wireUserRelayUrl(
 export const provision = internalAction({
   args: {
     userId: v.id("users"),
-    subscriptionId: v.id("subscriptions"),
+    // Optional for the owner-dev path — see managedRelays.create.
+    subscriptionId: v.optional(v.id("subscriptions")),
     relayId: v.id("managedRelays"),
     region: v.string(),
     password: v.string(),

@@ -1363,7 +1363,11 @@ export default defineSchema({
   // Managed relay servers (provisioned on Hetzner)
   managedRelays: defineTable({
     userId: v.id("users"),
-    subscriptionId: v.id("subscriptions"),
+    // Optional: owner-dev relays (the /billing/yaver-cloud/dev-relay path)
+    // have NO subscription row — they exist so the owner can exercise the
+    // full Relay Pro provision/deprovision lifecycle on the real Hetzner
+    // account before LemonSqueezy billing is live. Paid rows always carry it.
+    subscriptionId: v.optional(v.id("subscriptions")),
     // ─── Shared relay pool ──────────────────────────────────────────────
     // Relay Pro rides a SHARED multi-tenant host by default. A dedicated box
     // (cax11, €6.99/mo, necessarily always-on) against $9/mo revenue is 16%

@@ -78,7 +78,13 @@ export function subscriptionPlanFromPayload(
       .map(String);
     if (relayVariants.includes(variantId)) return "relay-pro";
   }
-  return String(data?.variant_name || "").includes("yearly") ? "relay-yearly" : "relay-pro";
+  // Case-insensitive: LemonSqueezy variant names are human-facing
+  // ("Relay Pro Yearly"). The old `.includes("yearly")` was case-sensitive,
+  // so a capitalized "Yearly" never mapped to relay-yearly — caught by
+  // billingWebhook.test.mts (2026-08-09).
+  return String(data?.variant_name || "").toLowerCase().includes("yearly")
+    ? "relay-yearly"
+    : "relay-pro";
 }
 
 /**

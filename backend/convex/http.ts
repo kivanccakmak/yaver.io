@@ -6610,6 +6610,85 @@ http.route({
   }),
 });
 
+/** POST /billing/yaver-cloud/dev-relay — OWNER-ONLY: provision (or reuse) a
+ *  managed Relay Pro relay on the owner's real Hetzner account WITHOUT a
+ *  LemonSqueezy subscription. The owner userId bypass in
+ *  subscriptions.canProvisionManaged authorises the spend (fail-closed for
+ *  everyone else), so kivanc.cakmak@icloud.com can exercise the full Relay
+ *  Pro provision → health-check → user-wiring → deprovision lifecycle headless
+ *  before billing goes live.
+ *
+ *  body {} or {region}      → create (if none live) + schedule provision
+ *  body {stop:true}         → deprovision the owner's relay (pool-aware:
+ *                             shared host deleted only when drained; the
+ *                             row is marked stopped first). Also clears a
+ *                             stuck "provisioning" row so the next call
+ *                             starts fresh. */
+http.route({
+  path: "/billing/yaver-cloud/dev-relay",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const session = await authenticateRequest(ctx, request);
+    if (!session) return errorResponse("Unauthorized", 401);
+    const scopeDenied = requireFullScope(session);
+    if (scopeDenied) return scopeDenied;
+    if (!isCloudPreviewUser(session.email, session.userDocId)) {
+      return errorResponse("Owner-only (private preview) on this account", 403);
+    }
+    const body = await request.json().catch(() => ({}));
+    const relay = await ctx.runQuery(internal.managedRelays.getByUserInternal, {
+      userId: session.userDocId as any,
+    });
+
+    if (body.stop === true) {
+      if (!relay) {
+        return jsonResponse({ ok: false, error: "No owner relay to stop" }, 404);
+      }
+      if (relay.hetznerServerId) {
+        await ctx.scheduler.runAfter(0, internal.provisionRelay.deprovision, {
+          relayId: relay._id,
+          hetznerServerId: String(relay.hetznerServerId),
+          domain: relay.domain ?? "",
+        });
+        return jsonResponse({ ok: true, stopping: true, relayId: relay._id });
+      }
+      // No box yet (stuck provisioning / failed before create) — clear the row
+      // so the next dev-relay call starts fresh.
+      await ctx.runMutation(internal.managedRelays.setStatus, {
+        relayId: relay._id,
+        status: "stopped",
+      });
+      return jsonResponse({ ok: true, stopped: true, relayId: relay._id });
+    }
+
+    if (relay && relay.status !== "stopped" && relay.status !== "error") {
+      return jsonResponse({
+        ok: true,
+        mode: "dev-relay",
+        relayId: relay._id,
+        reused: true,
+        domain: relay.domain ?? null,
+        status: relay.status,
+      });
+    }
+
+    const region = String(body.region ?? "eu").trim() || "eu";
+    const password = generateRelayPassword();
+    const relayId = await ctx.runMutation(internal.managedRelays.create, {
+      userId: session.userDocId as any,
+      region,
+      password,
+    });
+    await ctx.scheduler.runAfter(0, internal.provisionRelay.provision, {
+      userId: session.userDocId as any,
+      relayId,
+      region,
+      password,
+    });
+    return jsonResponse({ ok: true, mode: "dev-relay", relayId, provisioning: true });
+  }),
+});
+
 /** POST /billing/yaver-cloud/dev-deprovision — tear down a managed machine the
  *  caller owns. This is explicit decommission, not Pause: it cancels linked
  *  billing and schedules a full provider purge (server + persistent volume +
