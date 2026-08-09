@@ -75,12 +75,18 @@ elif [ -f "$ASSETLINKS_PATH" ]; then
 fi
 
 # 1. Calculate deployed directory size (excluding node_modules and .next)
+if stat -c%s "$DEPLOY_DIR/package.json" >/dev/null 2>&1; then
+  STAT_SIZE=(stat -c%s)
+else
+  STAT_SIZE=(stat -f%z)
+fi
+
 SIZE_KB=$(find "$DEPLOY_DIR" \
   -not -path '*/node_modules/*' \
   -not -path '*/.next/*' \
   -not -path '*/.open-next/*' \
   -type f -print0 \
-  | xargs -0 stat -f%z 2>/dev/null \
+  | xargs -0 "${STAT_SIZE[@]}" 2>/dev/null \
   | awk '{s+=$1} END {printf "%.0f", s/1024}')
 
 # Fallback for Linux
