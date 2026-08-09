@@ -18,7 +18,7 @@ import { CONVEX_URL } from "@/lib/constants";
 import { useMachineRoles } from "@/lib/useMachineRoles";
 import { planConnectionFanout } from "@/lib/connectionFanout";
 import { fetchGuestHosts, acceptGuestInvitation, type GuestInvitation } from "@/lib/guests";
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/ThemeProvider";
@@ -959,6 +959,102 @@ function RawTaskTerminal({
   return <div ref={mountRef} className="h-full min-h-[320px] w-full" />;
 }
 
+/**
+ * TerminalStatusStrip — the quiet status line above the opencode terminal.
+ *
+ * `live` is never inferred from task status alone: it is armed by the raw SSE
+ * lane on every live frame and decays after ~3s of silence, so a runner that
+ * claims `running` but has stopped emitting shows as Idle — the false-green
+ * class AGENTS.md hunts for. One line, no chips, no grid.
+ */
+function TerminalStatusStrip({ live, status }: { live: boolean; status?: string }) {
+  const done = !!status && ["completed", "done", "succeeded", "failed", "cancelled", "stopped"].includes(status);
+  const statusLabel = done ? "finished" : status || "—";
+  return (
+    <div className="flex items-center justify-between border-b border-surface-800 bg-surface-950/80 px-3 py-1.5 text-[10px] tracking-wide">
+      <span className="inline-flex items-center gap-1.5 font-semibold uppercase">
+        {live ? (
+          <>
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+            <span className="text-emerald-300">Live</span>
+          </>
+        ) : (
+          <>
+            <span className="h-1.5 w-1.5 rounded-full bg-surface-600" />
+            <span className="text-surface-500">Idle</span>
+          </>
+        )}
+      </span>
+      <span className="inline-flex items-center gap-2 text-surface-500">
+        <span className="capitalize">{statusLabel}</span>
+        <span className="text-surface-700">·</span>
+        <span>read-only</span>
+      </span>
+    </div>
+  );
+}
+
+// Long assistant outputs collapse behind a "Show details" toggle — same
+// spirit as mobile's bubble collapse. Thresholds mirror mobile's
+// buildAssistantPreview (>30 non-empty lines or >2500 chars).
+const CHAT_COLLAPSE_LINES = 30;
+const CHAT_COLLAPSE_CHARS = 2500;
+
+function isLongAssistantText(text: string): boolean {
+  const t = text.trim();
+  const lines = t.split("\n").filter((l) => l.trim()).length;
+  return lines > CHAT_COLLAPSE_LINES || t.length > CHAT_COLLAPSE_CHARS;
+}
+
+/**
+ * ChatAssistantMsg — memoized assistant bubble for the chat tab.
+ *
+ * Memoized on (text, status, isLast) so a growing live message re-renders
+ * only itself, not the whole transcript. While the LIVE tail is still growing
+ * it is never collapsed — a collapsing "Show details" button that moves with
+ * every token is worse than the scroll. Collapse applies to finalized long
+ * messages only.
+ */
+const ChatAssistantMsg = memo(function ChatAssistantMsg({
+  text,
+  status,
+  isLast,
+}: {
+  text: string;
+  status?: string;
+  isLast: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const liveGrowing = isLast && status === "running";
+  const long = isLongAssistantText(text);
+  const collapsed = long && !liveGrowing && !expanded;
+  const head = text.trim().split("\n").slice(0, CHAT_COLLAPSE_LINES).join("\n");
+  // Never leave an unclosed fenced block at the cut — the collapsed head
+  // must render as valid markdown (a lone "```" would swallow the rest of
+  // the transcript into one giant code block).
+  const fenceCount = (head.match(/^```/gm) || []).length;
+  const shown = collapsed ? (fenceCount % 2 === 1 ? `${head}\n\`\`\`` : head) : text;
+  return (
+    <div>
+      <div className="prose-invert break-words [&_pre]:whitespace-pre-wrap">
+        <AssistantMarkdown text={shown} />
+        {liveGrowing ? (
+          <span className="ml-0.5 inline-block h-3 w-1.5 translate-y-[2px] animate-pulse bg-surface-300" aria-hidden />
+        ) : null}
+      </div>
+      {long && !liveGrowing ? (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1 text-[11px] font-semibold text-[#818cf8] hover:text-[#a5b4fc]"
+        >
+          {expanded ? "Hide details" : "Show details"}
+        </button>
+      ) : null}
+    </div>
+  );
+});
+
 export default function DashboardPage() {
   // ── ALL hooks unconditionally at the top ────────────────────────
   const { user, token, isLoading, isAuthenticated, sessionExpired, logout } = useAuth();
@@ -999,6 +1095,17 @@ export default function DashboardPage() {
   const isOpenCodeTask = !!activeTask && String(activeTask.runnerId || "").toLowerCase() === "opencode";
   const showOpenCodeTerminal = isOpenCodeTask && taskViewMode === "terminal";
   const RAW_TERMINAL_CAP = 512 * 1024;
+  // ── terminal liveness ─────────────────────────────────────────────────
+  // Armed by the raw SSE lane on every LIVE frame (never the full-replace
+  // snapshot seed), decays after ~3s of silence. Drives the Live/Idle strip
+  // above the terminal — the honest "is it still writing?" answer.
+  const [rawLive, setRawLive] = useState(false);
+  const rawLiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markRawLive = useCallback(() => {
+    setRawLive(true);
+    if (rawLiveTimerRef.current) clearTimeout(rawLiveTimerRef.current);
+    rawLiveTimerRef.current = setTimeout(() => setRawLive(false), 3000);
+  }, []);
   // Pending agent_question pulled from the SSE stream. When non-null
   // the dashboard renders an inline answer card above the composer;
   // submitting POSTs to /tasks/{id}/answer (via answerTaskQuestion),
@@ -1664,6 +1771,7 @@ export default function DashboardPage() {
           // consumed (registry was cancelled by StopTask); close
           // the card.
           setAgentQuestion(null);
+          setRawLive(false);
         } else if (isOpenCode && (evt.type === "raw_replay" || evt.type === "raw")) {
           // Raw runner stdout (ANSI + TUI) → the opencode terminal view.
           // raw_replay is the one-shot seed (full=true → REPLACE the screen,
@@ -1678,6 +1786,7 @@ export default function DashboardPage() {
             rawTermRef.current?.reset();
           } else {
             rawBufRef.current = (rawBufRef.current + rawEvt.text).slice(-RAW_TERMINAL_CAP);
+            markRawLive(); // live bytes → the terminal strip's Live dot
           }
           // Push to the terminal only while it is mounted; while hidden
           // (Chat view) bytes stay in rawBufRef and the mount's onReady
@@ -1725,6 +1834,7 @@ export default function DashboardPage() {
       rawBufRef.current = "";
       rawWrittenRef.current = 0;
       rawCursorRef.current = 0;
+      setRawLive(false);
       if (activeTask) setTaskViewMode("chat");
     }
   }, [activeTask?.id]);
@@ -4284,16 +4394,20 @@ export default function DashboardPage() {
                       <div ref={outputRef} className="flex-1 overflow-y-auto bg-surface-950 px-4 py-5">
                         {isOpenCodeTask ? (
                           <div className="mx-auto mb-3 flex max-w-3xl justify-center">
-                            <div className="flex overflow-hidden rounded-lg border border-surface-700 text-[11px] font-semibold">
+                            <div className="flex items-center gap-1 rounded-full border border-surface-700 bg-surface-900/80 p-1 text-[11px] font-semibold shadow-sm">
                               {(["chat", "terminal"] as const).map((mode) => (
                                 <button
                                   key={mode}
                                   type="button"
                                   onClick={() => setTaskViewMode(mode)}
+                                  aria-pressed={taskViewMode === mode}
                                   className={taskViewMode === mode
-                                    ? "bg-indigo-500 px-3.5 py-1 text-white"
-                                    : "bg-surface-950/60 px-3.5 py-1 text-surface-400 hover:text-surface-200"}
+                                    ? "flex items-center gap-1.5 rounded-full bg-indigo-500 px-3.5 py-1 text-white shadow"
+                                    : "flex items-center gap-1.5 rounded-full px-3.5 py-1 text-surface-400 hover:text-surface-200"}
                                 >
+                                  <span className={taskViewMode === mode ? "font-mono opacity-90" : "font-mono opacity-60"} aria-hidden>
+                                    {mode === "chat" ? "C" : ">_"}
+                                  </span>
                                   {mode === "chat" ? "Chat" : "Terminal"}
                                 </button>
                               ))}
@@ -4317,8 +4431,11 @@ export default function DashboardPage() {
                           </div>
                         ) : null}
                         {showOpenCodeTerminal ? (
-                          <div className="mx-auto h-full max-w-3xl">
-                            <RawTaskTerminal taskId={activeTask!.id} onReady={handleTerminalReady} />
+                          <div className="mx-auto flex h-full max-w-3xl flex-col">
+                            <TerminalStatusStrip live={rawLive} status={activeTask.status} />
+                            <div className="min-h-0 flex-1">
+                              <RawTaskTerminal taskId={activeTask!.id} onReady={handleTerminalReady} />
+                            </div>
                           </div>
                         ) : chatMsgs.length === 0 ? (
                           <div className="flex h-full items-center justify-center gap-2 text-[12px] text-surface-600">
@@ -4348,21 +4465,17 @@ export default function DashboardPage() {
                                 <div key={i} className="flex justify-start">
                                   <div className="w-full px-1 py-1 text-[12px] leading-5 text-surface-100 break-words">
                                     {m.text ? (
-                                      // Render assistant prose as markdown so
-                                      // `**$ <cmd>**` shell pills + ```fenced```
-                                      // tool output land as readable cards
-                                      // (mirrors mobile/app/(tabs)/tasks.tsx
-                                      // and web/components/dashboard/
-                                      // VibeCodingView.tsx's ChatBubble).
-                                      <div className="prose-invert break-words [&_pre]:whitespace-pre-wrap">
-                                        {/* Memoized: this list has no memo'd bubble, so
-                                            stripAnsi + a full markdown re-parse of EVERY
-                                            message ran on every stream chunk. */}
-                                        <AssistantMarkdown text={m.text} />
-                                        {activeTask.status === "running" && i === chatMsgs.length - 1 ? (
-                                          <span className="ml-0.5 inline-block h-3 w-1.5 translate-y-[2px] animate-pulse bg-surface-300" aria-hidden />
-                                        ) : null}
-                                      </div>
+                                      // Memoized + collapsible: long assistant
+                                      // outputs fold behind "Show details"
+                                      // (parity with mobile), and the memo on
+                                      // (text, status, isLast) means a growing
+                                      // live message re-renders only itself,
+                                      // not the whole transcript.
+                                      <ChatAssistantMsg
+                                        text={m.text}
+                                        status={activeTask.status}
+                                        isLast={i === chatMsgs.length - 1}
+                                      />
                                     ) : activeTask.status === "running" || activeTask.status === "queued" ? (
                                       <span className="inline-flex items-center gap-2 text-surface-400">
                                         <span className="inline-flex items-center gap-1">

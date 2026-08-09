@@ -46,6 +46,8 @@ export interface XtermViewProps {
   background?: string;
   /** Default foreground. */
   foreground?: string;
+  /** Cursor + selection accent (defaults to the indigo accent). */
+  cursor?: string;
   fontSize?: number;
   style?: object;
 }
@@ -55,6 +57,7 @@ export interface XtermViewProps {
 function bridgeScript(opts: {
   background: string;
   foreground: string;
+  cursor: string;
   fontSize: number;
 }): string {
   return `
@@ -82,7 +85,13 @@ function bridgeScript(opts: {
     scrollback: 5000,
     allowProposedApi: true,
     convertEol: false,
-    theme: { background: ${JSON.stringify(opts.background)}, foreground: ${JSON.stringify(opts.foreground)} },
+    theme: {
+      background: ${JSON.stringify(opts.background)},
+      foreground: ${JSON.stringify(opts.foreground)},
+      cursor: ${JSON.stringify(opts.cursor)},
+      cursorAccent: ${JSON.stringify(opts.background)},
+      selectionBackground: "#1f2937",
+    },
   });
   var fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
@@ -122,6 +131,7 @@ const XtermView = forwardRef<XtermHandle, XtermViewProps>(function XtermView(
     onReady,
     background = "#0b0e14",
     foreground = "#d7dce5",
+    cursor = "#818cf8",
     fontSize = 13,
     style,
   },
@@ -145,9 +155,9 @@ const XtermView = forwardRef<XtermHandle, XtermViewProps>(function XtermView(
       `<body><div id="t"></div>` +
       `<script>${XTERM_JS}</script>` +
       `<script>${XTERM_FIT_JS}</script>` +
-      `<script>${bridgeScript({ background, foreground, fontSize })}</script>` +
+      `<script>${bridgeScript({ background, foreground, cursor, fontSize })}</script>` +
       `</body></html>`,
-    [background, foreground, fontSize],
+    [background, foreground, cursor, fontSize],
   );
 
   useImperativeHandle(

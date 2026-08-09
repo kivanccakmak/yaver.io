@@ -2581,6 +2581,18 @@ export default function TasksScreen() {
   const RAW_TERMINAL_CAP = 512 * 1024;
   const isOpenCodeTask = !!selectedTask && normalizeTaskRunnerId(selectedTask.runnerId) === "opencode";
 
+  // ── terminal liveness ─────────────────────────────────────────────────
+  // Armed by the raw lane on every LIVE frame (never the full-replace
+  // snapshot seed), decays after ~3s of silence. Drives the Live/Idle strip
+  // above the terminal — same honest "is it still writing?" answer as web.
+  const [rawLive, setRawLive] = useState(false);
+  const rawLiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markRawLive = useCallback(() => {
+    setRawLive(true);
+    if (rawLiveTimerRef.current) clearTimeout(rawLiveTimerRef.current);
+    rawLiveTimerRef.current = setTimeout(() => setRawLive(false), 3000);
+  }, []);
+
   // Single raw-frame sink shared by the live stream and the one-shot seed —
   // two copies of this logic would drift (see AGENTS.md cross-surface parity).
   const handleRawChunk = useCallback((text: string, offset: number, full: boolean) => {
@@ -2593,6 +2605,7 @@ export default function TasksScreen() {
       rawBufRef.current = (rawBufRef.current + text).slice(-RAW_TERMINAL_CAP);
     }
     if (typeof offset === "number") rawCursorRef.current = offset;
+    if (!full) markRawLive(); // live bytes → the terminal strip's Live dot
     // Only push to the terminal when it is mounted; while hidden (Chat view)
     // the bytes stay in rawBufRef and the mount's onReady drains them.
     if (xtermRef.current && rawWrittenRef.current < rawBufRef.current.length) {
@@ -2667,6 +2680,7 @@ export default function TasksScreen() {
       rawCursorRef.current = 0;
       rawBufRef.current = "";
       rawWrittenRef.current = 0;
+      setRawLive(false);
     }
 
     // Bytes of transcript received from the STREAM. This is the offset the
@@ -6939,18 +6953,25 @@ export default function TasksScreen() {
                     only (no toggle, zero surface change). */}
                 {isOpenCodeTask ? (
                   <View style={{ flexDirection: "row", justifyContent: "center", paddingVertical: 8 }}>
-                    <View style={{ flexDirection: "row", borderRadius: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCardElevated, overflow: "hidden" }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", borderRadius: 999, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCardElevated, padding: 3 }}>
                       {(["chat", "terminal"] as const).map((mode) => (
                         <Pressable
                           key={mode}
                           onPress={() => setTaskViewMode(mode)}
                           style={[
-                            { paddingHorizontal: 18, paddingVertical: 6 },
+                            { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 16, paddingVertical: 6, borderRadius: 999 },
                             taskViewMode === mode && { backgroundColor: c.accent },
                           ]}
                           accessibilityRole="button"
+                          accessibilityState={{ selected: taskViewMode === mode }}
                           accessibilityLabel={`Show ${mode} view`}
                         >
+                          <Ionicons
+                            name={mode === "chat" ? "chatbubble-outline" : "terminal-outline"}
+                            size={13}
+                            color={taskViewMode === mode ? "#fff" : c.textMuted}
+                            style={{ opacity: taskViewMode === mode ? 1 : 0.7 }}
+                          />
                           <Text
                             style={[
                               { fontSize: 13, fontWeight: "600", textTransform: "capitalize" },
@@ -6975,14 +6996,52 @@ export default function TasksScreen() {
                     PhaseStatusLine + DebugSection ride along as
                     ListFooterComponent. */}
                 {isOpenCodeTask && taskViewMode === "terminal" ? (
-                  <XtermView
-                    ref={xtermRef}
-                    onReady={drainRawToTerminal}
-                    background="#0b0e14"
-                    foreground="#d7dce5"
-                    fontSize={12}
-                    style={s.chatScroll}
-                  />
+                  <View style={{ flex: 1 }}>
+                    {/* Terminal status strip — same Live/Idle + status +
+                        read-only contract as web (page.tsx TerminalStatusStrip).
+                        Live is armed by the raw lane, never status alone. */}
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        borderBottomWidth: StyleSheet.hairlineWidth,
+                        borderBottomColor: c.border,
+                        paddingHorizontal: 12,
+                        paddingVertical: 5,
+                        backgroundColor: c.bg,
+                      }}
+                    >
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <View
+                          style={{
+                            width: 7,
+                            height: 7,
+                            borderRadius: 4,
+                            backgroundColor: rawLive ? "#34d399" : c.textMuted,
+                          }}
+                        />
+                        <Text style={{ fontSize: 10, fontWeight: "700", letterSpacing: 0.5, color: rawLive ? "#34d399" : c.textMuted }}>
+                          {rawLive ? "LIVE" : "IDLE"}
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 10, textTransform: "capitalize", color: c.textMuted }}>
+                        {["completed", "done", "succeeded", "failed", "cancelled", "stopped"].includes((selectedTask.status || "").toLowerCase())
+                          ? "finished"
+                          : (selectedTask.status || "—")}{" "}
+                        · read-only
+                      </Text>
+                    </View>
+                    <XtermView
+                      ref={xtermRef}
+                      onReady={drainRawToTerminal}
+                      background="#05070a"
+                      foreground="#d1d5db"
+                      cursor="#818cf8"
+                      fontSize={12}
+                      style={s.chatScroll}
+                    />
+                  </View>
                 ) : (
                   <FlatList
                     ref={chatScrollRef as any}
