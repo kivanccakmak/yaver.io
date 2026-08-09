@@ -125,9 +125,29 @@ AUTH_KEY_ISSUER="${APP_STORE_KEY_ISSUER:?Set APP_STORE_KEY_ISSUER (env or yaver 
 DEPLOY_ID="deploy-testflight-$$"
 LEASE_HELD=0
 DEPLOY_OUTCOME=failure
+run_yaver_bounded() {
+  local label="$1"; shift
+  local limit="${YAVER_DEPLOY_LEASE_TIMEOUT_SECONDS:-20}"
+  local log="/tmp/yaver-${label}-${DEPLOY_ID}.log"
+  yaver "$@" >"$log" 2>&1 &
+  local pid=$!
+  local start=$SECONDS
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ $((SECONDS - start)) -ge "$limit" ]; then
+      echo "WARN: yaver $label timed out after ${limit}s; continuing without blocking deploy teardown." >&2
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 1
+      kill -KILL "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 1
+  done
+  wait "$pid"
+}
 if command -v yaver >/dev/null 2>&1; then
   BR="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
-  if yaver autorun deploy-lease acquire --target testflight --autorun "$DEPLOY_ID" --workdir "$ROOT" --branch "$BR"; then
+  if run_yaver_bounded deploy-lease-acquire autorun deploy-lease acquire --target testflight --autorun "$DEPLOY_ID" --workdir "$ROOT" --branch "$BR"; then
     LEASE_HELD=1
   else
     rc=$?
@@ -138,7 +158,7 @@ if command -v yaver >/dev/null 2>&1; then
 fi
 release_lease() {
   [ "$LEASE_HELD" = 1 ] && command -v yaver >/dev/null 2>&1 && \
-    yaver autorun deploy-lease release --target testflight --autorun "$DEPLOY_ID" --outcome "$DEPLOY_OUTCOME" >/dev/null 2>&1 || true
+    run_yaver_bounded deploy-lease-release autorun deploy-lease release --target testflight --autorun "$DEPLOY_ID" --outcome "$DEPLOY_OUTCOME" || true
 }
 trap release_lease EXIT
 
@@ -210,7 +230,7 @@ PYEOF
 echo "Build $CURRENT_BUILD → $NEW_BUILD"
 # Record the real build number in the lease (same id re-acquires + overwrites).
 [ "$LEASE_HELD" = 1 ] && command -v yaver >/dev/null 2>&1 && \
-  yaver autorun deploy-lease acquire --target testflight --autorun "$DEPLOY_ID" --workdir "$ROOT" --build "$NEW_BUILD" >/dev/null 2>&1 || true
+  run_yaver_bounded deploy-lease-build autorun deploy-lease acquire --target testflight --autorun "$DEPLOY_ID" --workdir "$ROOT" --build "$NEW_BUILD" || true
 
 # Clean stale archive so a failed build can't silently reuse it
 ls -la /tmp/Yaver.xcarchive 2>/dev/null || true
@@ -233,8 +253,17 @@ mkdir -p "$DERIVED"
 CACHE_STATE="warm"
 [ -d "$DERIVED/Build" ] || CACHE_STATE="COLD (first archive here — expect the slow one)"
 
-# Archive
+# Archive.
+#
+# Do not pipe xcodebuild through tee/tail here. On 2026-08-09 a TestFlight
+# deploy spent hours alive but silent inside Xcode's build-log machinery after
+# `xcodebuild | tee /tmp/arch_full.log | tail -3`; the terminal looked quiet,
+# the archive never materialized, and the EXIT trap then hung trying to release
+# the lease. Write directly to the log, print bounded heartbeats, and fail
+# loudly when the log stops moving.
 echo "Archiving... (derived data: $DERIVED — $CACHE_STATE)"
+ARCHIVE_LOG=/tmp/arch_full.log
+: > "$ARCHIVE_LOG"
 xcodebuild -workspace Yaver.xcworkspace -scheme Yaver -configuration Release \
   -archivePath /tmp/Yaver.xcarchive archive \
   DEVELOPMENT_TEAM="${APPLE_TEAM_ID:?Set APPLE_TEAM_ID}" CODE_SIGN_STYLE=Automatic \
@@ -243,7 +272,43 @@ xcodebuild -workspace Yaver.xcworkspace -scheme Yaver -configuration Release \
   -authenticationKeyPath "$AUTH_KEY" \
   -authenticationKeyID "$AUTH_KEY_ID" \
   -authenticationKeyIssuerID "$AUTH_KEY_ISSUER" \
-  -derivedDataPath "$DERIVED" 2>&1 | tee /tmp/arch_full.log | tail -3
+  -derivedDataPath "$DERIVED" >"$ARCHIVE_LOG" 2>&1 &
+ARCHIVE_PID=$!
+ARCHIVE_STARTED=$SECONDS
+ARCHIVE_LAST_SIZE=0
+ARCHIVE_LAST_PROGRESS=$SECONDS
+ARCHIVE_SILENCE_LIMIT="${YAVER_IOS_ARCHIVE_SILENCE_TIMEOUT_SECONDS:-900}"
+while kill -0 "$ARCHIVE_PID" 2>/dev/null; do
+  sleep 30
+  ARCHIVE_SIZE=$(stat -f%z "$ARCHIVE_LOG" 2>/dev/null || echo 0)
+  if [ "$ARCHIVE_SIZE" != "$ARCHIVE_LAST_SIZE" ]; then
+    ARCHIVE_LAST_SIZE="$ARCHIVE_SIZE"
+    ARCHIVE_LAST_PROGRESS=$SECONDS
+    echo "Archive still running ($((SECONDS - ARCHIVE_STARTED))s, log ${ARCHIVE_SIZE} bytes). Last lines:"
+    tail -3 "$ARCHIVE_LOG" || true
+  elif [ $((SECONDS - ARCHIVE_LAST_PROGRESS)) -ge "$ARCHIVE_SILENCE_LIMIT" ]; then
+    echo "ERROR: xcodebuild archive produced no log output for ${ARCHIVE_SILENCE_LIMIT}s." >&2
+    echo "       This usually means Xcode/SwiftBuild is wedged, not that compilation is progressing." >&2
+    echo "       Last archive log lines:" >&2
+    tail -20 "$ARCHIVE_LOG" >&2 || true
+    kill -TERM "$ARCHIVE_PID" 2>/dev/null || true
+    sleep 5
+    kill -KILL "$ARCHIVE_PID" 2>/dev/null || true
+    wait "$ARCHIVE_PID" 2>/dev/null || true
+    exit 1
+  else
+    echo "Archive still running ($((SECONDS - ARCHIVE_STARTED))s, no new log for $((SECONDS - ARCHIVE_LAST_PROGRESS))s)."
+  fi
+done
+set +e
+wait "$ARCHIVE_PID"
+ARCHIVE_EXIT=$?
+set -e
+if [ "$ARCHIVE_EXIT" -ne 0 ]; then
+  echo "ERROR: Archive failed (exit $ARCHIVE_EXIT). Last archive log lines:" >&2
+  tail -40 "$ARCHIVE_LOG" >&2 || true
+  exit "$ARCHIVE_EXIT"
+fi
 
 # Verify archive was created
 if [ ! -d /tmp/Yaver.xcarchive ]; then
