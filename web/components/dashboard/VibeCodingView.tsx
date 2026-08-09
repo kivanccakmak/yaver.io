@@ -27,6 +27,8 @@ import { AGENT_AUTH_REMEDY, isAgentAuthErrorMessage } from "@/lib/agentAuthError
 import { validateOpenCodeModel } from "@/lib/opencodeModel";
 import type { Device } from "@/lib/use-devices";
 import { useAuth } from "@/lib/use-auth";
+import { collapseTopLevelProjects, mergeConvexCatalogIntoProjects } from "@/lib/projectTopLevel";
+import { CONVEX_URL } from "@/lib/constants";
 import { detectAskBreadth, detectAskIntent } from "@/lib/ask-intent";
 import { ScreenContextChip } from "@/components/dashboard/ScreenContextChip";
 import {
@@ -841,7 +843,7 @@ export default function VibeCodingView({
         // task kept running on the box. `null` here means "we could not ask";
         // the merge below then KEEPS what we already had (mobile's fetchTasks
         // has always done this via its `catch {}`).
-        const [projectRows, runnerRows, tasks, preview, currentDevStatus, git, commits, gitProviders, machineInventory, mcpRows] = await Promise.all([
+        const [projectRows, runnerRows, tasks, preview, currentDevStatus, git, commits, gitProviders, machineInventory, mcpRows, settings] = await Promise.all([
           agentClient.listProjects().catch(() => []),
           agentClient.getRunners().catch(() => []),
           agentClient.listTasks(12).catch(() => null),
@@ -852,9 +854,27 @@ export default function VibeCodingView({
           agentClient.gitProviderStatus().catch(() => []),
           agentClient.consoleMachines().catch(() => ({ machines: [] })),
           agentClient.listMcpServers().catch(() => []),
+          // Convex runtime project catalog for the connected machine — the
+          // Convex-side memory of "which project is on which machine", seeded
+          // by the Go agent (convex_state_sync.go) and the Runtime Lab. Merged
+          // with the agent's live discovery below so BOTH sources feed ONE
+          // top-level list (2026-08-09). Bounded: failure degrades to no
+          // catalog, never a broken poll.
+          token
+            ? fetch(`${CONVEX_URL}/settings`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" })
+                .then((r) => r.json().catch(() => ({})))
+                .then((data) => data?.settings || null)
+                .catch(() => null)
+            : Promise.resolve(null),
         ]);
         if (cancelled) return;
-        setProjects(projectRows);
+        // Top-level only (2026-08-09): an older agent can still report nested
+        // clones (yaver.io/mobile) — the composer must fold them into their
+        // root, never offer them as pickable projects.
+        const catalogRows = (settings?.runtimeProjectCatalogByDevice || []).find(
+          (row: any) => row?.deviceId === connectedDevice?.id,
+        )?.projects;
+        setProjects(mergeConvexCatalogIntoProjects(projectRows, catalogRows));
         setMcpServers((mcpRows || []).filter((server) => server.enabled));
         setRunners((runnerRows || []).filter((runner) => runner.installed));
         setTaskList((prev) => {
@@ -961,7 +981,7 @@ export default function VibeCodingView({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [activeTaskId, connected, connectedDevice, primaryRunnerByDevice, refreshNonce, selectedProjectPath, selectedRunner, user?.email]);
+  }, [activeTaskId, connected, connectedDevice, primaryRunnerByDevice, refreshNonce, selectedProjectPath, selectedRunner, token, user?.email]);
 
   useEffect(() => {
     if (!selectedRunnerRow || availableModels.length === 0) {
@@ -1759,7 +1779,7 @@ export default function VibeCodingView({
       setBusy(result?.error || `Could not clone ${repo.fullName}.`);
       return;
     }
-    const nextProjects = await agentClient.listProjects().catch(() => []);
+    const nextProjects = collapseTopLevelProjects(await agentClient.listProjects().catch(() => []));
     if (nextProjects.length > 0) {
       setProjects(nextProjects);
       if (result.path && nextProjects.some((project: Project) => project.path === result.path)) {

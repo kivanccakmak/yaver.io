@@ -203,3 +203,45 @@ func TestGitWalkSkipsGoModuleCache(t *testing.T) {
 		t.Fatal("isGoModuleCacheDir must reject non-numeric trailing versions")
 	}
 }
+
+// The yaver.io/mobile regression (2026-08-09): on the ubuntu-4gb box,
+// /root/Workspace/yaver.io/mobile is itself a git clone nested inside the
+// yaver.io checkout, so /projects listed BOTH "yaver.io" AND "mobile" — and
+// every task picker offered a phantom "yaver mobile" sub-project. The user's
+// contract: top-level only (medici.ai, yaver.io, talos, sfmg) — a nested clone
+// is part of its root checkout, never a pickable project. The outermost root
+// wins, and sibling names that merely share a prefix must not be confused.
+func TestCollapseNestedReposKeepsOnlyTopLevel(t *testing.T) {
+	top := projectInfo{Path: "/ws/yaver.io", Branch: "main"}
+	nested := projectInfo{Path: "/ws/yaver.io/mobile", Branch: "main"}
+	nestedDeep := projectInfo{Path: "/ws/yaver.io/mobile/app", Branch: "main"}
+	sibling := projectInfo{Path: "/ws/yaver.io-2", Branch: "main"}
+	other := projectInfo{Path: "/ws/medici.ai", Branch: "main"}
+
+	got := collapseNestedRepos([]projectInfo{top, nested, nestedDeep, sibling, other})
+	byPath := map[string]projectInfo{}
+	for _, p := range got {
+		byPath[p.Path] = p
+	}
+	for _, keep := range []string{"/ws/yaver.io", "/ws/yaver.io-2", "/ws/medici.ai"} {
+		if _, ok := byPath[keep]; !ok {
+			t.Fatalf("top-level repo %q was dropped; got %v", keep, got)
+		}
+	}
+	if _, ok := byPath["/ws/yaver.io/mobile"]; ok {
+		t.Fatalf("nested repo yaver.io/mobile must not surface as its own project; got %v", got)
+	}
+	if _, ok := byPath["/ws/yaver.io/mobile/app"]; ok {
+		t.Fatalf("deep-nested repo yaver.io/mobile/app must not surface; got %v", got)
+	}
+}
+
+func TestCollapseNestedReposEmptyAndSingle(t *testing.T) {
+	if got := collapseNestedRepos(nil); got != nil {
+		t.Fatalf("nil input must stay nil, got %v", got)
+	}
+	single := []projectInfo{{Path: "/ws/talos"}}
+	if got := collapseNestedRepos(single); len(got) != 1 || got[0].Path != "/ws/talos" {
+		t.Fatalf("single repo must pass through unchanged; got %v", got)
+	}
+}

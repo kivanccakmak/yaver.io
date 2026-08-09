@@ -47,6 +47,7 @@ import { probeFailureAllowsBoxAlive } from "@/lib/connection-error";
 import { resolveSeededRole } from "@/lib/connectionFanout";
 import { classifyRuntimeTargetProbeFailure } from "@/lib/runtimeTargetProbeFailure";
 import { detectProjectMachineMismatch } from "@/lib/projectMachineMismatch";
+import { collapseTopLevelProjects } from "@/lib/projectTopLevel";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
 import { ScreenContextChip } from "./ScreenContextChip";
 // Read-aloud must never recite Yaver's own prompt header — see lib/promptFraming.ts.
@@ -1400,9 +1401,18 @@ export default function RuntimeLabView({
         agentClient.listProjectsByCapability("mobile").catch(() => []),
         loadRuntimeSettings().catch(() => null),
       ]);
-      const rows = await expandMonorepoProjects(mergeProjectInventory([...(projectRows as Project[]), ...(mobileRows as Project[])], repoRows));
+      const merged = collapseTopLevelProjects(
+        mergeProjectInventory([...(projectRows as Project[]), ...(mobileRows as Project[])], repoRows),
+      );
+      const rows = await expandMonorepoProjects(merged);
       setProjects(rows);
-      void seedRuntimeProjectCatalog(rows).catch((err) => {
+      // Seed the Convex runtimeProjectCatalog with TOP-LEVEL rows only —
+      // this function is the catalog's only writer, and previously it
+      // persisted the expanded "<root> / <app>" rows, so "yaver.io / mobile"
+      // style sub-project names lived in Convex and surfaced elsewhere
+      // (2026-08-09). The lab's own app-level rows are fine for its UI; the
+      // shared catalog must stay top-level.
+      void seedRuntimeProjectCatalog(rows.filter((row) => !row.monorepoApp)).catch((err) => {
         const detail = err instanceof Error ? err.message : String(err);
         appendLog(`default project catalog sync skipped: ${detail || "settings unavailable"}`);
       });

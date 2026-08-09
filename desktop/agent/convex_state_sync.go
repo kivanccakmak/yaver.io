@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -127,6 +128,86 @@ func (s *convexSyncer) syncAll(ctx context.Context) {
 	// detection (a quiet box makes zero calls here too). It rides the same tick
 	// so a new runner seat / a /exit'd seat lands in Convex within ~60s.
 	syncTmuxSessionsToConvex(ctx)
+}
+
+// buildRuntimeProjectCatalog builds the per-machine project catalog that gets
+// seeded into Convex: TOP-LEVEL git projects only, each carrying its git
+// provider identity (gitRemote → repoName + gitProvider), branch and
+// framework. This is what answers "which project (on which git provider) is
+// on which machine" on every surface — web Settings, the mobile composer and
+// the dashboard. Privacy contract (matches the existing catalog validator):
+// names, remotes, branches, frameworks — NEVER absolute filesystem paths.
+// A repo with no origin remote has no provider identity and is skipped.
+func buildRuntimeProjectCatalog() []map[string]interface{} {
+	projects := collapseNestedRepos(listDiscoveredProjects())
+	out := make([]map[string]interface{}, 0, len(projects))
+	for _, p := range projects {
+		info := DetectProjectInfo(p.Path)
+		remote := strings.TrimSpace(info.GitRemote)
+		if remote == "" {
+			continue // no origin → no git provider identity to seed
+		}
+		repoName, gitProvider := deriveGitProviderIdentity(remote, info.Name)
+		out = append(out, map[string]interface{}{
+			"projectName": info.Name,
+			"repoName":    repoName,
+			"gitProvider": gitProvider,
+			"gitRemote":   remote,
+			"branch":      info.GitBranch,
+			"framework":   info.Framework,
+		})
+		if len(out) >= 50 {
+			break
+		}
+	}
+	return out
+}
+
+// deriveGitProviderIdentity parses a git remote URL into (repoName, provider).
+// Handles ssh (git@host:owner/repo.git), https (https://host/owner/repo) and
+// plain scp-ish forms; strips credentials that DetectProjectInfo may have left
+// in the host part. repoName falls back to the project's directory name when
+// the remote path is unparseable.
+func deriveGitProviderIdentity(gitRemote, fallbackName string) (string, string) {
+	remote := strings.TrimSpace(gitRemote)
+	hostPart := remote
+	// Drop scheme (https://, ssh://, git://).
+	if idx := strings.Index(hostPart, "://"); idx >= 0 {
+		hostPart = hostPart[idx+3:]
+	}
+	// Drop user@ (git@github.com:...).
+	if idx := strings.Index(hostPart, "@"); idx >= 0 {
+		hostPart = hostPart[idx+1:]
+	}
+	// Split host from path — scp form uses ':', https uses '/'.
+	path := ""
+	if idx := strings.Index(hostPart, ":"); idx >= 0 {
+		path = hostPart[idx+1:]
+		hostPart = hostPart[:idx]
+	} else if idx := strings.Index(hostPart, "/"); idx >= 0 {
+		path = hostPart[idx+1:]
+		hostPart = hostPart[:idx]
+	}
+	host := strings.ToLower(hostPart)
+	provider := host
+	switch {
+	case strings.Contains(host, "github"):
+		provider = "github"
+	case strings.Contains(host, "gitlab"):
+		provider = "gitlab"
+	}
+	path = strings.TrimSuffix(path, ".git")
+	path = strings.TrimSuffix(path, "/")
+	segs := []string{}
+	for _, s := range strings.Split(path, "/") {
+		if strings.TrimSpace(s) != "" {
+			segs = append(segs, s)
+		}
+	}
+	if len(segs) == 0 {
+		return fallbackName, provider
+	}
+	return segs[len(segs)-1], provider
 }
 
 // syncProjects walks every project directory the agent knows about and pushes
@@ -311,10 +392,11 @@ func (s *convexSyncer) buildBatchPayload() ([]byte, error) {
 	}
 
 	return json.Marshal(map[string]interface{}{
-		"deviceId": s.deviceID,
-		"projects": projects,
-		"services": services,
-		"activity": activity,
+		"deviceId":              s.deviceID,
+		"projects":              projects,
+		"services":              services,
+		"activity":              activity,
+		"runtimeProjectCatalog": buildRuntimeProjectCatalog(),
 	})
 }
 

@@ -508,6 +508,55 @@ type projectInfo struct {
 	ReadmePath string // path to copied README in ~/.yaver/projects/
 }
 
+// collapseNestedRepos drops any repo that lives INSIDE another discovered repo
+// root (component-wise), keeping only the outermost root. A nested git clone
+// such as <ws>/yaver.io/mobile is not a separate project the user can pick —
+// it is part of the top-level checkout — and listing it spawned "yaver mobile" /
+// "mobile" phantom rows on the mobile composer, the web pickers and the
+// dashboard rail. The task pickers must offer top-level projects (medici.ai,
+// yaver.io, talos, sfmg), never sub-project names.
+//
+// Component-wise via filepath.Rel, so sibling names that merely share a prefix
+// (/ws/yaver.io vs /ws/yaver.io-2) never collide.
+func collapseNestedRepos(projects []projectInfo) []projectInfo {
+	if len(projects) < 2 {
+		return projects
+	}
+	// Shallowest roots first so the top-level checkout is always the one kept.
+	sorted := make([]projectInfo, len(projects))
+	copy(sorted, projects)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		di, dj := pathDepth(sorted[i].Path), pathDepth(sorted[j].Path)
+		if di != dj {
+			return di < dj
+		}
+		return sorted[i].Path < sorted[j].Path
+	})
+	kept := make([]projectInfo, 0, len(sorted))
+	for _, p := range sorted {
+		path := filepath.Clean(p.Path)
+		nested := false
+		for _, k := range kept {
+			rel, err := filepath.Rel(filepath.Clean(k.Path), path)
+			if err != nil {
+				continue
+			}
+			if rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+				nested = true
+				break
+			}
+		}
+		if !nested {
+			kept = append(kept, p)
+		}
+	}
+	return kept
+}
+
+func pathDepth(p string) int {
+	return len(strings.Split(filepath.Clean(p), string(os.PathSeparator)))
+}
+
 func gatherProjectInfo(repoDir string) projectInfo {
 	info := projectInfo{Path: repoDir}
 

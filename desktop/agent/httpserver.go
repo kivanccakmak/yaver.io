@@ -3659,6 +3659,10 @@ func (s *HTTPServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 		projects = listDiscoveredProjects()
 	}
 	projects = mergeLiveWorkspaceReposIntoProjects(projects)
+	// Top-level only: a nested clone (yaver.io/mobile inside yaver.io) is not
+	// a pickable project — it leaked "mobile"/"yaver mobile" rows to every
+	// picker. The outermost repo root wins (2026-08-09).
+	projects = collapseNestedRepos(projects)
 	type projectResp struct {
 		Name           string   `json:"name"`
 		Path           string   `json:"path"`

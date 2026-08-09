@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { agentClient } from "@/lib/agent-client";
 import { AGENT_AUTH_REMEDY, isAgentAuthErrorMessage } from "@/lib/agentAuthError";
+import { collapseTopLevelProjects } from "@/lib/projectTopLevel";
 import EnvironmentSwitcher from "./EnvironmentSwitcher";
 import ProjectDetailView from "./ProjectDetailView";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
@@ -314,7 +315,7 @@ export default function ProjectsView({
         agentClient.listProjects(),
         agentClient.listWorkspaceRepos(),
       ]);
-      setProjects(mergeProjectInventory(list, repos));
+      setProjects(collapseTopLevelProjects(mergeProjectInventory(list, repos)));
     } catch (error) {
       setProjects([]);
       const message = error instanceof Error ? error.message : "Failed to load projects";

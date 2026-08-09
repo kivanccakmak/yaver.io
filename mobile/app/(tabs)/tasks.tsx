@@ -301,6 +301,71 @@ type ComposerProject = {
   gitRemote?: string;
 };
 
+// Top-level only — the composer contract (2026-08-09). A nested git clone
+// inside another repo (e.g. <ws>/yaver.io/mobile inside <ws>/yaver.io) is NOT
+// a pickable project: the outermost repo root wins, so the picker offers
+// medici.ai / yaver.io / talos / sfmg — never "yaver mobile" or
+// "<root> / <app>" sub-project rows. This is the client-side twin of the
+// agent's collapseNestedRepos: if a box still reports a nested repo (older
+// agent), the picker must not leak it.
+function collapseNestedComposerProjects(projects: ComposerProject[]): ComposerProject[] {
+  const sorted = [...projects].sort((a, b) => {
+    const da = (a.path || "").split("/").length;
+    const db = (b.path || "").split("/").length;
+    if (da !== db) return da - db;
+    return (a.path || "").localeCompare(b.path || "");
+  });
+  const kept: ComposerProject[] = [];
+  for (const p of sorted) {
+    const path = (p.path || "").replace(/\/+$/, "");
+    let nested = false;
+    for (const k of kept) {
+      const root = (k.path || "").replace(/\/+$/, "");
+      if (!root || root === path) continue;
+      if (path.startsWith(root + "/")) {
+        nested = true;
+        break;
+      }
+    }
+    if (!nested) kept.push(p);
+  }
+  return kept;
+}
+
+// Enrich the agent-discovered projects with the Convex runtime project
+// catalog for the runner device (projectName/repoName/gitRemote/branch/
+// framework — privacy-limited, never absolute paths). The catalog is the
+// Convex-side memory of the same git projects; a row that matches an
+// agent project by gitRemote or repoName fills in branch/framework the agent
+// may not have reported. Catalog rows with NO agent match are only added when
+// they carry a gitRemote we can still display — pathless rows cannot select a
+// workDir, so they never become pickable entries.
+function mergeConvexCatalogIntoProjects(
+  projects: ComposerProject[],
+  catalog?: { projectName?: string | null; repoName?: string | null; gitRemote?: string | null; branch?: string | null; framework?: string | null }[],
+): ComposerProject[] {
+  const rows = (catalog || []).filter((r) => r && (r.gitRemote || r.repoName));
+  if (rows.length === 0) return projects;
+  const norm = (v?: string | null) => String(v || "").trim().toLowerCase();
+  const enriched = projects.map((p) => {
+    const match = rows.find(
+      (r) =>
+        (p.gitRemote && r.gitRemote && norm(p.gitRemote) === norm(r.gitRemote)) ||
+        (r.repoName && norm(r.repoName) === norm(projectNameFromPath(p.path))),
+    );
+    if (!match) return p;
+    return {
+      ...p,
+      branch: p.branch || match.branch || undefined,
+      framework: p.framework || match.framework || undefined,
+      // The catalog name is the top-level repo identity (e.g. "talos"), never
+      // a "<root> / <app>" monorepo-app label — those must never surface.
+      name: match.projectName && !match.projectName.includes(" / ") ? match.projectName : p.name,
+    };
+  });
+  return collapseNestedComposerProjects(enriched);
+}
+
 function extractAssistantActivity(text: string, maxItems = 4): string[] {
   const seen = new Set<string>();
   const lines = text
@@ -1782,6 +1847,126 @@ export default function TasksScreen() {
     [composerProjects, selectedProjectPath],
   );
   const projectDir = selectedComposerProject?.path || selectedProjectPath || routeProjectDir;
+
+  // ── Project / MCP picker sheet ───────────────────────────────────────
+  // Rendered in THREE places by the same function so the three can never
+  // drift: (a) as an absolute overlay INSIDE the New Task composer Modal,
+  // (b) as an absolute overlay INSIDE the task-detail Modal (follow-up
+  // composer), and (c) as a standalone Modal when neither is up. iOS cannot
+  // present a second native Modal while another is on screen — the newcomer
+  // mounts invisibly behind it, so tapping the project chip "did nothing"
+  // (same class as the Logs sheet, 2026-08-08, and the Modal-handoff notes
+  // in this file). Overlays inside the hosting Modal are the only form that
+  // actually appears. (2026-08-09)
+  const renderProjectPickerSheet = () => (
+    <>
+      <Pressable style={[s.modalOverlay, { justifyContent: "flex-start" }]} onPress={() => setShowProjectPicker(false)} />
+      <View style={[s.agentPickerSheet, { backgroundColor: c.bgCard, maxHeight: "72%" }]}>
+        <View style={[s.agentPickerHeader, { borderBottomColor: c.border }]}>
+          <Text style={[s.agentPickerTitle, { color: c.textPrimary }]}>Task configuration</Text>
+          <Pressable onPress={() => setShowProjectPicker(false)}>
+            <Text style={{ color: c.accent, fontSize: 16, fontWeight: "600" }}>Done</Text>
+          </Pressable>
+        </View>
+        <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+          <View style={s.keepLastRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "600" }}>Keep last project</Text>
+              <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 2 }}>Auto-select this runner box's last project.</Text>
+            </View>
+            <Switch
+              value={keepLastProject}
+              onValueChange={(value) => {
+                setKeepLastProject(value);
+                void saveKeepLastProjectEnabled(value);
+              }}
+            />
+          </View>
+          {composerProjects.length === 0 ? (
+            <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 18 }}>
+              No projects reported by the runner machine yet.
+            </Text>
+          ) : (
+            <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+              {composerProjects.map((project) => {
+                const active = project.path === selectedProjectPath;
+                return (
+                  <Pressable
+                    key={project.path}
+                    onPress={() => {
+                      setSelectedProjectPath(project.path);
+                      if (keepLastProject) {
+                        const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
+                        void saveLastTaskProject({
+                          deviceId: runnerDeviceId,
+                          name: project.name,
+                          path: project.path,
+                          branch: project.branch,
+                          gitRemote: project.gitRemote,
+                        });
+                      }
+                    }}
+                    style={[
+                      s.projectPickerRow,
+                      { borderColor: active ? c.accent : c.border, backgroundColor: active ? withAlpha(c.accent, "1f") : c.bg },
+                    ]}
+                  >
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }} numberOfLines={1}>{project.name}</Text>
+                      <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }} numberOfLines={1}>{project.path}</Text>
+                      {[project.branch, project.framework].filter(Boolean).length ? (
+                        <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }} numberOfLines={1}>
+                          {[project.branch, project.framework].filter(Boolean).join(" · ")}
+                        </Text>
+                      ) : null}
+                    </View>
+                    {active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : null}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          )}
+          <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 18 }]}>MCP SERVERS</Text>
+          <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 10 }}>
+            Empty means only Yaver tools.
+          </Text>
+          {availableMcpServers.length === 0 ? (
+            <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 18 }}>
+              No enabled MCP servers registered on this runner.
+            </Text>
+          ) : (
+            availableMcpServers.map((server) => {
+              const active = selectedMcpServers.includes(server.name);
+              return (
+                <Pressable
+                  key={server.name}
+                  onPress={() => {
+                    setSelectedMcpServers((prev) =>
+                      prev.includes(server.name)
+                        ? prev.filter((name) => name !== server.name)
+                        : [...prev, server.name],
+                    );
+                  }}
+                  style={[
+                    s.projectPickerRow,
+                    { borderColor: active ? c.accent : c.border, backgroundColor: active ? withAlpha(c.accent, "1f") : c.bg },
+                  ]}
+                >
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }} numberOfLines={1}>{server.name}</Text>
+                    <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }} numberOfLines={1}>
+                      {server.toolCount ?? 0} tools{server.hasAuth ? " · auth" : ""}
+                    </Text>
+                  </View>
+                  {active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : <Ionicons name="ellipse-outline" size={20} color={c.textMuted} />}
+                </Pressable>
+              );
+            })
+          )}
+        </View>
+      </View>
+    </>
+  );
   // Multi-target wizard state. Only used when DeviceContext.multiTargetMode
   // is true: the FAB opens the wizard first, the wizard sets pendingTarget
   // (and switches the QUIC client to that device via selectDevice), then
@@ -4887,13 +5072,23 @@ export default function TasksScreen() {
     let cancelled = false;
     const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
     void (async () => {
-      const [projectRows, mcpRows, keep] = await Promise.all([
+      const [projectRows, mcpRows, keep, settings] = await Promise.all([
         connectionManager.runnerClient().listProjects().catch(() => [] as ComposerProject[]),
         listMcpServers().catch(() => [] as McpServer[]),
         loadKeepLastProjectEnabled(),
+        // Convex runtime project catalog for the runner device — the
+        // Convex-seeded memory of the same git projects, merged with the
+        // agent's live discovery below so both sources feed ONE list
+        // (2026-08-09). Privacy-limited: names/remotes/branches, no paths.
+        token ? getUserSettings(token).catch(() => null) : Promise.resolve(null),
       ]);
       if (cancelled) return;
-      const normalizedProjects = (projectRows || [])
+      const catalogForDevice = (settings as any)?.runtimeProjectCatalogByDevice as
+        | Array<{ deviceId: string; projects?: Array<{ projectName?: string | null; repoName?: string | null; gitRemote?: string | null; branch?: string | null; framework?: string | null }> }>
+        | undefined;
+      const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
+      const catalogRow = (catalogForDevice || []).find((row) => row?.deviceId === runnerDeviceId);
+      let normalizedProjects: ComposerProject[] = (projectRows || [])
         .filter((project: any) => project?.path)
         .map((project: any) => ({
           name: String(project.name || projectNameFromPath(project.path) || "Project"),
@@ -4902,6 +5097,11 @@ export default function TasksScreen() {
           framework: project.framework ? String(project.framework) : undefined,
           gitRemote: project.gitRemote ? String(project.gitRemote) : undefined,
         }));
+      // Top-level only + Convex/agent merge (Snowball, 2026-08-09): a box's
+      // discovery can leak nested clones (yaver.io/mobile) and the picker
+      // must fold them into their root; the Convex catalog enriches what the
+      // agent reports. Both sources, one top-level list.
+      normalizedProjects = mergeConvexCatalogIntoProjects(normalizedProjects, catalogRow?.projects);
       setComposerProjects(normalizedProjects);
       setAvailableMcpServers((mcpRows || []).filter((server) => server.enabled));
       setKeepLastProject(keep);
@@ -6129,6 +6329,7 @@ export default function TasksScreen() {
                   onPress={() => setShowProjectPicker(true)}
                   accessibilityRole="button"
                   accessibilityLabel="Configure project and MCPs for this task"
+                  testID="composer-project-chip"
                 >
                   <Ionicons name="options-outline" size={16} color={selectedComposerProject ? c.accent : c.textMuted} />
                   <Text style={[s.scopeChipText, { color: c.textSecondary }]} numberOfLines={1}>
@@ -6350,114 +6551,26 @@ export default function TasksScreen() {
               </View>
             </View>
           </KeyboardAvoidingView>
+          {/* Project/MCP picker as an in-composer OVERLAY — never a second
+              native Modal. iOS cannot present a second native Modal while
+              another is on screen; the newcomer mounts invisibly behind it,
+              so the project chip tap "did nothing" (same class as the Logs
+              sheet, 2026-08-08). Rendered inside THIS Modal the sheet
+              actually appears above the composer. (2026-08-09) */}
+          {showProjectPicker && showNewTask ? (
+            <View style={[StyleSheet.absoluteFillObject, { zIndex: 60 }]} pointerEvents="box-none">
+              {renderProjectPickerSheet()}
+            </View>
+          ) : null}
         </Modal>
 
-        <Modal visible={showProjectPicker} animationType="slide" transparent onRequestClose={() => setShowProjectPicker(false)}>
-          <Pressable style={[s.modalOverlay, { justifyContent: "flex-start" }]} onPress={() => setShowProjectPicker(false)} />
-          <View style={[s.agentPickerSheet, { backgroundColor: c.bgCard, maxHeight: "72%" }]}>
-            <View style={[s.agentPickerHeader, { borderBottomColor: c.border }]}>
-              <Text style={[s.agentPickerTitle, { color: c.textPrimary }]}>Task configuration</Text>
-              <Pressable onPress={() => setShowProjectPicker(false)}>
-                <Text style={{ color: c.accent, fontSize: 16, fontWeight: "600" }}>Done</Text>
-              </Pressable>
-            </View>
-            <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
-              <View style={s.keepLastRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "600" }}>Keep last project</Text>
-                  <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 2 }}>Auto-select this runner box's last project.</Text>
-                </View>
-                <Switch
-                  value={keepLastProject}
-                  onValueChange={(value) => {
-                    setKeepLastProject(value);
-                    void saveKeepLastProjectEnabled(value);
-                  }}
-                />
-              </View>
-              {composerProjects.length === 0 ? (
-                <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 18 }}>
-                  No projects reported by the runner machine yet.
-                </Text>
-              ) : (
-                <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
-                  {composerProjects.map((project) => {
-                    const active = project.path === selectedProjectPath;
-                    return (
-                      <Pressable
-                        key={project.path}
-                        onPress={() => {
-                          setSelectedProjectPath(project.path);
-                          if (keepLastProject) {
-                            const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
-                            void saveLastTaskProject({
-                              deviceId: runnerDeviceId,
-                              name: project.name,
-                              path: project.path,
-                              branch: project.branch,
-                              gitRemote: project.gitRemote,
-                            });
-                          }
-                        }}
-                        style={[
-                          s.projectPickerRow,
-                          { borderColor: active ? c.accent : c.border, backgroundColor: active ? withAlpha(c.accent, "1f") : c.bg },
-                        ]}
-                      >
-                        <View style={{ flex: 1, minWidth: 0 }}>
-                          <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }} numberOfLines={1}>{project.name}</Text>
-                          <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }} numberOfLines={1}>{project.path}</Text>
-                          {[project.branch, project.framework].filter(Boolean).length ? (
-                            <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }} numberOfLines={1}>
-                              {[project.branch, project.framework].filter(Boolean).join(" · ")}
-                            </Text>
-                          ) : null}
-                        </View>
-                        {active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : null}
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-              )}
-              <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 18 }]}>MCP SERVERS</Text>
-              <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 10 }}>
-                Empty means only Yaver tools.
-              </Text>
-              {availableMcpServers.length === 0 ? (
-                <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 18 }}>
-                  No enabled MCP servers registered on this runner.
-                </Text>
-              ) : (
-                availableMcpServers.map((server) => {
-                  const active = selectedMcpServers.includes(server.name);
-                  return (
-                    <Pressable
-                      key={server.name}
-                      onPress={() => {
-                        setSelectedMcpServers((prev) =>
-                          prev.includes(server.name)
-                            ? prev.filter((name) => name !== server.name)
-                            : [...prev, server.name],
-                        );
-                      }}
-                      style={[
-                        s.projectPickerRow,
-                        { borderColor: active ? c.accent : c.border, backgroundColor: active ? withAlpha(c.accent, "1f") : c.bg },
-                      ]}
-                    >
-                      <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }} numberOfLines={1}>{server.name}</Text>
-                        <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }} numberOfLines={1}>
-                          {server.toolCount ?? 0} tools{server.hasAuth ? " · auth" : ""}
-                        </Text>
-                      </View>
-                      {active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : <Ionicons name="ellipse-outline" size={20} color={c.textMuted} />}
-                    </Pressable>
-                  );
-                })
-              )}
-            </View>
-          </View>
+        {/* Standalone picker Modal — ONLY when neither the New Task composer
+            nor the task-detail Modal is up. Over any other Modal a second
+            native Modal is invisible on iOS, so this path must never
+            overlap them; the follow-up composer's chip uses the in-detail
+            overlay instead (see the task-detail Modal below). */}
+        <Modal visible={showProjectPicker && !showNewTask && !selectedTask} animationType="slide" transparent onRequestClose={() => setShowProjectPicker(false)}>
+          {renderProjectPickerSheet()}
         </Modal>
 
 
@@ -6805,6 +6918,8 @@ export default function TasksScreen() {
                   <Pressable
                     hitSlop={10}
                     style={[s.cockpitListBtn, { backgroundColor: c.accentSoft }]}
+                    accessibilityRole="button"
+                    accessibilityLabel="New task"
                     onPress={() => {
                       setNewTaskText("");
                       setAttachedImages([]);
@@ -7503,6 +7618,35 @@ export default function TasksScreen() {
                         attaches on every turn — so the disclosure has to be
                         here too, not only on the first message. */}
                     <ScreenContextChip workDir={projectDir} style={{ marginBottom: 8 }} />
+                    {/* Project/MCP scope chip — SAME affordance as the New
+                        Task composer. No chat/console discrimination
+                        (2026-08-09): a follow-up is a task, and the user
+                        must be able to re-target the project + MCPs for it
+                        exactly like a fresh task. Opens the same picker
+                        sheet; it renders as an in-detail overlay (never a
+                        second native Modal — iOS would mount it invisibly). */}
+                    <View style={s.composerScopeRow}>
+                      <Pressable
+                        style={({ pressed }) => [
+                          s.scopeChip,
+                          { backgroundColor: c.bgCardElevated, borderColor: selectedComposerProject ? c.accent : c.border },
+                          pressed && { opacity: 0.65 },
+                        ]}
+                        onPress={() => setShowProjectPicker(true)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Configure project and MCPs for this follow-up"
+                        testID="followup-project-chip"
+                      >
+                        <Ionicons name="options-outline" size={16} color={selectedComposerProject ? c.accent : c.textMuted} />
+                        <Text style={[s.scopeChipText, { color: c.textSecondary }]} numberOfLines={1}>
+                          {[
+                            selectedComposerProject?.name || projectNameFromPath(projectDir) || "Project",
+                            selectedMcpServers.length ? `${selectedMcpServers.length} MCP` : "No MCPs",
+                          ].join(" · ")}
+                        </Text>
+                        <Text style={{ color: c.textMuted, fontSize: 10 }}>▾</Text>
+                      </Pressable>
+                    </View>
                     <TextInput
                       // testIDs on the composer exist so the follow-up loop can
                       // be driven by maestro (mobile/maestro/followup-visible.yaml).
@@ -7689,6 +7833,16 @@ export default function TasksScreen() {
                 logs={logs}
                 onClose={() => setShowLogs(false)}
               />
+            </View>
+          ) : null}
+          {/* Project/MCP picker as an in-detail OVERLAY — the follow-up
+              composer's project chip opens it while the task-detail Modal is
+              up. A second native Modal would mount invisibly (same iOS rule
+              as the Logs sheet above), so it renders here, above the
+              composer, same zIndex ladder. (2026-08-09) */}
+          {showProjectPicker && !!selectedTask ? (
+            <View style={[StyleSheet.absoluteFillObject, { zIndex: 60 }]} pointerEvents="box-none">
+              {renderProjectPickerSheet()}
             </View>
           ) : null}
         </Modal>

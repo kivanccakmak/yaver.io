@@ -1,0 +1,177 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
+
+// The "which project is on which machine" seeding contract (2026-08-09):
+// the agent pushes a per-device runtime project catalog to Convex so web +
+// mobile can answer that question without fanning out to every box. The
+// catalog must be TOP-LEVEL only (a nested clone inside another repo is not
+// a pickable project) and each entry must carry its git provider identity.
+
+func TestDeriveGitProviderIdentity(t *testing.T) {
+	cases := []struct {
+		remote   string
+		wantRepo string
+		wantProv string
+	}{
+		{"git@github.com:yaver-io/yaver.io.git", "yaver.io", "github"},
+		{"https://github.com/kivanccakmak/talos.git", "talos", "github"},
+		{"git@gitlab.com:kivanccakmak/sfmg", "sfmg", "gitlab"},
+		{"https://gitlab.com/kivanccakmak/medici.ai.git", "medici.ai", "gitlab"},
+		{"https://gitlab.com/group/subgroup/project.git", "project", "gitlab"},
+		// SSH over https:// with a token — credentials must never leak into
+		// the provider or repo name.
+		{"https://token@github.com/owner/repo.git", "repo", "github"},
+		{"ssh://git@bitbucket.org/team/app", "app", "bitbucket.org"},
+		{"git@selfhosted.example.com:team/tool.git", "tool", "selfhosted.example.com"},
+	}
+	for _, tc := range cases {
+		repo, prov := deriveGitProviderIdentity(tc.remote, "fallback")
+		if repo != tc.wantRepo || prov != tc.wantProv {
+			t.Fatalf("deriveGitProviderIdentity(%q) = (%q, %q), want (%q, %q)",
+				tc.remote, repo, prov, tc.wantRepo, tc.wantProv)
+		}
+	}
+}
+
+func TestDeriveGitProviderIdentityFallsBackToName(t *testing.T) {
+	repo, prov := deriveGitProviderIdentity("git@github.com:", "medici.ai")
+	if repo != "medici.ai" {
+		t.Fatalf("unparseable remote path must fall back to the dir name, got %q", repo)
+	}
+	if prov != "github" {
+		t.Fatalf("provider must still derive from the host, got %q", prov)
+	}
+}
+
+// mkRealGitRepo creates a real git repo (so DetectProjectInfo can read the
+// origin remote + branch) with a fake origin URL. The branch depends on the
+// host's init.defaultBranch, so tests never assert on it.
+func mkRealGitRepo(t *testing.T, base string, parts ...string) string {
+	t.Helper()
+	dir := filepath.Join(append([]string{base}, parts...)...)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("-c", "user.email=test@test", "-c", "user.name=test", "commit", "--allow-empty", "-q", "-m", "init")
+	return dir
+}
+
+func setRemote(t *testing.T, dir, remote string) {
+	t.Helper()
+	cmd := exec.Command("git", "-C", dir, "remote", "add", "origin", remote)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git remote add failed: %v\n%s", err, out)
+	}
+}
+
+// writeProjectsFile seeds PROJECTS.md under the temp HOME so
+// listDiscoveredProjects sees exactly the given repo dirs.
+func writeProjectsFile(t *testing.T, dirs []string) {
+	t.Helper()
+	fp, err := projectsFilePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var sb string
+	for _, d := range dirs {
+		sb += "### " + d + "\n- Branch: main\n"
+	}
+	if err := os.WriteFile(fp, []byte(sb), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The batch payload must carry the catalog, and the catalog must be built
+// from the same TOP-LEVEL collapse as /projects — a nested clone
+// (yaver.io/mobile inside yaver.io) must never be seeded as its own machine
+// project.
+func TestBuildRuntimeProjectCatalogTopLevelOnly(t *testing.T) {
+	home := withHome(t)
+	ws := filepath.Join(home, "Workspace")
+	top := mkRealGitRepo(t, ws, "yaver.io")
+	nested := mkRealGitRepo(t, ws, "yaver.io", "mobile")
+	setRemote(t, top, "git@github.com:yaver-io/yaver.io.git")
+	setRemote(t, nested, "git@github.com:yaver-io/yaver.io.git")
+	writeProjectsFile(t, []string{top, nested})
+
+	catalog := buildRuntimeProjectCatalog()
+	byRepo := map[string]map[string]interface{}{}
+	for _, row := range catalog {
+		byRepo[row["repoName"].(string)] = row
+	}
+	if _, ok := byRepo["mobile"]; ok {
+		t.Fatalf("nested clone yaver.io/mobile leaked into the catalog: %v", catalog)
+	}
+	root, ok := byRepo["yaver.io"]
+	if !ok {
+		t.Fatalf("top-level yaver.io missing from catalog: %v", catalog)
+	}
+	if root["gitProvider"] != "github" {
+		t.Fatalf("gitProvider must be derived from the remote, got %q", root["gitProvider"])
+	}
+	if root["gitRemote"] != "git@github.com:yaver-io/yaver.io.git" {
+		t.Fatalf("gitRemote must be preserved verbatim, got %q", root["gitRemote"])
+	}
+}
+
+// A repo with no origin remote has no provider identity and must be skipped —
+// seeding a pathless/identity-less row would pollute the catalog.
+func TestBuildRuntimeProjectCatalogSkipsReposWithoutRemote(t *testing.T) {
+	home := withHome(t)
+	ws := filepath.Join(home, "Workspace")
+	repo := mkRealGitRepo(t, ws, "local-only")
+	writeProjectsFile(t, []string{repo})
+
+	catalog := buildRuntimeProjectCatalog()
+	for _, row := range catalog {
+		if row["repoName"] == "local-only" {
+			t.Fatalf("repo without an origin remote must not be seeded: %v", catalog)
+		}
+	}
+}
+
+// The batch payload carries the catalog so the Convex seeding has data, and
+// the per-device identity (deviceId) rides the same payload.
+func TestBatchPayloadIncludesRuntimeProjectCatalog(t *testing.T) {
+	home := withHome(t)
+	ws := filepath.Join(home, "Workspace")
+	repo := mkRealGitRepo(t, ws, "talos")
+	setRemote(t, repo, "git@gitlab.com:kivanccakmak/talos.git")
+	writeProjectsFile(t, []string{repo})
+
+	s := &convexSyncer{deviceID: "box-1"}
+	payload, err := s.buildBatchPayload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	catalog, ok := parsed["runtimeProjectCatalog"].([]interface{})
+	if !ok || len(catalog) == 0 {
+		t.Fatalf("batch payload must carry runtimeProjectCatalog; got %v", parsed)
+	}
+	row := catalog[0].(map[string]interface{})
+	if row["repoName"] != "talos" || row["gitProvider"] != "gitlab" {
+		t.Fatalf("catalog row missing provider identity: %v", row)
+	}
+}

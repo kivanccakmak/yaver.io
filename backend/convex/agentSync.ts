@@ -4,6 +4,7 @@
 
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
 // ---- Projects ----
@@ -222,6 +223,19 @@ export const batchSync = mutation({
       error: v.optional(v.string()),
       timestamp: v.number(),
     }))),
+    // Per-machine runtime project catalog: which git project (with its git
+    // provider identity) lives on this device. Seeded by the Go agent from
+    // its own top-level discovery (convex_state_sync.go) so web + mobile can
+    // answer "which project is in which machine" from Convex. Privacy:
+    // names/remotes/branches/frameworks only — never absolute paths.
+    runtimeProjectCatalog: v.optional(v.array(v.object({
+      projectName: v.string(),
+      repoName: v.optional(v.string()),
+      gitProvider: v.optional(v.string()),
+      gitRemote: v.optional(v.string()),
+      branch: v.optional(v.string()),
+      framework: v.optional(v.string()),
+    }))),
   },
   handler: async (ctx, args) => {
     const userId = await resolveUser(ctx);
@@ -240,6 +254,21 @@ export const batchSync = mutation({
       } else {
         await ctx.db.insert("userProjects", patch);
       }
+    }
+
+    // Persist the machine's project catalog into userSettings
+    // (runtimeProjectCatalogByDevice) + the device row cache via the internal
+    // set mutation — the same merge path the web RuntimeLab uses, so the
+    // agent-seeded rows and the lab-seeded rows can never drift in shape.
+    if (args.runtimeProjectCatalog !== undefined) {
+      await ctx.runMutation(internal.userSettings.set, {
+        userId,
+        runtimeProjectCatalogForDevice: {
+          deviceId: args.deviceId,
+          projects: args.runtimeProjectCatalog,
+          updatedAt: now,
+        },
+      });
     }
 
     // Services: wipe-and-insert per device, matching upsertServices's
