@@ -49,6 +49,7 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+      ANDROID_RELEASE_SHA256: ${{ secrets.ANDROID_RELEASE_SHA256 }}
       OAUTH_GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
       OAUTH_GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
       OAUTH_GITLAB_CLIENT_ID: ${{ secrets.OAUTH_GITLAB_CLIENT_ID }}
@@ -86,7 +87,7 @@ jobs:
           fi
 
       - name: Build and deploy to Cloudflare Workers
-        run: cd web && npm run deploy
+        run: ./deploy/deploy.sh cloudflare
 
       - name: Update Convex web version
         if: ${{ env.CONVEX_DEPLOY_KEY != '' }}
