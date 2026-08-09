@@ -9737,6 +9737,19 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			return mcpToolError(err.Error())
 		}
 		return mcpToolJSON(out)
+	case "mobile_test_open":
+		var args struct {
+			Mode       string `json:"mode"`
+			Profile    string `json:"profile"`
+			URL        string `json:"url"`
+			TimeoutSec int    `json:"timeout_sec"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		res := opsMobileTestOpenHandler(OpsContext{Ctx: context.Background(), Server: s}, mustJSON(args))
+		if !res.OK {
+			return mcpToolError(res.Error)
+		}
+		return mcpToolJSON(res.Initial)
 	case "sandbox_run":
 		var args struct {
 			DeviceID  string          `json:"device_id"`
