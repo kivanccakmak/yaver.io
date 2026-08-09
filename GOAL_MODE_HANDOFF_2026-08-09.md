@@ -82,6 +82,14 @@ can't reach (Unauthorized)`; Ofis2/Mobiles-Mac-mini/simkab genuinely offline.
 
 ## 4. Bug backlog — prescribed fixes in priority order
 
+> **STATUS 2026-08-09 evening:** 4.1 landed by a parallel session (three-path
+> overlay picker — see the `collapseNestedComposerProjects` / `renderProjectPickerSheet`
+> work in `tasks.tsx`), 4.3/4.4/4.5/4.6/4.7 + the `gitRemote` field bug landed in
+> `a308d1241` (web) and `2e4b2a4fa` (agent discovery). 4.2 live-verification on
+> ubuntu and the end-to-end mobile trace remain. The parallel session also added
+> agent-side `collapseNestedRepos` (discovery.go + httpserver.go) and a Convex
+> runtime-project-catalog merge on mobile — uncommitted as of this note.
+
 ### 4.1 MOBILE: project/MCP chip click does nothing (TestFlight) — THE big one
 
 `mobile/app/(tabs)/tasks.tsx`:
@@ -151,6 +159,13 @@ cache junk (`v2@v2.3.0`, `cdproto@…` — git repos under `/root/go/pkg/mod`).
 - After rebuild, on ubuntu run `curl <agent>/projects` and confirm the junk is
   gone (11 real top-level projects under `/root/Workspace`).
 
+> **DONE (2e4b2a4fa):** skip map gained `go/pkg/mod/src/snap/venv/.cabal/.stack`,
+> plus `isGoModuleCacheDir` (nested `<mod>@v<digits>` shape) and a root-child
+> guard so genuine `Workspace/notamodulecache@v1` projects survive. Pinned by
+> `TestGitWalkSkipsGoModuleCache`. NOTE: the ubuntu box ALREADY reports 11 clean
+> projects (its deployed agent predates the 153-junk observation or the box was
+> re-scanned) — the fix is defensive for other boxes and the module-cache shape.
+
 ### 4.5 WEB: "no reachable URL" for online machines (useDeviceProjects)
 
 Same as 4.3's root cause but a different consumer: `useDeviceProjects`
@@ -160,6 +175,11 @@ Same as 4.3's root cause but a different consumer: `useDeviceProjects`
 no usable https publicEndpoints, the list is empty. Fix: same-origin `/d/<id>`
 candidate (see 3.1). This unblocks Git projects on every card AND the mobile
 composer's project list (4.2b).
+
+> **DONE (a308d1241):** same-origin `/d/<id>` candidate now pushed FIRST in both
+> `useDeviceProjects` and `useAgentWirelessDevices`, mirroring
+> `useDeviceRuntimeInfo`. Also fixed the `gitRemote`-vs-`remote` mapper bug (every
+> chip showed "no git remote" because the agent emits `gitRemote`).
 
 ### 4.6 LIVE OUTPUT LOST / Reattach in web chat
 
@@ -176,6 +196,12 @@ ubuntu.
   attempt a **fresh candidate URL** (proxy /d/<id>) per attempt, not the same
   dead URL 5 times, and should auto-recover when the leg returns.
 
+> **DONE (a308d1241):** `AgentClient.roleBase` now prefers the same-origin
+> `/d/<id>` proxy when the dashboard is served from yaver.io — proven live
+> (the proxy serves `/tasks` and the raw SSE output lane with offsets). Every
+> stream (re)subscribe rebuilds the URL via `taskBaseUrl`, so the retry ladder
+> gets a fresh working candidate per attempt instead of the dead relay leg.
+
 ### 4.7 Relay-refused mislabel (magara) — classifier honesty
 
 `web/lib/relayAuth.ts` `isRelayCredentialDeny` (L123–126) + the /d/<id> proxy
@@ -185,9 +211,17 @@ reason is relay-credential but `device.online` is fresh, downgrade label to
 "no tunnel — restart agent on box" (the machine_doctor summary already says
 this: "relay tunnel that's registered but dead").
 
+> **DONE (a308d1241):** `classifyFetchError` gains `deviceOnline`. When a
+> relay-credential 401 body survives the proxy self-heal AND the device
+> heartbeats are fresh, it now labels "Relay tunnel down — restart the agent on
+> the box" (never a password scare / re-auth suggestion). Wired at all 5 call
+> sites in DevicesView.tsx; pinned by 2 new tests in connection-error.test.ts.
+
 ## 5. Verified-working (do not redo, cite as evidence)
 
 - `/d/<id>/info` proxy → 200 JSON for ubuntu + magara (real token).
+- `/d/<id>/tasks` + `/d/<id>/tasks/<id>/output` SSE (raw frames + offsets) →
+  work through the same-origin proxy (verified 2026-08-09 17:2x, task 722f156f).
 - `go build ./...` / `go vet ./...` in `desktop/agent` pass (post transfer.go fix).
 - DeepSeek V4 Flash in catalogue: `web/components/dashboard/DevicesView.tsx`
   `OPENCODE_PROVIDER_CATALOGUE` deepseek entry (**L2793–2805**, `deepseek-v4-flash`
@@ -197,6 +231,10 @@ this: "relay tunnel that's registered but dead").
 - Goal-mode opencode wrapper (`<yaver_goal>`) lives in `startProcess`
   (`desktop/agent/tasks.go`, guarded `runner == opencode && !rawRunnerCommand`).
 - Agent MCP scope: yaver MCP default for all three runners (4.2).
+- Web typecheck clean (post a308d1241); mobile typecheck clean except the
+  documented pre-existing TaskProofCard / DeviceContext / .test.ts errors.
+- A parallel opencode session is committing its own work to this repo — re-run
+  `git status` before any commit and stage only your files.
 
 ## 6. Test commands (run before committing each fix)
 
@@ -220,8 +258,14 @@ this: "relay tunnel that's registered but dead").
 
 ## 8. Explicitly NOT requested (ask before doing)
 
-- No deploys (web/Cloudflare, Convex backend, cli/npm, TestFlight, Play).
+- No deploys (web/Cloudflare, Convex backend, cli/npm, TestFlight, Play) — **no
+  releases at all until the user explicitly asks** (reinforced 2026-08-09).
 - No changes to the mobile native connect path; browser lane is additive-only
   (`.web.ts` siblings / capability checks).
 - No touching Ofis2 / Mobiles-Mac-mini / simkab / magara boxes' state; they're
   private LAN / offline — diagnosis only via the dashboard + relay probes.
+- **Remaining after the 4.x backlog:** (a) 4.2 live verify — task with
+  `mcpServers` + goal-mode on ubuntu, check `~/.yaver/runner-mcp/opencode/
+  opencode.json` during a run; (b) mobile E2E trace of a goal-mode task; (c) the
+  parallel session's uncommitted work (collapseNestedRepos, catalog merge,
+  projectTopLevel.ts, e2e spec) needs its own review + commit.
