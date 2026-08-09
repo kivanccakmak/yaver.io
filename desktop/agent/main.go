@@ -433,6 +433,44 @@ func synthRelayServerInfoFromURL(rawURL string) (RelayServerInfo, bool) {
 	}, true
 }
 
+// appendFreeRelayFallbacks — JOINT-INCLUSIVE Free + Relay Pro (2026-08-09).
+//
+// A device whose primary relay is a user-private managed relay (relayUrl =
+// the user's own box) keeps the shared FREE relays as lower-priority
+// OFF-LAN fallbacks — the same rule the config.json path already applies
+// ("configured + cached fallback"). Without this, a private relay that is
+// down, out of capacity, or mid-provision leaves the device unreachable
+// even though the free shared relay is fine.
+//
+// The per-user relay password is validated at /relay/validate against the
+// user's row on ANY Yaver relay, so it pairs with every free fallback entry
+// too (the /config server contract now ships it on all free entries for the
+// same reason). Never duplicates the primary relay. Pure — unit-testable.
+func appendFreeRelayFallbacks(
+	relayServers []RelayServerInfo,
+	relayPasswords map[string]string,
+	platform []RelayServerInfo,
+	primaryHTTPURL string,
+	perUserPassword string,
+) ([]RelayServerInfo, map[string]string) {
+	if len(platform) == 0 || strings.TrimSpace(primaryHTTPURL) == "" {
+		return relayServers, relayPasswords
+	}
+	if relayPasswords == nil {
+		relayPasswords = make(map[string]string)
+	}
+	for _, rs := range platform {
+		if relayHTTPURLsMatch(rs.HttpURL, primaryHTTPURL) {
+			continue // the primary relay is already in the list
+		}
+		relayServers = append(relayServers, rs)
+		if perUserPassword != "" && strings.TrimSpace(rs.QuicAddr) != "" {
+			relayPasswords[rs.QuicAddr] = perUserPassword
+		}
+	}
+	return relayServers, relayPasswords
+}
+
 // restoreUserCwdFromNpmWrapper undoes the cwd-clobbering done by the npm
 // wrapper's `go run .` dev fallback (cli/src/agent-runtime.js sets cwd to
 // desktop/agent so the Go toolchain can find the module). The wrapper
@@ -2989,6 +3027,22 @@ func runServe(args []string) {
 					relayPasswords[synth.QuicAddr] = userSettings.RelayPassword
 				}
 				log.Printf("Using user's managed relay (synthesised from settings): %s → QUIC %s", synth.HttpURL, synth.QuicAddr)
+				// JOINT-INCLUSIVE Free + Relay Pro: keep the shared free
+				// relays as working OFF-LAN fallbacks (per-user password is
+				// valid on every Yaver relay). A private relay that is down
+				// must not make the device unreachable.
+				if platformErr == nil {
+					before := len(relayServers)
+					relayServers, relayPasswords = appendFreeRelayFallbacks(
+						relayServers, relayPasswords,
+						platformCfg.RelayServers,
+						userSettings.RelayUrl,
+						userSettings.RelayPassword,
+					)
+					if added := len(relayServers) - before; added > 0 {
+						log.Printf("  + %d free shared relay fallback(s) (joint-inclusive Free + Relay Pro)", added)
+					}
+				}
 			} else {
 				log.Printf("User relay setting %s could not be parsed; falling back to platform relays", userSettings.RelayUrl)
 			}

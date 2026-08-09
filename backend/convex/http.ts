@@ -5844,13 +5844,11 @@ http.route({
   path: "/config",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
-    let userRelayUrl: string | undefined;
     let userRelayPassword: string | undefined;
     const authHeader = request.headers.get("Authorization");
     if (authHeader?.startsWith("Bearer ")) {
       const tokenHash = await sha256Hex(authHeader.slice(7));
       const settings = await ctx.runQuery(api.userSettings.getByToken, { tokenHash });
-      userRelayUrl = typeof settings?.relayUrl === "string" ? settings.relayUrl : undefined;
       userRelayPassword = typeof settings?.relayPassword === "string" ? settings.relayPassword : undefined;
     }
     const [config, runners, models] = await Promise.all([
@@ -5867,8 +5865,22 @@ http.route({
           ? parsed.map((server) => {
               if (!server || typeof server !== "object" || Array.isArray(server)) return server;
               const { password: _password, ...publicServer } = server as Record<string, unknown>;
-              const httpUrl = typeof publicServer.httpUrl === "string" ? publicServer.httpUrl : "";
-              if (userRelayPassword && (!userRelayUrl || userRelayUrl === httpUrl)) {
+              // Attach the caller's PER-USER relay password to every platform
+              // free-relay entry whenever they have one — NOT only when their
+              // relayUrl IS the free relay (the old condition).
+              //
+              // WHY (joint-inclusive Free + Relay Pro, 2026-08-09): the
+              // per-user password is validated at /relay/validate against the
+              // user's row on ANY Yaver relay, so it is valid on the shared
+              // free relay regardless of where the user's primary relayUrl
+              // points. A Relay Pro user whose devices are wired to their
+              // private managed relay still needs the free shared relay as a
+              // working OFF-LAN fallback — a private relay that is down or
+              // out of capacity must not make the device unreachable. Without
+              // the password here, the agent's fallback dial answers 401 and
+              // the "private primary + free fallback" ladder is dead on
+              // arrival.
+              if (userRelayPassword) {
                 return { ...publicServer, password: userRelayPassword };
               }
               return publicServer;
