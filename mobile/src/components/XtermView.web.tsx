@@ -20,7 +20,17 @@
 
 import { forwardRef, useImperativeHandle } from "react";
 import { StyleSheet, Text, View } from "react-native";
-import type { XtermHandle } from "./XtermView";
+
+// Defined locally (NOT imported from ./XtermView) so this file never
+// self-resolves into a cycle on the web target — the import specifier
+// "./XtermView" from XtermView.web.tsx would resolve back to this file.
+export interface XtermHandle {
+  write(bytes: Uint8Array): void;
+  fit(): void;
+  focus(): void;
+  /** Clear the grid + scrollback (raw_replay full-snapshot replace). */
+  reset(): void;
+}
 
 const WEB_TERMINAL_UNAVAILABLE =
   "Terminal isn't available in the browser — it needs the native WebView. Open Yaver on your phone or Mac for the live terminal.";
@@ -35,10 +45,13 @@ const XtermViewWeb = forwardRef<XtermHandle, Record<string, unknown>>((_props, r
       write: () => {
         /* no-op — no terminal in the browser; the placeholder says so */
       },
-      reset: () => {
+      fit: () => {
         /* no-op */
       },
-      fit: () => {
+      focus: () => {
+        /* no-op */
+      },
+      reset: () => {
         /* no-op */
       },
     }),
