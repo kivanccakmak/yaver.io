@@ -842,6 +842,38 @@ TUN/TAP. Pass-through — never stores task data.
 
 ## Mobile app
 
+### Task detail renders the LIVE opencode console (2026-08-09)
+
+`mobile/app/(tabs)/tasks.tsx` consumes the agent's RAW runner stdout lane
+(`/tasks/{id}/output?rawSince=` + `onRaw` SSE) into a per-task 512 KB buffer and
+renders it in a foldable `LiveConsoleSection` via the shared `AnsiConsoleText`
+(same colours/grammar as the opencode console: green `$` prompts, orange
+`> build · <model>` banners, diff +/- lines, `● live`/`○ idle` dot, byte
+counter). This replaced the `_Working through implementation details…_`
+collapse AND the Chat|Terminal toggle (removed in 33b3d798e; raw-lane
+consumption restored in ddf56ea15).
+
+- The raw lane is independent of the groomed transcript: `?rawSince=` seeds a
+  full `raw_replay` snapshot (finished tasks), then live `raw` frames append.
+  Reattach passes the byte cursor back as `rawSince` so the console never
+  gaps across a tunnel drop. Transport: `mobile/src/lib/quic.ts`
+  `streamTaskOutput` `onRaw`; classifier: `mobile/src/_core/ansi.ts` (web twin
+  `web/lib/_core/ansi.ts` — keep in sync).
+- **If task detail shows folded command cards with NO output, the agent binary
+  is stale.** Rebuilt agents (≥ 2026-08-09) emit `command_output` SSE
+  (`desktop/agent/opencode_stream.go` `closePendingCommand`); verify with
+  `strings <bin> | grep pendingCmdID`. Command cards stream real stdout now:
+  `command_start` → `command_output` → `command_end`.
+- **Opening the app for manual testing**: `node e2e/open-mobile-app.mjs`
+  (headed Chromium, iPhone 13 viewport, touch enabled, persistent profile at
+  `~/.yaver-e2e-profile`; use `E2E_PROFILE=~/.yaver-e2e-profile-manual` if the
+  default is locked). Never open `localhost:8081` in a desktop Chrome tab and
+  call it "mobile" — a narrowed window is a different RN-web component tree.
+  Headless: inject the agent token into
+  `localStorage["yaver.secure.yaver_auth_token"]` (RN-web key,
+  `mobile/src/lib/secureStoreCompat.ts`), drive with `devices["iPhone 15 Pro"]`
+  — see `e2e/verify_live_console7.mjs` (verified 2026-08-09).
+
 ### Hermes-push (default for RN/Expo)
 
 `yaver-cli push` and the agent's `/dev/build-native` both produce a Hermes

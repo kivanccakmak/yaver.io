@@ -363,6 +363,32 @@ function saveLastProject(deviceId: string | undefined | null, project: Project |
   }));
 }
 
+/**
+ * Keep-last-project, write BOTH stores (2026-08-09): localStorage (offline
+ * fallback, carries the absolute path) + Convex defaultRuntimeProjectByDevice
+ * (canonical cross-surface memory — the phone reads the SAME row, so a
+ * project remembered on the web restores on the phone and vice versa). Never
+ * blocks task creation: the Convex write is fire-and-forget with failures
+ * swallowed inside saveLastProjectToConvex.
+ */
+function saveLastProjectBoth(
+  convexUrl: string,
+  token: string | null | undefined,
+  deviceId: string | undefined | null,
+  project: Project | null,
+) {
+  saveLastProject(deviceId, project);
+  if (!token || !project?.path) return;
+  const projectName = String(project.name || "").trim();
+  if (!projectName) return;
+  void saveLastProjectToConvex(convexUrl, token, {
+    deviceId: String(deviceId || "default").trim() || "default",
+    projectName,
+    ...(project.gitRemote ? { gitRemote: String(project.gitRemote).trim() } : {}),
+    ...(project.branch ? { branch: String(project.branch).trim() } : {}),
+  });
+}
+
 function loadSectionState(): Record<SectionKey, SectionState> {
   if (typeof window === "undefined") return { ...SECTION_DEFAULTS };
   try {
@@ -1535,7 +1561,7 @@ export default function VibeCodingView({
     let task: Task;
     try {
       task = await agentClient.createTask(taskParams);
-      if (keepLastProject) saveLastProject(connectedDevice?.id, selectedProject);
+      if (keepLastProject) saveLastProjectBoth(CONVEX_URL, token, connectedDevice?.id, selectedProject);
     } catch (err) {
       const gap = capabilityGapFromError(err);
       if (gap) {
@@ -1747,7 +1773,7 @@ export default function VibeCodingView({
       mcpServers: selectedMcpServers,
       videoEnabled: videoSummaryEnabled,
     });
-    if (keepLastProject) saveLastProject(connectedDevice?.id, selectedProject);
+    if (keepLastProject) saveLastProjectBoth(CONVEX_URL, token, connectedDevice?.id, selectedProject);
     setActiveGraphRunId(null);
     setActiveTaskId(task.id);
     setBusy(plan.startedLabel);
@@ -2380,7 +2406,7 @@ export default function VibeCodingView({
                     key={project.path}
                     onClick={() => {
                       setSelectedProjectPath(project.path);
-                      if (keepLastProject) saveLastProject(connectedDevice?.id, project);
+                      if (keepLastProject) saveLastProjectBoth(CONVEX_URL, token, connectedDevice?.id, project);
                     }}
                     className={`rounded-2xl border p-3 text-left ${
                       selectedProjectPath === project.path
@@ -2471,7 +2497,7 @@ export default function VibeCodingView({
                       onChange={(event) => {
                         setKeepLastProject(event.target.checked);
                         setKeepLastProjectEnabled(event.target.checked);
-                        if (event.target.checked) saveLastProject(connectedDevice?.id, selectedProject);
+                        if (event.target.checked) saveLastProjectBoth(CONVEX_URL, token, connectedDevice?.id, selectedProject);
                       }}
                     />
                     keep

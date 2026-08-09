@@ -27,6 +27,10 @@ export type PendingCloudTaskParams = {
   videoEnabled?: boolean;
   askMode?: boolean;
   allowLocalFallback?: boolean;
+  /** Yaver goal-mode objective (opencode goal plugin) — carried through
+   *  the pending-cloud placeholder so a deferred dispatch still arms
+   *  goal-mode on the assigned machine. */
+  goal?: string;
 };
 
 export type PendingCloudDispatch = {

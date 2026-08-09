@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   loadKeepLastProjectEnabled,
   loadLastTaskProject,
+  loadLastTaskProjectFromConvex,
   saveKeepLastProjectEnabled,
   saveLastTaskProject,
+  saveLastTaskProjectToConvex,
 } from "./taskComposerPrefs.ts";
 
 const storage = ((AsyncStorage as any).default ?? AsyncStorage) as {
@@ -52,4 +55,29 @@ test("task composer keep-last-project defaults on and stores per device", async 
   assert.equal(saved?.name, "medici.ai");
   assert.equal(saved?.path, "/home/yaver/workspaces/medici.ai");
   assert.equal(saved?.branch, "main");
+});
+
+test("Convex last-project sync degrades to null without a token or a row", async () => {
+  // The full fetch round-trip cannot run here: the Convex helpers lazily
+  // import ./auth, which pulls react-native/expo-secure-store — esbuild
+  // cannot transform react-native/index.js, so the dynamic import throws and
+  // the helpers no-op (by design: failures never block task creation). The
+  // wire-shape + round-trip parity lives in web/lib/goalSlashCommandParity
+  // .test.ts (real web helper logic against the SAME Convex fields), which
+  // also asserts these mobile source markers. Here we pin the degradation:
+  assert.equal(await loadLastTaskProjectFromConvex(null, "ubuntu-4gb"), null);
+  assert.equal(await loadLastTaskProjectFromConvex("", "ubuntu-4gb"), null);
+  await saveLastTaskProjectToConvex(null, { deviceId: "ubuntu-4gb", name: "medici.ai" }); // no throw
+  await saveLastTaskProjectToConvex("tok", { deviceId: "", name: "x" }); // no throw (no deviceId)
+});
+
+test("Convex last-project sync source uses the canonical defaultRuntimeProject wire shape", () => {
+  // Assert the mobile helpers target the SAME Convex fields as the web
+  // helpers (defaultRuntimeProjectForDevice write / defaultRuntimeProjectByDevice
+  // read) — the cross-surface memory contract. A drift here is caught by the
+  // web parity test too; this keeps the pin next to the code.
+  const source = readFileSync(new URL("./taskComposerPrefs.ts", import.meta.url), "utf8");
+  assert.ok(source.includes("defaultRuntimeProjectForDevice"), "write must use defaultRuntimeProjectForDevice");
+  assert.ok(source.includes("defaultRuntimeProjectByDevice"), "read must use defaultRuntimeProjectByDevice");
+  assert.ok(source.includes('await import("./auth")'), "auth must be lazily imported (keeps this node test RN-free)");
 });

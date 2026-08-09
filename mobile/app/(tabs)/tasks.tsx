@@ -1735,7 +1735,11 @@ function LiveConsoleSection({
           <Text style={[s.liveConsoleDot, { color: c.textTertiary }]}>○ idle</Text>
         )}
         <Text style={[s.liveConsoleCount, { color: c.textTertiary }]} numberOfLines={1}>
-          {rawText.length > 0 ? `${Math.round(rawText.length / 1024)} KB` : ""}
+          {rawText.length > 1024
+            ? `${Math.round(rawText.length / 1024)} KB`
+            : rawText.length > 0
+              ? `${rawText.length} B`
+              : ""}
         </Text>
       </Pressable>
       {expanded && rawText.trim() ? (

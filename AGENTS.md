@@ -182,6 +182,30 @@ absolute gap, not a flaky one. Rules, full version in [`CLAUDE.md`](CLAUDE.md):
   (`profileFor` / `viewportMatchesSurface`) — one table, never a literal per
   spec — and drive RN-web at `MOBILE_WEB_URL`, skipping when it is unset rather
   than substituting the dashboard. Reference: `e2e/tests/vibe-color-loop.spec.ts`.
+- **Opening the mobile app for a HUMAN to test (manual session):** run
+  `node e2e/open-mobile-app.mjs` (headed Chromium, iPhone 13 viewport, touch
+  enabled, PERSISTENT profile at `~/.yaver-e2e-profile` — sign in once by hand,
+  the session persists for later runs). If the default profile is locked by
+  another instance, set `E2E_PROFILE=~/.yaver-e2e-profile-manual`. Never open
+  `localhost:8081` in a plain desktop Chrome tab and call it "mobile" — a
+  narrowed desktop window is exactly the false equivalence the viewport bullet
+  above forbids. For headless verification, inject the agent token into
+  `localStorage["yaver.secure.yaver_auth_token"]` (the RN-web key via
+  `mobile/src/lib/secureStoreCompat.ts`), then drive the app with
+  `devices["iPhone 15 Pro"]` context. Verified 2026-08-09 with
+  `e2e/verify_live_console7.mjs` (task detail → LiveConsoleSection).
+- **Mobile tasks render the LIVE opencode console, not a collapsed summary.**
+  `mobile/app/(tabs)/tasks.tsx` consumes the RAW runner stdout lane
+  (`?rawSince=` + `onRaw` SSE) into a per-task 512 KB buffer and renders it in a
+  foldable `LiveConsoleSection` via the shared `AnsiConsoleText` — same
+  colours/grammar as the opencode console (`$` prompts, `> build · model`
+  banners, diffs, `● live`/`○ idle` dot, byte counter). This replaced the
+  `_Working through implementation details…_` collapse (and the removed
+  Chat|Terminal toggle, 33b3d798e). If a task detail shows folded command cards
+  with no output, the AGENT is stale: rebuilt agents must contain the opencode
+  stdout-capture fix (`closePendingCommand`/`command_output` events; verify with
+  `strings <bin> | grep pendingCmdID`). Command cards also stream real stdout
+  now — `command_start` → `command_output` → `command_end` SSE.
 
 ## Never hot-swap an unsigned agent binary onto macOS
 

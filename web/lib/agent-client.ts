@@ -876,7 +876,8 @@ export interface APIKeyRecord {
   scopes?: string[];
 }
 
-// Matches ExecSession.Snapshot() in desktop/agent/exec.go.export interface ExecSnapshot {
+// Matches ExecSession.Snapshot() in desktop/agent/exec.go.
+export interface ExecSnapshot {
   id: string;
   command: string;
   status: "running" | "completed" | "failed";
@@ -3307,42 +3308,6 @@ export class AgentClient {
       throw new Error(data?.error || `openCodeConfig ${res.status}`);
     }
     return (data?.config || {}) as OpenCodeConfigSummary;
-  }
-
-  async saveOpenCodeConfig(
-    patch: {
-      defaultAgent?: string;
-      model?: string;
-      smallModel?: string;
-      buildModel?: string;
-      planModel?: string;
-      /** Optional provider upserts. Each entry creates or merges a
-       *  provider entry in opencode.json. Common case: setting an
-       *  Ollama provider's baseUrl to a private-network-reachable address.
-       *  Pass `delete: true` on an entry to remove it entirely. */
-      providers?: Array<{
-        id: string;
-        name?: string;
-        baseUrl?: string;
-        apiKey?: string;
-        models?: Record<string, unknown>;
-        delete?: boolean;
-      }>;
-    },
-    target?: string,
-  ): Promise<{ ok: boolean; config?: OpenCodeConfigSummary; error?: string }> {
-    this.assertConnected();
-    const base = target
-      ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner/opencode/config`
-      : `${this.baseUrl}/runner/opencode/config`;
-    const res = await fetch(base, {
-      method: "POST",
-      headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
-    return { ok: true, config: data?.config as OpenCodeConfigSummary };
   }
 
   async machineOnboardingStatus(target?: string): Promise<MachineOnboardingProviderStatus[]> {
