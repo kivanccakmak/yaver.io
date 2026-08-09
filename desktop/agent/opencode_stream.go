@@ -59,20 +59,28 @@ type opencodeStreamFilter struct {
 	// pass through as plain transcript while the CommandCard showed
 	// "(no output captured)" for a `ls` that printed a full listing.
 	// The following non-command lines are accumulated into the pending
-	// command's stdout and flushed as one command_output before the
-	// command_end — closed by the next `$ cmd` / banner / flush(EOF).
-	// Bounded by opencodeCmdOutputCap so a runaway capture can't balloon
-	// (the transcript stays authoritative either way).
-	pendingCmdID    string
-	pendingCmdSeq   int
-	pendingCmdOut   strings.Builder
-	pendingCmdBytes int
+	// command's stdout and flushed as command_output — live, in chunks
+	// of opencodeCmdChunkFlush bytes (so a long-running command's card
+	// streams its output while running), with the final remainder +
+	// command_end emitted when the command closes (next `$ cmd` / banner
+	// / flush at EOF). Bounded by opencodeCmdOutputCap so a runaway
+	// capture can't balloon (the transcript stays authoritative either
+	// way).
+	pendingCmdID     string
+	pendingCmdOut    strings.Builder
+	pendingCmdBytes  int
+	pendingCmdOutSeq int
 }
 
 // opencodeCmdOutputCap bounds how much raw stream text is attributed to a
 // single shell command's stdout. The transcript always carries the full
 // stream; this only caps the secondary CommandCard view.
 const opencodeCmdOutputCap = 64 * 1024
+
+// opencodeCmdChunkFlush — flush captured stdout to the card in chunks of at
+// least this many bytes, so a long-running command's output appears LIVE in
+// the CommandCard instead of only at close.
+const opencodeCmdChunkFlush = 4096
 
 // opencodeShellLineRE matches a line whose only "real" content is the
 // `$ <command>` form opencode prints when invoking a shell tool. Lines
@@ -132,25 +140,38 @@ func (f *opencodeStreamFilter) flush() []byte {
 	return out.Bytes()
 }
 
-// closePendingCommand flushes a still-open command's captured stdout as
-// one command_output event, then closes it with the neutral exitKnown=false
-// "done" badge. No-op when nothing is pending. Callers: the next `$ cmd`
-// line, a banner line, and flush() at EOF.
-func (f *opencodeStreamFilter) closePendingCommand() {
-	if f.pendingCmdID == "" {
+// flushPendingOutputChunk emits the accumulated stdout as one
+// command_output event and resets the accumulator. The per-command seq
+// counter keeps chunks ordered client-side even if SSE delivery races.
+func (f *opencodeStreamFilter) flushPendingOutputChunk() {
+	if f.pendingCmdID == "" || f.task == nil || f.pendingCmdBytes == 0 {
 		f.pendingCmdOut.Reset()
 		f.pendingCmdBytes = 0
 		return
 	}
+	emitCommandOutput(f.task, f.pendingCmdID, "stdout", f.pendingCmdOut.String(), f.pendingCmdOutSeq)
+	f.pendingCmdOutSeq++
+	f.pendingCmdOut.Reset()
+	f.pendingCmdBytes = 0
+}
+
+// closePendingCommand flushes a still-open command's captured stdout (the
+// final sub-chunk), then closes it with the neutral exitKnown=false "done"
+// badge. No-op when nothing is pending. Callers: the next `$ cmd` line, a
+// banner line, and flush() at EOF.
+func (f *opencodeStreamFilter) closePendingCommand() {
+	if f.pendingCmdID == "" {
+		f.pendingCmdOut.Reset()
+		f.pendingCmdBytes = 0
+		f.pendingCmdOutSeq = 0
+		return
+	}
+	f.flushPendingOutputChunk()
 	if f.task != nil {
-		if f.pendingCmdBytes > 0 {
-			emitCommandOutput(f.task, f.pendingCmdID, "stdout", f.pendingCmdOut.String(), f.pendingCmdSeq)
-		}
 		emitCommandEnd(f.task, f.pendingCmdID, 0, false, 0, false)
 	}
 	f.pendingCmdID = ""
-	f.pendingCmdOut.Reset()
-	f.pendingCmdBytes = 0
+	f.pendingCmdOutSeq = 0
 }
 
 func (f *opencodeStreamFilter) writeLine(out *bytes.Buffer, line []byte, hasNewline bool) {
@@ -187,9 +208,9 @@ func (f *opencodeStreamFilter) writeLine(out *bytes.Buffer, line []byte, hasNewl
 			id := fmt.Sprintf("%s-oc%d", f.task.ID, f.cmdSeq)
 			emitCommandStart(f.task, id, m[1], nil, "", "opencode")
 			f.pendingCmdID = id
-			f.pendingCmdSeq = f.cmdSeq
 			f.pendingCmdOut.Reset()
 			f.pendingCmdBytes = 0
+			f.pendingCmdOutSeq = 0
 		}
 		return
 	}
@@ -206,6 +227,13 @@ func (f *opencodeStreamFilter) writeLine(out *bytes.Buffer, line []byte, hasNewl
 		if hasNewline && f.pendingCmdBytes < opencodeCmdOutputCap {
 			f.pendingCmdOut.WriteByte('\n')
 			f.pendingCmdBytes++
+		}
+		// Live-flush: once enough bytes accumulated, push a chunk to the
+		// card NOW so a long-running command's output streams while it
+		// runs — the card is not a "waiting for output…" tombstone until
+		// the command closes (2026-08-09).
+		if f.pendingCmdBytes >= opencodeCmdChunkFlush {
+			f.flushPendingOutputChunk()
 		}
 	}
 	out.WriteString(clean)
