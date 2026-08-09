@@ -3354,6 +3354,55 @@ export default defineSchema({
   }).index("by_user", ["userId"])
     .index("by_device", ["deviceId"]),
 
+  // tmuxRunnerSessions — the durable "who is vibing where" ledger. Each row is
+  // one tmux session on one owned device, with the RUNNER that lives in it
+  // (claude / codex / opencode — or "shell"/"unknown" when none) and whether
+  // that seat is still OPEN or has CLOSED (runner exited via /exit /quit, pane
+  // went dead, or the whole session was torn down).
+  //
+  // Why this table exists: adoption state is in-memory on the agent, so an
+  // agent restart forgets every tmux session even though the runner keeps
+  // running, and the mobile Tasks list can only show sessions of the ONE
+  // connected box. This ledger lets every surface — mobile, web, TV, watch —
+  // answer "which machines have which runner seats, open or closed" from Convex
+  // alone, and keep vibing into them (the attach still goes P2P to the box;
+  // this is the inventory + lifecycle truth, never the context).
+  //
+  // Privacy contract (enforced by convex_privacy_test.go): IDENTIFIERS ONLY.
+  // tmux session names, tmux session/pane ids, a runner label, open/closed
+  // status and timestamps. NO pane content, NO current-path (absolute paths
+  // leak the home-dir username), NO prompts, NO titles, NO model, NO preview.
+  // The record answers "is there a claude seat open on box X" and nothing else.
+  tmuxRunnerSessions: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),            // the box that hosts the session
+    sessionName: v.string(),         // tmux session name (identifier, not content)
+    sessionId: v.optional(v.string()), // tmux session_id, e.g. "$1"
+    paneId: v.optional(v.string()),  // primary pane id, e.g. "%17"
+    runner: v.union(
+      v.literal("claude"),
+      v.literal("codex"),
+      v.literal("opencode"),
+      v.literal("shell"),
+      v.literal("unknown"),
+    ),
+    // open = tmux session exists with a live (non-dead) pane. closed = the
+    // runner exited (/exit etc.), its pane went dead, or the session is gone.
+    status: v.union(v.literal("open"), v.literal("closed")),
+    paneCount: v.optional(v.number()),
+    // firstSeenAt is sticky across transitions (kept from the row when an
+    // open record is re-observed or a closed record arrives for a known
+    // session); lastSeenAt is refreshed on every sync; closedAt is set once
+    // when the seat closes and cleared if the session reopens.
+    firstSeenAt: v.number(),         // epoch ms
+    lastSeenAt: v.number(),          // epoch ms
+    closedAt: v.optional(v.number()), // epoch ms
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_status", ["userId", "status"])
+    .index("by_device", ["deviceId"])
+    .index("by_device_session", ["deviceId", "sessionName"]),
+
   // Push tokens for the device-auth approval channel (P2): lets a remote
   // box's re-auth ring the user's phone so they approve with Face ID instead
   // of opening a browser. Only a notification-routing id is stored (Expo push

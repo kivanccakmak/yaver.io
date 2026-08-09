@@ -1003,6 +1003,7 @@ for (const path of [
   "/tasks/placement/preview", "/tasks/placement/record",
   "/tasks/placement/recent", "/tasks/placement/status",
   "/tasks/placement/activate", "/tasks/placement/rebind",
+  "/tmux-sessions",
   "/tasks/dispatch-intents", "/tasks/dispatch-intents/status",
   "/tasks/relay-source-intents", "/tasks/relay-source-intents/status",
   "/tasks/relay-source-intents/claim", "/tasks/relay-source-intents/github-app-token",
@@ -4074,6 +4075,37 @@ http.route({
     } catch (e: any) {
       const msg = e.message || "Failed to read task placement";
       return errorResponse(msg, /not found/i.test(msg) ? 404 : 500);
+    }
+  }),
+});
+
+/** GET /tmux-sessions — the caller's tmux runner-session ledger across every
+ *  device. Identifiers + open/closed lifecycle only (no pane content, paths,
+ *  prompts, or titles). Lets mobile/web render "who is vibing where" without
+ *  a P2P connection; the attach/vibe itself still goes P2P to the box. */
+http.route({
+  path: "/tmux-sessions",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return errorResponse("Unauthorized", 401);
+    }
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+    const url = new URL(request.url);
+    const status = url.searchParams.get("status") || undefined;
+    if (status !== undefined && status !== "open" && status !== "closed") {
+      return errorResponse("status must be open|closed", 400);
+    }
+    try {
+      const result = await ctx.runQuery(api.tmuxSessions.list, {
+        tokenHash,
+        deviceId: url.searchParams.get("deviceId") || undefined,
+        status: status as "open" | "closed" | undefined,
+      });
+      return jsonResponse(result);
+    } catch (e: any) {
+      return errorResponse(e.message || "Failed to list tmux sessions", 500);
     }
   }),
 });
