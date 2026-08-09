@@ -78,3 +78,69 @@ export async function saveLastTaskProject(project: Omit<TaskLastProject, "update
     // Task creation must not depend on local preference writes.
   }
 }
+
+/**
+ * Convex-backed last-project memory (2026-08-09). The canonical cross-surface
+ * store is `defaultRuntimeProjectByDevice` (backend/convex/userSettings.ts
+ * mergeRuntimeProjectPreference, replace-by-deviceId) — the SAME row the web
+ * dashboard's VibeCodingView writes via POST /settings, so a project remembered
+ * on the phone is remembered on the web (and vice versa). Privacy-limited by
+ * design: no absolute paths, only {projectName, gitRemote, branch}.
+ *
+ * Local AsyncStorage stays as the offline fallback: boot reads Convex first,
+ * falls back to the local row; writes go to BOTH. Never blocks task creation —
+ * a failed settings write is swallowed exactly like a failed local write.
+ */
+
+export async function saveLastTaskProjectToConvex(
+  token: string | null | undefined,
+  project: Omit<TaskLastProject, "updatedAt">,
+): Promise<void> {
+  if (!token || !project.deviceId || !project.name) return;
+  try {
+    // Lazy import: auth.ts drags in react-native/expo-secure-store, which
+    // esbuild cannot transform — the node test for this file imports it
+    // directly, so the RN module chain must stay out of module scope.
+    const { saveUserSettings } = await import("./auth");
+    await saveUserSettings(token, {
+      defaultRuntimeProjectForDevice: {
+        deviceId: project.deviceId,
+        projectName: project.name,
+        ...(project.gitRemote ? { gitRemote: project.gitRemote } : {}),
+        ...(project.branch ? { branch: project.branch } : {}),
+      },
+    });
+  } catch {
+    // Never block task creation on a failed settings write (same rule as the
+    // local write above).
+  }
+}
+
+/**
+ * Read the Convex-stored last project for a device. Returns null when there is
+ * no row, no token, or the settings fetch fails (caller falls back to local).
+ * The Convex row carries no absolute path — the caller matches by name/remote
+ * against its live project list.
+ */
+export async function loadLastTaskProjectFromConvex(
+  token: string | null | undefined,
+  deviceId: string,
+): Promise<Omit<TaskLastProject, "updatedAt"> | null> {
+  if (!token || !deviceId) return null;
+  try {
+    const { getUserSettings } = await import("./auth");
+    const settings = await getUserSettings(token);
+    const rows = settings?.defaultRuntimeProjectByDevice;
+    if (!Array.isArray(rows)) return null;
+    const row = rows.find((r) => r?.deviceId === deviceId && r?.projectName);
+    if (!row?.projectName) return null;
+    return {
+      deviceId,
+      name: String(row.projectName),
+      ...(row.gitRemote ? { gitRemote: String(row.gitRemote) } : {}),
+      ...(row.branch ? { branch: String(row.branch) } : {}),
+    };
+  } catch {
+    return null;
+  }
+}

@@ -14,6 +14,13 @@ export type SendTaskRequestBodyArgs = {
   video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" };
   codeMode?: boolean;
   allowLocalFallback?: boolean;
+  /** Yaver goal-mode objective (opencode goal plugin). When set, the task
+   *  runs as a persistent goal the opencode runner keeps working toward
+   *  across turns (create_goal + idle auto-continue) until complete with
+   *  evidence, blocked, or a safety limit. Empty = one-shot task. Only the
+   *  opencode runner honors it; other runners ignore the field. Surfaces
+   *  set this when the composer input is `/goal <objective>`. */
+  goal?: string;
 };
 
 export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<string, unknown> {
@@ -34,5 +41,6 @@ export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<
     ...(args.video?.enabled ? { videoEnabled: true } : {}),
     ...(args.video?.source ? { videoSource: args.video.source } : {}),
     ...(args.allowLocalFallback ? { allowLocalFallback: true } : {}),
+    ...(args.goal ? { goal: args.goal } : {}),
   };
 }

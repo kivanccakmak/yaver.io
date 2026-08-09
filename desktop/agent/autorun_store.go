@@ -156,6 +156,7 @@ func (s *AutorunStore) migrate() error {
 		  holder     TEXT NOT NULL,
 		  workdir    TEXT NOT NULL,
 		  branch     TEXT,
+		  build_number TEXT,
 		  stage      TEXT NOT NULL,
 		  started_at INTEGER NOT NULL,
 		  updated_at INTEGER NOT NULL,
@@ -177,6 +178,11 @@ func (s *AutorunStore) migrate() error {
 		  holder      TEXT NOT NULL,
 		  acquired_at INTEGER NOT NULL,
 		  expires_at  INTEGER NOT NULL);`,
+		// v2 — build_leases gains build_number (the build/upload bus keyed
+		// {app}@{target} carries CFBundleVersion/versionCode/sha). v1 shipped
+		// the table without it; ALTER must be idempotent for DBs that already
+		// ran the corrected DDL (fresh installs get it via the CREATE above).
+		`ALTER TABLE build_leases ADD COLUMN build_number TEXT;`,
 	}
 	for i, stmt := range migrations {
 		v := i + 1
@@ -188,6 +194,16 @@ func (s *AutorunStore) migrate() error {
 			continue
 		}
 		if _, err := s.db.Exec(stmt); err != nil {
+			// ALTER TABLE ADD COLUMN fails on a schema that already has the
+			// column (duplicate column). That's the idempotency case: a fresh
+			// DB got the column from the v1 CREATE. Treat "duplicate column"
+			// as applied rather than fatal.
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				if _, ierr := s.db.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, v, nowUnix()); ierr != nil {
+					return ierr
+				}
+				continue
+			}
 			return fmt.Errorf("autorun store migration v%d: %w", v, err)
 		}
 		if _, err := s.db.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, v, nowUnix()); err != nil {

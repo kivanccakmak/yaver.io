@@ -174,52 +174,89 @@ func globalBuildBus() *buildBusStore {
 }
 
 // acquire acquires the lease for key. Returns (held != nil) when someone
-// else owns it, or an error for store/IO failures.
+// else owns it, or an error for store/IO failures. A store that cannot BEGIN
+// (closed db, locked file) is treated as unavailable so callers fall back to
+// the flock backend rather than failing the whole build.
 func (b *buildBusStore) acquire(key, holder, workdir, branch, build, stage string, ttl time.Duration) (*BuildBusHeld, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.st == nil {
 		return nil, errBuildBusNoStore
 	}
+	held, err := b.acquireLocked(key, holder, workdir, branch, build, stage, ttl)
+	if err != nil && (errors.Is(err, sql.ErrConnDone) || strings.Contains(err.Error(), "database is closed")) {
+		return nil, errBuildBusNoStore
+	}
+	return held, err
+}
+
+// acquireLocked claims the lease for key. The atomic primitive is a single
+// INSERT OR IGNORE: SQLite enforces the target PRIMARY KEY, so exactly one
+// concurrent acquirer's INSERT affects a row — every other one ignores.
+// A "live row exists" read then distinguishes "someone else holds it" (→
+// BuildBusHeld) from "the row is dead/expired" (→ take over). This is race-
+// free where a read-then-write would double-claim under a single-writer conn
+// (proven by TestBuildBusConcurrentRaceOneWinner: 20 goroutines, 1 winner).
+func (b *buildBusStore) acquireLocked(key, holder, workdir, branch, build, stage string, ttl time.Duration) (*BuildBusHeld, error) {
 	if ttl <= 0 {
 		ttl = buildBusTTL
 	}
 	now := nowUnix()
-	tx, err := b.st.db.Begin()
+
+	// Atomic claim: only the first acquirer for this key inserts a row.
+	res, err := b.st.db.Exec(`INSERT OR IGNORE INTO build_leases(target, autorun_id, holder, workdir, branch, build_number, stage, started_at, updated_at, expires_at)
+	  VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		key, holder, holder, workdir, nullStr(branch), nullStr(build), stage, now, now, now+int64(ttl.Seconds()))
 	if err != nil {
-		return nil, fmt.Errorf("build bus begin: %w", err)
+		return nil, fmt.Errorf("build bus claim %s: %w", key, err)
 	}
-	defer tx.Rollback()
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil, nil // we own it
+	}
+
+	// A row already exists — is it a live holder or a dead one we can take?
+	// Single-conn serialisation makes the read AFTER the failed insert see the
+	// row, and only the true holder passes the live check.
 	var h BuildBusHeld
-	var autorunID string
 	var endedAt sql.NullInt64
-	err = tx.QueryRow(`SELECT autorun_id, holder, workdir, COALESCE(branch,''), COALESCE(build_number,''), stage, started_at, expires_at, ended_at
+	var existingAutorun string
+	err = b.st.db.QueryRow(`SELECT autorun_id, holder, workdir, COALESCE(branch,''), COALESCE(build_number,''), stage, started_at, expires_at, ended_at
 	  FROM build_leases WHERE target=?`, key).
-		Scan(&autorunID, &h.Holder, &h.Workdir, &h.Branch, &h.Build, &h.Stage, &h.StartedAt, &h.ExpiresAt, &endedAt)
-	switch {
-	case err == nil:
-		live := !endedAt.Valid && h.ExpiresAt > now
-		if live {
-			h.Key = key
-			h.Code = "build_bus_held"
-			h.WaitSeconds = h.ExpiresAt - now
-			return &h, nil
-		}
-		// Dead/expired → take over.
-		if _, err := tx.Exec(`UPDATE build_leases SET autorun_id=?, holder=?, workdir=?, branch=?, build_number=?, stage=?, started_at=?, updated_at=?, expires_at=?, ended_at=NULL, outcome=NULL WHERE target=?`,
-			holder, holder, workdir, nullStr(branch), nullStr(build), stage, now, now, now+int64(ttl.Seconds()), key); err != nil {
-			return nil, fmt.Errorf("build bus take-over %s: %w", key, err)
-		}
-	case errors.Is(err, sql.ErrNoRows):
-		if _, err := tx.Exec(`INSERT INTO build_leases(target, autorun_id, holder, workdir, branch, build_number, stage, started_at, updated_at, expires_at)
-		  VALUES(?,?,?,?,?,?,?,?,?,?)`,
-			key, holder, holder, workdir, nullStr(branch), nullStr(build), stage, now, now, now+int64(ttl.Seconds())); err != nil {
-			return nil, fmt.Errorf("build bus insert %s: %w", key, err)
-		}
-	default:
+		Scan(&existingAutorun, &h.Holder, &h.Workdir, &h.Branch, &h.Build, &h.Stage, &h.StartedAt, &h.ExpiresAt, &endedAt)
+	if err != nil {
 		return nil, fmt.Errorf("build bus read %s: %w", key, err)
 	}
-	return nil, tx.Commit()
+	live := !endedAt.Valid && h.ExpiresAt > now
+	if live {
+		h.Key = key
+		h.Code = "build_bus_held"
+		h.WaitSeconds = h.ExpiresAt - now
+		return &h, nil
+	}
+	// Dead/expired → take over with an UPDATE guarded by the same expiry
+	// predicate so a concurrent take-over can't both succeed.
+	if _, err := b.st.db.Exec(`UPDATE build_leases SET autorun_id=?, holder=?, workdir=?, branch=?, build_number=?, stage=?, started_at=?, updated_at=?, expires_at=?, ended_at=NULL, outcome=NULL
+	  WHERE target=? AND (ended_at IS NOT NULL OR expires_at <= ?)`,
+		holder, holder, workdir, nullStr(branch), nullStr(build), stage, now, now, now+int64(ttl.Seconds()), key, now); err != nil {
+		return nil, fmt.Errorf("build bus take-over %s: %w", key, err)
+	}
+	// The UPDATE may have matched 0 rows if another acquirer took it over
+	// between our read and write — re-check who owns it now.
+	var h2 BuildBusHeld
+	var endedAt2 sql.NullInt64
+	err = b.st.db.QueryRow(`SELECT holder, workdir, COALESCE(branch,''), COALESCE(build_number,''), stage, started_at, expires_at, ended_at
+	  FROM build_leases WHERE target=?`, key).
+		Scan(&h2.Holder, &h2.Workdir, &h2.Branch, &h2.Build, &h2.Stage, &h2.StartedAt, &h2.ExpiresAt, &endedAt2)
+	if err != nil {
+		return nil, fmt.Errorf("build bus re-read %s: %w", key, err)
+	}
+	if !endedAt2.Valid && h2.ExpiresAt > now && h2.Holder != holder {
+		h2.Key = key
+		h2.Code = "build_bus_held"
+		h2.WaitSeconds = h2.ExpiresAt - now
+		return &h2, nil
+	}
+	return nil, nil
 }
 
 func (b *buildBusStore) heartbeat(key, holder, stage string, ttl time.Duration) error {

@@ -4,6 +4,7 @@ import { useDevice } from "../context/DeviceContext";
 import { useAuth } from "../context/AuthContext";
 import { makeRealCarVoiceDeps, type CarVoiceConfig, type CarVoiceTaskRef } from "../lib/carVoiceCoding";
 import { connectionManager } from "../lib/connectionManager";
+import { goalFromSlashCommand } from "../lib/goalSlashCommand";
 import { appLog } from "../lib/logger";
 import { runtimeSurfaceClient } from "../lib/runtimeSurfaceClient";
 import { loadKeepLastProjectEnabled, loadLastTaskProject } from "../lib/taskComposerPrefs";
@@ -61,9 +62,14 @@ function makeWatchDeps(deviceId: string) {
       if (!deviceId) throw new Error("No Yaver device selected");
       const client = connectionManager.clientFor(deviceId);
       const lastProject = (await loadKeepLastProjectEnabled()) ? await loadLastTaskProject(deviceId) : null;
+      // Watch bridge dispatch uses the opencode runner; a "/goal
+      // <objective>" voice command arms Yaver goal-mode via the structured
+      // goal field (see goalSlashCommand).
+      const goalIntent = goalFromSlashCommand(prompt, "opencode");
+      const goalText = goalIntent?.goal ?? "";
       const t = await client.sendTask(
-        title,
-        prompt,
+        goalIntent ? goalText : title,
+        goalIntent ? goalText : prompt,
         undefined,
         undefined,
         undefined,
@@ -76,6 +82,7 @@ function makeWatchDeps(deviceId: string) {
         undefined,
         lastProject?.name,
         [],
+        goalIntent ? goalText : undefined,
       );
       return { id: t.id };
     },

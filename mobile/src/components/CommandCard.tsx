@@ -101,7 +101,7 @@ export function CommandCard({ model }: { model: CommandCardModel }) {
             <Text style={[s.meta, { color: c.textMuted }]}>
               {model.status === "running"
                 ? "waiting for output…"
-                : "(no output captured)"}
+                : "no output — the command produced nothing (a clean `git status`, for example)"}
             </Text>
           ) : (
             <ScrollView

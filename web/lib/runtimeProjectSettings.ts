@@ -100,3 +100,65 @@ export function runtimeProjectDefaultMap(rows?: RuntimeProjectPreference[]): Rec
   return out;
 }
 
+// ── Convex-backed last-project memory (2026-08-09) ─────────────────────
+// The canonical cross-surface store is `defaultRuntimeProjectByDevice`
+// (backend/convex/userSettings.ts mergeRuntimeProjectPreference,
+// replace-by-deviceId) — the SAME row mobile writes via
+// taskComposerPrefs.saveLastTaskProjectToConvex, so a project remembered
+// on the web shows up on the phone and vice versa. localStorage stays as
+// the offline fallback: boot reads Convex first, falls back to the local
+// row; writes go to BOTH. Never blocks task creation — a failed settings
+// write is swallowed exactly like a failed localStorage write.
+
+/** Read defaultRuntimeProjectByDevice for one device. Null when absent /
+ *  unreadable (caller falls back to localStorage). */
+export async function loadLastProjectFromConvex(
+  convexUrl: string,
+  token: string | null | undefined,
+  deviceId: string | null | undefined,
+): Promise<RuntimeProjectPreference | null> {
+  if (!token || !deviceId) return null;
+  try {
+    const res = await fetch(`${convexUrl}/settings`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    const rows = data?.settings?.defaultRuntimeProjectByDevice;
+    if (!Array.isArray(rows)) return null;
+    const row = rows.find((r: any) => r?.deviceId === deviceId && r?.projectName);
+    if (!row?.projectName) return null;
+    return runtimeProjectPreferenceFor(deviceId, row);
+  } catch {
+    return null;
+  }
+}
+
+/** Write defaultRuntimeProjectForDevice (replace-by-deviceId on the
+ *  server). No absolute paths — privacy-limited to what the schema allows:
+ *  projectName / gitRemote / branch. */
+export async function saveLastProjectToConvex(
+  convexUrl: string,
+  token: string | null | undefined,
+  project: RuntimeProjectPreference,
+): Promise<void> {
+  if (!token || !project.deviceId || !project.projectName) return;
+  try {
+    await fetch(`${convexUrl}/settings`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        defaultRuntimeProjectForDevice: {
+          deviceId: project.deviceId,
+          projectName: project.projectName,
+          ...(project.gitRemote ? { gitRemote: project.gitRemote } : {}),
+          ...(project.branch ? { branch: project.branch } : {}),
+        },
+      }),
+    });
+  } catch {
+    // Never block task creation on a failed settings write.
+  }
+}
+

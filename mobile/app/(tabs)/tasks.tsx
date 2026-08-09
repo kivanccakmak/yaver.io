@@ -78,6 +78,7 @@ import {
   TmuxSession,
 } from "../../src/lib/quic";
 import { connectionManager } from "../../src/lib/connectionManager";
+import { goalFromSlashCommand } from "../../src/lib/goalSlashCommand";
 import { markTaskDeleted, getDeletedTaskIds, cacheTaskTurns, getCachedTaskTurns, cacheTaskList, getCachedTaskList } from "../../src/lib/storage";
 import {
   activateTaskPlacement,
@@ -124,9 +125,11 @@ import type { YaverAgentToolContext } from "../../src/lib/yaverAgentTools";
 import {
   loadKeepLastProjectEnabled,
   loadLastTaskProject,
+  loadLastTaskProjectFromConvex,
   loadTaskVideoSummaryEnabled,
   saveKeepLastProjectEnabled,
   saveLastTaskProject,
+  saveLastTaskProjectToConvex,
 } from "../../src/lib/taskComposerPrefs";
 import { listMcpServers, type McpServer } from "../../src/lib/mcpServers";
 import { withAlpha } from "../../src/lib/themeUtils";
@@ -1676,8 +1679,79 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
   return messages;
 }
 
-// ── Main screen ──────────────────────────────────────────────────────
+// ── Live console (opencode raw lane) ─────────────────────────────────
+// The opencode runner streams raw ANSI stdout (`$` prompts, `> build`
+// banners, git patches, tool-call tails) as `raw`/`raw_replay` SSE
+// frames. The chat bubbles flatten this to markdown (and collapse it to
+// "_Working through implementation details…_" while running), so a
+// foldable Live console section re-renders the raw bytes via the shared
+// AnsiConsoleText — same grammar and colours as the opencode console and
+// the web dashboard's terminal. Auto-expanded while the task runs (the
+// user is watching the runner), collapseable like AgentContextPanel.
+function LiveConsoleSection({
+  task,
+  rawText,
+  live,
+  rawVersion,
+}: {
+  task: Task;
+  rawText: string;
+  live: boolean;
+  rawVersion: number;
+}) {
+  const c = useColors();
+  const [expanded, setExpanded] = useState(true);
+  const isOpenCode = normalizeTaskRunnerId(task.runnerId) === "opencode";
+  const isRunning = task.status === "running" || task.status === "queued";
+  if (!isOpenCode) return null;
+  // Only render when there is something to show — either live bytes now
+  // or a retained tail from a finished task. rawVersion is read so a
+  // streaming task's new frames re-render this section.
+  void rawVersion;
+  if (!rawText.trim()) return null;
 
+  return (
+    <View style={[s.liveConsoleWrap, { borderColor: c.border }]}>
+      <Pressable
+        onPress={() => setExpanded((v) => !v)}
+        style={({ pressed }) => [
+          s.liveConsoleToggle,
+          { backgroundColor: c.surface },
+          pressed && { opacity: 0.7 },
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel={expanded ? "Hide live console" : "Show live console"}
+        accessibilityState={{ expanded }}
+      >
+        <Text style={[s.liveConsoleCaret, { color: c.textMuted }]}>
+          {expanded ? "▼" : "▶"}
+        </Text>
+        <Text style={[s.liveConsoleTitle, { color: c.textSecondary }]}>
+          Live console
+        </Text>
+        {live ? (
+          <Text style={[s.liveConsoleDot, { color: "#4ade80" }]}>● live</Text>
+        ) : (
+          <Text style={[s.liveConsoleDot, { color: c.textTertiary }]}>○ idle</Text>
+        )}
+        <Text style={[s.liveConsoleCount, { color: c.textTertiary }]} numberOfLines={1}>
+          {rawText.length > 0 ? `${Math.round(rawText.length / 1024)} KB` : ""}
+        </Text>
+      </Pressable>
+      {expanded && rawText.trim() ? (
+        <ScrollView
+          style={[s.liveConsoleBody, { backgroundColor: c.bgCard, borderTopColor: c.border }]}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator
+        >
+          <AnsiConsoleText text={rawText} fontSize={11} />
+        </ScrollView>
+      ) : null}
+    </View>
+  );
+}
+
+// ── Main screen ──────────────────────────────────────────────────────
 /**
  * LogsPanelContent — the "Logs" sheet body, shared by two hosts:
  *
@@ -2908,13 +2982,47 @@ export default function TasksScreen() {
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRuntimeRenderRef = useRef<{ taskId: string; source: string; workDir?: string } | null>(null);
 
-  // ── opencode raw-lane note ─────────────────────────────────────────────
+  // ── opencode raw-lane (live console) ───────────────────────────────────
   // opencode tasks stream their RAW runner stdout (ANSI + TUI intact) as
   // `raw`/`raw_replay` SSE frames (agent 1.99.406+, commit d671b7c02).
-  // The Chat|Terminal toggle is GONE from mobile (2026-08-09, user call):
-  // the app is chat-only, and the raw console look renders inside the chat
-  // bubbles via AnsiConsoleText (hasConsoleMarkup). The transport still
-  // supports rawSince/onRaw for other surfaces; nothing here consumes it.
+  // The Chat|Terminal toggle stays GONE (2026-08-09, user call) — the app
+  // is chat-only — but the raw bytes are consumed again so the chat shows
+  // a LIVE console section (AnsiConsoleText) with the same colours/status
+  // as the opencode console, instead of collapsing everything to
+  // "_Working through implementation details…_" while the runner codes.
+  // Buffer discipline (per selected task, survives status changes):
+  //   rawBufRef     — retained tail of raw bytes (cap ~512KB, mirrors the
+  //                   agent's rawOutputMaxBytes)
+  //   rawCursorRef  — the agent's authoritative byte cursor, passed back as
+  //                   `rawSince` on reattach to resume without gaps
+  //   rawLive       — true for ~3s after the last LIVE raw frame (drives
+  //                   the Live/Idle dot on the console section header)
+  const RAW_CONSOLE_CAP = 512 * 1024;
+  const rawBufRef = useRef("");
+  const rawCursorRef = useRef(0);
+  const [rawLive, setRawLive] = useState(false);
+  const rawLiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markRawLive = useCallback(() => {
+    setRawLive(true);
+    if (rawLiveTimerRef.current) clearTimeout(rawLiveTimerRef.current);
+    rawLiveTimerRef.current = setTimeout(() => setRawLive(false), 3000);
+  }, []);
+  // Full-snapshot reset is keyed on the SELECTED TASK (not the raw lane):
+  // a fresh `raw_replay` with full=true replaces the buffer; live `raw`
+  // frames append. Tracked by task id so switching tasks never leaks one
+  // task's console into another's.
+  const rawTaskIdRef = useRef<string | null>(null);
+  const [rawVersion, setRawVersion] = useState(0);
+  const handleRawChunk = useCallback((text: string, offset: number, full: boolean) => {
+    if (full) {
+      rawBufRef.current = text;
+    } else {
+      rawBufRef.current = (rawBufRef.current + text).slice(-RAW_CONSOLE_CAP);
+    }
+    if (typeof offset === "number" && offset > 0) rawCursorRef.current = offset;
+    if (!full) markRawLive(); // live bytes → the console section's Live dot
+    setRawVersion((v) => v + 1); // console section re-renders from rawBufRef
+  }, [RAW_CONSOLE_CAP, markRawLive]);
 
   // SSE stream for the selected running task (full live terminal stream)
   const sseAbortRef = useRef<(() => void) | null>(null);
@@ -2956,7 +3064,7 @@ export default function TasksScreen() {
     let reattachTimer: ReturnType<typeof setTimeout> | undefined;
     setStreamHealth(null);
 
-    const subscribe = (since: number) => {
+    const subscribe = (since: number, rawSince: number) => {
     if (disposed) return;
     const abort = connectionManager.runnerClient().streamTaskOutput(
       selectedTask.id,
@@ -3057,6 +3165,17 @@ export default function TasksScreen() {
       },
       {
         since,
+        // Resume the RAW stdout lane from the same cursor the last stream
+        // reached, so the live console never repaints or gaps across a drop.
+        // Per-task reset: switching the selected task reseeds from a full
+        // `raw_replay` snapshot (rawSince=0); status changes keep the buffer.
+        rawSince,
+        onRaw: (text, offset, full) => {
+          handleRawChunk(text, offset, full);
+          // Raw bytes are output too — they prove the runner is alive.
+          attempt = 0;
+          setStreamHealth(null);
+        },
         onEnd: (info) => {
           if (disposed) return;
           // The transport used to end here in silence (`xhr.onerror` was an
@@ -3077,14 +3196,26 @@ export default function TasksScreen() {
           }
           setStreamHealth({ kind: "reattaching", message: plan.message });
           attempt += 1;
-          reattachTimer = setTimeout(() => subscribe(received), plan.delayMs);
+          reattachTimer = setTimeout(() => subscribe(received, rawCursorRef.current), plan.delayMs);
         },
       },
     );
     sseAbortRef.current = abort;
     };
 
-    subscribe(0);
+    // Per-task raw console reset: switching the selected task clears the
+    // buffer so the console reseeds from a full `raw_replay` snapshot
+    // (rawSince=0). Status changes (queued→running→completed) keep the
+    // buffer so the console resumes with `rawSince=<cursor>` instead of
+    // repainting.
+    if (rawTaskIdRef.current !== selectedTask.id) {
+      rawTaskIdRef.current = selectedTask.id;
+      rawCursorRef.current = 0;
+      rawBufRef.current = "";
+      setRawLive(false);
+    }
+
+    subscribe(0, rawCursorRef.current);
 
     // Late-join replay: if the agent already asked while no client
     // was subscribed, the SSE writer will replay on connect. But the
@@ -3116,7 +3247,48 @@ export default function TasksScreen() {
       sseAbortRef.current?.();
       sseAbortRef.current = null;
     };
-  }, [selectedTask?.id, selectedTask?.status, streamReattachNonce]);
+  }, [selectedTask?.id, selectedTask?.status, streamReattachNonce, handleRawChunk]);
+
+  // Raw console seed for tasks that never stream. A FINISHED opencode task
+  // has no live SSE (the effect above only subscribes while the runner is
+  // coding), so opening one subscribes once with `rawSince=0`, drains the
+  // raw_replay snapshot into the buffer, then aborts. Re-fetches when the
+  // task/status changes so the console tail is always authoritative.
+  useEffect(() => {
+    if (!selectedTask) return;
+    if (taskStatusMeansRunnerIsCoding(selectedTask.status)) return; // live stream owns the raw lane
+    if (normalizeTaskRunnerId(selectedTask.runnerId) !== "opencode") return;
+    if (!quicClient.isConnected) return;
+    if (rawBufRef.current && rawTaskIdRef.current === selectedTask.id) return; // already seeded
+    let disposed = false;
+    let seeded = false;
+    let abort: () => void = () => {};
+    rawTaskIdRef.current = selectedTask.id;
+    rawCursorRef.current = 0;
+    rawBufRef.current = "";
+    setRawLive(false);
+    abort = connectionManager.runnerClient().streamTaskOutput(
+      selectedTask.id,
+      () => { /* chat interest only — the live effect owns chat for coding tasks */ },
+      undefined,
+      undefined,
+      {
+        rawSince: 0,
+        onRaw: (text, offset, full) => {
+          if (disposed || seeded) return;
+          seeded = true;
+          handleRawChunk(text, offset, full);
+          // One-shot: the finished task's raw_replay IS the whole retained
+          // tail — close the stream, the console has everything.
+          abort();
+        },
+      },
+    );
+    return () => {
+      disposed = true;
+      abort();
+    };
+  }, [selectedTask?.id, selectedTask?.status, handleRawChunk]);
 
   // The queued render intent lands here, once, when the turn reaches a
   // renderable terminal state.
@@ -3925,6 +4097,13 @@ export default function TasksScreen() {
       const effectiveRunner = pendingTarget?.runner
         ? normalizeTaskRunnerId(pendingTarget.runner)
         : resolveRunnerForSend();
+      // Yaver goal-mode: `/goal <objective>` in the composer arms a
+      // persistent goal on the opencode runner. The objective travels as
+      // the structured `goal` field (NOT a raw runner command) so the
+      // agent's <yaver_goal> wrapper fires. Only opencode honors it; other
+      // runners get their native /goal passed through raw.
+      const goalIntent = goalFromSlashCommand(title, effectiveRunner);
+      const goalText = goalIntent?.goal ?? "";
       const effectiveModel = pendingTarget?.model && isModelCompatibleWithRunnerId(pendingTarget.model, effectiveRunner)
         ? pendingTarget.model
         : resolveModelForSend(effectiveRunner);
@@ -4022,8 +4201,11 @@ export default function TasksScreen() {
         }
       }
       const taskParams = {
-        title,
-        description: title,
+        // In goal mode the objective IS the task — never show "/goal x"
+        // as the title or send it to the runner wrapped in Yaver's
+        // preamble. Use the bare objective everywhere.
+        title: goalIntent ? goalText : title,
+        description: goalIntent ? goalText : title,
         model: effectiveRunner === "custom" ? undefined : effectiveModel,
         runner: effectiveRunner === "custom" ? "custom" : effectiveRunner,
         customCommand: effectiveRunner === "custom" ? customCommand.trim() || undefined : undefined,
@@ -4036,6 +4218,7 @@ export default function TasksScreen() {
         codeMode: true,
         allowLocalFallback: false,
         mcpServers: selectedMcpServers,
+        goal: goalIntent ? goalText : undefined,
       };
       pendingCloudTaskParams = taskParams;
       const rawTask = await sendClient.sendTask(
@@ -4053,16 +4236,23 @@ export default function TasksScreen() {
         taskParams.allowLocalFallback,
         taskParams.projectName,
         taskParams.mcpServers,
+        taskParams.goal,
       );
       if (taskParams.projectName && keepLastProject) {
         const runnerDeviceId = connectionManager.roleDeviceId("runner") || pendingTarget?.deviceId || activeDevice?.id || "default";
-        void saveLastTaskProject({
+        // Write BOTH stores: AsyncStorage (offline fallback) + Convex
+        // defaultRuntimeProjectByDevice (canonical cross-surface memory —
+        // the web dashboard reads the same row, so a project remembered on
+        // the phone shows up on the web and vice versa).
+        const lastProjectRow = {
           deviceId: runnerDeviceId,
           name: taskParams.projectName,
           path: projectDir || undefined,
           branch: selectedComposerProject?.branch,
           gitRemote: selectedComposerProject?.gitRemote,
-        });
+        };
+        void saveLastTaskProject(lastProjectRow);
+        if (token) void saveLastTaskProjectToConvex(token, lastProjectRow);
       }
       // Stamp the task with the device + model we KNOW we sent it to
       // (sendTask response doesn't always echo deviceName; with the
@@ -4963,7 +5153,14 @@ export default function TasksScreen() {
       if (routeProjectDir) return;
       if (selectedProjectPath && normalizedProjects.some((project) => project.path === selectedProjectPath)) return;
       if (keep) {
-        const last = await loadLastTaskProject(runnerDeviceId);
+        // Convex-first, local-fallback (Snowball, 2026-08-09): the canonical
+        // last-project memory is defaultRuntimeProjectByDevice — the SAME row
+        // the web dashboard writes — so a project remembered on the web shows
+        // up on the phone and vice versa. The Convex row has no absolute path,
+        // so matching runs on name/remote; the local AsyncStorage row carries
+        // the path and is used only when Convex has nothing for this device.
+        const convexLast = await loadLastTaskProjectFromConvex(token, runnerDeviceId);
+        const last = convexLast ?? (await loadLastTaskProject(runnerDeviceId));
         if (cancelled) return;
         const match = last
           ? normalizedProjects.find((project) =>
@@ -7337,6 +7534,12 @@ export default function TasksScreen() {
                           })}
                           defaultExpanded={selectedTask.status === "failed"}
                         />
+                        <LiveConsoleSection
+                          task={selectedTask}
+                          rawText={rawBufRef.current}
+                          live={rawLive}
+                          rawVersion={rawVersion}
+                        />
                         <CommandsPanel models={cmdCardsByTask[selectedTask.id]} />
                         <DebugSection task={selectedTask} connMode={connMode} c={c} />
                       </>
@@ -8436,6 +8639,15 @@ const s = StyleSheet.create({
   debugToggleText: { fontSize: 12, fontWeight: "600" },
   debugContent: { marginTop: 6, padding: 12, borderRadius: 8, borderWidth: 1 },
   debugLine: { fontSize: 11, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", lineHeight: 18 },
+
+  // Live console (opencode raw lane)
+  liveConsoleWrap: { marginHorizontal: spacing.lg, marginVertical: spacing.sm, borderWidth: 1, borderRadius: 10, overflow: "hidden" },
+  liveConsoleToggle: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 8, gap: 6 },
+  liveConsoleCaret: { fontSize: 11 },
+  liveConsoleTitle: { fontSize: 12, fontWeight: "600", letterSpacing: 0.2 },
+  liveConsoleDot: { fontSize: 10, fontWeight: "600", textTransform: "uppercase" },
+  liveConsoleCount: { fontSize: 10, marginLeft: "auto", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
+  liveConsoleBody: { borderTopWidth: 1, maxHeight: 320, padding: 12 },
 
   // Tmux sessions
   tmuxCard: { borderRadius: 12, padding: 14, borderWidth: 1, marginBottom: 10 },

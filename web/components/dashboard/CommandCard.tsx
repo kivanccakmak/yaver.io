@@ -86,7 +86,7 @@ export function CommandCard({ model }: { model: CommandCardModel }) {
             <div className="font-mono text-[11px] text-surface-400">
               {model.status === "running"
                 ? "waiting for output…"
-                : "(no output captured)"}
+                : "no output — the command produced nothing (a clean `git status`, for example)"}
             </div>
           ) : (
             <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed">

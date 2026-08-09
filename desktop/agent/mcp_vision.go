@@ -1273,9 +1273,12 @@ func (s *HTTPServer) handleVisionStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	freeOCRNote := "macOS Vision framework — $0, on-device"
 	freeOCR := runtime.GOOS == "darwin"
-	if !freeOCR && exec.LookPath("tesseract") == nil {
-		freeOCR = true
-		freeOCRNote = "tesseract — $0, on-device (apt install tesseract-ocr)"
+	if !freeOCR {
+		_, tesseractErr := exec.LookPath("tesseract")
+		if tesseractErr == nil {
+			freeOCR = true
+			freeOCRNote = "tesseract — $0, on-device (apt install tesseract-ocr)"
+		}
 	}
 	writeJSON(w, 200, map[string]interface{}{
 		"ok":                        true,

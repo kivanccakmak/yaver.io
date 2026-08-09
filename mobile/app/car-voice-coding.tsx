@@ -39,6 +39,7 @@ import { useAuth } from "../src/context/AuthContext";
 import { isDeviceAsleep, useMachineLifecycle } from "../src/lib/wakeMachine";
 import WakeProgress from "../src/components/WakeProgress";
 import { connectionManager } from "../src/lib/connectionManager";
+import { goalFromSlashCommand } from "../src/lib/goalSlashCommand";
 import { quicClient } from "../src/lib/quic";
 import { loadLocalSpeechConfig } from "../src/lib/auth";
 import { loadKeepLastProjectEnabled, loadLastTaskProject } from "../src/lib/taskComposerPrefs";
@@ -185,13 +186,18 @@ export default function CarVoiceCodingScreen() {
     };
     const client = connectionManager.clientFor(deviceId);
     const lastProject = (await loadKeepLastProjectEnabled()) ? await loadLastTaskProject(deviceId || "default") : null;
+    // Car dispatch always uses the opencode runner (terminal-style "yaver
+    // code" wrapping), so a "/goal <objective>" voice command arms Yaver
+    // goal-mode via the structured goal field (see goalSlashCommand).
     const deps = makeRealCarVoiceDeps({
       config,
       // codeMode=true → terminal-style ("yaver code") prompt wrapping.
       dispatchTask: async (title, prompt) => {
+        const goalIntent = goalFromSlashCommand(prompt, "opencode");
+        const goalText = goalIntent?.goal ?? "";
         const t = await client.sendTask(
-          title,
-          prompt,
+          goalIntent ? goalText : title,
+          goalIntent ? goalText : prompt,
           undefined,
           undefined,
           undefined,
@@ -204,6 +210,7 @@ export default function CarVoiceCodingScreen() {
           undefined,
           lastProject?.name,
           [],
+          goalIntent ? goalText : undefined,
         );
         return { id: t.id };
       },

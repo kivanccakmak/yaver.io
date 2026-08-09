@@ -4024,7 +4024,14 @@ func fallbackRunnerModels(runnerID string) []runnerModelInfo {
 		}
 	case "opencode":
 		return []runnerModelInfo{
-			{ID: "zai-coding-plan/glm-4.7", Name: "GLM 4.7 Coding Plan (z.ai)", Provider: "zai-coding-plan", Source: "builtin", IsDefault: true},
+			// Default = deepseek-v4-flash (2026-08-09, user ask: "our default
+			// will be deepseek v4 flash"), aligned with
+			// web/DEFAULT_MODEL_BY_RUNNER.opencode + mobile
+			// DeviceContext.DEFAULT_MODEL_BY_RUNNER.opencode. The runner
+			// resolves provider/model against its own opencode.json; the
+			// deepseek provider ships in the probed catalogue.
+			{ID: "deepseek-v4-flash", Name: "DeepSeek V4 Flash", Provider: "deepseek", Source: "builtin", IsDefault: true},
+			{ID: "zai-coding-plan/glm-4.7", Name: "GLM 4.7 Coding Plan (z.ai)", Provider: "zai-coding-plan", Source: "builtin", IsDefault: false},
 			{ID: "zai/glm-4.7", Name: "GLM 4.7 (z.ai)", Provider: "zai", Source: "builtin", IsDefault: false},
 			{ID: "openrouter/z-ai/glm-4.7", Name: "GLM 4.7 (OpenRouter)", Provider: "openrouter", Source: "builtin", IsDefault: false},
 			{ID: "openai/gpt-5.4", Name: "GPT-5.4", Provider: "openai", Source: "builtin", IsDefault: false},

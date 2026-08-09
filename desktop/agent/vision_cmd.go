@@ -92,10 +92,13 @@ func runVisionStatus() {
 	switch {
 	case runtime.GOOS == "darwin":
 		ocr = "available (macOS Vision framework, $0)"
-	case exec.LookPath("tesseract") == nil:
-		ocr = "available (tesseract, $0 — apt install tesseract-ocr)"
 	default:
-		ocr = "unavailable on this OS — install tesseract-ocr (Linux) or use a vision provider"
+		_, tesseractErr := exec.LookPath("tesseract")
+		if tesseractErr == nil {
+			ocr = "available (tesseract, $0 — apt install tesseract-ocr)"
+		} else {
+			ocr = "unavailable on this OS — install tesseract-ocr (Linux) or use a vision provider"
+		}
 	}
 	fmt.Printf("Vision status:\n")
 	fmt.Printf("  On-device OCR (free): %s\n", ocr)

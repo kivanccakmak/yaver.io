@@ -72,6 +72,7 @@ import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow
 import { diagnoseRunnerFailure, formatFailureTime, runnerFailureFromTaskFailure } from "@/lib/runnerFailure";
 import { describeSidecarNoise, partitionRunnerOutput } from "@/lib/runnerOutputNoise";
 import { isRawRunnerCommand } from "@/lib/raw-runner-command";
+import { loadLastProjectFromConvex, saveLastProjectToConvex } from "@/lib/runtimeProjectSettings";
 import PreviewPane from "./PreviewPane";
 import { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice } from "./DevicesView";
 
@@ -915,7 +916,23 @@ export default function VibeCodingView({
         if (!selectedProjectPath && projectRows.length > 0) {
           const wanted = deepLinkRef.current;
           const tail = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() || p;
-          const lastPath = keepLastProjectEnabled() ? loadLastProjectPath(connectedDevice?.id) : "";
+          // Keep-last-project, Convex-first (2026-08-09): the canonical memory
+          // is defaultRuntimeProjectByDevice — the SAME row mobile writes — so
+          // a project remembered on the phone restores here. The Convex row
+          // has no absolute path, so match by name/remote; localStorage (which
+          // carries the path) is the offline fallback.
+          let lastPath = "";
+          if (keepLastProjectEnabled()) {
+            const convexLast = await loadLastProjectFromConvex(CONVEX_URL, token, connectedDevice?.id);
+            if (convexLast?.projectName) {
+              const lastName = String(convexLast.projectName).toLowerCase();
+              const convexMatch =
+                projectRows.find((row) => tail(row.path).toLowerCase() === lastName) ||
+                projectRows.find((row) => row.name?.toLowerCase() === lastName);
+              if (convexMatch) lastPath = convexMatch.path;
+            }
+            if (!lastPath) lastPath = loadLastProjectPath(connectedDevice?.id);
+          }
           const match = wanted
             ? projectRows.find((row) => row.path === wanted.project) ||
               projectRows.find((row) => tail(row.path) === tail(wanted.project))
@@ -1327,18 +1344,31 @@ export default function VibeCodingView({
       return;
     }
     const promptText = composer.trim();
-    const rawRunnerCommand = isRawRunnerCommand(promptText);
+
+    // Yaver goal-mode (opencode goal plugin): `/goal <objective>` in the
+    // composer arms a persistent goal instead of a one-shot task. The
+    // objective travels as the structured `goal` field (NOT as a raw
+    // runner command) so the agent's tasks.go wraps it in <yaver_goal>
+    // and the opencode runner opens create_goal. `/goal` with no
+    // objective falls through to the runner as a raw command.
+    const goalIntent = goalFromSlashCommand(promptText, selectedRunner);
+    const goalPrompt = goalIntent?.prompt ?? promptText;
+    const goalObjective = goalIntent?.goal ?? "";
+    // A recognized `/goal <objective>` is a structured goal task, NOT a
+    // raw runner command — the agent only arms the <yaver_goal> wrapper
+    // when RawRunnerCommand is false.
+    const rawRunnerCommand = isRawRunnerCommand(goalPrompt);
 
     // Deep ask escalation: a broad / architectural QUESTION ("how does auth
     // work end to end?") runs a multi-agent graph (investigate → answer →
     // verify) instead of a single agent. Narrow questions stay single-agent
     // ask mode (askMode below); build instructions stay normal tasks.
-    if (detectAskIntent(promptText) && detectAskBreadth(promptText)) {
+    if (detectAskIntent(goalPrompt) && detectAskBreadth(goalPrompt)) {
       setBusy("Deep ask — investigate → answer → verify…");
       const res = await agentClient.createAgentGraph({
         name: "ask",
         workDir: selectedProject.path,
-        prompt: promptText,
+        prompt: goalPrompt,
         runner: selectedRunner || undefined,
         model: selectedModel || undefined,
         template: "ask",
@@ -1361,9 +1391,9 @@ export default function VibeCodingView({
     setBusy("Starting coding task…");
     // Leaving any prior deep-ask graph view when starting a normal task.
     setActiveGraphRunId(null);
-    const title = draftTitle.trim() || summarizeTitle(composer, selectedProject.name);
+    const title = draftTitle.trim() || summarizeTitle(goalPrompt, selectedProject.name);
     let placementPreview: TaskPlacementDecision | null = null;
-    const placementKind = inferTaskPlacementKind(promptText);
+    const placementKind = inferTaskPlacementKind(goalPrompt);
     const profileHints = await rememberProjectProfile(placementKind);
     const placementRequest = {
       kind: placementKind,
@@ -1408,12 +1438,12 @@ export default function VibeCodingView({
           title,
 	          description: buildVibeTaskPrompt({
 	            project: selectedProject,
-	            prompt: promptText,
+	            prompt: goalPrompt,
 	            gitStatus,
 	            deployTargets,
 	            machine: connectedMachine,
 	          }),
-	          userPrompt: promptText,
+	          userPrompt: goalPrompt,
           runner: selectedRunner || undefined,
           model: selectedModel || undefined,
           mode: selectedRunner === "opencode" && selectedMode ? selectedMode : undefined,
@@ -1422,7 +1452,8 @@ export default function VibeCodingView({
           projectDir: selectedProject.path,
           mcpServers: selectedMcpServers,
           videoEnabled: videoSummaryEnabled,
-	          askMode: rawRunnerCommand ? false : detectAskIntent(promptText),
+          goal: goalObjective || undefined,
+	          askMode: rawRunnerCommand ? false : detectAskIntent(goalPrompt),
         },
         createdAt: now,
         updatedAt: now,
@@ -1480,12 +1511,12 @@ export default function VibeCodingView({
       title,
       description: buildVibeTaskPrompt({
         project: selectedProject,
-        prompt: promptText,
+        prompt: goalPrompt,
         gitStatus,
         deployTargets,
         machine: connectedMachine,
       }),
-      userPrompt: composer.trim(),
+      userPrompt: goalPrompt,
       runner: selectedRunner || undefined,
       model: selectedModel || undefined,
       mode: selectedRunner === "opencode" && selectedMode ? selectedMode : undefined,
@@ -1494,11 +1525,12 @@ export default function VibeCodingView({
       projectDir: selectedProject.path,
       mcpServers: selectedMcpServers,
       videoEnabled: videoSummaryEnabled,
+      goal: goalObjective || undefined,
       // Console auto-detect: a natural-language question ("how do I test
       // STT/TTS?") routes to ask mode — deep grounded analysis, explain-first
       // — instead of a work run. High-precision; imperative build prompts are
       // left as normal tasks. See lib/ask-intent.ts.
-      askMode: rawRunnerCommand ? false : detectAskIntent(promptText),
+      askMode: rawRunnerCommand ? false : detectAskIntent(goalPrompt),
     };
     let task: Task;
     try {
@@ -3567,11 +3599,37 @@ type SlashCommandSuggestion = {
 };
 
 const SLASH_COMMAND_SUGGESTIONS: SlashCommandSuggestion[] = [
-  { command: "/goal ", label: "goal", description: "Set or update the runner goal.", runners: ["claude", "glm"] },
+  // /goal is Yaver goal-mode: on opencode it's captured into the
+  // structured `goal` field (opencode goal plugin, <yaver_goal> wrapper);
+  // on claude/glm it passes through to the runner's native /goal.
+  { command: "/goal ", label: "goal", description: "Set or update the runner goal.", runners: ["claude", "glm", "opencode"] },
   { command: "/exit", label: "exit", description: "Ask the runner session to exit.", runners: ["claude", "glm", "codex", "opencode"] },
   { command: "/help", label: "help", description: "Show runner-native slash command help.", runners: ["claude", "glm", "codex", "opencode"] },
   { command: "/clear", label: "clear", description: "Clear the runner conversation context.", runners: ["claude", "glm", "opencode"] },
 ];
+
+/**
+ * Recognize Yaver goal-mode input: `/goal <objective>` (case-insensitive)
+ * typed into the composer. Returns the objective as the structured `goal`
+ * field plus the objective as the task prompt, or null when the input is
+ * not a goal command (a bare `/goal` with no objective passes through to
+ * the runner as a raw command). Goal-mode is opencode-only on the agent
+ * side — the <yaver_goal> wrapper arms create_goal on the opencode runner.
+ */
+function goalFromSlashCommand(
+  input: string | null | undefined,
+  runner: string | null | undefined,
+): { goal: string; prompt: string } | null {
+  const text = String(input || "").trim();
+  if (!/^\/goal\s+/i.test(text)) return null;
+  const objective = text.replace(/^\/goal\s+/i, "").trim();
+  if (!objective) return null;
+  const runnerId = String(runner || "").trim().toLowerCase();
+  // Only the opencode runner honors the structured goal field; on other
+  // runners leave the input untouched so their native /goal works.
+  if (runnerId && runnerId !== "opencode") return null;
+  return { goal: objective, prompt: objective };
+}
 
 function slashCommandsForRunner(runner: string, input: string): SlashCommandSuggestion[] {
   const typed = input.trimStart();

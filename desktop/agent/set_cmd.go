@@ -121,7 +121,7 @@ Usage:
   yaver set vision-key openai --clear        Clear a stored vision key
 
 Vision keys (vision_keys in ~/.yaver/config.json) are the shared seam read by
-the MCP vision_* tools, `yaver vision`, and the web/mobile settings surfaces.
+the MCP vision_* tools, yaver vision, and the web/mobile settings surfaces.
 Set one key and every vision consumer picks it up.
 
 Options:

@@ -9,6 +9,7 @@ import type { ThemeColors } from "../src/constants/colors";
 import { useDevice } from "../src/context/DeviceContext";
 import { useAuth } from "../src/context/AuthContext";
 import { connectionManager } from "../src/lib/connectionManager";
+import { goalFromSlashCommand } from "../src/lib/goalSlashCommand";
 import { displayRunnerLabel, normalizeTaskRunnerId, preferredDefaultModelForRunner } from "../src/lib/remoteCodingSelection";
 import { listMcpServers, type McpServer } from "../src/lib/mcpServers";
 import {
@@ -143,11 +144,15 @@ export default function TVCodingScreen() {
     if (!deviceId || !prompt.trim()) return;
     const client = connectionManager.clientFor(deviceId);
     const projectName = selectedProject?.name || projectNameFromPath(selectedProjectPath);
+    // Yaver goal-mode: `/goal <objective>` arms a persistent goal on the
+    // opencode runner via the structured `goal` field (see goalSlashCommand).
+    const goalIntent = goalFromSlashCommand(prompt, selectedRunner);
+    const goalText = goalIntent?.goal ?? "";
     setBusy("Sending task...");
     try {
       const task = await client.sendTask(
-        prompt.trim().slice(0, 80) || "TV coding task",
-        prompt.trim(),
+        goalIntent ? goalText.slice(0, 80) : (prompt.trim().slice(0, 80) || "TV coding task"),
+        goalIntent ? goalText : prompt.trim(),
         selectedModel || undefined,
         selectedRunner || undefined,
         undefined,
@@ -160,6 +165,7 @@ export default function TVCodingScreen() {
         undefined,
         projectName,
         selectedMcpServers,
+        goalIntent ? goalText : undefined,
       );
       if (projectName && selectedProjectPath) {
         void saveLastTaskProject({

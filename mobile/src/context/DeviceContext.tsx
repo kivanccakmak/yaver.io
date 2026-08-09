@@ -231,12 +231,14 @@ AsyncStorage.getItem("@yaver/debug_logs_enabled").then((val) => {
 // Why hardcoded: the alternative is round-tripping
 // /agent/runners → models lookup just to render the picker, which would
 // add network latency to a UX flow that needs to feel instant.
-// "opencode" intentionally has no entry — opencode picks its own
-// internal default; clearing the per-device model is safer than
-// inheriting Codex's gpt-5.4 or Claude's opus when switching to it.
+// opencode = deepseek-v4-flash (2026-08-09, user ask: "our default will
+// be deepseek v4 flash") — the catalogue's current default, aligned with
+// the web DEFAULT_MODEL_BY_RUNNER.opencode. A saved per-device model
+// (the user's explicit pick) still wins over this global default.
 export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
   claude: "claude-opus-4-7",
   codex: "gpt-5.4",
+  opencode: "deepseek-v4-flash",
 };
 
 function deviceRunnerReadyFromHeartbeat(device: Pick<Device, "runners" | "installedRunnerIds">): boolean {

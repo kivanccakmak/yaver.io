@@ -1848,6 +1848,13 @@ export type CreateTaskParams = {
   gitRemote?: string;
   gitBranch?: string;
   autoPush?: "never" | "ask" | "always" | "";
+  /** Yaver goal-mode objective (opencode goal plugin). When set, the task
+   *  runs as a persistent goal the opencode runner keeps working toward
+   *  across turns (create_goal + idle auto-continue) until complete with
+   *  evidence, blocked, or a safety limit. Empty = one-shot task. Only the
+   *  opencode runner honors it; other runners ignore the field. Surfaces
+   *  set this when the composer input is `/goal <objective>`. */
+  goal?: string;
 };
 
 export function buildCreateTaskBody(params: CreateTaskParams): Record<string, unknown> {
@@ -1889,6 +1896,7 @@ export function buildCreateTaskBody(params: CreateTaskParams): Record<string, un
     gitRemote: params.gitRemote ?? "",
     gitBranch: params.gitBranch ?? "",
     autoPush: params.autoPush ?? "",
+    goal: params.goal ?? "",
     source: "web",
   };
 }
@@ -2279,6 +2287,9 @@ export class AgentClient {
     gitRemote?: string;
     gitBranch?: string;
     autoPush?: "never" | "ask" | "always" | "";
+    /** Yaver goal-mode objective (opencode goal plugin). Set when the
+     *  composer input was `/goal <objective>`; empty for one-shot tasks. */
+    goal?: string;
   }): Promise<Task> {
     this.assertConnected();
     // The create chain must be BOUNDED — a hung agent /tasks route used to

@@ -2620,7 +2620,14 @@ export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
   // pointing at the dead one earlier today and broke the vibe loop on every
   // surface. Probe before changing it.
   codex: "gpt-5.6-terra",
-  opencode: "zai-coding-plan/glm-4.7",
+  // opencode default = deepseek-v4-flash (2026-08-09, user ask: "our
+  // default will be deepseek v4 flash"). The opencode runner resolves
+  // provider/model against its own opencode.json, and deepseek-v4-flash
+  // is the catalogue's current default (OPENCODE_PROVIDER_CATALOGUE).
+  // Applied when the user selects opencode and has no prior per-device
+  // model choice; a saved per-device model (the user's explicit pick)
+  // still wins over this global default.
+  opencode: "deepseek-v4-flash",
 };
 
 export function isKivancAccount(email: string | null | undefined): boolean {
