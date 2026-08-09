@@ -9,7 +9,7 @@ import (
 )
 
 func TestCodexYaverOnlyMCPArgsIgnoreUserConfig(t *testing.T) {
-	args := codexYaverOnlyMCPArgs("/tmp/yaver", nil)
+	args := codexYaverOnlyMCPArgs("/tmp/yaver", nil, true)
 	joined := strings.Join(args, "\x00")
 	for _, want := range []string{
 		"--ignore-user-config",
@@ -19,6 +19,22 @@ func TestCodexYaverOnlyMCPArgsIgnoreUserConfig(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("codex scoped args missing %q: %v", want, args)
 		}
+	}
+}
+
+func TestCodexYaverOnlyMCPArgsSkipsYaverWhenExcluded(t *testing.T) {
+	args := codexYaverOnlyMCPArgs("/tmp/yaver", nil, false)
+	joined := strings.Join(args, "\x00")
+	for _, bad := range []string{
+		"mcp_servers.yaver.command",
+		`mcp_servers.yaver.args`,
+	} {
+		if strings.Contains(joined, bad) {
+			t.Fatalf("codex scoped args should NOT inject yaver MCP when excluded: %v", args)
+		}
+	}
+	if !strings.Contains(joined, "--ignore-user-config") {
+		t.Fatalf("codex scoped args missing --ignore-user-config: %v", args)
 	}
 }
 
@@ -48,7 +64,7 @@ func TestPrepareClaudeYaverOnlyConfigStripsForeignMCPs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env, err := prepareClaudeYaverOnlyConfig("/tmp/yaver", work, nil)
+	env, err := prepareClaudeYaverOnlyConfig("/tmp/yaver", work, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +112,7 @@ func TestPrepareOpenCodeYaverOnlyConfigPreservesProviderConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env, err := prepareOpenCodeYaverOnlyConfig("/tmp/yaver", nil)
+	env, err := prepareOpenCodeYaverOnlyConfig("/tmp/yaver", nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}

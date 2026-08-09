@@ -4821,6 +4821,11 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		// MCPServers is the per-task external MCP allowlist. Empty means no
 		// external MCPs; Yaver's own MCP doorway remains available.
 		MCPServers    []string           `json:"mcpServers,omitempty"`
+		// IncludeYaverMcp defaults true (nil = include). A surface sets
+		// false when the user explicitly deselects the `yaver` MCP chip, so
+		// the runner sees ONLY the external MCPs in mcpServers (possibly
+		// none). *bool, not bool, so "field absent" ≠ "false".
+		IncludeYaverMcp *bool             `json:"includeYaverMcp,omitempty"`
 		SliceContract *TaskSliceContract `json:"sliceContract,omitempty"`
 		// Runner/render machine split (task_ensure_clone.go): the surface
 		// passes the project's git identity so a runner box without the
@@ -5036,6 +5041,9 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		WorkDir:     body.WorkDir,
 		ProjectName: body.ProjectName,
 		MCPServers:  append([]string{}, body.MCPServers...),
+		// nil = include Yaver's own MCP doorway (default); explicit false
+		// strips it so the task runs with ONLY the selected external MCPs.
+		IncludeYaverMcp: body.IncludeYaverMcp == nil || *body.IncludeYaverMcp,
 		// What the user typed. Feedback / shake clients send no userPrompt,
 		// so the fallback to the (now clean) title is what keeps their own
 		// sentence in their own bubble.

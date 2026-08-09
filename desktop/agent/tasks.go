@@ -972,6 +972,12 @@ type TaskCreateOptions struct {
 	// external MCPs; the runner still gets Yaver's own MCP doorway.
 	MCPServers []string
 
+	// IncludeYaverMcp controls whether the runner sees Yaver's own `yaver mcp`
+	// doorway for this task. Defaults true. When the user explicitly deselects
+	// it on a surface (web/mobile MCP chips), the runner gets ONLY the external
+	// MCPs in MCPServers — possibly none, which is a real "no MCP tools" task.
+	IncludeYaverMcp bool
+
 	// SeedTurns is prior conversation history to PREPEND to the new task's
 	// Turns purely for DISPLAY continuity — it is NOT re-sent to the runner
 	// (the runner receives its context via the prompt/handoff). A fork sets
@@ -1172,6 +1178,10 @@ type Task struct {
 	// MCPServers is deliberately not echoed to generic task JSON. It controls
 	// runner spawn scope only; UI state owns what it selected.
 	MCPServers []string `json:"-"`
+
+	// IncludeYaverMcp echoes the per-task yaver-MCP door toggle (default true
+	// when unset). Kept on the Task so the spawn path can skip the injection.
+	IncludeYaverMcp bool `json:"includeYaverMcp,omitempty"`
 
 	// Runner/render machine split (task_ensure_clone.go): git identity the
 	// surface passed so THIS box can materialize its own clone when it was
@@ -2047,6 +2057,7 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		WorkDir:                     strings.TrimSpace(opts.WorkDir),
 		ProjectName:                 strings.TrimSpace(opts.ProjectName),
 		MCPServers:                  append([]string{}, opts.MCPServers...),
+		IncludeYaverMcp:             opts.IncludeYaverMcp,
 		GitRemote:                   strings.TrimSpace(opts.GitRemote),
 		GitBranch:                   strings.TrimSpace(opts.GitBranch),
 		AutoPush:                    strings.TrimSpace(opts.AutoPush),
@@ -3002,7 +3013,11 @@ func (tm *TaskManager) startProcess(task *Task) error {
 
 	// Determine working directory
 	taskDir := tm.effectiveTaskWorkDir(task)
-	mcpScope := prepareRunnerMCPScope(runner.RunnerID, taskDir, task.MCPServers)
+	includeYaverMcp := "1"
+	if !task.IncludeYaverMcp {
+		includeYaverMcp = "0"
+	}
+	mcpScope := prepareRunnerMCPScope(runner.RunnerID, taskDir, task.MCPServers, []string{includeYaverMcp})
 	switch normalizeRunnerID(runner.RunnerID) {
 	case "codex":
 		args = insertArgsAfter(args, "exec", mcpScope.Args)

@@ -24,20 +24,31 @@ func prepareRunnerMCPScope(runnerID, workDir string, allowed ...[]string) runner
 	if len(allowed) > 0 {
 		allowlist = allowed[0]
 	}
+	// includeYaverMcp defaults true. When the user explicitly deselects
+	// Yaver's own MCP doorway on a surface, skip the injection entirely so
+	// the runner sees ONLY the external MCPs the task allowed (possibly
+	// none). The flag rides in the allowlist as a sentinel: the first list
+	// element is the external-MCP allowlist; a second element carries the
+	// includeYaverMcp bool as the string "0"/"1" when provided. This keeps
+	// every existing caller (agent, MCP, CLI) byte-compatible.
+	includeYaverMcp := true
+	if len(allowed) > 1 && len(allowed[1]) > 0 {
+		includeYaverMcp = allowed[1][0] != "0"
+	}
 	servers := enabledExternalServersFor(allowlist)
 	yaverPath := findYaverBinary()
 	switch normalizeRunnerID(runnerID) {
 	case "codex":
-		return runnerMCPScope{Args: codexYaverOnlyMCPArgs(yaverPath, servers)}
+		return runnerMCPScope{Args: codexYaverOnlyMCPArgs(yaverPath, servers, includeYaverMcp)}
 	case "claude", "glm":
-		env, err := prepareClaudeYaverOnlyConfig(yaverPath, workDir, servers)
+		env, err := prepareClaudeYaverOnlyConfig(yaverPath, workDir, servers, includeYaverMcp)
 		if err != nil {
 			log.Printf("[runner-mcp] claude scoped MCP config unavailable; falling back to runner config: %v", err)
-			return runnerMCPScope{Args: claudeYaverOnlyMCPArgs(yaverPath, servers)}
+			return runnerMCPScope{Args: claudeYaverOnlyMCPArgs(yaverPath, servers, includeYaverMcp)}
 		}
 		return runnerMCPScope{Env: env}
 	case "opencode":
-		env, err := prepareOpenCodeYaverOnlyConfig(yaverPath, servers)
+		env, err := prepareOpenCodeYaverOnlyConfig(yaverPath, servers, includeYaverMcp)
 		if err != nil {
 			log.Printf("[runner-mcp] opencode scoped MCP config unavailable; falling back to runner config: %v", err)
 			return runnerMCPScope{}
@@ -75,11 +86,13 @@ func enabledExternalServersFor(allowlist []string) []ExternalMCPServer {
 	return out
 }
 
-func codexYaverOnlyMCPArgs(yaverPath string, servers []ExternalMCPServer) []string {
-	args := []string{
-		"--ignore-user-config",
-		"-c", fmt.Sprintf("mcp_servers.yaver.command=%q", yaverPath),
-		"-c", `mcp_servers.yaver.args=["mcp"]`,
+func codexYaverOnlyMCPArgs(yaverPath string, servers []ExternalMCPServer, includeYaverMcp bool) []string {
+	args := []string{"--ignore-user-config"}
+	if includeYaverMcp {
+		args = append(args,
+			"-c", fmt.Sprintf("mcp_servers.yaver.command=%q", yaverPath),
+			"-c", `mcp_servers.yaver.args=["mcp"]`,
+		)
 	}
 	for _, srv := range servers {
 		args = append(args,
@@ -91,8 +104,11 @@ func codexYaverOnlyMCPArgs(yaverPath string, servers []ExternalMCPServer) []stri
 	return args
 }
 
-func claudeYaverOnlyMCPArgs(yaverPath string, servers []ExternalMCPServer) []string {
-	mcp := map[string]any{"yaver": mcpServerEntry(yaverPath)}
+func claudeYaverOnlyMCPArgs(yaverPath string, servers []ExternalMCPServer, includeYaverMcp bool) []string {
+	mcp := map[string]any{}
+	if includeYaverMcp {
+		mcp["yaver"] = mcpServerEntry(yaverPath)
+	}
 	for _, srv := range servers {
 		mcp[srv.Name] = externalClaudeMCPEntry(srv)
 	}
@@ -102,7 +118,7 @@ func claudeYaverOnlyMCPArgs(yaverPath string, servers []ExternalMCPServer) []str
 	return []string{"--mcp-config", string(cfg)}
 }
 
-func prepareClaudeYaverOnlyConfig(yaverPath, workDir string, servers []ExternalMCPServer) ([]string, error) {
+func prepareClaudeYaverOnlyConfig(yaverPath, workDir string, servers []ExternalMCPServer, includeYaverMcp bool) ([]string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return nil, fmt.Errorf("resolve home: %w", err)
@@ -121,7 +137,10 @@ func prepareClaudeYaverOnlyConfig(yaverPath, workDir string, servers []ExternalM
 	cfg["hasCompletedOnboarding"] = true
 	trustClaudeScopedWorkDir(cfg, workDir)
 	stripClaudeProjectMCPServers(cfg)
-	mcp := map[string]any{"yaver": mcpServerEntry(yaverPath)}
+	mcp := map[string]any{}
+	if includeYaverMcp {
+		mcp["yaver"] = mcpServerEntry(yaverPath)
+	}
 	for _, srv := range servers {
 		mcp[srv.Name] = externalClaudeMCPEntry(srv)
 	}
@@ -179,7 +198,7 @@ func externalClaudeMCPEntry(srv ExternalMCPServer) map[string]any {
 	return entry
 }
 
-func prepareOpenCodeYaverOnlyConfig(yaverPath string, servers []ExternalMCPServer) ([]string, error) {
+func prepareOpenCodeYaverOnlyConfig(yaverPath string, servers []ExternalMCPServer, includeYaverMcp bool) ([]string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return nil, fmt.Errorf("resolve home: %w", err)
@@ -194,12 +213,13 @@ func prepareOpenCodeYaverOnlyConfig(yaverPath string, servers []ExternalMCPServe
 			return nil, fmt.Errorf("parse opencode config: %w", err)
 		}
 	}
-	mcp := map[string]any{
-		"yaver": map[string]any{
+	mcp := map[string]any{}
+	if includeYaverMcp {
+		mcp["yaver"] = map[string]any{
 			"type":    "local",
 			"command": []string{yaverPath, "mcp"},
 			"enabled": true,
-		},
+		}
 	}
 	for _, srv := range servers {
 		entry := map[string]any{"type": "remote", "url": srv.URL, "enabled": true}
