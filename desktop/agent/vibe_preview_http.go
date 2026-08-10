@@ -62,11 +62,18 @@ func (s *HTTPServer) handleVibePreviewStart(w http.ResponseWriter, r *http.Reque
 		// surface has to guess and none of them may offer a dead retry.
 		var active *PreviewSessionActiveError
 		var noBrowser *PreviewBrowserUnavailableError
+		var unreachable *PreviewTargetUnreachableError
 		switch {
 		case errors.As(err, &active):
 			jsonErrorWithGap(w, http.StatusConflict, active.Error(), previewSessionActiveGap(active))
 		case errors.As(err, &noBrowser):
 			jsonErrorWithGap(w, http.StatusServiceUnavailable, noBrowser.Error(), previewBrowserUnavailableGap())
+		case errors.As(err, &unreachable):
+			// A dev server that is not serving is a ROUTE, not a wall: POST
+			// /dev/start with the project pre-filled, streamed, then the start
+			// re-issued. 424 Failed Dependency is the honest status — the
+			// preview cannot start until its dependency (the dev server) does.
+			jsonErrorWithGap(w, http.StatusFailedDependency, unreachable.Error(), previewTargetUnreachableGap(unreachable))
 		default:
 			jsonError(w, http.StatusBadRequest, err.Error())
 		}

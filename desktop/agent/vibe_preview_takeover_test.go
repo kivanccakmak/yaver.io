@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,6 +32,31 @@ import (
 	"testing"
 	"time"
 )
+
+// testListenerURL returns a live 127.0.0.1 listener URL for tests that must
+// START a preview. Since vibe_preview.go's probeTargetURL gate, "the device is
+// connected" is no longer enough — something must actually be LISTENING at the
+// targetUrl, or Start refuses with PreviewTargetUnreachableError before the
+// behaviour under test runs. The listener accepts-and-closes so a probe's TCP
+// handshake succeeds.
+func testListenerURL(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	return "http://" + ln.Addr().String()
+}
 
 func startTakeoverTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -61,15 +87,16 @@ func TestPreviewLock_IsTypedNotProse(t *testing.T) {
 	mgr.SetDiskRoot(t.TempDir())
 	defer mgr.StopAll()
 
+	url := testListenerURL(t)
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "sfmg", TargetURL: "http://127.0.0.1:3000",
+		Project: "sfmg", TargetURL: url,
 		Mode: VibePreviewModeSummaryOnly, Surface: "tv",
 	}); err != nil {
 		t.Fatalf("first start: %v", err)
 	}
 
 	_, err := mgr.Start(VibePreviewStartOpts{
-		Project: "sfmg", TargetURL: "http://127.0.0.1:3000",
+		Project: "sfmg", TargetURL: url,
 		Mode: VibePreviewModeSummaryOnly, Surface: "vision",
 	})
 	var active *PreviewSessionActiveError
@@ -329,7 +356,7 @@ func TestPreviewRelease_AnswersInsteadOfMakingYouWait(t *testing.T) {
 
 	// A LIVE session (fps > 0) is the case that actually starts a capture loop.
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "sfmg", TargetURL: "http://x", Mode: VibePreviewModeLive,
+		Project: "sfmg", TargetURL: testListenerURL(t), Mode: VibePreviewModeLive,
 		Profile: "live-relay-cell", Surface: "tv",
 	}); err != nil {
 		t.Fatalf("start: %v", err)

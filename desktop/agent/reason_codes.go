@@ -106,6 +106,24 @@ const (
 	// fix into an infinite loop and teaches the user the product is broken
 	// rather than busy.
 	ReasonPreviewSessionActive = "preview.session_active"
+	// ReasonPreviewTargetUnreachable is "the vibe preview cannot reach the
+	// targetUrl it was told to capture — nothing is serving there". The
+	// DETECTION is Chrome's own navigate failure (net::ERR_CONNECTION_REFUSED),
+	// but only when the address refuses to connect; a page that loads and
+	// errors is a different class (the user's code, not Yaver's).
+	//
+	// Named because of what shipped without it (2026-08-10, ubuntu-4gb-hel1-1):
+	// the device card said "Connected" while /dev/status answered serving:false,
+	// and a vibe start navigated Chrome to a port with no listener. The refusal
+	// was the bare chromedp sentence
+	//   navigate to http://127.0.0.1:3000: ... net::ERR_CONNECTION_REFUSED
+	// with NO code and NO route — the user could not tell "the box is down"
+	// from "nothing is serving", and no button existed to start the dev server
+	// that /dev/start already knows how to launch. Connect-green + vibe-dead is
+	// the false green this codebase keeps paying for: reachability is not
+	// serving, and serving is not vibing. The remedy is a route: POST /dev/start
+	// with the project's workDir, then re-issue the preview start.
+	ReasonPreviewTargetUnreachable = "preview.target_unreachable"
 	// ReasonCapabilityInsufficientDisk is "the tool is installable here, and
 	// this machine does not have the room". A DIFFERENT code from
 	// toolchain_missing on purpose: the remedy is not an install, it is

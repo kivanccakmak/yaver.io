@@ -20,8 +20,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -333,6 +336,13 @@ type VibePreviewStartOpts struct {
 	// Recorded on the session purely so the NEXT surface's refusal can say who
 	// holds the lock instead of "another surface".
 	Surface string `json:"surface,omitempty"`
+	// WorkDir/Framework are carried into the target-unreachable gap's /dev/start
+	// body so the "Start the dev server" route is invocable without the surface
+	// guessing which project to boot. Optional: when absent the route still
+	// exists (auto-detect), but the pre-filled body is what makes it a button
+	// rather than a form.
+	WorkDir   string `json:"workDir,omitempty"`
+	Framework string `json:"framework,omitempty"`
 }
 
 // Start boots a new preview session: opens a headless Chrome, navigates to
@@ -389,6 +399,23 @@ func (m *VibePreviewManager) Start(opts VibePreviewStartOpts) (*VibePreviewSessi
 	now := m.nowFn()
 	browserID := fmt.Sprintf("vibe-preview-%s-%d", sanitizeBranchName(opts.Project), now.UnixNano()%1_000_000)
 
+	// Pre-probe the targetUrl BEFORE opening Chrome. A missing dev server
+	// otherwise costs a browser session + a navigate that fails seconds later
+	// with a bare chromedp sentence — and, worse, the failure was previously
+	// returned as a raw error with no code and no route, so the panel showed
+	// "navigate to http://127.0.0.1:3000: ... net::ERR_CONNECTION_REFUSED" with
+	// no button. Probe the operation (can I connect?) instead of the inventory
+	// (is a dev server "configured"?), so a connect-green-but-vibe-dead box is
+	// refused in milliseconds with a named cause and a /dev/start route.
+	if probeErr := m.probeTargetURL(opts.TargetURL); probeErr != nil {
+		return nil, &PreviewTargetUnreachableError{
+			TargetURL: opts.TargetURL,
+			Project:   opts.Project,
+			WorkDir:   opts.WorkDir,
+			Framework: opts.Framework,
+		}
+	}
+
 	// Open at the profile's size, not at whatever the browser layer defaults to
 	// — the caller's requested viewport is the whole point of the profile, and
 	// reporting it without applying it is a false green (see the interface note
@@ -398,6 +425,19 @@ func (m *VibePreviewManager) Start(opts VibePreviewStartOpts) (*VibePreviewSessi
 	}
 	if _, err := m.browser.Navigate(browserID, opts.TargetURL); err != nil {
 		_ = m.browser.CloseSession(browserID)
+		// The pre-probe already caught a refused port, but the navigate can
+		// still hit a refused connection (e.g. the dev server died between the
+		// probe and the navigation, or the address is a hostname that resolves
+		// to a non-listening port). Classify connection refusals as the same
+		// named cause so no surface ever sees the raw chromedp sentence.
+		if looksLikeConnectionRefused(err) {
+			return nil, &PreviewTargetUnreachableError{
+				TargetURL: opts.TargetURL,
+				Project:   opts.Project,
+				WorkDir:   opts.WorkDir,
+				Framework: opts.Framework,
+			}
+		}
 		return nil, fmt.Errorf("navigate to %s: %w", opts.TargetURL, err)
 	}
 
@@ -443,6 +483,100 @@ func (m *VibePreviewManager) Start(opts VibePreviewStartOpts) (*VibePreviewSessi
 	}
 
 	return cloneSession(sess), nil
+}
+
+// probeTargetURL makes a bounded TCP connect to the targetUrl's host:port and
+// reports whether anything is listening. This is the "probe the operation, not
+// the inventory" half of the target-unreachable fix: the device card's
+// "Connected" only means the AGENT answers — it says nothing about a dev server
+// serving on the preview port. A refused connect here means the preview cannot
+// capture, and the refusal carries a /dev/start route instead of a Chrome
+// sentence.
+//
+// The probe is deliberately TCP-only (no HTTP round trip): a dev server that
+// accepts connections but is still compiling should not be refused, and an
+// HTTP-only probe would race a booting server. If the URL is malformed, the
+// probe reports unreachable (the caller's refusal names the URL either way).
+func (m *VibePreviewManager) probeTargetURL(targetURL string) error {
+	u, err := url.Parse(strings.TrimSpace(targetURL))
+	if err != nil {
+		return fmt.Errorf("unparseable targetUrl %q", targetURL)
+	}
+	host := u.Hostname()
+	port := u.Port()
+	if host == "" {
+		return fmt.Errorf("targetUrl %q has no host", targetURL)
+	}
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		default:
+			return fmt.Errorf("targetUrl %q has no port and no known scheme", targetURL)
+		}
+	}
+	// Hostnames like "localhost" may resolve to ::1; try the literal host then
+	// the bracketed IPv6 form. Bounded: a dev server that is up answers a TCP
+	// handshake in single-digit ms; 750ms is generous for a busy box without
+	// stalling the refusal path.
+	addr := net.JoinHostPort(host, port)
+	conn, err := net.DialTimeout("tcp", addr, 750*time.Millisecond)
+	if err == nil {
+		_ = conn.Close()
+		return nil
+	}
+	// Fallback: an IPv6 literal in the hostname (e.g. "[::1]:3000" was already
+	// handled by JoinHostPort, but a bare "::1" host from a URL like
+	// "http://[::1]:3000" is what url.Parse yields) — net.DialTimeout handles
+	// the bracket form directly, so the first dial already covered it. Keep the
+	// error: the refusal names the URL, not the dial detail.
+	return fmt.Errorf("connect to %s: %w", addr, err)
+}
+
+// looksLikeConnectionRefused classifies a chromedp navigation error as "the
+// address refused to accept a connection" — the signal for
+// PreviewTargetUnreachableError. We match the stable substrings chromedp and
+// the Chrome devtools protocol emit (net::ERR_CONNECTION_REFUSED,
+// ECONNREFUSED), never a full sentence, so a Chrome version bump cannot break
+// the classifier.
+func looksLikeConnectionRefused(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, needle := range []string{
+		"ERR_CONNECTION_REFUSED",
+		"ERR_CONNECTION_RESET",
+		"ECONNREFUSED",
+		"connect: connection refused",
+		"failed to connect",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// targetHostPort extracts host:port from a targetUrl for the unreachable gap's
+// summary. Best-effort; returns the raw string when parsing fails.
+func targetHostPort(targetURL string) string {
+	u, err := url.Parse(strings.TrimSpace(targetURL))
+	if err != nil || u.Host == "" {
+		return targetURL
+	}
+	if u.Port() != "" {
+		return u.Host
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return net.JoinHostPort(u.Hostname(), "443")
+	case "http":
+		return net.JoinHostPort(u.Hostname(), "80")
+	}
+	return u.Host
 }
 
 // Stop tears down a session by project name. Idempotent: missing project

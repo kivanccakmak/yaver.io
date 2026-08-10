@@ -13,6 +13,7 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -432,6 +433,25 @@ func pollUntil(t *testing.T, maxMs int, cond func() bool, msg string) {
 // which is why this asserts what the browser was OPENED with. Revert
 // vibe_preview.go to m.browser.OpenSession(browserID, false) and this fails.
 func TestVibePreviewAppliesRequestedViewport(t *testing.T) {
+	// The pre-probe (vibe_preview.go probeTargetURL) requires something to be
+	// LISTENING at the targetUrl — "the device is connected" says nothing about
+	// a port serving, and that is the point of the probe. Serve a stub so the
+	// viewport assertion stays about the viewport, not the probe.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+
 	fb := newFakeBrowser([]byte("frame-1"))
 	m := NewVibePreviewManager(fb)
 	m.SetDiskRoot(t.TempDir())
@@ -439,7 +459,7 @@ func TestVibePreviewAppliesRequestedViewport(t *testing.T) {
 
 	sess, err := m.Start(VibePreviewStartOpts{
 		Project:   "tv",
-		TargetURL: "http://127.0.0.1:8088",
+		TargetURL: "http://" + ln.Addr().String(),
 		Mode:      VibePreviewModeSummaryOnly,
 		Width:     1920,
 		Height:    1080,

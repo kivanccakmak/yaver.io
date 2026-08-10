@@ -44,6 +44,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -74,6 +75,27 @@ type PreviewBrowserUnavailableError struct{}
 
 func (e *PreviewBrowserUnavailableError) Error() string {
 	return "browser automation unavailable: install Chrome/Chromium"
+}
+
+// PreviewTargetUnreachableError is "nothing is listening at the targetUrl the
+// preview was told to capture". Distinct from a page that LOADS and errors:
+// this is a connection refusal, measured by the pre-probe (or by Chrome's own
+// navigate when the pre-probe is skipped), and it has a deterministic fix —
+// the project's dev server is not running and /dev/start can start it.
+//
+// TargetURL and WorkDir are carried so the HTTP layer can build a route-to-fix
+// without the surface guessing which project to start. This is the
+// connect-green-but-vibe-dead class: the agent is reachable, so the device card
+// says Connected, while nothing serves the port the preview needs.
+type PreviewTargetUnreachableError struct {
+	TargetURL string
+	Project   string
+	WorkDir   string
+	Framework string
+}
+
+func (e *PreviewTargetUnreachableError) Error() string {
+	return fmt.Sprintf("nothing is serving %s — start the project's dev server first (vibe preview cannot capture a port with no listener)", e.TargetURL)
 }
 
 // previewSurfaceLabel is how a holding surface is named to a human. Keyed off
@@ -165,6 +187,51 @@ func previewSessionActiveGap(err *PreviewSessionActiveError) *CapabilityGap {
 // on a platform where it cannot work it degrades to an honest Constraint.
 func previewBrowserUnavailableGap() *CapabilityGap {
 	return capabilityGapForMissingTools([]string{"chromium"})
+}
+
+// previewTargetUnreachableGap turns "nothing is serving the targetUrl" into a
+// named cause with ONE invocable route: POST /dev/start, body pre-filled with
+// the project, workDir and framework, with a stream so the user watches the dev
+// server boot. Retry=true re-issues the preview start when the dev server
+// reports ready — the user's first frame IS the confirmation.
+//
+// WorkDir/Framework are best-effort: the manager may not always know them (a
+// bare targetUrl with no project context). When unknown, the route still
+// exists — /dev/start accepts a workDir-less body and auto-detects from the
+// agent's current project — but the summary must not claim a certainty the
+// route does not have. No Constraint: this class always has a fixer.
+func previewTargetUnreachableGap(err *PreviewTargetUnreachableError) *CapabilityGap {
+	if err == nil {
+		return nil
+	}
+	body := map[string]interface{}{}
+	if strings.TrimSpace(err.Project) != "" {
+		body["projectName"] = err.Project
+	}
+	if strings.TrimSpace(err.WorkDir) != "" {
+		body["workDir"] = err.WorkDir
+	}
+	if strings.TrimSpace(err.Framework) != "" {
+		body["framework"] = err.Framework
+	}
+	summary := fmt.Sprintf("Nothing is serving %s on this machine.", err.TargetURL)
+	if strings.TrimSpace(err.Project) != "" {
+		summary = fmt.Sprintf("The %q dev server isn't running — nothing is serving %s.", err.Project, err.TargetURL)
+	}
+	return &CapabilityGap{
+		Code:       ReasonPreviewTargetUnreachable,
+		Capability: "preview-target",
+		Summary:    summary,
+		Detail:     "The device is connected, but no dev server is listening at the preview address — there is nothing to capture yet. Starting the project's dev server first makes the preview work.",
+		Fix: &GapFix{
+			Label:  "Start the dev server",
+			Method: "POST",
+			Path:   "/dev/start",
+			Stream: "devserver",
+			Body:   body,
+			Retry:  true,
+		},
+	}
 }
 
 // ─── "Is it released yet?" ───────────────────────────────────────────────────
