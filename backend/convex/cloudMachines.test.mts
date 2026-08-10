@@ -7,6 +7,7 @@ import {
   buildManagedCloudInitContainer,
   isMachineWakeable,
   managedMachineLimit,
+  MACHINE_SPECS,
   planDeprovision,
   reusableSubscriptionMachineStatus,
   snapshotIsMandatory,
@@ -485,4 +486,57 @@ test("managedDeviceIdFor is stable across every park/wake", () => {
   // the row.
   const machineId = "mn777j15vc4wnt1gv4ceyad5858afzs4";
   assert.equal(managedDeviceIdFor(machineId), managedDeviceIdFor(machineId));
+});
+
+// ── 2026-08-10 provision-blocker regression guards ──────────────────────────
+// Every standard/heavy/build provision failed for ~6 weeks with
+// "Hetzner API 422: server type <id> is deprecated" because MACHINE_SPECS
+// defaults were cx32/cx42/cx52 (types 105/106/107, all deprecated) and the
+// surfaces only ever showed the generic "provisioning failed" label. These
+// tests pin both halves: the defaults must stay orderable, and the generated
+// cloud-init must not ship a dash-rejecting bare `set -o pipefail`.
+
+test("MACHINE_SPECS hetznerType defaults are not the deprecated cx32/cx42/cx52", () => {
+  const deprecated = new Set(["cx32", "cx42", "cx52"]);
+  for (const t of ["standard", "heavy", "build"]) {
+    const hetznerType = MACHINE_SPECS[t as keyof typeof MACHINE_SPECS].hetznerType;
+    assert.ok(
+      !deprecated.has(hetznerType),
+      `${t} default ${hetznerType} is deprecated — every provision would 422`,
+    );
+    // Must be the same ladder the wake path uses (cloudLifecycle.hetznerServerType)
+    // so the two sources of truth cannot drift again.
+    const expected = { standard: "cpx22", heavy: "cpx32", build: "cpx42" }[t];
+    assert.equal(hetznerType, expected);
+  }
+});
+
+test("container cloud-init ships a POSIX-safe pipefail, never a bare bash-ism", () => {
+  const base = {
+    convexSite: "https://example.convex.site",
+    machineId: "machine_ctr",
+    machineToken: "machine-token-ctr",
+    bootstrapDeviceCode: "device-code-ctr",
+    bootstrapExpiresAt: 1893456000000,
+    deviceId: "cloud-ctr",
+    hostname: "ctr.cloud.yaver.io",
+    yaverArch: "amd64" as const,
+    yaverReleaseUrl: "https://example.invalid/yaver-linux-amd64.tar.gz",
+    gpu: false,
+    // Volume-backed (container) path — this is what trips the volume block.
+    volumeId: "106577027",
+    boxRelayPassword: "",
+  };
+  const IMG = "ghcr.io/kivanccakmak/yaver-cloud:latest";
+  const ci = buildManagedCloudInitContainer(base as never, IMG);
+  // The incident: `set -euo pipefail` at runcmd block level ran under /bin/sh
+  // (dash) → "set: Illegal option -o pipefail" → whole runcmd aborted before
+  // docker pull → first boot died. The safe form is the POSIX fallback.
+  // set is a POSIX special builtin: in dash a failed "set -euo pipefail"
+  // EXITS the shell (fallbacks never run) — the incident shape. Runcmd
+  // blocks must use dash-safe "set -eu".
+  assert.match(ci, /\n  - \|\n    set -eu\n/);
+  assert.doesNotMatch(ci, /\n  - \|\n    set -euo pipefail\n/);
+  // The wake twin must also restore the managed identity from the volume.
+  assert.match(ci, /cp \/etc\/yaver\/machine\.json \/srv\/yaver\/state\/\.yaver\/machine\.json/);
 });

@@ -216,3 +216,45 @@ FAIL  -95%  € 52.09  Workspace $29 reserved cpx32
 Run this as a **preflight** before shipping a plan, a default SKU, or a park
 mode. A losing configuration should be refused by the system, not discovered on
 an invoice.
+
+## 9. The $19 price point (decision 2026-08-10, owner)
+
+Owner asked for Cloud Workspace at **$19/mo** with "~1000% margin". Audit
+reality: the repo's margin convention is gross margin % (capped at 100%), so
+"1000%" can only mean markup (≈11×). **A true 11× markup at $19 is
+mathematically impossible while keeping per-workspace durability** — the parked
+floor (40 GB volume €1.76 + reserved IP €1.20) alone is ≈€2.96 ≈ 5.9× markup /
+83% gross at zero active hours, and any active compute lowers it further:
+
+| Config @ $19 (≈ €17.5) | Cost/mo | Markup | Gross margin |
+|---|---:|---:|---:|
+| 0h (40 GB vol + IP) | €2.96 | 5.9× | 83% |
+| 40h on cpx22 (€0.0368/h) + 40 GB vol + IP | €4.43 | 3.9× | 75% |
+| 40h on cx33 (€0.016/h, when available) + 40 GB vol + IP | €3.60 | 4.9× | 79% |
+| 20 GB vol (€0.88) + IP, 40h cpx22 | €3.55 | 4.9× | 80% |
+
+**Decision: ship $19 with ~80% gross margin as the honest target** (owner
+accepted 2026-08-10). Two real levers if the margin must go higher:
+(1) shrink the durable volume 80 GB → 40/20 GB (the volume is the parked-cost
+driver: 80 GB = €3.52/mo floor today, §7 above assumed 20-40 GB); (2) drop the
+reserved egress IP (€1.20) — not recommended, it buys stable outbound identity.
+The current `MACHINE_SPECS.standard.diskGb = 80` makes the provisioned volume
+80 GB (`max(10, diskGb)`); revisiting that constant is the single biggest
+margin lever at $19.
+
+**2026-08-10 incident addendum (provision+wake were broken, fixed):** three
+stacked bugs silently blocked every managed provision/wake for ~6 weeks —
+(1) `MACHINE_SPECS` defaults `cx32/cx42/cx52` (Hetzner type ids 105/106/107)
+were deprecated → create 422 "server type <id> is deprecated" after the volume
+existed; (2) cloud-init runcmd blocks used `set -euo pipefail`, which is fatal
+under /bin/sh (dash special-builtin error exits the shell) → first boot died
+before docker; (3) the wake create sent NO user-data → a vanilla wake host had
+no docker/container/agent → every wake died in abandonWake (and healthCheck /
+resumeHealthCheck budgets were shorter than a fresh host's docker install +
+image pull). Fixed via: live-catalog-validated SKU resolution with
+cheapest-available fallback (`resolveProvisionServerType`), POSIX-safe `set -eu`
+runcmd blocks, `buildWakeCloudInit` shipping a full wake bootstrap (mount
+volume → docker → pull → restore machine.json from the volume copy → run the
+container), longer health budgets, "volume already attached" transient-retry,
+and DNS-record reclamation on decommission. Verified end-to-end on a real box
+(park → wake → active, memory intact) before decommissioning the test device.

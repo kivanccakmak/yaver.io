@@ -5,16 +5,31 @@ import { listGrantedMachineIdsForGrant, listVisibleInfraGrantsForGuest } from ".
 import { isOwnerUserId } from "./ownerAllowlist";
 import { randomHex, sha256Hex } from "./auth";
 import { selectComputeProvider } from "./cloudProviders/selection";
+import { hetznerPickAvailableServerType } from "./cloudLifecycle";
 
 // Machine specs by type. The Hetzner server_type strings are what you pass
 // to POST https://api.hetzner.cloud/v1/servers.
-const MACHINE_SPECS = {
+//
+// ⚠️ 2026-08-10 incident — these defaults were cx32/cx42/cx52 (Hetzner type
+// ids 105/106/107). Hetzner deprecated all three; every standard/heavy/build
+// provision then failed at create with `server type <id> is deprecated`
+// (422) AFTER the volume existed, ~14 attempts over ~6 weeks, and only the
+// generic "provisioning failed" label was visible on the row. cloudLifecycle.
+// hetznerServerType was fixed 2026-07-21 but the PROVISION path never used
+// it — two ladders that disagree. The defaults below now match that ladder
+// (verified orderable + non-deprecated against the live catalog on
+// 2026-08-10: cpx22=109, cpx32=110, cpx42=111), AND resolveProvisionServerType
+// re-checks the live catalog at provision time with a cheapest-available
+// fallback, so a future deprecation degrades to a substitute instead of a
+// silent 6-week outage.
+export const MACHINE_SPECS = {
   standard: {
     // Normie Cloud Workspace default: enough for one app / Yaver serverless /
-    // Hermes iteration without burning the $29 plan margin. CX32 is the current
-    // 4 vCPU / 8 GB / 80 GB shared-vCPU shape in Hetzner's CX line. Keep the
-    // exact provider type env-overridable because regional availability changes.
-    hetznerType: "cx32",
+    // Hermes iteration without burning the $29 plan margin. cpx22 (2c/4GB/80GB)
+    // is the current cheapest ORDERABLE shared-vCPU shape (cx23 2c/4GB is
+    // cheaper but was sold out EU-wide on 2026-07-21). Keep the exact provider
+    // type env-overridable because regional availability changes.
+    hetznerType: "cpx22",
     vcpu: 4,
     ramGb: 8,
     diskGb: 80,
@@ -23,7 +38,7 @@ const MACHINE_SPECS = {
   heavy: {
     // Two apps, Docker-heavy dev servers, or larger monorepos. Internal only:
     // users buy Cloud Workspace, placement picks this when needed.
-    hetznerType: "cx42",
+    hetznerType: "cpx32",
     vcpu: 8,
     ramGb: 16,
     diskGb: 160,
@@ -32,7 +47,7 @@ const MACHINE_SPECS = {
   build: {
     // Native mobile builds / large monorepo checks. Prefer this only when the
     // placement layer has evidence; otherwise it will erase the flat-plan margin.
-    hetznerType: "cx52",
+    hetznerType: "cpx42",
     vcpu: 16,
     ramGb: 32,
     diskGb: 320,
@@ -84,6 +99,8 @@ function normalizeMachineType(value: string | undefined | null): keyof typeof MA
   return "standard";
 }
 
+type MachineSpec = (typeof MACHINE_SPECS)[keyof typeof MACHINE_SPECS];
+
 export function reusableSubscriptionMachineStatus(status: unknown): boolean {
   return [
     "active",
@@ -98,6 +115,73 @@ export function reusableSubscriptionMachineStatus(status: unknown): boolean {
 function envServerTypeFor(machineType: string): string | undefined {
   const key = `YAVER_CLOUD_${String(machineType || "standard").toUpperCase().replace(/[^A-Z0-9]/g, "_")}_TYPE`;
   return process.env[key] || undefined;
+}
+
+const HETZNER_API_V1 = "https://api.hetzner.cloud/v1";
+
+/**
+ * resolveProvisionServerType — pick the concrete Hetzner server type for a
+ * provision, verified against the LIVE catalog.
+ *
+ * 2026-08-10 incident: the provision path used `envServerTypeFor(machineType)
+ * ?? specDef.hetznerType` with STALE defaults (cx32/cx42/cx52 = Hetzner type
+ * ids 105/106/107, all deprecated). Every standard/heavy/build provision then
+ * failed at create with `server type <id> is deprecated` (422) AFTER the
+ * volume existed; 14 attempts over ~6 weeks failed and the surfaces only ever
+ * showed the generic "provisioning failed" label. cloudLifecycle.
+ * hetznerServerType (the wake path's ladder) was fixed 2026-07-21 but the
+ * provision path never used it.
+ *
+ * Order: (1) env override for the machine type (YAVER_CLOUD_<TYPE>_TYPE —
+ * the SAME key cloudLifecycle.hetznerServerType reads, so the two ladders
+ * cannot drift again); (2) the spec default. The chosen type is checked
+ * against the live catalog; if it is missing or deprecated, the cheapest
+ * AVAILABLE type meeting the spec floor is picked instead (the wake path's
+ * availability logic, shared). Throws a NAMED error when nothing is
+ * orderable so the row's errorMessage names the cause. No HCLOUD_TOKEN ⇒
+ * fail-closed dry-run: return the configured default (nothing reaches
+ * Hetzner, the caller creates nothing).
+ */
+async function resolveProvisionServerType(
+  machineType: string,
+  specDef: MachineSpec,
+  region: string | undefined,
+): Promise<string> {
+  const token = process.env.HCLOUD_TOKEN;
+  const candidate = envServerTypeFor(machineType) ?? specDef.hetznerType;
+  if (!token) return candidate;
+  try {
+    const r = await fetch(
+      `${HETZNER_API_V1}/server_types?name=${encodeURIComponent(candidate)}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+    if (r.ok) {
+      const j = (await r.json()) as {
+        server_types?: Array<{ deprecation?: unknown }>;
+      };
+      const t = j.server_types?.[0];
+      if (t && !t.deprecation) return candidate;
+    }
+  } catch {
+    // Catalog unreachable — fall through to the availability picker; if that
+    // also fails, the provider error at create is the last defense (and the
+    // real message now lands on the row, not "provisioning failed").
+  }
+  const location = String(region || "eu").startsWith("us") ? "ash" : "fsn1";
+  const picked = await hetznerPickAvailableServerType(token, location, {
+    minCores: specDef.vcpu,
+    minRamGb: specDef.ramGb,
+    minDiskGb: specDef.diskGb,
+    architecture: "x86",
+  });
+  if (picked) return picked;
+  throw new Error(
+    `server type "${candidate}" is deprecated or not orderable, and no available type meets ` +
+      `${specDef.vcpu}c/${specDef.ramGb}GB/${specDef.diskGb}GB in ${location}`,
+  );
 }
 
 /**
@@ -322,8 +406,18 @@ ${optionalRepoClone}    SCRIPT
 
   const persistentStateMount = spec.volumeId
     ? `  # ── durable state volume (/root inside yaver-cloud container) ─────
+  # NOTE: cloud-init runs runcmd blocks under /bin/sh (dash). "set -euo
+  # pipefail" is a bash-ism dash rejects — and set is a POSIX SPECIAL
+  # BUILTIN, so the failed option EXITS the shell immediately (the
+  # "2>/dev/null || set -eu" fallback never runs — verified on-box
+  # 2026-08-10). This aborts the WHOLE runcmd and kills the first boot
+  # before docker even pulls (the exact 2026-08-10 incident: every
+  # container-path provision died on this line; the box booted, installed
+  # docker, then sat dead while healthCheck burned down and the row went
+  # error). runcmd blocks therefore use plain "set -eu" (dash-safe).
+  # pipefail stays ONLY inside the bash heredocs (TLS reconciler).
   - |
-    set -euo pipefail
+    set -eu
     dev=${shellSingleQuote(`/dev/disk/by-id/scsi-0HC_Volume_${spec.volumeId}`)}
     for i in $(seq 1 30); do
       [ -b "$dev" ] && break
@@ -514,6 +608,15 @@ ${hostedConvex}  # ── host TLS reconciler (same contract as the VM path) ─
     {"machineId":${jsonString(spec.machineId)},"machineToken":${jsonString(spec.machineToken)},"convexSite":${jsonString(spec.convexSite)},"hostname":${jsonString(spec.hostname)}}
     EOF
   - chmod 0600 /etc/yaver/machine.json
+  # ALSO persist the managed-box identity onto the durable volume. Park
+  # deletes the host, so /etc/yaver (host disk) is gone on wake — but the
+  # volume survives, and the wake bootstrap (cloudLifecycle.buildWakeCloudInit)
+  # restores machine.json from this copy. The plaintext machine token is
+  # never stored server-side, so this volume copy is the ONLY way a fresh
+  # wake host can recover the identity (git-autohydrate + idle auto-park
+  # both require loadMachineIdentity() to succeed).
+  - cp /etc/yaver/machine.json /srv/yaver/state/.yaver/machine.json
+  - chmod 0600 /srv/yaver/state/.yaver/machine.json
   - |
     cat > /usr/local/bin/yaver-tls-reconciler <<'SCRIPT'
     #!/usr/bin/env bash
@@ -2380,10 +2483,14 @@ export const provision = internalAction({
       }
 
       // ── 2. Hetzner server ───────────────────────────────────────
-      // Cost/availability override per internal profile. Captured on the row so
-      // resume recreates the exact same type; snapshots cannot restore onto a
-      // smaller disk. Legacy "cpu" keeps YAVER_CLOUD_CPU_TYPE support.
-      const createdServerType = envServerTypeFor(machineType) ?? specDef.hetznerType;
+      // Cost/availability override per internal profile. Resolved against the
+      // LIVE catalog with a cheapest-available fallback (2026-08-10: the
+      // cx32/cx42/cx52 defaults were deprecated and every provision failed
+      // with a silent 422 "server type <id> is deprecated"; the wake ladder
+      // had been fixed weeks earlier — the two must never disagree again).
+      // Captured on the row so resume recreates the exact same type;
+      // snapshots cannot restore onto a smaller disk.
+      const createdServerType = await resolveProvisionServerType(machineType, specDef, machine.region);
       const finalCloudInit = cloudImage
         ? buildManagedCloudInitContainer(bootstrapSpec, cloudImage)
         : cloudInit;
@@ -2640,11 +2747,11 @@ export const healthCheck = internalAction({
       console.log(`[cloudMachines.healthCheck] active: ${machine.hostname}`);
       return;
     }
-    if (attempt >= 10) {
+    if (attempt >= 30) {
       await ctx.runMutation(internal.cloudMachines.setStatus, {
         machineId,
         status: "error",
-        errorMessage: "Health check timed out after 10 attempts",
+        errorMessage: "Health check timed out after 30 attempts",
       });
       await ctx.runMutation(internal.cloudMachines.setPhase, {
         machineId,
@@ -2805,7 +2912,13 @@ export const resumeHealthCheck = internalAction({
     // became reachable" — and because abandonWake re-parks, the next attempt
     // hit the same wall. Scale the budget to what this box actually has to do.
     const bootBudgetAttempts =
-      machine.bootImageSource === "vanilla" ? 40 : machine.volumeId ? 20 : 32; // ~10 / ~5 / ~8 min
+      // Container-path box: the wake host is a FRESH vanilla machine that
+      // must install docker + pull the yaver-cloud image before the agent can
+      // answer — measured 5-10 min on 2c/4GB (2026-08-10). 40 attempts (~10
+      // min) deleted healthy boxes mid-pull and reported "never became
+      // reachable". 80 ≈ 20 min of runway; still bounded, and abandonWake
+      // keeps the meter honest if the box is genuinely dead.
+      machine.bootImageSource === "vanilla" ? 80 : machine.volumeId ? 20 : 32; // ~20 / ~5 / ~8 min
     if (signedOut || attempt >= bootBudgetAttempts) {
       const reason = signedOut
         ? "The box stayed awake waiting for Yaver sign-in, but was not authorized in time. Parked again to stop the meter — sign it in, then wake."

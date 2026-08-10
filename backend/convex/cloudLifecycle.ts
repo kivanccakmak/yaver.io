@@ -1236,7 +1236,15 @@ async function reserveEgressIpIfEligible(
   if (!egressIpPolicy(machine).eligible) return undefined;
   try {
     const datacenter = await hetznerPickDatacenter(token, preferredLocation);
-    if (!datacenter) return undefined;
+    if (!datacenter) {
+      // 2026-08-10: no reserved egress IP ever persisted across 6 wakes —
+      // this branch is a prime suspect and it was silent. Name it so the
+      // next wake's log says WHY the stability guarantee didn't engage.
+      console.warn(
+        `[cloudLifecycle.reserveEgressIp] no datacenter found for ${preferredLocation} — wake proceeds with an ephemeral address`,
+      );
+      return undefined;
+    }
     const created = await hetznerCreatePrimaryIp(
       token,
       `yaver-egress-${String(machineId).substring(0, 12)}`,
@@ -1249,8 +1257,12 @@ async function reserveEgressIpIfEligible(
       egressIpScope: created.datacenter,
     });
     return { id: created.id, datacenter: created.datacenter };
-  } catch {
-    // Never block a wake on a cost-optimisation/stability nicety.
+  } catch (e) {
+    // Never block a wake on a cost-optimisation/stability nicety — but say
+    // why (2026-08-10: this catch hid the failure for weeks).
+    console.warn(
+      `[cloudLifecycle.reserveEgressIp] reservation failed for ${machineId}: ${e instanceof Error ? e.message : String(e)}`,
+    );
     return undefined;
   }
 }
@@ -1372,6 +1384,133 @@ async function hetznerDelete(token: string, serverId: string): Promise<void> {
   });
   if (!r.ok && r.status !== 404) throw new Error(`delete HTTP ${r.status}`);
 }
+/**
+ * buildWakeCloudInit — the cloud-init a container-path WAKE server runs.
+ *
+ * 2026-08-10 incident: park deletes the host, so a wake boots a FRESH server,
+ * and the data rides on the persistent volume. hetznerCreateFromImage used to
+ * send NO user-data: a vanilla wake host came up with nothing but Hetzner's
+ * default udev trigger (no docker, no container, no agent) → resumeHealthCheck
+ * burned its budget → abandonWake parked again. Every volume-backed wake
+ * failed in prod, silently, because the path assumed a golden base image that
+ * was never configured (`YAVER_CLOUD_IMAGE_ID_*` unset; no golden snapshot in
+ * the account).
+ *
+ * This bootstrap is the wake-side twin of provision's
+ * buildManagedCloudInitContainer (cloudMachines.ts): mount the volume where
+ * the container expects it, ensure docker, pull the image, restore
+ * machine.json from the volume copy the provision path writes (the plaintext
+ * machine token is never stored server-side — the volume copy is the only way
+ * a fresh host recovers the managed-box identity, without which git-autohydrate
+ * and idle auto-park silently no-op), then run the SAME container the provision
+ * path runs. Works on vanilla AND golden boot images (docker install is a no-op
+ * when present). Keep the docker-run shape in sync with
+ * buildManagedCloudInitContainer's yaverDockerRun.
+ */
+export function buildWakeCloudInit(opts: {
+  convexSite: string;
+  machineId: string;
+  hostname: string;
+  volumeId: string;
+  relayPassword: string; // "" ⇒ relay ports + env omitted (no subscription)
+  image: string;
+}): string {
+  const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+  const relayPorts = opts.relayPassword
+    ? `      -p 4433:4433/udp -p 8443:8443/tcp \\\n`
+    : "";
+  const relayEnv = opts.relayPassword
+    ? `      -e RELAY_PASSWORD=${q(opts.relayPassword)} \\
+      -e CONVEX_URL=${q(opts.convexSite)} \\
+`
+    : "";
+  return `#cloud-config
+runcmd:
+  - |
+    set -eu
+    dev=/dev/disk/by-id/scsi-0HC_Volume_${opts.volumeId}
+    auto=/mnt/HC_Volume_${opts.volumeId}
+    for i in $(seq 1 30); do
+      [ -b "$dev" ] && break
+      sleep 2
+    done
+    if [ ! -b "$dev" ]; then
+      echo "[wake] volume ${opts.volumeId} did not appear; refusing ephemeral state"
+      exit 1
+    fi
+    mkdir -p /srv/yaver/state
+    # Hetzner automount (wake create passes automount:true) mounts the volume
+    # at /mnt/HC_Volume_<id> BEFORE cloud-init runs, so a plain "mount $dev"
+    # fails with "already mounted" and would abort the whole bootstrap (the
+    # 2026-08-10 wake double-fail). Bind-mount from the automount point when
+    # present, else mount the device directly.
+    if ! mountpoint -q /srv/yaver/state; then
+      if [ -d "$auto" ] && mountpoint -q "$auto"; then
+        mount --bind "$auto" /srv/yaver/state || true
+      else
+        mount "$dev" /srv/yaver/state || true
+      fi
+    fi
+    if ! mountpoint -q /srv/yaver/state; then
+      echo "[wake] volume ${opts.volumeId} did not mount"
+      exit 1
+    fi
+  - |
+    set -eu
+    which docker >/dev/null 2>&1 || curl -fsSL https://get.docker.com | sh
+    systemctl enable --now docker >/dev/null 2>&1 || true
+  - docker pull ${q(opts.image)}
+  - |
+    set -eu
+    mkdir -p /etc/yaver
+    if [ -f /srv/yaver/state/.yaver/machine.json ]; then
+      cp /srv/yaver/state/.yaver/machine.json /etc/yaver/machine.json
+      chmod 0600 /etc/yaver/machine.json
+    else
+      echo "[wake] machine.json missing on volume — identity not restorable"
+    fi
+    docker rm -f yaver 2>/dev/null || true
+    docker run -d --name yaver --restart always \\
+      -p 18080:18080 \\
+${relayPorts}      -e YAVER_HOSTNAME=${q(opts.hostname)} \\
+${relayEnv}      -e CONVEX_SELFHOSTED_FILE=/root/.yaver/convex-selfhosted.json \\
+      -v /srv/yaver/state:/root \\
+      -v /srv/yaver/state/Workspace:/srv/yaver/workspace \\
+      -v /etc/yaver:/etc/yaver \\
+      ${q(opts.image)}
+  - |
+    ok=0
+    for i in $(seq 1 60); do
+      if curl -fsS -m 4 http://127.0.0.1:18080/health >/dev/null 2>&1; then ok=1; break; fi
+      sleep 5
+    done
+    exit 0
+`;
+}
+
+/**
+ * wakeRelayPassword — the managed box's OWN relay password. Provision wires a
+ * random one into the managedRelays row + userSettings (boxRelayPassword); a
+ * wake must reuse the SAME password or the bundled relay would serve stale
+ * credentials to other devices. "" when there is no subscription (dev-adopt).
+ */
+async function wakeRelayPassword(
+  ctx: { runQuery: (q: any, args: any) => Promise<any> },
+  subscriptionId: string | undefined,
+): Promise<string> {
+  if (!subscriptionId) return "";
+  try {
+    const relays = await ctx.runQuery(internal.managedRelays.listBySubscription, {
+      subscriptionId,
+    });
+    const relay = Array.isArray(relays) ? relays[0] : undefined;
+    const password = (relay as { password?: string } | undefined)?.password;
+    return typeof password === "string" ? password : "";
+  } catch {
+    return "";
+  }
+}
+
 async function hetznerCreateFromImage(
   token: string,
   name: string,
@@ -1387,6 +1526,17 @@ async function hetznerCreateFromImage(
    * location and why the fallback below is deliberate rather than accidental.
    */
   egressIp?: { id: string; datacenter: string },
+  /**
+   * cloud-init user-data for the wake host. 2026-08-10: this was ABSENT, and
+   * every volume-backed wake failed silently — a fresh host booted with only
+   * Hetzner's default udev trigger, no docker/container/agent, so
+   * resumeHealthCheck burned its budget and abandonWake parked again. The
+   * wake path assumed a golden base image that was never configured. Pass
+   * buildWakeCloudInit(...) (container path) so a vanilla wake host boots the
+   * full bootstrap; legacy snapshot wakes keep "" (the restored disk already
+   * has docker + the service).
+   */
+  userData?: string,
 ): Promise<{
   serverId: string;
   ip: string;
@@ -1449,6 +1599,9 @@ async function hetznerCreateFromImage(
         ...(withEgressIp && egressIp
           ? { public_net: { enable_ipv4: true, enable_ipv6: true, ipv4: Number(egressIp.id) } }
           : {}),
+        // The wake host's own bootstrap (see the param doc above). Empty for
+        // legacy snapshot wakes; the container path ships buildWakeCloudInit.
+        ...(userData ? { user_data: userData } : {}),
         labels: { service: "yaver-cloud-machine", managed: "true", resumed: "true" },
       }),
     });
@@ -1511,6 +1664,35 @@ async function cloudflareUpsertA(hostname: string, ip: string): Promise<void> {
     }
   } catch (e) {
     console.error(`[cloudLifecycle] DNS upsert for ${hostname} failed:`, e);
+  }
+}
+
+/**
+ * cloudflareDeleteA — remove the auto-subdomain A record for a hostname.
+ * The auto domain is NOT a userDomains row, so it has no recordBinding to
+ * delete with — it must be removed by name. 2026-08-10: the owner
+ * dev-deprovision path (purgeMachineResources) skipped this, leaving a stale
+ * A record pointing at a dead IP after every decommission (the paid destroy
+ * route already did it — the two paths had drifted again). Idempotent.
+ */
+async function cloudflareDeleteA(hostname: string): Promise<void> {
+  const token = process.env.CF_API_TOKEN;
+  const zone = process.env.CF_ZONE_ID;
+  if (!token || !zone || !hostname) return;
+  try {
+    const list = await fetch(
+      `https://api.cloudflare.com/client/v4/zones/${zone}/dns_records?name=${encodeURIComponent(hostname)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const listJson = (await list.json()) as { result?: { id: string }[] };
+    for (const record of listJson.result ?? []) {
+      await fetch(
+        `https://api.cloudflare.com/client/v4/zones/${zone}/dns_records/${record.id}`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
+      );
+    }
+  } catch (e) {
+    console.error(`[cloudLifecycle] DNS delete for ${hostname} failed:`, e);
   }
 }
 
@@ -2338,6 +2520,13 @@ export const purgeMachineResources = internalAction({
       // billing. "removed" here would hide a live cost behind a clean-looking UI.
       return { ok: false, reason: `purge incomplete — still billing: ${aux.leaked.join("; ")}` };
     }
+    // The auto-subdomain A record is NOT a userDomains row — it must be removed
+    // by name (2026-08-10: this was missing here, so every owner decommission
+    // left a stale A record pointing at a dead IP; the paid destroy route
+    // already did it).
+    if (machine.hostname) {
+      await cloudflareDeleteA(machine.hostname);
+    }
     await ctx.runMutation(internal.cloudMachines.clearResources, { machineId });
     return { ok: true, reason: `purged: ${done.join(", ") || "nothing"}` };
   },
@@ -2496,7 +2685,13 @@ export const resumeMachine = internalAction({
         // A park deletes the server but the volume can linger "attached" to the
         // now-gone server, and create-with-volumes then 422s "volume already
         // attached". Detach it first so wake self-heals instead of dead-ending.
-        if (vol.serverId) {
+        // ALWAYS detach (not just when the volume REPORTS attached): Hetzner's
+        // release can lag — the volume can report detached while the underlying
+        // attach is still winding down (2026-08-10: a park→wake back-to-back
+        // hit exactly this race and the create 422'd "volume already attached",
+        // putting the row in error). Detach is idempotent (404/409-safe), so
+        // this is free.
+        {
           // The detach poll below can burn 20s in silence. Name it, or the
           // bar sits on the prior step while we're actually waiting on
           // Hetzner to release a volume.
@@ -2588,6 +2783,26 @@ export const resumeMachine = internalAction({
       const egressIp = await reserveEgressIpIfEligible(
         ctx, machineId, machine, token!, locationCandidates[0] ?? "fsn1",
       );
+      // Container-path wake bootstrap (2026-08-10: wake sent NO user-data, so
+      // a vanilla wake host had no docker/container/agent and every
+      // volume-backed wake died in abandonWake). Built here — NOT in
+      // buildManagedCloudInitContainer — because the wake path lives in this
+      // module and the plaintext machine token is recovered from the volume
+      // copy inside the script. Legacy in-VM (no YAVER_CLOUD_IMAGE) wakes keep
+      // "" — their restored disk already carries docker + the systemd service.
+      const wakeUserData =
+        machine.volumeId && process.env.YAVER_CLOUD_IMAGE
+          ? buildWakeCloudInit({
+              convexSite:
+                process.env.CONVEX_SITE_URL ||
+                "https://perceptive-minnow-557.eu-west-1.convex.site",
+              machineId: machine._id.toString(),
+              hostname,
+              volumeId: machine.volumeId,
+              relayPassword: await wakeRelayPassword(ctx, machine.subscriptionId),
+              image: process.env.YAVER_CLOUD_IMAGE,
+            })
+          : undefined;
       const { serverId, ip, actionId, egressIpUsed } = await hetznerCreateFromImage(
         token!,
         hostname,
@@ -2597,6 +2812,7 @@ export const resumeMachine = internalAction({
         resolveBootSshKeys(machine),
         volumeIds,
         egressIp,
+        wakeUserData,
       );
       if (egressIp && !egressIpUsed) {
         // The pinned datacenter could not serve this wake, so the box came up
@@ -2657,12 +2873,15 @@ export const resumeMachine = internalAction({
       // TRANSIENT: Hetzner is still finalizing the snapshot ("image not yet
       // available"). A park immediately followed by a wake hits this every
       // time on a large disk (a 160 GB snapshot takes minutes to become
-      // available). Burning the machine into `error` here was a dead end — the
+      // available). "volume already attached" is the same class: Hetzner's
+      // release of a volume from a just-deleted server can lag (2026-08-10:
+      // a park→wake back-to-back 422'd exactly this and burned the row into
+      // `error`). Burning the machine into `error` here was a dead end — the
       // start route then refuses with "not resumable" and the box can only be
       // rescued by hand-editing the row. Keep it `paused` (so Wake still works
       // and the UI shows Wake, not a fatal error) and auto-retry.
       const transient =
-        /image not yet available|not yet available|is locked|being created|resource_unavailable/i.test(msg);
+        /image not yet available|not yet available|is locked|being created|resource_unavailable|volume already attached/i.test(msg);
       if (transient) {
         const waitingOnSnapshot = Boolean(machine.lastSnapshotId);
         await ctx.runMutation(internal.cloudMachines.setStatus, {
@@ -2828,6 +3047,21 @@ export const resizeMachine = internalAction({
       const resizeEgressIp = await reserveEgressIpIfEligible(
         ctx, machineId, machine, token!, locationCandidates[0] ?? "fsn1",
       );
+      // Same container-path wake bootstrap as resumeMachine (the resize
+      // recreates the server too — a fresh host needs the full bootstrap).
+      const resizeUserData =
+        machine.volumeId && process.env.YAVER_CLOUD_IMAGE
+          ? buildWakeCloudInit({
+              convexSite:
+                process.env.CONVEX_SITE_URL ||
+                "https://perceptive-minnow-557.eu-west-1.convex.site",
+              machineId: machine._id.toString(),
+              hostname,
+              volumeId: machine.volumeId,
+              relayPassword: await wakeRelayPassword(ctx, machine.subscriptionId),
+              image: process.env.YAVER_CLOUD_IMAGE,
+            })
+          : undefined;
       const { serverId, ip, actionId, egressIpUsed: resizeEgressUsed } =
         await hetznerCreateFromImage(
           token!,
@@ -2838,6 +3072,7 @@ export const resizeMachine = internalAction({
           resolveBootSshKeys(machine),
           [machine.volumeId],
           resizeEgressIp,
+          resizeUserData,
         );
       if (resizeEgressIp && !resizeEgressUsed) {
         try { await hetznerDeletePrimaryIp(token!, resizeEgressIp.id); } catch { /* swept later */ }

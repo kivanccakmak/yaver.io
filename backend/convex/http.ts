@@ -7725,6 +7725,14 @@ http.route({
             // (phase="error"); drives the synthetic "Setting up" card's
             // failure state + recovery hint in web/mobile.
             provisionError: machine.provisionError ?? null,
+            // The REAL failure detail the server-side provision/wake catch
+            // recorded (Hetzner/validation message). provisionError is the
+            // box-beaconed label and can be the generic "provisioning failed";
+            // 2026-08-10: the actual cause of ~14 failed provisions — "server
+            // type 105 is deprecated" — was invisible on every surface for
+            // weeks because only the generic label was exposed. Surfaces
+            // should render this when the status is error.
+            provisionErrorMessage: machine.errorMessage ?? null,
             // "golden" ⇒ fast boot from a prebuilt snapshot; "vanilla" ⇒
             // ubuntu-24.04 with a 3–5 min first-boot build. Lets the card
             // show the right "setting up" expectation.
@@ -9876,7 +9884,12 @@ http.route({
       await ctx.runMutation(internal.cloudMachines.setPhase, {
         machineId: auth.machine._id,
         phase: "error",
-        error: errLabel || "provisioning failed",
+        // Prefer the box's own curated label, then the server-side
+        // errorMessage the provision/wake catch recorded (2026-08-10: the
+        // generic "provisioning failed" default hid "server type 105 is
+        // deprecated" on ~14 failed provisions for weeks — a named cause is
+        // a fixable one), and only then the generic default.
+        error: errLabel || auth.machine.errorMessage || "provisioning failed",
       });
       return jsonResponse({ ok: true });
     }
