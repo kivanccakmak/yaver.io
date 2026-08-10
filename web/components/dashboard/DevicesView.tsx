@@ -3602,9 +3602,14 @@ export default function DevicesView({
                 {failed ? (
                   <div className="mt-2">
                     <p className="text-xs text-red-700 dark:text-red-300">
-                      {m.provisionError
-                        ? m.provisionError
-                        : "Provisioning failed before the agent came online."}
+                      {/* Real cause first: errorMessage is the server-side
+                          provision/wake catch's message (e.g. "server type
+                          105 is deprecated"); provisionError is only the
+                          box-beaconed label and can be the generic
+                          "provisioning failed" (2026-08-10 incident). */}
+                      {m.errorMessage ??
+                        m.provisionError ??
+                        "Provisioning failed before the agent came online."}
                     </p>
                     <p className="mt-1 text-[11px] text-surface-500">
                       Recovery: remove this box from Billing and buy a fresh

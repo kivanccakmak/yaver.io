@@ -7725,14 +7725,13 @@ http.route({
             // (phase="error"); drives the synthetic "Setting up" card's
             // failure state + recovery hint in web/mobile.
             provisionError: machine.provisionError ?? null,
-            // The REAL failure detail the server-side provision/wake catch
-            // recorded (Hetzner/validation message). provisionError is the
-            // box-beaconed label and can be the generic "provisioning failed";
-            // 2026-08-10: the actual cause of ~14 failed provisions — "server
-            // type 105 is deprecated" — was invisible on every surface for
-            // weeks because only the generic label was exposed. Surfaces
-            // should render this when the status is error.
-            provisionErrorMessage: machine.errorMessage ?? null,
+            // The REAL failure detail is exposed once, as `errorMessage`
+            // (the server-side provision/wake catch's Hetzner/validation
+            // message). 2026-08-10: the actual cause of ~14 failed
+            // provisions — "server type 105 is deprecated" — was invisible
+            // on every surface for weeks because only the generic
+            // provisionError label was exposed. Surfaces must render
+            // errorMessage when the status is error.
             // "golden" ⇒ fast boot from a prebuilt snapshot; "vanilla" ⇒
             // ubuntu-24.04 with a 3–5 min first-boot build. Lets the card
             // show the right "setting up" expectation.
