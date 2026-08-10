@@ -10416,6 +10416,7 @@ export class QuicClient {
     text: string | null,
     choice: string | null,
     waitMs = 6000,
+    images?: ImageAttachment[],
   ): Promise<{
     ok?: boolean;
     session?: string;
@@ -10437,7 +10438,7 @@ export class QuicClient {
     if (!text && !choice) return { ok: false, error: "send text or choice" };
     const relayList = [...this.relayServers];
     if (relayList.length === 0) return { ok: false, error: "no relay servers configured" };
-    const body = JSON.stringify({ text, choice, waitMs });
+    const body = JSON.stringify({ text, choice, waitMs, images: images?.length ? images : undefined });
     let lastError = "no relay reached the device";
     for (const relay of relayList) {
       const url =

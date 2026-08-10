@@ -98,7 +98,22 @@ export function ShareComposeModal() {
 
     const results = await Promise.allSettled(
       targets.map((id) =>
-        quicClient.createFeedbackTaskOnDevice(id, { title, images }),
+        // WhatsApp-to-a-friend path: when the box has a LIVE runner session
+        // (the Vibe loop), send the screenshot INTO that session so it
+        // renders where the user is watching — same as dropping a photo into
+        // a chat. The agent saves the image and prefixes the prompt with the
+        // Read-tool hint (runner_session_turn.go attachImageHintToPrompt).
+        // Fall back to a background feedback task when no session is live
+        // (the turn endpoint 404s/conflicts on a bare shell).
+        quicClient
+          .runnerSessionTurn(id, comment.trim() || title, null, 8000, images)
+          .then((r) => {
+            if (r.ok) return true;
+            if (r.error && /not running a coding agent|no live|cannot resolve|no session/i.test(r.error)) {
+              return quicClient.createFeedbackTaskOnDevice(id, { title, images }).then(() => true);
+            }
+            return false;
+          }),
       ),
     );
 

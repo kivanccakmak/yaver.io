@@ -50,6 +50,15 @@ type runnerSessionTurnRequest struct {
 	// WaitMs is how long to let the runner react before reading the pane back.
 	// Zero picks a default; a watch wants this short, a car can wait longer.
 	WaitMs int `json:"waitMs"`
+	// Images are screenshot attachments to hand the runner alongside Text —
+	// the WhatsApp-to-a-friend path (ShareComposeModal → live Vibe session).
+	// The live session is a tmux TERMINAL, so an image cannot be typed as
+	// pixels; instead each image is saved to ~/.yaver/images/<turn>/* and the
+	// typed prompt is prefixed with the same "[Attached images — use the Read
+	// tool]" hint task_prompt_frame.go uses, so the runner (opencode/DeepSeek)
+	// sees the path and reads it through the yaver-vision plugin. Mutually
+	// exclusive with Choice (a menu answer cannot carry attachments).
+	Images []ImageAttachment `json:"images,omitempty"`
 }
 
 type runnerSessionTurnResponse struct {
@@ -216,6 +225,9 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 	if (text == "") == (choice == "") {
 		return runnerSessionTurnResponse{Error: "send exactly one of `text` (a prompt) or `choice` (a menu option number)"}, http.StatusBadRequest
 	}
+	if len(req.Images) > 0 && choice != "" {
+		return runnerSessionTurnResponse{Error: "`images` ride a prompt; a `choice` (menu answer) cannot carry attachments"}, http.StatusBadRequest
+	}
 	if choice != "" && !isTmuxChoiceAnswer(choice) {
 		return runnerSessionTurnResponse{Error: "`choice` must be a bare option number"}, http.StatusBadRequest
 	}
@@ -286,7 +298,22 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 		// cheap capture, not a new wait.
 		paneBeforePrompt = capturePaneTail(sessionName, runnerTurnPaneLines)
 		sentPrompt = true
-		if err := sendTmuxLine(sessionName, text); err != nil {
+		// Images ride the prompt as paths, not pixels: the live session is a
+		// tmux terminal. Save each attachment, then prefix the typed text with
+		// the same Read-tool hint the task path uses — so opencode/DeepSeek
+		// (text-only) sees the file and the yaver-vision plugin gives it eyes.
+		// The 2026-08-10 gap this closes: ShareComposeModal fan-out created a
+		// NEW background task with the image, invisible to the live Vibe
+		// session — the screenshot never passed through the session the user
+		// was actually watching.
+		typedText := text
+		if len(req.Images) > 0 {
+			imgPaths := saveImages(newPendingCloudTaskID(), req.Images)
+			if len(imgPaths) > 0 {
+				typedText = attachImageHintToPrompt(text, imgPaths)
+			}
+		}
+		if err := sendTmuxLine(sessionName, typedText); err != nil {
 			reply.Error = err.Error()
 			return reply, http.StatusInternalServerError
 		}
@@ -316,6 +343,24 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 	}
 	reply.OK = true
 	return reply, http.StatusOK
+}
+
+// attachImageHintToPrompt prefixes a typed prompt with the same
+// "[Attached images — use the Read tool]" hint the task-prompt frame uses, so
+// a text-only runner (opencode/DeepSeek V4 Flash) sees the saved image paths
+// and reads them via the yaver-vision plugin. Pure + testable; the caller
+// (executeRunnerSessionTurn) saves the attachments and hands the paths in.
+func attachImageHintToPrompt(text string, imgPaths []string) string {
+	if len(imgPaths) == 0 {
+		return text
+	}
+	var b strings.Builder
+	b.WriteString("[Attached images — use the Read tool to examine these files]\n")
+	for i, p := range imgPaths {
+		fmt.Fprintf(&b, "Image %d: %s\n", i+1, p)
+	}
+	b.WriteString(text)
+	return b.String()
 }
 
 // settleAndInspectPane waits for the pane to stop changing, then reports

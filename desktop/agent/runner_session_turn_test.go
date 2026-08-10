@@ -39,6 +39,39 @@ func TestRunnerSessionTurnRejectsNonPost(t *testing.T) {
 	}
 }
 
+// The WhatsApp-to-a-friend path (ShareComposeModal → live session) carries
+// image attachments. A menu answer (choice) cannot ride them — refuse loudly
+// rather than silently dropping the screenshot.
+func TestRunnerSessionTurnRejectsImagesWithChoice(t *testing.T) {
+	srv := &HTTPServer{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/runner/session/turn", strings.NewReader(
+		`{"session":"yaver-codex","choice":"1","images":[{"base64":"aGk=","mimeType":"image/png"}]}`,
+	))
+	srv.handleRunnerSessionTurn(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (images cannot ride a menu choice)", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "cannot carry attachments") {
+		t.Fatalf("body should name the images-with-choice conflict, got: %s", rec.Body.String())
+	}
+}
+
+// The prompt assembly for attached images must prefix the typed text with the
+// Read-tool hint so a text-only model (DeepSeek V4 Flash via opencode) can see
+// the saved paths. This is the exact string the runner receives.
+func TestAttachImageHintToPrompt(t *testing.T) {
+	got := attachImageHintToPrompt("what is in this screenshot?", []string{"/root/.yaver/images/t1/img_001.png"})
+	want := "[Attached images — use the Read tool to examine these files]\nImage 1: /root/.yaver/images/t1/img_001.png\nwhat is in this screenshot?"
+	if got != want {
+		t.Fatalf("prompt mismatch:\n got: %q\nwant: %q", got, want)
+	}
+	// No images → text untouched.
+	if got := attachImageHintToPrompt("plain", nil); got != "plain" {
+		t.Fatalf("no-image prompt must be unchanged, got %q", got)
+	}
+}
+
 // A voice surface says "the ubuntu session" and means "the only one". When it
 // is not the only one, guessing would type a prompt into the wrong agent — so
 // the caller is told to name it.
