@@ -2564,6 +2564,18 @@ export const purgeMachineResources = internalAction({
       }
     }
     await ctx.runMutation(internal.cloudMachines.clearResources, { machineId });
+    // Remove the device row too — a decommissioned box must not leave a
+    // phantom "cloud-<id>" card in the dashboard (2026-08-10: the first
+    // decommission left one, which read as "is the managed cloud real?").
+    if (machine.deviceId) {
+      try {
+        await ctx.runMutation(internal.devices.deleteDeviceRow, {
+          deviceId: machine.deviceId,
+        });
+      } catch {
+        /* best-effort */
+      }
+    }
     return { ok: true, reason: `purged: ${done.join(", ") || "nothing"}` };
   },
 });

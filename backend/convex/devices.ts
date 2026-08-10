@@ -2428,6 +2428,29 @@ export const removeDevice = mutation({
   },
 });
 
+/**
+ * deleteDeviceRow — internal device-row removal used by the managed-cloud
+ * decommission path (purgeMachineResources). 2026-08-10: decommissioning a
+ * cloud box removed the cloudMachines row but LEFT the device row
+ * (`cloud-<id>`), so the dashboard kept showing a phantom offline card for a
+ * decommissioned box (confusing — "is the managed cloud real?"). The public
+ * removeDevice requires a session tokenHash, which an internal action
+ * doesn't have; this is the internal equivalent, scoped to the deviceId the
+ * caller computed (internal functions are not client-callable).
+ */
+export const deleteDeviceRow = internalMutation({
+  args: { deviceId: v.string() },
+  handler: async (ctx, { deviceId }) => {
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", deviceId))
+      .unique();
+    if (device) {
+      await ctx.db.delete(device._id);
+    }
+  },
+});
+
 // ALIAS_PATTERN: a-z, 0-9, dash, underscore, dot. 1–48 chars. Lower-cased
 // before storage; we intentionally reject whitespace and uppercase so
 // `yaver ssh prod-mac` is the same identifier across CLI / web / mobile
