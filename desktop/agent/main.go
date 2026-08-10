@@ -12143,9 +12143,17 @@ func refreshRelayPasswordFromConvex(ctx context.Context) string {
 	if pw == "" {
 		return ""
 	}
-	// Also persist into config.json so a restart picks up the
-	// fresh password without another Convex round-trip.
-	cfg.RelayPassword = pw
+	// Persist into config.json so a restart picks up the fresh password
+	// without another Convex round-trip. MUST go through
+	// persistFreshRelayPassword — not a bare `cfg.RelayPassword = pw` — so
+	// CachedRelayPassword and the CachedRelayServers[].Password entries are
+	// updated in the same write. The two fields drifted apart
+	// (2026-08-10, ubuntu-4gb-hel1-1): relayPassword was refreshed here but
+	// CachedRelayPassword stayed stale, transportHeadersForBase reads the
+	// CACHED field first, and every relay request shipped the old password.
+	// Each request then earned an invalid-auth strike on the relay until the
+	// owner's own IP hit the limiter and locked itself out.
+	persistFreshRelayPassword(cfg, settings.RelayUrl, pw)
 	if saveErr := SaveConfig(cfg); saveErr != nil {
 		log.Printf("[RELAY] refresh-password: SaveConfig: %v", saveErr)
 	}

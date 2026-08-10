@@ -144,3 +144,65 @@ export async function loadLastTaskProjectFromConvex(
     return null;
   }
 }
+
+// ── Convex-backed MCP selection memory (2026-08-10) ──────────────────────
+// Same `mcpServersByDevice` row the web dashboard's RuntimeLabView and chat
+// composer write via POST /settings, so an MCP selection made on the phone is
+// remembered on the web/TV and vice versa. Shape mirrors
+// web/lib/runtimeProjectSettings.ts's load/saveMCPServersToConvex — one row,
+// every surface. Local AsyncStorage stays as the offline fallback: boot reads
+// Convex first, falls back to the local row; writes go to BOTH. Never blocks
+// task creation.
+
+export type MCPServersPreference = {
+  deviceId: string;
+  mcpServers?: string[];
+  includeYaverMcp?: boolean;
+  updatedAt?: number;
+};
+
+/** Read mcpServersByDevice for one device. Null when absent / unreadable
+ *  (caller falls back to local state). */
+export async function loadMCPServersFromConvex(
+  token: string | null | undefined,
+  deviceId: string | null | undefined,
+): Promise<MCPServersPreference | null> {
+  if (!token || !deviceId) return null;
+  try {
+    const { getUserSettings } = await import("./auth");
+    const settings = await getUserSettings(token);
+    const rows = settings?.mcpServersByDevice;
+    if (!Array.isArray(rows)) return null;
+    const row = rows.find((r) => r?.deviceId === deviceId);
+    if (!row) return null;
+    return {
+      deviceId,
+      ...(Array.isArray(row.mcpServers) ? { mcpServers: row.mcpServers.map(String) } : {}),
+      ...(typeof row.includeYaverMcp === "boolean" ? { includeYaverMcp: row.includeYaverMcp } : {}),
+      ...(typeof row.updatedAt === "number" ? { updatedAt: row.updatedAt } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Write mcpServersForDevice (replace-by-deviceId on the server). MCP names
+ *  only — URLs/keys stay on the agent. Never blocks task creation. */
+export async function saveMCPServersToConvex(
+  token: string | null | undefined,
+  pref: MCPServersPreference,
+): Promise<void> {
+  if (!token || !pref.deviceId) return;
+  try {
+    const { saveUserSettings } = await import("./auth");
+    await saveUserSettings(token, {
+      mcpServersForDevice: {
+        deviceId: pref.deviceId,
+        ...(pref.mcpServers?.length ? { mcpServers: pref.mcpServers } : {}),
+        ...(typeof pref.includeYaverMcp === "boolean" ? { includeYaverMcp: pref.includeYaverMcp } : {}),
+      },
+    });
+  } catch {
+    // Never block task creation on a failed settings write.
+  }
+}

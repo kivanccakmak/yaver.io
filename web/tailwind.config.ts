@@ -73,6 +73,11 @@ const config: Config = {
         blink: "blink 1s step-end infinite",
         "live-pulse": "livePulse 2s ease-in-out infinite",
         shimmer: "shimmer 1.6s linear infinite",
+        // The opencode console's `● live` dot — a hard on/off blink (step-end),
+        // not a soft fade, so a working runner reads as "alive" at a glance.
+        "live-dot": "liveDot 1.4s step-end infinite",
+        // Cursor-style block blink, opencode-terminal look.
+        "caret-blink": "caretBlink 1s step-end infinite",
       },
       keyframes: {
         fadeIn: {
@@ -89,6 +94,14 @@ const config: Config = {
         livePulse: {
           "0%, 100%": { opacity: "1" },
           "50%": { opacity: "0.55" },
+        },
+        liveDot: {
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0.12" },
+        },
+        caretBlink: {
+          "0%, 49%": { opacity: "1" },
+          "50%, 100%": { opacity: "0" },
         },
         shimmer: {
           "0%": { backgroundPosition: "-200% 0" },

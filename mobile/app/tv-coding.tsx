@@ -16,8 +16,10 @@ import {
   loadKeepLastProjectEnabled,
   loadLastTaskProject,
   loadLastTaskProjectFromConvex,
+  loadMCPServersFromConvex,
   saveLastTaskProject,
   saveLastTaskProjectToConvex,
+  saveMCPServersToConvex,
 } from "../src/lib/taskComposerPrefs";
 import type { ModelInfo, RunnerInfo } from "../src/lib/quic";
 
@@ -48,6 +50,9 @@ export default function TVCodingScreen() {
   const [selectedModel, setSelectedModel] = useState("");
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
+  // Yaver's own MCP doorway — default ON, same as every other surface
+  // (2026-08-10 cross-surface MCP sync).
+  const [includeYaverMcp, setIncludeYaverMcp] = useState(true);
   const [inputMode, setInputMode] = useState<"write" | "speech">("write");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState("");
@@ -116,6 +121,19 @@ export default function TVCodingScreen() {
         const convexLast = token ? await loadLastTaskProjectFromConvex(token, deviceId) : null;
         const last = keepLast ? (convexLast ?? (await loadLastTaskProject(deviceId))) : null;
         if (cancelled) return;
+        // MCP selection restore — same mcpServersByDevice row every surface
+        // writes, so an MCP set picked on the phone/web is remembered on the
+        // TV and vice versa (2026-08-10).
+        if (token) {
+          const mcpPref = await loadMCPServersFromConvex(token, deviceId).catch(() => null);
+          if (mcpPref && !cancelled) {
+            const known = new Set((mcpRows || []).filter((s) => s.enabled).map((s) => s.name));
+            if (Array.isArray(mcpPref.mcpServers)) {
+              setSelectedMcpServers(mcpPref.mcpServers.filter((name) => known.has(name)));
+            }
+            if (typeof mcpPref.includeYaverMcp === "boolean") setIncludeYaverMcp(mcpPref.includeYaverMcp);
+          }
+        }
         const projectMatch = last
           ? normalizedProjects.find((project) => project.path === last.path || project.name.toLowerCase() === last.name.toLowerCase())
           : null;
@@ -172,6 +190,7 @@ export default function TVCodingScreen() {
         projectName,
         selectedMcpServers,
         goalIntent ? goalText : undefined,
+        includeYaverMcp,
       );
       if (projectName && selectedProjectPath) {
         void saveLastTaskProject({
@@ -188,6 +207,15 @@ export default function TVCodingScreen() {
             path: selectedProjectPath,
             branch: selectedProject?.branch,
             gitRemote: selectedProject?.gitRemote,
+          });
+        }
+        // MCP selection rides along to Convex (2026-08-10) — same row the
+        // web/mobile write, so the TV's MCP choice is remembered elsewhere.
+        if (token) {
+          void saveMCPServersToConvex(token, {
+            deviceId,
+            mcpServers: selectedMcpServers,
+            includeYaverMcp,
           });
         }
       }
@@ -256,6 +284,9 @@ export default function TVCodingScreen() {
         ) : null}
 
         <ConfigBand title="Task MCPs">
+          <TVChip active={includeYaverMcp} colors={c} onPress={() => setIncludeYaverMcp((prev) => !prev)}>
+            yaver{includeYaverMcp ? "" : " (off)"}
+          </TVChip>
           <TVChip active={selectedMcpServers.length === 0} colors={c} onPress={() => setSelectedMcpServers([])}>
             No MCPs
           </TVChip>

@@ -7,9 +7,11 @@ import {
   loadKeepLastProjectEnabled,
   loadLastTaskProject,
   loadLastTaskProjectFromConvex,
+  loadMCPServersFromConvex,
   saveKeepLastProjectEnabled,
   saveLastTaskProject,
   saveLastTaskProjectToConvex,
+  saveMCPServersToConvex,
 } from "./taskComposerPrefs.ts";
 
 const storage = ((AsyncStorage as any).default ?? AsyncStorage) as {
@@ -80,4 +82,22 @@ test("Convex last-project sync source uses the canonical defaultRuntimeProject w
   assert.ok(source.includes("defaultRuntimeProjectForDevice"), "write must use defaultRuntimeProjectForDevice");
   assert.ok(source.includes("defaultRuntimeProjectByDevice"), "read must use defaultRuntimeProjectByDevice");
   assert.ok(source.includes('await import("./auth")'), "auth must be lazily imported (keeps this node test RN-free)");
+});
+
+test("Convex MCP sync degrades to null without a token or a row", async () => {
+  // Same lazy-import contract as the project helpers (see the comment above).
+  assert.equal(await loadMCPServersFromConvex(null, "ubuntu-4gb"), null);
+  assert.equal(await loadMCPServersFromConvex("", "ubuntu-4gb"), null);
+  assert.equal(await loadMCPServersFromConvex("tok", null), null);
+  await saveMCPServersToConvex(null, { deviceId: "ubuntu-4gb" }); // no throw
+  await saveMCPServersToConvex("tok", { deviceId: "" }); // no throw (no deviceId)
+});
+
+test("Convex MCP sync source uses the canonical mcpServers wire shape", () => {
+  // The same mcpServersByDevice row the web dashboard (runtimeProjectSettings
+  // .ts) and tvOS write — the cross-surface MCP memory contract (2026-08-10).
+  const source = readFileSync(new URL("./taskComposerPrefs.ts", import.meta.url), "utf8");
+  assert.ok(source.includes("mcpServersForDevice"), "write must use mcpServersForDevice");
+  assert.ok(source.includes("mcpServersByDevice"), "read must use mcpServersByDevice");
+  assert.ok(source.includes("includeYaverMcp"), "yaver doorway toggle must ride the same row");
 });

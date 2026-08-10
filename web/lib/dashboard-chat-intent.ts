@@ -12,7 +12,17 @@ export function parseDashboardChatIntent(text: string): DashboardChatIntent | nu
   const projectQuery = projectMatch?.[1];
   const wantsOpen = /\b(open|show|run|test|launch|start|preview)\b/.test(lower);
   const wantsWeb = /\b(web|webview|browser|preview)\b/.test(lower) && !/\bwatch|watchos|wear|tv|tvos|vision|xr\b/.test(lower);
-  const wantsTmux = /\b(tmux|session|attach|resume|detach)\b/.test(lower) && /\b(tmux|attach|resume|vibe|session)\b/.test(lower);
+  // tmux intent — DELIBERATELY narrow. A bare "resume", "session" or "attach"
+  // inside ordinary prose ("I did not like the experience… analyze deeply")
+  // used to route a normal vibe prompt into the terminal and open a WebShell
+  // that 400'd (2026-08-10: "deep audit analysis … whisper … analyze" sent
+  // with Enter instead of the Send button). The turn is a tmux attach ONLY
+  // when the user names tmux itself, or uses an explicit attach/resume
+  // construction — never from a single common word.
+  const wantsTmux =
+    /\btmux\b/.test(lower)
+    || (/\b(attach|resume|detach)\b/.test(lower) && /\b(session|tmux|pane)\b/.test(lower))
+    || /\battach\s+to\b/.test(lower);
 
   if (wantsTmux) {
     const runner = lower.match(/\b(codex|claude|opencode)\b/)?.[1];

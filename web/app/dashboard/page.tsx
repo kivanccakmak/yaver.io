@@ -80,6 +80,12 @@ import { classifyFetchError, summarizeFailures } from "@/lib/connection-error";
 import { clearLastFailure, recordLastFailure } from "@/lib/probe-backoff";
 import { HIDE_PAID_UI, ENABLE_GUEST_FEATURES } from "@/lib/launchFlags";
 import { parseDashboardChatIntent } from "@/lib/dashboard-chat-intent";
+import {
+  loadLastProjectFromConvex,
+  saveLastProjectToConvex,
+  loadMCPServersFromConvex,
+  saveMCPServersToConvex,
+} from "@/lib/runtimeProjectSettings";
 import { decideComposerKey, insertNewline, newlineIsNative } from "@/lib/composerKeys";
 import { runnerChipState } from "@/lib/runnerChipState";
 import {
@@ -1020,6 +1026,22 @@ export default function DashboardPage() {
   const [runners, setRunners] = useState<Runner[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
+  // Yaver's own MCP doorway — user-selectable, defaults ON (the agent
+  // injects `yaver mcp` unless the task explicitly opts out). Same rule as
+  // mobile tasks.tsx: without this chip the web chat always shipped the
+  // doorway with no way to turn it off, while mobile could (2026-08-10).
+  const [includeYaverMcp, setIncludeYaverMcp] = useState(true);
+  // Chat composer project picker — the web twin of mobile's
+  // renderProjectPickerSheet. `preferredSurfaceProjectPath` feeds task
+  // workDir; the picker makes it user-visible instead of chat-intent-only
+  // ("webview <path>"). Last choice is remembered via Convex
+  // defaultRuntimeProjectByDevice (loadLastProjectFromConvex /
+  // saveLastProjectToConvex), the SAME row mobile writes — so a project
+  // picked on the phone shows up here and vice versa.
+  const [chatProjects, setChatProjects] = useState<Array<{
+    name: string; path: string; branch?: string; framework?: string; gitRemote?: string;
+  }>>([]);
+  const [chatProjectPickerOpen, setChatProjectPickerOpen] = useState(false);
   const [selectedRunner, setSelectedRunner] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [selectedOpenCodeMode, setSelectedOpenCodeMode] = useState<string>("");
@@ -1357,6 +1379,47 @@ export default function DashboardPage() {
     }
     if (activeTabRef.current === "devices") setActiveTab("runtime");
   }, [isConnected]);
+
+  // Restore the last chat-composer choices from Convex on connect — the SAME
+  // defaultRuntimeProjectByDevice / mcpServersByDevice rows mobile writes, so
+  // a project/MCP set picked on the phone carries into the web chat and vice
+  // versa (2026-08-10). Project match is by name/remote against the live
+  // /projects list (Convex rows carry no absolute path — see
+  // web/lib/runtimeProjectSettings.ts). Never blocks connection: a failed
+  // settings read keeps the previous defaults.
+  useEffect(() => {
+    if (!isConnected || !token || !connectedDevice?.id) return;
+    const deviceId = connectedDevice.id;
+    let cancelled = false;
+    const restore = async () => {
+      try {
+        const pref = await loadLastProjectFromConvex(CONVEX_URL, token, deviceId);
+        if (cancelled || !pref?.projectName) return;
+        // Match the remembered project against the fresh /projects list.
+        const proj = chatProjects.find((p) =>
+          p.name === pref.projectName
+          || (pref.gitRemote && p.gitRemote && p.gitRemote === pref.gitRemote));
+        if (proj) setPreferredSurfaceProjectPath(proj.path);
+      } catch {}
+      try {
+        const mcpPref = await loadMCPServersFromConvex(CONVEX_URL, token, deviceId);
+        if (cancelled || !mcpPref) return;
+        if (Array.isArray(mcpPref.mcpServers)) {
+          setSelectedMcpServers(mcpPref.mcpServers.filter((name) =>
+            mcpServers.some((s) => s.name === name)));
+        }
+        if (typeof mcpPref.includeYaverMcp === "boolean") {
+          setIncludeYaverMcp(mcpPref.includeYaverMcp);
+        }
+      } catch {}
+    };
+    void restore();
+    return () => { cancelled = true; };
+    // chatProjects/mcpServers intentionally NOT in deps — restoring on the
+    // first connect after the list lands is what we want; re-restoring on
+    // every list refresh would overwrite an in-session pick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected, token, connectedDevice?.id]);
 
   // Sidebar tmux list: refresh on connect and every 20s after. Errors degrade to
   // an empty list (the section hides) — a stale roster that outlives the box is
@@ -2496,6 +2559,18 @@ export default function DashboardPage() {
     try {
       setMcpServers((await agentClient.listMcpServers()).filter((server) => server.enabled));
     } catch {}
+    // Project list for the chat composer picker — same /projects the
+    // Projects tab + mobile read, so the picker shows real repos on the
+    // connected box (2026-08-10).
+    try {
+      setChatProjects((await agentClient.listProjects()).map((p) => ({
+        name: p.name || p.path.split(/[\\/]/).filter(Boolean).pop() || p.path,
+        path: p.path,
+        branch: p.branch,
+        framework: p.framework,
+        gitRemote: p.gitRemote,
+      })));
+    } catch {}
   };
 
   const handleDashboardChatIntent = (text: string): boolean => {
@@ -2592,6 +2667,32 @@ export default function DashboardPage() {
     }
     setInput(""); setSending(true);
     const continuing = !!activeTask && activeTask.status !== "stopped" && activeTask.status !== "failed";
+    // Persist the composer's project + MCP choices to Convex when a NEW task
+    // starts — the SAME rows mobile writes (defaultRuntimeProjectByDevice /
+    // mcpServersByDevice), so a project picked in the web chat is remembered
+    // on the phone and vice versa. Never blocks task creation (fire-and-forget,
+    // same rule as mobile's saveLastTaskProjectToConvex).
+    if (!continuing) {
+      const deviceId = connectedDevice?.id;
+      if (deviceId && token) {
+        const proj = chatProjects.find((p) => p.path === preferredSurfaceProjectPath);
+        if (proj) {
+          void saveLastProjectToConvex(CONVEX_URL, token, {
+            deviceId,
+            projectName: proj.name,
+            ...(proj.gitRemote ? { gitRemote: proj.gitRemote } : {}),
+            ...(proj.branch ? { branch: proj.branch } : {}),
+            updatedAt: Date.now(),
+          }).catch(() => {});
+        }
+        void saveMCPServersToConvex(CONVEX_URL, token, {
+          deviceId,
+          mcpServers: selectedMcpServers,
+          includeYaverMcp,
+          updatedAt: Date.now(),
+        }).catch(() => {});
+      }
+    }
     // Optimistic user echo — always push the user bubble + empty assistant placeholder
     // so the next streamed line flows into the assistant bubble, not into the last
     // run's response.
@@ -2675,6 +2776,7 @@ export default function DashboardPage() {
               mode: selectedRunner === "opencode" && selectedOpenCodeMode ? selectedOpenCodeMode : undefined,
               workDir: preferredSurfaceProjectPath || undefined,
               mcpServers: selectedMcpServers,
+              includeYaverMcp,
             },
             createdAt: now,
             updatedAt: now,
@@ -2739,6 +2841,7 @@ export default function DashboardPage() {
           mode: selectedRunner === "opencode" && selectedOpenCodeMode ? selectedOpenCodeMode : undefined,
           workDir: preferredSurfaceProjectPath || undefined,
           mcpServers: selectedMcpServers,
+          includeYaverMcp,
         };
         fallbackPendingCloudTask = {
           localTaskId: "",
@@ -5211,8 +5314,85 @@ export default function DashboardPage() {
 	                            className="h-12 shrink-0 rounded-xl bg-surface-100 px-5 text-sm font-medium text-surface-900 hover:bg-surface-50 disabled:opacity-30">
 	                            {buttonLabel}
 	                          </button>
-                          {!taskRunning && mcpServers.length > 0 ? (
+                          {!taskRunning && (mcpServers.length > 0 || chatProjects.length > 0) ? (
                             <div className="flex flex-wrap items-center gap-2 text-[11px] text-surface-500 md:col-span-2">
+                              {/* Project picker — web twin of mobile's project
+                                  sheet. Feeds task workDir via
+                                  preferredSurfaceProjectPath; the chosen repo is
+                                  persisted to Convex (defaultRuntimeProjectByDevice)
+                                  on task start so the phone remembers it too. */}
+                              {chatProjects.length > 0 ? (
+                                chatProjectPickerOpen ? (
+                                  <div className="flex w-full flex-col gap-1.5 rounded-xl border border-surface-700 bg-surface-950/80 p-2">
+                                    <div className="flex items-center justify-between px-1">
+                                      <span className="font-semibold uppercase tracking-[0.14em]">Project</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setChatProjectPickerOpen(false)}
+                                        className="text-[11px] font-semibold text-surface-400 hover:text-surface-200"
+                                      >
+                                        Done
+                                      </button>
+                                    </div>
+                                    <div className="grid gap-1">
+                                      {chatProjects.map((proj) => {
+                                        const active = proj.path === preferredSurfaceProjectPath;
+                                        return (
+                                          <button
+                                            key={proj.path}
+                                            type="button"
+                                            onClick={() => {
+                                              setPreferredSurfaceProjectPath(active ? null : proj.path);
+                                              setChatProjectPickerOpen(false);
+                                            }}
+                                            className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left ${
+                                              active
+                                                ? "border-fuchsia-400/50 bg-fuchsia-400/10 text-fuchsia-100"
+                                                : "border-surface-800 bg-surface-950 text-surface-300 hover:border-surface-600"
+                                            }`}
+                                            title={proj.path}
+                                          >
+                                            <span className="min-w-0 flex-1 truncate font-semibold">{proj.name}</span>
+                                            <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-surface-500">{proj.path}</span>
+                                            {active ? <span className="text-fuchsia-300">✓</span> : null}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setChatProjectPickerOpen(true)}
+                                    className={`rounded-full border px-2.5 py-1 font-semibold ${
+                                      preferredSurfaceProjectPath
+                                        ? "border-fuchsia-400/50 bg-fuchsia-400/10 text-fuchsia-100"
+                                        : "border-surface-800 bg-surface-950 text-surface-400 hover:border-surface-700"
+                                    }`}
+                                    title="Pick the repo this task runs in (task workDir)"
+                                  >
+                                    {preferredSurfaceProjectPath
+                                      ? (chatProjects.find((p) => p.path === preferredSurfaceProjectPath)?.name
+                                         || preferredSurfaceProjectPath.split(/[\\/]/).filter(Boolean).pop())
+                                      : "Project ▾"}
+                                  </button>
+                                )
+                              ) : null}
+                              {/* Yaver's own MCP doorway — default ON, same as
+                                  mobile. Off means the runner gets only the
+                                  external MCPs the user selected below. */}
+                              <button
+                                type="button"
+                                onClick={() => setIncludeYaverMcp((v) => !v)}
+                                className={`rounded-full border px-2.5 py-1 font-semibold ${
+                                  includeYaverMcp
+                                    ? "border-brand/40 bg-brand-soft text-brand-softFg"
+                                    : "border-surface-800 bg-surface-950 text-surface-400 hover:border-surface-700"
+                                }`}
+                                title="Yaver's own MCP tools (yaver mcp) are attached to this task. Toggle off to run with only the external MCPs below."
+                              >
+                                yaver{includeYaverMcp ? "" : " (off)"}
+                              </button>
                               <span className="font-semibold uppercase tracking-[0.14em]">
                                 {selectedMcpServers.length ? `${selectedMcpServers.length} MCP` : "No MCP"}
                               </span>

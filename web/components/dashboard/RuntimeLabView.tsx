@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import {
   agentClient,
   type ConversationTurn,
+  type McpServer,
   type RemoteRuntimeCapabilities,
   type RemoteRuntimeSession,
   type RemoteRuntimeTarget,
@@ -14,6 +15,7 @@ import {
   type WorkspaceAppView,
 } from "@/lib/agent-client";
 import { isRunnerBrowserAuthTerminal } from "@/lib/agent-client";
+import { saveLastProjectToConvex, loadLastProjectFromConvex, saveMCPServersToConvex, loadMCPServersFromConvex } from "@/lib/runtimeProjectSettings";
 import { isAgentAuthErrorMessage } from "@/lib/agentAuthError";
 import { detectCompileFailure } from "@/lib/compileFailure";
 import {
@@ -1023,6 +1025,49 @@ export default function RuntimeLabView({
   const [runnerAuthCodeBusy, setRunnerAuthCodeBusy] = useState(false);
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
+  // External MCP servers + the yaver doorway toggle — parity with the web
+  // chat composer (page.tsx) so a task started from the Vibing tab carries the
+  // same MCP selection as one started from Chat. Defaults: yaver doorway ON,
+  // no external servers (2026-08-10). Loaded from the connected agent on
+  // connect; choices ride on task bodies via createTask.
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
+  const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
+  const [includeYaverMcp, setIncludeYaverMcp] = useState(true);
+  // Convex MCP sync — same mcpServersByDevice row the Chat composer and
+  // mobile write, so an MCP selection made on the Vibing tab is remembered
+  // on the phone and vice versa (2026-08-10). Load on connect; write on user
+  // change (guarded so the initial restore is not written back as a "change").
+  const mcpRestoredRef = useRef(false);
+  useEffect(() => {
+    if (!connectedDevice?.id || !token) return;
+    const deviceId = connectedDevice.id;
+    let cancelled = false;
+    const restore = async () => {
+      try {
+        const pref = await loadMCPServersFromConvex(CONVEX_URL, token, deviceId);
+        if (cancelled || !pref) return;
+        if (Array.isArray(pref.mcpServers)) {
+          setSelectedMcpServers(pref.mcpServers.filter((name) => mcpServers.some((s) => s.name === name)));
+        }
+        if (typeof pref.includeYaverMcp === "boolean") setIncludeYaverMcp(pref.includeYaverMcp);
+        mcpRestoredRef.current = true;
+      } catch {}
+    };
+    void restore();
+    return () => { cancelled = true; };
+    // mcpServers intentionally omitted: restore once the agent's server list
+    // is loaded; a later list refresh must not overwrite an in-session pick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectedDevice?.id, token]);
+  useEffect(() => {
+    if (!mcpRestoredRef.current || !connectedDevice?.id || !token) return;
+    void saveMCPServersToConvex(CONVEX_URL, token, {
+      deviceId: connectedDevice.id,
+      mcpServers: selectedMcpServers,
+      includeYaverMcp,
+      updatedAt: Date.now(),
+    }).catch(() => {});
+  }, [connectedDevice?.id, includeYaverMcp, selectedMcpServers, token]);
   const [chatRunnerControlsOpen, setChatRunnerControlsOpen] = useState(false);
   // Machine-roles (runner/render split) route editor in the chat header.
   const [machinesEditOpen, setMachinesEditOpen] = useState(false);
@@ -1181,10 +1226,29 @@ export default function RuntimeLabView({
   const [runtimeProjectSaving, setRuntimeProjectSaving] = useState(false);
   const [runtimeProjectNote, setRuntimeProjectNote] = useState<string | null>(null);
 
+  // Vibing's own default-project row — the SAME Convex
+  // defaultRuntimeProjectByDevice the web Chat composer and mobile write, so
+  // a project picked on the Vibing tab is remembered on the phone and vice
+  // versa (2026-08-10). `savedRuntimeProject` (loaded below) still drives the
+  // auto-render + the "★ Default" badge; this effect is the WRITE side, and
+  // it deliberately only fires on USER selection, not on the initial
+  // auto-selection from Convex (which would be a no-op write of the same row).
+  const userSelectedProjectRef = useRef(false);
   const selectedProject = useMemo(
     () => projects.find((p) => p.path === selectedPath) || null,
     [projects, selectedPath],
   );
+  useEffect(() => {
+    if (!connectedDevice?.id || !selectedProject || !userSelectedProjectRef.current) return;
+    if (!token) return;
+    void saveLastProjectToConvex(CONVEX_URL, token, {
+      deviceId: connectedDevice.id,
+      projectName: selectedProject.name,
+      ...(selectedProject.gitRemote ? { gitRemote: selectedProject.gitRemote } : {}),
+      ...(selectedProject.branch ? { branch: selectedProject.branch } : {}),
+      updatedAt: Date.now(),
+    }).catch(() => {});
+  }, [connectedDevice?.id, selectedProject, token]);
   const selectedProjectIsMobile = useMemo(() => isMobileRuntimeProject(selectedProject), [selectedProject]);
   const mobilePreviewDevice = mobilePreviewDevices[mobilePreviewMode];
   const mobilePreviewOuterWidth = mobilePreviewDevice.width + 20;
@@ -1401,6 +1465,9 @@ export default function RuntimeLabView({
         agentClient.listProjectsByCapability("mobile").catch(() => []),
         loadRuntimeSettings().catch(() => null),
       ]);
+      // MCP servers for the composer chips — same /mcp/servers the Chat tab
+      // reads, so the Vibing composer offers the same toggles (2026-08-10).
+      try { setMcpServers((await agentClient.listMcpServers()).filter((s) => s.enabled)); } catch {}
       const merged = collapseTopLevelProjects(
         mergeProjectInventory([...(projectRows as Project[]), ...(mobileRows as Project[])], repoRows),
       );
@@ -2428,6 +2495,8 @@ export default function RuntimeLabView({
         model: effectiveModel,
         projectName: selectedProject?.name,
         workDir: selectedProject?.path,
+        mcpServers: selectedMcpServers,
+        includeYaverMcp,
         ...splitTaskFields,
       });
       attachTaskSession(task);
@@ -2452,7 +2521,7 @@ export default function RuntimeLabView({
     } finally {
       setSending(false);
     }
-  }, [activeTaskStream?.id, appendLog, attachTaskSession, availableModels, composer, opencodeSnapshot, scrollToBottom, selectedModel, selectedProject, selectedRunner, sending, splitTaskFields]);
+  }, [activeTaskStream?.id, appendLog, attachTaskSession, availableModels, composer, includeYaverMcp, opencodeSnapshot, scrollToBottom, selectedMcpServers, selectedModel, selectedProject, selectedRunner, sending, splitTaskFields]);
 
   // "Fix with <runner>" — the route-to-fix on a failed build/preview. It
   // dispatches a coding task on the SAME box+project through the EXACT path
@@ -2482,6 +2551,8 @@ export default function RuntimeLabView({
         model: effectiveModel,
         projectName: selectedProject?.name,
         workDir: selectedProject?.path,
+        mcpServers: selectedMcpServers,
+        includeYaverMcp,
         ...splitTaskFields,
       });
       setFixTaskId(task.id);
@@ -2492,7 +2563,7 @@ export default function RuntimeLabView({
     } finally {
       setFixTaskBusy(false);
     }
-  }, [appendLog, attachTaskSession, availableModels, fixTaskBusy, selectedModel, selectedProject, selectedRunner, selectedRunnerRow, startSelectedRunnerSignIn, splitTaskFields]);
+  }, [appendLog, attachTaskSession, availableModels, fixTaskBusy, includeYaverMcp, selectedMcpServers, selectedModel, selectedProject, selectedRunner, selectedRunnerRow, startSelectedRunnerSignIn, splitTaskFields]);
 
   const runnerNotReadyForFix = !!(selectedRunnerRow && selectedRunnerRow.ready === false);
   const fixWithRunnerLabel = fixTaskBusy
@@ -3118,7 +3189,7 @@ export default function RuntimeLabView({
             <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">Project</span>
             <select
               value={selectedPath}
-              onChange={(e) => { setSelectedPath(e.target.value); setRuntimeProjectNote(null); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
+              onChange={(e) => { userSelectedProjectRef.current = true; setSelectedPath(e.target.value); setRuntimeProjectNote(null); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
               className="h-10 w-full rounded-md border border-[#d7dce3] bg-white px-3 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec]"
             >
               {projects.map((p) => (
@@ -3732,7 +3803,7 @@ export default function RuntimeLabView({
                         <label className="min-w-[260px] flex-1">
                           <select
                             value={selectedPath}
-                            onChange={(e) => { setSelectedPath(e.target.value); setRuntimeProjectNote(null); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
+              onChange={(e) => { userSelectedProjectRef.current = true; setSelectedPath(e.target.value); setRuntimeProjectNote(null); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
                             className="h-10 w-full rounded-md border border-[#d7dce3] bg-white px-3 text-sm text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#e6e8ec]"
                           >
                             {projects.map((p) => (
@@ -4309,6 +4380,50 @@ export default function RuntimeLabView({
                 workDir={selectedProject?.path}
                 className="mb-2"
               />
+              {/* MCP doorway + external servers — parity with the Chat tab
+                  composer (page.tsx). Defaults: yaver ON, no externals; the
+                  selection rides on createTask so a Vibing-started task carries
+                  the same MCP set as one started from Chat (2026-08-10). */}
+              {mcpServers.length > 0 ? (
+                <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-surface-500">
+                  <button
+                    type="button"
+                    onClick={() => setIncludeYaverMcp((v) => !v)}
+                    className={`rounded-full border px-2.5 py-1 font-semibold ${
+                      includeYaverMcp
+                        ? "border-brand/40 bg-brand-soft text-brand-softFg"
+                        : "border-surface-800 bg-surface-950 text-surface-400 hover:border-surface-700"
+                    }`}
+                    title="Yaver's own MCP tools (yaver mcp) are attached to this task. Toggle off to run with only the external MCPs below."
+                  >
+                    yaver{includeYaverMcp ? "" : " (off)"}
+                  </button>
+                  {mcpServers.map((server) => {
+                    const active = selectedMcpServers.includes(server.name);
+                    return (
+                      <button
+                        key={server.name}
+                        type="button"
+                        onClick={() => {
+                          setSelectedMcpServers((prev) =>
+                            prev.includes(server.name)
+                              ? prev.filter((name) => name !== server.name)
+                              : [...prev, server.name],
+                          );
+                        }}
+                        className={`rounded-full border px-2.5 py-1 font-semibold ${
+                          active
+                            ? "border-brand/40 bg-brand-soft text-brand-softFg"
+                            : "border-surface-800 bg-surface-950 text-surface-400 hover:border-surface-700"
+                        }`}
+                        title={`${server.url} · ${server.toolCount ?? 0} tools`}
+                      >
+                        {server.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
               <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 focus-within:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#101318]">
                 <textarea
                   value={composer}

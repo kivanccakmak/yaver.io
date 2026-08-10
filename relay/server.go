@@ -1129,9 +1129,19 @@ func (s *RelayServer) handleAgentConnection(ctx context.Context, conn quic.Conne
 			rejectRegistration("relay password missing", "no relay password")
 			return
 		}
-		if !s.abuseGuard.allowInvalidAuth(remoteAddr) {
-			rejectRegistration("too many invalid relay password attempts", "invalid password rate limited")
-			return
+		// dead_token means the PASSWORD validated (Convex matched the row) but
+		// the session token lapsed — a legitimate client, not a brute-force
+		// source. Counting it as an invalid-auth strike lets an owner's own
+		// box lock itself out: the 429s never reach Convex again, so
+		// clearInvalidAuth can never fire (2026-08-10, ubuntu-4gb-hel1-1).
+		// See the websocket register path for the full reasoning.
+		if denyReason != RelayDenyDeadToken {
+			if !s.abuseGuard.allowInvalidAuth(remoteAddr) {
+				rejectRegistration("too many invalid relay password attempts", "invalid password rate limited")
+				return
+			}
+		} else {
+			s.abuseGuard.clearInvalidAuth(remoteAddr)
 		}
 		// Audit §3 (2026-07-19): return the distinct reason so the agent's
 		// looksLikeStaleRelayPassword can route dead-token to re-auth instead
@@ -1413,9 +1423,25 @@ func (s *RelayServer) handleAgentWebSocket(ws *websocket.Conn) {
 			reject("relay password missing")
 			return
 		}
-		if !s.abuseGuard.allowInvalidAuth(remoteAddr) {
-			reject("too many invalid relay password attempts")
-			return
+		// dead_token means the PASSWORD is correct (Convex matched the
+		// userSettings row) but the session token is expired/foreign — a
+		// legitimate client whose session lapsed, NOT a brute-force source.
+		// Counting it as an invalid-auth strike lets an owner's own box lock
+		// itself out: every retry earns a strike, the bucket drains, and the
+		// 429s never reach Convex again so clearInvalidAuth can never fire —
+		// a self-sustaining lockout (2026-08-10, ubuntu-4gb-hel1-1). The
+		// strike exists to stop unknown passwords being guessed; a password
+		// that was JUST verified correct proves this source is not guessing.
+		if denyReason != RelayDenyDeadToken {
+			if !s.abuseGuard.allowInvalidAuth(remoteAddr) {
+				reject("too many invalid relay password attempts")
+				return
+			}
+		} else {
+			// The password validated — clear this IP's prior strikes so a
+			// misconfigured client that retried before re-auth does not keep
+			// paying for those attempts after it fixes the session.
+			s.abuseGuard.clearInvalidAuth(remoteAddr)
 		}
 		// Audit §3 (2026-07-19) — see the QUIC register path above for why
 		// these three cases must be distinct on the wire.
@@ -1889,7 +1915,7 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 		s.authViaCookie.Add(1)
 	}
 	if !authed {
-		uid, ok, authErr := s.validateRelayAccessE(relayPw, "proxy", deviceID, "")
+		uid, ok, denyReason, authErr := s.validateRelayAccessWithReason(relayPw, "proxy", deviceID, "")
 		if !ok {
 			// Could not reach a verdict — 503, not 401. Telling a client its
 			// password is invalid when the auth backend is merely down sends it
@@ -1911,9 +1937,22 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 			// Throttle invalid-auth attempts so the account-wide relay password
 			// isn't brute-forcible over HTTP (relay security audit, finding #4).
 			// Keyed on the real client IP (trusted-proxy-aware clientIP).
-			if !s.abuseGuard.allowInvalidAuth(s.abuseGuard.clientIP(r)) {
-				writeRelayErrorCode(w, http.StatusTooManyRequests, RelayCodePasswordRateLimited, "too many invalid relay password attempts")
-				return
+			//
+			// dead_token means the PASSWORD validated but the session token
+			// lapsed — a legitimate client, not a brute-force source. Counting
+			// it as an invalid-auth strike lets an owner's own box lock itself
+			// out: the 429s never reach Convex again, so clearInvalidAuth can
+			// never fire (2026-08-10, ubuntu-4gb-hel1-1). Same rule as the
+			// register paths above; the reason must be read (not collapsed) for
+			// this to work, which is why this path uses
+			// validateRelayAccessWithReason rather than validateRelayAccessE.
+			if denyReason != RelayDenyDeadToken {
+				if !s.abuseGuard.allowInvalidAuth(s.abuseGuard.clientIP(r)) {
+					writeRelayErrorCode(w, http.StatusTooManyRequests, RelayCodePasswordRateLimited, "too many invalid relay password attempts")
+					return
+				}
+			} else {
+				s.abuseGuard.clearInvalidAuth(s.abuseGuard.clientIP(r))
 			}
 			// Was a hand-rolled `{"error": ...}` with no ok/code/message at all,
 			// so the ONE deny a credential refresh actually repairs arrived on

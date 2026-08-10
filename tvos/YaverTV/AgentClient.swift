@@ -239,7 +239,9 @@ actor AgentClient {
         workDir: String,
         projectName: String = "",
         runner: String = "",
-        model: String = ""
+        model: String = "",
+        mcpServers: [String] = [],
+        includeYaverMcp: Bool = true
     ) async throws -> TaskSummary {
         var body: [String: Any] = [
             "title": title,
@@ -249,6 +251,11 @@ actor AgentClient {
         if !projectName.isEmpty { body["projectName"] = projectName }
         if !runner.isEmpty { body["runner"] = runner }
         if !model.isEmpty { body["model"] = model }
+        // MCP doorway parity with mobile/web: external servers + the yaver
+        // toggle travel on the task body so a TV-started task is
+        // indistinguishable from one started in the dashboard (2026-08-10).
+        if !mcpServers.isEmpty { body["mcpServers"] = mcpServers }
+        if includeYaverMcp == false { body["includeYaverMcp"] = false }
 
         let data = try await request("POST", path: "/tasks", jsonBody: body,
                                      failure: "couldn't start the task")
@@ -266,6 +273,18 @@ actor AgentClient {
         let data = try await request("GET", path: "/projects", failure: "couldn't load projects")
         if let wrapped = try? JSONDecoder().decode(ProjectList.self, from: data) { return wrapped.projects }
         return (try? JSONDecoder().decode([ProjectSummary].self, from: data)) ?? []
+    }
+
+    /// External MCP servers the box exposes (GET /mcp/servers or the ops
+    /// surface). The TV shows these as toggles beside the yaver doorway; the
+    /// chosen set rides on task bodies exactly like mobile/web.
+    func listMCPServers() async throws -> [McpServerSummary] {
+        struct McpEnvelope: Decodable { let servers: [McpServerSummary]? }
+        let data = try await request("GET", path: "/mcp/servers", failure: "couldn't load MCP servers")
+        if let env = try? JSONDecoder().decode(McpEnvelope.self, from: data), let servers = env.servers {
+            return servers
+        }
+        return (try? JSONDecoder().decode([McpServerSummary].self, from: data)) ?? []
     }
 
     // ---- Web preview streaming (headless capture → frames) ----------------

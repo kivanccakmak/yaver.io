@@ -126,10 +126,12 @@ import {
   loadKeepLastProjectEnabled,
   loadLastTaskProject,
   loadLastTaskProjectFromConvex,
+  loadMCPServersFromConvex,
   loadTaskVideoSummaryEnabled,
   saveKeepLastProjectEnabled,
   saveLastTaskProject,
   saveLastTaskProjectToConvex,
+  saveMCPServersToConvex,
 } from "../../src/lib/taskComposerPrefs";
 import { listMcpServers, type McpServer } from "../../src/lib/mcpServers";
 import { withAlpha } from "../../src/lib/themeUtils";
@@ -2012,7 +2014,7 @@ export default function TasksScreen() {
           </Text>
           <Pressable
             key="yaver"
-            onPress={() => setIncludeYaverMcp((prev) => !prev)}
+            onPress={() => { setIncludeYaverMcp((prev) => !prev); persistMCPPrefs(); }}
             style={[
               s.projectPickerRow,
               { borderColor: includeYaverMcp ? c.accent : c.border, backgroundColor: includeYaverMcp ? withAlpha(c.accent, "1f") : c.bg },
@@ -2249,6 +2251,23 @@ export default function TasksScreen() {
 
   // Speech state
   const { token, user, logout } = useAuth();
+  // Persist the MCP selection to Convex — same mcpServersByDevice row the web
+  // chat + Vibing composers and tvOS write, so a selection made on the phone
+  // is remembered on the web and vice versa (2026-08-10). Fire-and-forget:
+  // a failed settings write never blocks the picker. Reads the current state
+  // via a ref so callers can call it right after setState without waiting.
+  const mcpStateRef = useRef({ mcpServers: [] as string[], includeYaverMcp: true });
+  mcpStateRef.current = { mcpServers: selectedMcpServers, includeYaverMcp };
+  const persistMCPPrefs = useCallback(() => {
+    if (!token) return;
+    const deviceId = activeDevice?.id || "default";
+    const snap = mcpStateRef.current;
+    void saveMCPServersToConvex(token, {
+      deviceId,
+      mcpServers: snap.mcpServers,
+      includeYaverMcp: snap.includeYaverMcp,
+    });
+  }, [activeDevice?.id, token]);
   // Cross-device + offline tmux runner-session ledger from Convex
   // (mobile/src/lib/tmuxRunnerSessions.ts). The P2P list above only sees the
   // CONNECTED agent; this roster shows every machine's runner seats, open or
@@ -5182,6 +5201,23 @@ export default function TasksScreen() {
       setComposerProjects(normalizedProjects);
       setAvailableMcpServers((mcpRows || []).filter((server) => server.enabled));
       setKeepLastProject(keep);
+
+      // MCP selection restore — same mcpServersByDevice row the web chat +
+      // Vibing composers and tvOS write, so an MCP set chosen on the web is
+      // remembered on the phone and vice versa (2026-08-10). Convex-first,
+      // no local fallback (MCP names are agent-scoped, not path-scoped).
+      if (token) {
+        const mcpPref = await loadMCPServersFromConvex(token, runnerDeviceId).catch(() => null);
+        if (mcpPref && !cancelled) {
+          const known = new Set((mcpRows || []).filter((s) => s.enabled).map((s) => s.name));
+          if (Array.isArray(mcpPref.mcpServers)) {
+            setSelectedMcpServers(mcpPref.mcpServers.filter((name) => known.has(name)));
+          }
+          if (typeof mcpPref.includeYaverMcp === "boolean") {
+            setIncludeYaverMcp(mcpPref.includeYaverMcp);
+          }
+        }
+      }
 
       if (routeProjectDir) return;
       if (selectedProjectPath && normalizedProjects.some((project) => project.path === selectedProjectPath)) return;

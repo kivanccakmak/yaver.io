@@ -113,7 +113,9 @@ struct WebPreviewStreamView: View {
                 Spacer()
                 // The vibe loop lives ON the preview: prompt → runner turn →
                 // HMR lands in the frame stream that never stopped polling.
-                VibeTurnPanel(projectName: project.name)
+                // The full project travels so the panel can seed the workDir
+                // picker + remember the choice to Convex (2026-08-10).
+                VibeTurnPanel(project: project)
                     .padding(.horizontal, 32)
                     .padding(.bottom, logLines.isEmpty ? 30 : 8)
                 if !logLines.isEmpty {

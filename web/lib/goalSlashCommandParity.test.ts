@@ -37,7 +37,7 @@ import { fileURLToPath } from "node:url";
 import { goalFromSlashCommand as mobileGoalFromSlashCommand } from "../../mobile/src/lib/goalSlashCommand";
 
 // Web helpers (real logic) for the Convex wire-shape test.
-import { loadLastProjectFromConvex, saveLastProjectToConvex } from "./runtimeProjectSettings";
+import { loadLastProjectFromConvex, saveLastProjectToConvex, loadMCPServersFromConvex, saveMCPServersToConvex } from "./runtimeProjectSettings";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = join(root, "..");
@@ -167,6 +167,57 @@ test("web and mobile Convex last-project helpers use the same wire shape", async
     assert.equal(loaded?.projectName, "medici.ai");
     assert.equal(loaded?.gitRemote, "git@github.com:medici/medici.ai.git");
     assert.equal(loaded?.deviceId, "ubuntu-4gb");
+  } finally {
+    delete (globalThis as any).fetch;
+  }
+});
+
+test("web, mobile and tvOS MCP helpers use the same wire shape", async () => {
+  // Wire shape: mcpServersForDevice on write (replace-by-deviceId),
+  // mcpServersByDevice array on read, includeYaverMcp toggle in the same row.
+  // Three surfaces must target the SAME Convex fields or a selection made on
+  // one is silently lost on the others (2026-08-10 cross-surface MCP sync).
+  const webSource = readFileSync(join(root, "lib/runtimeProjectSettings.ts"), "utf8");
+  assert.ok(webSource.includes("mcpServersForDevice"), "web write must use mcpServersForDevice");
+  assert.ok(webSource.includes("mcpServersByDevice"), "web read must use mcpServersByDevice");
+  assert.ok(webSource.includes("includeYaverMcp"), "web row must carry includeYaverMcp");
+
+  const mobileSource = readFileSync(join(repoRoot, "mobile/src/lib/taskComposerPrefs.ts"), "utf8");
+  assert.ok(mobileSource.includes("mcpServersForDevice"), "mobile write must use mcpServersForDevice");
+  assert.ok(mobileSource.includes("mcpServersByDevice"), "mobile read must use mcpServersByDevice");
+  assert.ok(mobileSource.includes("includeYaverMcp"), "mobile row must carry includeYaverMcp");
+
+  const tvSource = readFileSync(join(repoRoot, "tvos/YaverTV/MachineRegistry.swift"), "utf8");
+  assert.ok(tvSource.includes("mcpServersForDevice"), "tvOS write must use mcpServersForDevice");
+  assert.ok(tvSource.includes("mcpServersByDevice"), "tvOS read must use mcpServersByDevice");
+  assert.ok(tvSource.includes("includeYaverMcp"), "tvOS row must carry includeYaverMcp");
+
+  // Mock-fetch round trip through the WEB helpers (real logic, stubbed fetch).
+  let settings: any = {};
+  let posted: any = null;
+  (globalThis as any).fetch = async (url: string, init?: any) => {
+    if (init?.method === "POST") {
+      posted = JSON.parse(init.body);
+      const pref = posted.mcpServersForDevice;
+      settings.mcpServersByDevice = [{ ...pref, updatedAt: Date.now() }];
+      return { ok: true, json: async () => ({ ok: true }) };
+    }
+    return { ok: true, json: async () => ({ settings }) };
+  };
+  try {
+    await saveMCPServersToConvex("https://convex.test", "tok", {
+      deviceId: "ubuntu-4gb",
+      mcpServers: ["github", "supabase"],
+      includeYaverMcp: false,
+    });
+    assert.deepEqual(posted.mcpServersForDevice, {
+      deviceId: "ubuntu-4gb",
+      mcpServers: ["github", "supabase"],
+      includeYaverMcp: false,
+    });
+    const loaded = await loadMCPServersFromConvex("https://convex.test", "tok", "ubuntu-4gb");
+    assert.deepEqual(loaded?.mcpServers, ["github", "supabase"]);
+    assert.equal(loaded?.includeYaverMcp, false);
   } finally {
     delete (globalThis as any).fetch;
   }

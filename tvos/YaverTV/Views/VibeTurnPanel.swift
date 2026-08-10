@@ -17,20 +17,34 @@
 // Role rule: the turn client is built from store.runnerBox() — NEVER the
 // selected box. In a runner/render split the selected box may be the render
 // machine, and a prompt sent there lands on a box with no runner sessions.
+//
+// Project + MCP picker (2026-08-10): the TV remembers the last project and
+// MCP selection the SAME way mobile and the web chat do — Convex
+// defaultRuntimeProjectByDevice / mcpServersByDevice, synced here via
+// YaverStore.rememberProject / rememberMCPServers. Picking a project on the
+// phone then vibing on the TV keeps the same workDir; the picker shows the
+// runner box's /projects and highlights the remembered one.
 
 import SwiftUI
 
 struct VibeTurnPanel: View {
     @EnvironmentObject var store: YaverStore
 
-    /// Names the app being vibed so the panel can say where the turn went.
-    let projectName: String
+    /// The project being previewed (the vibe turn runs in this repo's workDir).
+    let project: ProjectSummary?
 
     @State private var expanded = false
     @State private var prompt = ""
     @State private var sending = false
     @State private var turn: SessionTurnResult?
     @State private var turnError: String?
+    // Project/MCP picker state — loaded from the runner box on first open.
+    @State private var showProjectPicker = false
+    @State private var availableProjects: [ProjectSummary] = []
+    @State private var pickedProjectPath: String?
+    @State private var availableMCPServers: [String] = []
+    @State private var pickedMCPServers: Set<String> = []
+    @State private var yaverMcpOn = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -56,6 +70,11 @@ struct VibeTurnPanel: View {
                         .disabled(sending || prompt.trimmingCharacters(in: .whitespaces).isEmpty)
                     Button("Close") { expanded = false }
                 }
+                HStack(spacing: 10) {
+                    projectChip
+                    mcpChip
+                }
+                .padding(.top, 4)
             } else {
                 Button {
                     expanded = true
@@ -68,6 +87,129 @@ struct VibeTurnPanel: View {
         }
         .padding(16)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .task { await loadPickerState() }
+    }
+
+    // ── Project / MCP picker ──────────────────────────────────────────────
+
+    private var runnerBoxId: String? { store.runnerBox()?.id }
+
+    /// Seed the picker from the runner box's /projects + the Convex-remembered
+    /// selection (same rows the phone/web write). Runs once per panel mount.
+    private func loadPickerState() async {
+        guard let boxId = runnerBoxId else { return }
+        let prefs = store.lastProjectByDevice[boxId]
+        // Start from the remembered Convex choice so a phone-picked project
+        // shows up selected on the TV without any TV-side tap.
+        if let prefName = prefs?.projectName, let proj = project, proj.name == prefName {
+            pickedProjectPath = proj.path
+        } else if let proj = project {
+            pickedProjectPath = proj.path
+        }
+        if let mcpPref = store.lastMCPServersByDevice[boxId] {
+            yaverMcpOn = mcpPref.includeYaverMcp ?? true
+            pickedMCPServers = Set(mcpPref.mcpServers ?? [])
+        }
+        guard let client = store.runnerClient() else { return }
+        // Projects + MCP server names from the RUNNER box — the machine whose
+        // repo the AI edits (same list ProjectsView shows).
+        if let list = try? await client.listProjects() {
+            availableProjects = list
+        }
+        if let servers = try? await client.listMCPServers() {
+            availableMCPServers = servers.map(\.name)
+        }
+    }
+
+    /// "Project: <name> ▾" — opens a dpad-friendly list of the runner box's
+    /// repos. Picking one remembers it to Convex (store.rememberProject).
+    private var projectChip: some View {
+        Menu {
+            ForEach(availableProjects) { p in
+                Button {
+                    pickedProjectPath = p.path
+                    if let boxId = runnerBoxId {
+                        store.rememberProject(p, for: boxId)
+                    }
+                } label: {
+                    if p.path == pickedProjectPath {
+                        Label(p.name, systemImage: "checkmark")
+                    } else {
+                        Text(p.name)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                Text(currentProjectLabel)
+            }
+            .font(.system(size: 15, weight: .semibold))
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+        }
+        .disabled(availableProjects.isEmpty)
+    }
+
+    private var currentProjectLabel: String {
+        if let path = pickedProjectPath {
+            return availableProjects.first(where: { $0.path == path })?.name
+                ?? path.split(separator: "/").last.map(String.init)
+                ?? path
+        }
+        return project?.name ?? "Project ▾"
+    }
+
+    /// "yaver · 2 MCP ▾" — toggles the yaver doorway (default ON) and the
+    /// box's external MCP servers; selection syncs to Convex on change.
+    private var mcpChip: some View {
+        Menu {
+            Button {
+                yaverMcpOn.toggle()
+                persistMCP()
+            } label: {
+                if yaverMcpOn {
+                    Label("yaver (on)", systemImage: "checkmark")
+                } else {
+                    Text("yaver (off)")
+                }
+            }
+            if !availableMCPServers.isEmpty {
+                Divider()
+                ForEach(availableMCPServers, id: \.self) { name in
+                    Button {
+                        if pickedMCPServers.contains(name) {
+                            pickedMCPServers.remove(name)
+                        } else {
+                            pickedMCPServers.insert(name)
+                        }
+                        persistMCP()
+                    } label: {
+                        if pickedMCPServers.contains(name) {
+                            Label(name, systemImage: "checkmark")
+                        } else {
+                            Text(name)
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "platter.2.filled.ipad")
+                Text(yaverMcpOn ? "yaver" : "yaver (off)")
+                if !pickedMCPServers.isEmpty {
+                    Text("· \(pickedMCPServers.count) MCP")
+                }
+            }
+            .font(.system(size: 15, weight: .semibold))
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+        }
+    }
+
+    private func persistMCP() {
+        guard let boxId = runnerBoxId else { return }
+        store.rememberMCPServers(Array(pickedMCPServers), includeYaverMcp: yaverMcpOn, for: boxId)
     }
 
     /// The turn's life, narrated in place: what was sent, what the runner is
@@ -78,7 +220,7 @@ struct VibeTurnPanel: View {
             if sending {
                 HStack(spacing: 10) {
                     ProgressView()
-                    Text("Working on \(projectName)…").foregroundStyle(.secondary)
+                    Text("Working on \(currentProjectLabel)…").foregroundStyle(.secondary)
                 }
                 .font(.system(size: 16))
             }
@@ -130,7 +272,15 @@ struct VibeTurnPanel: View {
         prompt = ""
         Task {
             do {
-                let result = try await client.sendText(text, session: nil)
+                // The turn runs in the picked repo (workDir) with the chosen
+                // MCP set — the same selection a phone/web task carries.
+                let result = try await client.sendText(
+                    text,
+                    session: nil,
+                    workDir: pickedProjectPath,
+                    mcpServers: Array(pickedMCPServers),
+                    includeYaverMcp: yaverMcpOn
+                )
                 await MainActor.run {
                     sending = false
                     turn = result

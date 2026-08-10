@@ -189,6 +189,91 @@ func TestProxyOwnerMismatch_HasItsOwnCode(t *testing.T) {
 	}
 }
 
+// A DEAD SESSION TOKEN is not a brute-force attempt — it must not earn an
+// invalid-auth strike, or an owner's own box locks itself out: every retry
+// drains the IP bucket, the 429s never reach Convex again, so
+// clearInvalidAuth can never fire (2026-08-10, ubuntu-4gb-hel1-1).
+//
+// Convex returns reason=dead_token when the PASSWORD matched the
+// userSettings row but the session token is expired/foreign (userSettings.ts
+// validateRelayPassword). The register paths clear the IP's strikes in that
+// case; the proxy path must at minimum NOT consume the bucket, so a client
+// that keeps retrying after its session lapsed does not trip the limiter.
+//
+// PROVEN BY BREAKING: reverting the proxy path to the pre-fix shape — always
+// calling allowInvalidAuth regardless of denyReason — drains the burst in the
+// loop below and this test fails with a 429 where a 401 (invalid password)
+// is expected.
+func TestProxyDeadToken_DoesNotConsumeInvalidAuthBucket(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"ok":false,"userId":"","isPaid":false,"plan":"","reason":"dead_token"}`)
+	}))
+	defer backend.Close()
+
+	srv := NewRelayServer(0, 0, "", backend.URL, "")
+	cfg := defaultAbuseGuardConfig()
+	cfg.InvalidAuthPerIPPerMin = 2
+	cfg.InvalidAuthBurstPerIP = 2
+	srv.abuseGuard = newAbuseGuard(cfg)
+
+	// Every attempt presents a password that Convex validates as CORRECT but
+	// with a dead session token. The first three must all answer 401 (invalid
+	// password — the client's remedy is re-auth, not backoff), NOT 429.
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/d/device-abc/health", nil)
+		req.Header.Set("X-Relay-Password", "correct-password-dead-session")
+		rr := httptest.NewRecorder()
+		srv.handleProxy(rr, req)
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status = %d, want 401 (dead token is a valid password, not a brute-force source); body=%s",
+				i+1, rr.Code, rr.Body.String())
+		}
+		body := decodeRelayBody(t, rr)
+		if body["code"] != RelayCodePasswordInvalid {
+			t.Fatalf("attempt %d: code = %v, want %q", i+1, body["code"], RelayCodePasswordInvalid)
+		}
+	}
+
+	// And the bucket must still be full enough for a real bad-password attempt
+	// to be counted — the dead-token attempts above must NOT have consumed it.
+	// With burst=2, a genuinely wrong password from this IP trips the limiter
+	// on its third strike, proving dead-token attempts did not burn the burst.
+	req := httptest.NewRequest(http.MethodGet, "/d/device-abc/health", nil)
+	req.Header.Set("X-Relay-Password", "actually-wrong")
+	rr := httptest.NewRecorder()
+	srv.handleProxy(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("first real bad-password after dead-token attempts: status = %d, want 401 (bucket must not be pre-drained by dead-token retries)", rr.Code)
+	}
+}
+
+// A dead session token on the REGISTER paths must clear the IP's invalid-auth
+// strikes (the password validated), not merely skip counting. This is the
+// owner-self-lockout regression from 2026-08-10: a stale cached password
+// burned the bucket while the session was expired, and nothing cleared it.
+// The register path is exercised through the shared validate→strike decision
+// logic: the abuse-guard contract is that dead_token never consumes the
+// bucket (asserted above via the proxy path) — this test pins the wire shape
+// Convex answers with so the relay keeps distinguishing the three reasons.
+func TestConvexDeadTokenReason_SurvivesOnTheWire(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"ok":false,"userId":"","isPaid":false,"plan":"","reason":"dead_token"}`)
+	}))
+	defer backend.Close()
+
+	srv := NewRelayServer(0, 0, "", backend.URL, "")
+	_, ok, reason, err := srv.validateRelayAccessWithReason("any-password", "register", "device-abc", "expired-token")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if ok {
+		t.Fatal("dead token must not authorize")
+	}
+	if reason != RelayDenyDeadToken {
+		t.Fatalf("reason = %q, want %q — the relay must see dead_token distinctly so it can exempt it from the invalid-auth limiter", reason, RelayDenyDeadToken)
+	}
+}
+
 // writeRelayError's DEFAULT behaviour is unchanged: every other caller in the
 // relay still emits http.StatusText(status). Only callers that opt in via
 // writeRelayErrorCode get a stable code, so this change cannot have altered a

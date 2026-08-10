@@ -70,7 +70,7 @@ struct DroidStreamView: View {
                     Spacer()
                     // Same vibe loop as the browser lane: prompt from the
                     // couch, watch the Android screen pick up the change.
-                    VibeTurnPanel(projectName: "the app on screen")
+                    VibeTurnPanel(project: nil)
                         .padding(.horizontal, 32)
                         .padding(.bottom, 30)
                 }

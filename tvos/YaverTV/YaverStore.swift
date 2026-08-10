@@ -33,6 +33,52 @@ final class YaverStore: ObservableObject {
     /// badge can name boxes without a second network call.
     @Published var deviceNamesById: [String: String] = [:]
 
+    // Last-project + MCP memory — the SAME Convex rows mobile
+    // (taskComposerPrefs) and the web chat composer write
+    // (defaultRuntimeProjectByDevice / mcpServersByDevice), so a project/MCP
+    // set picked on the phone or the dashboard is remembered on the TV and
+    // vice versa (2026-08-10). Rows carry no absolute path — {projectName,
+    // gitRemote, branch} — matched against the box's live /projects at use.
+    @Published var lastProjectByDevice: [String: MachineRegistry.RuntimeProjectPref] = [:]
+    @Published var lastMCPServersByDevice: [String: MachineRegistry.MCPServersPref] = [:]
+
+    /// The remembered project for a box, matched against the box's live project
+    /// list (the Convex row names the project; the path comes from /projects).
+    func lastProject(for boxId: String?, projects: [ProjectSummary]) -> ProjectSummary? {
+        guard let boxId, let pref = lastProjectByDevice[boxId], let name = pref.projectName else { return nil }
+        return projects.first(where: { $0.name == name })
+            ?? projects.first(where: { p in
+                guard let prefRemote = pref.gitRemote, let pRemote = p.gitRemote else { return false }
+                return pRemote == prefRemote
+            })
+    }
+
+    /// Remember a picked project for a box and write it to Convex — the same
+    /// row the phone/dashboard read, so the next surface sees it. Fire-and-
+    /// forget: a failed settings write never blocks anything.
+    func rememberProject(_ project: ProjectSummary, for boxId: String) {
+        let pref = MachineRegistry.RuntimeProjectPref(
+            deviceId: boxId, projectName: project.name,
+            gitRemote: project.gitRemote, branch: project.branch)
+        lastProjectByDevice[boxId] = pref
+        guard isAuthenticated else { return }
+        Task { [weak self] in
+            await MachineRegistry.saveRuntimeProject(token: self?.token ?? "", pref: pref)
+        }
+    }
+
+    /// Remember the external-MCP selection + the yaver doorway toggle for a
+    /// box and write it to Convex (same mcpServersByDevice row mobile/web write).
+    func rememberMCPServers(_ servers: [String], includeYaverMcp: Bool, for boxId: String) {
+        let pref = MachineRegistry.MCPServersPref(
+            deviceId: boxId, mcpServers: servers, includeYaverMcp: includeYaverMcp)
+        lastMCPServersByDevice[boxId] = pref
+        guard isAuthenticated else { return }
+        Task { [weak self] in
+            await MachineRegistry.saveMCPServers(token: self?.token ?? "", pref: pref)
+        }
+    }
+
     /// True when the favorite row genuinely splits work across two machines.
     var machineSplitActive: Bool {
         guard let r = machineRoles else { return false }
@@ -53,6 +99,14 @@ final class YaverStore: ObservableObject {
     func adoptSettings(_ settings: MachineRegistry.UserSettings?, devices: [RegisteredDevice] = []) {
         if let rows = settings?.machineRolesByProject {
             machineRoles = rows.first(where: { ($0.projectName ?? "").isEmpty && !$0.runnerDeviceId.isEmpty })
+        }
+        if let rows = settings?.defaultRuntimeProjectByDevice {
+            lastProjectByDevice = Dictionary(uniqueKeysWithValues:
+                rows.compactMap { row in row.deviceId.map { ($0, row) } })
+        }
+        if let rows = settings?.mcpServersByDevice {
+            lastMCPServersByDevice = Dictionary(uniqueKeysWithValues:
+                rows.compactMap { row in row.deviceId.map { ($0, row) } })
         }
         if !devices.isEmpty {
             var names = deviceNamesById

@@ -730,6 +730,24 @@ export interface UserSettings {
   };
   /** Read-only default runtime project rows returned by GET /settings. */
   defaultRuntimeProjectByDevice?: RuntimeProjectPreference[];
+  /** Per-machine MCP selection — external MCP servers + the yaver doorway
+   * toggle. One write at a time via mcpServersForDevice; Convex stores only
+   * server NAMES (URLs/keys stay on the agent). Same row the web dashboard
+   * chat + Vibing composers write, so an MCP selection is remembered across
+   * phone/web/TV (2026-08-10). */
+  mcpServersForDevice?: {
+    deviceId: string;
+    mcpServers?: string[];
+    includeYaverMcp?: boolean;
+    updatedAt?: number;
+  } | null;
+  /** Read-only MCP selection rows returned by GET /settings. */
+  mcpServersByDevice?: Array<{
+    deviceId: string;
+    mcpServers?: string[];
+    includeYaverMcp?: boolean;
+    updatedAt?: number;
+  }>;
   /** Read-only project catalogs returned by GET /settings. */
   runtimeProjectCatalogByDevice?: RuntimeProjectCatalogRow[];
   /** Read-only non-secret OpenCode config cache, keyed by device. The live

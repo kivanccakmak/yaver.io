@@ -135,8 +135,8 @@ actor SessionClient {
     /// single live session happened to be the user's own hand-rolled tmux window,
     /// the guess drove THAT: a prompt typed into a personal Claude Code session,
     /// its private scrollback rendered back onto a television. Name the session.
-    func sendText(_ text: String, session: String?, waitMs: Int = 6000, surfaceId: String = "tvos") async throws -> SessionTurnResult {
-        try await turn(text: text, choice: nil, session: session, waitMs: waitMs, surfaceId: surfaceId)
+    func sendText(_ text: String, session: String?, waitMs: Int = 6000, surfaceId: String = "tvos", workDir: String? = nil, mcpServers: [String] = [], includeYaverMcp: Bool = true) async throws -> SessionTurnResult {
+        try await turn(text: text, choice: nil, session: session, waitMs: waitMs, surfaceId: surfaceId, workDir: workDir, mcpServers: mcpServers, includeYaverMcp: includeYaverMcp)
     }
 
     /// Answer a menu the pane is showing.
@@ -144,9 +144,9 @@ actor SessionClient {
         try await turn(text: nil, choice: choice, session: session, waitMs: waitMs, surfaceId: surfaceId)
     }
 
-    private func turn(text: String?, choice: String?, session: String?, waitMs: Int, surfaceId: String = "tvos") async throws -> SessionTurnResult {
+    private func turn(text: String?, choice: String?, session: String?, waitMs: Int, surfaceId: String = "tvos", workDir: String? = nil, mcpServers: [String] = [], includeYaverMcp: Bool = true) async throws -> SessionTurnResult {
         do {
-            return try await runtimeTurn(text: text, choice: choice, session: session, waitMs: waitMs, surfaceId: surfaceId)
+            return try await runtimeTurn(text: text, choice: choice, session: session, waitMs: waitMs, surfaceId: surfaceId, workDir: workDir, mcpServers: mcpServers, includeYaverMcp: includeYaverMcp)
         } catch {
             // Older agents do not have runtime_turn yet. The direct endpoint is
             // still the proven TV path, so keep it as a rollout fallback.
@@ -179,7 +179,7 @@ actor SessionClient {
         return []
     }
 
-    private func runtimeTurn(text: String?, choice: String?, session: String?, waitMs: Int, surfaceId: String = "tvos") async throws -> SessionTurnResult {
+    private func runtimeTurn(text: String?, choice: String?, session: String?, waitMs: Int, surfaceId: String = "tvos", workDir: String? = nil, mcpServers: [String] = [], includeYaverMcp: Bool = true) async throws -> SessionTurnResult {
         var target: [String: Any] = [:]
         if let session, !session.isEmpty { target["session"] = session }
         var payload: [String: Any] = [
@@ -206,6 +206,13 @@ actor SessionClient {
             "mode": "run",
         ]
         if let choice, !choice.isEmpty { payload["choice"] = choice }
+        // Project + MCP wiring: the turn runs in the picked repo's workDir and
+        // carries the same MCP selection as a phone/web task (2026-08-10).
+        // The runner box resolves the project path; workDir here is the
+        // user-picked absolute path from /projects when the picker set one.
+        if let workDir, !workDir.isEmpty { payload["workDir"] = workDir }
+        if !mcpServers.isEmpty { payload["mcpServers"] = mcpServers }
+        if includeYaverMcp == false { payload["includeYaverMcp"] = false }
         let body = try JSONSerialization.data(withJSONObject: [
             "verb": "runtime_turn",
             "payload": payload,

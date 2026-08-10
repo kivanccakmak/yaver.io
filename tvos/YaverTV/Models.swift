@@ -132,6 +132,10 @@ struct ProjectSummary: Decodable, Identifiable {
     let path: String?
     let framework: String?
     let branch: String?
+    /// Origin remote URL — used to match the Convex last-project row
+    /// (defaultRuntimeProjectByDevice carries {projectName, gitRemote, branch},
+    /// never an absolute path) against the live /projects list.
+    let gitRemote: String?
 
     var id: String { name }
 
@@ -157,6 +161,15 @@ struct ProjectSummary: Decodable, Identifiable {
 }
 
 struct ProjectList: Decodable { let projects: [ProjectSummary] }
+
+/// An external MCP server the box exposes — name is the identity the task body
+/// carries (`mcpServers: [name]`), same contract as mobile/web.
+struct McpServerSummary: Decodable, Identifiable {
+    let name: String
+    let url: String?
+    let toolCount: Int?
+    var id: String { name }
+}
 
 /// A feedback report the box has collected (GET /feedback). The TV shows them
 /// to review from the couch — the SDK captures video/voice/screenshots on the

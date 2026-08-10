@@ -62,8 +62,8 @@ func mcpRemoteExecCommand(deviceID, command, workDir string, timeout int) interf
 		if status >= 300 {
 			return mcpToolError(fmt.Sprintf("exec_command: poll remote returned %d: %s", status, string(raw)))
 		}
-		snapshot = map[string]any{}
-		if err := json.Unmarshal(raw, &snapshot); err != nil {
+		snapshot, err = decodeRemoteExecSnapshot(raw)
+		if err != nil {
 			return mcpToolError(fmt.Sprintf("exec_command: decode remote snapshot: %v", err))
 		}
 		if fmt.Sprint(snapshot["status"]) != "running" {
@@ -78,6 +78,28 @@ func mcpRemoteExecCommand(deviceID, command, workDir string, timeout int) interf
 		return mcpToolError("exec_command: no remote snapshot")
 	}
 	return mcpToolResult(formatExecSnapshot(snapshot))
+}
+
+// decodeRemoteExecSnapshot parses a /exec/{id} poll response into the exec
+// session's snapshot map.
+//
+// The agent answers `{"ok":true,"exec":{...}}` — the session snapshot lives
+// under the `exec` key (httpserver.go handleExecByID → jsonReply(..., {"ok":
+// true, "exec": sess.Snapshot()})). Parsing the RAW body as the snapshot made
+// every field nil — `snapshot["status"]` was missing, the poll loop broke
+// immediately, and the MCP tool returned `Status: <nil>` while the command
+// had actually run (2026-08-10, ubuntu-4gb-hel1-1). Unwrap `exec` when
+// present; fall back to a flat body for agents that answer without the
+// wrapper, so neither shape produces a silent empty result.
+func decodeRemoteExecSnapshot(raw []byte) (map[string]any, error) {
+	var outer map[string]any
+	if err := json.Unmarshal(raw, &outer); err != nil {
+		return nil, err
+	}
+	if exec, ok := outer["exec"].(map[string]any); ok {
+		return exec, nil
+	}
+	return outer, nil
 }
 
 func mustJSONBytes(v any) []byte {

@@ -662,6 +662,17 @@ func transportHeadersForBase(cfg *Config, baseURL string) (map[string]string, er
 				headers["X-Relay-Password"] = relay.Password
 				return headers, nil
 			}
+			// Prefer the canonical cfg.RelayPassword — it is the field every
+			// refresh path updates — and fall back to the cached copy. They
+			// drifted apart once (2026-08-10): a password refresh updated
+			// RelayPassword while CachedRelayPassword stayed stale, this
+			// function read the STALE cached field first, and every relay
+			// request shipped the old password until the relay's invalid-auth
+			// limiter locked the owner's own IP out.
+			if cfg.RelayPassword != "" {
+				headers["X-Relay-Password"] = cfg.RelayPassword
+				return headers, nil
+			}
 			if cfg.CachedRelayPassword != "" {
 				headers["X-Relay-Password"] = cfg.CachedRelayPassword
 				return headers, nil
@@ -675,12 +686,14 @@ func transportHeadersForBase(cfg *Config, baseURL string) (map[string]string, er
 				if strings.TrimRight(relay.HttpURL, "/") != origin {
 					continue
 				}
-				if cfg.CachedRelayPassword != "" {
-					headers["X-Relay-Password"] = cfg.CachedRelayPassword
-					return headers, nil
-				}
+				// Same canonical-first order as the cached-servers loop above:
+				// RelayPassword is the field every refresh writes.
 				if cfg.RelayPassword != "" {
 					headers["X-Relay-Password"] = cfg.RelayPassword
+					return headers, nil
+				}
+				if cfg.CachedRelayPassword != "" {
+					headers["X-Relay-Password"] = cfg.CachedRelayPassword
 					return headers, nil
 				}
 				return nil, fmt.Errorf("missing relay password for %s", origin)

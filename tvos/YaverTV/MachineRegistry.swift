@@ -113,6 +113,31 @@ enum MachineRegistry {
         /// extra call per surface would be a poor trade for a preference.
         /// Additive: nil on older payloads, which correctly means "all".
         let connectionMode: String?
+        /// Last-project memory — the SAME Convex row mobile (taskComposerPrefs)
+        /// and the web chat composer write (defaultRuntimeProjectByDevice),
+        /// so a project picked on the phone or the dashboard is remembered on
+        /// the TV and vice versa. Row carries no absolute path — only
+        /// {projectName, gitRemote, branch} — matched against the live
+        /// /projects list. (2026-08-10)
+        let defaultRuntimeProjectByDevice: [RuntimeProjectPref]?
+        /// Per-device external-MCP selection + the yaver doorway toggle — the
+        /// same mcpServersByDevice row mobile and web write.
+        let mcpServersByDevice: [MCPServersPref]?
+    }
+
+    /// One defaultRuntimeProjectByDevice row (Convex userSettings).
+    struct RuntimeProjectPref: Decodable {
+        let deviceId: String?
+        let projectName: String?
+        let gitRemote: String?
+        let branch: String?
+    }
+
+    /// One mcpServersByDevice row.
+    struct MCPServersPref: Decodable {
+        let deviceId: String?
+        let mcpServers: [String]?
+        let includeYaverMcp: Bool?
     }
 
     /// The fan-out preference as a decision, not a raw string.
@@ -209,7 +234,57 @@ enum MachineRegistry {
             throw AgentError(message: "Couldn't load relay settings (\(http.statusCode)).")
         }
         return (try? JSONDecoder().decode(UserSettingsEnvelope.self, from: data).settings)
-            ?? UserSettings(relayUrl: nil, relayPassword: nil, machineRolesByProject: nil, connectionMode: nil)
+            ?? UserSettings(relayUrl: nil, relayPassword: nil, machineRolesByProject: nil,
+                            connectionMode: nil, defaultRuntimeProjectByDevice: nil,
+                            mcpServersByDevice: nil)
+    }
+
+    /// POST /settings — write a last-project row to Convex. Same
+    /// `defaultRuntimeProjectForDevice` (replace-by-deviceId) the phone and
+    /// web dashboard write, so a project picked on the TV is remembered on the
+    /// phone and vice versa. Fire-and-forget at call sites: a failed settings
+    /// write must never block a vibe turn. Privacy-limited like the row itself:
+    /// no absolute paths, only {projectName, gitRemote, branch}.
+    static func saveRuntimeProject(token: String, pref: RuntimeProjectPref) async {
+        guard let deviceId = pref.deviceId, !deviceId.isEmpty else { return }
+        var body: [String: Any] = ["deviceId": deviceId]
+        if let name = pref.projectName, !name.isEmpty { body["projectName"] = name }
+        if let remote = pref.gitRemote, !remote.isEmpty { body["gitRemote"] = remote }
+        if let branch = pref.branch, !branch.isEmpty { body["branch"] = branch }
+        await postSettings(token: token,
+                           key: "defaultRuntimeProjectForDevice",
+                           value: body)
+    }
+
+    /// POST /settings — write the MCP selection row. Same
+    /// `mcpServersForDevice` (replace-by-deviceId) mobile/web write.
+    static func saveMCPServers(token: String, pref: MCPServersPref) async {
+        guard let deviceId = pref.deviceId, !deviceId.isEmpty else { return }
+        var body: [String: Any] = ["deviceId": deviceId]
+        if let servers = pref.mcpServers, !servers.isEmpty { body["mcpServers"] = servers }
+        if let includeYaverMcp = pref.includeYaverMcp { body["includeYaverMcp"] = includeYaverMcp }
+        await postSettings(token: token,
+                           key: "mcpServersForDevice",
+                           value: body)
+    }
+
+    /// Shared POST /settings writer. Deliberately silent on failure — a
+    /// preference write must never surface as an error on a lean-back surface.
+    private static func postSettings(token: String, key: String, value: [String: Any]) async {
+        guard !token.isEmpty else { return }
+        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("settings"))
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 12
+        do {
+            req.httpBody = try JSONSerialization.data(withJSONObject: [key: value])
+            _ = try await URLSession.shared.data(for: req)
+        } catch {
+            // Silent: rememberProject/rememberMCPServers already keep the local
+            // value; Convex sync is best-effort.
+        }
     }
 
     /// GET /guests/list — who this account has shared with. The host-side TV
