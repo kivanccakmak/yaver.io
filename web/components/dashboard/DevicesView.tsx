@@ -4010,6 +4010,14 @@ export default function DevicesView({
                           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success animate-live-pulse" />
                           {connectedLine}
                         </span>
+                      ) : isSelectedWorkspace && agentConnectionState === "connecting" ? (
+                        <span
+                          className="inline-flex items-center gap-1.5 rounded-full border border-info/40 bg-info-soft px-2 py-0.5 text-[11px] font-semibold text-info-softFg"
+                          title="Your dashboard session is connecting to this machine right now — relay dial, then agent handshake. It replaces the stale status while the attempt is in flight."
+                        >
+                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-info animate-pulse" />
+                          Connecting…
+                        </span>
                       ) : (
                         <TransportBadge device={device} />
                       )}
@@ -4549,7 +4557,17 @@ export default function DevicesView({
                     "⋯" menu — they're diagnostics, not the thing you came
                     to the card to do. */}
                 <div className="mt-5 flex flex-wrap items-center gap-2">
-                  {isActiveWorkspace && onCloseWorkspace ? (
+                  {isSelectedWorkspace && agentConnectionState === "connecting" ? (
+                    <button
+                      type="button"
+                      disabled
+                      className="inline-flex items-center gap-1.5 rounded-md border border-info/40 bg-info-soft px-3 py-1.5 text-xs font-semibold text-info-softFg opacity-80"
+                      title="Connection to this machine is in progress — the chip above updates when it lands."
+                    >
+                      <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-info" />
+                      Connecting…
+                    </button>
+                  ) : isActiveWorkspace && onCloseWorkspace ? (
                     <button
                       onClick={onCloseWorkspace}
                       className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 shadow-sm hover:border-slate-400 hover:bg-slate-50 dark:border-surface-700 dark:bg-[rgba(20,21,27,0.82)] dark:text-surface-100 dark:hover:border-surface-600 dark:hover:bg-[rgba(31,33,41,0.94)]"
