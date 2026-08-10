@@ -22,9 +22,21 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
+// The 2026-08-10 fix: this was hardcoded to darwin-arm64, so the plugin
+// silently broke on linux boxes (ubuntu-4gb-hel1-1) — the exec threw
+// ENOENT and DeepSeek V4 Flash (text-only) had no eyes there. Derive the
+// platform segment exactly as the npm launcher does
+// (~/.yaver/bin/current/<GOOS>-<GOARCH>/yaver), same rule as the agent's
+// own platform resolution (main.go platformSegmentFromExePath).
 const YAVER_BIN =
   process.env.YAVER_BIN ||
-  join(homedir(), ".yaver", "bin", "current", "darwin-arm64", "yaver")
+  (() => {
+    const plat = `${process.platform === "win32" ? "windows" : process.platform}-${
+      process.arch === "x64" ? "amd64" : process.arch === "arm64" ? "arm64" : process.arch
+    }`
+    const exe = process.platform === "win32" ? "yaver.exe" : "yaver"
+    return join(homedir(), ".yaver", "bin", "current", plat, exe)
+  })()
 
 const KNOWN_VISION_PREFIXES = [
   "claude",
