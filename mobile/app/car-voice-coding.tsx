@@ -42,7 +42,7 @@ import { connectionManager } from "../src/lib/connectionManager";
 import { goalFromSlashCommand } from "../src/lib/goalSlashCommand";
 import { quicClient } from "../src/lib/quic";
 import { loadLocalSpeechConfig } from "../src/lib/auth";
-import { loadKeepLastProjectEnabled, loadLastTaskProject } from "../src/lib/taskComposerPrefs";
+import { loadKeepLastProjectEnabled, loadLastTaskProject, loadLastTaskProjectFromConvex } from "../src/lib/taskComposerPrefs";
 import { speakText } from "../src/lib/speech";
 import {
   makeRealCarVoiceDeps,
@@ -185,7 +185,8 @@ export default function CarVoiceCodingScreen() {
       speakAcknowledgement: true,
     };
     const client = connectionManager.clientFor(deviceId);
-    const lastProject = (await loadKeepLastProjectEnabled()) ? await loadLastTaskProject(deviceId || "default") : null;
+    const convexLast = token ? await loadLastTaskProjectFromConvex(token, deviceId || "default") : null;
+    const lastProject = (await loadKeepLastProjectEnabled()) ? (convexLast ?? (await loadLastTaskProject(deviceId || "default"))) : null;
     // Car dispatch always uses the opencode runner (terminal-style "yaver
     // code" wrapping), so a "/goal <objective>" voice command arms Yaver
     // goal-mode via the structured goal field (see goalSlashCommand).
@@ -225,7 +226,7 @@ export default function CarVoiceCodingScreen() {
       },
     });
     return { deps, config };
-  }, [deviceId]);
+  }, [deviceId, token]);
 
   const callCarOps = useCallback(
     async (verb: string, payload: Record<string, unknown>) => {

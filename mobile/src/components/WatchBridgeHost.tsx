@@ -7,7 +7,7 @@ import { connectionManager } from "../lib/connectionManager";
 import { goalFromSlashCommand } from "../lib/goalSlashCommand";
 import { appLog } from "../lib/logger";
 import { runtimeSurfaceClient } from "../lib/runtimeSurfaceClient";
-import { loadKeepLastProjectEnabled, loadLastTaskProject } from "../lib/taskComposerPrefs";
+import { loadKeepLastProjectEnabled, loadLastTaskProject, loadLastTaskProjectFromConvex } from "../lib/taskComposerPrefs";
 import { watchBridgeBus } from "../lib/watchEntry";
 import { isDeviceAsleep, wakeManagedDevice } from "../lib/wakeMachine";
 
@@ -50,7 +50,7 @@ function pickDeviceId(devices: any[], activeDevice: any | null): string {
   return online?.id || online?.deviceId || devices[0]?.id || devices[0]?.deviceId || "";
 }
 
-function makeWatchDeps(deviceId: string) {
+function makeWatchDeps(deviceId: string, token: string | null | undefined) {
   const config: CarVoiceConfig = {
     pollIntervalMs: 4000,
     maxWaitMs: 15 * 60 * 1000,
@@ -61,7 +61,10 @@ function makeWatchDeps(deviceId: string) {
     dispatchTask: async (title, prompt) => {
       if (!deviceId) throw new Error("No Yaver device selected");
       const client = connectionManager.clientFor(deviceId);
-      const lastProject = (await loadKeepLastProjectEnabled()) ? await loadLastTaskProject(deviceId) : null;
+      // Convex-first: telefon/web'te seçilen son proje bilekte de geri gelir
+      // (defaultRuntimeProjectByDevice); AsyncStorage offline fallback.
+      const convexLast = token ? await loadLastTaskProjectFromConvex(token, deviceId) : null;
+      const lastProject = (await loadKeepLastProjectEnabled()) ? (convexLast ?? (await loadLastTaskProject(deviceId))) : null;
       // Watch bridge dispatch uses the opencode runner; a "/goal
       // <objective>" voice command arms Yaver goal-mode via the structured
       // goal field (see goalSlashCommand).
@@ -112,8 +115,8 @@ export function WatchBridgeHost() {
       return;
     }
     watchBridgeBus.configure({
-      makeDeps: () => makeWatchDeps(targetDeviceId).deps,
-      config: () => makeWatchDeps(targetDeviceId).config,
+      makeDeps: () => makeWatchDeps(targetDeviceId, token).deps,
+      config: () => makeWatchDeps(targetDeviceId, token).config,
       ops: (verb, payload) => {
         if (verb === "meeting_next") return runtimeSurfaceClient.meetingNext(targetDeviceId, payload as any);
         if (verb === "meeting_join_next") return runtimeSurfaceClient.meetingJoinNext(targetDeviceId, payload as any);

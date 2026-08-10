@@ -15,7 +15,9 @@ import { listMcpServers, type McpServer } from "../src/lib/mcpServers";
 import {
   loadKeepLastProjectEnabled,
   loadLastTaskProject,
+  loadLastTaskProjectFromConvex,
   saveLastTaskProject,
+  saveLastTaskProjectToConvex,
 } from "../src/lib/taskComposerPrefs";
 import type { ModelInfo, RunnerInfo } from "../src/lib/quic";
 
@@ -108,7 +110,11 @@ export default function TVCodingScreen() {
         setRunners(installed);
         setMcpServers((mcpRows || []).filter((server) => server.enabled));
 
-        const last = keepLast ? await loadLastTaskProject(deviceId) : null;
+        // Son-proje belleği, Convex-first (tasks.tsx ile aynı desen):
+        // canonical bellek defaultRuntimeProjectByDevice — telefonda/web'te
+        // seçilen proje TV'de de geri gelir; AsyncStorage offline fallback.
+        const convexLast = token ? await loadLastTaskProjectFromConvex(token, deviceId) : null;
+        const last = keepLast ? (convexLast ?? (await loadLastTaskProject(deviceId))) : null;
         if (cancelled) return;
         const projectMatch = last
           ? normalizedProjects.find((project) => project.path === last.path || project.name.toLowerCase() === last.name.toLowerCase())
@@ -175,6 +181,15 @@ export default function TVCodingScreen() {
           branch: selectedProject?.branch,
           gitRemote: selectedProject?.gitRemote,
         });
+        if (token) {
+          void saveLastTaskProjectToConvex(token, {
+            deviceId,
+            name: projectName,
+            path: selectedProjectPath,
+            branch: selectedProject?.branch,
+            gitRemote: selectedProject?.gitRemote,
+          });
+        }
       }
       setPrompt("");
       setBusy(`Started ${task.title || task.id}`);
