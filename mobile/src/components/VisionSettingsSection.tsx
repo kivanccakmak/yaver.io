@@ -61,7 +61,12 @@ export default function VisionSettingsSection({ connected }: Props) {
   const [freeOcr, setFreeOcr] = useState(false);
   const [activeProvider, setActiveProvider] = useState("");
   const [modelOverride, setModelOverride] = useState("");
-  const [provider, setProvider] = useState("mistral");
+  // Provider is OPT-IN, never a default: the section must not silently bias
+  // toward Mistral (or any vendor) when the user has configured nothing.
+  // Start unselected; preselect only the agent's reported active provider so
+  // editing an existing config lands on the right one. Saving still requires
+  // an explicit pick below.
+  const [provider, setProvider] = useState("");
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -72,8 +77,12 @@ export default function VisionSettingsSection({ connected }: Props) {
       setFreeOcr(!!st.free_ocr);
       setActiveProvider(st.active_provider ?? "");
       setModelOverride(st.model_override ?? "");
+      // Only preselect the agent's ACTIVE provider (i.e. one a key already
+      // exists for). Never auto-pick a vendor for a fresh, unconfigured box.
+      setProvider(st.active_provider ?? "");
     } else {
       setProvidersConfigured([]);
+      setProvider("");
     }
   }, [connected]);
 
@@ -83,6 +92,12 @@ export default function VisionSettingsSection({ connected }: Props) {
 
   const save = async (clear = false) => {
     if (!connected) return;
+    // Saving is opt-in by vendor: with provider unselected there is nothing
+    // to save to, and defaulting to Mistral would be a silent vendor bias.
+    if (!clear && !provider) {
+      Alert.alert("Vision", "Pick a provider first — no key is stored by default.");
+      return;
+    }
     setBusy(true);
     try {
       const out = await quicClient.setVisionKey(provider, key, clear);
@@ -148,7 +163,7 @@ export default function VisionSettingsSection({ connected }: Props) {
         <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16 }}>
           {providersConfigured.length > 0
             ? `Configured: ${providersConfigured.join(", ")}`
-            : "None — semantic “is this UI broken?” judgments are off until you add a key."}
+            : "None — free on-device OCR is on; semantic “is this UI broken?” judgments are OFF until you pick a provider and add a key."}
           {activeProvider ? ` · Active: ${activeProvider}` : ""}
           {modelOverride ? ` · Model: ${modelOverride}` : ""}
         </Text>
@@ -183,7 +198,7 @@ export default function VisionSettingsSection({ connected }: Props) {
           secureTextEntry
           autoCapitalize="none"
           autoCorrect={false}
-          placeholder={configuredHere ? "•••••••• (stored — type to replace)" : "sk-…"}
+          placeholder={configuredHere ? "•••••••• (stored — type to replace)" : "Pick a provider above, then paste its key here"}
           placeholderTextColor={c.textMuted}
           style={{
             borderWidth: 1,
@@ -200,14 +215,14 @@ export default function VisionSettingsSection({ connected }: Props) {
         <View style={{ flexDirection: "row", gap: 8 }}>
           <Pressable
             onPress={() => void save(false)}
-            disabled={!connected || busy || key.trim() === ""}
+            disabled={!connected || busy || !provider || key.trim() === ""}
             style={{
               flex: 1,
               borderRadius: 8,
               backgroundColor: c.textPrimary,
               paddingVertical: 10,
               alignItems: "center",
-              opacity: !connected || busy || key.trim() === "" ? 0.4 : 1,
+              opacity: !connected || busy || !provider || key.trim() === "" ? 0.4 : 1,
             }}
           >
             {busy ? (
