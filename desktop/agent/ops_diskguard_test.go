@@ -166,6 +166,55 @@ func TestDiskGuardOldAgentsKeepsCurrentAndNewest(t *testing.T) {
 	}
 }
 
+// Regression (2026-08-10, ubuntu-4gb): `1.99.406-dev` and
+// `current.stale-1.99.299` accumulated because semverDirRe only matched strict
+// `X.Y.Z` — dev builds and pre-swap backup trees were invisible to the guard,
+// so a box carried 441M of superseded binaries while diskguard reported zero.
+// Both classes must now be reclaimable; `current.stale-*` must NEVER be kept
+// as the rollback spare (the npm launcher re-downloads any release).
+func TestDiskGuardOldAgentsCatchesDevAndStaleCurrent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	binDir := filepath.Join(home, ".yaver", "bin")
+	for _, v := range []string{"1.99.100", "1.99.406-dev", "1.99.408-dev", "current.stale-1.99.299"} {
+		d := filepath.Join(binDir, v)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "yaver"), []byte(strings.Repeat("x", 1024)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// current → 1.99.411 (a real release; the newest real version is the spare).
+	if err := os.Symlink(filepath.Join(binDir, "1.99.411"), filepath.Join(binDir, "current")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	d411 := filepath.Join(binDir, "1.99.411")
+	if err := os.MkdirAll(d411, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d411, "yaver"), []byte(strings.Repeat("y", 1024)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cands, err := diskGuardCollectOldAgents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, c := range cands {
+		got[filepath.Base(c.Path)] = true
+	}
+	if got["1.99.411"] {
+		t.Error("must never propose the version `current` points to")
+	}
+	for _, v := range []string{"1.99.100", "1.99.406-dev", "1.99.408-dev", "current.stale-1.99.299"} {
+		if !got[v] {
+			t.Errorf("expected %q to be reclaimable (dev/stale-current must not accumulate), got %v", v, got)
+		}
+	}
+}
+
 func TestDiskGuardClearDryRunDeletesNothing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

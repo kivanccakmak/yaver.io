@@ -69,8 +69,14 @@ const diskGuardKeepAgentVersions = 1
 // run. Deleting them costs nothing; the next invocation writes a fresh one.
 var opencodeArtifactRe = regexp.MustCompile(`^\.[0-9a-f]{8,32}-0{8}\.so$`)
 
-// semverDirRe matches a ~/.yaver/bin/<version> directory.
-var semverDirRe = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+// semverDirRe matches a ~/.yaver/bin/<version> directory. Deliberately wider
+// than strict semver: `1.99.406-dev` (dev builds) and `current.stale-1.99.299`
+// (pre-swap backup trees) are just as superseded once `current` moves on, and
+// a regex that only matched `X.Y.Z` let BOTH classes accumulate forever
+// (2026-08-10: ubuntu-4gb carried 441M across 1.99.402 + two -dev trees +
+// a stale-current, none of which diskguard could see). The `current` symlink
+// itself is excluded below by resolve, not by this regex.
+var semverDirRe = regexp.MustCompile(`^(?:\d+\.\d+\.\d+(?:-[a-z0-9.]+)?|current\.stale-\d+\.\d+\.\d+(?:-[a-z0-9.]+)?)$`)
 
 // diskGuardProtectedNames are refused anywhere, at any depth. These are the
 // things whose loss is unrecoverable — an auth key, a signing identity, a
@@ -372,7 +378,16 @@ func diskGuardCollectOldAgents() ([]diskGuardCandidate, error) {
 		}
 	}
 	sort.Slice(versions, func(i, j int) bool { return compareSemverDG(versions[i], versions[j]) > 0 })
+	// The newest-spare rollback keeps only REAL releases (`1.99.411`), never
+	// `current.stale-*` trees — those are pre-swap backups with no rollback
+	// value once `current` has moved on (the npm launcher re-downloads any
+	// release). Keeping them meant a stale-current tree sat forever
+	// (2026-08-10: current.stale-1.99.299 was 121M and invisible to the old
+	// regex).
 	for i := 0; i < len(versions) && i < diskGuardKeepAgentVersions; i++ {
+		if strings.HasPrefix(versions[i], "current.stale-") {
+			continue
+		}
 		keep[versions[i]] = true
 	}
 
@@ -396,7 +411,15 @@ func diskGuardCollectOldAgents() ([]diskGuardCandidate, error) {
 }
 
 func compareSemverDG(a, b string) int {
-	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	// Strip a `-dev` / `.stale-*` suffix so version ordering still works;
+	// `1.99.411` must outrank `1.99.408-dev` and `current.stale-1.99.299`.
+	clean := func(s string) string {
+		if i := strings.IndexByte(s, '-'); i >= 0 {
+			return s[:i]
+		}
+		return s
+	}
+	as, bs := strings.Split(clean(a), "."), strings.Split(clean(b), ".")
 	for i := 0; i < 3; i++ {
 		ai, _ := strconv.Atoi(as[i])
 		bi, _ := strconv.Atoi(bs[i])

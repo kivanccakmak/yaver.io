@@ -12716,6 +12716,18 @@ func runMCP(args []string) {
 		// kept building the wrong project", this is the first place
 		// to look.
 		fmt.Fprintf(os.Stderr, "Yaver MCP server (stdio) v%s — session cwd: %s\n", version, *workDir)
+		// Version-drift guard (2026-08-10): a long-lived `yaver mcp`
+		// process keeps serving the BINARY IT STARTED WITH — the npm
+		// launcher resolves `~/.yaver/bin/current` at spawn time, so an
+		// update that replaces `current` leaves every already-running MCP
+		// process silently on the old version ("inventory says current →
+		// 1.99.411, operation says 1.99.409"). This is how the owner's
+		// exec_command returned `Status: <nil>` for hours after the fix
+		// shipped. The fix cannot reach a running process — only the
+		// client restarting it can — so the guard NAMES the drift on
+		// stderr (which MCP clients surface in their logs) instead of
+		// letting it look like the new version is broken.
+		warnStaleMCPProcess()
 		runMCPStdio(taskMgr, aclMgr, emailMgr)
 	case "http":
 		fmt.Printf("Yaver MCP server (HTTP) v%s on port %d — work dir: %s\n", version, *httpPort, *workDir)
@@ -12747,6 +12759,45 @@ func runMCP(args []string) {
 }
 
 // runMCPStdio runs MCP over stdin/stdout (JSON-RPC 2.0, one request per line).
+// mcpProcessIsStale reports whether the running MCP binary differs from what
+// ~/.yaver/bin/current resolves to — the pure comparison core of
+// warnStaleMCPProcess, split out so it is unit-testable.
+func mcpProcessIsStale(runningExe, currentSymlink string) (stale bool, running, current string) {
+	if resolved, err := filepath.EvalSymlinks(runningExe); err == nil {
+		running = filepath.Clean(resolved)
+	} else {
+		running = filepath.Clean(runningExe)
+	}
+	if resolved, err := filepath.EvalSymlinks(currentSymlink); err == nil {
+		current = filepath.Clean(resolved)
+	} else {
+		current = filepath.Clean(currentSymlink)
+	}
+	return running != current, running, current
+}
+
+// warnStaleMCPProcess prints a one-line stderr warning when the running MCP
+// binary is NOT what ~/.yaver/bin/current points to. See the caller for the
+// full story (2026-08-10 owner self-lockout); the short version is that a
+// process can only be fixed by restarting it, so the guard's job is to make
+// the staleness visible instead of silent.
+func warnStaleMCPProcess() {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	stale, running, current := mcpProcessIsStale(exe, filepath.Join(home, ".yaver", "bin", "current"))
+	if !stale {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Yaver MCP WARNING: this process runs %s but `current` points to %s — RESTART the MCP server (opencode/claude session) to pick up the update; the tools keep working on the old version until then.\n",
+		running, current)
+}
+
 func runMCPStdio(taskMgr *TaskManager, aclMgr *ACLManager, emailMgr *EmailManager) {
 	hostname, _ := os.Hostname()
 	srv := &HTTPServer{
