@@ -3789,6 +3789,20 @@ export default function DevicesView({
           {renderedDevices.map((device) => {
             const shareSummary = deviceShareSummary(device);
             const isSelectedWorkspace = activeWorkspaceDeviceId === device.id;
+            // The card is "connecting" from the moment its workspace is
+            // selected until the handshake lands — NOT only during the brief
+            // "connecting" agent state. The 2026-08-10 auto-connect gap: the
+            // dashboard picked the primary, set connectedDevice (so this card
+            // became selected), and the relay handshake took long enough that
+            // the card kept showing the stale "Reporting in · not verified"
+            // badge with no feedback until it flipped to Connected — the
+            // mobile app narrates the same window with a connecting spinner.
+            // Selected-but-not-yet-connected (and not errored) IS the
+            // connecting window; cover the probe + handshake both.
+            const isWorkspaceConnecting =
+              isSelectedWorkspace &&
+              agentConnectionState !== "connected" &&
+              agentConnectionState !== "error";
             const isPooledConnected = connectedDeviceIds.includes(device.id);
             const isActiveWorkspace = canShowCloseWorkspace({
               activeWorkspaceDeviceId,
@@ -4010,7 +4024,7 @@ export default function DevicesView({
                           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success animate-live-pulse" />
                           {connectedLine}
                         </span>
-                      ) : isSelectedWorkspace && agentConnectionState === "connecting" ? (
+                      ) : isWorkspaceConnecting ? (
                         <span
                           className="inline-flex items-center gap-1.5 rounded-full border border-info/40 bg-info-soft px-2 py-0.5 text-[11px] font-semibold text-info-softFg"
                           title="Your dashboard session is connecting to this machine right now — relay dial, then agent handshake. It replaces the stale status while the attempt is in flight."
@@ -4557,7 +4571,7 @@ export default function DevicesView({
                     "⋯" menu — they're diagnostics, not the thing you came
                     to the card to do. */}
                 <div className="mt-5 flex flex-wrap items-center gap-2">
-                  {isSelectedWorkspace && agentConnectionState === "connecting" ? (
+                  {isWorkspaceConnecting ? (
                     <button
                       type="button"
                       disabled
