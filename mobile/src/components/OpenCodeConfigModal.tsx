@@ -48,7 +48,7 @@ const PRESETS: Array<{ label: string; id: string; name: string; baseUrl?: string
     id: "zai-coding-plan",
     name: "Zai Coding Plan (GLM 4.7)",
     model: "zai-coding-plan/glm-4.7",
-    hint: "GLM 4.7 Coding Plan using OpenCode's built-in provider. This is the Hetzner/OpenCode default.",
+    hint: "GLM 4.7 Coding Plan using OpenCode's built-in provider.",
   },
   { label: "Z.ai API (GLM-4.7)", id: "zai", name: "Zai API (GLM 4.7)", baseUrl: "https://api.zai.ai/v1", model: "zai/glm-4.7", models: { "glm-4.7": { name: "GLM 4.7", tools: true }, "glm-4.7-flash": { name: "GLM 4.7 Flash", tools: true } }, hint: "General z.ai OpenAI-compatible endpoint." },
   { label: "Zhipu OpenAPI (GLM-4)", id: "glm", name: "Zhipu (open.bigmodel.cn)", baseUrl: "https://open.bigmodel.cn/api/paas/v4", hint: "Legacy GLM-4 / GLM-4V via open.bigmodel.cn. Different key from Z.ai Coding Plan." },
@@ -57,7 +57,7 @@ const PRESETS: Array<{ label: string; id: string; name: string; baseUrl?: string
   { label: "Together", id: "together", name: "Together AI", baseUrl: "https://api.together.xyz/v1", hint: "Open-weight models. api.together.xyz." },
   { label: "Local Ollama", id: "ollama", name: "Ollama (local)", baseUrl: "http://127.0.0.1:11434/v1", hint: "Local Ollama on the dev box. No API key needed." },
   { label: "Private Ollama", id: "ollama-private", name: "Ollama (private network)", baseUrl: "http://your-ollama-host:11434/v1", hint: "Use a reachable host on your private network." },
-  { label: "DeepSeek", id: "deepseek", name: "DeepSeek", baseUrl: "https://api.deepseek.com", hint: "DeepSeek-Coder/V3. Key from platform.deepseek.com." },
+  { label: "DeepSeek", id: "deepseek", name: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek/deepseek-v4-flash", hint: "DeepSeek V4 Flash — Hetzner/OpenCode varsayılanı. Key from platform.deepseek.com." },
 ];
 
 export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = false, target }: Props) {

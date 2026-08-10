@@ -1311,6 +1311,7 @@ const providerPresets: Array<{
   id: string;
   name: string;
   baseUrl?: string;
+  model?: string;
   hint: string;
 }> = [
   // z.ai's Coding Plan is an OpenCode built-in provider. Keep it
@@ -1369,7 +1370,8 @@ const providerPresets: Array<{
     id: "deepseek",
     name: "DeepSeek",
     baseUrl: "https://api.deepseek.com",
-    hint: "DeepSeek-Coder / DeepSeek-V3. API key from platform.deepseek.com.",
+    model: "deepseek/deepseek-v4-flash",
+    hint: "DeepSeek V4 Flash — Hetzner/OpenCode varsayılanı. API key from platform.deepseek.com.",
   },
 ];
 
