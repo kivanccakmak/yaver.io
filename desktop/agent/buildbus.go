@@ -54,8 +54,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 // buildBusTTL is how long a lease lives without a heartbeat. Defaults for a
@@ -318,18 +316,20 @@ func openFlock(key string) (f *os.File, held bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	f, err = os.OpenFile(filepath.Join(dir, sanitizeBusKey(key)+".lock"), os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return nil, false, err
+	lockPath := filepath.Join(dir, sanitizeBusKey(key)+".lock")
+	// Platform split lives in buildbus_lock_{unix,windows}.go: unix takes a
+	// NON-BLOCKING exclusive flock (EWOULDBLOCK => held by a sibling),
+	// windows degrades to always-free (the store row is the real authority).
+	// Direct unix.Flock here broke the windows cross-compile and killed the
+	// 5th-of-5 release target on 2026-08-10.
+	locked, held, lerr := openBusFlock(lockPath)
+	if lerr != nil {
+		return nil, false, lerr
 	}
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		f.Close()
-		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
-			return nil, true, nil
-		}
-		return nil, false, err
+	if held {
+		return nil, true, nil
 	}
-	return f, false, nil
+	return locked, false, nil
 }
 
 // sanitizeBusKey makes a lease key safe as a filename.
@@ -380,8 +380,7 @@ func (l *BuildBusLease) Release(outcome string) {
 			_ = store.release(key, holder, outcome)
 		}
 		if flockFile != nil {
-			_ = unix.Flock(int(flockFile.Fd()), unix.LOCK_UN)
-			_ = flockFile.Close()
+			closeBusFlock(flockFile)
 		}
 	})
 }
