@@ -1354,6 +1354,32 @@ export const setRelayForUser = internalMutation({
 });
 
 /**
+ * clearRelayForUser — remove the userSettings relay pointer (relayUrl +
+ * relayPassword) that the managed-box provision wired. 2026-08-10: decommission
+ * never cleared this, so the NEXT provisioned box's agent fetched userSettings
+ * on serve start and cached the PREVIOUS (dead) box's relay — the new box then
+ * dialed `mn72z84j.cloud.yaver.io:4433`, an address deleted at decommission,
+ * and became unreachable via relay (dashboard "not verified" + no device row).
+ * Call this when the decommissioned machine WAS the user's relay (its hostname
+ * matches the stored relayUrl). setRelayForUser cannot clear (undefined means
+ * "don't touch") — a patch with explicit undefined deletes the field.
+ */
+export const clearRelayForUser = internalMutation({
+  args: { userId: v.id("users") },
+  handler: async (ctx, { userId }) => {
+    const existing = await ctx.db
+      .query("userSettings")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .first();
+    if (!existing) return;
+    await ctx.db.patch(existing._id, {
+      relayUrl: undefined,
+      relayPassword: undefined,
+    });
+  },
+});
+
+/**
  * Repair the caller's userSettings row so it has a per-user free-relay
  * credential and the current platform-managed relay URL. Used when
  * the preview iframe keeps getting 401 "invalid relay password" from

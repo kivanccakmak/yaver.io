@@ -1489,26 +1489,43 @@ ${relayEnv}      -e CONVEX_SELFHOSTED_FILE=/root/.yaver/convex-selfhosted.json \
 }
 
 /**
- * wakeRelayPassword — the managed box's OWN relay password. Provision wires a
- * random one into the managedRelays row + userSettings (boxRelayPassword); a
- * wake must reuse the SAME password or the bundled relay would serve stale
- * credentials to other devices. "" when there is no subscription (dev-adopt).
+ * wakeRelayPassword — the managed box's OWN relay password. Provision wires
+ * a random one into the managedRelays row + userSettings (boxRelayPassword);
+ * a wake must reuse the SAME password or the bundled relay would serve stale
+ * credentials to other devices. Paid boxes look it up by subscription;
+ * owner-path boxes (no subscription, 2026-08-10) match the managedRelays row
+ * whose domain IS this box's hostname.
  */
 async function wakeRelayPassword(
   ctx: { runQuery: (q: any, args: any) => Promise<any> },
-  subscriptionId: string | undefined,
+  machine: { subscriptionId?: string | undefined; userId?: unknown; hostname?: string | undefined },
 ): Promise<string> {
-  if (!subscriptionId) return "";
-  try {
-    const relays = await ctx.runQuery(internal.managedRelays.listBySubscription, {
-      subscriptionId,
-    });
-    const relay = Array.isArray(relays) ? relays[0] : undefined;
-    const password = (relay as { password?: string } | undefined)?.password;
-    return typeof password === "string" ? password : "";
-  } catch {
-    return "";
+  if (machine.subscriptionId) {
+    try {
+      const relays = await ctx.runQuery(internal.managedRelays.listBySubscription, {
+        subscriptionId: machine.subscriptionId,
+      });
+      const relay = Array.isArray(relays) ? relays[0] : undefined;
+      const password = (relay as { password?: string } | undefined)?.password;
+      if (typeof password === "string") return password;
+    } catch {
+      /* fall through to the owner-path lookup */
+    }
   }
+  if (machine.userId && machine.hostname) {
+    try {
+      const relays = await ctx.runQuery(internal.managedRelays.getByUser, {
+        userId: machine.userId,
+      });
+      const match = (Array.isArray(relays) ? relays : []).find(
+        (r) => (r as { domain?: string }).domain === machine.hostname,
+      ) as { password?: string } | undefined;
+      if (typeof match?.password === "string") return match.password;
+    } catch {
+      /* best-effort — no relay on wake is the pre-2026-08-10 behaviour */
+    }
+  }
+  return "";
 }
 
 async function hetznerCreateFromImage(
@@ -2526,6 +2543,25 @@ export const purgeMachineResources = internalAction({
     // already did it).
     if (machine.hostname) {
       await cloudflareDeleteA(machine.hostname);
+      // The box was this user's relay (provision wired userSettings.relayUrl
+      // to the box's auto-domain). A decommissioned relay must not linger in
+      // userSettings: the NEXT provisioned box's agent fetches userSettings on
+      // serve start and caches it — 2026-08-10 the fresh box inherited the
+      // dead mn72z84j relay and became unreachable via relay (dashboard
+      // "not verified", no device row).
+      try {
+        const settings = await ctx.runQuery(internal.userSettings.getByUserId, {
+          userId: machine.userId,
+        });
+        const relayUrl = (settings as { relayUrl?: string } | undefined)?.relayUrl;
+        if (typeof relayUrl === "string" && relayUrl.includes(machine.hostname)) {
+          await ctx.runMutation(internal.userSettings.clearRelayForUser, {
+            userId: machine.userId,
+          });
+        }
+      } catch {
+        /* best-effort */
+      }
     }
     await ctx.runMutation(internal.cloudMachines.clearResources, { machineId });
     return { ok: true, reason: `purged: ${done.join(", ") || "nothing"}` };
@@ -2799,7 +2835,7 @@ export const resumeMachine = internalAction({
               machineId: machine._id.toString(),
               hostname,
               volumeId: machine.volumeId,
-              relayPassword: await wakeRelayPassword(ctx, machine.subscriptionId),
+              relayPassword: await wakeRelayPassword(ctx, machine),
               image: process.env.YAVER_CLOUD_IMAGE,
             })
           : undefined;
@@ -3058,7 +3094,7 @@ export const resizeMachine = internalAction({
               machineId: machine._id.toString(),
               hostname,
               volumeId: machine.volumeId,
-              relayPassword: await wakeRelayPassword(ctx, machine.subscriptionId),
+              relayPassword: await wakeRelayPassword(ctx, machine),
               image: process.env.YAVER_CLOUD_IMAGE,
             })
           : undefined;

@@ -2384,15 +2384,16 @@ export const provision = internalAction({
     const bootSshKeyNames = ownerBox && (process.env.YAVER_CLOUD_SSH_KEY_NAME || "").trim()
       ? [(process.env.YAVER_CLOUD_SSH_KEY_NAME || "").trim()]
       : [];
-    // Phase 2A — per-box self-relay password. Generated unconditionally
-    // (no env gate) for every managed box that has a subscription,
-    // because the bundled relay is the whole point of the architecture:
-    // the box runs yaver-relay from the yaver-cloud image so the user's OTHER
-    // self-hosted devices can use it (managedRelays row + userSettings
-    // pointers wired below, post-Hetzner). Dev-adopt boxes lacking a
-    // subscriptionId skip the relay wiring (managedRelays.create requires
-    // subId), so we only thread the password when both sides will land.
-    const boxRelayPassword = machine.subscriptionId ? randomHex(24) : "";
+    // Phase 2A — per-box self-relay password. Generated for subscription
+    // boxes AND owner-allowlist boxes (2026-08-10: subscription-less owner
+    // provisions had NO box relay, so the box couldn't register — the
+    // bootstrap pending-claim flow requires a managedRelays.password match —
+    // and was unreachable via relay; the free-relay fallback then also
+    // failed on a stale account password. The owner-dev relay path
+    // (managedRelays.create with no subscriptionId) is the established
+    // precedent for exactly this case).
+    const boxRelayPassword =
+      machine.subscriptionId || isOwnerUserId(machine.userId) ? randomHex(24) : "";
 
     const bootstrapSpec: ManagedCloudBootstrapSpec = {
       convexSite,
@@ -2594,7 +2595,10 @@ export const provision = internalAction({
       // release, OTHER devices won't actually USE this relay even
       // though everything is wired here. Box itself is reachable via
       // its own auto-cert (Step 2b), so this gap is OTHER-device-only.
-      if (machine.subscriptionId && boxRelayPassword) {
+      // Gated on boxRelayPassword (now generated for subscription AND owner
+      // boxes — 2026-08-10). managedRelays.create accepts no subscriptionId
+      // for the owner-dev path, so this is safe for both.
+      if (boxRelayPassword) {
         try {
           const relayId = await ctx.runMutation(internal.managedRelays.create, {
             userId: machine.userId,
