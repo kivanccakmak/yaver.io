@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type Device, type DeviceStorage, hideDevice, unhideAll } from "@/lib/use-devices";
+import { type Device, type DeviceStorage, hideDevice, setDeviceAlias, unhideAll } from "@/lib/use-devices";
 import { NetCaptureModal } from "./NetCaptureModal";
 import { DeviceStorageFold } from "./DeviceStorageFold";
 import { DeviceDeployCapabilities } from "./DeviceDeployCapabilities";
@@ -3407,6 +3407,12 @@ export default function DevicesView({
   // is destructive and outward-facing, so it gets the user's whole attention
   // and a typed confirmation — never a stray tap in a list.
   const [powerFor, setPowerFor] = useState<{ id: string; name: string } | null>(null);
+  // Rename (set/clear alias) for one device. Alias is the short name that
+  // powers `yaver ssh @<alias>` and the dashboard/mobile cards — the friendly
+  // name for Hetzner/managed boxes that arrive with hostname-style names
+  // (6464e1631412, yaver-standard-*). Owner-only, per-user unique (backend
+  // enforces); the menu opens a small inline editor, never a prompt().
+  const [renameFor, setRenameFor] = useState<{ id: string; alias: string; name: string } | null>(null);
   // Browser-shell modal state. Lives at the DevicesView level so the
   // Shell item in each card's "⋯" menu opens the same modal as the
   // home tab, including the reauth-required guidance when the agent's
@@ -4283,6 +4289,9 @@ export default function DevicesView({
                       }}
                       onRecycle={() => setRecycleFor({ id: device.id, name: device.alias || device.name || device.id })}
                       onRescue={() => setRescueOpenDeviceId(rescueOpenDeviceId === device.id ? null : device.id)}
+                      onRename={() =>
+                        setRenameFor({ id: device.id, alias: device.alias || "", name: device.alias || device.name || device.id })
+                      }
                       onPower={() =>
                         setPowerFor({ id: device.id, name: device.alias || device.name || device.id })
                       }
@@ -4594,6 +4603,19 @@ export default function DevicesView({
           deviceName={powerFor.name}
           agentClient={agentClient}
           onClose={() => setPowerFor(null)}
+        />
+      ) : null}
+      {renameFor && token ? (
+        <DeviceRenameDialog
+          deviceId={renameFor.id}
+          currentAlias={renameFor.alias}
+          displayName={renameFor.name}
+          token={token}
+          onClose={() => setRenameFor(null)}
+          onSaved={() => {
+            setRenameFor(null);
+            void onRefresh();
+          }}
         />
       ) : null}
       {shellSession ? (
@@ -5232,6 +5254,105 @@ function DeviceProjectsRail({
   );
 }
 
+// Rename (set/clear alias) dialog for one device. Alias is the short,
+// per-user-unique name that powers `yaver ssh @<alias>` and the dashboard /
+// mobile cards — the friendly name for Hetzner / managed-cloud boxes that
+// arrive with hostname-style names (6464e1631412, yaver-standard-*). The
+// backend enforces ownership + uniqueness; we surface its error verbatim so
+// the user knows what to fix. An inline editor, never a window.prompt() —
+// prompts are invisible in some embedded webviews and un-undoable in all.
+function DeviceRenameDialog({
+  deviceId,
+  currentAlias,
+  displayName,
+  token,
+  onClose,
+  onSaved,
+}: {
+  deviceId: string;
+  currentAlias: string;
+  displayName: string;
+  token: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [value, setValue] = useState(currentAlias);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await setDeviceAlias(token, deviceId, value.trim());
+      if (!res.ok) {
+        setError(res.error);
+        setSaving(false);
+        return;
+      }
+      onSaved();
+    } catch (e: any) {
+      setError(e?.message || "Rename failed");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={`Rename ${displayName}`}>
+      <button type="button" aria-label="Close rename dialog" onClick={onClose} className="fixed inset-0 cursor-default bg-black/50" />
+      <div className="relative w-full max-w-sm rounded-xl border border-slate-200 bg-white p-4 shadow-xl dark:border-surface-700 dark:bg-surface-900">
+        <h3 className="text-sm font-semibold text-slate-900 dark:text-surface-50">
+          Name this machine
+        </h3>
+        <p className="mt-1 text-[12px] leading-5 text-slate-500 dark:text-surface-400">
+          <span className="font-mono">{displayName}</span> — give it a short friendly
+          name (a-z, 0-9, <span className="font-mono">.</span>, <span className="font-mono">-</span>,{" "}
+          <span className="font-mono">_</span>, 1-48 chars). Powers{" "}
+          <span className="font-mono">yaver ssh @name</span> and the device cards.
+        </p>
+        <input
+          ref={inputRef}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void save();
+            if (e.key === "Escape") onClose();
+          }}
+          placeholder="e.g. hetzner-main"
+          className="mt-3 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 outline-none focus:border-brand focus:ring-1 focus:ring-brand dark:border-surface-700 dark:bg-surface-800 dark:text-surface-100"
+          autoComplete="off"
+          spellCheck={false}
+        />
+        {error ? (
+          <p className="mt-2 text-[12px] text-rose-600 dark:text-rose-400">{error}</p>
+        ) : null}
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-surface-700 dark:text-surface-200 dark:hover:bg-surface-800"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={saving}
+            className="rounded-md border border-brand bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-dark disabled:opacity-60"
+          >
+            {saving ? "Saving…" : currentAlias ? "Save name" : "Set name"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Every per-device action except the one CTA the card is for
 // (Open Workspace). They used to sit on the card as ~9 competing
 // buttons across two rows; the card is a status surface first, so
@@ -5258,6 +5379,7 @@ function DeviceActionsMenu({
   onSetSecondaryRenderer,
   onRecycle,
   onRescue,
+  onRename,
   onPower,
   onShell,
   onLaunchRunner,
@@ -5286,6 +5408,7 @@ function DeviceActionsMenu({
   onSetSecondaryRenderer: () => void;
   onRecycle: () => void;
   onRescue: () => void;
+  onRename: () => void;
   onPower: () => void;
   onShell: () => void;
   onLaunchRunner: (runner: TerminalLaunchRunner) => void;
@@ -5391,6 +5514,16 @@ function DeviceActionsMenu({
               <span>{detailsOpen ? "Hide details" : "Details"}</span>
               <span className={hintClass}>runtime · network</span>
             </button>
+            {canManage ? (
+              <button
+                className={itemClass}
+                onClick={() => { onRename(); setOpen(false); }}
+                title="Set a short friendly name — powers `yaver ssh @<alias>` and the cards. Useful for Hetzner/managed boxes that arrive with hostname-style names."
+              >
+                <span>{device.alias ? "Rename…" : "Name…"}</span>
+                <span className={hintClass}>ssh @alias</span>
+              </button>
+            ) : null}
             <button className={itemClass} onClick={() => { onShell(); setOpen(false); }}>
               <span>Shell</span>
               <span className={hintClass}>PTY in browser</span>
