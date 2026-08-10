@@ -760,6 +760,46 @@ export default function VibeCodingView({
         if (connectedDevice?.id !== targetDeviceId || connState !== "connected") {
           const target = devices.find((device) => device.id === targetDeviceId && device.online && !device.needsAuth);
           if (target) void onSelectDevice(target);
+          else {
+            // SELF-HEALING RE-ROUTE (2026-08-10 incident): the pending row
+            // points at a cloud machine that is ASLEEP (or otherwise not
+            // reachable), so `target` above is undefined and the old code
+            // `continue`d — the task sat "queued · Cloud workspace · Queue
+            // after current run" forever with a dead stream, while the
+            // primary owned box sat connected and idle. Placement now
+            // prefers a heartbeat-fresh owned box (taskPlacementPolicy.ts),
+            // so the row's target is stale the moment a live owned device
+            // exists. Re-route: if a LIVE owned device (heartbeat fresh,
+            // not needsAuth, has the requested runner) is connected or
+            // connectable, point the row there instead of waiting on the
+            // asleep cloud box. The dispatch intent is updated so the
+            // backend agrees; the next loop iteration dispatches normally.
+            const ownedTarget = devices.find((device) => {
+              if (device.isGuest || device.id === targetDeviceId) return false;
+              if (!device.online || device.needsAuth) return false;
+              const runner = currentRow.params?.runner || selectedRunner;
+              if (runner && Array.isArray((device as any).installedRunnerIds) && !(device as any).installedRunnerIds.includes(runner)) {
+                return false;
+              }
+              return true;
+            });
+            if (ownedTarget) {
+              updatePendingCloudDispatch(currentRow.localTaskId, {
+                targetDeviceId: ownedTarget.id,
+                placementLane: "owned_machine",
+                placementReason: "cloud target unreachable — re-routed to a live owned box",
+              });
+              void updateTaskDispatchIntent(token, {
+                intentId: currentRow.dispatchIntentId,
+                localTaskId: currentRow.localTaskId,
+                status: "queued",
+                targetDeviceId: ownedTarget.id,
+                reason: "cloud target unreachable — re-routed to a live owned box",
+              }).catch(() => null);
+              if (connectedDevice?.id !== ownedTarget.id) void onSelectDevice(ownedTarget);
+              continue;
+            }
+          }
           continue;
         }
         pendingDispatchRef.current.add(currentRow.localTaskId);
