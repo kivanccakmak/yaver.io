@@ -106,6 +106,7 @@ import type * as taskDispatchIntents from "../taskDispatchIntents.js";
 import type * as taskPackages from "../taskPackages.js";
 import type * as taskPlacement from "../taskPlacement.js";
 import type * as taskPlacementClassifier from "../taskPlacementClassifier.js";
+import type * as taskPlacementPolicy from "../taskPlacementPolicy.js";
 import type * as teams from "../teams.js";
 import type * as tmuxSessions from "../tmuxSessions.js";
 import type * as totp from "../totp.js";
@@ -222,6 +223,7 @@ declare const fullApi: ApiFromModules<{
   taskPackages: typeof taskPackages;
   taskPlacement: typeof taskPlacement;
   taskPlacementClassifier: typeof taskPlacementClassifier;
+  taskPlacementPolicy: typeof taskPlacementPolicy;
   teams: typeof teams;
   tmuxSessions: typeof tmuxSessions;
   totp: typeof totp;
