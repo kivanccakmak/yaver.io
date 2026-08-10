@@ -18,6 +18,10 @@ import {
 } from "./cloudPlacementCapacity";
 import { isOwner } from "./ownerAllowlist";
 import {
+  selectLiveOwnedDevice,
+  type OwnedDeviceCandidate,
+} from "./taskPlacementPolicy";
+import {
   classifyProjectForPlacement,
   strongestResourceClass,
   type PlacementResourceClass,
@@ -351,6 +355,19 @@ async function latestProfile(
   };
 }
 
+// selectLiveOwnedDevice (from taskPlacementPolicy.ts) is the PURE half of
+// candidateOwnedDevice, extracted so the placement rule is unit-testable
+// without a Convex ctx. It answers ONE question: among the user's owned
+// device rows, which is the live candidate for this task?
+//
+// LIVE means heartbeat-fresh, not flag-true. The 2026-08-10 incident (medici
+// task parked on an ASLEEP managed cloud box while the primary self-hosted
+// box sat idle): the primary's row carried needsAuth=true from an earlier
+// relay-password flap, so the old filter (isOnline && !needsAuth) excluded it,
+// the owned pool came back EMPTY, and placement fell through to
+// cloud_standard on a box that was "eligible" because it was paused. A fresh
+// heartbeat proves the agent is ALIVE; needsAuth means it needs a re-auth,
+// which is recoverable and strictly better than a machine that is asleep.
 async function candidateOwnedDevice(
   ctx: any,
   userId: Id<"users">,
@@ -360,25 +377,18 @@ async function candidateOwnedDevice(
     .query("devices")
     .withIndex("by_userId", (q: any) => q.eq("userId", userId))
     .collect();
-  const online = devices.filter((d: any) => d.isOnline && !d.needsAuth);
   const settings = await ctx.db
     .query("userSettings")
     .withIndex("by_userId", (q: any) => q.eq("userId", userId))
     .first();
-  const selected = args.targetDeviceId
-    ? online.find((d: any) => d.deviceId === args.targetDeviceId)
-    : undefined;
-  const pool = selected ? [selected] : orderOwnedDeviceCandidates(online, {
+  return selectLiveOwnedDevice(devices as OwnedDeviceCandidate[], {
+    now: Date.now(),
+    targetDeviceId: args.targetDeviceId,
+    runnerId: args.runnerId,
+    needsBuild: args.needsBuild,
     primaryDeviceId: settings?.primaryDeviceId,
     secondaryDeviceId: settings?.secondaryDeviceId,
   });
-  return pool.find((d: any) => {
-    if (args.runnerId && Array.isArray(d.installedRunnerIds) && !d.installedRunnerIds.includes(args.runnerId)) {
-      return false;
-    }
-    if (!args.needsBuild) return true;
-    return Array.isArray(d.publishCapabilities) && d.publishCapabilities.length > 0;
-  }) ?? null;
 }
 
 export function orderOwnedDeviceCandidates<T extends { deviceId?: string }>(

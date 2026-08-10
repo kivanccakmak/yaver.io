@@ -619,6 +619,7 @@ run_unit_tests() {
               convex/accessSigPolicy.test.mts \
               convex/billingWebhook.test.mts \
               convex/relayPoolPolicy.test.mts \
+              convex/taskPlacementPolicy.test.mts \
               convex/wakeOnRequestPolicy.test.mts > "$TEST_DIR/convex-policy-test.log" 2>&1); then
             pass "Convex policy unit tests passed"
         else
