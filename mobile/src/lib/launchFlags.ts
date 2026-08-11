@@ -11,7 +11,13 @@
 // Those are the free self-hosted story and stay visible.
 //
 // Mirrors the identical `HIDE_PAID_UI` flag in web/app/page.tsx.
-export const HIDE_PAID_UI = true;
+//
+// 2026-08-11: FLIPPED OFF. Monetization is live (Cloud Workspace $29/mo BYOK +
+// Relay Pro $9/mo pooled — docs/audits/hetzner-access-and-monetization-2026-08.md);
+// the web flag was already false (commit 901d8106f), this restores mobile to
+// match. The flag stays as the single emergency kill switch for the whole paid
+// surface.
+export const HIDE_PAID_UI = false;
 
 // Guest/share UI is closed for v1. Backend and agent enforcement are already
 // fail-closed; this flag keeps mobile from advertising flows that Convex and
