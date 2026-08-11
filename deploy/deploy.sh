@@ -150,7 +150,9 @@ run_shell() {
     printf '[dry-run] cd %q && %s\n' "$ROOT" "$*"
     return 0
   fi
-  (cd "$ROOT" && bash -lc "$*")
+  # Export ROOT so bash -lc children can reference $ROOT/scripts/... —
+  # a login shell does not inherit the parent's unexported variables.
+  (cd "$ROOT" && export ROOT && bash -lc "$*")
 }
 
 case "$target" in
