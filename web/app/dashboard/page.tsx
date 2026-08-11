@@ -5314,7 +5314,7 @@ export default function DashboardPage() {
 	                            className="h-12 shrink-0 rounded-xl bg-surface-100 px-5 text-sm font-medium text-surface-900 hover:bg-surface-50 disabled:opacity-30">
 	                            {buttonLabel}
 	                          </button>
-                          {!taskRunning && (mcpServers.length > 0 || chatProjects.length > 0) ? (
+                          {!taskRunning ? (
                             <div className="flex flex-wrap items-center gap-2 text-[11px] text-surface-500 md:col-span-2">
                               {/* Project picker — web twin of mobile's project
                                   sheet. Feeds task workDir via

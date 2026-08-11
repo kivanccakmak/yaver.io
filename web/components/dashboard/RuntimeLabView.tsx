@@ -4381,24 +4381,28 @@ export default function RuntimeLabView({
                 className="mb-2"
               />
               {/* MCP doorway + external servers — parity with the Chat tab
-                  composer (page.tsx). Defaults: yaver ON, no externals; the
-                  selection rides on createTask so a Vibing-started task carries
-                  the same MCP set as one started from Chat (2026-08-10). */}
-              {mcpServers.length > 0 ? (
-                <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-surface-500">
-                  <button
-                    type="button"
-                    onClick={() => setIncludeYaverMcp((v) => !v)}
-                    className={`rounded-full border px-2.5 py-1 font-semibold ${
-                      includeYaverMcp
-                        ? "border-brand/40 bg-brand-soft text-brand-softFg"
-                        : "border-surface-800 bg-surface-950 text-surface-400 hover:border-surface-700"
-                    }`}
-                    title="Yaver's own MCP tools (yaver mcp) are attached to this task. Toggle off to run with only the external MCPs below."
-                  >
-                    yaver{includeYaverMcp ? "" : " (off)"}
-                  </button>
-                  {mcpServers.map((server) => {
+                  composer (page.tsx). The yaver toggle renders ALWAYS (it is
+                  the doorway to Yaver's own MCP, present on every box even
+                  with zero external servers — gating it on mcpServers.length
+                  hid it exactly when the user needed to turn the doorway off,
+                  2026-08-11); external servers render only when the agent
+                  reported any. Defaults: yaver ON, no externals; the
+                  selection rides on createTask so a Vibing-started task
+                  carries the same MCP set as one started from Chat. */}
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-surface-500">
+                <button
+                  type="button"
+                  onClick={() => setIncludeYaverMcp((v) => !v)}
+                  className={`rounded-full border px-2.5 py-1 font-semibold ${
+                    includeYaverMcp
+                      ? "border-brand/40 bg-brand-soft text-brand-softFg"
+                      : "border-surface-800 bg-surface-950 text-surface-400 hover:border-surface-700"
+                  }`}
+                  title="Yaver's own MCP tools (yaver mcp) are attached to this task. Toggle off to run with only the external MCPs below."
+                >
+                  yaver{includeYaverMcp ? "" : " (off)"}
+                </button>
+                {mcpServers.map((server) => {
                     const active = selectedMcpServers.includes(server.name);
                     return (
                       <button
@@ -4423,7 +4427,6 @@ export default function RuntimeLabView({
                     );
                   })}
                 </div>
-              ) : null}
               <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 focus-within:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#101318]">
                 <textarea
                   value={composer}
