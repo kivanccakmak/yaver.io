@@ -77,7 +77,7 @@ func runLaunch(args []string) {
 	case "help", "--help", "-h":
 		printLaunchUsage()
 		return
-	case "cloud", "hetzner", "aws", "gcp", "azure", "ssh":
+	case "cloud", "aws", "gcp", "azure", "ssh":
 		// fall through to provider dispatch
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown launch provider: %s\n\n", args[0])
@@ -102,8 +102,6 @@ func runLaunch(args []string) {
 	switch opts.Provider {
 	case "cloud":
 		err = launchCloudAuto(ctx, &opts)
-	case "hetzner":
-		err = launchHetzner(ctx, &opts)
 	case "aws":
 		err = launchAWS(ctx, &opts)
 	case "gcp":
@@ -165,7 +163,7 @@ func parseLaunchArgs(args []string) launchOptions {
 
 func isExplicitCloudProvider(provider string) bool {
 	switch provider {
-	case "hetzner", "aws", "gcp", "azure":
+	case "aws", "gcp", "azure":
 		return true
 	default:
 		return false
@@ -466,6 +464,6 @@ Image discovery:
   scripts/build-cloud-image.sh.
 
 Operator/dev-only: concrete provider adapters can be exercised with
-YAVER_OPERATOR_PROVIDER_OVERRIDE=1 yaver launch <hetzner|aws|gcp|azure>. The
+YAVER_OPERATOR_PROVIDER_OVERRIDE=1 yaver launch <aws|gcp|azure>. The
 end-user Cloud Workspace product does not expose provider selection.`)
 }

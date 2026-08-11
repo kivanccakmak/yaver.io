@@ -1,15 +1,15 @@
 // HN-LAUNCH-HIDE-PAID: master gate for every paid/managed-infra web surface.
 //
-// Launch decision (2026-07-28): Yaver ships as a FREE open-source project on
-// the shared public relay — no checkout, no tiers, no billing anywhere in the
-// product at launch. Relay Pro, Cloud Workspace, metered CI runners and the
-// managed-cloud panels are all gated OFF behind this single flag so there is
-// exactly one switch to flip when paid infra is reintroduced later.
+// 2026-08-11: flipped OFF. The monetization audit
+// (docs/audits/hetzner-access-and-monetization-2026-08.md) locked Model A —
+// Cloud Workspace $29/mo BYOK + Relay Pro $9/mo pooled — and the public
+// pricing page is live. Paid infra is reintroduced; the flag stays as the
+// single emergency kill switch for the whole paid surface.
 //
 // Consumers must read THIS constant (never a per-file shadow copy) so the flag
 // is one source of truth — a drifted local `const HIDE_PAID_UI = false` is the
 // exact parity bug the cross-surface rule exists to prevent.
-export const HIDE_PAID_UI = true;
+export const HIDE_PAID_UI = false;
 
 // Guest/sharing and Teams UI. Twins of ENABLE_GUEST_FEATURES /
 // ENABLE_TEAM_FEATURES in backend/convex/launchFlags.ts and

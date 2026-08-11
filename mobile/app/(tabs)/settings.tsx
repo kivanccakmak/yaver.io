@@ -33,7 +33,6 @@ import VisionSettingsSection from "../../src/components/VisionSettingsSection";
 import BoxInitSection from "../../src/components/BoxInitSection";
 import AttachModeSection from "../../src/components/AttachModeSection";
 import CloudProvidersSection from "../../src/components/CloudProvidersSection";
-import HetznerSection from "../../src/components/HetznerSection";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { deleteAccount as deleteAccountApi, updateProfile, changePassword as changePasswordApi, getUserSettings, saveUserSettings, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent, getUsageSummary, type UsageSummary, type SpeechProvider, type TtsProvider, type KeyStorage, LOCAL_KEYS, getLocalSecret, saveLocalSecret, deleteLocalSecret, getKeyStoragePreference, saveKeyStoragePreference, loadLocalSpeechConfig, saveLocalSpeechConfig, getAuthConfig, setAccountPassword as setAccountPasswordApi, listAuthIdentities, startLinkIntent, unlinkProvider as unlinkProviderApi, startMergeIntent, cancelMergeIntent, type AuthIdentity, type OAuthProvider, type MergeIntent } from "../../src/lib/auth";
 import { SPEECH_PROVIDERS, TTS_PROVIDERS, STT_MODELS, TTS_MODELS, TTS_VOICES, DEFAULT_STT_MODEL, DEFAULT_TTS_MODEL, DEFAULT_TTS_VOICE } from "../../src/lib/speech";
@@ -5620,12 +5619,6 @@ export default function SettingsScreen() {
           <CloudProvidersSection c={c} token={token} />
         </View>
 
-        {/* Phone-DIRECT Hetzner: wire a token once, manage boxes from the
-            phone with no paired agent (api.hetzner.cloud called directly;
-            token stays in the device keychain). */}
-        <View style={styles.section}>
-          <HetznerSection c={c} token={token} />
-        </View>
 
         {/* Delete account */}
         <View style={styles.section}>

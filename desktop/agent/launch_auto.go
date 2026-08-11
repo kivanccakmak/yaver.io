@@ -24,8 +24,6 @@ func launchCloudAuto(ctx context.Context, opts *launchOptions) error {
 		selected.Provider = c.provider
 		fmt.Printf("Yaver selected a cloud workspace location (%s). Provider choice is automatic.\n", cloudLaunchLabel(c.provider))
 		switch c.provider {
-		case "hetzner":
-			return launchHetzner(ctx, &selected)
 		case "gcp":
 			return launchGCP(ctx, &selected)
 		case "aws":
@@ -46,21 +44,10 @@ func launchCloudCandidates(opts *launchOptions) []launchProviderCandidate {
 	// backend policy. This local dev fallback only chooses among credentials
 	// already configured on this machine, without exposing a provider picker.
 	return []launchProviderCandidate{
-		hetznerLaunchCandidate(),
 		gcpLaunchCandidate(),
 		awsLaunchCandidate(opts),
 		azureLaunchCandidate(),
 	}
-}
-
-func hetznerLaunchCandidate() launchProviderCandidate {
-	if _, err := exec.LookPath("hcloud"); err != nil {
-		return launchProviderCandidate{provider: "hetzner", reason: "hcloud CLI missing"}
-	}
-	if os.Getenv("HCLOUD_TOKEN") == "" {
-		return launchProviderCandidate{provider: "hetzner", reason: "HCLOUD_TOKEN missing"}
-	}
-	return launchProviderCandidate{provider: "hetzner", ready: true}
 }
 
 func gcpLaunchCandidate() launchProviderCandidate {
@@ -102,8 +89,6 @@ func azureLaunchCandidate() launchProviderCandidate {
 
 func cloudLaunchLabel(provider string) string {
 	switch provider {
-	case "hetzner":
-		return "EU/US cloud"
 	case "gcp":
 		return "Google Cloud region"
 	case "aws":

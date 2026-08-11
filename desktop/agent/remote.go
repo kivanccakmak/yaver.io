@@ -487,183 +487,27 @@ fi
 // Supported providers: "hetzner", "digitalocean"
 // Sizes:   small | medium | large
 // Regions: eu | us | asia
+// Provision no longer creates cloud servers on the user's behalf.
+//
+// Per the 2026-08-11 monetization decision (docs/audits/hetzner-access-and-
+// monetization-2026-08.md §0.2/§0.4): Yaver does not provision Hetzner /
+// DigitalOcean for users. Users self-host by installing yaver-cli on their
+// own machine (`npm install -g yaver-cli`), using their own relay, or
+// Tailscale. The managed path (Cloud Workspace, Relay Pro) is Yaver's own
+// infrastructure, provisioned server-side in Convex behind entitlement.
 func (m *RemoteManager) Provision(provider, size, region string) (string, error) {
 	switch strings.ToLower(provider) {
 	case "hetzner":
-		return m.provisionHetzner(size, region)
+		return hetznerManualInstructions(size, region), nil
 	case "digitalocean", "do":
-		return m.provisionDigitalOcean(size, region)
+		return doManualInstructions(size, region), nil
 	default:
 		return "", fmt.Errorf("unknown provider %q; supported: hetzner, digitalocean", provider)
 	}
 }
 
-func (m *RemoteManager) provisionHetzner(size, region string) (string, error) {
-	token := os.Getenv("HETZNER_API_TOKEN")
-	if token == "" {
-		return hetznerManualInstructions(size, region), nil
-	}
 
-	serverType := map[string]string{
-		"small": "cx22", "medium": "cx32", "large": "cx42",
-	}[strings.ToLower(size)]
-	if serverType == "" {
-		serverType = "cx22"
-	}
 
-	locationMap := map[string]string{
-		"eu": "nbg1", "us": "ash", "asia": "sin",
-	}
-	location := locationMap[strings.ToLower(region)]
-	if location == "" {
-		location = "nbg1"
-	}
-
-	// Fetch default SSH key from Hetzner account to embed in new server.
-	sshKeyIDs, _ := m.hetznerSSHKeyIDs(token)
-
-	body := map[string]interface{}{
-		"name":        fmt.Sprintf("yaver-%d", time.Now().Unix()),
-		"server_type": serverType,
-		"location":    location,
-		"image":       "ubuntu-22.04",
-		"ssh_keys":    sshKeyIDs,
-		"user_data":   "#!/bin/bash\napt-get update -y && apt-get install -y curl git\n",
-	}
-
-	resp, err := hetznerAPI(token, "POST", "/v1/servers", body)
-	if err != nil {
-		return "", fmt.Errorf("Hetzner create server: %w", err)
-	}
-
-	var result struct {
-		Server struct {
-			ID         int    `json:"id"`
-			Name       string `json:"name"`
-			PublicNet  struct {
-				IPv4 struct {
-					IP string `json:"ip"`
-				} `json:"ipv4"`
-			} `json:"public_net"`
-		} `json:"server"`
-	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return "", fmt.Errorf("parse Hetzner response: %w\nBody: %s", err, resp)
-	}
-
-	ip := result.Server.PublicNet.IPv4.IP
-	name := result.Server.Name
-
-	// Wait for SSH to become available (up to 2 min).
-	if err := waitForSSH(ip, "root", 120*time.Second); err != nil {
-		return "", fmt.Errorf("server %s (%s) did not become reachable: %w", name, ip, err)
-	}
-
-	summary, err := m.Setup(ip, "root")
-	if err != nil {
-		return "", fmt.Errorf("Setup failed on %s: %w", ip, err)
-	}
-
-	// Record provider instance ID for future API calls.
-	id := machineID(ip, "root")
-	m.mu.Lock()
-	if rm := m.machines[id]; rm != nil {
-		rm.ProviderInstanceID = fmt.Sprintf("%d", result.Server.ID)
-		rm.CostEstimate = hetznerCostEstimate(serverType)
-	}
-	m.mu.Unlock()
-	_ = m.saveConfig()
-
-	return fmt.Sprintf("Hetzner server %s provisioned at %s\n\n%s", name, ip, summary), nil
-}
-
-func (m *RemoteManager) provisionDigitalOcean(size, region string) (string, error) {
-	token := os.Getenv("DIGITALOCEAN_TOKEN")
-	if token == "" {
-		return doManualInstructions(size, region), nil
-	}
-
-	slug := map[string]string{
-		"small": "s-1vcpu-2gb", "medium": "s-2vcpu-4gb", "large": "s-4vcpu-8gb",
-	}[strings.ToLower(size)]
-	if slug == "" {
-		slug = "s-1vcpu-2gb"
-	}
-
-	regionSlug := map[string]string{
-		"eu": "fra1", "us": "nyc3", "asia": "sgp1",
-	}[strings.ToLower(region)]
-	if regionSlug == "" {
-		regionSlug = "nyc3"
-	}
-
-	body := map[string]interface{}{
-		"name":   fmt.Sprintf("yaver-%d", time.Now().Unix()),
-		"region": regionSlug,
-		"size":   slug,
-		"image":  "ubuntu-22-04-x64",
-	}
-
-	resp, err := digitaloceanAPI(token, "POST", "/v2/droplets", body)
-	if err != nil {
-		return "", fmt.Errorf("DigitalOcean create droplet: %w", err)
-	}
-
-	var result struct {
-		Droplet struct {
-			ID      int    `json:"id"`
-			Name    string `json:"name"`
-			Networks struct {
-				V4 []struct {
-					IPAddress string `json:"ip_address"`
-					Type      string `json:"type"`
-				} `json:"v4"`
-			} `json:"networks"`
-		} `json:"droplet"`
-	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return "", fmt.Errorf("parse DO response: %w\nBody: %s", err, resp)
-	}
-
-	ip := ""
-	for _, n := range result.Droplet.Networks.V4 {
-		if n.Type == "public" {
-			ip = n.IPAddress
-			break
-		}
-	}
-	if ip == "" {
-		// DO provisioning is async; wait a bit then re-fetch.
-		time.Sleep(15 * time.Second)
-		ip, _ = m.doDropletIP(token, result.Droplet.ID)
-	}
-	if ip == "" {
-		return "", fmt.Errorf("could not determine droplet IP for ID %d", result.Droplet.ID)
-	}
-
-	if err := waitForSSH(ip, "root", 120*time.Second); err != nil {
-		return "", fmt.Errorf("droplet %s (%s) did not become reachable: %w", result.Droplet.Name, ip, err)
-	}
-
-	summary, err := m.Setup(ip, "root")
-	if err != nil {
-		return "", fmt.Errorf("Setup failed on %s: %w", ip, err)
-	}
-
-	id := machineID(ip, "root")
-	m.mu.Lock()
-	if rm := m.machines[id]; rm != nil {
-		rm.ProviderInstanceID = fmt.Sprintf("%d", result.Droplet.ID)
-		rm.CostEstimate = doCostEstimate(slug)
-	}
-	m.mu.Unlock()
-	_ = m.saveConfig()
-
-	return fmt.Sprintf("DigitalOcean droplet %s provisioned at %s\n\n%s", result.Droplet.Name, ip, summary), nil
-}
-
-// Destroy tears down a VPS via its provider API and removes it from config.
-// confirm must be true to prevent accidental deletion.
 func (m *RemoteManager) Destroy(machineID string, confirm bool) (string, error) {
 	if !confirm {
 		return "", fmt.Errorf("pass confirm=true to destroy machine %q", machineID)
@@ -675,43 +519,22 @@ func (m *RemoteManager) Destroy(machineID string, confirm bool) (string, error) 
 		m.mu.Unlock()
 		return "", fmt.Errorf("machine %q not found", machineID)
 	}
-	provider := rm.Provider
 	instanceID := rm.ProviderInstanceID
+	provider := rm.Provider
 	label := rm.Label
 	m.mu.Unlock()
 
+	// Automated provider deletion is removed (2026-08-11): Yaver does not
+	// manage user-owned cloud resources. The remote server must be removed
+	// manually; only the local config row is dropped here.
+	_ = instanceID
 	var detail string
-	switch provider {
-	case "hetzner":
-		token := os.Getenv("HETZNER_API_TOKEN")
-		if token == "" {
-			detail = "HETZNER_API_TOKEN not set — remove server manually from https://console.hetzner.cloud"
-		} else if instanceID == "" {
-			detail = "no provider instance ID recorded — remove server manually"
-		} else {
-			_, err := hetznerAPI(token, "DELETE", "/v1/servers/"+instanceID, nil)
-			if err != nil {
-				return "", fmt.Errorf("Hetzner delete server %s: %w", instanceID, err)
-			}
-			detail = fmt.Sprintf("Hetzner server %s deleted", instanceID)
-		}
-
-	case "digitalocean":
-		token := os.Getenv("DIGITALOCEAN_TOKEN")
-		if token == "" {
-			detail = "DIGITALOCEAN_TOKEN not set — remove droplet manually from https://cloud.digitalocean.com"
-		} else if instanceID == "" {
-			detail = "no provider instance ID recorded — remove droplet manually"
-		} else {
-			_, err := digitaloceanAPI(token, "DELETE", "/v2/droplets/"+instanceID, nil)
-			if err != nil {
-				return "", fmt.Errorf("DigitalOcean delete droplet %s: %w", instanceID, err)
-			}
-			detail = fmt.Sprintf("DigitalOcean droplet %s deleted", instanceID)
-		}
-
-	default:
-		detail = fmt.Sprintf("provider %q not supported for automated destroy — remove manually", provider)
+	if provider == "hetzner" {
+		detail = "delete the server manually from https://console.hetzner.cloud (Yaver no longer manages user cloud resources)"
+	} else if provider == "digitalocean" {
+		detail = "delete the droplet manually from https://cloud.digitalocean.com (Yaver no longer manages user cloud resources)"
+	} else {
+		detail = fmt.Sprintf("provider %q — remove manually", provider)
 	}
 
 	m.mu.Lock()
@@ -773,7 +596,6 @@ func (m *RemoteManager) Snapshot(machineID string) (string, error) {
 		m.mu.Unlock()
 		return "", fmt.Errorf("machine %q not found", machineID)
 	}
-	provider := rm.Provider
 	instanceID := rm.ProviderInstanceID
 	label := rm.Label
 	m.mu.Unlock()
@@ -781,64 +603,21 @@ func (m *RemoteManager) Snapshot(machineID string) (string, error) {
 	snapName := fmt.Sprintf("yaver-%s-%s", strings.ReplaceAll(label, " ", "-"),
 		time.Now().Format("2006-01-02T150405"))
 
-	switch provider {
-	case "hetzner":
-		token := os.Getenv("HETZNER_API_TOKEN")
-		if token == "" {
-			return "", fmt.Errorf("HETZNER_API_TOKEN not set")
-		}
-		if instanceID == "" {
-			return "", fmt.Errorf("no provider instance ID for machine %q", machineID)
-		}
-		body := map[string]interface{}{
-			"description": snapName,
-			"type":        "snapshot",
-		}
-		resp, err := hetznerAPI(token, "POST", "/v1/servers/"+instanceID+"/actions/create_image", body)
-		if err != nil {
-			return "", fmt.Errorf("Hetzner create image: %w", err)
-		}
-		var result struct {
-			Image struct {
-				ID          int    `json:"id"`
-				Description string `json:"description"`
-			} `json:"image"`
-		}
-		_ = json.Unmarshal(resp, &result)
-		return fmt.Sprintf("Hetzner snapshot created: %s (image ID %d)\n", snapName, result.Image.ID), nil
-
-	case "digitalocean":
-		token := os.Getenv("DIGITALOCEAN_TOKEN")
-		if token == "" {
-			return "", fmt.Errorf("DIGITALOCEAN_TOKEN not set")
-		}
-		if instanceID == "" {
-			return "", fmt.Errorf("no provider instance ID for machine %q", machineID)
-		}
-		body := map[string]interface{}{
-			"type": "snapshot",
-			"name": snapName,
-		}
-		_, err := digitaloceanAPI(token, "POST", "/v2/droplets/"+instanceID+"/actions", body)
-		if err != nil {
-			return "", fmt.Errorf("DigitalOcean snapshot: %w", err)
-		}
-		return fmt.Sprintf("DigitalOcean snapshot requested: %s\n(Snapshots are async — check https://cloud.digitalocean.com in a few minutes)\n", snapName), nil
-
-	default:
-		// Fallback: tar home directory to a local archive via SSH.
-		rm2, _ := m.machines[machineID]
-		if rm2 == nil {
-			return "", fmt.Errorf("machine %q not found", machineID)
-		}
-		archiveName := snapName + ".tar.gz"
-		script := fmt.Sprintf("tar -czf /tmp/%s ~ 2>/dev/null && echo 'Snapshot: /tmp/%s'", archiveName, archiveName)
-		out, err := sshRun(rm2.Host, rm2.User, script)
-		if err != nil {
-			return "", fmt.Errorf("snapshot via tar failed: %w", err)
-		}
-		return out, nil
+	// Provider-level snapshots are removed (2026-08-11): Yaver no longer
+	// manages user-owned cloud resources. Fallback: tar home directory to a
+	// local archive via SSH.
+	_ = instanceID
+	rm2, _ := m.machines[machineID]
+	if rm2 == nil {
+		return "", fmt.Errorf("machine %q not found", machineID)
 	}
+	archiveName := snapName + ".tar.gz"
+	script := fmt.Sprintf("tar -czf /tmp/%s ~ 2>/dev/null && echo 'Snapshot: /tmp/%s'", archiveName, archiveName)
+	out, err := sshRun(rm2.Host, rm2.User, script)
+	if err != nil {
+		return "", fmt.Errorf("snapshot via tar failed: %w", err)
+	}
+	return out, nil
 }
 
 // Exec runs a command on a remote machine via SSH and returns combined output.
@@ -1121,12 +900,6 @@ func hetznerAPI(token, method, path string, body interface{}) ([]byte, error) {
 	return cloudAPIRequest(base+path, method, "Bearer "+token, body)
 }
 
-// digitaloceanAPI makes an authenticated request to the DigitalOcean v2 API.
-func digitaloceanAPI(token, method, path string, body interface{}) ([]byte, error) {
-	const base = "https://api.digitalocean.com"
-	return cloudAPIRequest(base+path, method, "Bearer "+token, body)
-}
-
 // cloudAPIRequest is the shared HTTP helper for provider API calls.
 func cloudAPIRequest(url, method, authorization string, body interface{}) ([]byte, error) {
 	var bodyReader io.Reader
@@ -1147,86 +920,27 @@ func cloudAPIRequest(url, method, authorization string, body interface{}) ([]byt
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("HTTP %s %s: %w", method, url, err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response body: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		return data, fmt.Errorf("API error %d: %s", resp.StatusCode, string(data))
-	}
-	return data, nil
-}
-
-// hetznerSSHKeyIDs returns the IDs of all SSH keys registered in the Hetzner account.
-func (m *RemoteManager) hetznerSSHKeyIDs(token string) ([]int, error) {
-	data, err := hetznerAPI(token, "GET", "/v1/ssh_keys", nil)
+	out, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	var result struct {
-		SSHKeys []struct {
-			ID int `json:"id"`
-		} `json:"ssh_keys"`
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(out))
 	}
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, err
-	}
-	ids := make([]int, 0, len(result.SSHKeys))
-	for _, k := range result.SSHKeys {
-		ids = append(ids, k.ID)
-	}
-	return ids, nil
+	return out, nil
 }
 
-// doDropletIP polls DigitalOcean for the public IPv4 of a droplet.
-// Used when the creation response doesn't immediately include the IP.
-func (m *RemoteManager) doDropletIP(token string, dropletID int) (string, error) {
-	data, err := digitaloceanAPI(token, "GET", fmt.Sprintf("/v2/droplets/%d", dropletID), nil)
-	if err != nil {
-		return "", err
-	}
-	var result struct {
-		Droplet struct {
-			Networks struct {
-				V4 []struct {
-					IPAddress string `json:"ip_address"`
-					Type      string `json:"type"`
-				} `json:"v4"`
-			} `json:"networks"`
-		} `json:"droplet"`
-	}
-	if err := json.Unmarshal(data, &result); err != nil {
-		return "", err
-	}
-	for _, n := range result.Droplet.Networks.V4 {
-		if n.Type == "public" {
-			return n.IPAddress, nil
-		}
-	}
-	return "", fmt.Errorf("no public IPv4 found for droplet %d", dropletID)
-}
+// digitaloceanAPI makes an authenticated request to the DigitalOcean v2 API.
 
-// waitForSSH polls an SSH port until it accepts connections or the deadline passes.
-func waitForSSH(host, user string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		out, err := sshRun(host, user, "echo ok")
-		if err == nil && strings.Contains(out, "ok") {
-			return nil
-		}
-		time.Sleep(5 * time.Second)
-	}
-	return fmt.Errorf("SSH on %s@%s not reachable after %s", user, host, timeout)
-}
 
-// userForHost looks up the SSH user for a known host, or returns an error.
+
 func (m *RemoteManager) userForHost(host string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1313,9 +1027,6 @@ func hetznerTypeForSize(size string) string {
 func hetznerRegionName(region string) string {
 	return map[string]string{"eu": "Nuremberg (nbg1)", "us": "Ashburn (ash)", "asia": "Singapore (sin)"}[strings.ToLower(region)]
 }
-func hetznerCostEstimate(serverType string) float64 {
-	return map[string]float64{"cx22": 4.85, "cx32": 9.31, "cx42": 18.56}[strings.ToLower(serverType)]
-}
 
 func doSizeName(size string) string {
 	return map[string]string{"small": "s-1vcpu-2gb (1 vCPU, 2 GB)", "medium": "s-2vcpu-4gb (2 vCPU, 4 GB)", "large": "s-4vcpu-8gb (4 vCPU, 8 GB)"}[strings.ToLower(size)]
@@ -1325,7 +1036,4 @@ func doSlugForSize(size string) string {
 }
 func doRegionName(region string) string {
 	return map[string]string{"eu": "Frankfurt (fra1)", "us": "New York 3 (nyc3)", "asia": "Singapore (sgp1)"}[strings.ToLower(region)]
-}
-func doCostEstimate(slug string) float64 {
-	return map[string]float64{"s-1vcpu-2gb": 12.0, "s-2vcpu-4gb": 24.0, "s-4vcpu-8gb": 48.0}[strings.ToLower(slug)]
 }
