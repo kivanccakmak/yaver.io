@@ -798,7 +798,8 @@ export default function LoginScreen() {
                     fallback path (no browser here, or signing in a simulator),
                     not the thing most people want first. */}
                 {!showEmailForm && (
-                  deviceCode ? (
+                  <View style={{ marginTop: providerGap }}>
+                  {deviceCode ? (
                     <View style={[styles.deviceCodePanel, { backgroundColor: c.bgCard, borderColor: providerBorderColor }]}>
                       <Text style={[styles.deviceCodeLabel, { color: c.textMuted }]}>
                         Approve this code from a signed-in device
@@ -837,7 +838,8 @@ export default function LoginScreen() {
                         <Text style={[styles.deviceCodeNote, { color: c.textMuted }]}>{deviceCodeNote}</Text>
                       ) : null}
                     </>
-                  )
+                  )}
+                  </View>
                 )}
 
                 {emailPasswordEnabled ? (

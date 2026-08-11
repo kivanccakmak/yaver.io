@@ -130,3 +130,5 @@ test-results/
 
 # yaver-test-sdk coverage output (generated per run)
 yaver-tests/.coverage.json
+# Mobile web-export sandbox (build-web-preview.sh runtime dirs: HOME/TMPDIR for headless Chrome).
+mobile/.tmp/

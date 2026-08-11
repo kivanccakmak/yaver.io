@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export const TASK_VIDEO_SUMMARY_KEY = "@yaver/tasks_video_summary_enabled";
 export const TASK_KEEP_LAST_PROJECT_KEY = "@yaver/tasks_keep_last_project";
+export const TASK_TEXT_CORRECTION_KEY = "@yaver/tasks_text_correction";
 export const TASK_LAST_PROJECT_PREFIX = "@yaver/last_project/v1/";
 
 export type TaskLastProject = {
@@ -42,6 +43,23 @@ export async function loadKeepLastProjectEnabled(): Promise<boolean> {
 export async function saveKeepLastProjectEnabled(enabled: boolean): Promise<void> {
   try {
     await AsyncStorage.setItem(TASK_KEEP_LAST_PROJECT_KEY, enabled ? "1" : "0");
+  } catch {
+    // Local preference only.
+  }
+}
+
+export async function loadTextCorrectionEnabled(): Promise<boolean> {
+  try {
+    const raw = await AsyncStorage.getItem(TASK_TEXT_CORRECTION_KEY);
+    return raw === "1";
+  } catch {
+    return false;
+  }
+}
+
+export async function saveTextCorrectionEnabled(enabled: boolean): Promise<void> {
+  try {
+    await AsyncStorage.setItem(TASK_TEXT_CORRECTION_KEY, enabled ? "1" : "0");
   } catch {
     // Local preference only.
   }

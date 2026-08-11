@@ -128,6 +128,7 @@ import {
   loadLastTaskProjectFromConvex,
   loadMCPServersFromConvex,
   loadTaskVideoSummaryEnabled,
+  loadTextCorrectionEnabled,
   saveKeepLastProjectEnabled,
   saveLastTaskProject,
   saveLastTaskProjectToConvex,
@@ -1924,6 +1925,10 @@ export default function TasksScreen() {
   const [includeYaverMcp, setIncludeYaverMcp] = useState(true);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [keepLastProject, setKeepLastProject] = useState(true);
+  // Opt-in text correction for task inputs. Off by default: commands and paths
+  // are not prose, and autocorrect silently mangling either is worse than none.
+  // Persisted per-device in AsyncStorage like keepLastProject.
+  const [textCorrectionEnabled, setTextCorrectionEnabled] = useState(false);
   const selectedComposerProject = useMemo(
     () => composerProjects.find((project) => project.path === selectedProjectPath) || null,
     [composerProjects, selectedProjectPath],
@@ -2065,6 +2070,29 @@ export default function TasksScreen() {
               );
             })
           )}
+          <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 18 }]}>TEXT CORRECTION</Text>
+          <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 10 }}>
+            Autocorrect/autocap for task inputs — off by default so commands and paths are never silently rewritten.
+          </Text>
+          <Pressable
+            onPress={() => setTextCorrectionEnabled((prev) => !prev)}
+            style={[
+              s.projectPickerRow,
+              { borderColor: textCorrectionEnabled ? c.accent : c.border, backgroundColor: textCorrectionEnabled ? withAlpha(c.accent, "1f") : c.bg },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Toggle text correction"
+          >
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }}>
+                Text correction{textCorrectionEnabled ? "" : " (off)"}
+              </Text>
+              <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }} numberOfLines={1}>
+                autoCorrect + sentence auto-capitalization for prompts
+              </Text>
+            </View>
+            {textCorrectionEnabled ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : <Ionicons name="ellipse-outline" size={20} color={c.textMuted} />}
+          </Pressable>
         </View>
       </View>
     </>
@@ -2177,6 +2205,9 @@ export default function TasksScreen() {
     let cancelled = false;
     void loadKeepLastProjectEnabled().then((enabled) => {
       if (!cancelled) setKeepLastProject(enabled);
+    });
+    void loadTextCorrectionEnabled().then((enabled) => {
+      if (!cancelled) setTextCorrectionEnabled(enabled);
     });
     return () => {
       cancelled = true;
@@ -6473,6 +6504,8 @@ export default function TasksScreen() {
                     value={newTaskText}
                     onChangeText={(t) => { setNewTaskText(t); setInputFromSpeech(false); }}
                     multiline numberOfLines={4} textAlignVertical="top" autoFocus
+                    autoCorrect={textCorrectionEnabled}
+                    autoCapitalize={textCorrectionEnabled ? "sentences" : "none"}
                   />
                   {isTranscribing && (
                     <View style={s.transcribingRow}>
@@ -7010,6 +7043,11 @@ export default function TasksScreen() {
           visible={!!selectedTask}
           animationType={tabletDualPane ? "fade" : "slide"}
           transparent
+          // Android transparent Modals default to adjustPan, which pans only
+          // the FOCUSED field above the keyboard — the follow-up card's Send
+          // button below it stayed hidden. Resize shrinks the modal so the
+          // KeyboardAvoidingView below can raise the whole card. iOS ignores.
+          softwareKeyboardLayoutMode="resize"
           onRequestClose={() => setSelectedTask(null)}
         >
           <KeyboardAvoidingView
@@ -7617,7 +7655,7 @@ export default function TasksScreen() {
 
                 {/* Follow-up input: compact bar, expands to full card on tap */}
                 {followUpExpanded ? (
-                  <View style={[s.modalContent, { backgroundColor: c.bgCard, borderTopWidth: 1, borderTopColor: c.border }]}>
+                  <View style={[s.modalContent, { backgroundColor: c.bgCard, borderTopWidth: 1, borderTopColor: c.border, paddingBottom: Math.max(insets.bottom + 28, 72) }]}>
                     <View style={s.modalHeader}>
                       <Text style={[s.modalTitle, { color: c.textPrimary }]}>Follow Up</Text>
                       {/* Runtime agent switch — tap to open the same picker
@@ -7709,6 +7747,8 @@ export default function TasksScreen() {
                       value={followUpText}
                       onChangeText={(t) => { setFollowUpText(t); setInputFromSpeech(false); }}
                       multiline numberOfLines={4} textAlignVertical="top" autoFocus
+                      autoCorrect={textCorrectionEnabled}
+                      autoCapitalize={textCorrectionEnabled ? "sentences" : "none"}
                     />
                     {isTranscribing && (
                       <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 6 }}>
