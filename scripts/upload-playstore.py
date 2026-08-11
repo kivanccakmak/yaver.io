@@ -8,10 +8,12 @@ original Yaver self-deploy behaviour (io.yaver.mobile, internal track).
 """
 
 import os
+import re
 import shutil
 import socket
 import subprocess
 import sys
+import zipfile
 
 # Large AABs on slow links run past httplib2's default (~60s) socket timeout.
 # Setting this BEFORE importing google clients so their httplib2.Http picks it up.
@@ -34,6 +36,53 @@ RELEASE_STATUS = os.environ.get("PLAY_RELEASE_STATUS", "draft")
 
 SCOPES = ["https://www.googleapis.com/auth/androidpublisher"]
 
+def extract_aab_version_code(aab_path: str):
+    """Best-effort versionCode for a build, read from the AAB's own manifest.
+
+    An AAB is a zip; the merged manifest at base/manifest/AndroidManifest.xml
+    is BINARY Android XML, so the plain-text `android:versionCode="N"` regex
+    only matches when the manifest happens to be text (rare). Returns the int
+    when readable, else None — callers then fall back to the build.gradle
+    versionCode (read_gradle_version_code) and finally to Play's own 403.
+    """
+    try:
+        with zipfile.ZipFile(aab_path) as z:
+            mn = "base/manifest/AndroidManifest.xml"
+            if mn not in z.namelist():
+                return None
+            data = z.read(mn).decode("utf-8", errors="replace")
+            m = re.search(r'android:versionCode="(\d+)"', data)
+            if m:
+                return int(m.group(1))
+            # Binary XML: versionCode is a 4-byte little-endian int that sits
+            # near the 'versionCode' attr name in the string pool. Fragile —
+            # prefer gradle, but try once.
+            raw = z.read(mn)
+            idx = raw.find(b"versionCode")
+            if idx >= 0 and idx + 16 <= len(raw):
+                candidate = int.from_bytes(raw[idx + 8:idx + 12], "little")
+                if 0 < candidate < 10000000:
+                    return candidate
+            return None
+    except Exception:
+        return None
+
+
+def read_gradle_version_code(gradle_path: str):
+    """versionCode from an app/build.gradle (the value the AAB was built with).
+
+    Every Yaver Android surface (phone, wear, tv, xr, auto) derives its
+    versionCode from mobile/android/app/build.gradle, so this is the same
+    number Play sees. Returns int or None.
+    """
+    try:
+        with open(gradle_path, "r", encoding="utf-8") as f:
+            m = re.search(r"versionCode\s+(\d+)", f.read())
+            return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
 def main():
     print(f"Uploading {len(AAB_PATHS)} AAB(s) to Google Play ({PACKAGE}) - {TRACK} track...", flush=True)
 
@@ -44,6 +93,64 @@ def main():
     edit = service.edits().insert(body={}, packageName=PACKAGE).execute()
     edit_id = edit["id"]
     print(f"Created edit: {edit_id}", flush=True)
+
+    # Pre-flight versionCode collision check (2026-08-11, Wear 298 / TV 300 /
+    # XR 301 on the SAME io.yaver.mobile package). Play rejects a versionCode
+    # already used on ANY track with a bare 403 "Version code N has already
+    # been used" — after a 300MB upload. Asking the API upfront turns that
+    # into a named, actionable message before a single byte goes up.
+    try:
+        app_edit = service.edits().get(
+            packageName=PACKAGE, editId=edit_id
+        ).execute()
+    except Exception:
+        app_edit = None
+    if app_edit:
+        highest = 0
+        try:
+            tracks = service.edits().tracks().list(
+                packageName=PACKAGE, editId=edit_id
+            ).execute().get("tracks", [])
+            for tr in tracks:
+                for rel in tr.get("releases", []):
+                    for code in rel.get("versionCodes", []):
+                        if isinstance(code, int) and code > highest:
+                            highest = code
+        except Exception:
+            highest = 0
+        for aab_path in AAB_PATHS:
+            code = extract_aab_version_code(aab_path)
+            if code is None:
+                # Binary manifests defeat the zip reader; the AAB was built
+                # from mobile/android/app/build.gradle, so read that.
+                gradle_path = os.path.join(
+                    os.path.dirname(aab_path), "..", "..", "..", "..",
+                    "mobile", "android", "app", "build.gradle")
+                code = read_gradle_version_code(gradle_path)
+            if code is None:
+                print(
+                    f"note: could not read versionCode from {aab_path} "
+                    f"(binary manifest, no gradle) — skipping pre-flight check; "
+                    f"Play's 403 will catch a collision.",
+                    flush=True,
+                )
+                continue
+            if 0 < highest and code <= highest:
+                print(
+                    f"VERSION CODE COLLISION: {aab_path} carries versionCode {code}, "
+                    f"but {highest} is already used on the {TRACK} track of {PACKAGE}. "
+                    f"Play refuses re-uploaded codes. Bump the app's versionCode "
+                    f"above {highest} (e.g. to {highest + 1}) and rebuild before "
+                    f"uploading — this script never rewrites your build.",
+                    flush=True,
+                )
+                raise SystemExit(2)
+            if highest == 0:
+                print(
+                    f"note: no prior versionCodes found on {TRACK} — first upload "
+                    f"(or read-only access); proceeding with {code}.",
+                    flush=True,
+                )
 
     version_codes = []
     for aab_path in AAB_PATHS:

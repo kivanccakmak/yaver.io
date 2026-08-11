@@ -76,6 +76,14 @@ Targets:
   testflight   Alias for ios
   android      Play internal deploy + upload
   playstore    Alias for android
+  tvos         Apple TV standalone archive/upload (App Store Connect)
+  android-tv   Android TV Play AAB + leanback manifest verification
+  tv           Alias for android-tv + tvos
+  wear-os      Wear OS AAB + Play internal upload
+  visionos     visionOS archive/upload (App Store Connect)
+  watchos      Build watchOS companion (embedded in iOS — no own record)
+  carplay      CarPlay iOS target archive/upload
+  android-auto Android Auto Play AAB upload
   npm          CLI npm release via `yaver deploy npm`
   cli          Alias for npm
   mcp          Publish/sync MCP registry metadata
@@ -183,6 +191,43 @@ case "$target" in
   mcp)
     require_deploy_boundary
     run "$ROOT/scripts/publish-mcp-registries.sh" --all
+    ;;
+  tvos)
+    require_deploy_boundary
+    run_shell 'source ~/.appstoreconnect/yaver.env 2>/dev/null; bash "$ROOT/scripts/deploy-tvos.sh" --upload'
+    ;;
+  android-tv)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-android-tv.sh" --upload
+    ;;
+  tv)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-tv.sh" --upload
+    ;;
+  wear-os|wearos|wear)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-wear-os.sh" --upload
+    ;;
+  visionos)
+    require_deploy_boundary
+    # Same App Store Connect creds as TestFlight/tvOS — sourced here so the
+    # script's own APP_STORE_KEY_*:? guards pass without a manual export
+    # (2026-08-11: visionOS deploy failed "Set APP_STORE_KEY_PATH" while
+    # ~/.appstoreconnect/yaver.env existed — TestFlight sourced it, this
+    # wrapper did not).
+    run_shell 'source ~/.appstoreconnect/yaver.env 2>/dev/null; bash "$ROOT/scripts/deploy-visionos.sh" --upload'
+    ;;
+  watchos)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-watchos.sh"
+    ;;
+  carplay)
+    require_deploy_boundary
+    run_shell 'source ~/.appstoreconnect/yaver.env 2>/dev/null; bash "$ROOT/scripts/deploy-carplay.sh" --upload'
+    ;;
+  android-auto|androidauto|auto)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-android-auto.sh" --upload
     ;;
   *)
     echo "ERROR: unknown deploy target '$target'." >&2
