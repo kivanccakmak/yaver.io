@@ -74,6 +74,7 @@ import DevicesView, { preferredDefaultModelForRunner, preferredDefaultRunnerForD
 import { CapabilityShelf } from "@/components/dashboard/CapabilityShelf";
 import RawFailureBanner, { announceRawFailure } from "@/components/dashboard/RawFailureBanner";
 import { AnsiConsoleText, hasConsoleMarkup } from "@/components/dashboard/AnsiConsoleText";
+import { summarizeRawConsole } from "@/lib/_core/ansi";
 import { SessionDeathError } from "@/lib/rawFailure";
 import { isRelayCredentialDeny, RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
 import { usableTunnelUrls } from "@/lib/endpoints";
@@ -1006,6 +1007,10 @@ export default function DashboardPage() {
   // reattach from re-rendering the scrollback.
   const [rawOutput, setRawOutput] = useState<string[]>([]);
   const [rawSince, setRawSince] = useState(0);
+  // Follow-output toggle (xterm-style): autoscroll tracks the tail while
+  // ON; the moment the user scrolls up to read, following turns off so the
+  // stream can't yank them back to the bottom. A pill re-engages it.
+  const [followOutput, setFollowOutput] = useState(true);
   // Pending agent_question pulled from the SSE stream. When non-null
   // the dashboard renders an inline answer card above the composer;
   // submitting POSTs to /tasks/{id}/answer (via answerTaskQuestion),
@@ -1824,7 +1829,9 @@ export default function DashboardPage() {
     };
   }, [activeTask?.id, activeTask?.status, appendAssistantChunk]);
 
-  useEffect(() => { if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }, [outputLines, chatMsgs, rawOutput]);
+  useEffect(() => {
+    if (outputRef.current && followOutput) outputRef.current.scrollTop = outputRef.current.scrollHeight;
+  }, [outputLines, chatMsgs, rawOutput, followOutput]);
 
   // Reconcile the activeTask's status from the polled tasks list. With-
   // out this, activeTask.status stays at "running" forever even after
@@ -4550,7 +4557,17 @@ export default function DashboardPage() {
                           </div>
                         </div>
                       ) : null}
-	                      <div ref={outputRef} className="flex-1 overflow-y-auto bg-surface-950 px-4 py-5">
+	                      <div
+                          ref={outputRef}
+                          onScroll={(e) => {
+                            // Scrolling up to read disengages follow; reaching
+                            // the bottom re-engages it (xterm-style).
+                            const el = e.currentTarget;
+                            const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+                            setFollowOutput(atBottom);
+                          }}
+                          className="flex-1 overflow-y-auto bg-surface-950 px-4 py-5"
+                        >
                         {/* NO Chat|Terminal toggle (2026-08-09, user call — same
                             as mobile): the dashboard task view is chat-only.
                             opencode's raw console look renders inside the
@@ -4636,26 +4653,69 @@ export default function DashboardPage() {
                               ))}
                             </div>
                           )
-                        ) : (
-                          <div className="mx-auto max-w-3xl">
-                            {/* Placeholder `$` prompts — only until the raw
-                                stream arrives and owns the console (the runner
-                                echoes the prompt itself). */}
-                            {rawOutput.length === 0
-                              ? chatMsgs
-                                  .filter((m) => m.role === "user")
-                                  .map((m, i) => (
-                                    <div key={`prompt-${i}`} className="whitespace-pre-wrap break-words py-0.5 font-mono text-[12px] leading-5 text-emerald-700 dark:text-emerald-300">
-                                      <span className="select-none text-surface-600">$ </span>{m.text}
-                                    </div>
-                                  ))
-                              : null}
-                            <AnsiConsoleText text={rawOutput.join("\n")} />
-                            {(activeTask.status === "running" || activeTask.status === "queued") ? (
-                              <span className="ml-0.5 inline-block h-3 w-1.5 translate-y-[2px] animate-pulse bg-surface-300" aria-hidden />
-                            ) : null}
-                          </div>
-                        )}
+                        ) : (() => {
+                          // Console-first task output: the raw runner stream
+                          // painted as-is via AnsiConsoleText, but SUMMARIZED
+                          // with the same deterministic reducer mobile uses
+                          // (shared _core/ansi) so megabytes of tool noise
+                          // don't bury the answer — web budgets are larger
+                          // than mobile's because the screen is. A compact
+                          // header turns a long stream into a document, and
+                          // the follow pill restores tail-tracking after the
+                          // user scrolls up to read (xterm-style).
+                          const rawJoined = rawOutput.join("\n");
+                          const isRunning = activeTask.status === "running" || activeTask.status === "queued";
+                          const consoleText = summarizeRawConsole(rawJoined, isRunning, {
+                            budgetLines: isRunning ? 150 : 800,
+                            budgetChars: isRunning ? 48 * 1024 : 256 * 1024,
+                          });
+                          const rawLines = rawJoined.split("\n").length;
+                          const rawKb = (rawJoined.length / 1024).toFixed(1);
+                          return (
+                            <div className="mx-auto max-w-3xl">
+                              <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-surface-800 pb-1.5 text-[10px] uppercase tracking-widest text-surface-500">
+                                <span className="font-semibold text-surface-300">{runnerLabel(activeRunnerId)}</span>
+                                {activeTask?.model ? (
+                                  <span className="normal-case tracking-normal text-surface-400">{activeTask.model}</span>
+                                ) : null}
+                                <span>{rawLines} lines · {rawKb} KB</span>
+                                {isRunning ? (
+                                  <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                                    live
+                                  </span>
+                                ) : null}
+                              </div>
+                              {/* Placeholder `$` prompts — only until the raw
+                                  stream arrives and owns the console (the runner
+                                  echoes the prompt itself). */}
+                              {rawOutput.length === 0
+                                ? chatMsgs
+                                    .filter((m) => m.role === "user")
+                                    .map((m, i) => (
+                                      <div key={`prompt-${i}`} className="whitespace-pre-wrap break-words py-0.5 font-mono text-[12px] leading-5 text-emerald-700 dark:text-emerald-300">
+                                        <span className="select-none text-surface-600">$ </span>{m.text}
+                                      </div>
+                                    ))
+                                : null}
+                              <AnsiConsoleText text={consoleText} />
+                              {isRunning ? (
+                                <span className="ml-0.5 inline-block h-3 w-1.5 translate-y-[2px] animate-pulse bg-surface-300" aria-hidden />
+                              ) : null}
+                              {!followOutput ? (
+                                <div className="sticky bottom-2 mt-2 flex justify-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => { setFollowOutput(true); if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }}
+                                    className="rounded-full border border-surface-700 bg-surface-900/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-surface-300 shadow-md transition-colors hover:border-emerald-500/50 hover:text-emerald-300"
+                                  >
+                                    ↓ follow output
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })()}
                         {/* Task-proof card (audit §9.4, B14): the SAME shared
                             component VibeCodingView mounts, so the two web
                             chat surfaces can't drift. Renders under the

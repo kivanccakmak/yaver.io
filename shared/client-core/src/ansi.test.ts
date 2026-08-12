@@ -19,6 +19,7 @@ import {
   paletteRgb,
   classifyAnsiLine,
   styleAnsiLines,
+  summarizeRawConsole,
 } from "./ansi";
 
 let failures = 0;
@@ -196,6 +197,39 @@ if (failures > 0) {
   const hints = styled.map((l) => l.hint);
   ok(hints.includes("banner"), "banner line classified through the one-stop helper");
   ok(hints.includes("prompt"), "$ prompt classified through the one-stop helper");
+}
+
+// ── summarizeRawConsole (shared noisy-console reducer) ──────────────────
+{
+  const raw = [
+    "> build · deepseek-v4-flash",     // banner — kept
+    "$ npm run build",                  // prompt echo — dropped
+    "workdir: /repo",                   // runner config banner — dropped
+    "compiled 42 files",                // real output — kept
+    "compiled 42 files",                // repeat
+    "compiled 42 files",                // 3rd repeat — collapsed
+    "compiled 42 files",                // 4th — dropped
+    "diff --git a/x.ts b/x.ts",        // diff hunk — dropped
+    "──────────",                       // TUI redraw edge — dropped
+    "✓ done",                           // status — kept
+  ].join("\n");
+  const out = summarizeRawConsole(raw, false);
+  ok(out.includes("> build · deepseek-v4-flash"), "banner survives");
+  ok(!out.includes("$ npm run build"), "$ echo dropped");
+  ok(!out.includes("workdir:"), "config banner dropped");
+  ok(out.includes("compiled 42 files"), "real output kept");
+  ok(!out.includes("diff --git"), "diff hunk dropped");
+  ok(!out.includes("──────────"), "TUI redraw edge dropped");
+  ok(out.includes("✓ done"), "status kept");
+  ok(out.includes("noisy lines collapsed"), "collapse count reported");
+  // Running budget is tighter than finished.
+  const big = Array.from({ length: 200 }, (_, i) => `line ${i}`).join("\n");
+  const running = summarizeRawConsole(big, true).split("\n").length;
+  const finished = summarizeRawConsole(big, false).split("\n").length;
+  ok(running < finished, "running budget tighter than finished budget");
+  // ANSI on kept lines survives (so AnsiConsoleText can still paint them).
+  const ansiLine = "\x1b[31mred text\x1b[0m";
+  ok(summarizeRawConsole(ansiLine, false).includes("\x1b[31m"), "kept lines keep their escapes");
 }
 
 console.log("\nall ansi tests pass");

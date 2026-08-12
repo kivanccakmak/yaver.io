@@ -10,6 +10,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { planConnectionFanout, resolveSeededRole, METERED_FANOUT_LIMIT } from "./connectionFanout";
 
 const devices = [
@@ -51,22 +53,26 @@ test("render demotes to the seeded secondary when the primary is unreachable", (
 
 // PARITY — the two copies must not drift. Comments may differ; logic may not.
 test("the mobile twin matches web, logic for logic", () => {
-  const here = new URL(".", import.meta.url);
+  // `import.meta.url` is already a file:// string; converting it straight to
+  // a path avoids the DOM-URL vs node:url.URL lib clash entirely (their
+  // searchParams iterator types differ) — exactly the kind of phantom drift
+  // this drift-test shouldn't be failing on.
+  const here = path.dirname(fileURLToPath(import.meta.url));
   const strip = (src: string) =>
     src
       .replace(/\/\*[\s\S]*?\*\//g, "")   // block comments
       .replace(/^\s*\/\/.*$/gm, "")        // line comments
       .replace(/\s+/g, " ")
       .trim();
-  const mine = strip(readFileSync(new URL("connectionFanout.ts", here), "utf8"));
-  const theirs = strip(readFileSync(new URL("../../../web/lib/connectionFanout.ts", here), "utf8"));
+  const mine = strip(readFileSync(path.join(here, "connectionFanout.ts"), "utf8"));
+  const theirs = strip(readFileSync(path.join(here, "../../../web/lib/connectionFanout.ts"), "utf8"));
   assert.equal(mine, theirs, "web and mobile connectionFanout have drifted apart");
 });
 
 // STRUCTURE — the phone's pool-warm pass must use the shared plan, and must
 // keep the health filter that stopped the reconnect storm.
 test("mobile warms its pool from the shared plan, with the health filter intact", () => {
-  const src = readFileSync(new URL("../context/DeviceContext.tsx", import.meta.url), "utf8");
+  const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../context/DeviceContext.tsx"), "utf8");
   assert.match(src, /planConnectionFanout\(\{/, "the warm pass must build a plan");
   assert.match(src, /mode: connectionMode/, "the user preference must reach the warm pass");
   // The filter is what prevents warming machines with stale LAN/Tailscale

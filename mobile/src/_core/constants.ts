@@ -72,6 +72,14 @@ export const DEFAULT_BEACON_UDP_PORT = 19837;
 export const HEARTBEAT_STALE_MS = 900_000;
 
 /**
+ * How long after the last relay-presence ping a device still counts as
+ * having a "live bus signal". Same product number as the web dashboard's
+ * hasRecentLiveSignal default (`web/lib/device-lifecycle.ts`, maxAgeMs =
+ * 360_000) so the phone and the browser agree on what "live" means.
+ */
+export const BUS_PRESENCE_STALE_MS = 360_000;
+
+/**
  * How long after the last UDP beacon an agent is still considered
  * "locally present". Re-broadcast interval is 3 s, so 10 s covers
  * three missed beats without false offline.

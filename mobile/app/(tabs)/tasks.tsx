@@ -57,6 +57,7 @@ import { useColors, useTheme } from "../../src/context/ThemeContext";
 import type { ThemeColors } from "../../src/constants/colors";
 import { AnsiConsoleText, hasConsoleMarkup } from "../../src/components/AnsiConsoleText";
 import { assembleTrace } from "../../src/_core/trace";
+import { summarizeRawConsole as _summarizeRawConsole } from "../../src/_core/ansi";
 import { appTag } from "../../src/lib/appVersion";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
@@ -667,51 +668,11 @@ function buildLiveAssistantMarkdown(content: string): string {
 // ── Summarized console (mobile: same style, fewer words) ──────────────
 // Mobile keeps the console STYLE (AnsiConsoleText) but a summarized
 // payload — the full raw stream is megabytes of tool noise a phone screen
-// shouldn't spend pixels on. Deterministic, no LLM:
-//   • `$ cmd` prompt echoes, runner config banners (workdir/model/…),
-//     git diff hunks and punctuation-only TUI redraws are dropped.
-//   • 3+ consecutive identical lines collapse to one.
-//   • A line/byte budget bounds the render (a RUNNING task gets a tight
-//     budget — the user is watching the runner, not reading it; a finished
-//     task's tail gets a bigger one so the answer stays readable).
-//   • A trailing marker says how many lines were collapsed.
-// Classification runs on stripAnsi'd text so ANSI-prefixed lines still
-// match; the KEPT lines keep their escapes intact for AnsiConsoleText.
+// shouldn't spend pixels on. The reducer lives in shared/client-core
+// (src/_core/ansi.ts, sync'd) so web + mobile collapse the SAME grammar;
+// this local wrapper only picks mobile-sized budgets.
 function summarizeRawConsole(raw: string, running: boolean): string {
-  if (!raw) return "";
-  const budgetLines = running ? 40 : 200;
-  const budgetChars = running ? 6 * 1024 : 24 * 1024;
-  const lines = raw.split("\n");
-  const kept: string[] = [];
-  let keptChars = 0;
-  let dropped = 0;
-  let prevKey = "";
-  let runLen = 0;
-  const isNoise = (plain: string) => {
-    if (/^\$\s+/.test(plain)) return true; // `$ cmd` echo
-    if (/^(workdir|model|provider|approval|sandbox|reasoning effort|session id|project path|project):/i.test(plain)) return true; // runner config banners
-    if (/^(diff --git|index [0-9a-f]+\.\.[0-9a-f]+|@@ |--- |\+\+\+ )/.test(plain)) return true; // diff hunks
-    if (/^[{}[\];(),.=><:+\-/*\\|'"`_~]+$/.test(plain)) return true; // TUI redraw edges
-    return false;
-  };
-  for (const rawLine of lines) {
-    const plain = stripAnsi(rawLine).trim();
-    if (!plain) continue;
-    if (isNoise(plain)) { dropped += 1; continue; }
-    if (plain === prevKey) {
-      runLen += 1;
-      if (runLen > 2) { dropped += 1; continue; } // 3+ repeats → one
-    } else {
-      prevKey = plain;
-      runLen = 1;
-    }
-    if (kept.length >= budgetLines || keptChars >= budgetChars) { dropped += 1; continue; }
-    kept.push(rawLine);
-    keptChars += rawLine.length + 1;
-  }
-  let out = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-  if (dropped > 0) out = `${out}\n… ${dropped} noisy lines collapsed`;
-  return out;
+  return _summarizeRawConsole(raw, running);
 }
 
 // The preview is one line, capped at 120 chars — so it must never touch
@@ -7140,11 +7101,11 @@ export default function TasksScreen() {
           visible={!!selectedTask}
           animationType={tabletDualPane ? "fade" : "slide"}
           transparent
-          // Android transparent Modals default to adjustPan, which pans only
-          // the FOCUSED field above the keyboard — the follow-up card's Send
-          // button below it stayed hidden. Resize shrinks the modal so the
-          // KeyboardAvoidingView below can raise the whole card. iOS ignores.
-          softwareKeyboardLayoutMode="resize"
+          // NOTE: softwareKeyboardLayoutMode ("resize") is NOT in RN 0.81.5's
+          // Modal types — it cannot compile against this React Native. The
+          // Android keyboard-panning issue it was meant to fix (follow-up
+          // Send button hidden) must be revisited with the KeyboardAvoidingView
+          // below once the RN version supports the prop.
           onRequestClose={() => setSelectedTask(null)}
         >
           <KeyboardAvoidingView

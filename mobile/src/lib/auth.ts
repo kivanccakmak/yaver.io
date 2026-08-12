@@ -718,6 +718,9 @@ export interface UserSettings {
     autoPush?: "never" | "ask" | "always";
     updatedAt?: number;
   }>;
+  /** Fan-out mode: "all" = every machine, "single" = pin to the selected
+   *  device. Mirrors web's connectionMode so the phone and browser agree. */
+  connectionMode?: "single" | "all";
   machineRolesForProject?: {
     projectName?: string;
     runnerDeviceId: string | null;

@@ -397,3 +397,65 @@ export function styleAnsiLines(input: string): AnsiStyledLine[] {
     return { hint: classifyAnsiLine(plain), plain, tokens: l.tokens };
   });
 }
+
+/**
+ * Summarize a raw runner console for a small screen (phone / compact web
+ * pane). The full raw stream is megabytes of tool noise a human shouldn't
+ * have to read to find the answer; this is a DETERMINISTIC reducer — no LLM,
+ * no config:
+ *
+ *   - `$ cmd` prompt echoes, runner-config banners (workdir/model/…), git
+ *     diff hunks and punctuation-only TUI redraw edges are dropped.
+ *   - 3+ consecutive identical lines collapse to one.
+ *   - A line/byte budget bounds the render (a RUNNING task gets a tight
+ *     budget — the user is watching the runner, not reading it; a finished
+ *     task's tail gets a bigger one so the answer stays readable).
+ *   - A trailing marker says how many lines were collapsed.
+ *
+ * Classification runs on ANSI-stripped text so escapes-prefixed lines still
+ * match; the KEPT lines keep their escapes intact for AnsiConsoleText to
+ * paint. Budgets default to mobile-sized; pass larger ones for web.
+ */
+export interface SummarizeConsoleOptions {
+  /** Max lines to keep. Default: 40 running / 200 finished. */
+  budgetLines?: number;
+  /** Max characters to keep. Default: 6 KiB running / 24 KiB finished. */
+  budgetChars?: number;
+}
+
+const CONSOLE_NOISE_RE = [
+  /^\$\s+/, // `$ cmd` echo
+  /^(workdir|model|provider|approval|sandbox|reasoning effort|session id|project path|project):/i, // runner config banners
+  /^(diff --git|index [0-9a-f]+\.\.[0-9a-f]+|@@ |--- |\+\+\+ )/, // diff hunks
+  /^[{}[\];(),.=><:+\-/*\\|'"`_~]+$/, // TUI redraw edges
+];
+
+export function summarizeRawConsole(raw: string, running: boolean, opts?: SummarizeConsoleOptions): string {
+  if (!raw) return "";
+  const budgetLines = opts?.budgetLines ?? (running ? 40 : 200);
+  const budgetChars = opts?.budgetChars ?? (running ? 6 * 1024 : 24 * 1024);
+  const lines = raw.split("\n");
+  const kept: string[] = [];
+  let keptChars = 0;
+  let dropped = 0;
+  let prevKey = "";
+  let runLen = 0;
+  for (const rawLine of lines) {
+    const plain = ansiToPlain(rawLine).trim();
+    if (!plain) continue;
+    if (CONSOLE_NOISE_RE.some((re) => re.test(plain))) { dropped += 1; continue; }
+    if (plain === prevKey) {
+      runLen += 1;
+      if (runLen > 2) { dropped += 1; continue; } // 3+ repeats → one
+    } else {
+      prevKey = plain;
+      runLen = 1;
+    }
+    if (kept.length >= budgetLines || keptChars >= budgetChars) { dropped += 1; continue; }
+    kept.push(rawLine);
+    keptChars += rawLine.length + 1;
+  }
+  let out = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (dropped > 0) out = `${out}\n… ${dropped} noisy lines collapsed`;
+  return out;
+}

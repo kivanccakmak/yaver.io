@@ -586,6 +586,36 @@ export interface Task {
   videoSource?: "browser" | "sim-ios" | "sim-android" | "phone";
   videoClipId?: string;
   videoStatus?: "queued" | "recording" | "ready" | "failed" | "stale";
+  /** Task-proof evidence (vibe-preview F3): the agent records what it did
+   *  after completion. `proofStatus`/`proofUrl` on the Task row mirror the
+   *  hydrated `TaskProof` from GET /tasks/{id}/proof. */
+  proofStatus?: string;
+  proofUrl?: string;
+  commitSha?: string;
+  commitSubject?: string;
+  diffShortstat?: string;
+}
+
+/** Task-proof evidence returned by GET /tasks/{id}/proof — mirrors the
+ *  web-side TaskProof (web/lib/agent-client.ts) so the two surfaces can't
+ *  drift. */
+export interface TaskProof {
+  taskId: string;
+  status: "capturing" | "ready" | "failed";
+  failedReason?: string;
+  failedRoute?: string;
+  lane?: string;
+  clipId?: string;
+  videoUrl?: string;
+  posterUrl?: string;
+  commitSha?: string;
+  commitSubject?: string;
+  commitBranch?: string;
+  diffShortstat?: string;
+  summaryMarkdown?: string;
+  durationSec?: number;
+  costUsd?: number;
+  createdAt?: string;
 }
 
 export interface AutorunSessionInfo {
