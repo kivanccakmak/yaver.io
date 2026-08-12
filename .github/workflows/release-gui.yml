@@ -96,6 +96,16 @@ jobs:
         run: node scripts/fetch-agent-binary.mjs
       - name: Package
         working-directory: electron
+        env:
+          # electron-builder signs the mac app with these when present
+          # (hardened runtime + notarization via notarytool), exactly like the
+          # CLI release path. Without them the DMG still builds but is
+          # unsigned — Gatekeeper would block it on first run.
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: npx electron-builder --${{ matrix.platform }} --publish never
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
