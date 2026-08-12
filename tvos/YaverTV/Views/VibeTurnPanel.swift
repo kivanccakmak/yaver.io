@@ -57,6 +57,10 @@ struct VibeTurnPanel: View {
     @State private var pickedMCPServers: Set<String> = []
     @State private var yaverMcpOn = true
 
+    /// Focus the prompt the moment the panel expands so the Siri Remote's mic
+    /// button dictates straight into it — the only speech input a TV has.
+    @FocusState private var promptFocused: Bool
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let turnError {
@@ -76,11 +80,15 @@ struct VibeTurnPanel: View {
                         .textFieldStyle(.plain)
                         .font(.system(size: 20))
                         .frame(maxWidth: 700)
+                        .focused($promptFocused)
                         .onSubmit { send() }
                     Button(sending ? "Sending…" : "Send") { send() }
                         .disabled(sending || prompt.trimmingCharacters(in: .whitespaces).isEmpty)
                     Button("Close") { expanded = false }
                 }
+                Text("Press the mic button on the Siri Remote to dictate — the prompt is focused.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
                 HStack(spacing: 10) {
                     projectChip
                     mcpChip
@@ -89,6 +97,8 @@ struct VibeTurnPanel: View {
             } else {
                 Button {
                     expanded = true
+                    // Focus follows the expansion so a second mic press dictates.
+                    promptFocused = true
                 } label: {
                     Label(turn == nil ? "Vibe — ask for a change" : "Ask for another change",
                           systemImage: "wand.and.stars")

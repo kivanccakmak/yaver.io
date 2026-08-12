@@ -239,6 +239,39 @@ enum MachineRegistry {
                             mcpServersByDevice: nil)
     }
 
+    /// POST /settings/repair-relay — re-sync this account's per-user relay
+    /// password with the platform-managed value. The tvOS twin of mobile's
+    /// DeviceContext.repairRelay and the web dashboard's auto-repair: when the
+    /// relay keeps answering 401 "invalid relay password", the stored password
+    /// drifted from what the relay expects, and this re-copies the current
+    /// value (backend userSettings.repairRelayPassword — never generates new
+    /// secrets, only re-copies what every synced user has). Safe on the shared
+    /// free relay; cannot touch other tenants. Throws with the backend's own
+    /// reason (session expired → the caller should surface re-auth).
+    static func repairRelay(token: String) async throws {
+        guard !token.isEmpty else { throw AgentError(message: "Sign in first.") }
+        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("settings/repair-relay"))
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 12
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse else {
+            throw AgentError(message: "No response from Yaver while repairing the relay.")
+        }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw AgentError(message: "Your TV session expired — sign in again to repair the relay.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let err = obj["error"] as? String, !err.isEmpty {
+                throw AgentError(message: err)
+            }
+            throw AgentError(message: "Relay repair failed (\(http.statusCode)).")
+        }
+    }
+
     /// POST /settings — write a last-project row to Convex. Same
     /// `defaultRuntimeProjectForDevice` (replace-by-deviceId) the phone and
     /// web dashboard write, so a project picked on the TV is remembered on the

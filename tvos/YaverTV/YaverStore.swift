@@ -143,13 +143,44 @@ final class YaverStore: ObservableObject {
     /// split is configured but unreachable — callers surface the named cause.
     func runnerClient() -> AgentClient? {
         guard isAuthenticated, let box = runnerBox() else { return nil }
-        return AgentClient(token: token, box: box)
+        return AgentClient(token: token, box: box, relayRepair: relayRepairClosure)
     }
 
     /// Client for preview/stream/build flows — the render box.
     func renderClient() -> AgentClient? {
         guard isAuthenticated, let box = renderBox() else { return nil }
-        return AgentClient(token: token, box: box)
+        return AgentClient(token: token, box: box, relayRepair: relayRepairClosure)
+    }
+
+    /// The relay-credential self-heal, injected into every client so the TV
+    /// auto-repairs a stale relay password exactly like mobile/web — the
+    /// "in tasks: invalid relay password" fix. The client calls it once per
+    /// failing relay leg, adopts the REPAIRED box (new password in the relay
+    /// endpoints), and retries — one repair per streak, never a loop.
+    private var relayRepairClosure: @Sendable () async -> BoxTarget? {
+        { [weak self] in await self?.repairRelay() }
+    }
+
+    /// POST /settings/repair-relay, then re-fetch /settings and adopt the
+    /// corrected relay metadata onto the selected box. Returns the REPAIRED
+    /// box so the client can swap its endpoints and retry; nil when repair
+    /// failed or there is nothing to repair. Mirrors mobile's repairRelay.
+    func repairRelay() async -> BoxTarget? {
+        guard isAuthenticated, let box = selectedBox else { return nil }
+        do {
+            try await MachineRegistry.repairRelay(token: token)
+        } catch {
+            return nil
+        }
+        guard let settings = try? await MachineRegistry.fetchSettings(token: token) else { return nil }
+        adoptSettings(settings)
+        guard settings.relayUrl?.isEmpty == false || settings.relayPassword?.isEmpty == false else { return nil }
+        let repaired = BoxTarget(id: box.id, name: box.name, host: box.host, port: box.port,
+                                 managed: box.managed, machineId: box.machineId,
+                                 relayBaseUrl: settings.relayUrl, relayPassword: settings.relayPassword)
+        addBox(repaired)
+        select(repaired)
+        return repaired
     }
 
     var isAuthenticated: Bool { !token.isEmpty }
@@ -358,7 +389,7 @@ final class YaverStore: ObservableObject {
 
     func client() -> AgentClient? {
         guard isAuthenticated, let box = selectedBox else { return nil }
-        return AgentClient(token: token, box: box)
+        return AgentClient(token: token, box: box, relayRepair: relayRepairClosure)
     }
 
     private func persistBoxes() {

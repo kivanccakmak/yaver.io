@@ -80,20 +80,29 @@ struct TasksView: View {
     private var filtered: [TaskSummary] { tasks.filter { filter.matches($0.status) } }
 
     private var header: some View {
-        HStack {
-            Image(systemName: "checklist").font(.system(size: 26)).foregroundStyle(.blue)
-            Text("Tasks").font(.system(size: 30, weight: .bold))
-            Spacer()
-            Button {
-                showComposer = true
-            } label: {
-                Label("New vibe", systemImage: "wand.and.stars")
-                    .font(.system(size: 17, weight: .semibold))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "bubble.left.and.bubble.right.fill").font(.system(size: 26)).foregroundStyle(.blue)
+                Text("Chat").font(.system(size: 30, weight: .bold))
+                Text("Tasks & vibes").font(.system(size: 17)).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    showComposer = true
+                } label: {
+                    Label("New vibe", systemImage: "wand.and.stars")
+                        .font(.system(size: 17, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
+                    .disabled(loading)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
-                .disabled(loading)
+            // The one speech path a TV has: the Siri Remote's mic button
+            // dictates into a focused text field. Everything started from the
+            // phone's whisper mic is a task too, so it lands in this same list.
+            Text("Press the mic button on the Siri Remote to dictate a vibe — or start one with whisper on your iPhone; it appears here.")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 48).padding(.vertical, 20)
     }

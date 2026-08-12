@@ -109,17 +109,24 @@ private struct RuntimeTurnList: Decodable {
 
 actor SessionClient {
     private let token: String
-    private let box: BoxTarget
+    private var box: BoxTarget
     private let session: URLSession
+
+    /// The relay-credential self-heal injected by YaverStore (POST
+    /// /settings/repair-relay → repaired box, or nil). Same contract as
+    /// AgentClient.relayRepair; the turn endpoint rides the same LAN-first /
+    /// relay-second legs, so it hits the same stale-password 401.
+    private let relayRepair: (@Sendable () async -> BoxTarget?)?
 
     private struct Endpoint {
         let url: URL
         let relay: Bool
     }
 
-    init(token: String, box: BoxTarget) {
+    init(token: String, box: BoxTarget, relayRepair: (@Sendable () async -> BoxTarget?)? = nil) {
         self.token = token
         self.box = box
+        self.relayRepair = relayRepair
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 30
         self.session = URLSession(configuration: cfg)
@@ -257,43 +264,63 @@ actor SessionClient {
     }
 
     private func request(_ method: String, path: String, body: Data?, failure: String, extraOK: Set<Int> = []) async throws -> (data: Data, status: Int) {
-        let endpoints = requestEndpoints(path: path)
-        guard !endpoints.isEmpty else { throw AgentError(message: "bad box host") }
+        // Same relay-credential self-heal as AgentClient: a stale per-user
+        // relay password 401s the relay leg while the box is fine. Repair once
+        // per streak and re-run with the corrected password; endpoints are
+        // recomputed each pass.
+        var repairedOnce = false
+        var finalError: Error = AgentError(message: failure)
+        for _ in 0..<2 {
+            let endpoints = requestEndpoints(path: path)
+            guard !endpoints.isEmpty else { throw AgentError(message: "bad box host") }
 
-        var lastError: Error = AgentError(message: failure)
-        for endpoint in endpoints {
-            var req = URLRequest(url: endpoint.url)
-            req.httpMethod = method
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-            if endpoint.relay, let pw = box.relayPassword, !pw.isEmpty {
-                req.setValue(pw, forHTTPHeaderField: "X-Relay-Password")
-            }
-            req.httpBody = body
+            var lastError: Error = AgentError(message: failure)
+            for endpoint in endpoints {
+                var req = URLRequest(url: endpoint.url)
+                req.httpMethod = method
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+                if endpoint.relay, let pw = box.relayPassword, !pw.isEmpty {
+                    req.setValue(pw, forHTTPHeaderField: "X-Relay-Password")
+                }
+                req.httpBody = body
 
-            do {
-                let (data, resp) = try await self.session.data(for: req)
-                guard let http = resp as? HTTPURLResponse else {
-                    throw AgentError(message: "no response")
+                do {
+                    let (data, resp) = try await self.session.data(for: req)
+                    guard let http = resp as? HTTPURLResponse else {
+                        throw AgentError(message: "no response")
+                    }
+                    if (200..<300).contains(http.statusCode) || extraOK.contains(http.statusCode) {
+                        return (data, http.statusCode)
+                    }
+                    if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let err = obj["error"] as? String, !err.isEmpty {
+                        throw AgentError(message: err)
+                    }
+                    lastError = AgentError(message: "\(failure) (\(http.statusCode))")
+                    continue
+                } catch let err as AgentError {
+                    // A relay credential deny is self-healable: repair once and
+                    // re-run the whole leg. Any other refusal is final.
+                    if endpoint.relay, FailureSignals.isRelayCredentialDeny(err.message), !repairedOnce {
+                        if let repaired = await relayRepair?() {
+                            self.box = repaired
+                            repairedOnce = true
+                            lastError = err
+                            break // recompute endpoints with the new password
+                        }
+                    }
+                    throw err
+                } catch {
+                    lastError = error
+                    continue
                 }
-                if (200..<300).contains(http.statusCode) || extraOK.contains(http.statusCode) {
-                    return (data, http.statusCode)
-                }
-                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let err = obj["error"] as? String, !err.isEmpty {
-                    throw AgentError(message: err)
-                }
-                lastError = AgentError(message: "\(failure) (\(http.statusCode))")
-                continue
-            } catch let err as AgentError {
-                throw err
-            } catch {
-                lastError = error
-                continue
             }
+            if !repairedOnce { throw lastError }
+            finalError = lastError
         }
-        throw lastError
+        throw finalError
     }
 
     private func requestEndpoints(path rawPath: String) -> [Endpoint] {

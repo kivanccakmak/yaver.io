@@ -1,11 +1,29 @@
-// DashboardView.swift — lean-back tile launcher. Picks/registers a box (the
-// LAN host running `yaver serve`) and routes into the control surfaces.
+// DashboardView.swift — lean-back launcher, shaped like the web dashboard.
+//
+// The tile grid used to be twelve boxes (Session, Tasks, Projects, Runtime,
+// Apple TV, Capture, Feedback, Android, Switch, Update agent, Shared with,
+// Sign out). On a TV that is a wall of inventory; the web's sidebar is five
+// items — Devices, Chat, Projects, Vibing — and sign-out lives in the profile.
+// This surface is the same five, plus a "More" tile that hides the secondary
+// tools instead of showing them all at once:
+//
+//   Devices  → MachinePickerView  (your account's machines, switch/wake)
+//   Chat     → TasksView          (tasks & vibes — the web/mobile chat)
+//   Projects → ProjectsView       (browse & preview on the TV)
+//   Vibing   → SessionView        (drive a live coding session)
+//   More     → secondary tools    (Runtime · Apple TV · capture · feedback)
+//
+// The profile menu (top-right) owns the account-level actions: Sign out,
+// Update agent, Shared with. The connected PC is shown as a first-class card
+// under the header — name, host, live status — so "which box am I on" is the
+// first thing the initial screen answers, exactly like web/mobile.
 
 import SwiftUI
 
 struct DashboardView: View {
     @EnvironmentObject var store: YaverStore
     @State private var showPicker = false
+    @State private var showMore = false
     @State private var showUpdateAgent = false
     @State private var showSharedGuests = false
     @StateObject private var lifecycle = BoxLifecycle()
@@ -67,54 +85,26 @@ struct DashboardView: View {
                         wakePanel
 
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 24)], spacing: 24) {
-                            NavigationLink(destination: SessionView()) {
-                                Tile(icon: "terminal.fill", title: "Session", detail: "Drive a live coding session")
+                            // Devices — the account's machines, with liveness +
+                            // wake, same list web's Devices tab shows.
+                            Button { showPicker = true } label: {
+                                Tile(icon: "laptopcomputer", title: "Devices", detail: "Machines on your account · switch or wake")
                             }
                             NavigationLink(destination: TasksView()) {
-                                Tile(icon: "checklist", title: "Tasks", detail: "What's running & in review")
+                                Tile(icon: "bubble.left.and.bubble.right.fill", title: "Chat", detail: "Tasks & vibes — what's running, start a vibe")
                             }
                             NavigationLink(destination: ProjectsView()) {
                                 Tile(icon: "folder.fill", title: "Projects", detail: "Browse & preview on the TV")
                             }
-                            // "Yaver Catalog" used to sit here. It navigated to
-                            // RuntimeDashboardView — the same destination as the
-                            // Runtime tile below it — under the subtitle
-                            // "SFMG · Carrotbet · Personal Runtime": three of the
-                            // author's own projects, hardcoded, shipped to every
-                            // install. There is no catalog. A tile that lies about
-                            // where it goes and advertises a stranger's side
-                            // projects is worse than no tile.
-                            NavigationLink(destination: RuntimeDashboardView()) {
-                                Tile(icon: "terminal", title: "Runtime", detail: "Claude · Codex · reload")
+                            NavigationLink(destination: SessionView()) {
+                                Tile(icon: "wand.and.stars", title: "Vibing", detail: "Drive a live coding session")
                             }
-                            NavigationLink(destination: AppleTVRemoteView()) {
-                                Tile(icon: "appletv", title: "Apple TV", detail: "Remote · now playing")
-                            }
-                            NavigationLink(destination: AppleTVRemoteView(captureFirst: true)) {
-                                Tile(icon: "video", title: "Capture", detail: "Capture card view")
-                            }
-                            NavigationLink(destination: FeedbackView()) {
-                                Tile(icon: "bubble.left.and.text.bubble.right", title: "Feedback", detail: "Reports from test devices")
-                            }
-                            NavigationLink(destination: DroidStreamView()) {
-                                Tile(icon: "iphone.gen3", title: "Android", detail: "Watch the redroid screen live")
-                            }
-                            Button { showPicker = true } label: {
-                                Tile(icon: "server.rack", title: store.selectedBox?.name ?? "Box", detail: "Switch machine")
-                            }
-                            // Not scoped to the selected box on purpose: the TV
-                            // reaches boxes over direct LAN only, so the machines
-                            // that most need an update are the ones it can't
-                            // select. UpdateAgentView asks the account, not the
-                            // box — see its header.
-                            Button { showUpdateAgent = true } label: {
-                                Tile(icon: "arrow.down.circle", title: "Update agent", detail: "Ask a machine to update")
-                            }
-                            Button { showSharedGuests = true } label: {
-                                Tile(icon: "person.2.fill", title: "Shared with", detail: "See guests and remove access")
-                            }
-                            Button { store.signOut() } label: {
-                                Tile(icon: "rectangle.portrait.and.arrow.right", title: "Sign out", detail: "")
+                            // Everything that used to be its own box lives here,
+                            // one level down: Runtime, Apple TV remote, Capture,
+                            // Android, Feedback. Capability is not deleted, it
+                            // just stops crowding the five surfaces.
+                            Button { showMore = true } label: {
+                                Tile(icon: "ellipsis.circle.fill", title: "More", detail: "Runtime · Apple TV · capture · feedback")
                             }
                         }
                     }
@@ -135,6 +125,7 @@ struct DashboardView: View {
                 routedFromStartAt = true
             }
             .sheet(isPresented: $showPicker) { MachinePickerView() }
+            .sheet(isPresented: $showMore) { MoreToolsView() }
             .sheet(isPresented: $showUpdateAgent) { UpdateAgentView() }
             .sheet(isPresented: $showSharedGuests) { SharedGuestsView(token: store.token) }
             .task(id: store.selectedBox?.id) {
@@ -219,24 +210,51 @@ struct DashboardView: View {
         }
     }
 
+    /// Header: brand on the left, the PROFILE menu on the right. Sign-out is
+    /// an account action, so it lives here — never buried in a tile grid.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Yaver").font(.system(size: 48, weight: .heavy))
-            Text(store.selectedBox.map { "Remote runtime on \($0.name)" } ?? "No box selected")
-                .font(.system(size: 20)).foregroundStyle(.secondary)
+        HStack(alignment: .center, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Yaver").font(.system(size: 48, weight: .heavy))
+                Text(store.selectedBox.map { "Remote runtime on \($0.name)" } ?? "No box selected")
+                    .font(.system(size: 20)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Menu {
+                Button(role: .destructive) { store.signOut() } label: {
+                    Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                }
+                Button { showUpdateAgent = true } label: {
+                    Label("Update agent", systemImage: "arrow.down.circle")
+                }
+                Button { showSharedGuests = true } label: {
+                    Label("Shared with", systemImage: "person.2.fill")
+                }
+            } label: {
+                Image(systemName: "person.crop.circle.fill")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
+    /// The connected PC, named and alive — the first thing the initial screen
+    /// answers. Status dot: green = reachable, orange = unreachable, gray =
+    /// checking. Detail names host, relay fallback and the runner/render split
+    /// badge so a split is never two silent sources.
     private var selectedMachinePanel: some View {
         HStack(spacing: 22) {
             Image(systemName: "server.rack")
                 .font(.system(size: 34, weight: .semibold))
-                .foregroundStyle(.green)
+                .foregroundStyle(connectivityColor)
                 .frame(width: 54, height: 54)
-                .background(.green.opacity(0.16), in: RoundedRectangle(cornerRadius: 12))
+                .background(connectivityColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 12))
             VStack(alignment: .leading, spacing: 4) {
-                Text(store.selectedBox?.name ?? "Selected machine")
-                    .font(.system(size: 26, weight: .bold))
+                HStack(spacing: 12) {
+                    Text(store.selectedBox?.name ?? "Selected machine")
+                        .font(.system(size: 26, weight: .bold))
+                    statusChip
+                }
                 Text(machineDetail)
                     .font(.system(size: 17))
                     .foregroundStyle(.secondary)
@@ -253,6 +271,36 @@ struct DashboardView: View {
         .padding(24)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private var connectivityColor: Color {
+        switch lifecycle.reachable {
+        case .some(true): return .green
+        case .some(false): return .orange
+        case nil: return .gray
+        }
+    }
+
+    @ViewBuilder private var statusChip: some View {
+        switch lifecycle.reachable {
+        case .some(true):
+            chip("Connected", .green)
+        case .some(false):
+            chip("Unreachable", .orange)
+        case nil:
+            chip("Checking…", .gray)
+        }
+    }
+
+    private func chip(_ text: String, _ color: Color) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 9, height: 9)
+            Text(text)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(color)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 5)
+        .background(color.opacity(0.14), in: Capsule())
     }
 
     private var machineDetail: String {
@@ -296,6 +344,57 @@ struct DashboardView: View {
             .padding(.top, 8)
             Button("Shared with") { showSharedGuests = true }
         }
+    }
+}
+
+/// The secondary tools, one level below the five surfaces — the tiles that
+/// used to crowd the dashboard (Runtime, Apple TV remote, Capture, Android,
+/// Feedback) live here now. A sheet with its own NavigationStack so each row
+/// pushes its full-screen destination, D-pad friendly.
+private struct MoreToolsView: View {
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(spacing: 14) {
+                    moreRow(icon: "terminal", title: "Runtime", detail: "Claude · Codex · reload · voice") { RuntimeDashboardView() }
+                    moreRow(icon: "appletv", title: "Apple TV", detail: "Remote · now playing") { AppleTVRemoteView() }
+                    moreRow(icon: "video", title: "Capture", detail: "Capture card view") { AppleTVRemoteView(captureFirst: true) }
+                    moreRow(icon: "iphone.gen3", title: "Android", detail: "Watch the redroid screen live") { DroidStreamView() }
+                    moreRow(icon: "bubble.left.and.text.bubble.right", title: "Feedback", detail: "Reports from test devices") { FeedbackView() }
+                }
+                .padding(40)
+            }
+            .navigationTitle("More")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    @Environment(\.dismiss) private var dismiss
+
+    private func moreRow<D: View>(icon: String, title: String, detail: String,
+                                  @ViewBuilder destination: @escaping () -> D) -> some View {
+        NavigationLink(destination: destination()) {
+            HStack(spacing: 18) {
+                Image(systemName: icon)
+                    .font(.system(size: 28))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(.system(size: 24, weight: .semibold))
+                    Text(detail).font(.system(size: 16)).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 28).padding(.vertical, 18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        }
+        .buttonStyle(.card)
     }
 }
 

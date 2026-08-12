@@ -32,6 +32,10 @@ struct TaskComposerView: View {
     @State private var mode = ""
     @State private var askMode = false
 
+    /// The composer opens focused on the prompt so the Siri Remote's mic
+    /// button dictates into it immediately — the only speech input a TV has.
+    @FocusState private var promptFocused: Bool
+
     private var runnerBoxId: String? { store.runnerBox()?.id }
 
     var body: some View {
@@ -42,7 +46,12 @@ struct TaskComposerView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 22))
                 .lineLimit(3, reservesSpace: true)
+                .focused($promptFocused)
                 .onSubmit { create() }
+
+            Text("Press the mic button on the Siri Remote to dictate — or type with the remote's keyboard.")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
 
             HStack(spacing: 10) {
                 projectChip
@@ -83,6 +92,7 @@ struct TaskComposerView: View {
         .padding(40)
         .frame(maxWidth: 900)
         .task { await loadPickerState() }
+        .onAppear { promptFocused = true }
     }
 
     private var header: some View {

@@ -161,7 +161,13 @@ enum FailureSignals {
     /// A relay CREDENTIAL refusal — the account's relay password is missing or
     /// stale. Self-healable and emphatically not the agent's fault, so it must
     /// never reach a coding runner.
-    private static func isRelayCredentialFailure(_ lower: String) -> Bool {
+    ///
+    /// Public: AgentClient/SessionClient use it to decide when to run the
+    /// /settings/repair-relay self-heal on a relay-leg failure (the tvOS twin
+    /// of mobile's probeWithRepair + web's auto-repair). Same matcher the
+    /// target-probe classifier above uses — one vocabulary, no per-caller
+    /// regexes.
+    static func isRelayCredentialFailure(_ lower: String) -> Bool {
         lower.contains("relay_password_missing")
             || lower.contains("relay_password_invalid")
             || lower.contains("relay_password_rate_limited")
@@ -171,6 +177,15 @@ enum FailureSignals {
             || lower.contains("too many invalid relay password attempts")
             || lower.contains("reason=bad_password")
             || lower.contains("relay authentication failed")
+    }
+
+    /// True when an error message is a relay CREDENTIAL deny — the account's
+    /// per-user relay password is missing or stale on the wire. This is the
+    /// one failure the TV can self-heal (POST /settings/repair-relay re-copies
+    /// the platform value, same as mobile/web), so it is classified here and
+    /// handled at the client layer rather than rendered as a dead error.
+    static func isRelayCredentialDeny(_ message: String?) -> Bool {
+        isRelayCredentialFailure((message ?? "").lowercased())
     }
 
     static func classifyTargetProbeFailure(_ error: String?) -> TargetProbePlan {
