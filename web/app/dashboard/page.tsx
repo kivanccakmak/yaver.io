@@ -995,19 +995,17 @@ export default function DashboardPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const pendingDispatchRef = useRef<Set<string>>(new Set());
-  // ── opencode raw-lane note ─────────────────────────────────────────
-  // opencode tasks stream their RAW runner stdout (ANSI + TUI intact) as
-  // `raw`/`raw_replay` SSE frames (agent 1.99.406+, commit d671b7c02).
-  // The Chat|Terminal toggle is GONE (2026-08-09, user call — same as
-  // mobile): the dashboard task view is chat-only, and the raw console
-  // look renders inside the chat bubbles via AnsiConsoleText. The raw
-  // lane is consumed below into a foldable console panel — the web twin
-  // of mobile's LiveConsoleSection (audit 2026-08-12 §2: web had no
-  // consumer for a lane mobile ships). rawSince resume keeps a reattach
-  // from re-rendering the scrollback.
+  // ── raw-lane note ─────────────────────────────────────────
+  // Every runner (opencode, codex, claude, …) streams its RAW stdout
+  // (ANSI + TUI intact) as `raw`/`raw_replay` SSE frames (agent 1.99.406+,
+  // commit d671b7c02) — see tasks.go emitRaw, which runs before any
+  // per-runner grooming. Since 2026-08-12 the task view IS the console:
+  // rawOutput is the primary output, painted via AnsiConsoleText. The
+  // groomed chat transcript survives only as the no-raw-lane fallback and
+  // as the source of the `$` placeholder prompts. rawSince resume keeps a
+  // reattach from re-rendering the scrollback.
   const [rawOutput, setRawOutput] = useState<string[]>([]);
   const [rawSince, setRawSince] = useState(0);
-  const [rawOpen, setRawOpen] = useState(false);
   // Pending agent_question pulled from the SSE stream. When non-null
   // the dashboard renders an inline answer card above the composer;
   // submitting POSTs to /tasks/{id}/answer (via answerTaskQuestion),
@@ -1717,6 +1715,15 @@ export default function DashboardPage() {
     return u;
   }, [appendAssistantChunk]);
 
+  // The console buffer is per-TASK: switching tasks must never leak one
+  // task's raw tail into another's (mobile keys the reset the same way).
+  // Declared BEFORE the stream effect so the reset lands first, then the
+  // stream's raw_replay reseeds the fresh task.
+  useEffect(() => {
+    setRawOutput([]);
+    setRawSince(0);
+  }, [activeTask?.id]);
+
   // Live SSE for the active running task. The 3s poller is fine for
   // background sync but caps tail latency at the polling cadence
   // (and stalls during relay outages). Subscribing to /tasks/<id>/
@@ -1727,21 +1734,30 @@ export default function DashboardPage() {
       sseActiveTaskRef.current = null;
       return;
     }
-    if (activeTask.status !== "running" && activeTask.status !== "queued") {
+    const tid = activeTask.id;
+    const status = String(activeTask.status || "");
+    const runnerCoding = status === "running" || status === "queued";
+    // Terminal tasks get NO live ladder and NO health banner — but the
+    // console still needs its raw tail, seeded in one raw_replay frame
+    // (rawSince=0 → the agent's full retained tail; the stream closes on
+    // `done`, and the recovery wrapper classifies that as idle — no
+    // reattach, no health noise).
+    if (!runnerCoding) {
       sseActiveTaskRef.current = null;
       setTaskStreamHealth(null);
-      return;
+    } else {
+      sseActiveTaskRef.current = tid;
     }
-    const tid = activeTask.id;
-    const isOpenCode = String(activeTask.runnerId || "").toLowerCase() === "opencode";
-    sseActiveTaskRef.current = tid;
     // Recovery-wrapped — see lib/taskStreamWithRecovery.ts. Without onEnd a
     // severed stream ends in silence and the transcript freezes mid-answer.
     const stop = streamTaskOutputWithRecovery(
       agentClient,
       tid,
       (chunk) => {
-        appendAssistantChunk(tid, chunk);
+        // Terminal replay carries the whole groomed transcript — the raw
+        // console is the view now, so only a coding task feeds the bubbles
+        // (which stay as the no-raw-lane fallback + the agent-question card).
+        if (runnerCoding) appendAssistantChunk(tid, chunk);
       },
       (evt) => {
         if (!evt || typeof evt.type !== "string") return;
@@ -1767,13 +1783,15 @@ export default function DashboardPage() {
         }
       },
       {
-        onHealth: setTaskStreamHealth,
-        // The raw opencode console lane (ANSI + TUI, ungroomed). Append into
-        // a bounded buffer (mobile uses 512 KB; here we cap lines at 2000 so
-        // a long turn cannot balloon the DOM). raw_replay is the reattach
-        // snapshot — replace, not append. The byte cursor rides rawSince so a
-        // stream reattach resumes where the console left off.
-        rawSince,
+        onHealth: runnerCoding ? setTaskStreamHealth : undefined,
+        // The raw console lane (ANSI + TUI, ungroomed) is the task view's
+        // PRIMARY output — the same bytes mobile's LiveConsoleSection and
+        // tvOS render, for EVERY runner. Append into a bounded buffer
+        // (2000 lines so a long turn cannot balloon the DOM). raw_replay
+        // is the reattach snapshot — replace, not append. The byte cursor
+        // rides rawSince so a stream reattach resumes where the console
+        // left off.
+        rawSince: runnerCoding ? rawSince : 0,
         onRaw: (ev) => {
           if (ev.type === "raw_replay") {
             setRawOutput(ev.text ? [ev.text] : []);
@@ -1791,12 +1809,14 @@ export default function DashboardPage() {
     // was subscribed, the SSE writer replays on connect — but also
     // poll once so the card shows the moment the user opens the task
     // tab without waiting for the next SSE flush.
-    void agentClient.getPendingTaskQuestion(tid).then((q) => {
-      if (q && q.taskId === tid) {
-        setAgentQuestion(q);
-        setAgentAnswerText("");
-      }
-    });
+    if (runnerCoding) {
+      void agentClient.getPendingTaskQuestion(tid).then((q) => {
+        if (q && q.taskId === tid) {
+          setAgentQuestion(q);
+          setAgentAnswerText("");
+        }
+      });
+    }
     return () => {
       stop();
       setTaskStreamHealth(null);
@@ -1804,7 +1824,7 @@ export default function DashboardPage() {
     };
   }, [activeTask?.id, activeTask?.status, appendAssistantChunk]);
 
-  useEffect(() => { if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }, [outputLines, chatMsgs]);
+  useEffect(() => { if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }, [outputLines, chatMsgs, rawOutput]);
 
   // Reconcile the activeTask's status from the polled tasks list. With-
   // out this, activeTask.status stays at "running" forever even after
@@ -4551,101 +4571,99 @@ export default function DashboardPage() {
                             ) : null}
                           </div>
                         ) : null}
-                        {chatMsgs.length === 0 ? (
-                          <div className="flex h-full items-center justify-center gap-2 text-[12px] text-surface-600">
-                            {(activeTask.status === "running" || activeTask.status === "queued") && <span className="h-3 w-3 animate-spin rounded-full border border-surface-500 border-t-transparent" />}
-                            {activeTask.status === "running" || activeTask.status === "queued" ? (
-                              <span>
-                                <span className="font-medium text-emerald-700 dark:text-emerald-300">{runnerLabel(activeRunnerId)}</span> is working...
-                              </span>
-                            ) : "No messages yet"}
-                          </div>
+                        {/* Console-first task output (2026-08-12, user
+                            directive): the task view IS the live console —
+                            the raw runner stream painted as-is, like opencode
+                            itself, for EVERY runner (opencode / codex /
+                            claude / …). The old groomed-bubble transcript +
+                            folded "Live console" card are gone; the console
+                            is the default, full-height, streaming. User
+                            prompts render as `$` placeholder lines only until
+                            the first raw bytes arrive (the runner's own echo
+                            owns the stream from then on). Tasks whose agent
+                            has no raw lane fall back to the groomed
+                            transcript. */}
+                        {rawOutput.length === 0 && rawSince === 0 ? (
+                          chatMsgs.length === 0 ? (
+                            <div className="flex h-full items-center justify-center gap-2 text-[12px] text-surface-600">
+                              {(activeTask.status === "running" || activeTask.status === "queued") && <span className="h-3 w-3 animate-spin rounded-full border border-surface-500 border-t-transparent" />}
+                              {activeTask.status === "running" || activeTask.status === "queued" ? (
+                                <span>
+                                  <span className="font-medium text-emerald-700 dark:text-emerald-300">{runnerLabel(activeRunnerId)}</span> is working...
+                                </span>
+                              ) : "No messages yet"}
+                            </div>
+                          ) : (
+                            <div className="mx-auto flex max-w-3xl flex-col gap-3">
+                              {chatMsgs.map((m, i) => (
+                                m.role === "user" ? (
+                                  <div key={i} className="flex justify-end">
+                                    <div className={`max-w-[80%] rounded-2xl rounded-br-sm px-3.5 py-2 text-[13px] text-white whitespace-pre-wrap break-words shadow-sm ${m.queued ? "bg-indigo-500/40 italic ring-1 ring-indigo-300/30" : "bg-indigo-500"}`}>
+                                      {m.queued ? <span className="mr-1.5 text-[10px] uppercase tracking-wide text-indigo-800 dark:text-indigo-100/80">queued after current run</span> : null}
+                                      {m.text}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  // Fallback transcript only — see the
+                                  // console-first block above.
+                                  <div key={i} className="flex justify-start">
+                                    <div className="w-full px-1 py-1 text-[12px] leading-5 text-surface-100 break-words">
+                                      {m.text ? (
+                                        <ChatAssistantMsg
+                                          text={m.text}
+                                          status={activeTask.status}
+                                          isLast={i === chatMsgs.length - 1}
+                                        />
+                                      ) : activeTask.status === "running" || activeTask.status === "queued" ? (
+                                        <span className="inline-flex items-center gap-2 text-surface-400">
+                                          <span className="inline-flex items-center gap-1">
+                                            <span className="h-2 w-2 animate-pulse rounded-full bg-surface-400" />
+                                            <span className="h-2 w-2 animate-pulse rounded-full bg-surface-400 [animation-delay:200ms]" />
+                                            <span className="h-2 w-2 animate-pulse rounded-full bg-surface-400 [animation-delay:400ms]" />
+                                          </span>
+                                          <span className="text-[11px] tracking-wide">
+                                            {activeTask.status === "queued"
+                                              ? "Waiting for the current run slot..."
+                                              : `${runnerLabel(activeTask.runnerId || selectedRunner)} is thinking...`}
+                                          </span>
+                                        </span>
+                                      ) : (
+                                        <span className="text-surface-500">({activeTask.status || "no response"})</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                )
+                              ))}
+                            </div>
+                          )
                         ) : (
-                          <div className="mx-auto flex max-w-3xl flex-col gap-3">
-                            {chatMsgs.map((m, i) => (
-                              m.role === "user" ? (
-                                <div key={i} className="flex justify-end">
-                                  <div className={`max-w-[80%] rounded-2xl rounded-br-sm px-3.5 py-2 text-[13px] text-white whitespace-pre-wrap break-words shadow-sm ${m.queued ? "bg-indigo-500/40 italic ring-1 ring-indigo-300/30" : "bg-indigo-500"}`}>
-                                    {m.queued ? <span className="mr-1.5 text-[10px] uppercase tracking-wide text-indigo-800 dark:text-indigo-100/80">queued after current run</span> : null}
-                                    {m.text}
-                                  </div>
-                                </div>
-                              ) : (
-                                // The runner's stream flows UNBOXED (user directive
-                                // 2026-07-27): a bubble around a long tool-heavy
-                                // stream reads as a box that can't contain its
-                                // content. Only the user's messages keep bubbles —
-                                // same shape as the codex / Claude Code UIs.
-                                <div key={i} className="flex justify-start">
-                                  <div className="w-full px-1 py-1 text-[12px] leading-5 text-surface-100 break-words">
-                                    {m.text ? (
-                                      // Memoized + collapsible: long assistant
-                                      // outputs fold behind "Show details"
-                                      // (parity with mobile), and the memo on
-                                      // (text, status, isLast) means a growing
-                                      // live message re-renders only itself,
-                                      // not the whole transcript.
-                                      <ChatAssistantMsg
-                                        text={m.text}
-                                        status={activeTask.status}
-                                        isLast={i === chatMsgs.length - 1}
-                                      />
-                                    ) : activeTask.status === "running" || activeTask.status === "queued" ? (
-                                      <span className="inline-flex items-center gap-2 text-surface-400">
-                                        <span className="inline-flex items-center gap-1">
-                                          <span className="h-2 w-2 animate-pulse rounded-full bg-surface-400" />
-                                          <span className="h-2 w-2 animate-pulse rounded-full bg-surface-400 [animation-delay:200ms]" />
-                                          <span className="h-2 w-2 animate-pulse rounded-full bg-surface-400 [animation-delay:400ms]" />
-                                        </span>
-                                        <span className="text-[11px] tracking-wide">
-                                          {activeTask.status === "queued"
-                                            ? "Waiting for the current run slot..."
-                                            : `${runnerLabel(activeTask.runnerId || selectedRunner)} is thinking...`}
-                                        </span>
-                                      </span>
-                                    ) : (
-                                      <span className="text-surface-500">({activeTask.status || "no response"})</span>
-                                    )}
-                                  </div>
-                                </div>
-                              )
-                            ))}
+                          <div className="mx-auto max-w-3xl">
+                            {/* Placeholder `$` prompts — only until the raw
+                                stream arrives and owns the console (the runner
+                                echoes the prompt itself). */}
+                            {rawOutput.length === 0
+                              ? chatMsgs
+                                  .filter((m) => m.role === "user")
+                                  .map((m, i) => (
+                                    <div key={`prompt-${i}`} className="whitespace-pre-wrap break-words py-0.5 font-mono text-[12px] leading-5 text-emerald-700 dark:text-emerald-300">
+                                      <span className="select-none text-surface-600">$ </span>{m.text}
+                                    </div>
+                                  ))
+                              : null}
+                            <AnsiConsoleText text={rawOutput.join("\n")} />
+                            {(activeTask.status === "running" || activeTask.status === "queued") ? (
+                              <span className="ml-0.5 inline-block h-3 w-1.5 translate-y-[2px] animate-pulse bg-surface-300" aria-hidden />
+                            ) : null}
                           </div>
                         )}
                         {/* Task-proof card (audit §9.4, B14): the SAME shared
                             component VibeCodingView mounts, so the two web
                             chat surfaces can't drift. Renders under the
-                            transcript once the task lands in completed/review
+                            console once the task lands in completed/review
                             with a proof or demo clip attached. */}
                         {taskProofVisible(activeTask) ? (
                           <div className="mx-auto mt-3 max-w-3xl">
                             <TaskProofCard task={activeTask} agentClient={agentClient} />
-                          </div>
-                        ) : null}
-                        {/* Raw opencode console (the LiveConsoleSection twin —
-                            audit 2026-08-12 §2: mobile renders the RAW runner
-                            stdout lane, web chat had no consumer). Foldable:
-                            the groomed transcript stays the default; the
-                            console is one tap away. Reset the fold when the
-                            task changes. */}
-                        {rawOutput.length > 0 ? (
-                          <div className="mx-auto mt-3 max-w-3xl">
-                            <button
-                              type="button"
-                              onClick={() => setRawOpen((v) => !v)}
-                              className="flex w-full items-center gap-2 rounded-xl border border-surface-700 bg-surface-900 px-3 py-2 text-left text-[11px] font-semibold text-surface-300 hover:border-surface-500"
-                            >
-                              <span className={`text-surface-500 transition-transform ${rawOpen ? "rotate-90" : ""}`}>▸</span>
-                              Live console
-                              <span className="ml-auto font-mono text-surface-600">
-                                {rawSince.toLocaleString()} bytes · {rawOutput.length} lines
-                              </span>
-                            </button>
-                            {rawOpen ? (
-                              <div className="mt-1 max-h-72 overflow-y-auto rounded-xl border border-surface-800 bg-black/40 p-3 font-mono text-[11px] leading-5 text-surface-200">
-                                <AnsiConsoleText text={rawOutput.join("\n")} />
-                              </div>
-                            ) : null}
                           </div>
                         ) : null}
                       </div>

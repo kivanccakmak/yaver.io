@@ -69,9 +69,9 @@ struct TaskDetailView: View {
     private var consolePane: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                Text(console.isEmpty ? "Waiting for output…" : console)
+                Text(cleanConsole.isEmpty ? "Waiting for output…" : cleanConsole)
                     .font(.system(size: 15, design: .monospaced))
-                    .foregroundStyle(console.isEmpty ? .secondary : .primary)
+                    .foregroundStyle(cleanConsole.isEmpty ? .secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .id("console-bottom")
                     .padding(.horizontal, 48).padding(.vertical, 16)
@@ -114,6 +114,39 @@ struct TaskDetailView: View {
     private var byteCount: String {
         let kb = console.utf8.count / 1024
         return "\(kb) KB"
+    }
+
+    /// The raw runner stream keeps its ANSI/VT escapes (SGR colours, cursor
+    /// moves, OSC titles) so a real terminal can paint it. A SwiftUI `Text`
+    /// cannot — it would render the escapes as literal garbage on the couch.
+    /// Strip CSI (ESC [ … final), OSC (ESC ] … BEL/ST) and two-byte controls;
+    /// the monospaced console look is what matters here, not the colours.
+    private var cleanConsole: String { Self.stripANSI(console) }
+
+    private static func stripANSI(_ s: String) -> String {
+        var out = ""
+        var state = 0 // 0=text 1=esc 2=csi 3=osc
+        for ch in s.unicodeScalars {
+            switch state {
+            case 0:
+                if ch == "\u{1B}" { state = 1 } else { out.unicodeScalars.append(ch) }
+            case 1:
+                if ch == "[" { state = 2 }
+                else if ch == "]" { state = 3 }
+                else { state = 0 } // two-byte controls (e.g. ESC ( B) — drop
+            case 2:
+                // CSI: params (0x30…0x3F), intermediates (0x20…0x2F),
+                // then a final byte (0x40…0x7E) ends the sequence.
+                if ch.value >= 0x40 && ch.value <= 0x7E { state = 0 }
+            case 3:
+                if ch == "\u{07}" { state = 0 }            // BEL ends OSC
+                else if ch == "\u{1B}" { state = 1 }       // possible ST (ESC \)
+                else if ch == "\\" { state = 0 }           // ST ends OSC
+            default:
+                state = 0
+            }
+        }
+        return out
     }
 
     private func statusDot(_ s: String?) -> some View {

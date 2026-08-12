@@ -664,6 +664,56 @@ function buildLiveAssistantMarkdown(content: string): string {
   return `${body}${activity}\n\n_Working through implementation details…_`.trim();
 }
 
+// ── Summarized console (mobile: same style, fewer words) ──────────────
+// Mobile keeps the console STYLE (AnsiConsoleText) but a summarized
+// payload — the full raw stream is megabytes of tool noise a phone screen
+// shouldn't spend pixels on. Deterministic, no LLM:
+//   • `$ cmd` prompt echoes, runner config banners (workdir/model/…),
+//     git diff hunks and punctuation-only TUI redraws are dropped.
+//   • 3+ consecutive identical lines collapse to one.
+//   • A line/byte budget bounds the render (a RUNNING task gets a tight
+//     budget — the user is watching the runner, not reading it; a finished
+//     task's tail gets a bigger one so the answer stays readable).
+//   • A trailing marker says how many lines were collapsed.
+// Classification runs on stripAnsi'd text so ANSI-prefixed lines still
+// match; the KEPT lines keep their escapes intact for AnsiConsoleText.
+function summarizeRawConsole(raw: string, running: boolean): string {
+  if (!raw) return "";
+  const budgetLines = running ? 40 : 200;
+  const budgetChars = running ? 6 * 1024 : 24 * 1024;
+  const lines = raw.split("\n");
+  const kept: string[] = [];
+  let keptChars = 0;
+  let dropped = 0;
+  let prevKey = "";
+  let runLen = 0;
+  const isNoise = (plain: string) => {
+    if (/^\$\s+/.test(plain)) return true; // `$ cmd` echo
+    if (/^(workdir|model|provider|approval|sandbox|reasoning effort|session id|project path|project):/i.test(plain)) return true; // runner config banners
+    if (/^(diff --git|index [0-9a-f]+\.\.[0-9a-f]+|@@ |--- |\+\+\+ )/.test(plain)) return true; // diff hunks
+    if (/^[{}[\];(),.=><:+\-/*\\|'"`_~]+$/.test(plain)) return true; // TUI redraw edges
+    return false;
+  };
+  for (const rawLine of lines) {
+    const plain = stripAnsi(rawLine).trim();
+    if (!plain) continue;
+    if (isNoise(plain)) { dropped += 1; continue; }
+    if (plain === prevKey) {
+      runLen += 1;
+      if (runLen > 2) { dropped += 1; continue; } // 3+ repeats → one
+    } else {
+      prevKey = plain;
+      runLen = 1;
+    }
+    if (kept.length >= budgetLines || keptChars >= budgetChars) { dropped += 1; continue; }
+    kept.push(rawLine);
+    keptChars += rawLine.length + 1;
+  }
+  let out = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (dropped > 0) out = `${out}\n… ${dropped} noisy lines collapsed`;
+  return out;
+}
+
 // The preview is one line, capped at 120 chars — so it must never touch
 // more than a bounded slice of the task. It used to run the whole output
 // buffer (MAX_OUTPUT_LINES_PER_TASK = 8000 lines) through 12 chained
@@ -1683,15 +1733,19 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
   return messages;
 }
 
-// ── Live console (opencode raw lane) ─────────────────────────────────
-// The opencode runner streams raw ANSI stdout (`$` prompts, `> build`
-// banners, git patches, tool-call tails) as `raw`/`raw_replay` SSE
-// frames. The chat bubbles flatten this to markdown (and collapse it to
+// ── Live console (raw lane) ─────────────────────────────────────────
+// EVERY runner (opencode, codex, claude, …) streams its RAW runner
+// stdout (ANSI + TUI intact) as `raw`/`raw_replay` SSE frames — see
+// agent tasks.go emitRaw, which runs before any per-runner grooming.
+// The chat bubbles flatten this to markdown (and collapse it to
 // "_Working through implementation details…_" while running), so a
 // foldable Live console section re-renders the raw bytes via the shared
 // AnsiConsoleText — same grammar and colours as the opencode console and
-// the web dashboard's terminal. Auto-expanded while the task runs (the
-// user is watching the runner), collapseable like AgentContextPanel.
+// the web dashboard's task view. Mobile renders a SUMMARIZED payload
+// (same style, fewer words — summarizeRawConsole) since the phone
+// shouldn't spend pixels on megabytes of tool noise. Auto-expanded while
+// the task runs (the user is watching the runner), collapseable like
+// AgentContextPanel.
 function LiveConsoleSection({
   task,
   rawText,
@@ -1705,9 +1759,7 @@ function LiveConsoleSection({
 }) {
   const c = useColors();
   const [expanded, setExpanded] = useState(true);
-  const isOpenCode = normalizeTaskRunnerId(task.runnerId) === "opencode";
   const isRunning = task.status === "running" || task.status === "queued";
-  if (!isOpenCode) return null;
   // Only render when there is something to show — either live bytes now
   // or a retained tail from a finished task. rawVersion is read so a
   // streaming task's new frames re-render this section.
@@ -1752,7 +1804,7 @@ function LiveConsoleSection({
           nestedScrollEnabled
           showsVerticalScrollIndicator
         >
-          <AnsiConsoleText text={rawText} fontSize={11} />
+          <AnsiConsoleText text={summarizeRawConsole(rawText, isRunning)} fontSize={11} />
         </ScrollView>
       ) : null}
     </View>
@@ -3070,14 +3122,14 @@ export default function TasksScreen() {
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRuntimeRenderRef = useRef<{ taskId: string; source: string; workDir?: string } | null>(null);
 
-  // ── opencode raw-lane (live console) ───────────────────────────────────
-  // opencode tasks stream their RAW runner stdout (ANSI + TUI intact) as
-  // `raw`/`raw_replay` SSE frames (agent 1.99.406+, commit d671b7c02).
-  // The Chat|Terminal toggle stays GONE (2026-08-09, user call) — the app
-  // is chat-only — but the raw bytes are consumed again so the chat shows
-  // a LIVE console section (AnsiConsoleText) with the same colours/status
-  // as the opencode console, instead of collapsing everything to
-  // "_Working through implementation details…_" while the runner codes.
+  // ── raw-lane (live console) ─────────────────────────────────────────
+  // Every runner (opencode, codex, claude, …) streams its RAW runner
+  // stdout (ANSI + TUI intact) as `raw`/`raw_replay` SSE frames (agent
+  // 1.99.406+, commit d671b7c02) — see agent tasks.go emitRaw. The app
+  // is chat-first, but the raw bytes are consumed so the task detail
+  // shows a LIVE console section (AnsiConsoleText) with the same
+  // colours/status as the runner's console — summarized on mobile so
+  // megabytes of tool noise don't eat the screen (summarizeRawConsole).
   // Buffer discipline (per selected task, survives status changes):
   //   rawBufRef     — retained tail of raw bytes (cap ~512KB, mirrors the
   //                   agent's rawOutputMaxBytes)
