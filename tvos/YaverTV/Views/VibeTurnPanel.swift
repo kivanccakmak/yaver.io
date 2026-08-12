@@ -32,6 +32,17 @@ struct VibeTurnPanel: View {
 
     /// The project being previewed (the vibe turn runs in this repo's workDir).
     let project: ProjectSummary?
+    /// External one-shot prompt seed (the DOM-mode "Deep audit this element"
+    /// button). When the binding becomes non-empty the panel fills the prompt,
+    /// expands, and SENDS — one tap from selection to runner turn. The value is
+    /// cleared so a repeated tap re-fires. Defaults to a constant so existing
+    /// call sites (visionOS, ProjectsView previews) compile unchanged.
+    @Binding var prefill: String
+
+    init(project: ProjectSummary?, prefill: Binding<String> = .constant("")) {
+        self.project = project
+        self._prefill = prefill
+    }
 
     @State private var expanded = false
     @State private var prompt = ""
@@ -88,6 +99,18 @@ struct VibeTurnPanel: View {
         .padding(16)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
         .task { await loadPickerState() }
+        // One-tap deep-audit from DOM mode: seed the prompt, expand, and send
+        // immediately (the agent's per-turn hook prepends the selected
+        // element's block to the turn — the runner gets the element, not a
+        // grep request). Clearing the binding lets the same button re-fire.
+        .onChange(of: prefill) { _, value in
+            let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return }
+            prefill = ""
+            prompt = text
+            expanded = true
+            send()
+        }
     }
 
     // ── Project / MCP picker ──────────────────────────────────────────────

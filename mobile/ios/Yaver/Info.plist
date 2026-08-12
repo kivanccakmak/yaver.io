@@ -66,68 +66,10 @@
 	<string>12.0</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- Yaver connects to the user's OWN machines at addresses only the user
-	     knows: RFC1918 LAN, and tailnet/VPN overlays. NSAllowsLocalNetworking
-	     exempts RFC1918 + link-local + .local ONLY. It does NOT exempt
-	     100.64.0.0/10 — that is RFC 6598 shared address space (CGNAT), and it
-	     is where BOTH overlays live:
-	       • Tailscale/headscale — 100.64.0.0/10   (quic.ts isTailscaleIP)
-	       • Yaver Mesh          — 100.96.0.0/12   (quic.ts isMeshOverlayIP,
-	                                                mesh_agent.go meshOverlayPrefix)
-	     Mesh is a subrange of the tailnet range, so ONE exemption covers both
-	     the lan-tailscale and lan-mesh candidate paths.
-	     CAVEAT: being a subrange also means the two overlays can COLLIDE, and
-	     the two are NOT peers. Yaver Mesh ships ON by default with Yaver, so it
-	     is present on every box; Tailscale is the user's own, optional, and
-	     usually predates us. That asymmetry decides who must yield: Tailscale
-	     is the incumbent on the user's machine and we must never fight it for a
-	     route. Yaver classifies mesh-before-tailscale (isMeshOverlayIP wins),
-	     but that is only labelling — if Tailscale hands a node an address in
-	     100.96–100.111 while Yaver Mesh also routes 100.96.0.0/12, the conflict
-	     is in the host routing table and no client-side classification fixes it.
-	     KNOWN HAZARD: picking 100.96.0.0/12 for an always-on default overlay
-	     placed it inside the range of the one overlay users most commonly
-	     already run. Narrowing/relocating mesh's range is a fleet-breaking
-	     change, so it is not done here — but a mesh box that also runs Tailscale
-	     should be treated as unverified, and mesh should back off rather than
-	     claim the route.
-	     With arbitrary loads
-	     off, every plaintext probe to either overlay failed -1022 before
-	     reaching the network, so a phone and a Mac both on the same tailnet (or
-	     both on Yaver Mesh) could never connect directly and fell back to relay
-	     — and the reconnect ladder retried that permanently-impossible leg
-	     forever.
-	     ATS exceptions are per-domain and cannot express an IP range, so a
-	     scoped exception for 100.64/10 is not expressible. Same posture as SSH,
-	     VNC, and other clients that dial user-specified hosts.
-	     App Review justification: the app connects to user-specified servers on
-	     local networks and private VPN overlays at arbitrary addresses.
-	     Note this does NOT weaken relay: relay is https:// and stays TLS. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
-		<!-- NSAllowsLocalNetworking is DELIBERATELY ABSENT.
-		     PROVEN BY EXPERIMENT on visionOS, 2026-08-03: Apple IGNORES
-		     NSAllowsArbitraryLoads when NSAllowsLocalNetworking (or
-		     ...InWebContent / ...ForMedia) is also present. Setting both does NOT
-		     mean "local networking PLUS everything else" — it means the
-		     arbitrary-loads flag is INERT and only the RFC1918 exemption applies,
-		     which is exactly what blocks 100.64.0.0/10 (RFC 6598 CGNAT, where
-		     Tailscale and Yaver Mesh live).
-
-		     This explains the 2026-07-18 refutation directly: NSAllowsArbitraryLoads
-		     WAS verified inside the shipped archive and the phone still could not
-		     connect. It was present and inert at the same time, so the verification
-		     was true and meaningless together.
-
-		     The experiment: the visionOS app displayed "App Transport Security
-		     policy requires the use of a secure connection" with BOTH keys set, and
-		     read the box's real host / platform / agent version with ONLY
-		     NSAllowsArbitraryLoads. Nothing else changed between the two runs.
-
-		     ArbitraryLoads alone already permits local networking, so removing the
-		     narrower key loses nothing. -->
 	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Yaver provides Bluetooth access to apps you run for testing.</string>
@@ -178,13 +120,6 @@
 	</array>
 	<key>RCTNewArchEnabled</key>
 	<true/>
-	<!-- The presence of this manifest flips the app into scene-based
-	     lifecycle. It MUST therefore declare BOTH roles: with only the CarPlay
-	     role (as shipped through build 474), the phone UI ran in an anonymous
-	     window scene with no delegate, so URL opens / NSUserActivity went to
-	     nobody and AppDelegate.application(_:open:options:) never fired —
-	     every yaver:// deep link app-wide was silently dropped. See
-	     YaverSceneDelegate.swift. -->
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UISceneConfigurations</key>
