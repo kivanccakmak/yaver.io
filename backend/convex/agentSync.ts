@@ -236,6 +236,17 @@ export const batchSync = mutation({
       branch: v.optional(v.string()),
       framework: v.optional(v.string()),
     }))),
+    // Per-machine external-MCP catalog: which user-registered MCP server
+    // lives on this device. Seeded by the Go agent (convex_state_sync.go
+    // buildMCPCatalog) so the web chat + mobile composers can render
+    // another machine's MCP servers as selectable. Privacy: names/URLs and
+    // cached tool counts only — auth tokens NEVER leave the agent.
+    mcpCatalog: v.optional(v.array(v.object({
+      name: v.string(),
+      url: v.string(),
+      enabled: v.boolean(),
+      toolCount: v.optional(v.number()),
+    }))),
   },
   handler: async (ctx, args) => {
     const userId = await resolveUser(ctx);
@@ -266,6 +277,20 @@ export const batchSync = mutation({
         runtimeProjectCatalogForDevice: {
           deviceId: args.deviceId,
           projects: args.runtimeProjectCatalog,
+          updatedAt: now,
+        },
+      });
+    }
+
+    // Same for the MCP catalog: agent-seeded rows merge into
+    // userSettings.mcpCatalogByDevice (replace-by-deviceId), the row the web
+    // chat + mobile composers read for the cross-machine MCP picker.
+    if (args.mcpCatalog !== undefined) {
+      await ctx.runMutation(internal.userSettings.set, {
+        userId,
+        mcpCatalogForDevice: {
+          deviceId: args.deviceId,
+          servers: args.mcpCatalog,
           updatedAt: now,
         },
       });

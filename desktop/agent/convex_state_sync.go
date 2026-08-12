@@ -163,6 +163,39 @@ func buildRuntimeProjectCatalog() []map[string]interface{} {
 	return out
 }
 
+// buildMCPCatalog builds the per-machine external-MCP catalog seeded into
+// Convex — the cross-machine view that answers "which MCP server lives on
+// which machine" on every surface (web chat composer, mobile composer).
+// Privacy contract (mirrors the runtimeProjectCatalog contract): names, URLs
+// and cached tool counts only — NEVER auth tokens or headers. A server whose
+// tools were never listed this process omits toolCount (surfaces render "0
+// tools" fallback), so this never makes a network call: it reads only the
+// 60-second cache warm by normal tools/list traffic.
+func buildMCPCatalog() []map[string]interface{} {
+	servers := enabledExternalServers()
+	if len(servers) == 0 {
+		return nil
+	}
+	out := make([]map[string]interface{}, 0, len(servers))
+	for _, s := range servers {
+		entry := map[string]interface{}{
+			"name":    s.Name,
+			"url":     s.URL,
+			"enabled": true,
+		}
+		if v, ok := extMCPCache.Load(s.Name); ok {
+			if e, ok := v.(*extToolEntry); ok {
+				entry["toolCount"] = len(e.tools)
+			}
+		}
+		out = append(out, entry)
+		if len(out) >= 40 {
+			break
+		}
+	}
+	return out
+}
+
 // deriveGitProviderIdentity parses a git remote URL into (repoName, provider).
 // Handles ssh (git@host:owner/repo.git), https (https://host/owner/repo) and
 // plain scp-ish forms; strips credentials that DetectProjectInfo may have left
@@ -397,6 +430,7 @@ func (s *convexSyncer) buildBatchPayload() ([]byte, error) {
 		"services":              services,
 		"activity":              activity,
 		"runtimeProjectCatalog": buildRuntimeProjectCatalog(),
+		"mcpCatalog":            buildMCPCatalog(),
 	})
 }
 

@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // The "which project is on which machine" seeding contract (2026-08-09):
@@ -173,5 +175,101 @@ func TestBatchPayloadIncludesRuntimeProjectCatalog(t *testing.T) {
 	row := catalog[0].(map[string]interface{})
 	if row["repoName"] != "talos" || row["gitProvider"] != "gitlab" {
 		t.Fatalf("catalog row missing provider identity: %v", row)
+	}
+}
+
+// The MCP catalog is the cross-machine answer to "which MCP server lives on
+// which machine" — web chat + mobile composers render it. Privacy contract:
+// name/url/toolCount only, NEVER the auth token.
+func TestBuildMCPCatalogIncludesEnabledServersNoTokens(t *testing.T) {
+	resetExternalMCPCacheForTest()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, configDirName), 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := SaveConfig(&Config{
+		ExternalMCPServers: []ExternalMCPServer{
+			{Name: "sentry", URL: "https://mcp.example/sentry", AuthToken: "super-secret", Enabled: true},
+			{Name: "github", URL: "https://mcp.example/github", Enabled: true},
+			{Name: "retired", URL: "https://mcp.example/retired", Enabled: false},
+		},
+	}); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+	// Warm the tools cache for one server so toolCount rides the row.
+	extMCPCache.Store("sentry", &extToolEntry{
+		at:    time.Now(),
+		tools: []map[string]interface{}{{"name": "a"}, {"name": "b"}},
+	})
+
+	catalog := buildMCPCatalog()
+	byName := map[string]map[string]interface{}{}
+	for _, row := range catalog {
+		byName[row["name"].(string)] = row
+	}
+	if _, ok := byName["retired"]; ok {
+		t.Fatalf("disabled MCP server leaked into the catalog: %v", catalog)
+	}
+	for _, name := range []string{"sentry", "github"} {
+		row, ok := byName[name]
+		if !ok {
+			t.Fatalf("enabled MCP server %q missing from catalog: %v", name, catalog)
+		}
+		if row["url"] == "" || row["enabled"] != true {
+			t.Fatalf("row %q missing url/enabled: %v", name, row)
+		}
+		if _, leaked := row["auth_token"]; leaked {
+			t.Fatalf("auth_token LEAKED into the catalog for %q: %v", name, row)
+		}
+		if _, leaked := row["authToken"]; leaked {
+			t.Fatalf("authToken LEAKED into the catalog for %q: %v", name, row)
+		}
+	}
+	if got := byName["sentry"]["toolCount"]; got != 2 {
+		t.Fatalf("toolCount for sentry = %v, want 2 (from warm cache)", got)
+	}
+	if _, ok := byName["github"]["toolCount"]; ok {
+		t.Fatalf("uncached server must omit toolCount, got %v", byName["github"])
+	}
+}
+
+// The batch payload carries the MCP catalog with the device identity, and
+// must NEVER include the auth token even when the source config has one.
+func TestBatchPayloadIncludesMCPCatalogNoTokens(t *testing.T) {
+	resetExternalMCPCacheForTest()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, configDirName), 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := SaveConfig(&Config{
+		ExternalMCPServers: []ExternalMCPServer{{
+			Name: "bet", URL: "https://mcp.example/bet", AuthToken: "hunter2", Enabled: true,
+		}},
+	}); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	s := &convexSyncer{deviceID: "box-1"}
+	payload, err := s.buildBatchPayload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	raw := string(payload)
+	if strings.Contains(raw, "hunter2") || strings.Contains(raw, "auth_token") {
+		t.Fatalf("batch payload leaks MCP auth material: %s", raw)
+	}
+	catalog, ok := parsed["mcpCatalog"].([]interface{})
+	if !ok || len(catalog) == 0 {
+		t.Fatalf("batch payload must carry mcpCatalog; got %v", parsed)
+	}
+	row := catalog[0].(map[string]interface{})
+	if row["name"] != "bet" || row["enabled"] != true {
+		t.Fatalf("catalog row missing name/enabled: %v", row)
 	}
 }

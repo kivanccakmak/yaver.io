@@ -91,6 +91,17 @@ const runtimeProjectCatalogValidator = v.object({
   updatedAt: v.optional(v.number()),
 });
 
+const mcpCatalogValidator = v.object({
+  deviceId: v.string(),
+  servers: v.array(v.object({
+    name: v.string(),
+    url: v.string(),
+    enabled: v.boolean(),
+    toolCount: v.optional(v.union(v.number(), v.null())),
+  })),
+  updatedAt: v.optional(v.number()),
+});
+
 // The saved render target completes the auto-vibe pair: when a machine has
 // BOTH a default project and a default target, the Vibing tab renders without
 // a click. Keyed per (deviceId, projectName) so one box can prefer the
@@ -305,6 +316,32 @@ type MCPServersPreferenceRow = {
   updatedAt: number;
 };
 
+// Per-device external-MCP catalog (2026-08-13). Which registered MCP servers
+// live on which machine — seeded by the Go agent heartbeat so the web chat +
+// mobile composers can render another machine's MCPs. Privacy-limited:
+// names/URLs/cached tool counts only; auth tokens never leave the agent.
+type MCPCatalogPatch = {
+  deviceId: string;
+  servers: Array<{
+    name: string;
+    url: string;
+    enabled: boolean;
+    toolCount?: number | null;
+  }>;
+  updatedAt?: number;
+};
+
+type MCPCatalogRow = {
+  deviceId: string;
+  servers: Array<{
+    name: string;
+    url: string;
+    enabled: boolean;
+    toolCount?: number;
+  }>;
+  updatedAt: number;
+};
+
 type OpenCodeConfigSnapshotRow = {
   deviceId: string;
   model?: string;
@@ -412,6 +449,52 @@ function mergeMCPServersPreference(
   const filtered = (existing ?? []).filter((row) => row.deviceId !== deviceId);
   const row = sanitizeMCPServersPreference(payload);
   const next = row ? [...filtered, row] : filtered;
+  return next.length > 0 ? next : undefined;
+}
+
+function sanitizeMCPCatalog(payload: MCPCatalogPatch): MCPCatalogRow | undefined {
+  const deviceId = cleanRuntimeText(payload.deviceId, 120);
+  if (!deviceId) return undefined;
+  const seen = new Set<string>();
+  const servers = (payload.servers ?? [])
+    .map((server) => {
+      const name = cleanRuntimeText(server.name, 80);
+      // sanitizeRuntimeGitRemote strips URL credentials + hash — an MCP URL
+      // carrying `https://token@host/...` must not let the token into Convex.
+      // Non-URL MCP endpoints are invalid anyway, so they're dropped.
+      const url = sanitizeRuntimeGitRemote(server.url);
+      if (!name || !url) return null;
+      return {
+        name,
+        url,
+        enabled: !!server.enabled,
+        ...(typeof server.toolCount === "number" && server.toolCount >= 0
+          ? { toolCount: Math.min(Math.floor(server.toolCount), 100_000) }
+          : {}),
+      };
+    })
+    .filter((server): server is { name: string; url: string; enabled: boolean; toolCount?: number } => {
+      if (!server) return false;
+      const key = server.name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 60);
+  if (servers.length === 0) return undefined;
+  return { deviceId, servers, updatedAt: payload.updatedAt ?? Date.now() };
+}
+
+function mergeMCPCatalog(
+  existing: MCPCatalogRow[] | undefined,
+  payload: MCPCatalogPatch,
+): MCPCatalogRow[] | undefined {
+  const deviceId = cleanRuntimeText(payload.deviceId, 120);
+  if (!deviceId) return existing;
+  const row = sanitizeMCPCatalog(payload);
+  if (!row) return existing;
+  const filtered = (existing ?? []).filter((r) => r.deviceId !== deviceId);
+  const next = [...filtered, row];
   return next.length > 0 ? next : undefined;
 }
 
@@ -682,12 +765,14 @@ async function patchOwnedDeviceRuntimeProjectCache(
     defaultRuntimeProjectForDevice?: RuntimeProjectPreferencePatch;
     runtimeProjectCatalogForDevice?: RuntimeProjectCatalogPatch;
     mcpServersForDevice?: MCPServersPreferencePatch;
+    mcpCatalogForDevice?: MCPCatalogPatch;
   },
 ) {
   const touched = new Set<string>();
   if (args.defaultRuntimeProjectForDevice?.deviceId) touched.add(args.defaultRuntimeProjectForDevice.deviceId);
   if (args.runtimeProjectCatalogForDevice?.deviceId) touched.add(args.runtimeProjectCatalogForDevice.deviceId);
   if (args.mcpServersForDevice?.deviceId) touched.add(args.mcpServersForDevice.deviceId);
+  if (args.mcpCatalogForDevice?.deviceId) touched.add(args.mcpCatalogForDevice.deviceId);
   for (const deviceId of touched) {
     const device = await ctx.db
       .query("devices")
@@ -709,6 +794,10 @@ async function patchOwnedDeviceRuntimeProjectCache(
     if (args.runtimeProjectCatalogForDevice?.deviceId === deviceId) {
       const row = mergeRuntimeProjectCatalog([], args.runtimeProjectCatalogForDevice)?.[0];
       patch.runtimeProjectCatalog = row?.projects ?? [];
+    }
+    if (args.mcpCatalogForDevice?.deviceId === deviceId) {
+      const row = mergeMCPCatalog([], args.mcpCatalogForDevice)?.[0];
+      patch.mcpCatalog = row?.servers ?? [];
     }
     if (Object.keys(patch).length > 0) await ctx.db.patch(device._id, patch);
   }
@@ -805,6 +894,7 @@ export const set = internalMutation({
     defaultRuntimeTargetForDevice: v.optional(runtimeTargetPreferenceValidator),
     machineRolesForProject: v.optional(machineRolesValidator),
     runtimeProjectCatalogForDevice: v.optional(runtimeProjectCatalogValidator),
+    mcpCatalogForDevice: v.optional(mcpCatalogValidator),
     // Per-subsystem managed: true (Yaver-hosted) | false (user-hosted)
     // | null (unset → use legacy default). Clients send only the
     // subsystem(s) they're changing; unspecified keys retain their
@@ -950,10 +1040,17 @@ export const set = internalMutation({
         args.runtimeProjectCatalogForDevice as RuntimeProjectCatalogPatch,
       );
     }
+    if (args.mcpCatalogForDevice !== undefined) {
+      patch.mcpCatalogByDevice = mergeMCPCatalog(
+        existing?.mcpCatalogByDevice as MCPCatalogRow[] | undefined,
+        args.mcpCatalogForDevice as MCPCatalogPatch,
+      );
+    }
     await patchOwnedDeviceRuntimeProjectCache(ctx, args.userId, {
       defaultRuntimeProjectForDevice: args.defaultRuntimeProjectForDevice as RuntimeProjectPreferencePatch | undefined,
       mcpServersForDevice: args.mcpServersForDevice as MCPServersPreferencePatch | undefined,
       runtimeProjectCatalogForDevice: args.runtimeProjectCatalogForDevice as RuntimeProjectCatalogPatch | undefined,
+      mcpCatalogForDevice: args.mcpCatalogForDevice as MCPCatalogPatch | undefined,
     });
     if (args.managed !== undefined) {
       patch.managed = mergeManagedPatch(

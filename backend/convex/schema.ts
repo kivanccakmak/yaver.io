@@ -1133,6 +1133,28 @@ export default defineSchema({
         }),
       ),
     ),
+    // Per-device external-MCP catalog (2026-08-13). Which user-registered MCP
+    // servers live on which machine — seeded by the Go agent's heartbeat
+    // (agentSync:batchSync mcpCatalog → userSettings.set mcpCatalogForDevice)
+    // so the web chat + mobile composers can offer another machine's MCPs.
+    // Privacy-limited: names/URLs/cached tool counts only; auth tokens never
+    // leave the agent.
+    mcpCatalogByDevice: v.optional(
+      v.array(
+        v.object({
+          deviceId: v.string(),
+          servers: v.array(
+            v.object({
+              name: v.string(),
+              url: v.string(),
+              enabled: v.boolean(),
+              toolCount: v.optional(v.number()),
+            }),
+          ),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
     // Per-device MCP selection preference (2026-08-09). The canonical
     // cross-surface memory for which MCP servers a task should attach, plus
     // whether Yaver's own `yaver mcp` doorway is included (default true).
