@@ -224,15 +224,8 @@ export default function HomePage() {
           <p className="mx-auto max-w-2xl text-sm leading-relaxed text-surface-300 sm:text-base md:text-[17px]">
             Your coding agent builds on your own machine — or a Cloud
             Workspace — and the app hot-reloads on your real iPhone or
-            Android seconds later. Gestures, sensors, real network, real
-            performance. Hermes bytecode through a native bridge, never a
-            WebView.
-          </p>
-
-          <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-surface-300 sm:text-base md:text-[17px]">
-            Drive it from the native desktop app for macOS, Windows, and
-            Linux, from your phone, or from the web. Bring your own AI
-            account — Claude Code, Codex, or OpenCode.
+            Android seconds later. Drive it from the desktop app, your phone,
+            or the web. Bring your own AI account.
           </p>
 
           <div className="mx-auto mt-6 flex max-w-2xl flex-wrap items-center justify-center gap-2">
