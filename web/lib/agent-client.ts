@@ -5299,10 +5299,19 @@ export class AgentClient {
 
   async getRemoteRuntimeCapabilities(workDir: string, framework: string): Promise<RemoteRuntimeCapabilities> {
     this.assertConnected();
-    const url = new URL(`${this.devBaseUrl}/remote-runtime/capabilities`);
-    url.searchParams.set("workDir", workDir);
-    url.searchParams.set("framework", framework);
-    const res = await this.fetchWithTimeout(url.toString(), { headers: this.authHeaders }, 90_000);
+    // devBaseUrl is a RELATIVE same-origin path (`/d/<deviceId>`) when the
+    // dashboard is served from yaver.io, so `new URL(...)` here threw
+    // "cannot be parsed as a URL" — the runtime-target probe died before it
+    // ever reached the box (2026-08-12, "Runtime target probe failed" with a
+    // green connection check: inventory says OK, operation never happened).
+    // fetch() resolves relative paths against the page origin — the same
+    // pattern every sibling remote-runtime method below already uses.
+    const params = new URLSearchParams({ workDir, framework });
+    const res = await this.fetchWithTimeout(
+      `${this.devBaseUrl}/remote-runtime/capabilities?${params.toString()}`,
+      { headers: this.authHeaders },
+      90_000,
+    );
     if (!res.ok) throw new Error(await responseErrorMessage(res, `Failed to load remote runtime capabilities: HTTP ${res.status}`));
     return res.json();
   }

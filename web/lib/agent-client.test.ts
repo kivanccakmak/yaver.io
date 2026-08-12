@@ -115,3 +115,33 @@ test("web bundle preview URL preserves agent-minted signature in relay mode", ()
     console.log("ok   a runner with no compat opinion is left alone");
   }
 }
+
+/**
+ * Regression guard (2026-08-12 "Runtime target probe failed"): the
+ * remote-runtime capabilities fetch built its URL with `new URL(relative)`
+ * — and devBaseUrl is a RELATIVE same-origin path (`/d/<deviceId>`) when
+ * the dashboard is served from yaver.io. new URL() without a base throws
+ * "cannot be parsed as a URL" before any request is made, so the probe died
+ * with a green connection check: inventory says OK, the operation never
+ * happened. The fix passes the relative URL straight to fetch(), which
+ * resolves it against the page origin — the same pattern every sibling
+ * remote-runtime method uses. This test pins the CLASS: any URL built from
+ * the relative dev-base must go through fetch, never new URL().
+ */
+test("relative role-base URLs must resolve via fetch, never new URL()", () => {
+  const relative = "/d/6e8db080-a9d0-443c-a55b-b9c385522a97";
+  // The bug: this throws.
+  assert.throws(() => new URL(`${relative}/remote-runtime/capabilities`), /Invalid URL/);
+  // The fix shape: URLSearchParams for the query + the relative path handed
+  // to fetch (resolves against window.location.origin in the browser).
+  const params = new URLSearchParams({ workDir: "/w", framework: "swift" });
+  const path = `${relative}/remote-runtime/capabilities?${params.toString()}`;
+  assert.match(path, /^\/d\//);
+  assert.match(path, /remote-runtime\/capabilities/);
+  assert.match(path, /workDir=/);
+  assert.match(path, /framework=swift/);
+  // And the same construction must NOT throw when a base is present (the
+  // non-same-origin branch builds an absolute relay URL).
+  const absolute = new URL(`https://public.yaver.io${relative}/remote-runtime/capabilities`);
+  assert.equal(absolute.pathname, "/d/6e8db080-a9d0-443c-a55b-b9c385522a97/remote-runtime/capabilities");
+});
