@@ -446,6 +446,25 @@ ipcMain.handle('disconnect-device', () => {
   return { ok: true };
 });
 
+// Route the agent proxy to a SPECIFIC machine by device id — the GUI twin of
+// the web's agentClient.setMachineRoleRoutes. The AI-machine dropdown saves
+// the Convex machineRolesByProject row AND calls this, so tasks actually go
+// to the picked runner box instead of just being remembered (2026-08-12:
+// "desktop gui fully compatible with the machine roles too" — before this,
+// saving a split in the GUI changed the row but the proxy kept hitting the
+// originally connected device). Same direct-then-relay probe as
+// connectToDevice; on success agentBaseUrl points at the runner box.
+ipcMain.handle('route-agent', async (_e, device, relayServers) => {
+  authToken = getToken();
+  if (!device?.deviceId) return { ok: false, error: 'No device id' };
+  try {
+    const result = await connectToDevice(device, relayServers || []);
+    return { ok: true, ...result };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle('get-connection-state', () => {
   return {
     connected: !!agentBaseUrl,

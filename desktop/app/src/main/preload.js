@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('yaver', {
   disconnectDevice: () => ipcRenderer.invoke('disconnect-device'),
   getConnectionState: () => ipcRenderer.invoke('get-connection-state'),
   probeLocalAgent: () => ipcRenderer.invoke('probe-local-agent'),
+  // Re-point the agent proxy at a specific machine (AI-machine picker).
+  routeAgent: (device, relays) => ipcRenderer.invoke('route-agent', device, relays),
 
   // ── Agent API proxy ─────────────────────────────────
   agentRequest: (method, path, body) => ipcRenderer.invoke('agent-request', method, path, body),

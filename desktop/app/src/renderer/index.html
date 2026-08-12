@@ -810,6 +810,24 @@ async function setAIMachine(deviceId) {
     workspace: current?.workspace || 'runner-clone',
     autoPush: current?.autoPush || 'ask',
   });
+  // Route the proxy to the picked runner box so tasks actually stream from
+  // it — the machine-role split must move traffic, not just the row.
+  const dev = machineRolesDevices.find(d => (d.deviceId || d.id) === deviceId);
+  if (dev) await routeToMachine(dev);
+}
+
+async function routeToMachine(dev) {
+  try {
+    let relays = [];
+    try {
+      const s = await window.yaver.convexRequest('GET', '/settings');
+      relays = s?.relayServers || [];
+    } catch {}
+    const r = await window.yaver.routeAgent({ deviceId: dev.deviceId || dev.id, quicHost: dev.quicHost, quicPort: dev.quicPort }, relays);
+    if (r && r.ok === false) console.warn('route-agent:', r.error);
+  } catch (e) {
+    console.warn('route-agent failed:', e);
+  }
 }
 
 async function setRenderMachine(deviceId) {
