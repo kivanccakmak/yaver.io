@@ -1169,3 +1169,37 @@ func TestTmuxChoiceAnswer(t *testing.T) {
 		}
 	}
 }
+
+// The tmux-on-Windows bridge (audit 2026-08-12): the install hint always said
+// "tmux runs via WSL2" but the exec path could not reach it — discoverBinary
+// only finds a native tmux.exe. The fix writes a .cmd shim that forwards every
+// tmux argv to the WSL distro's tmux; this pins the shim CONTENT so a future
+// refactor that drops the bridge (reverting Windows to "no tmux, use WSL")
+// fails here first. The OS-gated write path itself is exercised by
+// ensureWSLTmuxShim on Windows; the content contract is testable everywhere.
+func TestTmuxWSLShimContentBridgesToWSL(t *testing.T) {
+	content := tmuxWSLShimContent()
+	for _, want := range []string{
+		"wsl.exe -d %DISTRO% -- tmux %*", // argv passthrough to the distro's tmux
+		"wsl.exe --list --quiet",         // default-distro discovery
+		"YAVER_WSL_DISTRO",               // per-distro override escape hatch
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("shim content missing %q:\n%s", want, content)
+		}
+	}
+	if !strings.HasPrefix(content, "@echo off") {
+		t.Errorf("shim must be a .cmd batch file, got:\n%s", content)
+	}
+	// The bridge must be reachable through tmuxCmdName's fallback path — the
+	// Windows branch is what routes a missing native tmux to the shim. Guard
+	// that the branch exists at all (cannot execute it on non-Windows).
+	src, err := os.ReadFile("tmux.go")
+	if err != nil {
+		t.Fatalf("read tmux.go: %v", err)
+	}
+	if !strings.Contains(string(src), `runtime.GOOS == "windows"`) ||
+		!strings.Contains(string(src), "ensureWSLTmuxShim()") {
+		t.Fatal("tmuxCmdName no longer routes Windows to the WSL shim")
+	}
+}
