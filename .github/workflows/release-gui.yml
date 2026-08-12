@@ -72,17 +72,10 @@ jobs:
         include:
           - os: macos-latest
             platform: mac
-            artifact_glob: "dist/*.dmg"
           - os: windows-latest
             platform: win
-            artifact_glob: "dist/*.exe"
           - os: ubuntu-latest
             platform: linux
-            artifact_glob: |
-              dist/*.AppImage
-              dist/*.deb
-              dist/*.rpm
-              dist/*.tar.gz
     steps:
       - uses: actions/checkout@v4
       - name: Setup Node
@@ -135,7 +128,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: yaver-gui-${{ matrix.platform }}
-          path: electron/${{ matrix.artifact_glob }}
+          # Installers only — explicitly exclude blockmaps (matched by
+          # dist/yaver-gui-*) so the release stays clean. Multiline path
+          # lists are the supported upload-artifact form (brace globs are not
+          # minimatch; matrix multiline values collapse to the first line).
+          path: |
+            electron/dist/yaver-gui-*.AppImage
+            electron/dist/yaver-gui-*.dmg
+            electron/dist/yaver-gui-*.zip
+            electron/dist/yaver-gui-*.exe
+            electron/dist/yaver-gui-*.deb
+            electron/dist/yaver-gui-*.rpm
+            electron/dist/yaver-gui-*.tar.gz
           if-no-files-found: error
 
   release:
@@ -160,9 +164,17 @@ jobs:
             itself a Yaver node (vibe it directly, or from phone/TV/watch/web).
 
             ## Downloads
-            - **macOS** — `yaver-gui-<version>-mac.dmg` (Apple Silicon & Intel)
+            - **macOS** — `yaver-gui-<version>-mac.dmg` (Apple Silicon & Intel, signed + notarized)
             - **Windows** — `yaver-gui-<version>-win-setup.exe` (x64)
-            - **Linux** — `yaver-gui-<version>-linux.AppImage` (x64 & arm64)
+            - **Linux** — `yaver-gui-<version>-linux.AppImage` · `.deb` (apt-get) · `.rpm` · `.tar.gz`
+
+            apt-get (Debian/Ubuntu):
+            ```
+            wget <release_url>/download/gui/v<version>/yaver-gui-<version>-linux.deb
+            sudo apt-get install ./yaver-gui-<version>-linux.deb
+            ```
+            The embedded agent means a fresh machine needs no npm/node install — the app
+            carries `yaver serve` (with embedded hermesc) and self-provisions runners on demand.
 
             See [yaver.io/download](https://yaver.io/download) for the landing page.
           files: dist-artifacts/*
