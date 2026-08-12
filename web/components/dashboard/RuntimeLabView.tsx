@@ -35,6 +35,7 @@ import {
   newlineIsNative,
 } from "@/lib/composerKeys";
 import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskStreamWithRecovery";
+import { AnsiConsoleText, hasConsoleMarkup } from "./AnsiConsoleText";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 import { StreamHealthNotice } from "./StreamHealthNotice";
 import { clampDevPct, formatDevProgressLine } from "@/lib/devEventLine";
@@ -4378,7 +4379,14 @@ export default function RuntimeLabView({
                     const isLatestAssistant = index === messages.length - 1;
                     const rawLines = String(message.content || "").split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
                     const TAIL = 30;
-                    const folded = isLatestAssistant && !taskStreamExpanded && rawLines.length > TAIL + 10;
+                    // The fold is for FINISHED long outputs — never while the
+                    // runner is coding. A live stream must stay fully visible or
+                    // the chat reads as dead ("opencode is working" with an
+                    // empty pane — the 2026-08-12 fix-task report: the fix
+                    // streamed fine but was folded, so it looked like nothing
+                    // happened). Auto-expand when the task becomes live.
+                    const runnerCoding = taskStatusMeansRunnerIsCoding(activeTaskStream?.status);
+                    const folded = isLatestAssistant && !taskStreamExpanded && !runnerCoding && rawLines.length > TAIL + 10;
                     const visible = folded ? rawLines.slice(-TAIL) : rawLines;
                     return (
                       <div key={`turn-${index}`} className="flex flex-col rounded-2xl rounded-bl-md border border-[#e4e7ec] bg-white shadow-sm dark:border-[#242b35] dark:bg-[#171b23]">
@@ -4424,7 +4432,19 @@ export default function RuntimeLabView({
                           </button>
                         ) : null}
                         <pre className="whitespace-pre-wrap break-words p-3 text-[11px] leading-5 text-[#344054] dark:text-[#d5dae1]">
-                          {visible.length ? visible.join("\n") : "Waiting for runner output..."}
+                          {visible.length ? (
+                            hasConsoleMarkup(visible.join("\n")) ? (
+                              // Console-alike (2026-08-12 user request): the
+                              // chat stream should read like the runner's own
+                              // console — $ prompts, > build · <model> banners,
+                              // diff +/- — via the SAME shared painter the
+                              // dashboard console + mobile + tvOS use. Plain
+                              // text falls back to the raw <pre>.
+                              <AnsiConsoleText text={visible.join("\n")} />
+                            ) : (
+                              visible.join("\n")
+                            )
+                          ) : "Waiting for runner output..."}
                         </pre>
                       </div>
                     );
