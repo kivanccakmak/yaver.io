@@ -23,13 +23,11 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -253,9 +251,12 @@ func holderAliveOnThisHost(holder string) bool {
 	if err != nil || pid <= 0 {
 		return true
 	}
-	// kill(pid, 0) probes existence without signalling.
-	err = syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
+	// isProcessAlive is the cross-platform probe (os.FindProcess +
+	// Signal(0) on unix, OpenProcess on windows). The raw syscall.Kill
+	// used here before 1.99.413 did not exist on Windows and broke the
+	// Windows CLI build ("undefined: syscall.Kill" in the release-cli
+	// workflow's windows-amd64 job).
+	return isProcessAlive(pid)
 }
 
 // AcquireDeployLease takes the single per-target deploy lease. Returns:
