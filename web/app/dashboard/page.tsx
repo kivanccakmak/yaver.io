@@ -24,6 +24,7 @@ import "@xterm/xterm/css/xterm.css";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/ThemeProvider";
 import ProjectsView from "@/components/dashboard/ProjectsView";
+import DownloadsView from "@/components/dashboard/DownloadsView";
 import TodosView from "@/components/dashboard/TodosView";
 import BuildsView from "@/components/dashboard/BuildsView";
 import { DeployCapabilitiesView } from "@/components/dashboard/DeployCapabilitiesView";
@@ -159,7 +160,7 @@ const DASHBOARD_TABS = [
   "collab", "infra", "connect", "network", "tools", "security", "storage",
   "vault", "apikeys", "schedules", "exec", "phone", "vibe-preview",
   "domains", "screenlog", "settings", "billing", "stores", "cloud", "build",
-  "arm", "appletv", "packages", "verbs",
+  "arm", "appletv", "packages", "verbs", "downloads",
 ] as const;
 type DashboardTab = typeof DASHBOARD_TABS[number];
 
@@ -3264,6 +3265,7 @@ export default function DashboardPage() {
     { id: "chat", label: "Chat", icon: "\uD83D\uDCAC" },
     { id: "projects", label: "Projects", icon: "\uD83D\uDCC1" },
     { id: "runtime", label: "Vibing", icon: "\u25A3" },
+    { id: "downloads", label: "Downloads", icon: "\u2B07" },
   ] as { id: typeof activeTab; label: string; icon: string; badge?: number }[]).filter(
     (t) =>
       isOwnerAccount || !OWNER_ONLY_TABS.has(t.id),
@@ -3330,6 +3332,7 @@ export default function DashboardPage() {
 	              { id: "chat",     label: "Chat",     icon: "💬" },
 	              { id: "projects", label: "Projects", icon: "📁" },
 	              { id: "runtime", label: "Vibing", icon: "▣" },
+	              { id: "downloads", label: "Downloads", icon: "⬇" },
 	            ] as const).map((it) => (
               <button
                 key={it.id}
@@ -4406,6 +4409,10 @@ export default function DashboardPage() {
             </div>
           ) : activeTab === "exec" ? (
             <div className="flex-1 min-h-0 w-full"><ExecView /></div>
+          ) : activeTab === "downloads" ? (
+            <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full">
+              <DownloadsView />
+            </div>
           ) : activeTab === "devices" ? (
             <div className="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full space-y-4">
               <PendingClaimsSection

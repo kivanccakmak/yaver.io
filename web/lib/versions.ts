@@ -10,7 +10,7 @@
  * electron/package.json's artifactName pattern; GitHub's
  * /releases/latest/download/ URL shape resolves each by its exact asset name.
  */
-export const GUI_VERSION = "0.1.0";
+export const GUI_VERSION = "0.1.1";
 export const GUI_BASE_URL =
   "https://github.com/yaver-io/yaver.io/releases/latest/download";
 export const GUI_DOWNLOADS = {

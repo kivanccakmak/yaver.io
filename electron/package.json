@@ -1,7 +1,7 @@
 {
   "name": "yaver-gui",
   "productName": "Yaver",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Desktop GUI for the Yaver web dashboard — chat, vibing, devices, and previews in a native shell.",
   "main": "src/main.js",
   "author": "Kivanç Çakmak <kivanc.cakmak@simkab.com>",
@@ -38,7 +38,10 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "assets/icon.icns",
-      "target": ["dmg", "zip"]
+      "target": ["dmg", "zip"],
+      "dmg": {
+        "title": "yaver.io"
+      }
     },
     "win": {
       "icon": "assets/icon.ico",
