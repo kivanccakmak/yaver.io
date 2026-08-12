@@ -237,6 +237,21 @@ export default function PreviewPane({
     lines: string[];
     commands: Record<string, CommandCardModel>;
   } | null>(null);
+  // Auto-re-render on `runtime_render_requested` (the agent's structured
+  // "runner finished, refresh the preview" event). This is the Cross-Surface
+  // render contract RuntimeLabView already honors: render exactly ONCE when
+  // the task reaches a renderable terminal state (completed/review), never
+  // while the runner is coding, coalesced while a reload is in flight.
+  // `autoRenderRef` dedupes per task+turn so follow-up turns each render
+  // exactly once (same discriminator trick as RuntimeLabView).
+  const [agentRenderRequest, setAgentRenderRequest] = useState<{ id: string; reason: string } | null>(null);
+  const autoRenderRef = useRef<string | null>(null);
+
+  // Cross-Surface render contract: only a renderable TERMINAL state may
+  // trigger the preview reload — never while the runner is coding. Twin of
+  // RuntimeLabView.taskStatusAllowsRender (kept local to avoid a cross-file
+  // import cycle; the two must not drift — same contract).
+  const taskStatusAllowsRender = (status: TaskStatus): boolean => status === "completed" || status === "review";
   // The live-output stream's health. Before this, a stream cut mid-render
   // ended in silence and this panel froze on its last line with no way to
   // tell a finished task from a severed tunnel.
@@ -1080,6 +1095,10 @@ export default function PreviewPane({
         lines: [],
         commands: {},
       });
+      // Fresh task → clear the previous turn's render intent + dedupe so
+      // this task's terminal state renders once.
+      setAgentRenderRequest(null);
+      autoRenderRef.current = null;
       // Recovery-wrapped: a dropped stream is named + reattached instead of
       // freezing this panel's transcript on its last frame. lib/
       // taskStreamWithRecovery.ts owns the ladder; the policy lives in
@@ -1103,14 +1122,27 @@ export default function PreviewPane({
         (evt) => {
           // Structured shell-command events → foldable CommandCards.
           // P2P only (task SSE stream), never Convex.
-          if (!isCommandEvent(evt)) return;
-          setActiveTaskStream((prev) => {
-            if (!prev || prev.id !== task.id) return prev;
-            return {
-              ...prev,
-              commands: reduceCommandEvent(prev.commands, evt),
-            };
-          });
+          if (isCommandEvent(evt)) {
+            setActiveTaskStream((prev) => {
+              if (!prev || prev.id !== task.id) return prev;
+              return {
+                ...prev,
+                commands: reduceCommandEvent(prev.commands, evt),
+              };
+            });
+            return;
+          }
+          // Structured render intent: the runner finished a turn and asked
+          // for the preview to refresh. Captured here (the same event
+          // RuntimeLabView consumes) so the preview reloads when the task
+          // reaches a renderable terminal state — never mid-coding.
+          if (evt?.type === "runtime_render_requested") {
+            const reason = String(evt.reason || "task-output");
+            setAgentRenderRequest({
+              id: `${task.id}:${String(evt.ts || Date.now())}:${reason}`,
+              reason,
+            });
+          }
         },
         { onHealth: setTaskStreamHealth },
       );
@@ -1170,6 +1202,30 @@ export default function PreviewPane({
     // full = rebuild the Hermes bundle and push it to the phone.
     await agentClient.reloadDevServer({ mode: kind === "full" ? "bundle" : "fast" });
   }, [devStatus?.framework]);
+
+  // Cross-Surface render contract: when the runner emits
+  // runtime_render_requested AND the task has reached a renderable terminal
+  // state (completed/review), reload the preview exactly once per turn.
+  // While the runner is still coding (queued/running) the intent stays
+  // queued; reloading mid-coding is what the contract forbids. Dedupe key
+  // includes the per-turn discriminator (line count + tail) so a follow-up
+  // turn on the SAME task renders again instead of being deduped away.
+  useEffect(() => {
+    if (!activeTaskStream) return;
+    if (!taskStatusAllowsRender(activeTaskStream.status)) return;
+    const structuredRequest = agentRenderRequest?.id?.startsWith(`${activeTaskStream.id}:`) ? agentRenderRequest : null;
+    const key = [
+      activeTaskStream.id,
+      activeTaskStream.status,
+      String(activeTaskStream.lines?.length ?? 0),
+      (activeTaskStream.lines?.[activeTaskStream.lines.length - 1] ?? "").slice(-80),
+      structuredRequest ? `mcp:${structuredRequest.id}` : "task-finished",
+    ].join(":");
+    if (autoRenderRef.current === key) return;
+    autoRenderRef.current = key;
+    void handleReload("fast");
+  }, [activeTaskStream, agentRenderRequest, handleReload]);
+
 
   const handleStop = useCallback(async () => {
     setStopState("stopping");

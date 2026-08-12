@@ -21,6 +21,13 @@ export type SendTaskRequestBodyArgs = {
    *  opencode runner honors it; other runners ignore the field. Surfaces
    *  set this when the composer input is `/goal <objective>`. */
   goal?: string;
+  /** Runs the task as a grounded deep question-answer (askModePreamble:
+   *  file:line citations, explain-first, confirm gate) instead of a work
+   *  run — the phone's "deep audit" frame. The web dashboard already sends
+   *  it (agent-client.ts buildCreateTaskBody); this field closes the
+   *  mobile gap so a phone-triggered ask is indistinguishable from a
+   *  dashboard one. */
+  askMode?: boolean;
   /** Whether the runner sees Yaver's own `yaver mcp` doorway (default
    *  true). Set false when the user deselects the `yaver` chip. */
   includeYaverMcp?: boolean;
@@ -45,6 +52,7 @@ export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<
     ...(args.video?.source ? { videoSource: args.video.source } : {}),
     ...(args.allowLocalFallback ? { allowLocalFallback: true } : {}),
     ...(args.goal ? { goal: args.goal } : {}),
+    ...(args.askMode ? { askMode: true } : {}),
     // Absent = include (server default true); only an explicit false strips
     // Yaver's own MCP doorway so the task runs with ONLY selected externals.
     ...(args.includeYaverMcp === false ? { includeYaverMcp: false } : {}),

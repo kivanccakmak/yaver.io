@@ -214,6 +214,140 @@ actor AgentClient {
         return (try JSONDecoder().decode(TaskList.self, from: data)).tasks
     }
 
+    /// Stream a task's live output (GET /tasks/{id}/output?rawSince=…).
+    ///
+    /// Same SSE frame vocabulary the phone consumes (quic.ts::streamTaskOutput):
+    ///   - {type:"output", text}       groomed transcript chunk
+    ///   - {type:"raw", text, offset}  raw runner stdout (ANSI intact), live
+    ///   - {type:"raw_replay", text, offset, full} one-shot seed of the raw tail
+    ///                                 at subscribe time (full=true → replace)
+    ///   - {type:"done", status}       terminal state
+    ///   - {type:"agent_question", question} runner is asking the human
+    ///
+    /// `rawSince: 0` seeds a terminal with the full retained tail; pass the
+    /// `offset` from the previous `raw`/`raw_replay` frame to resume without
+    /// gaps. `onDone` fires exactly once with the terminal status; `onEnd`
+    /// fires when the stream ends for ANY other reason (drop, relay bounce,
+    /// cancel) so a frozen console is never silent — same discipline as
+    /// subscribeDevEvents.
+    struct TaskOutputEvent: Decodable {
+        let type: String?
+        let text: String?
+        let status: String?
+        let offset: Int?
+        let full: Bool?
+        let question: String?
+        let questionId: String?
+    }
+
+    func subscribeTaskOutput(
+        taskId: String,
+        rawSince: Int? = nil,
+        onRaw: (@Sendable (String, Int, Bool) -> Void)? = nil,
+        onData: (@Sendable (String) -> Void)? = nil,
+        onDone: (@Sendable (String) -> Void)? = nil,
+        onEnd: (@Sendable (FailureSignals.StreamEndKind, String?) -> Void)? = nil
+    ) -> Task<Void, Never> {
+        var query = ""
+        if let rawSince, rawSince >= 0 {
+            query = "?rawSince=\(rawSince)"
+        }
+        let endpoints = requestEndpoints(path: "/tasks/\(taskId)/output\(query)")
+        let token = self.token
+        let relayPassword = box.relayPassword
+        let urlSession = self.session
+        return Task {
+            var lastError = "task output stream unavailable"
+            var connected = false
+            var sawDone = false
+            for endpoint in endpoints {
+                if Task.isCancelled { onEnd?(.cancelled, nil); return }
+                var req = URLRequest(url: endpoint.url)
+                req.httpMethod = "GET"
+                req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+                if endpoint.relay, let relayPassword, !relayPassword.isEmpty {
+                    req.setValue(relayPassword, forHTTPHeaderField: "X-Relay-Password")
+                }
+                do {
+                    let (bytes, resp) = try await urlSession.bytes(for: req)
+                    guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                        lastError = "task output stream returned HTTP \((resp as? HTTPURLResponse)?.statusCode ?? -1)"
+                        continue
+                    }
+                    connected = true
+                    var dataLines: [String] = []
+                    for try await line in bytes.lines {
+                        if Task.isCancelled { onEnd?(.cancelled, nil); return }
+                        if line.isEmpty {
+                            emitTaskOutput(dataLines, onRaw: onRaw, onData: onData, onDone: onDone, sawDone: &sawDone)
+                            dataLines.removeAll(keepingCapacity: true)
+                            continue
+                        }
+                        if line.hasPrefix("data:") {
+                            dataLines.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
+                        }
+                    }
+                    emitTaskOutput(dataLines, onRaw: onRaw, onData: onData, onDone: onDone, sawDone: &sawDone)
+                    // The body ended. If we never saw `done`, this is an
+                    // interruption — the box closed the stream or the relay
+                    // dropped it — and saying nothing froze the console.
+                    if !sawDone {
+                        onEnd?(.interrupted, "the box closed the task output stream")
+                    } else {
+                        onEnd?(.done, nil)
+                    }
+                    return
+                } catch {
+                    if Task.isCancelled { onEnd?(.cancelled, nil); return }
+                    lastError = error.localizedDescription
+                    if connected {
+                        onEnd?(.interrupted, lastError)
+                        return
+                    }
+                    continue
+                }
+            }
+            onEnd?(.interrupted, lastError)
+        }
+    }
+
+    private nonisolated func emitTaskOutput(
+        _ dataLines: [String],
+        onRaw: (@Sendable (String, Int, Bool) -> Void)?,
+        onData: (@Sendable (String) -> Void)?,
+        onDone: (@Sendable (String) -> Void)?,
+        sawDone: inout Bool
+    ) {
+        guard !dataLines.isEmpty else { return }
+        let payload = dataLines.joined(separator: "\n")
+        guard let data = payload.data(using: .utf8),
+              let event = try? JSONDecoder().decode(TaskOutputEvent.self, from: data)
+        else { return }
+        switch event.type ?? "" {
+        case "raw":
+            if let onRaw, let text = event.text, !text.isEmpty {
+                onRaw(text, event.offset ?? 0, event.full ?? false)
+            }
+        case "raw_replay":
+            if let onRaw, let text = event.text, !text.isEmpty {
+                onRaw(text, event.offset ?? 0, event.full ?? true)
+            }
+        case "output":
+            if let onData, let text = event.text, !text.isEmpty {
+                onData(text)
+            }
+        case "done":
+            if !sawDone, let onDone {
+                sawDone = true
+                onDone(event.status ?? "completed")
+            }
+        default:
+            break // agent_question and future event types: TV renders nothing yet
+        }
+    }
+
     /// START a vibe from a native surface (POST /tasks).
     ///
     /// THE ONE CAPABILITY THAT MADE EVERY NATIVE SURFACE UNVIBEABLE (2026-08-03).
@@ -240,6 +374,9 @@ actor AgentClient {
         projectName: String = "",
         runner: String = "",
         model: String = "",
+        mode: String = "",
+        goal: String = "",
+        askMode: Bool = false,
         mcpServers: [String] = [],
         includeYaverMcp: Bool = true
     ) async throws -> TaskSummary {
@@ -251,6 +388,15 @@ actor AgentClient {
         if !projectName.isEmpty { body["projectName"] = projectName }
         if !runner.isEmpty { body["runner"] = runner }
         if !model.isEmpty { body["model"] = model }
+        // opencode agent mode (build/plan/custom — maps to `opencode run
+        // --agent <mode>`) and goal-mode (persistent opencode-goal-plugin
+        // objective) travel on the body exactly like mobile/web so a
+        // TV-started task is indistinguishable from a dashboard one.
+        if !mode.isEmpty { body["mode"] = mode }
+        if !goal.isEmpty { body["goal"] = goal }
+        // askMode opts the task into the grounded explain-first preamble
+        // (askModePreamble) — the "deep audit this" frame from the couch.
+        if askMode { body["askMode"] = true }
         // MCP doorway parity with mobile/web: external servers + the yaver
         // toggle travel on the task body so a TV-started task is
         // indistinguishable from one started in the dashboard (2026-08-10).

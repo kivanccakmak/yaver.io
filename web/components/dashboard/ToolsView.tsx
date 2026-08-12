@@ -1234,7 +1234,7 @@ export default function ToolsView({ devices = [] }: Props) {
 // it as a one-click "Save" next to the existing display row instead of forcing
 // the user through the full opencode.json edit flow. Other provider settings
 // (API keys, custom options) still go through the full save form.
-function ProviderCard({
+export function ProviderCard({
   provider,
   onSaveBaseUrl,
   onDelete,
@@ -1306,7 +1306,7 @@ function ProviderCard({
 // providers Yaver users hit most often. The user still has to paste
 // their API key — we deliberately don't ship default keys. Adding a
 // new preset only requires a row here, no UI plumbing change.
-const providerPresets: Array<{
+export const providerPresets: Array<{
   label: string;
   id: string;
   name: string;
@@ -1375,7 +1375,7 @@ const providerPresets: Array<{
   },
 ];
 
-function AddProviderForm({
+export function AddProviderForm({
   onAdd,
 }: {
   onAdd: (args: { id: string; name?: string; baseUrl?: string; apiKey?: string }) => Promise<boolean>;

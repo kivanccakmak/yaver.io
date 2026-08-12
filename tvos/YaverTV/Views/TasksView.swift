@@ -15,6 +15,7 @@ struct TasksView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var filter: Filter = .active
+    @State private var showComposer = false
 
     enum Filter: String, CaseIterable, Identifiable {
         case active = "Active", review = "Review", done = "Done", failed = "Failed", all = "All"
@@ -65,6 +66,15 @@ struct TasksView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
         .task { await load() }
+        .sheet(isPresented: $showComposer) {
+            TaskComposerView()
+                .environmentObject(store)
+        }
+        // The composer dismisses itself after a successful POST — reload so the
+        // new task is visible at the top of Active instead of a stale list.
+        .onChange(of: showComposer) { _, open in
+            if !open { Task { await load() } }
+        }
     }
 
     private var filtered: [TaskSummary] { tasks.filter { filter.matches($0.status) } }
@@ -74,6 +84,14 @@ struct TasksView: View {
             Image(systemName: "checklist").font(.system(size: 26)).foregroundStyle(.blue)
             Text("Tasks").font(.system(size: 30, weight: .bold))
             Spacer()
+            Button {
+                showComposer = true
+            } label: {
+                Label("New vibe", systemImage: "wand.and.stars")
+                    .font(.system(size: 17, weight: .semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
                 .disabled(loading)
         }
@@ -81,20 +99,15 @@ struct TasksView: View {
     }
 
     @ViewBuilder private func row(_ t: TaskSummary) -> some View {
-        let live = (t.tmuxSession?.isEmpty == false)
-        Group {
-            if live {
-                NavigationLink(destination: SessionView(preselect: t.tmuxSession)) { rowBody(t, live: true) }
-                    .buttonStyle(.card)
-            } else {
-                rowBody(t, live: false)
-                    .padding(.horizontal, 24).padding(.vertical, 18)
-                    .background(.gray.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
-            }
-        }
+        // Tap a task to stream its LIVE console (raw runner stdout over
+        // /tasks/{id}/output?rawSince=) — the tvOS twin of mobile's
+        // LiveConsoleSection. A task with a tmux session additionally offers
+        // "Drive session" from the detail's footer.
+        NavigationLink(destination: TaskDetailView(task: t)) { rowBody(t) }
+            .buttonStyle(.card)
     }
 
-    private func rowBody(_ t: TaskSummary, live: Bool) -> some View {
+    private func rowBody(_ t: TaskSummary) -> some View {
         HStack(spacing: 18) {
             statusDot(t.status)
             VStack(alignment: .leading, spacing: 4) {
@@ -103,7 +116,7 @@ struct TasksView: View {
                     .font(.system(size: 15)).foregroundStyle(.secondary)
             }
             Spacer()
-            if live { Image(systemName: "chevron.right").foregroundStyle(.secondary) }
+            Image(systemName: "chevron.right").foregroundStyle(.secondary)
         }
     }
 

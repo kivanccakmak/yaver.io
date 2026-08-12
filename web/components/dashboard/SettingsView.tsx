@@ -9,7 +9,7 @@ import McpServersCard from "./McpServersCard";
 import BillingView from "./BillingView";
 import GitSettingsCard from "./GitSettingsCard";
 import VisionSettingsCard from "./VisionSettingsCard";
-import OpenCodeModelCard from "./OpenCodeModelCard";
+import OpenCodeSettingsView from "./OpenCodeSettingsView";
 import { ManagedCloudPanel } from "./ManagedCloudPanel";
 import { agentClient } from "@/lib/agent-client";
 import { HIDE_PAID_UI } from "@/lib/launchFlags";
@@ -973,8 +973,11 @@ export default function SettingsView({ user, onLogout }: SettingsViewProps) {
       {/* Vision — screenshots/crash logs/UI failures → text via Yaver MCP */}
       <VisionSettingsCard />
 
-      {/* Coding model — which model opencode uses per machine */}
-      <OpenCodeModelCard devices={ownedDevices} />
+      {/* Coding model — which model opencode uses per machine. The
+          consolidated hub: provider selection, API-key entry, model pickers,
+          add/edit/delete providers, diagnostics (2026-08-12). Supersedes the
+          model-only OpenCodeModelCard. */}
+      <OpenCodeSettingsView devices={ownedDevices} />
 
       {/* Legal */}
       <div className="card mb-6">

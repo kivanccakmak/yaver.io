@@ -2387,6 +2387,12 @@ export default function TasksScreen() {
       cancelled = true;
     };
   }, []);
+  // Ask / deep-audit mode: when ON, the task runs as a grounded
+  // explain-first question-answer (askModePreamble — file:line cites,
+  // confirm gate) instead of a work run. Web has the Ask toggle /
+  // auto-detect; this closes the mobile gap so a phone can trigger the
+  // same deep-audit frame.
+  const [askModeEnabled, setAskModeEnabled] = useState(false);
   // Inline player state — set the clipId to open the modal that plays
   // the task's recorded demo MP4. Sourced from the agent at
   // /vibing/preview/clip/<id>.
@@ -4302,6 +4308,7 @@ export default function TasksScreen() {
         mcpServers: selectedMcpServers,
         goal: goalIntent ? goalText : undefined,
         includeYaverMcp,
+        askMode: askModeEnabled,
       };
       pendingCloudTaskParams = taskParams;
       const rawTask = await sendClient.sendTask(
@@ -4321,6 +4328,7 @@ export default function TasksScreen() {
         taskParams.mcpServers,
         taskParams.goal,
         taskParams.includeYaverMcp,
+        taskParams.askMode,
       );
       if (taskParams.projectName && keepLastProject) {
         const runnerDeviceId = connectionManager.roleDeviceId("runner") || pendingTarget?.deviceId || activeDevice?.id || "default";
@@ -6582,6 +6590,37 @@ export default function TasksScreen() {
                     </View>
                   </View>
                 )}
+                {/* Ask / deep-audit toggle — runs the task as a grounded
+                    explain-first question-answer (askModePreamble: file:line
+                    cites, confirm gate) instead of a work run. The web
+                    dashboard has Ask via auto-detect; this is the explicit
+                    phone twin so a deep audit can be triggered from the
+                    hand (2026-08-12). Works for every runner. */}
+                <Pressable
+                  onPress={() => {
+                    taskHaptics.send();
+                    setAskModeEnabled((v) => !v);
+                  }}
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: askModeEnabled }}
+                  accessibilityLabel="Deep audit — answer with file:line evidence, change nothing without asking"
+                  style={[s.composerModeRow, { borderColor: withAlpha(c.border, "cc") }]}
+                >
+                  <Text style={[s.composerModeLabel, { color: c.textMuted }]}>Ask</Text>
+                  <View style={[s.composerModeButton, {
+                    borderColor: askModeEnabled ? c.accent : c.border,
+                    backgroundColor: askModeEnabled ? c.accent + "20" : "transparent",
+                  }]}>
+                    <Text style={[s.composerModeText, { color: askModeEnabled ? c.accent : c.textSecondary }]}>
+                      {askModeEnabled ? "Deep audit on" : "Deep audit"}
+                    </Text>
+                  </View>
+                  {askModeEnabled && (
+                    <Text style={{ fontSize: 11, color: c.textMuted, marginLeft: 8, flexShrink: 1 }}>
+                      answers with file:line evidence · changes nothing without asking
+                    </Text>
+                  )}
+                </Pressable>
                 <View style={[s.composerFooter, { borderTopColor: withAlpha(c.border, "cc") }]}>
                   <Pressable
                     style={({ pressed }) => [

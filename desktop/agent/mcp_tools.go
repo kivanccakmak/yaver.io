@@ -55,6 +55,10 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 						"type":        "boolean",
 						"description": "Default false. When true, the new task is exempt from yaver's no-questions preamble + soft-question fallback — the runner may emit clarifying questions in prose. Only enable for audits or risky-change reviews where the user wants explicit confirmation. When false, the runner is told to pick sensible defaults and stop only via the yaver_ask_user MCP tool.",
 					},
+					"ask_mode": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Default false. When true, the task runs as a grounded deep question-answer (askModePreamble: file:line citations, explain-first, confirm gate) instead of a work run — the 'deep audit' frame. Works on the local machine and, with device_id, on a remote box.",
+					},
 				},
 			},
 		},

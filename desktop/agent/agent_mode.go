@@ -364,6 +364,58 @@ func buildAgentGraphTemplate(req AgentGraphCreateRequest) []AgentGraphNodeSpec {
 				VerifyPoints: 1.0,
 			},
 		}
+	case "audit", "audit-deep":
+		// A read-only deep AUDIT of the repository: the runner owns a bounded
+		// audit contract and returns a machine-readable report artifact
+		// (audit-report.md + audit-report.json) instead of just prose. Every
+		// node is AskMode — grounded file:line evidence, no mutations without
+		// a yaver_ask_user confirm. This is the "deep audit this repo" verb
+		// that ask/deep-ask only approximated by phrasing.
+		return []AgentGraphNodeSpec{
+			{
+				ID:        "scope",
+				Title:     "Scope The Audit",
+				Kind:      AgentNodeChat,
+				Prompt:    "You are running a deep codebase AUDIT. First produce a bounded audit scope: read the repo's README/docs and detect its stack, entrypoints, auth, data layer, and public surface, then list the audit dimensions you will cover (e.g. security, correctness, failure-plumbing, stale-docs-vs-code, perf, surface-parity). Do NOT modify anything — this is a read-only audit.\n\nAudit task:\n" + prompt,
+				WorkDir:   workDir,
+				Project:   project,
+				AskMode:   true,
+				Toughness: 0.85,
+			},
+			{
+				ID:        "investigate",
+				Title:     "Investigate",
+				Kind:      AgentNodeChat,
+				Prompt:    "Execute the audit scope. Trace each dimension end to end — grep, open files, follow the wiring across subsystems. For every finding record file:line evidence, the concrete defect, and why it matters (what a user or a future operator experiences). Hunt the 'inventory says yes, operation says no' shape: documented-but-dead routes, stale .md claims, capabilities that report success without doing work. Do NOT modify anything.\n\nAudit task:\n" + prompt,
+				WorkDir:   workDir,
+				Project:   project,
+				DependsOn: []string{"scope"},
+				AskMode:   true,
+				Toughness: 0.9,
+			},
+			{
+				ID:        "report",
+				Title:     "Write Audit Report",
+				Kind:      AgentNodeChat,
+				Prompt:    "Write the audit report as a MARKDOWN FILE at audit-report.md in the repo root (and a machine-readable audit-report.json: {audited_at, scope[], findings:[{id,severity,title,evidence:[{file,line}],remediation}]}). Group findings by severity (critical/high/medium/low), each with file:line evidence and a concrete remediation. Finish with a short 'What is healthy' section so the report is balanced. Writing these two files is the ONLY write this audit performs — never modify source code. Then summarize the top findings in chat.\n\nAudit task:\n" + prompt,
+				WorkDir:   workDir,
+				Project:   project,
+				DependsOn: []string{"investigate"},
+				AskMode:   true,
+				Toughness: 0.85,
+			},
+			{
+				ID:        "verify",
+				Title:     "Verify Findings",
+				Kind:      AgentNodeChat,
+				Prompt:    "Adversarially verify the audit report against the actual code: re-open every cited file:line and confirm the finding is real and current; flag any finding that is stale, overstated, or missing its root cause; and note anything the audit missed. Update audit-report.md/audit-report.json in place with corrections. Report what changed.\n\nAudit task:\n" + prompt,
+				WorkDir:   workDir,
+				Project:   project,
+				DependsOn: []string{"report"},
+				AskMode:   true,
+				Toughness: 0.85,
+			},
+		}
 	case "full", "agent", "default", "ship":
 		return []AgentGraphNodeSpec{
 			{
@@ -1318,7 +1370,7 @@ func runAgentModeViaDaemon(args []string) {
 		prompt := fs.String("prompt", "", "top-level user goal")
 		runner := fs.String("runner", "", "default runner")
 		model := fs.String("model", "", "default model")
-		template := fs.String("template", "full", "full")
+		template := fs.String("template", "full", "graph template: full|ask|audit")
 		maxParallel := fs.Int("max-parallel", 2, "max concurrent ready nodes")
 		_ = fs.Parse(args[1:])
 		if strings.TrimSpace(*prompt) == "" {

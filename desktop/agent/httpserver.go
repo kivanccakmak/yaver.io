@@ -124,6 +124,12 @@ type HTTPServer struct {
 	dbLifecycleMgr     *DBLifecycleManager  // nil until first db_migrate
 	previewMgr         *PreviewManager      // nil until first preview_*
 	vibePreviewMgr     *VibePreviewManager  // nil until first /vibing/preview/start
+	// windowsSeats is the in-process runner-seat index on native Windows —
+	// the persistence/reattach layer tmux provides on Unix (windows_seat.go).
+	// Nil everywhere else; runner_pty.go consults it through
+	// windowsSeatResume/windowsSeatClaim so the runner-pty path needs no
+	// GOOS switch of its own.
+	windowsSeats *windowsSeatIndex
 	oauthWizardMgr     *OAuthWizardManager  // nil until first auth_oauth_*
 	cloudDeployMgr     *CloudDeployManager  // nil until first cloud_*
 	migrateMgr         *MigrateManager      // nil until first migrate_*
@@ -317,6 +323,7 @@ func NewHTTPServer(port int, token, ownerUserID, deviceID, convexURL, hostname s
 		streams:               NewLogStreamRegistry(),
 		hostShareWorkspaceMgr: hostShareWorkspaceMgr,
 		heartbeatKick:         make(chan struct{}, 1),
+		windowsSeats:          newWindowsSeatIndex(),
 	}
 	// Lets a credential recovery re-dispatch whatever the user typed while the
 	// runner was signed out, without threading a TaskManager into the auth paths.
@@ -6891,6 +6898,10 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			// AskFreely opts the new task out of yaver's no-questions
 			// preamble + soft-question fallback (default false).
 			AskFreely bool `json:"ask_freely"`
+			// AskMode runs the task as a grounded deep question-answer
+			// (askModePreamble: file:line cites, explain-first, confirm
+			// gate) instead of a work run — the MCP "deep audit" frame.
+			AskMode bool `json:"ask_mode"`
 			// Goal arms Yaver goal-mode (opencode goal plugin): a persistent
 			// objective the runner keeps working toward across turns.
 			Goal string `json:"goal,omitempty"`
@@ -6914,6 +6925,12 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 				"videoEnabled": args.VideoEnabled,
 				"videoSource":  strings.TrimSpace(args.VideoSource),
 				"askFreely":    args.AskFreely,
+				// askMode was NOT forwarded before — a remote deep-audit /
+				// explain-first task silently lost its frame and ran as a plain
+				// build task on the target box. Same shape as the mobile gap
+				// (quic.ts sendTask had no askMode either). Forward it so a
+				// device-pinned ask is indistinguishable from a local one.
+				"askMode": args.AskMode,
 			}
 			out, err := proxyToDeviceJSON(ctx, "create_task", deviceID, http.MethodPost, "/tasks", body)
 			if err != nil {
@@ -6934,6 +6951,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			VideoEnabled: args.VideoEnabled,
 			VideoSource:  strings.TrimSpace(args.VideoSource),
 			AskFreely:    args.AskFreely,
+			AskMode:      args.AskMode,
 		}
 		meta := taskPlacementRequestFromTaskBody(taskPlacementRequestInput{
 			KindHint:       "",
@@ -6972,6 +6990,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 				"videoEnabled":  args.VideoEnabled,
 				"videoSource":   strings.TrimSpace(args.VideoSource),
 				"askFreely":     args.AskFreely,
+				"askMode":       args.AskMode,
 				"placementKind": meta.Kind,
 			})
 			cloudErr := &CloudWorkspaceRequiredError{

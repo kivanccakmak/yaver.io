@@ -44,3 +44,22 @@ test("mobile task request body carries portable project identity and MCP allowli
   assert.equal(body.workDir, "/Users/kivanccakmak/Workspace/medici.ai");
   assert.deepEqual(body.mcpServers, ["tusrehber"]);
 });
+
+test("mobile task request body carries askMode only when enabled (deep-audit frame)", () => {
+  const plain = buildSendTaskRequestBody({
+    title: "Add a button",
+    description: "",
+    runner: "opencode",
+    codeMode: true,
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(plain, "askMode"), false);
+
+  const audit = buildSendTaskRequestBody({
+    title: "Deep audit the auth flow",
+    description: "",
+    runner: "opencode",
+    codeMode: true,
+    askMode: true,
+  });
+  assert.equal(audit.askMode, true);
+});

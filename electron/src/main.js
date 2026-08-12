@@ -375,6 +375,21 @@ function rebuildTray() {
       },
     },
     {
+      // First-class opencode config — the dashboard's Settings tab renders
+      // OpenCodeSettingsView (provider selection, API-key entry, model
+      // pickers). Deep-link straight to it from the tray so the desktop
+      // app's most-reached dev setting is one click, not a tab hunt.
+      label: "OpenCode settings…",
+      click: () => {
+        showWindow();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          const current = mainWindow.webContents.getURL();
+          const sep = current.includes("?") ? "&" : "?";
+          void mainWindow.loadURL(current + sep + "tab=settings");
+        }
+      },
+    },
+    {
       label: "Reload",
       click: () => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
