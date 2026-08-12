@@ -538,6 +538,12 @@ export default function HomePage() {
               full MCP guide &rarr;
             </Link>
           </p>
+          <p className="mt-4 text-center text-xs text-surface-600">
+            Prefer the global CLI?{" "}
+            <Link href="/download" className="underline hover:text-surface-300">
+              npm install -g yaver-cli &rarr;
+            </Link>
+          </p>
         </div>
       </section>
 
