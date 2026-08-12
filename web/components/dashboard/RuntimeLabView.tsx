@@ -1466,8 +1466,22 @@ export default function RuntimeLabView({
   const loadProjects = useCallback(async () => {
     setError(null);
     try {
+      // Machine-role split: the project LIST must come from the box the
+      // render probe will actually ask (devBaseUrl), not the connected/AI
+      // box. Before 2026-08-12 the list always came from agentClient
+      // (connected box) while Load Targets probed the render box — so the
+      // picker offered /root/Workspace/yaver.io paths that the Mac's agent
+      // answered with "no workspace manifest at …" (inventory from one
+      // machine, operation on another). Fall back to the connected box
+      // when no split is active (byte-identical single-box behavior) or the
+      // render-routed fetch fails (offline render box — still show what the
+      // connected box has).
+      const split = machineRolesSplitActive(machineRoles);
+      const renderProjects = split
+        ? await agentClient.listRenderProjects().catch(() => null)
+        : null;
       const [projectRows, repoRows, mobileRows, settings] = await Promise.all([
-        agentClient.listProjects(),
+        renderProjects ? Promise.resolve(renderProjects) : agentClient.listProjects(),
         agentClient.listWorkspaceRepos(),
         agentClient.listProjectsByCapability("mobile").catch(() => []),
         loadRuntimeSettings().catch(() => null),
@@ -1500,7 +1514,7 @@ export default function RuntimeLabView({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load projects.");
     }
-  }, [appendLog, connectedDevice?.id, loadRuntimeSettings, seedRuntimeProjectCatalog, selectedPath]);
+  }, [appendLog, connectedDevice?.id, loadRuntimeSettings, machineRoles, seedRuntimeProjectCatalog, selectedPath]);
 
   const refreshRunners = useCallback(async () => {
     const deviceFallback = deviceRunnerFallback;
@@ -2837,6 +2851,19 @@ export default function RuntimeLabView({
     setError(null);
     appendLog(`create session ${targetId}`);
     try {
+      // One session per view: starting a new target must REPLACE the old
+      // one, not stack a second stream beside it. Before 2026-08-12 clicking
+      // "Web UI in browser" while a WebRTC session was live just added
+      // another session — the viewer kept showing the prior stream ("it
+      // still kept prior one, it should have overwritten").
+      if (session && session.id && session.id !== "" && session.status !== "failed" && session.status !== "ended") {
+        try {
+          await agentClient.closeRemoteRuntimeSession(session.id);
+          appendLog(`replaced session ${session.id}`);
+        } catch (err) {
+          appendLog(`could not close prior session ${session.id}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
       const next = await agentClient.startRemoteRuntimeSession(
         selectedProject.path,
         runtimeFrameworkForProject(selectedProject),
@@ -2856,7 +2883,7 @@ export default function RuntimeLabView({
     } finally {
       setBusy(false);
     }
-  }, [appendLog, selectedProject]);
+  }, [appendLog, selectedProject, session]);
 
   const openWebUI = useCallback(async () => {
     if (!selectedProject) return;

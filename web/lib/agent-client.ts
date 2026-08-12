@@ -5207,6 +5207,40 @@ export class AgentClient {
     return data.projects ?? [];
   }
 
+  /** Project list from the RENDER machine when a runner/render split is
+   *  active, else the connected box. The project PICKER must offer the
+   *  render box's projects: Load Targets probes the render box, so a path
+   *  from the AI/connected box (e.g. /root/Workspace/yaver.io on the Linux
+   *  runner) is nonsense there — the probe dies with "workspace manifest:
+   *  no workspace manifest at /root/Workspace/yaver.io" even though the
+   *  connection is fine (2026-08-12: "Runtime target probe failed … this
+   *  sucked too" — inventory from one machine, operation on another).
+   *  Same /projects shape as listProjects, routed via devBaseUrl. */
+  async listRenderProjects(): Promise<Array<{
+    name: string;
+    path: string;
+    branch?: string;
+    framework?: string;
+    frameworks?: string[];
+    stack?: string;
+    surfaces?: string[];
+    testSurfaces?: string[];
+    backend?: string;
+    services?: string[];
+    hosting?: string[];
+    role?: string;
+    executionMode?: string;
+    primarySurface?: string;
+    gitRemote?: string;
+    tags?: string[];
+  }>> {
+    this.assertConnected();
+    const res = await fetch(`${this.devBaseUrl}/projects`, { headers: this.authHeaders });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Failed to load render projects: HTTP ${res.status}`);
+    return data.projects ?? [];
+  }
+
   async listWorkspaceRepos(): Promise<Array<{
     name: string;
     path: string;

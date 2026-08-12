@@ -580,6 +580,12 @@ export default function RemoteRuntimeViewer({
   const isRTP = transport.startsWith("webrtc-rtp-h264");
   const isMobileWebBrowser = session.displaySurface === "mobile-web" ||
     (session.targetId === "browser-window" && ["expo", "react-native", "flutter"].includes(String(session.framework || "").toLowerCase()));
+  // Authoritative sizing: the agent's per-platform viewport (TV 3840x2160,
+  // Watch 396x484, Vision 1920x1080, phone 393x852 — appleTargetViewport /
+  // androidTargetDisplay) wins; the frame's own dims fall back next; the
+  // hardcoded shapes are last resort only (2026-08-12 audit: Apple sim
+  // targets carried no viewport, so a tvOS session rendered in a 9/19.5
+  // phone frame).
   const viewportWidth = session.viewport?.width || (isMobileWebBrowser ? 393 : dims?.width || 1280);
   const viewportHeight = session.viewport?.height || (isMobileWebBrowser ? 852 : dims?.height || 800);
   const viewportLabel = session.viewport?.label || (isMobileWebBrowser ? "Mobile" : "Browser");
@@ -590,10 +596,12 @@ export default function RemoteRuntimeViewer({
     return `media ${Math.round(ageMs / 1000)}s ago`;
   }, [lastFrameAt]);
 
-  const aspectRatio = isMobileWebBrowser
-    ? `${viewportWidth} / ${viewportHeight}`
+  const aspectRatio = session.viewport?.width && session.viewport?.height
+    ? `${session.viewport.width} / ${session.viewport.height}`
     : dims
     ? `${dims.width} / ${dims.height}`
+    : isMobileWebBrowser
+    ? `${viewportWidth} / ${viewportHeight}`
     : session.platform === "android"
     ? "9 / 19.5"
     : "9 / 19.5";
@@ -634,6 +642,19 @@ export default function RemoteRuntimeViewer({
 
       {fallbackNote ? (
         <div className="text-[11px] text-amber-700 dark:text-amber-300">{fallbackNote}</div>
+      ) : null}
+
+      {/* Agent note — ALWAYS visible, not just in the empty-state overlay.
+          The white-screen report (2026-08-12): a browser-window session with
+          no dev server streams a white about:blank frame — frames exist, so
+          the old overlay never rendered and the agent's "no dev server is
+          running — start one first" note was invisible. A blank frame WITH
+          an explanation is acceptable; a blank frame with silence is the
+          bug. */}
+      {session.note ? (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-4 text-amber-800 dark:text-amber-100">
+          {session.note}
+        </div>
       ) : null}
 
       <div className="grid gap-2 text-[11px] sm:grid-cols-4">
