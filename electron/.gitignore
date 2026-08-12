@@ -1,0 +1,6 @@
+# The embedded yaver Go agent binary is fetched at release time by
+# scripts/fetch-agent-binary.mjs (CI workflow release-gui.yml). It is never
+# committed — ~60MB per platform, and it would go stale the moment versions.json
+# moves. The fetch script repopulates this dir before electron-builder runs.
+resources/bin/
+dist/

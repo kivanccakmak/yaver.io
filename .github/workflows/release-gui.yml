@@ -1,0 +1,134 @@
+name: Release Desktop GUI
+
+on:
+  push:
+    tags:
+      - "gui/v*"
+  workflow_dispatch:
+    inputs:
+      skip_agent_bundle:
+        description: "Skip downloading the agent binary into the bundle (debug builds)."
+        type: boolean
+        default: false
+        required: false
+
+# Only repo owner can push tags (configure tag protection rules in GitHub).
+# Release jobs require the "production" environment.
+
+concurrency:
+  group: release-gui
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract and validate version
+        id: version
+        run: |
+          JSON_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('versions.json','utf8')).gui)")
+          if [[ "$GITHUB_REF" == refs/tags/gui/v* ]]; then
+            TAG_VERSION="${GITHUB_REF#refs/tags/gui/v}"
+            if [ "$TAG_VERSION" != "$JSON_VERSION" ]; then
+              echo "ERROR: Tag version ($TAG_VERSION) does not match versions.json ($JSON_VERSION)"
+              exit 1
+            fi
+          else
+            TAG_VERSION="$JSON_VERSION"
+          fi
+          echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $TAG_VERSION"
+
+  test:
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+      - name: Install
+        working-directory: electron
+        run: npm ci
+      - name: Unit tests (navigation policy, auth interceptor, agent manager)
+        working-directory: electron
+        run: npm test
+
+  build:
+    needs: [validate, test]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            artifact_glob: "dist/*.dmg"
+          - os: windows-latest
+            platform: win
+            artifact_glob: "dist/*.exe"
+          - os: ubuntu-latest
+            platform: linux
+            artifact_glob: "dist/*.AppImage"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+      - name: Install
+        working-directory: electron
+        run: npm ci
+      - name: Download agent binary into the bundle
+        if: ${{ !inputs.skip_agent_bundle }}
+        working-directory: electron
+        run: node scripts/fetch-agent-binary.mjs
+      - name: Package
+        working-directory: electron
+        run: npx electron-builder --${{ matrix.platform }} --publish never
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: yaver-gui-${{ matrix.platform }}
+          path: electron/${{ matrix.artifact_glob }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/gui/v')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+          merge-multiple: true
+      - name: Cut GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Yaver Desktop GUI ${{ github.ref_name }}"
+          body: |
+            Native desktop GUI for Yaver — sign in (OAuth or email) and vibe tasks
+            straight from your computer. Embeds the Yaver agent, so this machine is
+            itself a Yaver node (vibe it directly, or from phone/TV/watch/web).
+
+            ## Downloads
+            - **macOS** — `yaver-gui-<version>-mac.dmg` (Apple Silicon & Intel)
+            - **Windows** — `yaver-gui-<version>-win-setup.exe` (x64)
+            - **Linux** — `yaver-gui-<version>-linux.AppImage` (x64 & arm64)
+
+            See [yaver.io/download](https://yaver.io/download) for the landing page.
+          files: dist-artifacts/*

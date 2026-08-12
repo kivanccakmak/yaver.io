@@ -26,6 +26,7 @@ const path = require("node:path");
 const fs = require("node:fs");
 const http = require("node:http");
 const { APP_ORIGINS, isAllowedAppUrl, inPageNavigationDecision } = require("./navigation-policy");
+const { AgentManager } = require("./agent-manager");
 
 const DASHBOARD_PRODUCTION_URL = "https://yaver.io/dashboard";
 const DEV_SERVER_URL = "http://localhost:3000";
@@ -33,6 +34,9 @@ const DEV_SERVER_URL = "http://localhost:3000";
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
+/** Embedded yaver Go agent supervisor — makes this desktop a yaver node. */
+let agentManager = null;
+let agentStatus = "starting";
 
 /** Captured auth material, per origin: { token, relayPassword }.
  *  Persisted for the process lifetime only (never written to disk). */
@@ -224,6 +228,9 @@ async function createWindow() {
     show: false,
     backgroundColor: "#0a0a0c",
     title: "Yaver",
+    // Window/taskbar icon on Windows + Linux (macOS uses the app bundle's
+    // icns). Also the dock/taskbar image during the brief pre-paint window.
+    icon: path.join(__dirname, "..", "assets", "icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -332,8 +339,17 @@ function trayIcon() {
 
 function rebuildTray() {
   if (!tray) return;
+  const agentLabel = {
+    running: "Agent · running ✓",
+    adopted: "Agent · running (external) ✓",
+    starting: "Agent · starting…",
+    missing: "Agent · binary not found",
+    crashed: "Agent · restarting…",
+    stopped: "Agent · stopped",
+  }[agentStatus] || "Agent · " + agentStatus;
   const menu = Menu.buildFromTemplate([
     { label: "Show Yaver", click: showWindow },
+    { label: agentLabel, enabled: false },
     {
       label: "Task notifications",
       type: "checkbox",
@@ -345,6 +361,20 @@ function rebuildTray() {
     },
     { type: "separator" },
     {
+      // Doctor / diagnose — the embedded agent serves /diagnose (+ stream,
+      // /agent/doctor, /net/doctor, /mobile/hermes/doctor); the dashboard's
+      // HealthView tab renders them. Deep-link to that tab.
+      label: "Diagnose (doctor)",
+      click: () => {
+        showWindow();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          const current = mainWindow.webContents.getURL();
+          const sep = current.includes("?") ? "&" : "?";
+          void mainWindow.loadURL(current + sep + "tab=health");
+        }
+      },
+    },
+    {
       label: "Reload",
       click: () => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
@@ -354,13 +384,35 @@ function rebuildTray() {
     { label: "Quit Yaver", click: () => { isQuitting = true; app.quit(); } },
   ]);
   tray.setContextMenu(menu);
-  tray.setToolTip("Yaver — AI dev machine remote");
+  tray.setToolTip(`Yaver — AI dev machine remote (${agentLabel})`);
 }
 
 function createTray() {
   tray = new Tray(trayIcon());
   tray.on("click", showWindow);
   rebuildTray();
+}
+
+// ---------------------------------------------------------------------------
+// Embedded yaver agent (this desktop IS a yaver node)
+// ---------------------------------------------------------------------------
+
+/**
+ * Start the embedded agent supervisor. The desktop can be a remote box
+ * (vibed from tvOS/mobile/web/another desktop over the same device routing)
+ * and a client surface (the window vibes the local agent or any other
+ * device). Healthy agents already running on :18080 are adopted, not
+ * duplicated — matching `yaver serve`'s own reuse semantics.
+ */
+function startEmbeddedAgent() {
+  agentManager = new AgentManager({
+    onStatus: ({ state }) => {
+      agentStatus = state;
+      if (tray) rebuildTray();
+    },
+    onLog: (line) => console.log(line),
+  });
+  void agentManager.start();
 }
 
 function showWindow() {
@@ -373,7 +425,7 @@ function showWindow() {
 }
 
 // ---------------------------------------------------------------------------
-// Deep links: yaver://dashboard?tab=chat | runtime | devices | projects
+// Deep links: yaver://dashboard?tab=chat | runtime | devices | projects | health
 // ---------------------------------------------------------------------------
 
 function handleDeepLink(rawUrl) {

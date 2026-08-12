@@ -23,6 +23,7 @@ WEB_VERSION=$(read_version web)
 INSTALLER_VERSION=$(read_version installer)
 BACKEND_VERSION=$(read_version backend)
 PI_IMAGE_VERSION=$(read_version piImage)
+GUI_VERSION=$(read_version gui)
 
 changed=0
 update_file() {
@@ -39,6 +40,7 @@ update_file() {
 echo "Syncing versions from versions.json..."
 echo "  cli=$CLI_VERSION mobile=$MOBILE_VERSION relay=$RELAY_VERSION"
 echo "  web=$WEB_VERSION installer=$INSTALLER_VERSION backend=$BACKEND_VERSION piImage=$PI_IMAGE_VERSION"
+echo "  gui=$GUI_VERSION"
 echo ""
 
 # --- Desktop CLI (Go const) ---
@@ -114,6 +116,9 @@ update_pkg_version "$REPO_ROOT/cli/package.json" "$CLI_VERSION" "cli package.jso
 # "Version bumping"). It was historically omitted here, which let it drift
 # (e.g. stuck at 1.18.126 while every other site was 1.18.131).
 update_pkg_version "$REPO_ROOT/mobile/package.json" "$MOBILE_VERSION" "mobile package.json"
+
+# --- Desktop GUI: electron/package.json ---
+update_pkg_version "$REPO_ROOT/electron/package.json" "$GUI_VERSION" "electron/package.json"
 
 echo ""
 if [ "$changed" -eq 0 ]; then

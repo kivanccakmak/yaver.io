@@ -502,7 +502,7 @@ function AuthContent() {
     : "rounded-lg px-4 py-3";
 
   return (
-    <div className={`flex items-center justify-center px-6 ${isSdkPopup ? "min-h-screen py-8" : "min-h-[70vh] py-20"}`}>
+    <div className={`flex items-center justify-center px-6 ${isSdkPopup ? "min-h-screen py-8" : "min-h-screen py-12"}`}>
       <div className={containerClass}>
         <div className={`${isSdkPopup ? "mb-6" : "mb-8"} text-center`}>
           <span className={`${isSdkPopup ? "text-xl" : "text-2xl"} font-bold tracking-tight text-surface-50`}>

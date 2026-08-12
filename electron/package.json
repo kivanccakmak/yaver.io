@@ -24,9 +24,35 @@
     "appId": "io.yaver.gui",
     "productName": "Yaver",
     "files": ["src/**/*", "assets/**/*", "package.json"],
-    "directories": { "output": "dist" },
-    "mac": { "category": "public.app-category.developer-tools", "target": ["dmg", "zip"] },
-    "win": { "target": ["nsis"] },
-    "linux": { "target": ["AppImage"], "category": "Development" }
+    "directories": { "output": "dist", "buildResources": "assets" },
+    "artifactName": "yaver-gui-${version}-${os}.${ext}",
+    "extraResources": [
+      {
+        "from": "resources/bin",
+        "to": "bin",
+        "filter": ["yaver", "yaver.exe"]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icon.icns",
+      "target": ["dmg", "zip"]
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": ["nsis"]
+    },
+    "linux": {
+      "icon": "assets/icon.png",
+      "target": ["AppImage"],
+      "category": "Development"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "yaver-gui-${version}-win-setup.${ext}",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
+    }
   }
 }

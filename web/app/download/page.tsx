@@ -1,5 +1,19 @@
 import Image from "next/image";
 import Link from "next/link";
+import versions from "../../versions.json";
+
+// Desktop GUI release artifacts are named deterministically by
+// electron/package.json's artifactName pattern; the version comes from the
+// repo's single source of truth (versions.json → electron/package.json via
+// scripts/sync-versions.sh). GitHub's /releases/latest/download/ URL shape
+// resolves each artifact by its exact asset name.
+const GUI_VERSION = versions.gui || "0.1.0";
+const GUI_BASE = "https://github.com/yaver-io/yaver.io/releases/latest/download";
+const GUI_DOWNLOADS = {
+  mac: `${GUI_BASE}/yaver-gui-${GUI_VERSION}-mac.dmg`,
+  win: `${GUI_BASE}/yaver-gui-${GUI_VERSION}-win-setup.exe`,
+  linux: `${GUI_BASE}/yaver-gui-${GUI_VERSION}-linux.AppImage`,
+};
 
 function DownloadButton({
   href,
@@ -115,6 +129,60 @@ export default function DownloadPage() {
             />
           </div>
         </section>
+
+        <section className="mt-10 rounded-2xl border border-surface-800 bg-surface-900 p-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-surface-500">
+            Desktop app (GUI)
+          </p>
+          <h2 className="mt-2 text-2xl font-semibold text-surface-50">
+            Yaver for macOS, Windows &amp; Linux
+          </h2>
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-surface-400">
+            A native desktop shell around the Yaver dashboard — sign in (OAuth or email) and vibe
+            tasks straight from your computer. It embeds the same Go agent, so the machine you install
+            it on is itself a Yaver node: vibe it directly from the desktop app, or from your phone,
+            TV, watch, or any other device. Includes native tray, task notifications, and deep links.
+          </p>
+          <div className="mt-6 grid gap-4 md:grid-cols-3">
+            <a
+              href={GUI_DOWNLOADS.mac}
+              className="rounded-xl border border-surface-700 bg-surface-950 p-5 transition hover:border-surface-500"
+            >
+              <div className="text-sm font-semibold text-surface-50">macOS</div>
+              <div className="mt-1 text-xs text-surface-500">DMG · Apple Silicon &amp; Intel</div>
+              <div className="mt-3 text-xs font-medium text-emerald-400">Download →</div>
+            </a>
+            <a
+              href={GUI_DOWNLOADS.win}
+              className="rounded-xl border border-surface-700 bg-surface-950 p-5 transition hover:border-surface-500"
+            >
+              <div className="text-sm font-semibold text-surface-50">Windows</div>
+              <div className="mt-1 text-xs text-surface-500">NSIS installer · x64</div>
+              <div className="mt-3 text-xs font-medium text-emerald-400">Download →</div>
+            </a>
+            <a
+              href={GUI_DOWNLOADS.linux}
+              className="rounded-xl border border-surface-700 bg-surface-950 p-5 transition hover:border-surface-500"
+            >
+              <div className="text-sm font-semibold text-surface-50">Linux</div>
+              <div className="mt-1 text-xs text-surface-500">AppImage · x64 &amp; arm64</div>
+              <div className="mt-3 text-xs font-medium text-emerald-400">Download →</div>
+            </a>
+          </div>
+          <p className="mt-4 text-xs text-surface-500">
+            Prefer the terminal? <code>npm install -g yaver-cli</code> is still the one path for the
+            agent — the desktop app is an optional native client surface, not another install channel
+            for the daemon. All releases:{" "}
+            <a
+              href="https://github.com/yaver-io/yaver.io/releases"
+              className="text-surface-300 underline hover:text-surface-50"
+            >
+              GitHub Releases
+            </a>
+            .
+          </p>
+        </section>
+
 
         <section className="mt-10 grid gap-5 md:grid-cols-2">
           <div className="rounded-2xl border border-surface-800 bg-surface-900 p-6">
