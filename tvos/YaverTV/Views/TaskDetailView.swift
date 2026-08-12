@@ -57,8 +57,24 @@ struct TaskDetailView: View {
             }
             Spacer()
             if live {
-                HStack(spacing: 6) {
-                    Circle().fill(.green).frame(width: 8, height: 8)
+                // opencode-style working indicator — purple gradient orb while
+                // the model is thinking, so a streamed run reads as alive even
+                // between stdout bursts (2026-08-12, cross-surface parity with
+                // web's console orb).
+                HStack(spacing: 8) {
+                    ZStack {
+                        Circle()
+                            .fill(
+                                AngularGradient(
+                                    gradient: Gradient(colors: [.purple, .pink, .purple]),
+                                    center: .center
+                                )
+                            )
+                            .rotationEffect(.degrees(live ? 360 : 0))
+                            .animation(.linear(duration: 1.4).repeatForever(autoreverses: false), value: live)
+                            .frame(width: 16, height: 16)
+                        Circle().fill(Color.black).frame(width: 10, height: 10)
+                    }
                     Text("live").font(.system(size: 14, weight: .semibold)).foregroundStyle(.green)
                 }
             }
@@ -69,6 +85,17 @@ struct TaskDetailView: View {
     private var consolePane: some View {
         ScrollViewReader { proxy in
             ScrollView {
+                // The user's submitted prompt — ALWAYS visible above the
+                // stream, opencode-style `$` line. The runner echoes it into
+                // the raw console too, but showing it explicitly means a
+                // follow-up sent while streaming can never disappear from the
+                // couch (2026-08-12 cross-surface parity: web/mobile/desktop
+                // all render the submitted text; tvOS had only the raw echo).
+                Text("$ \(task.safeTitle)")
+                    .font(.system(size: 15, design: .monospaced))
+                    .foregroundStyle(.green)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 48).padding(.top, 16)
                 Text(cleanConsole.isEmpty ? "Waiting for output…" : cleanConsole)
                     .font(.system(size: 15, design: .monospaced))
                     .foregroundStyle(cleanConsole.isEmpty ? .secondary : .primary)

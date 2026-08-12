@@ -3262,6 +3262,34 @@ export default function RuntimeLabView({
           >
             {runtimeProjectSaving ? "Saving..." : selectedProjectIsSavedDefault ? "Default" : "Save default"}
           </button>
+          {/* AI-machine picker, on the same Load Targets row as Render —
+              the runner box that executes coding tasks. Mirrors the render
+              picker: saves the account-favorite role + re-routes in one
+              shot. Added 2026-08-12 (user directive: "next to render machine
+              make AI machine too as option"); reuses setRunnerMachine so the
+              two pickers can't drift. */}
+          {onSaveMachineRoles && roleEligibleDevices.length > 0 ? (
+            <label className="shrink-0">
+              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-[#5d6673] dark:text-[#9aa3af]">AI machine</span>
+              <select
+                value={machineRoles?.runnerDeviceId || connectedDevice?.id || ""}
+                disabled={machinesBusy || busy}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  if (next) void setRunnerMachine(next);
+                }}
+                title="Which machine runs the AI coding tasks — chat streams from this box"
+                className="h-10 rounded-md border border-[#d7dce3] bg-white px-2 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec]"
+              >
+                {!machineRoles?.runnerDeviceId ? <option value="">— pick a machine —</option> : null}
+                {roleEligibleDevices.map((device) => (
+                  <option key={device.id} value={device.id}>
+                    {device.name || device.id.slice(0, 8)}{device.online === false ? " (offline)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           {/* Render-machine picker, ON the row that probes it. The Route
               editor in the chat aside also sets this, but the box a probe is
               about to hit must be visible and changeable where the probe is
@@ -3287,6 +3315,11 @@ export default function RuntimeLabView({
           ) : null}
           {renderPickNote ? (
             <span className="inline-flex h-10 items-center text-xs text-rose-600 dark:text-rose-300">{renderPickNote}</span>
+          ) : null}
+          {runnerMachineNote ? (
+            <span className={`inline-flex h-10 items-center text-xs ${runnerMachineNote.tone === "ok" ? "text-emerald-600 dark:text-emerald-300" : "text-rose-600 dark:text-rose-300"}`}>
+              {runnerMachineNote.text}
+            </span>
           ) : null}
           {runtimeProjectNote ? (
             <span className="inline-flex h-10 min-w-[160px] items-center text-xs text-[#667085] dark:text-[#9aa3af]">{runtimeProjectNote}</span>
@@ -4144,38 +4177,9 @@ export default function RuntimeLabView({
               ) : null}
               {chatRunnerControlsOpen ? (
                 <div className="mt-2 grid gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 dark:border-[#2a3039] dark:bg-[#101318]">
-                  {/* Machine (AI runner box) — 2026-08-12, user directive: the
-                      runner MACHINE used to be selectable only behind "Route".
-                      This dropdown saves the role + re-routes in one shot, so
-                      "point the AI at the MacBook Air" is one comfortable step
-                      from the primary picker. */}
-                  <label className="min-w-0">
-                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Machine (AI runner box)</span>
-                    <select
-                      value={machineRoles?.runnerDeviceId || connectedDevice?.id || ""}
-                      onChange={(event) => {
-                        const next = event.target.value;
-                        if (!next) return;
-                        void setRunnerMachine(next);
-                      }}
-                      disabled={machinesBusy || !onSaveMachineRoles}
-                      className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
-                    >
-                      {roleEligibleDevices.length === 0 ? <option value="">No machines registered</option> : null}
-                      {roleEligibleDevices.map((device) => (
-                        <option key={device.id} value={device.id}>
-                          {device.name || device.id.slice(0, 8)}
-                          {device.online === false ? " (offline)" : ""}
-                          {connectedDevice?.id === device.id ? " (connected)" : ""}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {runnerMachineNote ? (
-                    <p className={`text-[11px] leading-4 ${runnerMachineNote.tone === "ok" ? "text-emerald-600 dark:text-emerald-300" : "text-rose-600 dark:text-rose-300"}`}>
-                      {runnerMachineNote.text}
-                    </p>
-                  ) : null}
+                  {/* Machine selection lives on the Load Targets row (AI
+                      machine + Render machine side by side, 2026-08-12) — NOT
+                      duplicated here. This panel is runner/model/mode only. */}
                   <div className="grid gap-2 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
                     <label className="min-w-0">
                       <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Runner</span>

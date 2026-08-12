@@ -4686,21 +4686,34 @@ export default function DashboardPage() {
                                   </span>
                                 ) : null}
                               </div>
-                              {/* Placeholder `$` prompts — only until the raw
-                                  stream arrives and owns the console (the runner
-                                  echoes the prompt itself). */}
-                              {rawOutput.length === 0
-                                ? chatMsgs
-                                    .filter((m) => m.role === "user")
-                                    .map((m, i) => (
-                                      <div key={`prompt-${i}`} className="whitespace-pre-wrap break-words py-0.5 font-mono text-[12px] leading-5 text-emerald-700 dark:text-emerald-300">
-                                        <span className="select-none text-surface-600">$ </span>{m.text}
-                                      </div>
-                                    ))
-                                : null}
+                              {/* User prompts — ALWAYS visible in console mode
+                                  (2026-08-12 user report: a follow-up sent while
+                                  the task was streaming vanished completely —
+                                  this block was gated on rawOutput.length === 0,
+                                  so the instant the first raw byte arrived the
+                                  submitted text stopped rendering anywhere; not
+                                  as a `$` line, not as a blue bubble). Rendered
+                                  as opencode-style `$` lines at the TOP of the
+                                  stream, like the runner's own echo. */}
+                              {chatMsgs
+                                .filter((m) => m.role === "user")
+                                .map((m, i) => (
+                                  <div key={`prompt-${i}`} className="whitespace-pre-wrap break-words py-0.5 font-mono text-[12px] leading-5 text-emerald-700 dark:text-emerald-300">
+                                    <span className="select-none text-surface-600">$ </span>{m.text}
+                                  </div>
+                                ))}
                               <AnsiConsoleText text={consoleText} />
                               {isRunning ? (
-                                <span className="ml-0.5 inline-block h-3 w-1.5 translate-y-[2px] animate-pulse bg-surface-300" aria-hidden />
+                                // opencode-style working indicator — the purple
+                                // gradient orb opencode shows bottom-left while
+                                // the model is thinking. Pulsing conic-gradient
+                                // ring + breathing dot, so a streamed run reads
+                                // as "alive" at a glance even when stdout is
+                                // between bursts (2026-08-12 user request).
+                                <span className="relative ml-0.5 inline-flex h-4 w-4 items-center justify-center align-[-1px]">
+                                  <span className="absolute inset-0 animate-spin rounded-full [background:conic-gradient(from_0deg,#a855f7,#ec4899,#a855f7)] [animation-duration:1.4s]" />
+                                  <span className="absolute inset-[3px] animate-pulse rounded-full bg-[#0b0d11]" />
+                                </span>
                               ) : null}
                               {!followOutput ? (
                                 <div className="sticky bottom-2 mt-2 flex justify-center">

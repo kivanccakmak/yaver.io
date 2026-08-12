@@ -97,6 +97,14 @@
     .console-user { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; color: var(--text); word-wrap: break-word; }
     .console-user .console-prompt { color: var(--green); user-select: none; }
     .console-raw { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-wrap: break-word; }
+    /* opencode-style working orb (2026-08-12): purple conic-gradient spinner
+       shown while the raw console is streaming, bottom-left of the console
+       block, so a live run reads as alive even between stdout bursts. */
+    .console-live-orb { display: inline-block; width: 14px; height: 14px; margin: 6px 10px 0 2px; vertical-align: middle; border-radius: 50%; position: relative; flex-shrink: 0; }
+    .console-live-orb::before { content: ''; position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(from 0deg, #a855f7, #ec4899, #a855f7); animation: orb-spin 1.4s linear infinite; }
+    .console-live-orb::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--bg-card, #0b0d11); animation: blink 1.4s ease-in-out infinite; }
+    @keyframes orb-spin { to { transform: rotate(360deg); } }
+    .console-live-row { display: flex; align-items: flex-start; }
     .chat-bar { padding: 10px 14px; border-top: 1px solid var(--border); background: var(--bg-card); display: flex; gap: 8px; align-items: flex-end; }
     .chat-input { flex: 1; resize: none; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 13px; font-family: inherit; line-height: 1.5; min-height: 40px; max-height: 140px; outline: none; }
     .chat-input:focus { border-color: var(--accent); } .chat-input::placeholder { color: var(--text-muted); }
@@ -222,9 +230,18 @@
         <!-- Chat view (split pane) -->
         <div class="split" id="page-chat" style="display:flex">
           <div class="pane-left" id="pane-left">
-            <!-- Runner selector -->
-            <div style="padding:6px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted)">
+            <!-- Runner selector + machine roles (2026-08-12): the AI machine
+                 (runner box) and Render machine pickers sit right next to the
+                 Runner dropdown — webui parity, no duplication. They read and
+                 write the SAME Convex userSettings.machineRolesByProject row
+                 the web dashboard uses, so a choice here shows up in the
+                 webui and vice versa. -->
+            <div style="padding:6px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted);flex-wrap:wrap">
               Runner: <select class="no-drag" id="runner-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px;outline:none" onchange="switchRunner(this.value)"></select>
+              <span style="opacity:.7">AI machine:</span>
+              <select class="no-drag" id="ai-machine-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px;outline:none;max-width:180px" onchange="setAIMachine(this.value)"></select>
+              <span style="opacity:.7">Render machine:</span>
+              <select class="no-drag" id="render-machine-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px;outline:none;max-width:180px" onchange="setRenderMachine(this.value)"></select>
               <button class="btn-icon no-drag" onclick="handleStopTask()" title="Stop task" style="width:22px;height:22px;font-size:11px;margin-left:auto;color:var(--red);display:none" id="stop-btn">&#x25A0;</button>
             </div>
             <div class="chat-msgs" id="chat-msgs"><div class="msg msg-status">Describe what you want to build.</div></div>
@@ -591,6 +608,7 @@ function enterMain(device, mode) {
   showScreen('main');
   startPolling();
   loadRunners();
+  loadMachineRoles();
   loadTaskList();
   navTo('chat');
 }
@@ -747,6 +765,83 @@ async function loadRunners() {
 }
 
 async function switchRunner(id) { try { await window.yaver.switchRunner(id); } catch {} }
+
+// ── Machine roles (AI machine + Render machine) ─────────────────────
+// Reads/writes the SAME Convex userSettings.machineRolesByProject row the
+// web dashboard uses (web/lib/useMachineRoles.ts): GET /settings for the
+// row, POST /settings with machineRolesForProject to save. Picks here show
+// up in the webui and vice versa — no per-surface copy (2026-08-12).
+let machineRolesDevices = [];
+
+async function loadMachineRoles() {
+  try {
+    const devicesResp = await window.yaver.listDevices();
+    machineRolesDevices = devicesResp.devices || [];
+  } catch {}
+  let row = null;
+  try {
+    const s = await window.yaver.convexRequest('GET', '/settings');
+    const rows = (s?.settings?.machineRolesByProject) || [];
+    row = rows.find(r => !r.projectName) || null;
+  } catch {}
+  const aiSel = document.getElementById('ai-machine-select');
+  const renderSel = document.getElementById('render-machine-select');
+  if (!aiSel || !renderSel) return;
+  const opts = machineRolesDevices.map(d =>
+    `<option value="${esc(d.deviceId || d.id || '')}" ${d.isOnline === false ? '' : ''}>${esc(d.name || d.deviceId || d.id)}${d.isOnline === false ? ' (offline)' : ''}</option>`
+  ).join('');
+  aiSel.innerHTML = `<option value="">— connected box —</option>` + opts;
+  renderSel.innerHTML = `<option value="">— same as AI —</option>` + opts;
+  if (row) {
+    if (row.runnerDeviceId) aiSel.value = row.runnerDeviceId;
+    if (row.renderDeviceId) renderSel.value = row.renderDeviceId;
+  }
+}
+
+async function setAIMachine(deviceId) {
+  const renderSel = document.getElementById('render-machine-select');
+  const current = await readMachineRolesRow();
+  const renderId = renderSel && renderSel.value ? renderSel.value : (deviceId || current?.runnerDeviceId || '');
+  await saveMachineRolesRow({
+    runnerDeviceId: deviceId || null,
+    renderDeviceId: renderId || deviceId || null,
+    ...(current?.secondaryRunnerDeviceId ? { secondaryRunnerDeviceId: current.secondaryRunnerDeviceId } : {}),
+    ...(current?.secondaryRenderDeviceId ? { secondaryRenderDeviceId: current.secondaryRenderDeviceId } : {}),
+    workspace: current?.workspace || 'runner-clone',
+    autoPush: current?.autoPush || 'ask',
+  });
+}
+
+async function setRenderMachine(deviceId) {
+  const aiSel = document.getElementById('ai-machine-select');
+  const current = await readMachineRolesRow();
+  const runnerId = aiSel && aiSel.value ? aiSel.value : (deviceId || current?.runnerDeviceId || '');
+  await saveMachineRolesRow({
+    runnerDeviceId: runnerId || null,
+    renderDeviceId: deviceId || runnerId || null,
+    ...(current?.secondaryRunnerDeviceId ? { secondaryRunnerDeviceId: current.secondaryRunnerDeviceId } : {}),
+    ...(current?.secondaryRenderDeviceId ? { secondaryRenderDeviceId: current.secondaryRenderDeviceId } : {}),
+    workspace: current?.workspace || 'runner-clone',
+    autoPush: current?.autoPush || 'ask',
+  });
+}
+
+async function readMachineRolesRow() {
+  try {
+    const s = await window.yaver.convexRequest('GET', '/settings');
+    const rows = (s?.settings?.machineRolesByProject) || [];
+    return rows.find(r => !r.projectName) || null;
+  } catch { return null; }
+}
+
+async function saveMachineRolesRow(row) {
+  try {
+    await window.yaver.convexRequest('POST', '/settings', { machineRolesForProject: { ...row, updatedAt: Date.now() } });
+    loadMachineRoles();
+  } catch (e) {
+    alert('Could not save machine roles: ' + (e?.message || e));
+  }
+}
 
 // ════════════════════════════════════════════════════════
 // PROJECTS
@@ -1211,6 +1306,11 @@ function renderTaskConsole() {
   el.scrollTop = el.scrollHeight;
 }
 
+function setConsoleLive(live) {
+  const orb = document.getElementById('console-live-orb');
+  if (orb) orb.style.display = live ? 'inline-block' : 'none';
+}
+
 function handleTaskOutputFrame(ev) {
   if (!ev || typeof ev.type !== 'string') return;
   if (ev.type === 'raw_replay') {
@@ -1222,6 +1322,7 @@ function handleTaskOutputFrame(ev) {
     taskRawCursor = typeof ev.offset === 'number' ? ev.offset : taskRawCursor;
     renderTaskConsole();
   } else if (ev.type === 'done') {
+    setConsoleLive(false);
     if (taskStreamController) { taskStreamController.abort(); taskStreamController = null; }
   }
 }
@@ -1232,13 +1333,24 @@ function startTaskStream(taskId) {
   taskRawBuf = '';
   taskRawCursor = 0;
   // The console block lives INSIDE #chat-msgs, after the user `$` lines.
+  // A live-row wrapper carries the opencode-style purple working orb so a
+  // streaming run reads as alive even between stdout bursts (2026-08-12).
+  let rowEl = document.getElementById('console-live-row');
+  if (!rowEl) {
+    rowEl = document.createElement('div');
+    rowEl.id = 'console-live-row';
+    rowEl.className = 'console-live-row';
+    rowEl.innerHTML = '<span id="console-live-orb" class="console-live-orb"></span>';
+    document.getElementById('chat-msgs').appendChild(rowEl);
+  }
   let rawEl = document.getElementById('console-raw');
   if (!rawEl) {
     rawEl = document.createElement('div');
     rawEl.id = 'console-raw';
     rawEl.className = 'console-raw';
-    document.getElementById('chat-msgs').appendChild(rawEl);
+    rowEl.appendChild(rawEl);
   }
+  setConsoleLive(true);
   const connect = () => {
     const ctrl = new AbortController();
     taskStreamController = ctrl;
