@@ -41,7 +41,7 @@ func iceServersForPeer() []webrtc.ICEServer {
 		stun = "stun:stun.l.google.com:19302"
 	}
 	out = append(out, webrtc.ICEServer{URLs: []string{stun}})
-	turnURL := strings.TrimSpace(os.Getenv("YAVER_TURN_URL"))
+	turnURL := resolveTurnURL()
 	secret := turnAuthSecret()
 	if turnURL == "" || secret == "" {
 		return out // STUN-only; ICE tries its best (works on same-network)

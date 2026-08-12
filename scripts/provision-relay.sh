@@ -118,10 +118,13 @@ services:
     ports:
       - "4433:4433/udp"
       - "8080:8080"
+      - "3478:3478/udp"
     environment:
       - RELAY_PASSWORD=$PASSWORD
       - RELAY_QUIC_PORT=4433
       - RELAY_HTTP_PORT=8080
+      - TURN_PORT=3478
+      - TURN_PUBLIC_IP=$SERVER_IP
     volumes:
       - relay-data:/var/lib/yaver-relay
 volumes:
@@ -167,6 +170,7 @@ echo "Server IP: $SERVER_IP"
 echo "Domain: $DOMAIN"
 echo "QUIC: $SERVER_IP:4433"
 echo "HTTPS: https://$DOMAIN"
+echo "TURN: $SERVER_IP:3478 (UDP — colocated WebRTC TURN; agents derive turn:$DOMAIN:3478 from RELAY_URL)"
 echo "Password: $PASSWORD"
 
 # Output JSON for automation

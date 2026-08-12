@@ -615,6 +615,13 @@ export default function VibeCodingView({
   } | null>(null);
   // Bumping this re-runs the stream effect — the "Reattach" route.
   const [streamReattachNonce, setStreamReattachNonce] = useState(0);
+  // Auto-re-render on runtime_render_requested — the Cross-Surface render
+  // contract (same as PreviewPane/RuntimeLabView): render exactly ONCE when
+  // the task reaches a renderable terminal state (completed/review), never
+  // while the runner is coding, deduped per task+turn so follow-ups render
+  // again instead of being deduped away.
+  const [agentRenderRequest, setAgentRenderRequest] = useState<{ id: string; reason: string } | null>(null);
+  const autoRenderRef = useRef<string | null>(null);
   const [sections, setSections] = useState<Record<SectionKey, SectionState>>(() => loadSectionState());
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [runnerAuthBusy, setRunnerAuthBusy] = useState(false);
@@ -1193,6 +1200,18 @@ export default function VibeCodingView({
           if (event?.type === "resume" && event.full === true) {
             received = 0;
             setStreamedOutput("");
+            return;
+          }
+          // Structured render intent — the runner finished a turn and asked
+          // for the preview to refresh. Captured here (the same event
+          // PreviewPane/RuntimeLabView consume) so the preview reloads when
+          // the task reaches a renderable terminal state, never mid-coding.
+          if (event?.type === "runtime_render_requested") {
+            const reason = String(event.reason || "task-output");
+            setAgentRenderRequest({
+              id: `${activeStreamTaskId}:${String(event.ts || Date.now())}:${reason}`,
+              reason,
+            });
           }
         },
         {
@@ -1229,6 +1248,33 @@ export default function VibeCodingView({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeStreamTaskId, streamReattachNonce]);
+
+  // Cross-Surface render contract: when the runner emits
+  // runtime_render_requested AND the active task reached a renderable
+  // terminal state (completed/review), reload the preview exactly once per
+  // turn. While the runner is coding (queued/running) the intent stays
+  // queued — reloading mid-coding is what the contract forbids. Dedupe key
+  // includes the per-turn discriminator so a follow-up turn renders again.
+  useEffect(() => {
+    if (!activeTask) return;
+    const status = activeTask.status;
+    if (status !== "completed" && status !== "review") return;
+    const structuredRequest = agentRenderRequest?.id?.startsWith(`${activeTask.id}:`)
+      ? agentRenderRequest
+      : null;
+    const key = [
+      activeTask.id,
+      status,
+      String(activeTask.output?.length ?? 0),
+      (activeTask.output?.[activeTask.output.length - 1] ?? "").slice(-80),
+      structuredRequest ? `mcp:${structuredRequest.id}` : "task-finished",
+    ].join(":");
+    if (autoRenderRef.current === key) return;
+    autoRenderRef.current = key;
+    void agentClient.reloadDevServer({
+      mode: (devStatus?.framework || "").match(/^(expo|react-native)$/i) ? "bundle" : "dev",
+    });
+  }, [activeTask, agentRenderRequest, devStatus?.framework]);
 
   useEffect(() => {
     if (!token || !activeTask?.placementId) return;

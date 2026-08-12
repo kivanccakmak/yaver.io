@@ -25,6 +25,11 @@ func TestExecutionModeForFramework(t *testing.T) {
 		{"kotlin", ExecutionModeNativeWebRTC, "webrtc"},
 		// Flutter joins the WebRTC family — see docs/native-webrtc-web-streaming.md §1.
 		{"flutter", ExecutionModeNativeWebRTC, "webrtc"},
+		// Unity is a generic remote-PC view (no SDK): the player runs on the
+		// box's display and the desktop-screen capture streams it. This is the
+		// guard that previously shipped ExecutionModeUnsupported — the
+		// "inventory says surfaces, operation says unsupported" false green.
+		{"unity", ExecutionModeNativeWebRTC, "webrtc"},
 	}
 	for _, tc := range cases {
 		if got := executionModeForFramework(tc.framework); got != tc.wantMode {
@@ -33,6 +38,22 @@ func TestExecutionModeForFramework(t *testing.T) {
 		if got := primarySurfaceForFramework(tc.framework); got != tc.wantSurf {
 			t.Fatalf("%s surface = %s, want %s", tc.framework, got, tc.wantSurf)
 		}
+	}
+}
+
+// Unity must resolve to a real, streamable target (the desktop-screen grab),
+// not ExecutionModeUnsupported and not the web-dev-server downgrade. Break
+// the unity case in remoteRuntimeCapabilitiesForProject and this fails.
+func TestRemoteRuntimeCapabilitiesForUnityIsRemotePCView(t *testing.T) {
+	caps := remoteRuntimeCapabilitiesForProject(t.TempDir(), "unity")
+	if !caps.RemoteRuntimeEligible {
+		t.Fatalf("unity should be remote-runtime eligible (generic remote-PC view), got eligible=%v", caps.RemoteRuntimeEligible)
+	}
+	if caps.ExecutionMode != ExecutionModeNativeWebRTC {
+		t.Fatalf("unity execution mode = %q, want native-webrtc", caps.ExecutionMode)
+	}
+	if len(caps.Targets) == 0 {
+		t.Fatal("unity must have at least one streamable target")
 	}
 }
 

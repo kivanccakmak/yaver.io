@@ -15,6 +15,7 @@ func TestIceServersForPeer_STUNOnlyByDefault(t *testing.T) {
 	t.Setenv("YAVER_TURN_URL", "")
 	t.Setenv("TURN_AUTH_SECRET", "")
 	t.Setenv("RELAY_PASSWORD", "")
+	t.Setenv("RELAY_URL", "")
 
 	servers := iceServersForPeer()
 	if len(servers) != 1 {
@@ -48,12 +49,81 @@ func TestIceServersForPeer_TURNURLWithoutSecretFallsBackToSTUN(t *testing.T) {
 	t.Setenv("YAVER_TURN_URL", "turn:relay.example.com:3478")
 	t.Setenv("TURN_AUTH_SECRET", "")
 	t.Setenv("RELAY_PASSWORD", "")
+	t.Setenv("RELAY_URL", "")
 
 	servers := iceServersForPeer()
 	if len(servers) != 1 {
 		t.Fatalf("ice server count = %d, want 1 (STUN-only)", len(servers))
 	}
 	assertSTUNServer(t, servers[0], "stun:stun.l.google.com:19302")
+}
+
+func TestDerivedTurnURLFromRelayURL(t *testing.T) {
+	t.Setenv("YAVER_TURN_URL", "")
+	t.Setenv("YAVER_TURN_PORT", "")
+	for _, tc := range []struct {
+		name    string
+		relay   string
+		want    string
+	}{
+		{name: "https relay → default TURN port", relay: "https://relay.yaver.io", want: "turn:relay.yaver.io:3478"},
+		{name: "http relay with path", relay: "http://relay.example.com:8080/", want: "turn:relay.example.com:3478"},
+		{name: "unset relay → empty", relay: "", want: ""},
+		{name: "garbage relay → empty", relay: "://not a url", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RELAY_URL", tc.relay)
+			if got := derivedTurnURLFromRelayURL(); got != tc.want {
+				t.Fatalf("derivedTurnURLFromRelayURL() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("YAVER_TURN_PORT override", func(t *testing.T) {
+		t.Setenv("RELAY_URL", "https://relay.yaver.io")
+		t.Setenv("YAVER_TURN_PORT", "5349")
+		if got := derivedTurnURLFromRelayURL(); got != "turn:relay.yaver.io:5349" {
+			t.Fatalf("derivedTurnURLFromRelayURL() = %q, want turn:relay.yaver.io:5349", got)
+		}
+	})
+}
+
+func TestResolveTurnURL_ExplicitWinsOverDerivation(t *testing.T) {
+	t.Setenv("YAVER_TURN_URL", "turn:explicit.example.com:3478")
+	t.Setenv("RELAY_URL", "https://relay.yaver.io")
+	t.Setenv("YAVER_TURN_PORT", "")
+	if got := resolveTurnURL(); got != "turn:explicit.example.com:3478" {
+		t.Fatalf("resolveTurnURL() = %q, want explicit override to win", got)
+	}
+	t.Setenv("YAVER_TURN_URL", "")
+	if got := resolveTurnURL(); got != "turn:relay.yaver.io:3478" {
+		t.Fatalf("resolveTurnURL() with RELAY_URL only = %q, want derived", got)
+	}
+}
+
+func TestIceServersForPeer_DerivesTURNFromRelayURL(t *testing.T) {
+	// F2 guard: a deploy that sets RELAY_URL but not YAVER_TURN_URL must
+	// still get relay-backed TURN — this is the "production was STUN-only"
+	// regression. Break resolveTurnURL and this test fails.
+	t.Setenv("YAVER_STUN_URL", "")
+	t.Setenv("YAVER_TURN_URL", "")
+	t.Setenv("YAVER_TURN_PORT", "")
+	t.Setenv("RELAY_URL", "https://relay.yaver.io")
+	t.Setenv("TURN_AUTH_SECRET", "")
+	t.Setenv("RELAY_PASSWORD", "shared-secret-1")
+
+	servers := iceServersForPeer()
+	if len(servers) != 2 {
+		t.Fatalf("ice server count = %d, want 2 (STUN + derived TURN)", len(servers))
+	}
+	assertSTUNServer(t, servers[0], "stun:stun.l.google.com:19302")
+	turn := servers[1]
+	if len(turn.URLs) != 1 || turn.URLs[0] != "turn:relay.yaver.io:3478" {
+		t.Fatalf("TURN URLs = %v, want derived relay TURN", turn.URLs)
+	}
+	if turn.Username == "" || turn.Credential == nil || turn.Credential == "" {
+		t.Fatalf("TURN credentials must be non-empty, got %+v", turn)
+	}
 }
 
 func assertSTUNServer(t *testing.T, server webrtc.ICEServer, wantURL string) {
@@ -74,6 +144,7 @@ func TestHandleRemoteRuntimeTURNCredentials_StunOnlyByDefault(t *testing.T) {
 	t.Setenv("YAVER_TURN_URL", "")
 	t.Setenv("TURN_AUTH_SECRET", "")
 	t.Setenv("RELAY_PASSWORD", "")
+	t.Setenv("RELAY_URL", "")
 
 	srv := &HTTPServer{}
 	req := httptest.NewRequest(http.MethodGet, "/remote-runtime/turn-credentials", nil)

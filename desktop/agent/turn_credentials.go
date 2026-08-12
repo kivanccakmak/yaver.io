@@ -14,6 +14,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -73,7 +74,7 @@ func (s *HTTPServer) handleRemoteRuntimeTURNCredentials(w http.ResponseWriter, r
 	// host that backs RELAY_URL), we just return STUN-only and let
 	// ICE try its best. The viewer never knows whether the agent
 	// has TURN configured — it only sees what's in the response.
-	turnURL := strings.TrimSpace(os.Getenv("YAVER_TURN_URL"))
+	turnURL := resolveTurnURL()
 	if turnURL == "" {
 		jsonReply(w, http.StatusOK, resp)
 		return
@@ -122,4 +123,45 @@ func turnAuthSecret() string {
 func writeTURNCredentials(w http.ResponseWriter, resp turnCredentialResponse) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// derivedTurnURLFromRelayURL builds "turn:<host>:<port>" from RELAY_URL
+// (e.g. "https://relay.yaver.io" → "turn:relay.yaver.io:3478").
+//
+// This is the F2 fix (WEBRTC_LANE_DEEP_AUDIT): production WebRTC was
+// STUN-only because nothing in any deploy pipeline set YAVER_TURN_URL, even
+// though the shipped relay already colocates a TURN server on the same host.
+// Operators who set RELAY_URL (everyone — it is how the agent finds the
+// relay) now get TURN for free; YAVER_TURN_URL still wins when explicitly
+// set. Port defaults to 3478 (IANA TURN) and can be overridden with
+// YAVER_TURN_PORT; host comes from the relay URL's hostname so a WAN relay
+// host yields WAN TURN candidates.
+//
+// Returns "" when RELAY_URL is unset or unparseable — callers then fall back
+// to STUN-only exactly as before, never failing the whole session.
+func derivedTurnURLFromRelayURL() string {
+	relayURL := strings.TrimSpace(os.Getenv("RELAY_URL"))
+	if relayURL == "" {
+		return ""
+	}
+	u, err := url.Parse(relayURL)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	port := strings.TrimSpace(os.Getenv("YAVER_TURN_PORT"))
+	if port == "" {
+		port = "3478"
+	}
+	return "turn:" + u.Hostname() + ":" + port
+}
+
+// resolveTurnURL is the single source of truth for the agent's TURN server:
+// explicit YAVER_TURN_URL wins; otherwise derive from RELAY_URL (F2). Both
+// /remote-runtime/turn-credentials and iceServersForPeer use this so a
+// relay-backed deploy can never drift between the two ICE configs.
+func resolveTurnURL() string {
+	if v := strings.TrimSpace(os.Getenv("YAVER_TURN_URL")); v != "" {
+		return v
+	}
+	return derivedTurnURLFromRelayURL()
 }

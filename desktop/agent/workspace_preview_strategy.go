@@ -299,6 +299,24 @@ func ResolveWorkspacePreview(stack string, hasPairedDevice bool) WorkspacePrevie
 			Reason:       "native Apple UI — needs an iOS simulator, which exists only on a macOS host (or use a paired iPhone via `yaver wire push`)",
 		}
 
+	// ── Unity — generic remote-PC view ───────────────────────────────────
+	//
+	// No Unity SDK, no editor bridge, no WebGL: the built player runs on the
+	// box's display and the desktop-screen ffmpeg grab streams that display
+	// over the same WebRTC/JPEG lane as every other native runtime. The
+	// player is launched via /unity/relaunch. This MUST precede default: —
+	// otherwise Unity falls to "web dev server, load in your browser", which
+	// for a Unity player is the silent downgrade this file forbids.
+	case strings.Contains(s, "unity"):
+		return WorkspacePreviewPlan{
+			Primary:      PreviewChromeWebRTC,
+			Fallbacks:    nil,
+			MachineClass: "standard",
+			Feedback:     FeedbackViewerTriggered, // no Unity SDK (removed 2026-08-02)
+			Supported:    true,
+			Reason:       "Unity player runs on the box's display; the desktop-screen capture streams it over WebRTC/JPEG — a generic remote-PC view",
+		}
+
 	default:
 		return WorkspacePreviewPlan{
 			Primary:      PreviewDirectURL,

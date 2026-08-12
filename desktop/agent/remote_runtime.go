@@ -239,6 +239,14 @@ func executionModeForFramework(framework string) ProjectExecutionMode {
 		// on Skia/Impeller in its own process. The web dashboard's
 		// RemoteRuntimeViewer streams the running emulator/simulator.
 		return ExecutionModeNativeWebRTC
+	case "unity":
+		// Unity is treated as a generic remote-PC view: no Unity SDK, no
+		// editor bridge — the built player runs on the box's display and
+		// the desktop-screen target streams that display over the same
+		// WebRTC/JPEG pipeline that ships every other native runtime.
+		// The player is launched via /unity/relaunch; the box must have a
+		// real display for the ffmpeg grab (same constraint as "desktop").
+		return ExecutionModeNativeWebRTC
 	case "browser":
 		// "PC UI in glasses" surface — a headless Chromium tab on the
 		// agent host streamed to a spatial headset / web client over
@@ -635,6 +643,14 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 			// other arm here it is framework-independent; "desktop" is a
 			// pseudo-framework so the existing picker plumbing can reach it
 			// without a parallel capabilities endpoint.
+			caps.Targets = []RemoteRuntimeTarget{
+				probeDesktopScreenTarget(),
+			}
+		case "unity":
+			// Generic remote-PC view: the built Unity player runs on the
+			// box's display; the desktop-screen ffmpeg grab streams it over
+			// the same WebRTC/JPEG pipeline. No Unity SDK, no editor bridge
+			// — the same "yet another remote PC" lane as "desktop".
 			caps.Targets = []RemoteRuntimeTarget{
 				probeDesktopScreenTarget(),
 			}
