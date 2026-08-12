@@ -4825,17 +4825,17 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Title         string `json:"title"`
-		Description   string `json:"description"`
-		UserPrompt    string `json:"userPrompt,omitempty"`
-		Model         string `json:"model"`
-		Runner        string `json:"runner"`         // runner ID: "claude", "codex", "opencode" — empty uses default
-		Mode          string `json:"mode,omitempty"` // runner-specific subcommand: opencode "build" / "plan" / custom agent
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		UserPrompt  string `json:"userPrompt,omitempty"`
+		Model       string `json:"model"`
+		Runner      string `json:"runner"`         // runner ID: "claude", "codex", "opencode" — empty uses default
+		Mode        string `json:"mode,omitempty"` // runner-specific subcommand: opencode "build" / "plan" / custom agent
 		// Goal arms Yaver goal-mode (opencode goal plugin): a persistent
 		// objective the runner keeps working toward across turns instead of
 		// a one-shot task. Sent to opencode as a create_goal instruction.
-		Goal string `json:"goal,omitempty"`
-		CustomCommand string `json:"customCommand"`  // arbitrary command — runs via sh -c
+		Goal          string `json:"goal,omitempty"`
+		CustomCommand string `json:"customCommand"` // arbitrary command — runs via sh -c
 		// ProjectName is the portable project identity selected by the UI.
 		// The runner machine resolves it against its own checkouts; do not
 		// assume a path picked on a Mac exists on Hetzner Ubuntu.
@@ -4851,13 +4851,13 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		WorkDir            string            `json:"workDir,omitempty"`
 		// MCPServers is the per-task external MCP allowlist. Empty means no
 		// external MCPs; Yaver's own MCP doorway remains available.
-		MCPServers    []string           `json:"mcpServers,omitempty"`
+		MCPServers []string `json:"mcpServers,omitempty"`
 		// IncludeYaverMcp defaults true (nil = include). A surface sets
 		// false when the user explicitly deselects the `yaver` MCP chip, so
 		// the runner sees ONLY the external MCPs in mcpServers (possibly
 		// none). *bool, not bool, so "field absent" ≠ "false".
-		IncludeYaverMcp *bool             `json:"includeYaverMcp,omitempty"`
-		SliceContract *TaskSliceContract `json:"sliceContract,omitempty"`
+		IncludeYaverMcp *bool              `json:"includeYaverMcp,omitempty"`
+		SliceContract   *TaskSliceContract `json:"sliceContract,omitempty"`
 		// Runner/render machine split (task_ensure_clone.go): the surface
 		// passes the project's git identity so a runner box without the
 		// source can materialize its own clone, plus the push policy that
@@ -10273,12 +10273,12 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		return mcpToolJSON(mcpDiskUsage(args.Path))
 	case "disk_manage":
 		var args struct {
-			Action          string   `json:"action"`
-			Path            string   `json:"path"`
-			Classes         []string `json:"classes"`
-			DryRun          *bool    `json:"dryRun"`
-			Threshold       int      `json:"thresholdPercent"`
-			MinAgeMinutes   int      `json:"minAgeMinutes"`
+			Action        string   `json:"action"`
+			Path          string   `json:"path"`
+			Classes       []string `json:"classes"`
+			DryRun        *bool    `json:"dryRun"`
+			Threshold     int      `json:"thresholdPercent"`
+			MinAgeMinutes int      `json:"minAgeMinutes"`
 		}
 		json.Unmarshal(call.Arguments, &args)
 		switch args.Action {

@@ -1044,7 +1044,7 @@ func (s *HTTPServer) handleRunnerBrowserAuthStart(w http.ResponseWriter, r *http
 	// (launch gate, chip, health loop, dispatch preflight, the modals that used
 	// to start a session merely because they opened) gets the same answer.
 	decision := DecideRunnerAuthStart(RunnerAuthStartInput{
-		Runner:   normalizeRunnerAuthName(req.Runner),
+		Runner: normalizeRunnerAuthName(req.Runner),
 		Trigger: func() RunnerAuthStartTrigger {
 			if req.Confirm {
 				return RunnerAuthTriggerConfirmed

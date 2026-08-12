@@ -1,6 +1,10 @@
 # ACP Subscription-Auth Plan — opencode / Claude Code / Codex
 
-> Status: DRAFT (2026-08-11). Deep-audit sonucu; implementasyon yeni session'da.
+> Status: DRAFT → **Faz A done + Faz B core done (client/runner/probe live-verified)**.
+> Updated 2026-08-12 with the verified findings from the handoff
+> `docs/handoff/acp-subscription-auth-2026-08-12.md` (live-verified against real
+> binaries + real paid accounts on 2026-08-11/12). Faz D surfaces + Faz E
+> release still open.
 > Amaç: terminalde yapılan **subscription login'lerini** (claude.ai hesabı, ChatGPT
 > planı) yaver'ın **tüm client yüzeylerinden** (mobile, webui, tvOS, car, watch,
 > wear) görülebilir ve kullanılabilir kılmak — **API key değil**. ACP (Agent
@@ -79,12 +83,21 @@ Kaynak: https://agentclientprotocol.com (v1 stabilize, v2 draft)
 | `session-config-options.md` | Model/agent seçimi | Runner model yönlendirme |
 | `terminals.md` | Terminal komutları | PTY yerine standardize |
 
-**Runner ACP desteği:**
-- **opencode:** `opencode acp` — ACP server var (yerel `--help` doğrulandı)
-- **Claude Code:** `claude --help`'te ACP flag'i görünmedi; son sürümlerde ACP'ye
-  geçiş olduğu biliniyor — **doğrulanmalı** (`claude --version`, docs)
-- **Codex:** yerel `--help`'te ACP yok; Codex CLI `--acp` veya benzeri —
-  **doğrulanmalı**
+**Runner ACP desteği (VERIFIED 2026-08-11/12 — handoff §1):**
+- **opencode 1.18.15:** ✅ **NATIVE ACP** — `opencode acp --pure` (stdio JSON-RPC v1). Auth method: `opencode-login`.
+- **Claude Code 2.1.222:** ❌ **no native ACP** (`claude --help` has no `acp` flag — corrected from "geçiş olduğu biliniyor"); the ACP server is the npm adapter `@agentclientprotocol/claude-agent-acp` v0.66.0. Auth methods: `claude-ai-login` (**terminal** type — subscription, args `--cli auth login --claudeai`), `console-login` (API key).
+- **Codex 0.142.5:** ❌ no native ACP (`codex --help`); npm adapter `@agentclientprotocol/codex-acp` v1.1.14. Auth methods: `chat-gpt` (subscription), `api-key`. `NO_BROWSER=1` hides chat-gpt on headless boxes.
+- **glm:** retired runner — use opencode with `zai-coding-plan/glm-4.7`.
+
+**Wire-protocol facts (verified by probing — handoff §1, all in `acp_client.go` header):**
+- Transport: newline-delimited JSON-RPC 2.0 over stdio.
+- Prompt method is **`session/prompt`** (NOT `prompt` → `-32601`); prompt is an ARRAY of content blocks — `{type:"text",text}` and `{type:"image",data,mimeType}` (the screenshot-attachment shape) both work.
+- **`session/new` REQUIRES `mcpServers`** (omitting → `-32602`) — the MCP-injection seam; yaver MCP rides here as a stdio descriptor (screenshot → Read tool in ACP mode).
+- opencode's schema is STRICT: stdio MCP descriptor must serialize `env:[]`/`args:[]`/`headers:[]` (Go `omitempty` drops len-0 slices → opencode `-32602`). Fixed with custom `MarshalJSON`; normalized to the strictest consumer.
+- **`auth/status` NOT implemented by opencode yet** (draft RFD, `-32601`) — auth verdict stays on the probe path; ACP contributes reachability + auth-methods surface.
+- **`clientCapabilities.auth.terminal: true` MUST be advertised in `initialize`** — without it claude-agent-acp hides the terminal subscription method (`methods=[]`); with it you get `[claude-ai-login, console-login]`.
+- `authenticate {methodId}` returns `{}` on codex chat-gpt / opencode-login (already authed); claude-ai-login is terminal type → goes through `acpTerminalLoginCommand` (`claude-agent-acp --cli auth login --claudeai`), never through `authenticate`.
+- codex-acp `initialize` → `mcpCapabilities: {acp:false, http:true, sse:false}`; supports text + images.
 
 ---
 
@@ -119,38 +132,33 @@ Mobile / WebUI / tvOS / car / watch
 
 ## 5. Implementasyon Planı (adım adım)
 
-### Faz A — Doğrulama (yeni session'da önce bunlar)
-- [ ] Claude Code ACP desteğini doğrula: `claude --version`, `claude --help | grep -i acp`,
-      docs. Yoksa: Claude Code'un ACP'ye geçiş tarihi/flag'i araştır
-- [ ] Codex ACP desteğini doğrula: `codex --help | grep -i acp`, `codex exec --help`
-- [ ] `opencode acp --help` ile ACP server'ın tam arayüzünü çıkar
-- [ ] `auth-methods.md` (Terminal Authentication) RFD'sini oku — uzaktan login akışı
-- [ ] `get-auth-state.md` RFD'sini oku — auth state sorgulama şekli
+### Faz A — Doğrulama (DONE 2026-08-11/12, live-verified)
+- [x] Claude Code ACP desteğini doğrula → **no native ACP**; adapter `claude-agent-acp` required (terminal auth: `--cli auth login --claudeai`)
+- [x] Codex ACP desteğini doğrula → **no native ACP**; adapter `codex-acp` required (chat-gpt subscription works live)
+- [x] `opencode acp --help` ile ACP server'ın tam arayüzünü çıkar → native `opencode acp --pure`
+- [x] `auth-methods.md` (Terminal Authentication) RFD'sini oku → terminal-type methods + `acpTerminalLoginCommand`
+- [x] `get-auth-state.md` RFD'sini oku → opencode does NOT implement `auth/status` yet; probe fallback retained
 
-### Faz B — opencode ACP köprüsü (ilk implementasyon)
-- [ ] `desktop/agent/acp_client.go` — ACP JSON-RPC istemcisi (initialize, session/new,
-      auth-state, prompt, session/list, session/resume)
-- [ ] `opencode acp`'yi runner olarak başlatma yolu (runner_pty_cmd yerine ACP stdio)
-- [ ] `/runner-auth/status`'u ACP `getAuthState` ile besle (probe fallback korunur)
-- [ ] Task prompt'larını ACP `prompt` turn'ü ile gönderme (PTY yerine)
-- [ ] yaver mcp enjeksiyonunu ACP modunda koru (screenshot Read tool çalışsın)
+### Faz B — opencode ACP köprüsü (CORE DONE: client/runner/probe; task-turns over ACP NOT started)
+- [x] `desktop/agent/acp_client.go` — ACP JSON-RPC istemcisi (initialize, session/new, auth-state, prompt text+image, session/list, session/close, Authenticate, Logout, MCP descriptors, strict-MarshalJSON, auth.terminal capability)
+- [x] Runner ACP launch path (`acp_runner.go` — `acpRunnerSpecFor`, cached `probeACPAuthState` 60s TTL / 20s timeout, `invalidateACPProbeCache`, `acpTerminalLoginCommand`)
+- [x] `/runner-auth/status` ACP ile besle (probe fallback korunur) — `enrichRowWithACPAuthState` + `acpAuthStateForRunner` (shared with `/agent/runners`)
+- [ ] Task prompt'larını ACP `prompt` turn'ü ile gönderme (PTY yerine) — **deliberately NOT started** (biggest change; touches streaming/capture; guard with break-it test when done)
+- [x] yaver mcp enjeksiyonunu ACP modunda koru → `acpMCPServersForTask` + `session/new` mcpServers seam (screenshot Read tool)
 
-### Faz C — Claude Code + Codex subscription (ACP destekleri netleşince)
-- [ ] Claude Code ACP varsa: aynı acp_client ile bağla; yoksa probe korunur
-      ve "subscription import" akışı iyileştirilir (uzaktan login başlatma)
-- [ ] Codex ACP varsa: aynı; yoksa `codex login --device-auth` akışını
-      `/runner-auth/browser/start`'a tam bağla (mobil'den remote box'ta login)
-- [ ] auth-methods RFD'sine göre: mobil/webui'den "terminal login'i kullan" butonu
-      → box'ta ACP login akışını başlat
+### Faz C — Claude Code + Codex subscription (PARTIAL: adapters wired + probe/enrichment live-verified; browser-login flows for claude/codex opencode pending Faz D surfaces)
+- [x] Claude Code ACP adapter bağla (auth-state + terminal-login command live-verified; org-block documented)
+- [x] Codex ACP adapter bağla (chat-gpt subscription full loop live-verified)
+- [x] opencode browser-login URL capture **SOLVED 2026-08-12** — see §4-blocker-resolution below
+- [ ] Mobile/webui'den "terminal login'i kullan" butonu → box'ta ACP login akışını başlat (Faz D)
 
-### Faz D — Yüzeyler + güvenlik
-- [ ] `/runner-auth/status` çıktısına `authMethod: "acp" | "probe" | "apikey"` ekle
-- [ ] Mobile/webui/tvOS runner kartları: subscription durumunu net göster
-      ("claude.ai · max · via ACP")
+### Faz D — Yüzeyler + güvenlik (NOT STARTED)
+- [x] `/runner-auth/status` çıktısına `authMethod: "acp" | "probe" | "apikey"` ekle → done, wire-verified (also on `/agent/runners` + `supportsBrowserAuth` for opencode)
+- [ ] Mobile/webui/tvOS runner kartları: subscription durumunu net göster ("claude.ai · max · via ACP") — grep `mobile/app/(tabs)/`, `web/components/dashboard/`
 - [ ] Güvenlik testi: ACP bağlantısı kesilirse probe'a düş, yanlış "signed in" yok
 - [ ] Kır-geri-yükle testleri (probe → ACP geçişi, ACP çökerse fallback)
 
-### Faz E — Kapanış
+### Faz E — Kapanış (NOT STARTED)
 - [ ] CLAUDE.md / AGENTS.md güncelle (ACP katmanı, güvenlik sınırı)
 - [ ] yaver-cli 1.99.412+ release + tüm makinelere dağıt
 - [ ] E2E: mobil'den screenshot task → remote box ACP runner → yaver mcp Read tool
@@ -170,10 +178,46 @@ Mobile / WebUI / tvOS / car / watch
    istiyor; provider key'leri (opencode provider config) ayrı kalır.
 4. **Probe fallback her zaman açık** — ACP bağlanamazsa `claude auth status` /
    `codex login status` çalışmaya devam eder. ACP bir "extra", asla tek yol değil.
+5. **`OPENCODE_CONFIG_CONTENT` sadece login process'ini etkiler** — açık
+   olan `enabled_providers` filtresini atlatmak için enjekte edilir; kullanıcının
+   diskteki `opencode.json`'una asla yazılmaz (sst/opencode `config.ts`'te local
+   priority ile merge edilir, mergeDeep arrays'i replace eder).
 
----
+## 7. §4 Blocker Resolution — opencode login URL capture (2026-08-12)
 
-## 7. Bu Oturumda Yapılanlar (bağlam)
+**Blocker root cause (NOT a missing URL print):** `opencode auth login` FILTERS
+providers by `config.enabled_providers`. The user's config lists
+`["zai-coding-plan","deepseek"]`, so `openai` (the OAuth credential) silently
+vanished from the login command and every `-p <provider>` returned
+`Unknown provider "<provider>"` — the naive `opencode auth login` hung in the
+TUI provider picker because the only selectable providers were API-key ones.
+
+**Working recipe (verified live against opencode 1.18.15 + real paid account):**
+
+```
+OPENCODE_CONFIG_CONTENT='{"enabled_providers":["openai"]}' \
+  opencode auth login -p openai -m "ChatGPT Pro/Plus (headless)"
+```
+
+- `OPENCODE_CONFIG_CONTENT` (JSON config string, merged with local priority —
+  verified in sst/opencode `config.ts`) injects an enabled set including
+  openai WITHOUT touching on-disk config; only affects that process.
+- The **"headless"** method is a plain RFC 8628 device-code flow (clack
+  `log.info` → `process.stdout`, no TTY needed):
+  `Go to: https://auth.openai.com/codex/device` + `Enter code: MWJI-A4WH0`.
+- The URL matches `urlPattern` and the code matches `codexCodePattern` — the
+  shared scanner captures both with zero new parsing (opencode rides the
+  codex/kimi machine). Method label match is case-insensitive (providers.ts).
+
+**Landed in code:** `runnerBrowserAuthCommand` opencode case → the headless
+argv + `OPENCODE_CONFIG_CONTENT` env, returns `"device-auth"`;
+`scanRunnerBrowserAuthOutput` captures the opencode device code (gate now
+`codex || kimi || opencode`); `runnerSupportsBrowserAuth("opencode")` = true
+so surfaces render the "sign in" button. Guards: 
+`TestRunnerBrowserAuthCommandOpenCodeHeadless` (argv + env),
+`TestScanRunnerBrowserAuthOutputCapturesOpenCodeDeviceFlow` (URL+code capture).
+
+## 8. Bu Oturumda Yapılanlar (bağlam)
 
 - Commit `580389c4a` — cross-surface last-project/MCP Convex sync + relay/agent fix'leri
 - Commit `fbcfb2d1b` — diskguard `-dev` + `current.stale` + MCP stale-process guard
@@ -187,7 +231,7 @@ Mobile / WebUI / tvOS / car / watch
   Play internal 297 ✓, Wear 298 ✓, TV 300 ✓, XR 301 ✓, visionOS ✓, carplay ✓
 - Android Auto: upload devam ediyordu (303)
 
-## 8. Kalan İşler (yeni session)
+## 9. Kalan İşler (yeni session)
 
 1. Faz A doğrulamaları (Claude/Codex ACP desteği, RFD okuma)
 2. Faz B opencode ACP köprüsü
