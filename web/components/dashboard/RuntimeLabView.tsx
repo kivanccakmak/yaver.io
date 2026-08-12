@@ -4499,6 +4499,27 @@ export default function RuntimeLabView({
                 iframeRef={domInspectFrameRef}
                 className="mb-2"
               />
+              {/* Project picker — the composer MUST be able to pick which
+                  project the next task runs in, because every render surface
+                  (TV, watch, car, AR/VR, phone, browser) is project-scoped:
+                  Load Targets probes the SELECTED project's targets. Without
+                  this the chat always ran the first project (yaver.io repo
+                  root → browser-only targets) and tvOS/watch/car/vision could
+                  never be vibed from the chat (2026-08-12 audit). Same
+                  selectedPath + state-reset the Project panel select uses. */}
+              <label className="min-w-0 flex-1" title="Project the next task runs in — Load Targets probes its render surfaces">
+                <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-surface-500">Project</span>
+                <select
+                  value={selectedPath}
+                  onChange={(e) => { userSelectedProjectRef.current = true; setSelectedPath(e.target.value); setRuntimeProjectNote(null); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
+                  className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec]"
+                >
+                  {projects.length === 0 ? <option value="">No projects on the render machine</option> : null}
+                  {projects.map((p) => (
+                    <option key={p.path} value={p.path}>{p.name} · {p.framework || "unknown"}</option>
+                  ))}
+                </select>
+              </label>
               {/* MCP doorway + external servers — parity with the Chat tab
                   composer (page.tsx). The yaver toggle renders ALWAYS (it is
                   the doorway to Yaver's own MCP, present on every box even

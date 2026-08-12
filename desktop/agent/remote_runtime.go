@@ -854,6 +854,13 @@ func probeAppleSimTarget(id, surface, label, family, deviceType string, families
 		RuntimeHostClass: "macos-ios",
 		HostOS:           runtime.GOOS,
 		RequiredCLI:      "xcrun simctl",
+		// Per-platform pixel size — the viewer must respect each surface's
+		// physical dimensions, not a hardcoded phone aspect. Mirrors the
+		// androidTargetDisplay table (2026-08-12 audit: a tvOS session
+		// rendered in a 9/19.5 phone frame because Apple sim targets carried
+		// no viewport at all). Set even when the target is disabled so the
+		// viewer can still lay out correctly.
+		Viewport: appleTargetViewport(surface),
 	}
 	if runtime.GOOS != "darwin" {
 		target.Enabled = false
@@ -912,6 +919,26 @@ func probeTVOSSimulatorTarget(families map[string]bool, familiesKnown bool) Remo
 
 func probeVisionOSSimulatorTarget(families map[string]bool, familiesKnown bool) RemoteRuntimeTarget {
 	return probeAppleSimTarget("visionos-simulator", "vision", "Apple Vision Pro Simulator over WebRTC", "visionOS", "Apple Vision", families, familiesKnown)
+}
+
+// appleTargetViewport returns the physical pixel size of an Apple simulator
+// surface. Physical pixels, not points: a TV frame is 3840×2160 regardless of
+// the points the tvOS UI lays out in. The viewer uses this to size its media
+// element so a couch/test session shows the platform's real aspect, not a
+// phone-shaped fallback (2026-08-12 audit).
+func appleTargetViewport(surface string) *RemoteRuntimeViewport {
+	switch surface {
+	case "tv":
+		return &RemoteRuntimeViewport{Label: "Apple TV", Width: 3840, Height: 2160}
+	case "tablet":
+		return &RemoteRuntimeViewport{Label: "iPad", Width: 1620, Height: 2160}
+	case "watch":
+		return &RemoteRuntimeViewport{Label: "Apple Watch", Width: 396, Height: 484}
+	case "vision":
+		return &RemoteRuntimeViewport{Label: "Vision Pro", Width: 1920, Height: 1080}
+	default: // phone
+		return &RemoteRuntimeViewport{Label: "iPhone", Width: 393, Height: 852}
+	}
 }
 
 func probeAndroidEmulatorTarget() RemoteRuntimeTarget {
