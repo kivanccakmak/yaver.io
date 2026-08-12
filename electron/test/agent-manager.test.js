@@ -3,10 +3,30 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
-const { AgentManager, resolveAgentBinary, probeAgentHealth, AGENT_PORT } = require("../src/agent-manager");
+const { AgentManager, resolveAgentBinary, probeAgentHealth, agentEnv, AGENT_PORT } = require("../src/agent-manager");
 
 test("AGENT_PORT is 18080 (matches the agent's default)", () => {
   assert.equal(AGENT_PORT, 18080);
+});
+
+// The desktop GUI must NEVER trigger a macOS keychain prompt. The agent is
+// spawned with YAVER_VAULT_SKIP_KEYCHAIN=1, which the agent honors as a
+// global keychain gate (vault_keychain.go::keychainAccessDisabled) for both
+// the vault mirror AND the runner-auth probe — the two `security` shell-outs
+// that prompt. Pin the env so the gate can't silently regress.
+test("agentEnv always sets YAVER_VAULT_SKIP_KEYCHAIN=1", () => {
+  const env = agentEnv();
+  assert.equal(env.YAVER_VAULT_SKIP_KEYCHAIN, "1");
+  // And it must be inherited through to the spawned child, not dropped.
+  const old = process.env.YAVER_VAULT_SKIP_KEYCHAIN;
+  try {
+    delete process.env.YAVER_VAULT_SKIP_KEYCHAIN;
+    const env2 = agentEnv();
+    assert.equal(env2.YAVER_VAULT_SKIP_KEYCHAIN, "1");
+  } finally {
+    if (old === undefined) delete process.env.YAVER_VAULT_SKIP_KEYCHAIN;
+    else process.env.YAVER_VAULT_SKIP_KEYCHAIN = old;
+  }
 });
 
 test("probeAgentHealth resolves ok=false on an unbound port", async () => {

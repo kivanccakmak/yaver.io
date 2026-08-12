@@ -52,6 +52,30 @@ async function download(url, outPath) {
   await pipeline(res, createWriteStream(outPath, { mode: 0o755 }));
 }
 
+/**
+ * Resolve the release tag name for a given agent version on a repo. Tags may
+ * be `v1.2.3` or `cli/v1.2.3` (the CLI's stripCliTagPrefix accepts both), and
+ * a release's download URL must use the EXACT tag. Prefer the API so we never
+ * guess the prefix; fall back to `v<version>` for offline/rate-limited runs.
+ */
+async function resolveReleaseTag(repo, version) {
+  const apiUrl = `https://api.github.com/repos/${repo}/releases/tags/v${version}`;
+  try {
+    const res = await new Promise((resolve, reject) => {
+      https.get(apiUrl, { headers: { "User-Agent": "yaver-gui-release", Accept: "application/vnd.github+json" } }, resolve).on("error", reject);
+    });
+    let body = "";
+    for await (const chunk of res) body += chunk;
+    if (res.statusCode === 200) {
+      const tag = JSON.parse(body).tag_name;
+      if (typeof tag === "string" && tag) return tag;
+    }
+  } catch {
+    /* fall through */
+  }
+  return `v${version}`;
+}
+
 async function main() {
   const targetDir = join(__dirname, "..", "resources", "bin");
   const targetPath = join(targetDir, binaryName());
@@ -59,9 +83,12 @@ async function main() {
   await mkdir(targetDir, { recursive: true });
 
   if (process.platform === "win32") {
-    // Windows ships a raw .exe from its own repo.
-    const url = `https://github.com/${WINDOWS_REPO}/releases/download/v${version}/yaver-windows-${process.arch}.exe`;
-    console.log(`[fetch-agent] windows agent ${version} → ${targetPath}`);
+    // Windows ships a raw .exe from its own repo. Resolve the release tag via
+    // the API (tags may be `v1.2.3` or `cli/v1.2.3` — mirror the CLI's
+    // stripCliTagPrefix), then build the asset URL.
+    const winTag = await resolveReleaseTag(WINDOWS_REPO, version);
+    const url = `https://github.com/${WINDOWS_REPO}/releases/download/${winTag}/yaver-windows-${process.arch}.exe`;
+    console.log(`[fetch-agent] windows agent ${version} (tag ${winTag}) → ${targetPath}`);
     await download(url, targetPath);
     console.log(`[fetch-agent] done`);
     return;

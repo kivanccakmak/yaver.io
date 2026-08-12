@@ -264,4 +264,4 @@ class AgentManager {
   }
 }
 
-module.exports = { AgentManager, resolveAgentBinary, probeAgentHealth, AGENT_PORT };
+module.exports = { AgentManager, resolveAgentBinary, probeAgentHealth, agentEnv, AGENT_PORT };
