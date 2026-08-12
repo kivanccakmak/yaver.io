@@ -89,6 +89,14 @@
     .msg-assistant pre { background: #0c0c0c; padding: 8px 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; font-size: 11px; border: 1px solid var(--border); }
     .msg-assistant code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11px; }
     .msg-status { align-self: center; font-size: 11px; color: var(--text-muted); padding: 2px 10px; }
+
+    /* Console-first task output (2026-08-12, user directive): the chat pane
+       IS the runner's live console — raw stdout streamed as-is, like opencode
+       itself, for every runner. User prompts render as `$` lines, the raw
+       stream as a monospaced block; no more chat bubbles. */
+    .console-user { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; color: var(--text); word-wrap: break-word; }
+    .console-user .console-prompt { color: var(--green); user-select: none; }
+    .console-raw { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-wrap: break-word; }
     .chat-bar { padding: 10px 14px; border-top: 1px solid var(--border); background: var(--bg-card); display: flex; gap: 8px; align-items: flex-end; }
     .chat-input { flex: 1; resize: none; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 13px; font-family: inherit; line-height: 1.5; min-height: 40px; max-height: 140px; outline: none; }
     .chat-input:focus { border-color: var(--accent); } .chat-input::placeholder { color: var(--text-muted); }
@@ -624,7 +632,7 @@ async function handleSend() {
   } else {
     addMsg('status', 'Sending to AI...');
     const r = await window.yaver.createTask(taskData);
-    if (r.taskId) { currentTask = { id: r.taskId, status: 'running', rendered: 1 }; document.getElementById('stop-btn').style.display = 'flex'; loadTaskList(); }
+    if (r.taskId) { currentTask = { id: r.taskId, status: 'running', rendered: 1 }; document.getElementById('stop-btn').style.display = 'flex'; loadTaskList(); startTaskStream(r.taskId); }
   }
 }
 
@@ -644,8 +652,20 @@ async function handleStopTask() {
 
 function addMsg(role, content) {
   const c = document.getElementById('chat-msgs');
-  const d = document.createElement('div'); d.className = 'msg msg-' + role;
-  d.innerHTML = role === 'assistant' ? renderMd(content) : (role === 'status' ? content : esc(content));
+  const d = document.createElement('div');
+  if (role === 'user') {
+    // Console-style `$` prompt line (like opencode echoes it), not a bubble.
+    d.className = 'console-user';
+    d.innerHTML = `<span class="console-prompt">$ </span>` + esc(content);
+  } else if (role === 'status') {
+    d.className = 'msg msg-status';
+    d.textContent = content;
+  } else {
+    // Assistant fallback text (the raw console is the primary view; this
+    // only shows for tasks whose agent has no raw lane).
+    d.className = 'console-raw';
+    d.textContent = stripAnsi(content);
+  }
   c.appendChild(d); c.scrollTop = c.scrollHeight;
 }
 
@@ -658,14 +678,18 @@ function startPolling() {
     try {
       const d = await window.yaver.getTask(currentTask.id); if (!d?.task) return;
       const t = d.task;
-      if (t.turns) { for (let i = currentTask.rendered||1; i < t.turns.length; i++) addMsg(t.turns[i].role, t.turns[i].content); currentTask.rendered = t.turns.length; }
-      // Typing indicator
+      // Console-first: while the raw stream owns the pane, the groomed turns
+      // and final resultText are redundant (the console shows the full run).
+      const consoleActive = taskStreamTaskId === currentTask.id && taskRawBuf.length > 0;
+      if (!consoleActive && t.turns) { for (let i = currentTask.rendered||1; i < t.turns.length; i++) addMsg(t.turns[i].role, t.turns[i].content); currentTask.rendered = t.turns.length; }
+      // Typing indicator (only when the console is not streaming — the
+      // stream itself is the activity signal).
       let typing = document.getElementById('typing-indicator');
-      if (t.status === 'running') {
+      if (!consoleActive && t.status === 'running') {
         if (!typing) { const d = document.createElement('div'); d.id = 'typing-indicator'; d.className = 'msg msg-status'; d.innerHTML = '<span style="animation:blink 1s infinite">&#x25CF;</span> AI is thinking...'; document.getElementById('chat-msgs').appendChild(d); document.getElementById('chat-msgs').scrollTop = document.getElementById('chat-msgs').scrollHeight; }
       } else if (typing) { typing.remove(); }
       if (t.status !== 'running' && t.status !== 'queued') {
-        if (t.resultText) addMsg('assistant', t.resultText);
+        if (!consoleActive && t.resultText) addMsg('assistant', t.resultText);
         addMsg('status', 'Task ' + t.status + (t.costUsd ? ' ($'+t.costUsd.toFixed(4)+')' : ''));
         currentTask.status = t.status; document.getElementById('stop-btn').style.display = 'none'; loadTaskList();
         notify('Task ' + t.status, t.title || 'Your task finished');
@@ -694,10 +718,16 @@ async function selectTask(id) {
     const d = await window.yaver.getTask(id); if (!d?.task) return;
     currentTask = { id, status: d.task.status, rendered: 0 };
     const c = document.getElementById('chat-msgs'); c.innerHTML = '';
-    if (d.task.turns) { for (const t of d.task.turns) addMsg(t.role, t.content); currentTask.rendered = d.task.turns.length; }
-    if (d.task.status !== 'running' && d.task.status !== 'queued') addMsg('status', 'Task ' + d.task.status);
+    // Console-first (2026-08-12): the raw stream is the view — the stream
+    // below seeds the full tail. Legacy tasks whose agent has no raw lane
+    // fall back to the turn transcript.
+    if (!d.task.rawOutput) {
+      if (d.task.turns) { for (const t of d.task.turns) addMsg(t.role, t.content); currentTask.rendered = d.task.turns.length; }
+      if (d.task.status !== 'running' && d.task.status !== 'queued') addMsg('status', 'Task ' + d.task.status);
+    }
     document.getElementById('stop-btn').style.display = d.task.status==='running'?'flex':'none';
     navTo('chat'); loadTaskList();
+    startTaskStream(id);
   } catch {}
 }
 
@@ -811,7 +841,7 @@ async function handleDeploy(target) {
   addMsg('user', `Deploy ${proj.name} to ${labels[target]}`);
   addMsg('status', 'Starting deploy...');
   const r = await window.yaver.createTask({ title: `Deploy ${proj.name} to ${labels[target]}`, description: prompts[target], source: 'desktop' });
-  if (r.taskId) { currentTask = { id: r.taskId, status: 'running', rendered: 1 }; document.getElementById('stop-btn').style.display = 'flex'; loadTaskList(); }
+  if (r.taskId) { currentTask = { id: r.taskId, status: 'running', rendered: 1 }; document.getElementById('stop-btn').style.display = 'flex'; loadTaskList(); startTaskStream(r.taskId); }
 }
 
 function handleDeployMenu() { navTo('builds'); }
@@ -1080,7 +1110,7 @@ document.addEventListener('keydown', e => {
 // HELPERS
 // ════════════════════════════════════════════════════════
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
-function stopAll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } if (devPollTimer) { clearInterval(devPollTimer); devPollTimer = null; } if (taskListTimer) { clearInterval(taskListTimer); taskListTimer = null; } }
+function stopAll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } if (devPollTimer) { clearInterval(devPollTimer); devPollTimer = null; } if (taskListTimer) { clearInterval(taskListTimer); taskListTimer = null; } if (taskStreamController) { taskStreamController.abort(); taskStreamController = null; } taskStreamTaskId = null; }
 
 // ════════════════════════════════════════════════════════
 // VOICE INPUT (MediaRecorder → agent transcribe)
@@ -1149,6 +1179,110 @@ function startSSE() {
       }
     } catch {}
   })();
+}
+
+// ════════════════════════════════════════════════════════
+// TASK OUTPUT STREAM (live console — raw runner stdout)
+// ════════════════════════════════════════════════════════
+// Console-first task view (2026-08-12, user directive): the chat pane IS
+// the runner's console. We consume the RAW stdout lane
+// (/tasks/{id}/output?rawSince=) — `raw_replay` seeds/replaces the tail,
+// `raw` appends live frames — for EVERY runner (opencode / codex / claude),
+// the same bytes the web console, mobile and tvOS render. Same
+// fetch/ReadableStream pattern as startSSE; the agent's byte cursor rides
+// rawSince so a retry resumes without re-rendering the scrollback. A clean
+// `done` frame is the only silent stop; anything else gets ONE retry.
+let taskStreamController = null;
+let taskRawBuf = '';
+let taskRawCursor = 0;
+let taskStreamTaskId = null;
+
+function stripAnsi(s) {
+  return String(s || '')
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '') // CSI (SGR colours, cursor, erase…)
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, '') // OSC … BEL/ST
+    .replace(/\u001b[()][0-9A-B]/g, '');           // two-byte controls
+}
+
+function renderTaskConsole() {
+  const el = document.getElementById('console-raw');
+  if (!el) return;
+  el.textContent = stripAnsi(taskRawBuf);
+  el.scrollTop = el.scrollHeight;
+}
+
+function handleTaskOutputFrame(ev) {
+  if (!ev || typeof ev.type !== 'string') return;
+  if (ev.type === 'raw_replay') {
+    taskRawBuf = ev.full ? (ev.text || '') : (taskRawBuf + (ev.text || ''));
+    taskRawCursor = typeof ev.offset === 'number' ? ev.offset : taskRawCursor;
+    renderTaskConsole();
+  } else if (ev.type === 'raw' && ev.text) {
+    taskRawBuf += ev.text;
+    taskRawCursor = typeof ev.offset === 'number' ? ev.offset : taskRawCursor;
+    renderTaskConsole();
+  } else if (ev.type === 'done') {
+    if (taskStreamController) { taskStreamController.abort(); taskStreamController = null; }
+  }
+}
+
+function startTaskStream(taskId) {
+  if (taskStreamController) { taskStreamController.abort(); taskStreamController = null; }
+  taskStreamTaskId = taskId;
+  taskRawBuf = '';
+  taskRawCursor = 0;
+  // The console block lives INSIDE #chat-msgs, after the user `$` lines.
+  let rawEl = document.getElementById('console-raw');
+  if (!rawEl) {
+    rawEl = document.createElement('div');
+    rawEl.id = 'console-raw';
+    rawEl.className = 'console-raw';
+    document.getElementById('chat-msgs').appendChild(rawEl);
+  }
+  const connect = () => {
+    const ctrl = new AbortController();
+    taskStreamController = ctrl;
+    (async () => {
+      let sawDone = false;
+      try {
+        const conn = await window.yaver.getConnectionState();
+        if (!conn.connected || !conn.baseUrl) return;
+        const auth = await window.yaver.getAuthState();
+        const res = await fetch(conn.baseUrl + '/tasks/' + encodeURIComponent(taskId) + '/output?rawSince=' + taskRawCursor, {
+          headers: { 'Authorization': 'Bearer ' + (auth.token || '') },
+          signal: ctrl.signal,
+        });
+        const reader = res.body && res.body.getReader();
+        if (!reader) return;
+        const decoder = new TextDecoder();
+        let pending = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          pending += decoder.decode(value, { stream: true });
+          const lines = pending.split('\n');
+          pending = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const ev = JSON.parse(line.slice(6));
+              if (ev.type === 'done') sawDone = true;
+              handleTaskOutputFrame(ev);
+            } catch {}
+          }
+        }
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;
+      }
+      // A clean `done` is the only silent stop. Anything else (relay bounce,
+      // box drop) gets ONE retry from the agent's byte cursor.
+      if (!sawDone && !ctrl.signal.aborted && taskStreamTaskId === taskId) {
+        taskStreamController = null;
+        setTimeout(connect, 3000);
+      }
+    })();
+  };
+  connect();
 }
 
 // ════════════════════════════════════════════════════════

@@ -1008,6 +1008,12 @@ export default function RuntimeLabView({
   // the chat surface never shows — the user clicked and got NOTHING, on a save
   // that also never verified the runner was signed in on the box (2026-07-27).
   const [runnerSaveNotice, setRunnerSaveNotice] = useState<{ tone: "ok" | "warn" | "error"; text: string } | null>(null);
+  // The primary picker's machine dropdown (2026-08-12, user directive): the
+  // runner MACHINE used to be selectable only behind "Route", so pointing the
+  // AI at another box (e.g. this Mac) was a buried 4-step detour. The dropdown
+  // saves the role + re-routes agentClient in one shot; this note answers
+  // into the same panel instead of the log pane.
+  const [runnerMachineNote, setRunnerMachineNote] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [runnerAuthStatus, setRunnerAuthStatus] = useState<RunnerBrowserAuthSession | null>(null);
   const [runnerAuthError, setRunnerAuthError] = useState<string | null>(null);
   // action:"noop" from the agent — it declined to start a sign-in because the
@@ -2126,16 +2132,24 @@ export default function RuntimeLabView({
   }, [appendLog, runnerAuthCallbackBusy, runnerAuthCallbackUrl, runnerAuthStatus?.id, runnerAuthStatus?.runner]);
 
   const saveRunnerChoice = useCallback(async () => {
-    if (!connectedDevice?.id || !selectedRunner) return;
+    // The preference belongs to the box that RUNS the AI — which is the
+    // routed runner machine when a split is active, NOT necessarily the
+    // device the dashboard is connected to. Before 2026-08-12 "Save for
+    // machine" always wrote the CONNECTED device, so after routing the
+    // runner to another box the save kept landing on the old one.
+    const runnerMachineId = machineRoles?.runnerDeviceId || connectedDevice?.id || "";
+    if (!runnerMachineId || !selectedRunner) return;
     const provider = normalizeRunnerId(selectedRunner) === "opencode" && selectedModel.includes("/")
       ? selectedModel.split("/")[0]
       : null;
     setRunnerSaveNotice({ tone: "warn", text: "Saving…" });
     const runnerName = selectedRunnerRow?.name || selectedRunner;
     const chosen = `${runnerName}${selectedModel ? ` · ${selectedModel}` : ""}`;
-    const target = connectedDevice.name || "this machine";
+    const target = machineRoles?.runnerDeviceId
+      ? deviceNameById.get(machineRoles.runnerDeviceId) || machineRoles.runnerDeviceId.slice(0, 8)
+      : connectedDevice?.name || "this machine";
     try {
-      await setPrimaryRunner(connectedDevice.id, selectedRunner, selectedModel || null, undefined, provider);
+      await setPrimaryRunner(runnerMachineId, selectedRunner, selectedModel || null, undefined, provider);
       // Saving the preference is the inventory; whether the runner can take
       // the next task is the operation. The box's own runner row carries that
       // answer — say it, and when sign-in is missing, route straight into the
@@ -2149,14 +2163,47 @@ export default function RuntimeLabView({
       } else {
         setRunnerSaveNotice({ tone: "ok", text: `Saved ${chosen} for ${target} — signed in and ready.` });
       }
-      appendLog(`runner set: ${selectedRunner}${selectedModel ? ` ${selectedModel}` : ""}`);
+      appendLog(`runner set: ${selectedRunner}${selectedModel ? ` ${selectedModel}` : ""} on ${target}`);
     } catch (err) {
       setRunnerSaveNotice({
         tone: "error",
         text: `Save failed: ${err instanceof Error ? err.message : String(err)}`,
       });
     }
-  }, [appendLog, connectedDevice?.id, connectedDevice?.name, selectedModel, selectedRunner, selectedRunnerRow, setPrimaryRunner, startSelectedRunnerSignIn]);
+  }, [appendLog, connectedDevice?.id, connectedDevice?.name, deviceNameById, machineRoles?.runnerDeviceId, selectedModel, selectedRunner, selectedRunnerRow, setPrimaryRunner, startSelectedRunnerSignIn]);
+
+  // Point the AI RUNNER at a specific box, right from the primary picker.
+  // Previously only the Route editor could change which machine runs the AI;
+  // this is the same save+route in one shot (mirrors setRenderDeviceAndReprobe
+  // — routes are set directly because the dashboard-shell effect fires on the
+  // NEXT commit and a send would race it).
+  const setRunnerMachine = useCallback(async (next: string) => {
+    if (!onSaveMachineRoles || !next) return;
+    setMachinesBusy(true);
+    setRunnerMachineNote(null);
+    const renderId = machineRoles?.renderDeviceId || next;
+    try {
+      await onSaveMachineRoles({
+        runnerDeviceId: next,
+        ...(machineRoles?.secondaryRunnerDeviceId ? { secondaryRunnerDeviceId: machineRoles.secondaryRunnerDeviceId } : {}),
+        renderDeviceId: renderId,
+        ...(machineRoles?.secondaryRenderDeviceId ? { secondaryRenderDeviceId: machineRoles.secondaryRenderDeviceId } : {}),
+        workspace: machineRoles?.workspace || "runner-clone",
+        autoPush: machineRoles?.autoPush || "ask",
+      });
+      agentClient.setMachineRoleRoutes({ runnerDeviceId: next, renderDeviceId: renderId });
+      const nm = deviceNameById.get(next) || next.slice(0, 8);
+      setRunnerMachineNote({ tone: "ok", text: `Saved — chat streams from ${nm}.` });
+      appendLog(`runner machine → ${nm}`);
+    } catch (err) {
+      setRunnerMachineNote({
+        tone: "error",
+        text: `Could not save: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setMachinesBusy(false);
+    }
+  }, [appendLog, deviceNameById, machineRoles?.autoPush, machineRoles?.renderDeviceId, machineRoles?.secondaryRenderDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.workspace, onSaveMachineRoles]);
 
   const attachTaskSession = useCallback((task: Task) => {
     stopActiveTaskStream();
@@ -4097,6 +4144,38 @@ export default function RuntimeLabView({
               ) : null}
               {chatRunnerControlsOpen ? (
                 <div className="mt-2 grid gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 dark:border-[#2a3039] dark:bg-[#101318]">
+                  {/* Machine (AI runner box) — 2026-08-12, user directive: the
+                      runner MACHINE used to be selectable only behind "Route".
+                      This dropdown saves the role + re-routes in one shot, so
+                      "point the AI at the MacBook Air" is one comfortable step
+                      from the primary picker. */}
+                  <label className="min-w-0">
+                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Machine (AI runner box)</span>
+                    <select
+                      value={machineRoles?.runnerDeviceId || connectedDevice?.id || ""}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        if (!next) return;
+                        void setRunnerMachine(next);
+                      }}
+                      disabled={machinesBusy || !onSaveMachineRoles}
+                      className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
+                    >
+                      {roleEligibleDevices.length === 0 ? <option value="">No machines registered</option> : null}
+                      {roleEligibleDevices.map((device) => (
+                        <option key={device.id} value={device.id}>
+                          {device.name || device.id.slice(0, 8)}
+                          {device.online === false ? " (offline)" : ""}
+                          {connectedDevice?.id === device.id ? " (connected)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {runnerMachineNote ? (
+                    <p className={`text-[11px] leading-4 ${runnerMachineNote.tone === "ok" ? "text-emerald-600 dark:text-emerald-300" : "text-rose-600 dark:text-rose-300"}`}>
+                      {runnerMachineNote.text}
+                    </p>
+                  ) : null}
                   <div className="grid gap-2 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
                     <label className="min-w-0">
                       <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Runner</span>
