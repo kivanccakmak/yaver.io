@@ -45,6 +45,26 @@ const APP_SOURCES = [
   "../native-liveactivity/shared/YaverActivityAttributes.swift",
 ];
 
+// Version keys must NOT be rewritten on the repair path. The committed
+// pbxproj pins the REAL version (1.18.167, bumped by sync-versions.sh); this
+// script only scaffolds new targets. Before 2026-08-12 both settings were
+// applied unconditionally in repairTarget(), so EVERY deploy rewrote the
+// Live Activity + watch targets to 1.0.0 — the committed MARKETING_VERSION
+// was clobbered in the working tree and the archive shipped mismatched
+// embedded targets. These keys are now applied on first creation only.
+const VERSION_KEYS = new Set(["CURRENT_PROJECT_VERSION", "MARKETING_VERSION"]);
+
+// applySettings writes the scaffold settings onto a build config. On the
+// repair path (target already exists) version keys are skipped so committed
+// values survive; on first creation they are written so a fresh target has
+// sane defaults. Centralised so the create path and repairTarget agree.
+function applySettings(bs, repair) {
+  for (const [key, val] of Object.entries(settings)) {
+    if (repair && VERSION_KEYS.has(key)) continue;
+    bs[key] = val;
+  }
+}
+
 const settings = {
   PRODUCT_NAME: TARGET,
   PRODUCT_BUNDLE_IDENTIFIER: BUNDLE,
@@ -104,7 +124,8 @@ const configLists = proj.pbxXCConfigurationList();
 const buildConfigs = proj.pbxXCBuildConfigurationSection();
 for (const ref of configLists[cfgList].buildConfigurations.map((c) => c.value)) {
   const bs = buildConfigs[ref].buildSettings;
-  for (const [key, val] of Object.entries(settings)) bs[key] = val;
+  // First creation: write every setting including the version defaults.
+  applySettings(bs, false);
 }
 
 const project = proj.hash.project.objects.PBXProject[proj.getFirstProject().uuid];
@@ -153,7 +174,11 @@ function repairTarget(targetUuid) {
   for (const ref of (lists[cfg]?.buildConfigurations || []).map((c) => c.value)) {
     const bs = cfgs[ref]?.buildSettings;
     if (!bs) continue;
-    for (const [key, val] of Object.entries(settings)) bs[key] = val;
+    // Repair path: preserve the committed MARKETING_VERSION /
+    // CURRENT_PROJECT_VERSION — clobbering them to the 1.0.0 scaffold
+    // default was the 2026-08-12 bug that shipped mismatched embedded
+    // targets on every deploy.
+    applySettings(bs, true);
   }
 
   // addPbxGroup leaves path as the literal string "undefined". Xcode then

@@ -226,20 +226,42 @@ func attemptCodesign(ctx context.Context, hash string) error {
 // affects only the named keychain, and is exactly what the deploy script
 // does before building. Returns true when an unlock was performed.
 //
+// Single-keychain boxes (MacBook Air / laptop — identities in
+// login.keychain-db, no yaver-ci.keychain-db) self-heal via the macOS
+// login password: YAVER_LOGIN_PASSWORD from the parent env or
+// ~/.yaver/local-secrets.env (same source the deploy script now sources).
+// Partition list included so codesign can use the key without a GUI prompt.
+//
 // Deliberately NOT attempted without an explicitly configured keychain —
 // guessing at keychains or passwords is not something an agent should do.
 func repairSigningKeychain(ctx context.Context) bool {
+	// 1. Dedicated signing keychain (two-keychain layout).
 	kc := strings.TrimSpace(os.Getenv("YAVER_SIGNING_KEYCHAIN"))
 	pw := os.Getenv("YAVER_SIGNING_KEYCHAIN_PASSWORD")
-	if kc == "" || pw == "" {
-		return false
+	if kc != "" && pw != "" {
+		c, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := exec.CommandContext(c, "security", "unlock-keychain", "-p", pw, kc).Run(); err == nil {
+			return true
+		}
 	}
-	c, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	if err := exec.CommandContext(c, "security", "unlock-keychain", "-p", pw, kc).Run(); err != nil {
-		return false
+	// 2. Login keychain (single-keychain layout) — macOS login password.
+	loginPw := os.Getenv("YAVER_LOGIN_PASSWORD")
+	if loginPw == "" {
+		loginPw = localSecretsEnv()["YAVER_LOGIN_PASSWORD"]
 	}
-	return true
+	if loginPw != "" {
+		kcPath := claudeLoginKeychainPath()
+		c, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if exec.CommandContext(c, "security", "unlock-keychain", "-p", loginPw, kcPath).Run() == nil {
+			_ = exec.CommandContext(c, "security",
+				"set-key-partition-list", "-S", "apple-tool:,apple:,codesign:",
+				"-s", "-k", loginPw, kcPath).Run()
+			return true
+		}
+	}
+	return false
 }
 
 // signingRemedy maps a codesign failure to the operator's next step. The
@@ -255,12 +277,12 @@ func signingRemedy(errMsg, keychain string, locked bool) string {
 			"codesign cannot reach the PRIVATE KEY in %s (the certificate is visible, which is why `security find-identity` looks healthy). "+
 				"Headless fix: (1) `security unlock-keychain -p <pw> %s`; "+
 				"(2) `security set-key-partition-list -S apple-tool-:,apple:,codesign: -s -k <pw> %s` to allow non-GUI signing; "+
-				"(3) set YAVER_SIGNING_KEYCHAIN/_PASSWORD so the deploy unlocks it in-process — an unlock does not survive across SSH invocations. "+
+				"(3) set YAVER_SIGNING_KEYCHAIN/_PASSWORD for a dedicated signing keychain, OR set YAVER_LOGIN_PASSWORD in ~/.yaver/local-secrets.env (chmod 600) when the identities live in login.keychain-db — the deploy and this doctor both self-unlock then. "+
 				"Note: if the identity is not in login.keychain, your login password will NOT unlock it.",
 			kcName, kcName, kcName)
 	}
 	if locked {
-		return fmt.Sprintf("%s is locked — unlock it (`security unlock-keychain %s`) or set YAVER_SIGNING_KEYCHAIN/_PASSWORD for headless deploys.", kcName, kcName)
+		return fmt.Sprintf("%s is locked — unlock it (`security unlock-keychain %s`), set YAVER_SIGNING_KEYCHAIN/_PASSWORD, or set YAVER_LOGIN_PASSWORD in ~/.yaver/local-secrets.env for headless deploys on a single-keychain box.", kcName, kcName)
 	}
 	if strings.Contains(errMsg, "no identity found") || strings.Contains(errMsg, "ambiguous") {
 		return "No usable signing identity — import your Apple Distribution certificate (.p12) into a keychain on this machine."

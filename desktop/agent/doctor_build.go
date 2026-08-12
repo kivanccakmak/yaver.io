@@ -9,9 +9,11 @@ package main
 // The catalogue is intentionally small and data-driven so adding a new
 // target is one line in buildTargets, not a new file. Tools are probed
 // via PATH + <bin> <versionFlag> with a 2s timeout. Secrets are looked
-// up in the vault (project-scoped first, then global), not in env vars —
-// the whole point is to make the machine able to deploy without the
-// user having to set env vars manually.
+// up in the vault (project-scoped first, then global), then the parent
+// env, then the gitignored deploy env files (~/.appstoreconnect/yaver.env,
+// ~/.yaver/local-secrets.env) the deploy scripts source — the whole point
+// is to make the machine able to deploy without the user having to set
+// env vars manually.
 
 import (
 	"context"
@@ -20,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -391,11 +394,24 @@ func RunBuildDoctor(target, project string, vs *VaultStore) (BuildDoctorReport, 
 				res.Source = "env"
 			}
 		}
+		// The gitignored deploy env files the scripts actually source.
+		// The doctor used to check ONLY vault + parent env, so it reported
+		// APP_STORE_KEY_* / ANDROID_KEYSTORE_PASSWORD as MISS on a machine
+		// where ~/.appstoreconnect/yaver.env had them and `deploy.sh ios`
+		// would have worked — a false red that sent operators chasing a
+		// missing secret. Found 2026-08-12 during a headless TestFlight
+		// audit; these files are the "vault is the problem" replacement.
+		if !res.Found {
+			if v := deployEnvFileValue(name); v != "" {
+				res.Found = true
+				res.Source = "deploy env file"
+			}
+		}
 		report.Secrets = append(report.Secrets, res)
 		if !res.Found {
 			report.Notes = append(report.Notes,
-				fmt.Sprintf("%s not found in vault or env — add with: yaver vault add %s%s",
-					name, name, projectFlag(project)))
+				fmt.Sprintf("%s not found in vault, env or deploy env files — add with: yaver vault add %s%s, or export %s in ~/.appstoreconnect/yaver.env / ~/.yaver/local-secrets.env",
+					name, name, projectFlag(project), name))
 		}
 	}
 
@@ -421,6 +437,48 @@ func projectFlag(p string) string {
 		return ""
 	}
 	return " --project " + p
+}
+
+// deployEnvFileValue reads a secret key from the gitignored deploy env
+// files the scripts source (~/.appstoreconnect/yaver.env first — the ASC
+// creds; then ~/.yaver/local-secrets.env — the macOS login password). This
+// mirrors the sourcing in scripts/deploy-testflight.sh so the doctor's
+// answer matches what a real deploy would do. Values come back unquoted;
+// `export FOO=bar` and `FOO="bar"` forms are both accepted. File paths are
+// resolved under the HOME the doctor runs as (never hardcoded usernames).
+func deployEnvFileValue(name string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".appstoreconnect", "yaver.env"),
+		filepath.Join(home, ".yaver", "local-secrets.env"),
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			line = strings.TrimPrefix(line, "export ")
+			k, v, ok := strings.Cut(line, "=")
+			if !ok || strings.TrimSpace(k) != name {
+				continue
+			}
+			v = strings.TrimSpace(v)
+			if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+				v = v[1 : len(v)-1]
+			}
+			if v != "" {
+				return v
+			}
+		}
+	}
+	return ""
 }
 
 // probeTool runs exec.LookPath + <bin> <versionFlag> with a 2s timeout.

@@ -13,6 +13,27 @@ node "$ROOT/scripts/add-watch-ios-target.js"
 # Idempotent — a no-op when the target is already in the committed pbxproj.
 node "$ROOT/scripts/add-liveactivity-ios-target.js"
 
+# Embedded-target version guard (2026-08-12 snowball): the two target-injection
+# scripts used to rewrite MARKETING_VERSION/CURRENT_PROJECT_VERSION to their
+# 1.0.0 scaffold defaults on EVERY run, clobbering the committed 1.18.167 in
+# the working tree. The archive then shipped a watch/Live-Activity extension
+# versioned 1.0.0 under an app versioned 1.18.167 — and nothing in the deploy
+# pipeline said a word. The scripts are fixed to preserve committed versions,
+# but a future regression must not ship silently: fail fast when ANY
+# MARKETING_VERSION in the pbxproj differs from the app target's, naming the
+# fix. This is a version-alignment check, not a store rule.
+MARKETING_VERSIONS="$(grep -E '^\s*MARKETING_VERSION = ' "$ROOT/mobile/ios/Yaver.xcodeproj/project.pbxproj" \
+  | sed -E 's/.*MARKETING_VERSION = ([^;]+);.*/\1/' | tr -d ' ' | sort -u)"
+if [ "$(printf '%s\n' "$MARKETING_VERSIONS" | wc -l | tr -d ' ')" -ne 1 ]; then
+  echo "ERROR: embedded-target version drift in project.pbxproj:" >&2
+  echo "  $(printf '%s\n' "$MARKETING_VERSIONS" | tr '\n' ' ')" >&2
+  echo "  The watch / Live Activity targets must match the app's MARKETING_VERSION." >&2
+  echo "  Fix: scripts/add-watch-ios-target.js and add-liveactivity-ios-target.js" >&2
+  echo "  must preserve committed versions (they do as of 2026-08-12); restore the" >&2
+  echo "  committed pbxproj if a stale script run clobbered it." >&2
+  exit 1
+fi
+
 cd "$ROOT/mobile/ios"
 
 hydrate_native_dependency_artifacts() {
@@ -74,6 +95,16 @@ if [ -f "$HOME/.appstoreconnect/yaver.env" ]; then
   set -a; source "$HOME/.appstoreconnect/yaver.env"; set +a
 fi
 
+# macOS login-password secret for headless login.keychain-db unlocks (the
+# single-keychain layout). Owner-only, gitignored, never in CI — the same
+# file runner_auth.go reads for the Claude-Code keychain. Sourced here so the
+# login-keychain unlock block below can see it without the operator exporting
+# it by hand on every deploy.
+if [ -f "$HOME/.yaver/local-secrets.env" ]; then
+  # shellcheck source=/dev/null
+  set -a; source "$HOME/.yaver/local-secrets.env"; set +a
+fi
+
 # Headless codesigning: unlock the signing keychain in THIS process.
 #
 # Why this exists: on a remote/SSH deploy (the Mac mini worker), codesign dies
@@ -110,6 +141,29 @@ if [ -n "${YAVER_SIGNING_KEYCHAIN:-}" ]; then
   # No lock-on-sleep: a mini that naps mid-archive must not relock and fail the
   # export an hour into the build.
   security set-keychain-settings -t 100000 -u "$YAVER_SIGNING_KEYCHAIN" || true
+fi
+
+# Single-keychain machines (MacBook Air / laptop): the signing identities live
+# in login.keychain-db, not a dedicated yaver-ci.keychain-db. In a headless
+# (SSH / agent / launchd-Background) session that keychain is LOCKED and
+# codesign dies with errSecInternalComponent exactly like a missing key.
+# `security find-identity` still lists the certs, so the failure looks like a
+# missing cert. Unlock + partition-list in THIS process using the macOS login
+# password from ~/.yaver/local-secrets.env (YAVER_LOGIN_PASSWORD, chmod 600,
+# owner-only) or the parent env. Same three moves as the Claude-Code keychain
+# unlock in runner_auth.go. Unset = no-op (GUI session already has it open).
+# Found 2026-08-12: the deploy script only unlocked YAVER_SIGNING_KEYCHAIN, so
+# a single-keychain box could never self-unlock headlessly.
+LOGIN_KC="${YAVER_LOGIN_KEYCHAIN_PATH:-$HOME/Library/Keychains/login.keychain-db}"
+if [ -n "${YAVER_LOGIN_PASSWORD:-}" ]; then
+  if [ -f "$LOGIN_KC" ]; then
+    echo "Unlocking login keychain (headless codesign): $LOGIN_KC"
+    security unlock-keychain -p "$YAVER_LOGIN_PASSWORD" "$LOGIN_KC"
+    security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$YAVER_LOGIN_PASSWORD" "$LOGIN_KC" || true
+    security set-keychain-settings -t 100000 -u "$LOGIN_KC" || true
+  else
+    echo "WARN: YAVER_LOGIN_PASSWORD set but login keychain not found at $LOGIN_KC" >&2
+  fi
 fi
 
 # App Store Connect API key — set these env vars or in the Yaver vault.

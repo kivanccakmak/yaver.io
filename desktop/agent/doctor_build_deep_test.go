@@ -107,6 +107,36 @@ func TestCheckPathSecret_Tilde(t *testing.T) {
 	}
 }
 
+// TestCheckPathSecret_ExpandEnv pins the $VAR expansion added 2026-08-12
+// (headless TestFlight audit). The pre-seeded ~/.appstoreconnect/yaver.env
+// writes APP_STORE_KEY_PATH="$HOME/.appstoreconnect/private_keys/…"; the
+// probe used to handle only "~/", so a present p8 file was reported missing
+// — a false red on an otherwise healthy deploy. This test is the guard:
+// break the expansion and the file "vanishes" again.
+func TestCheckPathSecret_ExpandEnv(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir on this runner")
+	}
+	tmpName := ".yaver-doctor-expandenv-" + filepath.Base(t.TempDir())
+	abs := filepath.Join(home, tmpName)
+	if err := os.WriteFile(abs, []byte("x"), 0600); err != nil {
+		t.Skipf("cannot write to home: %v", err)
+	}
+	defer os.Remove(abs)
+
+	// t.Setenv replaces $HOME for the whole process — exactly the shape
+	// the real env file uses ("$HOME/…"). checkPathSecret must expand it.
+	t.Setenv("HOME", home)
+	resolved, err := checkPathSecret("$HOME/" + tmpName)
+	if err != nil {
+		t.Fatalf("checkPathSecret with $HOME: %v", err)
+	}
+	if resolved != abs {
+		t.Errorf("resolved = %q; want %q", resolved, abs)
+	}
+}
+
 // TestJavaMajorVersion_Parse covers each output flavour we've seen
 // in the wild: Oracle JDK, OpenJDK, and the legacy 1.8.0 scheme.
 // The actual `java -version` invocation is exercised by an

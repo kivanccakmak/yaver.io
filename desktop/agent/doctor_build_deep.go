@@ -76,9 +76,9 @@ func isPathSecret(name string) bool {
 }
 
 // resolveSecretValue walks the same lookup order as RunBuildDoctor:
-// vault:project → vault:global → env. Returns ("", "") if unresolved.
-// Pulled into a helper so the path-existence check can re-resolve
-// without re-implementing the search.
+// vault:project → vault:global → env → deploy env files. Returns
+// ("", "") if unresolved. Pulled into a helper so the path-existence
+// check can re-resolve without re-implementing the search.
 func resolveSecretValue(name, project string, vs *VaultStore) (value, source string) {
 	if vs != nil {
 		if project != "" {
@@ -93,11 +93,23 @@ func resolveSecretValue(name, project string, vs *VaultStore) (value, source str
 	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
 		return v, "env"
 	}
+	// Same deploy env files the scripts source. Without this, a path
+	// secret like APP_STORE_KEY_PATH resolved from ~/.appstoreconnect/
+	// yaver.env by the Found check but re-resolved to "" here — the
+	// path-existence probe then reported "file is missing" for a file
+	// that exists. Found 2026-08-12, headless TestFlight audit.
+	if v := deployEnvFileValue(name); v != "" {
+		return v, "deploy env file"
+	}
 	return "", ""
 }
 
-// checkPathSecret expands ~ and verifies the file exists. Empty value
-// means "secret unresolved" — handled upstream, not here.
+// checkPathSecret expands ~ and $VAR (e.g. $HOME) and verifies the file
+// exists. Empty value means "secret unresolved" — handled upstream, not
+// here. $VAR expansion matters: the pre-seeded ~/.appstoreconnect/yaver.env
+// writes APP_STORE_KEY_PATH="$HOME/.appstoreconnect/private_keys/…", and
+// before 2026-08-12 the probe only handled "~/" so a present p8 file was
+// reported missing (false red on an otherwise healthy deploy).
 func checkPathSecret(value string) (string, error) {
 	v := strings.TrimSpace(value)
 	if v == "" {
@@ -107,6 +119,9 @@ func checkPathSecret(value string) (string, error) {
 		if home, err := os.UserHomeDir(); err == nil {
 			v = filepath.Join(home, v[2:])
 		}
+	}
+	if strings.Contains(v, "$") {
+		v = os.ExpandEnv(v)
 	}
 	if !filepath.IsAbs(v) {
 		// Relative paths are evaluated against the agent's CWD; we
