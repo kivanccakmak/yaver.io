@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useState, useRef, useEffect } from "react";
 import { useTheme } from "./ThemeProvider";
 import SearchBar from "./SearchBar";
 import { useAuth } from "@/lib/use-auth";
+import { isAppSurfacePath } from "@/lib/app-surface";
 
 function UserMenu({ user, logout }: { user: { email: string; name?: string; avatarUrl?: string }; logout: () => void }) {
   const [open, setOpen] = useState(false);
@@ -83,6 +85,41 @@ export default function Header() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { theme, toggle } = useTheme();
   const { user, isLoading, isAuthenticated, logout } = useAuth();
+  const pathname = usePathname();
+  // Sign-in → app only: on the auth flow and the app surfaces themselves
+  // there is NO marketing chrome (Pricing / FAQ / Docs / Developers /
+  // Download / Blog / search). The page IS the product there. The dashboard
+  // additionally hides the whole header via `body.dashboard-mode`.
+  const isAppSurface = isAppSurfacePath(pathname ?? "/");
+
+  // App surfaces get a bare brand bar — the login page and the app are
+  // chrome-free. No marketing links, no search, no sign-in CTA (the page
+  // itself carries the auth form).
+  if (isAppSurface) {
+    return (
+      <header className="sticky top-0 z-50 border-b border-surface-800/60 bg-surface-950/80 backdrop-blur-xl">
+        <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+          <div className="flex items-center gap-3">
+            <Link href={isAuthenticated ? "/dashboard" : "/"} className="flex items-center gap-2.5">
+              <span className="text-xl font-bold tracking-tight text-surface-50">
+                {isAuthenticated ? "Yaver" : <>yaver<span className="font-normal text-surface-500">.io</span></>}
+              </span>
+            </Link>
+          </div>
+          <div className="hidden items-center gap-8 md:flex">
+            {!isLoading && isAuthenticated && user ? (
+              <UserMenu user={user} logout={logout} />
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2 md:hidden">
+            {!isLoading && isAuthenticated && user ? (
+              <UserMenu user={user} logout={logout} />
+            ) : null}
+          </div>
+        </nav>
+      </header>
+    );
+  }
 
   return (
     <header className="sticky top-0 z-50 border-b border-surface-800/60 bg-surface-950/80 backdrop-blur-xl">

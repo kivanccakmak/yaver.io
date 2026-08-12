@@ -1,0 +1,32 @@
+{
+  "name": "yaver-gui",
+  "productName": "Yaver",
+  "version": "0.1.0",
+  "description": "Desktop GUI for the Yaver web dashboard — chat, vibing, devices, and previews in a native shell.",
+  "main": "src/main.js",
+  "license": "FSL-1.1-Apache-2.0",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "YAVER_DEV=1 electron .",
+    "test": "node --test test/*.test.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "io.yaver.gui",
+    "productName": "Yaver",
+    "files": ["src/**/*", "assets/**/*", "package.json"],
+    "directories": { "output": "dist" },
+    "mac": { "category": "public.app-category.developer-tools", "target": ["dmg", "zip"] },
+    "win": { "target": ["nsis"] },
+    "linux": { "target": ["AppImage"], "category": "Development" }
+  }
+}

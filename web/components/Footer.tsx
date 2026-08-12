@@ -1,4 +1,13 @@
+"use client";
+
+import { usePathname } from "next/navigation";
+import { isAppSurfacePath } from "@/lib/app-surface";
+
 export default function Footer() {
+  const pathname = usePathname();
+  // Sign-in → app only: no marketing chrome on the auth flow or app surfaces
+  // (mirrors Header). The dashboard additionally hides this via CSS.
+  if (isAppSurfacePath(pathname ?? "/")) return null;
   return (
     <footer className="border-t border-surface-800 bg-surface-950">
       <div className="mx-auto max-w-6xl px-6 py-6">
