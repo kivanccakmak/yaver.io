@@ -35,6 +35,15 @@ function binaryName() {
   return process.platform === "win32" ? "yaver.exe" : "yaver";
 }
 
+/**
+ * Go-style architecture name used by the release assets. Node says "x64";
+ * the agent's release assets are named with Go's "amd64" (agent-runtime.js
+ * does the same mapping: `arch === 'x64' ? 'amd64' : arch`).
+ */
+function goArch() {
+  return process.arch === "x64" ? "amd64" : process.arch;
+}
+
 async function download(url, outPath) {
   const res = await new Promise((resolve, reject) => {
     https.get(url, { headers: { "User-Agent": "yaver-gui-release" } }, resolve).on("error", reject);
@@ -87,7 +96,7 @@ async function main() {
     // the API (tags may be `v1.2.3` or `cli/v1.2.3` — mirror the CLI's
     // stripCliTagPrefix), then build the asset URL.
     const winTag = await resolveReleaseTag(WINDOWS_REPO, version);
-    const url = `https://github.com/${WINDOWS_REPO}/releases/download/${winTag}/yaver-windows-${process.arch}.exe`;
+    const url = `https://github.com/${WINDOWS_REPO}/releases/download/${winTag}/yaver-windows-${goArch()}.exe`;
     console.log(`[fetch-agent] windows agent ${version} (tag ${winTag}) → ${targetPath}`);
     await download(url, targetPath);
     console.log(`[fetch-agent] done`);
@@ -96,18 +105,20 @@ async function main() {
 
   // darwin / linux: tar.gz from the main repo. Try the versioned name first,
   // fall back to the unversioned legacy name (agent-runtime's second candidate).
-  const base = `https://github.com/${DEFAULT_REPO}/releases/download/v${version}`;
+  const tag = await resolveReleaseTag(DEFAULT_REPO, version);
+  const base = `https://github.com/${DEFAULT_REPO}/releases/download/${tag}`;
   const osKey = process.platform === "darwin" ? "darwin" : "linux";
+  const archKey = goArch();
   const candidates = [
-    `${base}/yaver-v${version}-${osKey}-${process.arch}.tar.gz`,
-    `${base}/yaver-${osKey}-${process.arch}.tar.gz`,
+    `${base}/yaver-v${version}-${osKey}-${archKey}.tar.gz`,
+    `${base}/yaver-${osKey}-${archKey}.tar.gz`,
   ];
   let archivePath = null;
   for (const url of candidates) {
     try {
       archivePath = join(targetDir, "agent.tar.gz");
       await download(url, archivePath);
-      console.log(`[fetch-agent] ${osKey}-${process.arch} agent ${version} ← ${url}`);
+      console.log(`[fetch-agent] ${osKey}-${archKey} agent ${version} ← ${url}`);
       break;
     } catch {
       archivePath = null;
@@ -123,7 +134,7 @@ async function main() {
     maxBuffer: 64 * 1024 * 1024,
   });
   // Legacy archives extract as `yaver-<os>-<arch>`; normalize to `yaver`.
-  const extracted = join(targetDir, `yaver-${osKey}-${process.arch}`);
+  const extracted = join(targetDir, `yaver-${osKey}-${archKey}`);
   if (existsSync(extracted)) {
     await import("node:fs/promises").then((m) => m.rename(extracted, targetPath));
   }

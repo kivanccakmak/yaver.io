@@ -132,3 +132,10 @@ test-results/
 yaver-tests/.coverage.json
 # Mobile web-export sandbox (build-web-preview.sh runtime dirs: HOME/TMPDIR for headless Chrome).
 mobile/.tmp/
+
+# Machine-local yaver test-sdk run artifacts. Never commit: run dirs are named
+# with HH:MM:SS (colons), which git on Windows refuses to check out
+# ("invalid path") and they churn on every local run. The tracked .yaver config
+# (machine.md / publish.yaml / services.yaml) is unaffected.
+.yaver/results/
+.yaver/tests/
